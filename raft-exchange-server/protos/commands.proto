@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package exchange.core2.cmd;
+
+option java_package = "com.binance.raftexchange.server.stubs.command";
+option java_multiple_files = true;
+
+// Enum for command types
+enum CommandCode {
+  UNKNOWN = 0;
+  ADD_USER = 1;
+  ADJUST_BALANCE = 2;
+  PLACE_ORDER = 3;
+  CANCEL_ORDER = 4;
+}
+
+// Base command message
+message OrderCommand {
+  CommandCode command_code = 1;
+  int64 command_id = 2;
+  int64 user_id = 3;
+  int64 timestamp = 4;
+
+  // Optional fields for specific commands
+  string symbol = 5; // For orders
+  int64 price = 6;
+  int64 size = 7;
+  string action = 8; // e.g., "BUY" or "SELL"
+}
