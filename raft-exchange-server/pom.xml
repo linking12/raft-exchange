@@ -13,6 +13,7 @@
 	<properties>
 		<binance-infra.version>2.0.0-SNAPSHOT</binance-infra.version>
 		<grpc.version>1.70.0</grpc.version>
+		<protobuf.version>3.25.5</protobuf.version>
 		<jgroups-raft.version>1.0.11.Final</jgroups-raft.version>
 		<jgroups.version>5.2.17.Final</jgroups.version>
 	</properties>
@@ -91,6 +92,13 @@
 	</dependencyManagement>
 
 	<build>
+		<extensions>
+			<extension>
+				<groupId>kr.motd.maven</groupId>
+				<artifactId>os-maven-plugin</artifactId>
+				<version>1.6.2</version>
+			</extension>
+		</extensions>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
@@ -131,6 +139,29 @@
 				<configuration>
 					<skipTests>true</skipTests>
 				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.xolstice.maven.plugins</groupId>
+				<artifactId>protobuf-maven-plugin</artifactId>
+				<version>0.6.1</version>
+				<configuration>
+					<protoSourceRoot>${project.basedir}/protos</protoSourceRoot>
+					<protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
+					<includes>
+						<include>**/*.proto</include>
+					</includes>
+					<excludes>
+						<exclude>**/Usuario.proto</exclude>
+					</excludes>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>compile</goal>
+							<goal>test-compile</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>
