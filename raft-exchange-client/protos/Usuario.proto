@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+option java_package = "com.cristiano.grpcclient.stubs.usuario";
+option java_outer_classname = "UsuarioProtos";
+option java_multiple_files = true;//em vez de gerar tudo em uma classe só, ele irá separar as classes em arquivos
+
+message Usuario{
+    string fullname = 1;
+    string email = 2;
+    string password = 3;
+}
+
+message Usuarios{
+    repeated Usuario usuario = 1;
+}
+
+service UsuarioService{
+    rpc salve(Usuario) returns (Usuario);// Unary
+    rpc salveAllStreamClient(stream Usuario) returns (Usuarios); // Client Streaming
+    rpc salveAllStreamServer(Usuarios) returns (stream Usuario); // Server Streaming
+    rpc salveAllStream(stream Usuario) returns (stream Usuario); // BI-DIRECIONAL STREAMING
+}

@@ -10,6 +10,7 @@
 	<modules>
 		<module>exchange-core</module>
 		<module>raft-exchange-server</module>
+		<module>raft-exchange-client</module>
 	</modules>
 
 	<properties>
