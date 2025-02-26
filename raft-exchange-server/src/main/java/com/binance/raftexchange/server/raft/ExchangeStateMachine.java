@@ -4,11 +4,15 @@ import java.io.DataInput;
 import java.io.DataOutput;
 
 import org.jgroups.raft.StateMachine;
+import org.jgroups.util.ByteArrayDataInputStream;
+import org.jgroups.util.ByteArrayDataOutputStream;
 
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.IEventsHandler;
 import exchange.core2.core.SimpleEventsProcessor;
+import exchange.core2.core.common.api.ApiCommand;
+import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 
 public class ExchangeStateMachine implements StateMachine {
@@ -51,7 +55,16 @@ public class ExchangeStateMachine implements StateMachine {
 
     @Override
     public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
-        return null;
+        ByteArrayDataInputStream in = new ByteArrayDataInputStream(data, offset, length);
+        // 构造出ApiCommand出来
+        ApiCommand apiCommand = null;
+        CommandResultCode commandResultCode = api.submitCommandAsync(apiCommand).get();
+        ByteArrayDataOutputStream out = new ByteArrayDataOutputStream();
+        if (commandResultCode != null) {
+            // out.writeUTF(value);
+        }
+        return out.buffer();
+
     }
 
     @Override
