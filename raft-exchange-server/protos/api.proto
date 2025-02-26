@@ -132,3 +132,8 @@ message ApiMessage {
   }
   int64 timestamp = 14;  // Common field from ApiCommand
 }
+
+
+service ApiCommandService{
+    rpc execApiCommand(stream ApiMessage) returns (stream CommandResultCode); // BI-DIRECIONAL STREAMING
+}

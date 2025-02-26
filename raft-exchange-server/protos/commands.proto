@@ -5,25 +5,130 @@ package exchange.core2.cmd;
 option java_package = "com.binance.raftexchange.server.stubs.command";
 option java_multiple_files = true;
 
-// Enum for command types
-enum CommandCode {
-  UNKNOWN = 0;
-  ADD_USER = 1;
-  ADJUST_BALANCE = 2;
-  PLACE_ORDER = 3;
-  CANCEL_ORDER = 4;
+syntax = "proto3";
+
+package exchange.core2.core.common.cmd;
+
+option java_package = "exchange.core2.core.common.cmd";
+option java_outer_classname = "OrderCommandProto";
+
+// Enum for Command Result Codes
+enum CommandResultCode {
+    NEW = 0;
+    VALID_FOR_MATCHING_ENGINE = 1;
+    SUCCESS = 100;
+    ACCEPTED = 110;
+
+    AUTH_INVALID_USER = 1001;           // Negative values prefixed as positive
+    AUTH_TOKEN_EXPIRED = 1002;
+
+    INVALID_SYMBOL = 1201;
+    INVALID_PRICE_STEP = 1202;
+    UNSUPPORTED_SYMBOL_TYPE = 1203;
+
+    RISK_NSF = 2001;
+    RISK_INVALID_RESERVE_BID_PRICE = 2002;
+    RISK_ASK_PRICE_LOWER_THAN_FEE = 2003;
+    RISK_MARGIN_TRADING_DISABLED = 2004;
+
+    MATCHING_UNKNOWN_ORDER_ID = 3002;
+    MATCHING_UNSUPPORTED_COMMAND = 3004;
+    MATCHING_INVALID_ORDER_BOOK_ID = 3005;
+    MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT = 3041;
+    MATCHING_REDUCE_FAILED_WRONG_SIZE = 3051;
+
+    USER_MGMT_USER_ALREADY_EXISTS = 4001;
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME = 4101;
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_MANY = 4102;
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF = 4103;
+    USER_MGMT_NON_ZERO_ACCOUNT_BALANCE = 4104;
+    USER_MGMT_USER_NOT_SUSPENDABLE_HAS_POSITIONS = 4130;
+    USER_MGMT_USER_NOT_SUSPENDABLE_NON_EMPTY_ACCOUNTS = 4131;
+    USER_MGMT_USER_NOT_SUSPENDED = 4132;
+    USER_MGMT_USER_ALREADY_SUSPENDED = 4133;
+    USER_MGMT_USER_NOT_FOUND = 4201;
+
+    SYMBOL_MGMT_SYMBOL_ALREADY_EXISTS = 5001;
+
+    BINARY_COMMAND_FAILED = 8001;
+    REPORT_QUERY_UNKNOWN_TYPE = 8003;
+    STATE_PERSIST_RISK_ENGINE_FAILED = 8010;
+    STATE_PERSIST_MATCHING_ENGINE_FAILED = 8020;
+
+    DROP = 9999;
 }
 
-// Base command message
-message OrderCommand {
-  CommandCode command_code = 1;
-  int64 command_id = 2;
-  int64 user_id = 3;
-  int64 timestamp = 4;
+// Enum for Order Command Types
+enum OrderCommandType {
+    PLACE_ORDER = 1;
+    CANCEL_ORDER = 2;
+    MOVE_ORDER = 3;
+    REDUCE_ORDER = 4;
+    ORDER_BOOK_REQUEST = 6;
+    ADD_USER = 10;
+    BALANCE_ADJUSTMENT = 11;
+    SUSPEND_USER = 12;
+    RESUME_USER = 13;
+    BINARY_DATA_QUERY = 90;
+    BINARY_DATA_COMMAND = 91;
+    PERSIST_STATE_MATCHING = 110;
+    PERSIST_STATE_RISK = 111;
+    GROUPING_CONTROL = 118;
+    NOP = 120;
+    RESET = 124;
+    SHUTDOWN_SIGNAL = 127;
+    RESERVED_COMPRESSED = 255;  // -1 in byte becomes 255 in unsigned context
+}
 
-  // Optional fields for specific commands
-  string symbol = 5; // For orders
-  int64 price = 6;
-  int64 size = 7;
-  string action = 8; // e.g., "BUY" or "SELL"
+// Enum for Order Action
+enum OrderAction {
+    BID = 0;
+    ASK = 1;
+}
+
+// Enum for Order Type
+enum OrderType {
+    GTC = 0;  // Good-Til-Canceled (assumed as common default)
+    IOC = 1;  // Immediate-Or-Cancel (assumed as common type)
+    FOK = 2;  // Fill-Or-Kill (assumed as common type)
+}
+
+// Message for Matcher Trade Event (simplified, as full structure not provided)
+message MatcherTradeEvent {
+    int64 order_id = 1;
+    int64 price = 2;
+    int64 size = 3;
+    MatcherTradeEvent next_event = 4;  // Linked list structure
+}
+
+// Message for L2 Market Data (simplified placeholder)
+message L2MarketData {
+    repeated int64 bid_prices = 1;
+    repeated int64 bid_sizes = 2;
+    repeated int64 ask_prices = 3;
+    repeated int64 ask_sizes = 4;
+}
+
+// Main Order Command message
+message OrderCommand {
+    OrderCommandType command = 1;
+    int64 order_id = 2;
+    int32 symbol = 3;
+    int64 price = 4;
+    int64 size = 5;
+    int64 reserve_bid_price = 6;
+    OrderAction action = 7;
+    OrderType order_type = 8;
+    int64 uid = 9;
+    int64 timestamp = 10;
+    int32 user_cookie = 11;
+    int64 events_group = 12;
+    int32 service_flags = 13;
+    CommandResultCode result_code = 14;
+    MatcherTradeEvent matcher_event = 15;
+    L2MarketData market_data = 16;
+}
+
+service OrderCommandService{
+    rpc execOrderCommand(stream OrderCommand) returns (stream CommandResultCode); 
 }
