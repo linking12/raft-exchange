@@ -1,16 +1,12 @@
 package com.binance.raftexchange.server.raft;
 
 import com.binance.platform.common.shutdown.GracefulShutdownHook;
-import com.binance.raftexchange.server.services.UserServiceImpl;
-import io.grpc.Server;
-import io.grpc.ServerBuilder;
 import org.jgroups.JChannel;
 import org.jgroups.raft.RaftHandle;
 import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 public class JGroupsRaftClusterView implements GracefulShutdownHook {
@@ -21,7 +17,6 @@ public class JGroupsRaftClusterView implements GracefulShutdownHook {
     private final String raftId;
     private volatile boolean isMaster;
     private RaftHandle raftHandle;
-    private Server grpcServer;
 
     public JGroupsRaftClusterView(ClusterDiscoveryByEureka discovery, StateMachine stateMachine, String jgroupsClusterName) {
         this.discovery = discovery;
@@ -68,33 +63,12 @@ public class JGroupsRaftClusterView implements GracefulShutdownHook {
         }
     }
 
+    public boolean isMaster() {
+        return isMaster;
+    }
+
     public void setMaster(boolean master) {
         isMaster = master;
     }
 
-    public void startGrpcServer() {
-        grpcServer = ServerBuilder.forPort(5001).addService(new UserServiceImpl()).build();
-        try {
-            grpcServer.start();
-        } catch (IOException e) {
-            throw new RuntimeException(e.getMessage());
-        }
-    }
-
-    public void stopGrpcServer() {
-        if (grpcServer != null) {
-            LOG.info("Shutting down gRPC server...");
-            grpcServer.shutdown();
-            try {
-                if (!grpcServer.awaitTermination(5, TimeUnit.SECONDS)) {
-                    LOG.warn("forcing shutdown...");
-                    grpcServer.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                grpcServer.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-            LOG.info("gRPC server stopped successfully.");
-        }
-    }
 }

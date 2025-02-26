@@ -19,11 +19,9 @@ public class ClusterRoleChangeListener implements RAFT.RoleChange {
         switch (role) {
             case Leader:
                 jgroupsRaftClusterView.setMaster(true);
-                jgroupsRaftClusterView.startGrpcServer();
                 break;
             case Follower:
                 jgroupsRaftClusterView.setMaster(false);
-                jgroupsRaftClusterView.stopGrpcServer();
                 break;
             default:
                 LOG.error("Role {} unknown.", role);

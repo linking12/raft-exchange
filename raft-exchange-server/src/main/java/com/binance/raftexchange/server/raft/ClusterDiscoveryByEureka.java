@@ -14,55 +14,39 @@ import org.apache.commons.lang3.StringUtils;
 import org.jgroups.JChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 
 import com.binance.platform.common.EnvUtil;
-import com.netflix.appinfo.ApplicationInfoManager;
 import com.netflix.appinfo.InstanceInfo;
 import com.netflix.discovery.CacheRefreshedEvent;
 import com.netflix.discovery.EurekaClient;
 import com.netflix.discovery.EurekaEvent;
 
-import javax.annotation.PostConstruct;
-
-@Component
 public class ClusterDiscoveryByEureka {
     private static final Logger LOGGER = LoggerFactory.getLogger(ClusterDiscoveryByEureka.class);
 
     private static final String RAFTPORT = "raft.port";
 
     private String jgroupResources;
-
-    @Autowired
-    private ApplicationInfoManager applicationInfoManager;
-
-    @Autowired
-    private EurekaClient eurekaClient;
-
-    @Value("${spring.application.name}")
-    private String appName;
-
-    @Value("${spring.cloud.client.ip-address}")
-    private String localHost;
-
-    @Value("${raft.port:7800}")
-    private String jgroupPort;
-
-    @Value("${raft.init-nodes:1}")
-    private Integer startupNodes;
+    private final EurekaClient eurekaClient;
+    private final String appName;
+    private final String localHost;
+    private final String jgroupPort;
+    private final int startupNodes;
 
     private List<String> lastClusterHostAndPorts;
 
     private volatile String lastAppsHashCode;
 
-    @PostConstruct
-    public void init() {
-        applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
+    public ClusterDiscoveryByEureka(EurekaClient eurekaClient, String appName, String localHost, String jgroupPort, int startupNodes) {
+        this.eurekaClient = eurekaClient;
+        this.appName = appName;
+        this.localHost = localHost;
+        this.jgroupPort = jgroupPort;
+        this.startupNodes = startupNodes;
         this.eurekaClient.registerEventListener(this::onEurekaEvent);
+        this.eurekaClient.getApplicationInfoManager().registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
         try {
             this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver()
                     .getResource("classpath:jgroups-raft.xml").getInputStream(), StandardCharsets.UTF_8);
