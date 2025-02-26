@@ -4,6 +4,7 @@ import static com.binance.platform.common.EurekaConstants.EUREKA_METADATA_FLOWFL
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -16,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 
 import com.binance.platform.common.EnvUtil;
@@ -25,6 +27,9 @@ import com.netflix.discovery.CacheRefreshedEvent;
 import com.netflix.discovery.EurekaClient;
 import com.netflix.discovery.EurekaEvent;
 
+import javax.annotation.PostConstruct;
+
+@Component
 public class ClusterDiscoveryByEureka {
     private static final Logger LOGGER = LoggerFactory.getLogger(ClusterDiscoveryByEureka.class);
 
@@ -47,14 +52,20 @@ public class ClusterDiscoveryByEureka {
     @Value("${raft.port:7800}")
     private String jgroupPort;
 
+    @Value("${raft.init-nodes:1}")
+    private Integer startupNodes;
+
     private List<String> lastClusterHostAndPorts;
 
     private volatile String lastAppsHashCode;
 
+    @PostConstruct
     public void init() {
+        applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
         this.eurekaClient.registerEventListener(this::onEurekaEvent);
         try {
-            this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver().getResource("classpath:maxwell-jgroups-tcp.xml").getInputStream(), StandardCharsets.UTF_8);
+            this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver()
+                    .getResource("classpath:jgroups-raft.xml").getInputStream(), StandardCharsets.UTF_8);
         } catch (Throwable e) {
             // ignore
         }
@@ -81,36 +92,21 @@ public class ClusterDiscoveryByEureka {
         return host + "[" + port + "]";
     }
 
-    private String createJgroupCluster() {
-        int clusterSize = this.lastClusterHostAndPorts != null ? this.lastClusterHostAndPorts.size() : 0;
-        if (clusterSize == 3) {
-            StringBuilder clusterIpSb = new StringBuilder();
-            for (int i = 0; i < clusterSize; i++) {
-                String ip = this.lastClusterHostAndPorts.get(i);
-                if (i == clusterSize - 1) {
-                    clusterIpSb.append(ip);
-                } else {
-                    clusterIpSb.append(ip + ",");
-                }
-            }
-            return clusterIpSb.toString();
-        }
-        return null;
-    }
-
     public String raftMemberCluster() {
-        return this.createJgroupCluster();
+        if (lastClusterHostAndPorts == null || lastClusterHostAndPorts.size() < startupNodes) {
+            return null;
+        }
+        return String.join(",", lastClusterHostAndPorts);
     }
 
     public String raftCurrentMember() {
-        return this.jgroupHostAndPort(this.localHost, this.jgroupPort);
+        return jgroupHostAndPort(this.localHost, this.jgroupPort);
     }
 
     public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {
         JChannel jChannel = null;
         try {
-            String jgroupCluster = this.createJgroupCluster();
-            if (StringUtils.isNotBlank(jgroupCluster)) {
+            if (StringUtils.isNotBlank(raftMemberCluster)) {
                 String realJChannelParam = StringUtils.replaceEach(//
                     this.jgroupResources, //
                     new String[] {//
@@ -123,7 +119,7 @@ public class ClusterDiscoveryByEureka {
                     new String[] {//
                         localHost, //
                         jgroupPort, //
-                        jgroupCluster, //
+                        raftMemberCluster, //
                         raftMemberCluster, //
                         raftCurrentMember} //
                 );

@@ -30,6 +30,7 @@ import net.jpountz.xxhash.XXHashFactory;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
+import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.wire.InputStreamToWire;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
@@ -231,7 +232,7 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
 
         @Override
         public void close() {
-            bytes.release();
+            bytes.release(ReferenceOwner.INIT);
         }
     }
 
