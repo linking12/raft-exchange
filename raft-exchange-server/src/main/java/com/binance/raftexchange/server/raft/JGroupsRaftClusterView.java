@@ -7,7 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class JGroupsRaftClusterView {
-    private static final transient Logger LOG = LoggerFactory.getLogger(JGroupsRaftClusterView.class);
+    private static final Logger LOG = LoggerFactory.getLogger(JGroupsRaftClusterView.class);
     private StateMachine stateMachine;
     private String jgroupsConfig;
     private String jgroupsClusterName;
