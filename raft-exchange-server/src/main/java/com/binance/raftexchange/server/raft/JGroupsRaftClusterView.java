@@ -8,19 +8,18 @@ import org.slf4j.LoggerFactory;
 
 public class JGroupsRaftClusterView {
     private static final Logger LOG = LoggerFactory.getLogger(JGroupsRaftClusterView.class);
-    private StateMachine stateMachine;
-    private String jgroupsConfig;
-    private String jgroupsClusterName;
-    private RaftHandle raftHandle;
-    private String raftId;
+    private final StateMachine stateMachine;
+    private final String jgroupsConfig;
+    private final String jgroupsClusterName;
+    private final String raftId;
     private volatile boolean isMaster;
+    private RaftHandle raftHandle;
 
-    public JGroupsRaftClusterView(String jgroupsConfig, String jgroupsClusterName, RaftHandle raftHandle, String raftId) {
+    public JGroupsRaftClusterView(String jgroupsConfig, String jgroupsClusterName, String raftId, StateMachine stateMachine) {
         this.jgroupsConfig = jgroupsConfig;
         this.jgroupsClusterName = jgroupsClusterName;
-        this.raftHandle = raftHandle;
         this.raftId = raftId;
-        this.stateMachine = new ExchangeStateMachine();
+        this.stateMachine = stateMachine;
     }
 
     public void doStart() throws Exception {
@@ -70,7 +69,6 @@ public class JGroupsRaftClusterView {
                 raftHandle.log().close();
                 LOG.info("Closed Log for JGroupsRaftClusterView with Id {}", raftId);
             }
-
             raftHandle = null;
         }
     }
