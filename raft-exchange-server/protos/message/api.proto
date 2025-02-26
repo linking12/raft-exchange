@@ -1,5 +1,6 @@
 syntax = "proto3";
 
+import "message/commands.proto";
 package com.binance.raftexchange.server.stubs.api;
 
 option java_package = "com.binance.raftexchange.server.stubs.api";
@@ -135,5 +136,5 @@ message ApiMessage {
 
 
 service ApiCommandService{
-    rpc execApiCommand(stream ApiMessage) returns (stream CommandResultCode); // BI-DIRECIONAL STREAMING
+    rpc execApiCommand(stream ApiMessage) returns (stream exchange.core2.cmd.CommandResult); // BI-DIRECIONAL STREAMING
 }

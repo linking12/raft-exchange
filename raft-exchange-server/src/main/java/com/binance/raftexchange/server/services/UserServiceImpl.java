@@ -4,7 +4,9 @@ import com.binance.raftexchange.server.stubs.usuario.Usuario;
 import com.binance.raftexchange.server.stubs.usuario.UsuarioServiceGrpc.UsuarioServiceImplBase;
 
 import io.grpc.stub.StreamObserver;
+import org.springframework.stereotype.Component;
 
+@Component
 public class UserServiceImpl extends UsuarioServiceImplBase {
     @Override
     public void salve(Usuario request, StreamObserver<Usuario> responseObserver) {
@@ -13,4 +15,6 @@ public class UserServiceImpl extends UsuarioServiceImplBase {
         responseObserver.onNext(usuarioSaved);
         responseObserver.onCompleted();
     }
+
+
 }

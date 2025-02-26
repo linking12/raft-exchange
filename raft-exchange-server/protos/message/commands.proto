@@ -5,11 +5,6 @@ package exchange.core2.cmd;
 option java_package = "com.binance.raftexchange.server.stubs.command";
 option java_multiple_files = true;
 
-syntax = "proto3";
-
-package exchange.core2.core.common.cmd;
-
-option java_package = "exchange.core2.core.common.cmd";
 option java_outer_classname = "OrderCommandProto";
 
 // Enum for Command Result Codes
@@ -58,8 +53,17 @@ enum CommandResultCode {
     DROP = 9999;
 }
 
+//pb这个编译器不允许returns(stream Enum) 这样
+// 所以需要包一下
+message CommandResult {
+    CommandResultCode resultCode = 1;
+}
+
 // Enum for Order Command Types
 enum OrderCommandType {
+    // make grpc compiler happy :)
+    // 因为First enum value must be 0 in proto3 所以要这样写
+    PLACEHOLDER = 0;
     PLACE_ORDER = 1;
     CANCEL_ORDER = 2;
     MOVE_ORDER = 3;
@@ -130,5 +134,5 @@ message OrderCommand {
 }
 
 service OrderCommandService{
-    rpc execOrderCommand(stream OrderCommand) returns (stream CommandResultCode); 
+    rpc execOrderCommand(stream OrderCommand) returns (stream CommandResult);
 }
