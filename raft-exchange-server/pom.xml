@@ -12,6 +12,7 @@
 
 	<properties>
 		<binance-infra.version>2.0.0-SNAPSHOT</binance-infra.version>
+		<grpc.version>1.70.0</grpc.version>
 		<jgroups-raft.version>1.0.11.Final</jgroups-raft.version>
 		<jgroups.version>5.2.17.Final</jgroups.version>
 	</properties>
@@ -19,18 +20,24 @@
 
 	<dependencies>
 		<dependency>
-			<groupId>com.binance.infra.avengers</groupId>
-			<artifactId>platform-starter-web</artifactId>
-			<exclusions>
-				<exclusion>
-					<groupId>org.apache.kafka</groupId>
-					<artifactId>kafka-clients</artifactId>
-				</exclusion>
-			</exclusions>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-netty</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-protobuf</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-stub</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.jgroups</groupId>
@@ -64,6 +71,21 @@
 				<groupId>org.jgroups</groupId>
 				<artifactId>jgroups-raft</artifactId>
 				<version>${jgroups-raft.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-netty</artifactId>
+				<version>${grpc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-protobuf</artifactId>
+				<version>${grpc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-stub</artifactId>
+				<version>${grpc.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
