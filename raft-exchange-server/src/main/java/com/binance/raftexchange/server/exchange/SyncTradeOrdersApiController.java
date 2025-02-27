@@ -6,5 +6,8 @@ public class SyncTradeOrdersApiController {
 
 	}
 
-	
+	public static void moveOrder() {
+
+	}
+
 }
