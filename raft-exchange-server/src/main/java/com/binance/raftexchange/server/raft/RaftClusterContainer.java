@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.raft;
 import java.util.concurrent.TimeUnit;
 
 import org.jgroups.JChannel;
+import org.jgroups.protocols.raft.Role;
 import org.jgroups.raft.RaftHandle;
 import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
@@ -33,8 +34,15 @@ public class RaftClusterContainer {
 			LOGGER.info("Starting jgroup: {}", raftCurrentMember);
 		} while (jChannel == null);
 		this.raftCurrentMember = raftCurrentMember;
-		this.raftHandle = new RaftHandle(jChannel, stateMachine).raftId(raftCurrentMember)
-				.addRoleListener(new RaftClusterRoleChangeListener(this));
+		this.raftHandle = new RaftHandle(jChannel, stateMachine).raftId(raftCurrentMember).addRoleListener(role -> {
+			if (role == Role.Leader) {
+				isLeader = true;
+				LOGGER.info("Won HA election, starting raftExchange:{}", raftCurrentMember);
+			} else {
+				isLeader = false;
+				LOGGER.info("Unable to find consensus, stepping down HA leadership:{}", raftCurrentMember);
+			}
+		});
 		this.raftHandle.channel().connect(jgroupsClusterName);
 	}
 
@@ -68,10 +76,6 @@ public class RaftClusterContainer {
 
 	public boolean isLeader() {
 		return this.isLeader;
-	}
-
-	public void setLeader(boolean leader) {
-		this.isLeader = leader;
 	}
 
 	public RaftHandle raftHandle() {
