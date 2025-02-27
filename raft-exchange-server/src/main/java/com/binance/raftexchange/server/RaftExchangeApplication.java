@@ -33,19 +33,19 @@ public class RaftExchangeApplication implements CommandLineRunner {
 
 	@Override
 	public void run(String... arg0) throws Exception {
-		// startRaft();
-		startGrpcServer();
+		startRaft();
+		// startGrpcServer();
 	}
 
 	public void startRaft() throws Exception {
 		RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(applicationInfoManager, eurekaClient);
 		RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
 		raftClusterContainer.doStart();
-
+		this.raftClusterContainer = raftClusterContainer;
 	}
 
 	public void startGrpcServer() throws Exception {
-		GrpcServerContainer grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
+		GrpcServerContainer grpcServerContainer = new GrpcServerContainer();
 		grpcServerContainer.doStart();
 	}
 
