@@ -12,7 +12,6 @@ import com.binance.platform.common.shutdown.GracefulShutdownHook;
 import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
-import com.netflix.appinfo.ApplicationInfoManager;
 import com.netflix.discovery.EurekaClient;
 
 @EnableEurekaClient
@@ -27,9 +26,6 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 	@Autowired
 	private EurekaClient eurekaClient;
 
-	@Autowired
-	private ApplicationInfoManager applicationInfoManager;
-
 	private RaftClusterContainer raftClusterContainer;
 
 	private GrpcServerContainer grpcServerContainer;
@@ -41,7 +37,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 	}
 
 	public void startRaft() throws Exception {
-		RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(applicationInfoManager, eurekaClient);
+		RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(eurekaClient);
 		RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
 		raftClusterContainer.doStart();
 		this.raftClusterContainer = raftClusterContainer;
