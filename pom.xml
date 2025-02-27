@@ -11,14 +11,15 @@
 		<module>exchange-core</module>
 		<module>raft-exchange-server</module>
 		<module>raft-exchange-client</module>
-        <module>raft-exchange-spi</module>
-    </modules>
+		<module>raft-exchange-spi</module>
+	</modules>
 
 	<properties>
 		<java.version>1.8</java.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<exchange-core.version>1.0.0-SNAPSHOT</exchange-core.version>
+		<exchange-spi.version>1.0.0-SNAPSHOT</exchange-spi.version>
 		<binance-infra.version>2.0.0-SNAPSHOT</binance-infra.version>
 	</properties>
 
@@ -28,6 +29,11 @@
 				<groupId>com.binance.raft-exchange</groupId>
 				<artifactId>exchange-core</artifactId>
 				<version>${exchange-core.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.binance.raft-exchange</groupId>
+				<artifactId>raft-exchange-spi</artifactId>
+				<version>${exchange-spi.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
