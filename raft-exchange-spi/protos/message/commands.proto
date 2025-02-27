@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package exchange.core2.cmd;
+package com.binance.raftexchange.stubs.command;
 
 option java_package = "com.binance.raftexchange.stubs.command";
 option java_multiple_files = true;
 
-option java_outer_classname = "OrderCommandProto";
+import "message/common.proto";
 
 // Enum for Command Result Codes
 enum CommandResultCode {
@@ -61,9 +61,7 @@ message CommandResult {
 
 // Enum for Order Command Types
 enum OrderCommandType {
-    // make grpc compiler happy :)
-    // 因为First enum value must be 0 in proto3 所以要这样写
-    PLACEHOLDER = 0;
+    ORDER_COMMAND_INVALID = 0; // proto3 enum必须从0开始
     PLACE_ORDER = 1;
     CANCEL_ORDER = 2;
     MOVE_ORDER = 3;
@@ -82,19 +80,6 @@ enum OrderCommandType {
     RESET = 124;
     SHUTDOWN_SIGNAL = 127;
     RESERVED_COMPRESSED = 255;  // -1 in byte becomes 255 in unsigned context
-}
-
-// Enum for Order Action
-enum OrderAction {
-    BID = 0;
-    ASK = 1;
-}
-
-// Enum for Order Type
-enum OrderType {
-    GTC = 0;  // Good-Til-Canceled (assumed as common default)
-    IOC = 1;  // Immediate-Or-Cancel (assumed as common type)
-    FOK = 2;  // Fill-Or-Kill (assumed as common type)
 }
 
 // Message for Matcher Trade Event (simplified, as full structure not provided)

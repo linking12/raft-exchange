@@ -1,10 +1,12 @@
 syntax = "proto3";
 
-import "message/commands.proto";
 package com.binance.raftexchange.stubs.api;
 
 option java_package = "com.binance.raftexchange.stubs.api";
 option java_multiple_files = true;
+
+import "message/common.proto";
+import "message/commands.proto";
 
 // Binary Data Command
 message ApiBinaryDataCommand {
@@ -92,22 +94,6 @@ message ApiResumeUser {
   int64 uid = 1;
 }
 
-// Enums
-enum OrderAction {
-  ASK = 0;
-  BID = 1;
-}
-
-enum OrderType {
-  GTC = 0;  // Good Till Cancel
-  IOC = 1;  // Immediate Or Cancel
-}
-
-enum BalanceAdjustmentType {
-  ADJUSTMENT = 0;
-  SUSPEND = 1;  // Added as per TODO comment
-}
-
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -128,7 +114,6 @@ message ApiCommand {
   }
 }
 
-
 service ApiCommandService{
-    rpc execApiCommand(stream ApiCommand) returns (stream exchange.core2.cmd.CommandResult); // BI-DIRECIONAL STREAMING
+    rpc execApiCommand(stream ApiCommand) returns (stream com.binance.raftexchange.stubs.command.CommandResult); // BI-DIRECTIONAL STREAMING
 }

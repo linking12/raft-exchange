@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs;
+
+option java_package = "com.binance.raftexchange.stubs";
+option java_multiple_files = true;
+
+
+//@see exchange.core2.core.common.BalanceAdjustmentType
+enum BalanceAdjustmentType {
+  ADJUSTMENT = 0;
+  SUSPEND = 1;//exchange.core2.core.common.api.ApiAdjustUserBalance目前不支持suspend
+}
+
+//@see exchange.core2.core.common.Action
+enum OrderAction {
+  ASK = 0;
+  BID = 1;
+}
+
+//@see exchange.core2.core.common.OrderType
+enum OrderType {
+  GTC = 0;
+  IOC = 1;
+  IOC_BUDGET = 2;
+  FOK = 3;
+  FOK_BUDGET = 4;
+}
+
