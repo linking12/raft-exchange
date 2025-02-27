@@ -10,15 +10,15 @@ import io.grpc.ServerBuilder;
 
 public class GrpcServerContainer {
 
-	static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
 
 	private final RaftClusterContainer raftClusterContainer;
 
 	private Server server;
 
-    public GrpcServerContainer(RaftClusterContainer raftClusterContainer) {
-        this.raftClusterContainer = raftClusterContainer;
-    }
+	public GrpcServerContainer(RaftClusterContainer raftClusterContainer) {
+		this.raftClusterContainer = raftClusterContainer;
+	}
 
 	public void doStart() throws Exception {
 		String grpcPort = System.getProperty("grpc.port", "5001");

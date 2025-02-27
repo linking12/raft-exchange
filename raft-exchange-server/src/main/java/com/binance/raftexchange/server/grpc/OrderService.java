@@ -1,11 +1,10 @@
 package com.binance.raftexchange.server.grpc;
 
-import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.stubs.command.CommandResult;
-import com.binance.raftexchange.stubs.command.CommandResultCode;
 import com.binance.raftexchange.stubs.command.OrderCommand;
 import com.binance.raftexchange.stubs.command.OrderCommandServiceGrpc;
 
