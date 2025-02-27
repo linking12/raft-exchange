@@ -55,16 +55,16 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
 	@Override
 	public void shutdown() {
-		if (this.raftClusterContainer != null) {
+		if (this.grpcServerContainer != null) {
 			try {
-				this.raftClusterContainer.doStop();
+				this.grpcServerContainer.doStop();
 			} catch (Exception e) {
 				LOGGER.error(e.getMessage(), e);
 			}
 		}
-		if (this.grpcServerContainer != null) {
+		if (this.raftClusterContainer != null) {
 			try {
-				this.grpcServerContainer.doStop();
+				this.raftClusterContainer.doStop();
 			} catch (Exception e) {
 				LOGGER.error(e.getMessage(), e);
 			}
