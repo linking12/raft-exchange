@@ -33,8 +33,8 @@ public class RaftExchangeApplication implements CommandLineRunner {
 
 	@Override
 	public void run(String... arg0) throws Exception {
-		startRaft();
-		// startGrpcServer();
+		// startRaft();
+		startGrpcServer();
 	}
 
 	public void startRaft() throws Exception {
