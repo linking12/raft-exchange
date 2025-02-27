@@ -26,7 +26,7 @@ import com.netflix.discovery.EurekaEvent;
 
 public class RaftClusterDiscovery {
 	private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterDiscovery.class);
-	private static final String DEFAULT_JGROUPRAFT_CONFIG = "jgroups-tcp.xml";
+	private static final String DEFAULT_JGROUPRAFT_CONFIG = "jgroups-raft.xml";
 	private static final String RAFTPORT = "raft.port";
 
 	private final String localHost;
