@@ -48,16 +48,6 @@ public class RaftClusterContainer {
 
 	public void doStop() throws Exception {
 		isLeader = false;
-		LOGGER.info("Disconnecting JGroupsraft Channel for JGroupsRaftClusterView with Id {}", raftCurrentMember);
-		raftHandle.channel().disconnect();
-		if (raftHandle != null && raftHandle.log() != null) {
-			raftHandle.log().close();
-			LOGGER.info("Closed Log for JGroupsRaftClusterView with Id {}", raftCurrentMember);
-		}
-	}
-
-	public void doShutdown() throws Exception {
-		isLeader = false;
 		if (raftHandle != null) {
 			if (raftHandle.channel() != null) {
 				LOGGER.info("Closing JGroupsraft Channel for JGroupsRaftClusterView with Id {}", raftCurrentMember);
