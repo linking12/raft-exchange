@@ -33,12 +33,13 @@ public class RaftClusterDiscovery {
 	private final String jgroupClusterName;
 	private final EurekaClient eurekaClient;
 
-	private String jgroupPort = "7800";
+	private String jgroupPort;
 	private String jgroupResources;
 	private String lastAppsHashCode;
 	private List<String> lastClusterHostAndPorts;
 
 	public RaftClusterDiscovery(ApplicationInfoManager applicationInfoManager, EurekaClient eurekaClient) {
+		this.jgroupPort = System.getProperty(RAFTPORT, "7800");
 		applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
 		eurekaClient.registerEventListener(this::onEurekaEvent);
 		this.eurekaClient = eurekaClient;
