@@ -115,23 +115,23 @@ enum BalanceAdjustmentType {
 }
 
 // Union type for all API commands
-message ApiMessage {
+message ApiCommand {
+  int64 timestamp = 1;
   oneof command {
-    ApiBinaryDataCommand binary_data = 1;
-    ApiPlaceOrder place_order = 2;
-    ApiAdjustUserBalance adjust_balance = 3;
-    ApiPersistState persist_state = 4;
-    ApiOrderBookRequest order_book_request = 5;
-    ApiNop nop = 6;
-    ApiMoveOrder move_order = 7;
-    ApiCancelOrder cancel_order = 8;
-    ApiAddUser add_user = 9;
-    ApiReduceOrder reduce_order = 10;
-    ApiSuspendUser suspend_user = 11;
-    ApiReset reset = 12;
-    ApiResumeUser resume_user = 13;
+    ApiBinaryDataCommand binary_data = 2;
+    ApiPlaceOrder place_order = 3;
+    ApiAdjustUserBalance adjust_balance = 4;
+    ApiPersistState persist_state = 5;
+    ApiOrderBookRequest order_book_request = 6;
+    ApiNop nop = 7;
+    ApiMoveOrder move_order = 8;
+    ApiCancelOrder cancel_order = 9;
+    ApiAddUser add_user = 10;
+    ApiReduceOrder reduce_order = 11;
+    ApiSuspendUser suspend_user = 12;
+    ApiReset reset = 13;
+    ApiResumeUser resume_user = 14;
   }
-  int64 timestamp = 14;  // Common field from ApiCommand
 }
 
 

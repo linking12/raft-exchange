@@ -1,58 +1,50 @@
 package com.binance.raftexchange.server.raft;
 
+import com.binance.platform.common.shutdown.GracefulShutdownHook;
 import org.jgroups.JChannel;
 import org.jgroups.raft.RaftHandle;
 import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class JGroupsRaftClusterView {
+import java.util.concurrent.TimeUnit;
+
+public class JGroupsRaftClusterView implements GracefulShutdownHook {
     private static final Logger LOG = LoggerFactory.getLogger(JGroupsRaftClusterView.class);
+    private final ClusterDiscoveryByEureka discovery;
     private final StateMachine stateMachine;
-    private final String jgroupsConfig;
     private final String jgroupsClusterName;
     private final String raftId;
     private volatile boolean isMaster;
     private RaftHandle raftHandle;
 
-    public JGroupsRaftClusterView(String jgroupsConfig, String jgroupsClusterName, String raftId, StateMachine stateMachine) {
-        this.jgroupsConfig = jgroupsConfig;
-        this.jgroupsClusterName = jgroupsClusterName;
-        this.raftId = raftId;
+    public JGroupsRaftClusterView(ClusterDiscoveryByEureka discovery, StateMachine stateMachine, String jgroupsClusterName) {
+        this.discovery = discovery;
         this.stateMachine = stateMachine;
+        this.jgroupsClusterName = jgroupsClusterName;
+        this.raftId = discovery.raftCurrentMember();
     }
 
     public void doStart() throws Exception {
-        if (raftHandle == null && jgroupsConfig != null && !jgroupsConfig.isEmpty()) {
-            raftHandle = new RaftHandle(new JChannel(jgroupsConfig), stateMachine).raftId(raftId);
-        }
-        Exception cause = null;
-        for (int i = 1; i < 11; i++) {
-            LOG.debug("Attempt #{} for raft {} to join {}", i, raftId, jgroupsClusterName);
-            try {
-                raftHandle.addRoleListener(new ClusterRoleChangeListener(this));
-                raftHandle.channel().connect(jgroupsClusterName);
-                LOG.debug("Joined and connected to {} with raft id: {}", jgroupsClusterName, raftId);
-                cause = null;
-                break;
-            } catch (Exception e) {
-                cause = e;
-            }
-            // wait for next attempt
-            Thread.sleep(5000);
-        }
-        if (cause != null) {
-            throw cause;
-        }
+        JChannel jChannel;
+        do {
+            String raftMemberCluster = discovery.raftMemberCluster();
+            jChannel = discovery.createJChannel(raftMemberCluster, raftId);
+            TimeUnit.SECONDS.sleep(5);
+            LOG.info("Starting jgroup: {}", raftId);
+        } while (jChannel == null);
+        this.raftHandle = new RaftHandle(jChannel, null).raftId(raftId);
+        raftHandle.addRoleListener(new ClusterRoleChangeListener(this));
+        this.raftHandle.channel().connect(jgroupsClusterName);
+        LOG.info("Joined and connected to {} with raft id: {}", jgroupsClusterName, raftId);
     }
 
-    public void doStop() throws Exception {
-        isMaster = false;
-        LOG.info("Disconnecting JGroupsraft Channel for JGroupsRaftClusterView with Id {}", raftId);
-        raftHandle.channel().disconnect();
-        if (raftHandle != null && raftHandle.log() != null) {
-            raftHandle.log().close();
-            LOG.info("Closed Log for JGroupsRaftClusterView with Id {}", raftId);
+    @Override
+    public void shutdown() {
+        try {
+            doShutdown();
+        } catch (Exception e) {
+            LOG.error("Error shutting down JGroupsRaftClusterView", e);
         }
     }
 
@@ -60,12 +52,10 @@ public class JGroupsRaftClusterView {
         isMaster = false;
         if (raftHandle != null) {
             if (raftHandle.channel() != null) {
-                LOG.info("Closing JGroupsraft Channel for JGroupsRaftClusterView with Id {}", raftId);
                 raftHandle.channel().close();
-                LOG.info("Closed JGroupsraft Channel Channel for JGroupsRaftClusterView with Id {}", raftId);
+                LOG.info("Closed JGroupsRaft Channel for JGroupsRaftClusterView with Id {}", raftId);
             }
             if (raftHandle.log() != null) {
-                LOG.info("Closing Log for JGroupsRaftClusterView with Id {}", raftId);
                 raftHandle.log().close();
                 LOG.info("Closed Log for JGroupsRaftClusterView with Id {}", raftId);
             }

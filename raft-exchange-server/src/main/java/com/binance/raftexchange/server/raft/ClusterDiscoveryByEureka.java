@@ -4,6 +4,7 @@ import static com.binance.platform.common.EurekaConstants.EUREKA_METADATA_FLOWFL
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -13,13 +14,10 @@ import org.apache.commons.lang3.StringUtils;
 import org.jgroups.JChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.util.StreamUtils;
 
 import com.binance.platform.common.EnvUtil;
-import com.netflix.appinfo.ApplicationInfoManager;
 import com.netflix.appinfo.InstanceInfo;
 import com.netflix.discovery.CacheRefreshedEvent;
 import com.netflix.discovery.EurekaClient;
@@ -31,30 +29,27 @@ public class ClusterDiscoveryByEureka {
     private static final String RAFTPORT = "raft.port";
 
     private String jgroupResources;
-
-    @Autowired
-    private ApplicationInfoManager applicationInfoManager;
-
-    @Autowired
-    private EurekaClient eurekaClient;
-
-    @Value("${spring.application.name}")
-    private String appName;
-
-    @Value("${spring.cloud.client.ip-address}")
-    private String localHost;
-
-    @Value("${raft.port:7800}")
-    private String jgroupPort;
+    private final EurekaClient eurekaClient;
+    private final String appName;
+    private final String localHost;
+    private final String jgroupPort;
+    private final int startupNodes;
 
     private List<String> lastClusterHostAndPorts;
 
     private volatile String lastAppsHashCode;
 
-    public void init() {
+    public ClusterDiscoveryByEureka(EurekaClient eurekaClient, String appName, String localHost, String jgroupPort, int startupNodes) {
+        this.eurekaClient = eurekaClient;
+        this.appName = appName;
+        this.localHost = localHost;
+        this.jgroupPort = jgroupPort;
+        this.startupNodes = startupNodes;
         this.eurekaClient.registerEventListener(this::onEurekaEvent);
+        this.eurekaClient.getApplicationInfoManager().registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
         try {
-            this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver().getResource("classpath:maxwell-jgroups-tcp.xml").getInputStream(), StandardCharsets.UTF_8);
+            this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver()
+                    .getResource("classpath:jgroups-raft.xml").getInputStream(), StandardCharsets.UTF_8);
         } catch (Throwable e) {
             // ignore
         }
@@ -81,36 +76,21 @@ public class ClusterDiscoveryByEureka {
         return host + "[" + port + "]";
     }
 
-    private String createJgroupCluster() {
-        int clusterSize = this.lastClusterHostAndPorts != null ? this.lastClusterHostAndPorts.size() : 0;
-        if (clusterSize == 3) {
-            StringBuilder clusterIpSb = new StringBuilder();
-            for (int i = 0; i < clusterSize; i++) {
-                String ip = this.lastClusterHostAndPorts.get(i);
-                if (i == clusterSize - 1) {
-                    clusterIpSb.append(ip);
-                } else {
-                    clusterIpSb.append(ip + ",");
-                }
-            }
-            return clusterIpSb.toString();
-        }
-        return null;
-    }
-
     public String raftMemberCluster() {
-        return this.createJgroupCluster();
+        if (lastClusterHostAndPorts == null || lastClusterHostAndPorts.size() < startupNodes) {
+            return null;
+        }
+        return String.join(",", lastClusterHostAndPorts);
     }
 
     public String raftCurrentMember() {
-        return this.jgroupHostAndPort(this.localHost, this.jgroupPort);
+        return jgroupHostAndPort(this.localHost, this.jgroupPort);
     }
 
     public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {
         JChannel jChannel = null;
         try {
-            String jgroupCluster = this.createJgroupCluster();
-            if (StringUtils.isNotBlank(jgroupCluster)) {
+            if (StringUtils.isNotBlank(raftMemberCluster)) {
                 String realJChannelParam = StringUtils.replaceEach(//
                     this.jgroupResources, //
                     new String[] {//
@@ -123,7 +103,7 @@ public class ClusterDiscoveryByEureka {
                     new String[] {//
                         localHost, //
                         jgroupPort, //
-                        jgroupCluster, //
+                        raftMemberCluster, //
                         raftMemberCluster, //
                         raftCurrentMember} //
                 );
