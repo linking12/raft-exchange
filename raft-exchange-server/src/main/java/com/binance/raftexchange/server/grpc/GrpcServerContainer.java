@@ -21,7 +21,9 @@ public class GrpcServerContainer {
 	}
 
 	public void doStart() throws Exception {
-		this.server = ServerBuilder.forPort(5001).addService(new ApiService()).addService(new OrderService()).build();
+		String grpcPort = System.getProperty("grpc.port", "5001");
+		this.server = ServerBuilder.forPort(Integer.valueOf(grpcPort)).addService(new ApiService())
+				.addService(new OrderService()).build();
 		Server localServer = server.start();
 		LOGGER.info("grpc server start {}", localServer.getPort());
 	}
