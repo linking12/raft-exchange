@@ -30,16 +30,18 @@ public class RaftClusterDiscovery {
 	private static final String RAFTPORT = "raft.port";
 
 	private final String localHost;
+	private final String jgroupPort;
 	private final String jgroupClusterName;
+	private final int startupNodes;
 	private final EurekaClient eurekaClient;
 
-	private String jgroupPort;
 	private String jgroupResources;
 	private String lastAppsHashCode;
 	private List<String> lastClusterHostAndPorts;
 
 	public RaftClusterDiscovery(ApplicationInfoManager applicationInfoManager, EurekaClient eurekaClient) {
 		this.jgroupPort = System.getProperty(RAFTPORT, "7800");
+		this.startupNodes = Integer.parseInt(System.getProperty("raft.startupNodes", "3"));
 		applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
 		eurekaClient.registerEventListener(this::onEurekaEvent);
 		this.eurekaClient = eurekaClient;
@@ -79,7 +81,10 @@ public class RaftClusterDiscovery {
 	}
 
 	public String raftMemberCluster() {
-		return this.createJgroupCluster();
+		if (lastClusterHostAndPorts == null || lastClusterHostAndPorts.size() < startupNodes) {
+			return null;
+		}
+		return String.join(",", lastClusterHostAndPorts);
 	}
 
 	public String raftCurrentMember() {
@@ -89,8 +94,7 @@ public class RaftClusterDiscovery {
 	public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {
 		JChannel jChannel = null;
 		try {
-			String jgroupCluster = this.createJgroupCluster();
-			if (StringUtils.isNotBlank(jgroupCluster)) {
+			if (StringUtils.isNotBlank(raftMemberCluster)) {
 				String realJChannelParam = StringUtils.replaceEach(//
 						this.jgroupResources, //
 						new String[] { //
@@ -103,7 +107,7 @@ public class RaftClusterDiscovery {
 						new String[] { //
 								localHost, //
 								jgroupPort, //
-								jgroupCluster, //
+								raftMemberCluster, //
 								raftMemberCluster, //
 								raftCurrentMember } //
 				);
@@ -116,23 +120,6 @@ public class RaftClusterDiscovery {
 			LOGGER.error("init jgroups error", e);
 		}
 		return jChannel;
-	}
-
-	private String createJgroupCluster() {
-		int clusterSize = this.lastClusterHostAndPorts != null ? this.lastClusterHostAndPorts.size() : 0;
-		if (clusterSize == 3) {
-			StringBuilder clusterIpSb = new StringBuilder();
-			for (int i = 0; i < clusterSize; i++) {
-				String ip = this.lastClusterHostAndPorts.get(i);
-				if (i == clusterSize - 1) {
-					clusterIpSb.append(ip);
-				} else {
-					clusterIpSb.append(ip + ",");
-				}
-			}
-			return clusterIpSb.toString();
-		}
-		return null;
 	}
 
 }

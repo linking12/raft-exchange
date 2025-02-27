@@ -3,21 +3,25 @@ package com.binance.raftexchange.server.raft;
 import java.io.DataInput;
 import java.io.DataOutput;
 
+import com.binance.raftexchange.stubs.api.ApiAddUser;
+import com.binance.raftexchange.stubs.api.ApiCommand;
+import com.binance.raftexchange.stubs.command.OrderCommand;
+import com.google.protobuf.GeneratedMessageV3;
 import org.jgroups.raft.StateMachine;
-import org.jgroups.util.ByteArrayDataInputStream;
-import org.jgroups.util.ByteArrayDataOutputStream;
 
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.IEventsHandler;
 import exchange.core2.core.SimpleEventsProcessor;
-import exchange.core2.core.common.api.ApiCommand;
-import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.ExchangeConfiguration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ExchangeStateMachine implements StateMachine {
 
-	private final ExchangeApi api;
+    private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
+
+    private final ExchangeApi api;
 
 	public ExchangeStateMachine() {
 		SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new IEventsHandler() {
@@ -54,19 +58,26 @@ public class ExchangeStateMachine implements StateMachine {
 		this.api = api;
 	}
 
-	@Override
-	public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
-		ByteArrayDataInputStream in = new ByteArrayDataInputStream(data, offset, length);
-		// 构造出ApiCommand出来
-		ApiCommand apiCommand = null;
-		CommandResultCode commandResultCode = api.submitCommandAsync(apiCommand).get();
-		ByteArrayDataOutputStream out = new ByteArrayDataOutputStream();
-		if (commandResultCode != null) {
-			// out.writeUTF(value);
-		}
-		return out.buffer();
+    @Override
+    public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
+        GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data, offset, length);
+        if (grpcMessage instanceof ApiCommand) {
+            ApiCommand.CommandCase commandCase = ((ApiCommand) grpcMessage).getCommandCase();
+            switch (commandCase) {
+                case ADD_USER:
+                    ApiAddUser apiAddUser = ((ApiCommand) grpcMessage).getAddUser();
+                    //todo call exchange api
+                    LOG.info("ApiAddUser applied, msg: {}", apiAddUser);
+                    break;
+                default:
+                    LOG.warn("Unsupported ApiCommand: {}", commandCase);
+            }
 
-	}
+        } else if (grpcMessage instanceof OrderCommand) {
+            ((OrderCommand) grpcMessage).getCommand();
+        }
+        return null;
+    }
 
 	@Override
 	public void readContentFrom(DataInput in) throws Exception {

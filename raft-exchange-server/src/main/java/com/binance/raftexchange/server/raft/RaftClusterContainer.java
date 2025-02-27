@@ -2,6 +2,8 @@ package com.binance.raftexchange.server.raft;
 
 import java.util.concurrent.TimeUnit;
 
+import com.binance.raftexchange.stubs.api.ApiAddUser;
+import com.binance.raftexchange.stubs.api.ApiCommand;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.raft.Role;
 import org.jgroups.raft.RaftHandle;
@@ -38,6 +40,18 @@ public class RaftClusterContainer {
 			if (role == Role.Leader) {
 				isLeader = true;
 				LOGGER.info("Won HA election, starting raftExchange:{}", raftCurrentMember);
+
+				// test code
+				try {
+					ApiCommand apiCommand = ApiCommand.newBuilder()
+							.setAddUser(ApiAddUser.newBuilder().setUid(30L))
+							.build();
+					byte[] bytes = SerializeHelper.serializeWithType(apiCommand);
+					raftHandle.set(bytes, 0, bytes.length);
+				} catch (Exception e) {
+					LOGGER.error("test code error", e);
+				}
+
 			} else {
 				isLeader = false;
 				LOGGER.info("Unable to find consensus, stepping down HA leadership:{}", raftCurrentMember);
