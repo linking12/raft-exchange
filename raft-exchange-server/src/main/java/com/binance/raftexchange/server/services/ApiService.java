@@ -1,9 +1,9 @@
 package com.binance.raftexchange.server.services;
 
-import com.binance.raftexchange.server.stubs.api.ApiCommandServiceGrpc;
-import com.binance.raftexchange.server.stubs.api.ApiMessage;
-import com.binance.raftexchange.server.stubs.command.CommandResult;
-import com.binance.raftexchange.server.stubs.command.CommandResultCode;
+import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
+import com.binance.raftexchange.stubs.api.ApiMessage;
+import com.binance.raftexchange.stubs.command.CommandResult;
+import com.binance.raftexchange.stubs.command.CommandResultCode;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

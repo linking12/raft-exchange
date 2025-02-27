@@ -1,9 +1,9 @@
 syntax = "proto3";
 
 import "message/commands.proto";
-package com.binance.raftexchange.client.stubs.api;
+package com.binance.raftexchange.stubs.api;
 
-option java_package = "com.binance.raftexchange.server.stubs.api";
+option java_package = "com.binance.raftexchange.stubs.api";
 option java_multiple_files = true;
 
 
