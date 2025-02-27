@@ -37,6 +37,8 @@ public class ExchangeStateMachine implements StateMachine {
 		}
 		return null;
 	}
+	
+	
 
 	@Override
 	public void readContentFrom(DataInput in) throws Exception {
