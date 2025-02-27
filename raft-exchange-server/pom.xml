@@ -23,29 +23,15 @@
 		</dependency>
 		<dependency>
 			<groupId>com.binance.infra.avengers</groupId>
-			<artifactId>platform-starter-web</artifactId>
-			<exclusions>
-				<exclusion>
-					<groupId>com.binance.infra.avengers</groupId>
-					<artifactId>platform-starter-swagger</artifactId>
-				</exclusion>
-				<exclusion>
-					<groupId>com.binance.infra.avengers</groupId>
-					<artifactId>
-						platform-starter-resilience4j
-					</artifactId>
-				</exclusion>
-				<exclusion>
-					<groupId>com.binance.infra.avengers</groupId>
-					<artifactId>platform-starter-openfeign</artifactId>
-				</exclusion>
-				<exclusion>
-					<groupId>org.springframework.boot</groupId>
-					<artifactId>
-						spring-boot-starter-validation
-					</artifactId>
-				</exclusion>
-			</exclusions>
+			<artifactId>platform-starter-apollo</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.binance.infra.avengers</groupId>
+			<artifactId>platform-starter-monitor</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.binance.infra.avengers</groupId>
+			<artifactId>platform-starter-eureka</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>io.grpc</groupId>
