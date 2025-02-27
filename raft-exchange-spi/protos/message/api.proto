@@ -6,12 +6,6 @@ package com.binance.raftexchange.stubs.api;
 option java_package = "com.binance.raftexchange.stubs.api";
 option java_multiple_files = true;
 
-
-// Base message that all commands inherit from implicitly via timestamp
-message ApiCommand {
-  int64 timestamp = 1;
-}
-
 // Binary Data Command
 message ApiBinaryDataCommand {
   int32 transferId = 1;
@@ -136,5 +130,5 @@ message ApiCommand {
 
 
 service ApiCommandService{
-    rpc execApiCommand(stream ApiMessage) returns (stream exchange.core2.cmd.CommandResult); // BI-DIRECIONAL STREAMING
+    rpc execApiCommand(stream ApiCommand) returns (stream exchange.core2.cmd.CommandResult); // BI-DIRECIONAL STREAMING
 }

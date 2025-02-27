@@ -1,7 +1,7 @@
 package com.binance.raftexchange.server.services;
 
+import com.binance.raftexchange.stubs.api.ApiCommand;
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
-import com.binance.raftexchange.stubs.api.ApiMessage;
 import com.binance.raftexchange.stubs.command.CommandResult;
 import com.binance.raftexchange.stubs.command.CommandResultCode;
 import io.grpc.stub.StreamObserver;
@@ -14,10 +14,10 @@ public class ApiService extends ApiCommandServiceGrpc.ApiCommandServiceImplBase 
     static final Logger LOGGER = LoggerFactory.getLogger(ApiService.class);
 
     @Override
-    public StreamObserver<ApiMessage> execApiCommand(StreamObserver<CommandResult> responseObserver) {
-        return new StreamObserver<ApiMessage>() {
+    public StreamObserver<ApiCommand> execApiCommand(StreamObserver<CommandResult> responseObserver) {
+        return new StreamObserver<ApiCommand>() {
             @Override
-            public void onNext(ApiMessage apiMessage) {
+            public void onNext(ApiCommand apiCommand) {
                 CommandResult result = CommandResult.newBuilder()
                         .setResultCode(CommandResultCode.ACCEPTED)
                         .build();
@@ -33,6 +33,7 @@ public class ApiService extends ApiCommandServiceGrpc.ApiCommandServiceImplBase 
 
             @Override
             public void onCompleted() {
+
             }
         };
     }
