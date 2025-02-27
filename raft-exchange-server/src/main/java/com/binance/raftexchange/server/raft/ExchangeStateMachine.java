@@ -70,7 +70,7 @@ public class ExchangeStateMachine implements StateMachine {
 
 	@Override
 	public void readContentFrom(DataInput in) throws Exception {
-
+         
 	}
 
 	@Override
