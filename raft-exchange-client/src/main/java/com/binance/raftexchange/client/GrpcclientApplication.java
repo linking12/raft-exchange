@@ -6,9 +6,9 @@ import java.util.concurrent.TimeUnit;
 
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-import com.binance.raftexchange.client.stubs.usuario.Usuario;
-import com.binance.raftexchange.client.stubs.usuario.UsuarioServiceGrpc;
-import com.binance.raftexchange.client.stubs.usuario.Usuarios;
+import com.binance.raftexchange.stubs.usuario.Usuario;
+import com.binance.raftexchange.stubs.usuario.UsuarioServiceGrpc;
+import com.binance.raftexchange.stubs.usuario.Usuarios;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;

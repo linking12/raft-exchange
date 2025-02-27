@@ -1,13 +1,12 @@
 package com.binance.raftexchange.server.services;
 
-import com.binance.raftexchange.server.stubs.usuario.Usuario;
-import com.binance.raftexchange.server.stubs.usuario.UsuarioServiceGrpc.UsuarioServiceImplBase;
-
+import com.binance.raftexchange.stubs.usuario.Usuario;
+import com.binance.raftexchange.stubs.usuario.UsuarioServiceGrpc;
 import io.grpc.stub.StreamObserver;
 import org.springframework.stereotype.Component;
 
 @Component
-public class UserServiceImpl extends UsuarioServiceImplBase {
+public class UserServiceImpl extends UsuarioServiceGrpc.UsuarioServiceImplBase {
     @Override
     public void salve(Usuario request, StreamObserver<Usuario> responseObserver) {
         Usuario usuarioSaved = Usuario.newBuilder().setEmail("teste_email@saved.com").setFullname(request.getFullname())
