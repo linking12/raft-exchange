@@ -10,15 +10,15 @@ import io.grpc.stub.StreamObserver;
 
 public class ApiService extends ApiCommandServiceGrpc.ApiCommandServiceImplBase {
 
-	private final RaftClusterContainer raftClusterContainer;
+    private final RaftClusterContainer raftClusterContainer;
 
-	public ApiService(RaftClusterContainer raftClusterContainer) {
-		this.raftClusterContainer = raftClusterContainer;
-	}
+    public ApiService(RaftClusterContainer raftClusterContainer) {
+        this.raftClusterContainer = raftClusterContainer;
+    }
 
-	@Override
-	public StreamObserver<ApiCommand> execApiCommand(StreamObserver<CommandResult> responseObserver) {
-		return new UniversalStreamObserver<>(responseObserver, raftClusterContainer);
-	}
+    @Override
+    public StreamObserver<ApiCommand> execApiCommand(StreamObserver<CommandResult> responseObserver) {
+        return new UniversalStreamObserver<>(responseObserver, raftClusterContainer);
+    }
 
 }
