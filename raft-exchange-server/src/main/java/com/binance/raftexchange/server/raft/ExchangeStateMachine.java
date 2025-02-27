@@ -21,7 +21,7 @@ public class ExchangeStateMachine implements StateMachine {
 
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
 
-    private final ExchangeApi api;
+    private final ExchangeApi exchangeApi;
 
 	public ExchangeStateMachine() {
 		SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new IEventsHandler() {
@@ -55,7 +55,7 @@ public class ExchangeStateMachine implements StateMachine {
 				.build();
 		exchangeCore.startup();
 		ExchangeApi api = exchangeCore.getApi();
-		this.api = api;
+		this.exchangeApi = api;
 	}
 
     @Override
@@ -65,6 +65,8 @@ public class ExchangeStateMachine implements StateMachine {
             ApiCommand.CommandCase commandCase = ((ApiCommand) grpcMessage).getCommandCase();
             switch (commandCase) {
                 case ADD_USER:
+                	
+                	
                     ApiAddUser apiAddUser = ((ApiCommand) grpcMessage).getAddUser();
                     //todo call exchange api
                     LOG.info("ApiAddUser applied, msg: {}", apiAddUser);
