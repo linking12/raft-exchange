@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.grpc;
 
+import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,26 +14,14 @@ import io.grpc.stub.StreamObserver;
 public class OrderService extends OrderCommandServiceGrpc.OrderCommandServiceImplBase {
 	static final Logger LOGGER = LoggerFactory.getLogger(ApiService.class);
 
-	@Override
+	private final RaftClusterContainer raftClusterContainer;
+
+    public OrderService(RaftClusterContainer raftClusterContainer) {
+        this.raftClusterContainer = raftClusterContainer;
+    }
+
+    @Override
 	public StreamObserver<OrderCommand> execOrderCommand(StreamObserver<CommandResult> responseObserver) {
-		return new StreamObserver<OrderCommand>() {
-			@Override
-			public void onNext(OrderCommand apiCommand) {
-				CommandResult result = CommandResult.newBuilder().setResultCode(CommandResultCode.ACCEPTED).build();
-				responseObserver.onNext(result);
-				responseObserver.onCompleted();
-			}
-
-			@Override
-			public void onError(Throwable throwable) {
-				// 先log下。。。
-				LOGGER.error("error ", throwable);
-			}
-
-			@Override
-			public void onCompleted() {
-
-			}
-		};
+		return new UniversalStreamObserver<>(responseObserver, raftClusterContainer);
 	}
 }

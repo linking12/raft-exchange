@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.raft;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import com.binance.raftexchange.stubs.api.ApiAddUser;
@@ -78,6 +79,16 @@ public class RaftClusterContainer {
 			}
 			raftHandle = null;
 		}
+	}
+
+	/**
+	 *
+	 * @param log 需要进行共识和应用的信息
+	 * @return 状态机应用结果
+	 * @throws Exception
+	 */
+	public CompletableFuture<byte[]> requestConsensus(byte[] log) throws Exception {
+		return raftHandle.setAsync(log, 0, log.length);
 	}
 
 	public boolean isLeader() {

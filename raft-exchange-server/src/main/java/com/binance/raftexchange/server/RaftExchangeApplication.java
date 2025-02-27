@@ -32,8 +32,8 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
 	@Override
 	public void run(String... arg0) throws Exception {
-		startRaft();
-		// startGrpcServer();
+//		startRaft();
+		 startGrpcServer(this.raftClusterContainer);
 	}
 
 	public void startRaft() throws Exception {
@@ -43,8 +43,9 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 		this.raftClusterContainer = raftClusterContainer;
 	}
 
-	public void startGrpcServer() throws Exception {
-		GrpcServerContainer grpcServerContainer = new GrpcServerContainer();
+	public void startGrpcServer(RaftClusterContainer raftClusterContainer) throws Exception {
+		//只有raft server启动后才允许启动grpc服务
+		GrpcServerContainer grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
 		grpcServerContainer.doStart();
 		this.grpcServerContainer = grpcServerContainer;
 	}
