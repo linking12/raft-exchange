@@ -14,9 +14,9 @@ public class RaftClusterContainer {
 	private final StateMachine stateMachine;
 	private final String jgroupsClusterName;
 	private final RaftClusterDiscovery raftClusterDiscovery;
-	private volatile boolean isLeader;
 	private RaftHandle raftHandle;
 	private String raftCurrentMember;
+	private volatile boolean isLeader;
 
 	public RaftClusterContainer(RaftClusterDiscovery raftClusterDiscovery) {
 		this.jgroupsClusterName = raftClusterDiscovery.getJgroupClusterName();
