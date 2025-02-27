@@ -40,8 +40,8 @@ public class RaftExchangeApplication implements CommandLineRunner {
 	@Override
 	public void run(String... arg0) throws Exception {
 		RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(applicationInfoManager, eurekaClient);
-		RaftClusterContainer RaftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
-		RaftClusterContainer.doStart();
+		RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
+		raftClusterContainer.doStart();
 
 		//
 	}
