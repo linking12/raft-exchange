@@ -23,15 +23,7 @@
 		</dependency>
 		<dependency>
 			<groupId>com.binance.infra.avengers</groupId>
-			<artifactId>platform-starter-apollo</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>com.binance.infra.avengers</groupId>
-			<artifactId>platform-starter-monitor</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>com.binance.infra.avengers</groupId>
-			<artifactId>platform-starter-eureka</artifactId>
+			<artifactId>platform-starter-web</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>io.grpc</groupId>
