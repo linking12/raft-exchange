@@ -4,6 +4,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
+import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
 import com.binance.raftexchange.stubs.api.ApiCommand;
 import com.binance.raftexchange.stubs.command.OrderCommand;
 import com.google.protobuf.GeneratedMessageV3;
@@ -26,6 +27,7 @@ public class ExchangeStateMachine implements StateMachine {
 				case BINARY_DATA:
 					break;
 				case PLACE_ORDER:
+					result = SyncTradeOrdersApiController.placeOrder(((ApiCommand) grpcMessage).getPlaceOrder());
 					break;
 				case ADJUST_BALANCE:
 					result = SyncAdminApiAccountsController.adjustBalance(((ApiCommand) grpcMessage).getAdjustBalance());
@@ -33,13 +35,16 @@ public class ExchangeStateMachine implements StateMachine {
 				case PERSIST_STATE:
 					break;
 				case ORDER_BOOK_REQUEST:
+					result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand) grpcMessage).getOrderBookRequest());
 					break;
 				case NOP:
 					LOG.info("NOP Command received, no action taken.");
 					break;
 				case MOVE_ORDER:
+					result = SyncTradeOrdersApiController.moveOrder(((ApiCommand) grpcMessage).getMoveOrder());
 					break;
 				case CANCEL_ORDER:
+					result = SyncTradeOrdersApiController.cancelOrder(((ApiCommand) grpcMessage).getCancelOrder());
 					break;
 				case ADD_USER:
 					result = SyncAdminApiAccountsController.createUser(((ApiCommand) grpcMessage).getAddUser());
