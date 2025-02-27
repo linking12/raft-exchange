@@ -1,4 +1,4 @@
-package com.binance.raftexchange.server.services;
+package com.binance.raftexchange.server.grpc;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
