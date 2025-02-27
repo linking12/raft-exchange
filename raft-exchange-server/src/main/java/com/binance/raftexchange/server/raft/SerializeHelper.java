@@ -3,6 +3,9 @@ package com.binance.raftexchange.server.raft;
 import com.binance.raftexchange.stubs.api.ApiCommand;
 import com.binance.raftexchange.stubs.command.OrderCommand;
 import com.google.protobuf.GeneratedMessageV3;
+import com.google.protobuf.Int32Value;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.ProtocolMessageEnum;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -43,8 +46,21 @@ public class SerializeHelper {
             case "OrderCommand":
                 return OrderCommand.parseFrom(payload);
             default:
-                throw new IllegalArgumentException("未知消息类型: " + type);
+                throw new IllegalArgumentException("Unknown command type: " + type);
         }
     }
 
+    public static byte[] enumToBytesProto(ProtocolMessageEnum enumValue) {
+        return Int32Value.newBuilder().setValue(enumValue.getNumber()).build().toByteArray();
+    }
+
+    public static <T extends ProtocolMessageEnum> T bytesToEnumProto(byte[] bytes, Class<T> enumClass) throws InvalidProtocolBufferException {
+        int intValue = Int32Value.parseFrom(bytes).getValue();
+        for (T value : enumClass.getEnumConstants()) {
+            if (value.getNumber() == intValue) {
+                return value;
+            }
+        }
+        throw new IllegalArgumentException("Unknown enum value: " + intValue);
+    }
 }
