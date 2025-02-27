@@ -20,30 +20,24 @@
 		<dependency>
 			<groupId>com.binance.raft-exchange</groupId>
 			<artifactId>raft-exchange-spi</artifactId>
-			<version>1.0.0-SNAPSHOT</version>
 		</dependency>
 		<dependency>
 			<groupId>com.binance.infra.avengers</groupId>
 			<artifactId>platform-starter-web</artifactId>
 		</dependency>
-
 		<dependency>
 			<groupId>io.grpc</groupId>
 			<artifactId>grpc-netty-shaded</artifactId>
-			<version>1.70.0</version>
 			<scope>runtime</scope>
 		</dependency>
 		<dependency>
 			<groupId>io.grpc</groupId>
 			<artifactId>grpc-protobuf</artifactId>
-			<version>1.70.0</version>
 		</dependency>
 		<dependency>
 			<groupId>io.grpc</groupId>
 			<artifactId>grpc-stub</artifactId>
-			<version>1.70.0</version>
 		</dependency>
-
 		<dependency>
 			<groupId>org.jgroups</groupId>
 			<artifactId>jgroups-raft</artifactId>
@@ -80,6 +74,11 @@
 				<groupId>org.jgroups</groupId>
 				<artifactId>jgroups-raft</artifactId>
 				<version>${jgroups-raft.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-netty-shaded</artifactId>
+				<version>${grpc.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>io.grpc</groupId>
