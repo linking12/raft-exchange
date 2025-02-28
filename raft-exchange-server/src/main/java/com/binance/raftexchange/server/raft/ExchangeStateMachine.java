@@ -77,9 +77,10 @@ public class ExchangeStateMachine implements StateMachine {
         BinaryDataCommand.CommandCase commandCase = binaryDataCommand.getCommandCase();
         switch (commandCase) {
             case ADD_ACCOUNTS:
+                result = SyncAdminApiAccountsController.batchAddAccounts(binaryDataCommand.getAddAccounts());
                 break;
             case ADD_SYMBOLS:
-                result = SyncAdminApiSymbolsController.createSymbol(binaryDataCommand.getAddSymbols());
+                result = SyncAdminApiSymbolsController.batchAddSymbols(binaryDataCommand.getAddSymbols());
                 break;
             default:
                 LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);

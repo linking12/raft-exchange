@@ -1,9 +1,15 @@
 package com.binance.raftexchange.server.exchange;
 
+import com.binance.raftexchange.stubs.request.AccountBalanceMap;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiResumeUser;
 import com.binance.raftexchange.stubs.request.ApiSuspendUser;
+import com.binance.raftexchange.stubs.request.BatchAddAccountsCommand;
+import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
+import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
+
+import java.util.Map;
 
 public class SyncAdminApiAccountsController extends AbstractApiController {
 
@@ -44,5 +50,23 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
                 .build();
         LOG.info("ApiResumeUser applied, msg: {}", apiResumeUser);
         return callExchange(apiResumeUser);
+    }
+
+    public static byte[] batchAddAccounts(BatchAddAccountsCommand grpcBatchAddAccountsCommand) throws Exception {
+        Map<Long, AccountBalanceMap> usersMap = grpcBatchAddAccountsCommand.getUsersMap();
+        LongObjectHashMap<IntLongHashMap> users = new LongObjectHashMap<>(usersMap.size());
+        for (Map.Entry<Long, AccountBalanceMap> entry : usersMap.entrySet()) {
+            Long uid = entry.getKey();
+            AccountBalanceMap accounts = entry.getValue();
+            for (Map.Entry<Integer, Long> e : accounts.getBalancesMap().entrySet()) {
+                Integer currency = e.getKey();
+                Long balance = e.getValue();
+                users.getIfAbsentPut(uid, new IntLongHashMap()).put(currency, balance);
+            }
+        }
+        exchange.core2.core.common.api.binary.BatchAddAccountsCommand batchAddAccountsCommand = new exchange.core2.core.common.api.binary.BatchAddAccountsCommand(users);
+        LOG.info("batchAddAccountsCommand applied, msg: {}", batchAddAccountsCommand);
+
+        return callExchange(batchAddAccountsCommand);
     }
 }

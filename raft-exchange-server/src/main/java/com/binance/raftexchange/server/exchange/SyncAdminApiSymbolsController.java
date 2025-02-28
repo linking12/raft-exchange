@@ -6,12 +6,14 @@ import exchange.core2.core.common.SymbolType;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Map;
 
 public class SyncAdminApiSymbolsController extends AbstractApiController {
 
-    public static byte[] createSymbol(BatchAddSymbolsCommand grpcBatchAddSymbolsCommand) throws Exception {
-        Collection<exchange.core2.core.common.CoreSymbolSpecification> coreSymbols = new ArrayList<>();
-        for (CoreSymbolSpecification grpcSymbol : grpcBatchAddSymbolsCommand.getSymbolsMap().values()) {
+    public static byte[] batchAddSymbols(BatchAddSymbolsCommand grpcBatchAddSymbolsCommand) throws Exception {
+        Map<Integer, CoreSymbolSpecification> symbolsMap = grpcBatchAddSymbolsCommand.getSymbolsMap();
+        Collection<exchange.core2.core.common.CoreSymbolSpecification> coreSymbols = new ArrayList<>(symbolsMap.size());
+        for (CoreSymbolSpecification grpcSymbol : symbolsMap.values()) {
             exchange.core2.core.common.CoreSymbolSpecification coreSymbol = exchange.core2.core.common.CoreSymbolSpecification.builder()
                     .symbolId(grpcSymbol.getSymbolId())
                     .type(SymbolType.of(grpcSymbol.getType().getNumber()))
