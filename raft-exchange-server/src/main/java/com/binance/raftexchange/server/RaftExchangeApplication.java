@@ -33,7 +33,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     @Override
     public void run(String... arg0) throws Exception {
         startRaftServer();
-        startGrpcServer(this.raftClusterContainer);
+        startGrpcServer();
     }
 
     public void startRaftServer() throws Exception {
@@ -43,10 +43,14 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         this.raftClusterContainer = raftClusterContainer;
     }
 
-    public void startGrpcServer(RaftClusterContainer raftClusterContainer) throws Exception {
-        GrpcServerContainer grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
-        grpcServerContainer.doStart();
-        this.grpcServerContainer = grpcServerContainer;
+    public void startGrpcServer() throws Exception {
+        GrpcServerContainer grpcServerContainer = null;
+        do {
+            grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
+        } while (this.raftClusterContainer != null);
+        if (grpcServerContainer != null) {
+            grpcServerContainer.doStart();
+        }
     }
 
     @Override
