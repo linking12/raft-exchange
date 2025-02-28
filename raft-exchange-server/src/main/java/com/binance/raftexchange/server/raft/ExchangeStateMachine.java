@@ -4,9 +4,11 @@ import java.io.DataInput;
 import java.io.DataOutput;
 
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
+import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
-import com.binance.raftexchange.stubs.api.ApiCommand;
-import com.binance.raftexchange.stubs.command.OrderCommand;
+import com.binance.raftexchange.server.util.SerializeHelper;
+import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
 import org.jgroups.raft.StateMachine;
 
@@ -60,9 +62,17 @@ public class ExchangeStateMachine implements StateMachine {
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
             }
-
-        } else if (grpcMessage instanceof OrderCommand) {
-            ((OrderCommand)grpcMessage).getCommand();
+        } else if (grpcMessage instanceof BinaryDataCommand) {
+            BinaryDataCommand.CommandCase commandCase = ((BinaryDataCommand) grpcMessage).getCommandCase();
+            switch (commandCase) {
+                case ADD_ACCOUNTS:
+                    break;
+                case ADD_SYMBOLS:
+                    result = SyncAdminApiSymbolsController.createSymbol(((BinaryDataCommand) grpcMessage).getAddSymbols());
+                    break;
+                default:
+                    LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
+            }
         }
         return serialize_response ? result : null;
     }

@@ -24,7 +24,6 @@ public class GrpcServerContainer {
         String grpcPort = System.getProperty("grpc.port", "5001");
         this.server = ServerBuilder.forPort(Integer.valueOf(grpcPort))//
             .addService(new ApiService(raftClusterContainer))//
-            .addService(new OrderService(raftClusterContainer))//
             .build();
         Server localServer = server.start();
         LOGGER.info("grpc server start {}", localServer.getPort());

@@ -2,9 +2,9 @@ package com.binance.raftexchange.server.grpc;
 
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 
-import com.binance.raftexchange.stubs.api.ApiCommand;
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
-import com.binance.raftexchange.stubs.command.CommandResult;
+import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.response.CommandResult;
 
 import io.grpc.stub.StreamObserver;
 

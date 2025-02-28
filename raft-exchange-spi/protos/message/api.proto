@@ -7,7 +7,7 @@ option java_multiple_files = true;
 
 import "message/request.proto";
 import "message/response.proto";
- 
+
 service ApiCommandService{
-    rpc execApiCommand(stream ApiCommand) returns (stream com.binance.raftexchange.stubs.command.CommandResult); // BI-DIRECTIONAL STREAMING
+    rpc execApiCommand(stream com.binance.raftexchange.stubs.request.ApiCommand) returns (stream com.binance.raftexchange.stubs.response.CommandResult); // BI-DIRECTIONAL STREAMING
 }

@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.raft;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import com.binance.raftexchange.server.util.SerializeHelper;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.raft.Role;
 import org.jgroups.raft.RaftHandle;
@@ -10,8 +11,8 @@ import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.binance.raftexchange.stubs.api.ApiAddUser;
-import com.binance.raftexchange.stubs.api.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiCommand;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);

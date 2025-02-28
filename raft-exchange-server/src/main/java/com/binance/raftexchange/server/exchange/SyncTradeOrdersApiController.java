@@ -1,9 +1,9 @@
 package com.binance.raftexchange.server.exchange;
 
-import com.binance.raftexchange.stubs.api.ApiCancelOrder;
-import com.binance.raftexchange.stubs.api.ApiMoveOrder;
-import com.binance.raftexchange.stubs.api.ApiOrderBookRequest;
-import com.binance.raftexchange.stubs.api.ApiPlaceOrder;
+import com.binance.raftexchange.stubs.request.ApiCancelOrder;
+import com.binance.raftexchange.stubs.request.ApiMoveOrder;
+import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
+import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
 
 public class SyncTradeOrdersApiController extends AbstractApiController {
 

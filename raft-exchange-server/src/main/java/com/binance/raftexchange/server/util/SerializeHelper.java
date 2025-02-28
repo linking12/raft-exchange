@@ -1,7 +1,7 @@
-package com.binance.raftexchange.server.raft;
+package com.binance.raftexchange.server.util;
 
-import com.binance.raftexchange.stubs.api.ApiCommand;
-import com.binance.raftexchange.stubs.command.OrderCommand;
+import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.response.OrderCommand;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;

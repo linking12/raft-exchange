@@ -1,7 +1,7 @@
 package com.binance.raftexchange.server.exchange;
 
-import com.binance.raftexchange.stubs.api.ApiAddUser;
-import com.binance.raftexchange.stubs.api.ApiAdjustUserBalance;
+import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 
 public class SyncAdminApiAccountsController extends AbstractApiController {
 

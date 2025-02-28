@@ -1,7 +1,7 @@
 package com.binance.raftexchange.server.grpc;
 
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
-import com.binance.raftexchange.server.raft.SerializeHelper;
+import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.server.util.ThrowableFunction;
 import com.google.protobuf.GeneratedMessageV3;
 import io.grpc.stub.StreamObserver;
