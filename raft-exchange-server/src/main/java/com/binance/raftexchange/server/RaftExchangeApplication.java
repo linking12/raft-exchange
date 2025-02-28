@@ -32,11 +32,11 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     @Override
     public void run(String... arg0) throws Exception {
-        // startRaft();
+        startRaftServer();
         startGrpcServer(this.raftClusterContainer);
     }
 
-    public void startRaft() throws Exception {
+    public void startRaftServer() throws Exception {
         RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(eurekaClient);
         RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
         raftClusterContainer.doStart();
