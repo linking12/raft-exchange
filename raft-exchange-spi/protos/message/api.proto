@@ -11,7 +11,3 @@ import "message/response.proto";
 service ApiCommandService{
   rpc execApiCommand(stream com.binance.raftexchange.stubs.request.ApiCommand) returns (stream com.binance.raftexchange.stubs.response.CommandResult); // BI-DIRECTIONAL STREAMING
 }
-
-service BinaryDataCommandService{
-  rpc execBinaryDataCommand(stream com.binance.raftexchange.stubs.request.BinaryDataCommand) returns (stream com.binance.raftexchange.stubs.response.CommandResult); // BI-DIRECTIONAL STREAMING
-}

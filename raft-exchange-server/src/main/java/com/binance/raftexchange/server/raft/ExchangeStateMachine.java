@@ -3,6 +3,10 @@ package com.binance.raftexchange.server.raft;
 import java.io.DataInput;
 import java.io.DataOutput;
 
+import org.jgroups.raft.StateMachine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
@@ -11,10 +15,6 @@ import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
-import org.jgroups.raft.StateMachine;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class ExchangeStateMachine implements StateMachine {
 
@@ -28,7 +28,7 @@ public class ExchangeStateMachine implements StateMachine {
             ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
             switch (commandCase) {
                 case BINARY_DATA:
-                    ApiBinaryDataCommand apiBinaryDataCommand = ((ApiCommand) grpcMessage).getBinaryData();
+                    ApiBinaryDataCommand apiBinaryDataCommand = ((ApiCommand)grpcMessage).getBinaryData();
                     result = processBinaryDataCommand(apiBinaryDataCommand.getData());
                     break;
                 case PLACE_ORDER:
@@ -65,8 +65,6 @@ public class ExchangeStateMachine implements StateMachine {
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
             }
-        } else if (grpcMessage instanceof BinaryDataCommand) {
-            result = processBinaryDataCommand((BinaryDataCommand) grpcMessage);
         }
         return serialize_response ? result : null;
     }
