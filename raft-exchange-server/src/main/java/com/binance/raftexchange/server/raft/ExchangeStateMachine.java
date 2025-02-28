@@ -40,9 +40,6 @@ public class ExchangeStateMachine implements StateMachine {
                 case ORDER_BOOK_REQUEST:
                     result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand)grpcMessage).getOrderBookRequest());
                     break;
-                case NOP:
-                    LOG.info("NOP Command received, no action taken.");
-                    break;
                 case MOVE_ORDER:
                     result = SyncTradeOrdersApiController.moveOrder(((ApiCommand)grpcMessage).getMoveOrder());
                     break;
@@ -64,6 +61,9 @@ public class ExchangeStateMachine implements StateMachine {
                     break;
                 case RESUME_USER:
                     result = SyncAdminApiAccountsController.resumeUser(((ApiCommand)grpcMessage).getResumeUser());
+                    break;
+                case NOP:
+                    LOG.info("NOP Command received, no action taken.");
                     break;
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
