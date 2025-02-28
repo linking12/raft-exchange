@@ -7,6 +7,9 @@ import com.binance.raftexchange.stubs.api.ApiPlaceOrder;
 
 public class SyncTradeOrdersApiController extends AbstractApiController {
 
+    /**
+     * 获取OrderBook
+     */
     public static byte[] getOrderBook(ApiOrderBookRequest grpcApiOrderBookRequest) throws Exception {
         exchange.core2.core.common.api.ApiOrderBookRequest apiOrderBookRequest =
             exchange.core2.core.common.api.ApiOrderBookRequest.builder().symbol(grpcApiOrderBookRequest.getSymbol())
@@ -15,6 +18,9 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
         return callExchange(apiOrderBookRequest);
     }
 
+    /**
+     * 下单
+     */
     public static byte[] placeOrder(ApiPlaceOrder grpcApiPlaceOrder) throws Exception {
         exchange.core2.core.common.api.ApiPlaceOrder apiPlaceOrder = exchange.core2.core.common.api.ApiPlaceOrder
             .builder().price(grpcApiPlaceOrder.getPrice()).size(grpcApiPlaceOrder.getSize())
@@ -27,6 +33,9 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
         return callExchange(apiPlaceOrder);
     }
 
+    /**
+     * 修改订单
+     */
     public static byte[] moveOrder(ApiMoveOrder grpcApiMoveOrder) throws Exception {
         exchange.core2.core.common.api.ApiMoveOrder apiMoveOrder = exchange.core2.core.common.api.ApiMoveOrder.builder()
             .orderId(grpcApiMoveOrder.getOrderId()).newPrice(grpcApiMoveOrder.getNewPrice())
@@ -35,6 +44,9 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
         return callExchange(apiMoveOrder);
     }
 
+    /**
+     * 撤单
+     */
     public static byte[] cancelOrder(ApiCancelOrder grpcApiCancelOrder) throws Exception {
         exchange.core2.core.common.api.ApiCancelOrder apiCancelOrder =
             exchange.core2.core.common.api.ApiCancelOrder.builder().orderId(grpcApiCancelOrder.getOrderId())
