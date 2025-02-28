@@ -7,6 +7,7 @@ import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
 import com.binance.raftexchange.server.util.SerializeHelper;
+import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
@@ -27,6 +28,8 @@ public class ExchangeStateMachine implements StateMachine {
             ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
             switch (commandCase) {
                 case BINARY_DATA:
+                    ApiBinaryDataCommand apiBinaryDataCommand = ((ApiCommand) grpcMessage).getBinaryData();
+                    result = processBinaryDataCommand(apiBinaryDataCommand.getData());
                     break;
                 case PLACE_ORDER:
                     result = SyncTradeOrdersApiController.placeOrder(((ApiCommand)grpcMessage).getPlaceOrder());
@@ -63,18 +66,24 @@ public class ExchangeStateMachine implements StateMachine {
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
             }
         } else if (grpcMessage instanceof BinaryDataCommand) {
-            BinaryDataCommand.CommandCase commandCase = ((BinaryDataCommand) grpcMessage).getCommandCase();
-            switch (commandCase) {
-                case ADD_ACCOUNTS:
-                    break;
-                case ADD_SYMBOLS:
-                    result = SyncAdminApiSymbolsController.createSymbol(((BinaryDataCommand) grpcMessage).getAddSymbols());
-                    break;
-                default:
-                    LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
-            }
+            result = processBinaryDataCommand((BinaryDataCommand) grpcMessage);
         }
         return serialize_response ? result : null;
+    }
+
+    private byte[] processBinaryDataCommand(BinaryDataCommand binaryDataCommand) throws Exception {
+        byte[] result = null;
+        BinaryDataCommand.CommandCase commandCase = binaryDataCommand.getCommandCase();
+        switch (commandCase) {
+            case ADD_ACCOUNTS:
+                break;
+            case ADD_SYMBOLS:
+                result = SyncAdminApiSymbolsController.createSymbol(binaryDataCommand.getAddSymbols());
+                break;
+            default:
+                LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
+        }
+        return result;
     }
 
     @Override

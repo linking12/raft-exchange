@@ -10,7 +10,7 @@ import "message/common.proto";
 // Binary Data Command
 message ApiBinaryDataCommand {
   int32 transferId = 1;
-  bytes data = 2;  // Using bytes since BinaryDataCommand is not specified in detail
+  BinaryDataCommand data = 2;
 }
 
 // Place Order Command
