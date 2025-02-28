@@ -5,8 +5,6 @@ import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
 import com.binance.raftexchange.stubs.request.NodeListCommand;
 import com.binance.raftexchange.stubs.response.NodeList;
-import com.binance.raftexchange.stubs.response.NodeType;
-import com.binance.raftexchange.stubs.response.ServerNode;
 import io.grpc.stub.StreamObserver;
 
 import java.util.List;

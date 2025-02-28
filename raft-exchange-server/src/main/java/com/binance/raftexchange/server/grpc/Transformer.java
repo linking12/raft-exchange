@@ -15,10 +15,13 @@ class Transformer {
     }
 
     private static NodeType transformType(RaftNode.NodeType nodeType) {
-        return switch (nodeType) {
-            case LEADER -> NodeType.LEADER;
-            case FOLLOWER -> NodeType.FOLLOW;
-            default -> NodeType.UNRECOGNIZED;
-        };
+        switch (nodeType) {
+            case LEADER:
+                return NodeType.LEADER;
+            case FOLLOWER:
+                return NodeType.FOLLOW;
+            default:
+                return NodeType.UNRECOGNIZED;
+        }
     }
 }
