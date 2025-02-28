@@ -3,17 +3,18 @@ package com.binance.raftexchange.server.raft;
 import java.io.DataInput;
 import java.io.DataOutput;
 
+import org.jgroups.raft.StateMachine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
 import com.binance.raftexchange.server.util.SerializeHelper;
+import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
-import org.jgroups.raft.StateMachine;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class ExchangeStateMachine implements StateMachine {
 
@@ -27,6 +28,8 @@ public class ExchangeStateMachine implements StateMachine {
             ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
             switch (commandCase) {
                 case BINARY_DATA:
+                    ApiBinaryDataCommand apiBinaryDataCommand = ((ApiCommand)grpcMessage).getBinaryData();
+                    result = processBinaryDataCommand(apiBinaryDataCommand.getData());
                     break;
                 case PLACE_ORDER:
                     result = SyncTradeOrdersApiController.placeOrder(((ApiCommand)grpcMessage).getPlaceOrder());
@@ -34,13 +37,8 @@ public class ExchangeStateMachine implements StateMachine {
                 case ADJUST_BALANCE:
                     result = SyncAdminApiAccountsController.adjustBalance(((ApiCommand)grpcMessage).getAdjustBalance());
                     break;
-                case PERSIST_STATE:
-                    break;
                 case ORDER_BOOK_REQUEST:
                     result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand)grpcMessage).getOrderBookRequest());
-                    break;
-                case NOP:
-                    LOG.info("NOP Command received, no action taken.");
                     break;
                 case MOVE_ORDER:
                     result = SyncTradeOrdersApiController.moveOrder(((ApiCommand)grpcMessage).getMoveOrder());
@@ -52,29 +50,41 @@ public class ExchangeStateMachine implements StateMachine {
                     result = SyncAdminApiAccountsController.createUser(((ApiCommand)grpcMessage).getAddUser());
                     break;
                 case REDUCE_ORDER:
+                    result = SyncTradeOrdersApiController.reduceOrder(((ApiCommand)grpcMessage).getReduceOrder());
                     break;
                 case SUSPEND_USER:
+                    result = SyncAdminApiAccountsController.suspendUser(((ApiCommand)grpcMessage).getSuspendUser());
                     break;
                 case RESET:
+                    // 重置撮合
+                    //@see exchange.core2.core.processors.RiskEngine#reset
                     break;
                 case RESUME_USER:
+                    result = SyncAdminApiAccountsController.resumeUser(((ApiCommand)grpcMessage).getResumeUser());
+                    break;
+                case NOP:
+                    LOG.info("NOP Command received, no action taken.");
                     break;
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
             }
-        } else if (grpcMessage instanceof BinaryDataCommand) {
-            BinaryDataCommand.CommandCase commandCase = ((BinaryDataCommand) grpcMessage).getCommandCase();
-            switch (commandCase) {
-                case ADD_ACCOUNTS:
-                    break;
-                case ADD_SYMBOLS:
-                    result = SyncAdminApiSymbolsController.createSymbol(((BinaryDataCommand) grpcMessage).getAddSymbols());
-                    break;
-                default:
-                    LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
-            }
         }
         return serialize_response ? result : null;
+    }
+
+    private byte[] processBinaryDataCommand(BinaryDataCommand binaryDataCommand) throws Exception {
+        byte[] result = null;
+        BinaryDataCommand.CommandCase commandCase = binaryDataCommand.getCommandCase();
+        switch (commandCase) {
+            case ADD_ACCOUNTS:
+                break;
+            case ADD_SYMBOLS:
+                result = SyncAdminApiSymbolsController.createSymbol(binaryDataCommand.getAddSymbols());
+                break;
+            default:
+                LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
+        }
+        return result;
     }
 
     @Override

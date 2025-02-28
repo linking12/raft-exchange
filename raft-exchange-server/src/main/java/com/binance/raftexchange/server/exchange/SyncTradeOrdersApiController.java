@@ -4,6 +4,7 @@ import com.binance.raftexchange.stubs.request.ApiCancelOrder;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
+import com.binance.raftexchange.stubs.request.ApiReduceOrder;
 
 public class SyncTradeOrdersApiController extends AbstractApiController {
 
@@ -55,4 +56,17 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
         return callExchange(apiCancelOrder);
     }
 
+    /**
+     * @see exchange.core2.core.orderbook.IOrderBook#reduceOrder
+     */
+    public static byte[] reduceOrder(ApiReduceOrder grpcApiReduceOrder) throws Exception {
+        exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder = exchange.core2.core.common.api.ApiReduceOrder.builder()
+                .orderId(grpcApiReduceOrder.getOrderId())
+                .uid(grpcApiReduceOrder.getUid())
+                .symbol(grpcApiReduceOrder.getSymbol())
+                .reduceSize(grpcApiReduceOrder.getReduceSize())
+                .build();
+
+        return callExchange(apiReduceOrder);
+    }
 }

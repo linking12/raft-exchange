@@ -2,6 +2,8 @@ package com.binance.raftexchange.server.exchange;
 
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
+import com.binance.raftexchange.stubs.request.ApiResumeUser;
+import com.binance.raftexchange.stubs.request.ApiSuspendUser;
 
 public class SyncAdminApiAccountsController extends AbstractApiController {
 
@@ -27,4 +29,20 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         return callExchange(apiAdjustUserBalance);
     }
 
+
+    public static byte[] suspendUser(ApiSuspendUser grpcApiSuspendUser) throws Exception {
+        exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser = exchange.core2.core.common.api.ApiSuspendUser.builder()
+                .uid(grpcApiSuspendUser.getUid())
+                .build();
+        LOG.info("ApiSuspendUser applied, msg: {}", apiSuspendUser);
+        return callExchange(apiSuspendUser);
+    }
+
+    public static byte[] resumeUser(ApiResumeUser grpcApiResumeUser) throws Exception {
+        exchange.core2.core.common.api.ApiResumeUser apiResumeUser = exchange.core2.core.common.api.ApiResumeUser.builder()
+                .uid(grpcApiResumeUser.getUid())
+                .build();
+        LOG.info("ApiResumeUser applied, msg: {}", apiResumeUser);
+        return callExchange(apiResumeUser);
+    }
 }
