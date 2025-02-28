@@ -17,8 +17,7 @@ public class SerializeHelper {
     private SerializeHelper() {}
 
     /**
-     * [2-byte length] [类型字符串] [protobuf byte[]]
-     * ｜--------writeUTF--------｜｜---write---｜
+     * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------writeUTF--------｜｜---write---｜
      */
     public static byte[] serializeWithType(GeneratedMessageV3 message) throws IOException {
         String type = message.getClass().getSimpleName();
@@ -32,8 +31,7 @@ public class SerializeHelper {
     }
 
     /**
-     * [2-byte length] [类型字符串] [protobuf byte[]]
-     * ｜--------readUTF--------｜｜---readFully---｜
+     * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------readUTF--------｜｜---readFully---｜
      */
     public static GeneratedMessageV3 deserializeWithType(byte[] data, int offset, int length) throws IOException {
         DataInputStream dataInputStream = new DataInputStream(new ByteArrayInputStream(data, offset, length));
@@ -54,7 +52,8 @@ public class SerializeHelper {
         return Int32Value.newBuilder().setValue(enumValue.getNumber()).build().toByteArray();
     }
 
-    public static <T extends ProtocolMessageEnum> T bytesToEnumProto(byte[] bytes, Class<T> enumClass) throws InvalidProtocolBufferException {
+    public static <T extends ProtocolMessageEnum> T bytesToEnumProto(byte[] bytes, Class<T> enumClass)
+        throws InvalidProtocolBufferException {
         int intValue = Int32Value.parseFrom(bytes).getValue();
         for (T value : enumClass.getEnumConstants()) {
             if (value.getNumber() == intValue) {

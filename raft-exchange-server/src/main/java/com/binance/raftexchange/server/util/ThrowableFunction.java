@@ -15,7 +15,7 @@ public interface ThrowableFunction<T, R> {
         };
     }
 
-    static <T,R> Function<T, R> warp(ThrowableFunction<T, R> tf) {
+    static <T, R> Function<T, R> warp(ThrowableFunction<T, R> tf) {
         return tf.toFunction();
     }
 }

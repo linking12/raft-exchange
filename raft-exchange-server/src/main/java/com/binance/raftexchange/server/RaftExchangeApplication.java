@@ -17,55 +17,55 @@ import com.netflix.discovery.EurekaClient;
 @EnableEurekaClient
 @SpringBootApplication
 public class RaftExchangeApplication implements CommandLineRunner, GracefulShutdownHook {
-	private static final Logger LOGGER = LoggerFactory.getLogger(RaftExchangeApplication.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(RaftExchangeApplication.class);
 
-	public static void main(String[] args) throws Exception {
-		SpringApplication.run(RaftExchangeApplication.class, args);
-	}
+    public static void main(String[] args) throws Exception {
+        SpringApplication.run(RaftExchangeApplication.class, args);
+    }
 
-	@Autowired
-	private EurekaClient eurekaClient;
+    @Autowired
+    private EurekaClient eurekaClient;
 
-	private RaftClusterContainer raftClusterContainer;
+    private RaftClusterContainer raftClusterContainer;
 
-	private GrpcServerContainer grpcServerContainer;
+    private GrpcServerContainer grpcServerContainer;
 
-	@Override
-	public void run(String... arg0) throws Exception {
-//		startRaft();
-		 startGrpcServer(this.raftClusterContainer);
-	}
+    @Override
+    public void run(String... arg0) throws Exception {
+        // startRaft();
+        startGrpcServer(this.raftClusterContainer);
+    }
 
-	public void startRaft() throws Exception {
-		RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(eurekaClient);
-		RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
-		raftClusterContainer.doStart();
-		this.raftClusterContainer = raftClusterContainer;
-	}
+    public void startRaft() throws Exception {
+        RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(eurekaClient);
+        RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
+        raftClusterContainer.doStart();
+        this.raftClusterContainer = raftClusterContainer;
+    }
 
-	public void startGrpcServer(RaftClusterContainer raftClusterContainer) throws Exception {
-		//只有raft server启动后才允许启动grpc服务
-		GrpcServerContainer grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
-		grpcServerContainer.doStart();
-		this.grpcServerContainer = grpcServerContainer;
-	}
+    public void startGrpcServer(RaftClusterContainer raftClusterContainer) throws Exception {
+        // 只有raft server启动后才允许启动grpc服务
+        GrpcServerContainer grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
+        grpcServerContainer.doStart();
+        this.grpcServerContainer = grpcServerContainer;
+    }
 
-	@Override
-	public void shutdown() {
-		if (this.grpcServerContainer != null) {
-			try {
-				this.grpcServerContainer.doStop();
-			} catch (Exception e) {
-				LOGGER.error(e.getMessage(), e);
-			}
-		}
-		if (this.raftClusterContainer != null) {
-			try {
-				this.raftClusterContainer.doStop();
-			} catch (Exception e) {
-				LOGGER.error(e.getMessage(), e);
-			}
-		}
-	}
+    @Override
+    public void shutdown() {
+        if (this.grpcServerContainer != null) {
+            try {
+                this.grpcServerContainer.doStop();
+            } catch (Exception e) {
+                LOGGER.error(e.getMessage(), e);
+            }
+        }
+        if (this.raftClusterContainer != null) {
+            try {
+                this.raftClusterContainer.doStop();
+            } catch (Exception e) {
+                LOGGER.error(e.getMessage(), e);
+            }
+        }
+    }
 
 }

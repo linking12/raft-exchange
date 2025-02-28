@@ -25,102 +25,102 @@ import com.netflix.discovery.EurekaClient;
 import com.netflix.discovery.EurekaEvent;
 
 public class RaftClusterDiscovery {
-	private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterDiscovery.class);
-	private static final String DEFAULT_JGROUPRAFT_CONFIG = "jgroups-raft.xml";
-	private static final String RAFTPORT = "raft.port";
+    private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterDiscovery.class);
+    private static final String DEFAULT_JGROUPRAFT_CONFIG = "jgroups-raft.xml";
+    private static final String RAFTPORT = "raft.port";
 
-	private final String localHost;
-	private final String jgroupPort;
-	private final String jgroupClusterName;
-	private final int startupNodes;
-	private final EurekaClient eurekaClient;
+    private final String localHost;
+    private final String jgroupPort;
+    private final String jgroupClusterName;
+    private final int startupNodes;
+    private final EurekaClient eurekaClient;
 
-	private String jgroupResources;
-	private String lastAppsHashCode;
-	private List<String> lastClusterHostAndPorts;
+    private String jgroupResources;
+    private String lastAppsHashCode;
+    private List<String> lastClusterHostAndPorts;
 
-	public RaftClusterDiscovery(EurekaClient eurekaClient) {
-		this.jgroupPort = System.getProperty(RAFTPORT, "7800");
-		this.startupNodes = Integer.parseInt(System.getProperty("raft.startupNodes", "3"));
-		ApplicationInfoManager applicationInfoManager = eurekaClient.getApplicationInfoManager();
-		applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
-		eurekaClient.registerEventListener(this::onEurekaEvent);
-		this.eurekaClient = eurekaClient;
-		this.localHost = applicationInfoManager.getInfo().getIPAddr();
-		this.jgroupClusterName = applicationInfoManager.getInfo().getAppName();
-		try {
-			this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver()
-					.getResource("classpath:" + DEFAULT_JGROUPRAFT_CONFIG).getInputStream(), StandardCharsets.UTF_8);
-		} catch (Throwable e) {
-			// ignore
-		}
-	}
+    public RaftClusterDiscovery(EurekaClient eurekaClient) {
+        this.jgroupPort = System.getProperty(RAFTPORT, "7800");
+        this.startupNodes = Integer.parseInt(System.getProperty("raft.startupNodes", "3"));
+        ApplicationInfoManager applicationInfoManager = eurekaClient.getApplicationInfoManager();
+        applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
+        eurekaClient.registerEventListener(this::onEurekaEvent);
+        this.eurekaClient = eurekaClient;
+        this.localHost = applicationInfoManager.getInfo().getIPAddr();
+        this.jgroupClusterName = applicationInfoManager.getInfo().getAppName();
+        try {
+            this.jgroupResources = StreamUtils.copyToString(new PathMatchingResourcePatternResolver()
+                .getResource("classpath:" + DEFAULT_JGROUPRAFT_CONFIG).getInputStream(), StandardCharsets.UTF_8);
+        } catch (Throwable e) {
+            // ignore
+        }
+    }
 
-	public String getJgroupClusterName() {
-		return this.jgroupClusterName;
-	}
+    public String getJgroupClusterName() {
+        return this.jgroupClusterName;
+    }
 
-	private void onEurekaEvent(EurekaEvent event) {
-		if (event instanceof CacheRefreshedEvent) {
-			String appsHashCode = this.eurekaClient.getApplications().getAppsHashCode();
-			if (!Objects.equals(this.lastAppsHashCode, appsHashCode)) {
-				List<InstanceInfo> clusterInstanceList = eurekaClient.getApplication(jgroupClusterName).getInstances();
-				List<String> clusterHostAndPort = clusterInstanceList.stream()
-						.filter(instance -> (instance.getMetadata().containsKey(RAFTPORT) && StringUtils
-								.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
-						.map(instance -> String.format("%s[%s]", instance.getIPAddr(),
-								instance.getMetadata().get(RAFTPORT)))
-						.collect(Collectors.toList());
-				if (this.lastClusterHostAndPorts == null
-						|| !CollectionUtils.isEqualCollection(this.lastClusterHostAndPorts, clusterHostAndPort)) {
-					this.lastClusterHostAndPorts = clusterHostAndPort;
-					LOGGER.info("update last clusters to {}", this.lastClusterHostAndPorts);
-					this.lastAppsHashCode = appsHashCode;
-				}
-			}
-		}
-	}
+    private void onEurekaEvent(EurekaEvent event) {
+        if (event instanceof CacheRefreshedEvent) {
+            String appsHashCode = this.eurekaClient.getApplications().getAppsHashCode();
+            if (!Objects.equals(this.lastAppsHashCode, appsHashCode)) {
+                List<InstanceInfo> clusterInstanceList = eurekaClient.getApplication(jgroupClusterName).getInstances();
+                List<String> clusterHostAndPort = clusterInstanceList.stream()
+                    .filter(instance -> (instance.getMetadata().containsKey(RAFTPORT) && StringUtils
+                        .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
+                    .map(
+                        instance -> String.format("%s[%s]", instance.getIPAddr(), instance.getMetadata().get(RAFTPORT)))
+                    .collect(Collectors.toList());
+                if (this.lastClusterHostAndPorts == null
+                    || !CollectionUtils.isEqualCollection(this.lastClusterHostAndPorts, clusterHostAndPort)) {
+                    this.lastClusterHostAndPorts = clusterHostAndPort;
+                    LOGGER.info("update last clusters to {}", this.lastClusterHostAndPorts);
+                    this.lastAppsHashCode = appsHashCode;
+                }
+            }
+        }
+    }
 
-	public String raftMemberCluster() {
-		if (lastClusterHostAndPorts == null || lastClusterHostAndPorts.size() < startupNodes) {
-			return null;
-		}
-		return String.join(",", lastClusterHostAndPorts);
-	}
+    public String raftMemberCluster() {
+        if (lastClusterHostAndPorts == null || lastClusterHostAndPorts.size() < startupNodes) {
+            return null;
+        }
+        return String.join(",", lastClusterHostAndPorts);
+    }
 
-	public String raftCurrentMember() {
-		return String.format("%s[%s]", this.localHost, this.jgroupPort);
-	}
+    public String raftCurrentMember() {
+        return String.format("%s[%s]", this.localHost, this.jgroupPort);
+    }
 
-	public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {
-		JChannel jChannel = null;
-		try {
-			if (StringUtils.isNotBlank(raftMemberCluster)) {
-				String realJChannelParam = StringUtils.replaceEach(//
-						this.jgroupResources, //
-						new String[] { //
-								"replace_bindlocalhost", //
-								"replace_bindport", //
-								"replace_hostcluster", //
-								"replace_raftmember_cluster", //
-								"replace_raftmember_current"//
-						}, //
-						new String[] { //
-								localHost, //
-								jgroupPort, //
-								raftMemberCluster, //
-								raftMemberCluster, //
-								raftCurrentMember } //
-				);
-				jChannel = new JChannel(new ByteArrayInputStream(realJChannelParam.getBytes(StandardCharsets.UTF_8)));
-				jChannel.setDiscardOwnMessages(true);
-				return jChannel;
-			}
+    public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {
+        JChannel jChannel = null;
+        try {
+            if (StringUtils.isNotBlank(raftMemberCluster)) {
+                String realJChannelParam = StringUtils.replaceEach(//
+                    this.jgroupResources, //
+                    new String[] { //
+                        "replace_bindlocalhost", //
+                        "replace_bindport", //
+                        "replace_hostcluster", //
+                        "replace_raftmember_cluster", //
+                        "replace_raftmember_current"//
+                    }, //
+                    new String[] { //
+                        localHost, //
+                        jgroupPort, //
+                        raftMemberCluster, //
+                        raftMemberCluster, //
+                        raftCurrentMember} //
+                );
+                jChannel = new JChannel(new ByteArrayInputStream(realJChannelParam.getBytes(StandardCharsets.UTF_8)));
+                jChannel.setDiscardOwnMessages(true);
+                return jChannel;
+            }
 
-		} catch (Throwable e) {
-			LOGGER.error("init jgroups error", e);
-		}
-		return jChannel;
-	}
+        } catch (Throwable e) {
+            LOGGER.error("init jgroups error", e);
+        }
+        return jChannel;
+    }
 
 }

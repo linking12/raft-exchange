@@ -20,61 +20,61 @@ public class ExchangeStateMachine implements StateMachine {
     @Override
     public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data, offset, length);
-		byte[] result = null;
+        byte[] result = null;
         if (grpcMessage instanceof ApiCommand) {
-            ApiCommand.CommandCase commandCase = ((ApiCommand) grpcMessage).getCommandCase();
-			switch (commandCase) {
-				case BINARY_DATA:
-					break;
-				case PLACE_ORDER:
-					result = SyncTradeOrdersApiController.placeOrder(((ApiCommand) grpcMessage).getPlaceOrder());
-					break;
-				case ADJUST_BALANCE:
-					result = SyncAdminApiAccountsController.adjustBalance(((ApiCommand) grpcMessage).getAdjustBalance());
-					break;
-				case PERSIST_STATE:
-					break;
-				case ORDER_BOOK_REQUEST:
-					result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand) grpcMessage).getOrderBookRequest());
-					break;
-				case NOP:
-					LOG.info("NOP Command received, no action taken.");
-					break;
-				case MOVE_ORDER:
-					result = SyncTradeOrdersApiController.moveOrder(((ApiCommand) grpcMessage).getMoveOrder());
-					break;
-				case CANCEL_ORDER:
-					result = SyncTradeOrdersApiController.cancelOrder(((ApiCommand) grpcMessage).getCancelOrder());
-					break;
-				case ADD_USER:
-					result = SyncAdminApiAccountsController.createUser(((ApiCommand) grpcMessage).getAddUser());
-					break;
-				case REDUCE_ORDER:
-					break;
-				case SUSPEND_USER:
-					break;
-				case RESET:
-					break;
-				case RESUME_USER:
-					break;
-				default:
-					LOG.warn("Unsupported ApiCommand: {}", commandCase);
-			}
+            ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
+            switch (commandCase) {
+                case BINARY_DATA:
+                    break;
+                case PLACE_ORDER:
+                    result = SyncTradeOrdersApiController.placeOrder(((ApiCommand)grpcMessage).getPlaceOrder());
+                    break;
+                case ADJUST_BALANCE:
+                    result = SyncAdminApiAccountsController.adjustBalance(((ApiCommand)grpcMessage).getAdjustBalance());
+                    break;
+                case PERSIST_STATE:
+                    break;
+                case ORDER_BOOK_REQUEST:
+                    result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand)grpcMessage).getOrderBookRequest());
+                    break;
+                case NOP:
+                    LOG.info("NOP Command received, no action taken.");
+                    break;
+                case MOVE_ORDER:
+                    result = SyncTradeOrdersApiController.moveOrder(((ApiCommand)grpcMessage).getMoveOrder());
+                    break;
+                case CANCEL_ORDER:
+                    result = SyncTradeOrdersApiController.cancelOrder(((ApiCommand)grpcMessage).getCancelOrder());
+                    break;
+                case ADD_USER:
+                    result = SyncAdminApiAccountsController.createUser(((ApiCommand)grpcMessage).getAddUser());
+                    break;
+                case REDUCE_ORDER:
+                    break;
+                case SUSPEND_USER:
+                    break;
+                case RESET:
+                    break;
+                case RESUME_USER:
+                    break;
+                default:
+                    LOG.warn("Unsupported ApiCommand: {}", commandCase);
+            }
 
         } else if (grpcMessage instanceof OrderCommand) {
-            ((OrderCommand) grpcMessage).getCommand();
+            ((OrderCommand)grpcMessage).getCommand();
         }
-		return serialize_response ? result : null;
+        return serialize_response ? result : null;
     }
 
-	@Override
-	public void readContentFrom(DataInput in) throws Exception {
+    @Override
+    public void readContentFrom(DataInput in) throws Exception {
 
-	}
+    }
 
-	@Override
-	public void writeContentTo(DataOutput out) throws Exception {
+    @Override
+    public void writeContentTo(DataOutput out) throws Exception {
 
-	}
+    }
 
 }
