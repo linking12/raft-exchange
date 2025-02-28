@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package com.binance.raftexchange.stubs.command;
 
-option java_package = "com.binance.raftexchange.stubs.command";
+option java_package = "com.binance.raftexchange.stubs.response";
 option java_multiple_files = true;
 
 import "message/common.proto";
@@ -116,8 +116,4 @@ message OrderCommand {
     CommandResultCode result_code = 14;
     MatcherTradeEvent matcher_event = 15;
     L2MarketData market_data = 16;
-}
-
-service OrderCommandService{
-    rpc execOrderCommand(stream OrderCommand) returns (stream CommandResult);
 }
