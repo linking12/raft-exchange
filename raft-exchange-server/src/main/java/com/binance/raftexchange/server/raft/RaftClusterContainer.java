@@ -3,14 +3,15 @@ package com.binance.raftexchange.server.raft;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import com.binance.raftexchange.stubs.api.ApiAddUser;
-import com.binance.raftexchange.stubs.api.ApiCommand;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.raft.Role;
 import org.jgroups.raft.RaftHandle;
 import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.binance.raftexchange.stubs.api.ApiAddUser;
+import com.binance.raftexchange.stubs.api.ApiCommand;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
@@ -79,22 +80,12 @@ public class RaftClusterContainer {
         }
     }
 
-    /**
-     *
-     * @param log 需要进行共识和应用的信息
-     * @return 状态机应用结果
-     * @throws Exception
-     */
     public CompletableFuture<byte[]> requestConsensus(byte[] log) throws Exception {
         return raftHandle.setAsync(log, 0, log.length);
     }
 
     public boolean isLeader() {
         return this.isLeader;
-    }
-
-    public RaftHandle raftHandle() {
-        return this.raftHandle;
     }
 
 }
