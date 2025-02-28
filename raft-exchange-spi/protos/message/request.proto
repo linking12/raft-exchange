@@ -153,3 +153,8 @@ message BinaryDataCommand {
     BatchAddSymbolsCommand add_symbols = 2;
   }
 }
+
+//只是请求Node列表 似乎也不需要有什么字段
+message NodeListCommand {
+
+}

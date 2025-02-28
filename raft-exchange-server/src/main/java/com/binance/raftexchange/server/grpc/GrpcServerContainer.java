@@ -23,8 +23,10 @@ public class GrpcServerContainer {
     public void doStart() throws Exception {
         String grpcPort = System.getProperty("grpc.port", "5001");
         this.server = ServerBuilder.forPort(Integer.valueOf(grpcPort))//
-            .addService(new ApiService(raftClusterContainer))//
-            .build();
+                .addService(new ApiService(raftClusterContainer))//
+                .addService(new BinaryDataCommandService(raftClusterContainer))
+                .addService(new SevererNodeService(raftClusterContainer))
+                .build();
         Server localServer = server.start();
         LOGGER.info("grpc server start {}", localServer.getPort());
     }

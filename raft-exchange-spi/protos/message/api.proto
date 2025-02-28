@@ -15,3 +15,7 @@ service ApiCommandService{
 service BinaryDataCommandService{
   rpc execBinaryDataCommand(stream com.binance.raftexchange.stubs.request.BinaryDataCommand) returns (stream com.binance.raftexchange.stubs.response.CommandResult); // BI-DIRECTIONAL STREAMING
 }
+
+service ServerNodeService {
+  rpc listNodes(com.binance.raftexchange.stubs.request.NodeListCommand) returns (com.binance.raftexchange.stubs.response.NodeList);
+}

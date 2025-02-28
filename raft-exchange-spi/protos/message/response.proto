@@ -50,13 +50,28 @@ enum CommandResultCode {
     STATE_PERSIST_RISK_ENGINE_FAILED = 8010;
     STATE_PERSIST_MATCHING_ENGINE_FAILED = 8020;
 
+    NEED_MOVE = 9998;
     DROP = 9999;
+}
+
+enum NodeType {
+    LEADER = 0;
+    FOLLOW = 1;
+}
+
+message ServerNode {
+    NodeType type = 1;
+    string host = 2;
+    int32 port = 3;
 }
 
 //pb这个编译器不允许returns(stream Enum) 这样
 // 所以需要包一下
 message CommandResult {
     CommandResultCode resultCode = 1;
+    oneof extMessage {
+        ServerNode masterNode = 2; //当前的操作不允许在follow上执行的时候 才会返回这个
+    }
 }
 
 // Enum for Order Command Types
@@ -116,4 +131,8 @@ message OrderCommand {
     CommandResultCode result_code = 14;
     MatcherTradeEvent matcher_event = 15;
     L2MarketData market_data = 16;
+}
+
+message NodeList {
+    repeated ServerNode nodes = 1;
 }

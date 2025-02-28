@@ -1,9 +1,15 @@
 package com.binance.raftexchange.server.raft;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import com.binance.raftexchange.server.util.SerializeHelper;
+import org.jgroups.Address;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.raft.Role;
 import org.jgroups.raft.RaftHandle;
@@ -86,7 +92,33 @@ public class RaftClusterContainer {
     }
 
     public boolean isLeader() {
-        return this.isLeader;
+        return raftHandle.isLeader();
+    }
+
+    public List<RaftNode> listNodes() {
+        List<Address> members = this.raftHandle.channel().view().getMembers();
+        Address leader = this.raftHandle.leader();
+        ArrayList<RaftNode> list = new ArrayList<>(members.size());
+        //todo 找不到address转host port的办法 所以先用tostring做demo。。。
+        for (Address member : members) {
+            list.add(parse(member, leader));
+        }
+        return list;
+    }
+
+    public RaftNode leaderNode() {
+        Address leader = this.raftHandle.leader();
+        return parse(leader, leader);
+    }
+
+    private RaftNode parse(Address member, Address leader) {
+        boolean isLeader = member.equals(leader);
+        String string = member.toString();
+        String[] hostAndPort = string.split("\\[");
+        String host = hostAndPort[0];
+        int port = Integer.parseInt(hostAndPort[1].substring(0, hostAndPort.length - 1));
+
+        return new RaftNode(host, port, isLeader ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER);
     }
 
 }
