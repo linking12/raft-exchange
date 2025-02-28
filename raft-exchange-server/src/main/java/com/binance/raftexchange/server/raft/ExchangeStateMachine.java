@@ -59,8 +59,11 @@ public class ExchangeStateMachine implements StateMachine {
                     result = SyncAdminApiAccountsController.suspendUser(((ApiCommand)grpcMessage).getSuspendUser());
                     break;
                 case RESET:
+                    // 重置撮合
+                    //@see exchange.core2.core.processors.RiskEngine#reset
                     break;
                 case RESUME_USER:
+                    result = SyncAdminApiAccountsController.resumeUser(((ApiCommand)grpcMessage).getResumeUser());
                     break;
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
