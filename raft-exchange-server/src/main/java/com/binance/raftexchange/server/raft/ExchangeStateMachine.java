@@ -53,8 +53,10 @@ public class ExchangeStateMachine implements StateMachine {
                     result = SyncAdminApiAccountsController.createUser(((ApiCommand)grpcMessage).getAddUser());
                     break;
                 case REDUCE_ORDER:
+                    result = SyncTradeOrdersApiController.reduceOrder(((ApiCommand)grpcMessage).getReduceOrder());
                     break;
                 case SUSPEND_USER:
+                    result = SyncAdminApiAccountsController.suspendUser(((ApiCommand)grpcMessage).getSuspendUser());
                     break;
                 case RESET:
                     break;
