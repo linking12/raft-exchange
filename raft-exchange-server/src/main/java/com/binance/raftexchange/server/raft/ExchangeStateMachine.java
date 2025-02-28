@@ -37,8 +37,6 @@ public class ExchangeStateMachine implements StateMachine {
                 case ADJUST_BALANCE:
                     result = SyncAdminApiAccountsController.adjustBalance(((ApiCommand)grpcMessage).getAdjustBalance());
                     break;
-                case PERSIST_STATE:
-                    break;
                 case ORDER_BOOK_REQUEST:
                     result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand)grpcMessage).getOrderBookRequest());
                     break;

@@ -35,12 +35,6 @@ message ApiAdjustUserBalance {
   BalanceAdjustmentType adjustmentType = 5;
 }
 
-// Persist State Command
-message ApiPersistState {
-  int64 dumpId = 1;
-  bool seal = 2;
-}
-
 // Order Book Request Command
 message ApiOrderBookRequest {
   int32 symbol = 1;
@@ -100,7 +94,6 @@ message ApiCommand {
     ApiBinaryDataCommand binary_data = 2;
     ApiPlaceOrder place_order = 3;
     ApiAdjustUserBalance adjust_balance = 4;
-    ApiPersistState persist_state = 5;
     ApiOrderBookRequest order_book_request = 6;
     ApiNop nop = 7;
     ApiMoveOrder move_order = 8;
