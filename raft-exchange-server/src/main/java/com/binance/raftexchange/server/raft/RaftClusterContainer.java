@@ -1,14 +1,10 @@
 package com.binance.raftexchange.server.raft;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 
-import com.binance.raftexchange.server.util.SerializeHelper;
 import org.jgroups.Address;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.raft.Role;
@@ -17,6 +13,7 @@ import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 
@@ -55,7 +52,6 @@ public class RaftClusterContainer {
             }
         });
         this.raftHandle.channel().connect(jgroupsClusterName);
-
         // test code
         while (!isLeader) {
             Thread.sleep(1000);
@@ -87,6 +83,10 @@ public class RaftClusterContainer {
         }
     }
 
+    public boolean startSuccessed() {
+        return raftHandle.channel().view() != null;
+    }
+
     public CompletableFuture<byte[]> requestConsensus(byte[] log) throws Exception {
         return raftHandle.setAsync(log, 0, log.length);
     }
@@ -99,7 +99,7 @@ public class RaftClusterContainer {
         List<Address> members = this.raftHandle.channel().view().getMembers();
         Address leader = this.raftHandle.leader();
         ArrayList<RaftNode> list = new ArrayList<>(members.size());
-        //todo 找不到address转host port的办法 所以先用tostring做demo。。。
+        // todo 找不到address转host port的办法 所以先用tostring做demo。。。
         for (Address member : members) {
             list.add(parse(member, leader));
         }

@@ -1,5 +1,7 @@
 package com.binance.raftexchange.server;
 
+import java.util.concurrent.TimeUnit;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,7 +49,8 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         GrpcServerContainer grpcServerContainer = null;
         do {
             grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
-        } while (this.raftClusterContainer != null);
+            TimeUnit.SECONDS.sleep(5);
+        } while (raftClusterContainer.startSuccessed());
         if (grpcServerContainer != null) {
             grpcServerContainer.doStart();
         }
