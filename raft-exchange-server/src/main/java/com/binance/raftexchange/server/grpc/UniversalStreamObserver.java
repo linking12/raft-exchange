@@ -36,11 +36,11 @@ class UniversalStreamObserver<Command extends GeneratedMessageV3> implements Str
 
         if (!raftClusterContainer.isLeader() && allowFollowExecute(command)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
-            ServerNode masterNode = Transformer.raftNodeTransform(raftNode);
+            ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
             responseObserver.onNext(
                     CommandResult.newBuilder()
                             .setResultCode(CommandResultCode.NEED_MOVE)
-                            .setMasterNode(masterNode)
+                            .setLeaderNode(leaderNode)
                             .build()
             );
             responseObserver.onCompleted();

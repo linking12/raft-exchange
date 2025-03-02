@@ -70,7 +70,7 @@ message ServerNode {
 message CommandResult {
     CommandResultCode resultCode = 1;
     oneof extMessage {
-        ServerNode masterNode = 2; //当前的操作不允许在follow上执行的时候 才会返回这个
+        ServerNode leaderNode = 2; //当前的操作不允许在follow上执行的时候 才会返回这个
     }
 }
 
