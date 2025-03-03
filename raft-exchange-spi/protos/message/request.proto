@@ -97,7 +97,6 @@ message ApiCommand {
     ApiAddUser add_user = 10;
     ApiReduceOrder reduce_order = 11;
     ApiSuspendUser suspend_user = 12;
-    ApiReset reset = 13;
     ApiResumeUser resume_user = 14;
   }
 }
