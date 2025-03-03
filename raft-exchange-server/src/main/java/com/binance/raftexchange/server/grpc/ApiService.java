@@ -18,7 +18,7 @@ public class ApiService extends ApiCommandServiceGrpc.ApiCommandServiceImplBase 
 
     @Override
     public StreamObserver<ApiCommand> execApiCommand(StreamObserver<CommandResult> responseObserver) {
-        return new UniversalStreamObserver<>(responseObserver, raftClusterContainer);
+        return new UniversalStreamObserver(responseObserver, raftClusterContainer);
     }
 
 }

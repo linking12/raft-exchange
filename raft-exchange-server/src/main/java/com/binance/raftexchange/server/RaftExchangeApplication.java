@@ -50,7 +50,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         do {
             grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
             TimeUnit.SECONDS.sleep(5);
-        } while (raftClusterContainer.startSuccessed());
+        } while (!raftClusterContainer.startSuccessed());
         if (grpcServerContainer != null) {
             grpcServerContainer.doStart();
         }

@@ -1,4 +1,4 @@
-package com.binance.raftexchange.client;
+package com.binance.raftexchange.client.Api;
 
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
@@ -14,6 +14,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.nio.NioEventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import io.grpc.netty.shaded.io.netty.util.concurrent.ScheduledFuture;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
@@ -35,7 +36,7 @@ public class ExchangeClient {
 
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
 
-    private ServerNode leaderNode;
+    private volatile ServerNode leaderNode;
 
     private final ServerNodeServiceGrpc.ServerNodeServiceFutureStub nodeStub;
 
@@ -44,9 +45,8 @@ public class ExchangeClient {
     //todo close考虑关闭
     private final ScheduledFuture flushTimer;
 
-    public ExchangeClient() {
-        //todo 本地测试用
-        ManagedChannel leaderChannel = sniffLeaderChannel("localhost", 5001);
+    public ExchangeClient(String host, int port) {
+        ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
         this.flushTimer = flushLeaderNode();
@@ -65,12 +65,13 @@ public class ExchangeClient {
         //目前先统一打到Leader上
         return NettyChannelBuilder.forAddress(host, port)
                 .eventLoopGroup(DEFAULT_EVENTLOOP_GROUP)
+                .channelType(NioSocketChannel.class)
                 .usePlaintext()
                 .build();
     }
 
     private ScheduledFuture flushLeaderNode() {
-        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.SECONDS);
+        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.DAYS);
     }
 
     private void flushLeaderNode0() {
@@ -154,6 +155,7 @@ public class ExchangeClient {
 
     //监测到leader切换 进行刷新stream 以确保用户调用无感
     void reportLeaderFresh(ServerNode leaderNode) {
+        this.leaderNode = leaderNode;
         String leaderHost = leaderNode.getHost();
         int leaderPort = leaderNode.getPort();
         ManagedChannel leaderChannel = createChannel(leaderHost, leaderPort);

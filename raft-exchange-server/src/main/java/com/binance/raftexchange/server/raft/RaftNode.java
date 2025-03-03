@@ -4,6 +4,7 @@ import java.util.Objects;
 
 /**
  * 代表了raft层的对象 不要使用grpc的
+ * 这里代表了raft真实提供出去的交互接口
  */
 public final class RaftNode {
     private final String host;
@@ -45,7 +46,6 @@ public final class RaftNode {
     public String toString() {
         return "RaftNode[" + "host=" + host + ", " + "port=" + port + ", " + "nodeType=" + nodeType + ']';
     }
-
 
     public enum NodeType {
         LEADER,

@@ -26,7 +26,7 @@ public abstract class AbstractApiController {
         return serializeResult(resultCode);
     }
 
-    private static byte[] serializeResult(exchange.core2.core.common.cmd.CommandResultCode resultCode) {
+    protected static byte[] serializeResult(exchange.core2.core.common.cmd.CommandResultCode resultCode) {
         CommandResultCode grpcCommandResultCode = CommandResultCode.forNumber(Math.abs(resultCode.getCode()));
         if (grpcCommandResultCode == null) {
             return null;

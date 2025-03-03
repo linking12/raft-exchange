@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.raft;
 import java.io.DataInput;
 import java.io.DataOutput;
 
+import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
 import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +65,7 @@ public class ExchangeStateMachine implements StateMachine {
                     break;
                 case NOP:
                     LOG.info("NOP Command received, no action taken.");
+                    result = SyncNoOpApiController.handleNoOp();
                     break;
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);

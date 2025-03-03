@@ -99,24 +99,30 @@ public class RaftClusterContainer {
         List<Address> members = this.raftHandle.channel().view().getMembers();
         Address leader = this.raftHandle.leader();
         ArrayList<RaftNode> list = new ArrayList<>(members.size());
+        List<String> raftedWorkers = raftClusterDiscovery.raftWorkers();
         // todo 找不到address转host port的办法 所以先用tostring做demo。。。
         for (Address member : members) {
-            list.add(parse(member, leader));
+            list.add(parse(member, leader, raftedWorkers));
         }
         return list;
     }
 
     public RaftNode leaderNode() {
         Address leader = this.raftHandle.leader();
-        return parse(leader, leader);
+        List<String> raftedWorkers = raftClusterDiscovery.raftWorkers();
+        return parse(leader, leader, raftedWorkers);
     }
 
-    private RaftNode parse(Address member, Address leader) {
+    private RaftNode parse(Address member, Address leader, List<String> raftedWorkers) {
         boolean isLeader = member.equals(leader);
         String string = member.toString();
         String[] hostAndPort = string.split("\\[");
         String host = hostAndPort[0];
-        int port = Integer.parseInt(hostAndPort[1].substring(0, hostAndPort.length - 1));
+        int port = raftedWorkers.stream()
+                .filter(s -> s.startsWith(host))
+                .map(s -> s.split("\\[")[1])
+                .mapToInt(s -> Integer.parseInt(s.substring(0, s.length() - 1)))
+                .findFirst().getAsInt();
 
         return new RaftNode(host, port, isLeader ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER);
     }

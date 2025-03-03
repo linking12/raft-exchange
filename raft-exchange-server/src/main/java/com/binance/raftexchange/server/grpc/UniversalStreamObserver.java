@@ -7,7 +7,7 @@ import com.binance.raftexchange.server.util.ThrowableFunction;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.ServerNode;
-import com.google.protobuf.GeneratedMessageV3;
+import com.binance.raftexchange.stubs.request.ApiCommand;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,14 +15,14 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-class UniversalStreamObserver<Command extends GeneratedMessageV3> implements StreamObserver<Command> {
+class UniversalStreamObserver implements StreamObserver<ApiCommand> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalStreamObserver.class);
     private static final Object PLACEHOLDER = new Object();
 
     protected final StreamObserver<CommandResult> responseObserver;
     protected final RaftClusterContainer raftClusterContainer;
 
-    protected final ConcurrentHashMap<Command, Object> commandOnTheWay = new ConcurrentHashMap<>();
+    protected final ConcurrentHashMap<ApiCommand, Object> commandOnTheWay = new ConcurrentHashMap<>();
     protected final AtomicBoolean isEnd = new AtomicBoolean(false);
     protected final AtomicBoolean delayEnd = new AtomicBoolean();
 
@@ -32,7 +32,7 @@ class UniversalStreamObserver<Command extends GeneratedMessageV3> implements Str
     }
 
     @Override
-    public void onNext(Command command) {
+    public void onNext(ApiCommand command) {
 
         if (!raftClusterContainer.isLeader() && allowFollowExecute(command)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
@@ -43,7 +43,6 @@ class UniversalStreamObserver<Command extends GeneratedMessageV3> implements Str
                             .setLeaderNode(leaderNode)
                             .build()
             );
-            responseObserver.onCompleted();
             return;
         }
 
@@ -53,16 +52,21 @@ class UniversalStreamObserver<Command extends GeneratedMessageV3> implements Str
             commandOnTheWay.put(command, PLACEHOLDER);
             byte[] raftLog = SerializeHelper.serializeWithType(command);
             raftClusterContainer.requestConsensus(raftLog) // 等待共识
-                .thenApply(ThrowableFunction.warp(b -> SerializeHelper.deserializeWithType(b, 0, b.length))) // 把状态机应用结果给下面
-                .thenApply(msg -> ((CommandResult)msg)).thenAccept(responseObserver::onNext).whenComplete((v, t) -> {
-                    commandOnTheWay.remove(command);
-                    // 对端已经onCompleted
-                    // 我方没有在途的command正在apply
-                    // 且只有一个才可以关闭
-                    if (isEnd.get() && allowEnd()) {
-                        responseObserver.onCompleted();
-                    }
-                });
+                    .thenApply(ThrowableFunction.warp(b -> SerializeHelper.bytesToEnumProto(b, CommandResultCode.class))) // 把状态机应用结果给下面
+                    .whenComplete((v, t) -> {
+                        if (v != null) {
+                            responseObserver.onNext(CommandResult.newBuilder()
+                                    .setResultCode(v)
+                                    .build());
+                        }
+                        commandOnTheWay.remove(command);
+                        // 对端已经onCompleted
+                        // 我方没有在途的command正在apply
+                        // 且只有一个才可以关闭
+                        if (isEnd.get() && allowEnd()) {
+                            responseObserver.onCompleted();
+                        }
+                    });
 
         } catch (Throwable e) {
             responseObserver.onError(e);
@@ -88,7 +92,7 @@ class UniversalStreamObserver<Command extends GeneratedMessageV3> implements Str
         return commandOnTheWay.isEmpty() && delayEnd.compareAndSet(false, true);
     }
 
-    protected boolean allowFollowExecute(Command command) {
+    protected boolean allowFollowExecute(ApiCommand command) {
         return false;
     }
 }

@@ -4,8 +4,8 @@ import static com.binance.platform.common.EurekaConstants.EUREKA_METADATA_FLOWFL
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -27,7 +27,8 @@ import com.netflix.discovery.EurekaEvent;
 public class RaftClusterDiscovery {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterDiscovery.class);
     private static final String DEFAULT_JGROUPRAFT_CONFIG = "jgroups-raft.xml";
-    private static final String RAFTPORT = "raft.port";
+    private static final String RAFT_PORT = "raft.port";
+    private static final String GRPC_PORT = "grpc.port";
 
     private final String localHost;
     private final String jgroupPort;
@@ -38,12 +39,13 @@ public class RaftClusterDiscovery {
     private String jgroupResources;
     private String lastAppsHashCode;
     private List<String> lastClusterHostAndPorts;
+    private volatile List<String> raftWorkers;
 
     public RaftClusterDiscovery(EurekaClient eurekaClient) {
-        this.jgroupPort = System.getProperty(RAFTPORT, "7800");
+        this.jgroupPort = System.getProperty(RAFT_PORT, "7800");
         this.startupNodes = Integer.parseInt(System.getProperty("raft.startupNodes", "3"));
         ApplicationInfoManager applicationInfoManager = eurekaClient.getApplicationInfoManager();
-        applicationInfoManager.registerAppMetadata(Collections.singletonMap(RAFTPORT, jgroupPort));
+        applicationInfoManager.registerAppMetadata(Map.of(RAFT_PORT, jgroupPort, GRPC_PORT, System.getProperty("grpc.port", "5001")));
         eurekaClient.registerEventListener(this::onEurekaEvent);
         this.eurekaClient = eurekaClient;
         this.localHost = applicationInfoManager.getInfo().getIPAddr();
@@ -66,11 +68,15 @@ public class RaftClusterDiscovery {
             if (!Objects.equals(this.lastAppsHashCode, appsHashCode)) {
                 List<InstanceInfo> clusterInstanceList = eurekaClient.getApplication(jgroupClusterName).getInstances();
                 List<String> clusterHostAndPort = clusterInstanceList.stream()
-                    .filter(instance -> (instance.getMetadata().containsKey(RAFTPORT) && StringUtils
+                    .filter(instance -> (instance.getMetadata().containsKey(RAFT_PORT) && StringUtils
                         .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
                     .map(
-                        instance -> String.format("%s[%s]", instance.getIPAddr(), instance.getMetadata().get(RAFTPORT)))
+                        instance -> String.format("%s[%s]", instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT)))
                     .collect(Collectors.toList());
+                this.raftWorkers = clusterInstanceList.stream()
+                        .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
+                        .map(instance -> String.format("%s[%s]", instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
+                        .toList();
                 if (this.lastClusterHostAndPorts == null
                     || !CollectionUtils.isEqualCollection(this.lastClusterHostAndPorts, clusterHostAndPort)) {
                     this.lastClusterHostAndPorts = clusterHostAndPort;
@@ -90,6 +96,10 @@ public class RaftClusterDiscovery {
 
     public String raftCurrentMember() {
         return String.format("%s[%s]", this.localHost, this.jgroupPort);
+    }
+
+    public List<String> raftWorkers() {
+        return raftWorkers;
     }
 
     public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {
