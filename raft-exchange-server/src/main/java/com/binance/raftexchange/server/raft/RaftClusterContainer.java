@@ -13,10 +13,6 @@ import org.jgroups.raft.StateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.binance.raftexchange.server.util.SerializeHelper;
-import com.binance.raftexchange.stubs.request.ApiAddUser;
-import com.binance.raftexchange.stubs.request.ApiCommand;
-
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
     private final StateMachine stateMachine;
@@ -24,7 +20,6 @@ public class RaftClusterContainer {
     private final RaftClusterDiscovery raftClusterDiscovery;
     private RaftHandle raftHandle;
     private String raftCurrentMember;
-    private volatile boolean isLeader;
 
     public RaftClusterContainer(RaftClusterDiscovery raftClusterDiscovery) {
         this.jgroupsClusterName = raftClusterDiscovery.getJgroupClusterName();
@@ -44,10 +39,8 @@ public class RaftClusterContainer {
         this.raftCurrentMember = raftCurrentMember;
         this.raftHandle = new RaftHandle(jChannel, stateMachine).raftId(raftCurrentMember).addRoleListener(role -> {
             if (role == Role.Leader) {
-                isLeader = true;
                 LOGGER.info("Won HA election, starting raftExchange:{}", raftCurrentMember);
             } else {
-                isLeader = false;
                 LOGGER.info("Unable to find consensus, stepping down HA leadership:{}", raftCurrentMember);
             }
         });
@@ -55,7 +48,6 @@ public class RaftClusterContainer {
     }
 
     public void doStop() throws Exception {
-        isLeader = false;
         if (raftHandle != null) {
             if (raftHandle.channel() != null) {
                 LOGGER.info("Closing JGroupsraft Channel for JGroupsRaftClusterView with Id {}", raftCurrentMember);
