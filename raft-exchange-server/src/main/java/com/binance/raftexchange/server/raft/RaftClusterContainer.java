@@ -52,17 +52,6 @@ public class RaftClusterContainer {
             }
         });
         this.raftHandle.channel().connect(jgroupsClusterName);
-        // test code
-        while (!isLeader) {
-            Thread.sleep(1000);
-        }
-        try {
-            ApiCommand apiCommand = ApiCommand.newBuilder().setAddUser(ApiAddUser.newBuilder().setUid(30L)).build();
-            byte[] bytes = SerializeHelper.serializeWithType(apiCommand);
-            raftHandle.set(bytes, 0, bytes.length);
-        } catch (Exception e) {
-            LOGGER.error("test code error", e);
-        }
     }
 
     public void doStop() throws Exception {
@@ -118,11 +107,8 @@ public class RaftClusterContainer {
         String string = member.toString();
         String[] hostAndPort = string.split("\\[");
         String host = hostAndPort[0];
-        int port = raftedWorkers.stream()
-                .filter(s -> s.startsWith(host))
-                .map(s -> s.split("\\[")[1])
-                .mapToInt(s -> Integer.parseInt(s.substring(0, s.length() - 1)))
-                .findFirst().getAsInt();
+        int port = raftedWorkers.stream().filter(s -> s.startsWith(host)).map(s -> s.split("\\[")[1])
+            .mapToInt(s -> Integer.parseInt(s.substring(0, s.length() - 1))).findFirst().getAsInt();
 
         return new RaftNode(host, port, isLeader ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER);
     }
