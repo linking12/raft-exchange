@@ -56,10 +56,6 @@ public class ExchangeStateMachine implements StateMachine {
                 case SUSPEND_USER:
                     result = SyncAdminApiAccountsController.suspendUser(((ApiCommand)grpcMessage).getSuspendUser());
                     break;
-                case RESET:
-                    // 重置撮合
-                    //@see exchange.core2.core.processors.RiskEngine#reset
-                    break;
                 case RESUME_USER:
                     result = SyncAdminApiAccountsController.resumeUser(((ApiCommand)grpcMessage).getResumeUser());
                     break;

@@ -78,10 +78,6 @@ message ApiSuspendUser {
   int64 uid = 1;
 }
 
-// Reset Command
-message ApiReset {
-}
-
 // Resume User Command
 message ApiResumeUser {
   int64 uid = 1;
