@@ -23,7 +23,7 @@ import java.util.function.Supplier;
 @Builder
 public final class PerformanceConfiguration {
 
-    public static final PerformanceConfiguration DEFAULT = PerformanceConfiguration.baseBuilder().build();
+    public static final PerformanceConfiguration DEFAULT = PerformanceConfiguration.throughputPerformanceBuilder().build();
 
     /*
      * Disruptor ring buffer size (number of commands). Must be power of 2.
