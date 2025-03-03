@@ -35,23 +35,29 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         return callExchange(apiAdjustUserBalance);
     }
 
-
+    /**
+     * 禁用用户
+     */
     public static byte[] suspendUser(ApiSuspendUser grpcApiSuspendUser) throws Exception {
-        exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser = exchange.core2.core.common.api.ApiSuspendUser.builder()
-                .uid(grpcApiSuspendUser.getUid())
-                .build();
+        exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser =
+            exchange.core2.core.common.api.ApiSuspendUser.builder().uid(grpcApiSuspendUser.getUid()).build();
         LOG.info("ApiSuspendUser applied, msg: {}", apiSuspendUser);
         return callExchange(apiSuspendUser);
     }
 
+    /**
+     * 解禁用户
+     */
     public static byte[] resumeUser(ApiResumeUser grpcApiResumeUser) throws Exception {
-        exchange.core2.core.common.api.ApiResumeUser apiResumeUser = exchange.core2.core.common.api.ApiResumeUser.builder()
-                .uid(grpcApiResumeUser.getUid())
-                .build();
+        exchange.core2.core.common.api.ApiResumeUser apiResumeUser =
+            exchange.core2.core.common.api.ApiResumeUser.builder().uid(grpcApiResumeUser.getUid()).build();
         LOG.info("ApiResumeUser applied, msg: {}", apiResumeUser);
         return callExchange(apiResumeUser);
     }
 
+    /**
+     * 批量创建账户
+     */
     public static byte[] batchAddAccounts(BatchAddAccountsCommand grpcBatchAddAccountsCommand) throws Exception {
         Map<Long, AccountBalanceMap> usersMap = grpcBatchAddAccountsCommand.getUsersMap();
         LongObjectHashMap<IntLongHashMap> users = new LongObjectHashMap<>(usersMap.size());
@@ -64,7 +70,8 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
                 users.getIfAbsentPut(uid, new IntLongHashMap()).put(currency, balance);
             }
         }
-        exchange.core2.core.common.api.binary.BatchAddAccountsCommand batchAddAccountsCommand = new exchange.core2.core.common.api.binary.BatchAddAccountsCommand(users);
+        exchange.core2.core.common.api.binary.BatchAddAccountsCommand batchAddAccountsCommand =
+            new exchange.core2.core.common.api.binary.BatchAddAccountsCommand(users);
         LOG.info("batchAddAccountsCommand applied, msg: {}", batchAddAccountsCommand);
 
         return callExchange(batchAddAccountsCommand);
