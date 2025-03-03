@@ -21,12 +21,13 @@ public abstract class AbstractApiController {
 
     public static byte[] callExchange(BinaryDataCommand binaryDataCommand) throws Exception {
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
-        exchange.core2.core.common.cmd.CommandResultCode resultCode = api.submitBinaryDataAsync(binaryDataCommand).get();
+        exchange.core2.core.common.cmd.CommandResultCode resultCode =
+            api.submitBinaryDataAsync(binaryDataCommand).get();
         LOG.info("{} called, result: {}", binaryDataCommand.getClass().getSimpleName(), resultCode);
         return serializeResult(resultCode);
     }
 
-    protected static byte[] serializeResult(exchange.core2.core.common.cmd.CommandResultCode resultCode) {
+    public static byte[] serializeResult(exchange.core2.core.common.cmd.CommandResultCode resultCode) {
         CommandResultCode grpcCommandResultCode = CommandResultCode.forNumber(Math.abs(resultCode.getCode()));
         if (grpcCommandResultCode == null) {
             return null;
