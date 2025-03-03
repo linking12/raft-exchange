@@ -57,15 +57,12 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     }
 
     /**
-     * @see exchange.core2.core.orderbook.IOrderBook#reduceOrder
+     * 改单
      */
     public static byte[] reduceOrder(ApiReduceOrder grpcApiReduceOrder) throws Exception {
-        exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder = exchange.core2.core.common.api.ApiReduceOrder.builder()
-                .orderId(grpcApiReduceOrder.getOrderId())
-                .uid(grpcApiReduceOrder.getUid())
-                .symbol(grpcApiReduceOrder.getSymbol())
-                .reduceSize(grpcApiReduceOrder.getReduceSize())
-                .build();
+        exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder = exchange.core2.core.common.api.ApiReduceOrder
+            .builder().orderId(grpcApiReduceOrder.getOrderId()).uid(grpcApiReduceOrder.getUid())
+            .symbol(grpcApiReduceOrder.getSymbol()).reduceSize(grpcApiReduceOrder.getReduceSize()).build();
 
         return callExchange(apiReduceOrder);
     }
