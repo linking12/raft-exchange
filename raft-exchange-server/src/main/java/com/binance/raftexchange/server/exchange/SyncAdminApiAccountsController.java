@@ -24,7 +24,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     }
 
     /**
-     * 调整保证金
+     * 增加资金
      */
     public static byte[] adjustBalance(ApiAdjustUserBalance grpcApiAdjustUserBalance) throws Exception {
         exchange.core2.core.common.api.ApiAdjustUserBalance apiAdjustUserBalance =
