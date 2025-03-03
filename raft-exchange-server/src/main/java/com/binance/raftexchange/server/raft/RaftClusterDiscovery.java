@@ -4,8 +4,9 @@ import static com.binance.platform.common.EurekaConstants.EUREKA_METADATA_FLOWFL
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -45,7 +46,12 @@ public class RaftClusterDiscovery {
         this.jgroupPort = System.getProperty(RAFT_PORT, "7800");
         this.startupNodes = Integer.parseInt(System.getProperty("raft.startupNodes", "3"));
         ApplicationInfoManager applicationInfoManager = eurekaClient.getApplicationInfoManager();
-        applicationInfoManager.registerAppMetadata(Map.of(RAFT_PORT, jgroupPort, GRPC_PORT, System.getProperty("grpc.port", "5001")));
+
+        HashMap<String, String> meta = new HashMap<>();
+        meta.put(RAFT_PORT, jgroupPort);
+        meta.put(GRPC_PORT, System.getProperty("grpc.port", "5001"));
+        applicationInfoManager.registerAppMetadata(meta);
+
         eurekaClient.registerEventListener(this::onEurekaEvent);
         this.eurekaClient = eurekaClient;
         this.localHost = applicationInfoManager.getInfo().getIPAddr();
@@ -76,7 +82,7 @@ public class RaftClusterDiscovery {
                 this.raftWorkers = clusterInstanceList.stream()
                         .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
                         .map(instance -> String.format("%s[%s]", instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
-                        .toList();
+                        .collect(Collectors.toList());
                 if (this.lastClusterHostAndPorts == null
                     || !CollectionUtils.isEqualCollection(this.lastClusterHostAndPorts, clusterHostAndPort)) {
                     this.lastClusterHostAndPorts = clusterHostAndPort;
@@ -99,7 +105,7 @@ public class RaftClusterDiscovery {
     }
 
     public List<String> raftWorkers() {
-        return raftWorkers;
+        return Collections.unmodifiableList(raftWorkers);
     }
 
     public JChannel createJChannel(String raftMemberCluster, String raftCurrentMember) {

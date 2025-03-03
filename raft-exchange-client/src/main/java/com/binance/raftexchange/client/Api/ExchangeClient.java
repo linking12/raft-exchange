@@ -71,6 +71,7 @@ public class ExchangeClient {
     }
 
     private ScheduledFuture flushLeaderNode() {
+        //todo 暂时放长一点
         return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.DAYS);
     }
 
