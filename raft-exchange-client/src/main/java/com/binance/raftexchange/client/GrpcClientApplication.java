@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @SpringBootApplication
 @Slf4j
-public class GrpcclientApplication {
+public class GrpcClientApplication {
 
     public static void main(String[] args) throws Exception {
         //让我们简化一下 不启动Spring了
