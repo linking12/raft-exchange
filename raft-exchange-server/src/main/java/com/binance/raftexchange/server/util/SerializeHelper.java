@@ -1,7 +1,6 @@
 package com.binance.raftexchange.server.util;
 
 import com.binance.raftexchange.stubs.request.ApiCommand;
-import com.binance.raftexchange.stubs.response.OrderCommand;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -9,7 +8,6 @@ import com.google.protobuf.ProtocolMessageEnum;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 
@@ -30,22 +28,16 @@ public class SerializeHelper {
         return outputStream.toByteArray();
     }
 
+    public static byte[] serializeWithType(Class<? extends GeneratedMessageV3> type, byte[] pb) {
+        return pb;
+    }
+
     /**
      * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------readUTF--------｜｜---readFully---｜
      */
     public static GeneratedMessageV3 deserializeWithType(byte[] data, int offset, int length) throws IOException {
-        DataInputStream dataInputStream = new DataInputStream(new ByteArrayInputStream(data, offset, length));
-        String type = dataInputStream.readUTF();
-        byte[] payload = new byte[length - 2 * Byte.BYTES - type.getBytes().length];
-        dataInputStream.readFully(payload);
-        switch (type) {
-            case "ApiCommand":
-                return ApiCommand.parseFrom(payload);
-            case "OrderCommand":
-                return OrderCommand.parseFrom(payload);
-            default:
-                throw new IllegalArgumentException("Unknown command type: " + type);
-        }
+        //这里不需要OrderCommand了直接用apiCommand就行了
+        return ApiCommand.parseFrom(new ByteArrayInputStream(data, offset, length));
     }
 
     public static byte[] enumToBytesProto(ProtocolMessageEnum enumValue) {
