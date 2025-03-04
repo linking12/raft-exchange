@@ -64,7 +64,7 @@ public class RaftClusterContainer {
         }
     }
 
-    public boolean startSuccessed() {
+    public boolean started() {
         return raftHandle.channel().view() != null;
     }
 

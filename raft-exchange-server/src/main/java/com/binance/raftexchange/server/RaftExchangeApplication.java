@@ -46,14 +46,12 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     }
 
     public void startGrpcServer() throws Exception {
-        GrpcServerContainer grpcServerContainer = null;
+        GrpcServerContainer grpcServerContainer = new GrpcServerContainer();
         do {
-            grpcServerContainer = new GrpcServerContainer(raftClusterContainer);
+            grpcServerContainer.setRaftClusterContainer(raftClusterContainer);
             TimeUnit.SECONDS.sleep(5);
-        } while (!raftClusterContainer.startSuccessed());
-        if (grpcServerContainer != null) {
-            grpcServerContainer.doStart();
-        }
+        } while (!raftClusterContainer.started());
+        grpcServerContainer.doStart();
     }
 
     @Override

@@ -12,20 +12,19 @@ public class GrpcServerContainer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
 
-    private final RaftClusterContainer raftClusterContainer;
+    private RaftClusterContainer raftClusterContainer;
 
     private Server server;
 
-    public GrpcServerContainer(RaftClusterContainer raftClusterContainer) {
+    public void setRaftClusterContainer(RaftClusterContainer raftClusterContainer) {
         this.raftClusterContainer = raftClusterContainer;
     }
 
     public void doStart() throws Exception {
         String grpcPort = System.getProperty("grpc.port", "5001");
         this.server = ServerBuilder.forPort(Integer.parseInt(grpcPort))//
-                .addService(new ApiService(raftClusterContainer))//
-                .addService(new SevererNodeService(raftClusterContainer))
-                .build();
+            .addService(new ApiService(raftClusterContainer))//
+            .addService(new SevererNodeService(raftClusterContainer)).build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
     }
