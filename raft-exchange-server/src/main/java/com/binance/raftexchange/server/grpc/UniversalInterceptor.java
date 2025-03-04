@@ -22,7 +22,7 @@ import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.ServerNode;
 
-class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT>{
+class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
 
     protected final ServerCall<ReqT, RespT> call;
@@ -38,9 +38,8 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onMessage(ReqT message) {
-        InputStream stream = (InputStream) message;
-        stream.markSupported();
-        try {
+        try (InputStream stream = (InputStream) message) {
+            stream.markSupported();
             //这里的InputStream是一个对于netty direct的bytebuf的安全包装
             //基本可以认为是零拷贝的
             CompletableFuture<CommandResult> complete = handle(stream.readAllBytes())
