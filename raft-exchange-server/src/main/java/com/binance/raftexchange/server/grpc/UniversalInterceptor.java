@@ -1,6 +1,7 @@
 package com.binance.raftexchange.server.grpc;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -42,7 +43,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             stream.markSupported();
             //这里的InputStream是一个对于netty direct的bytebuf的安全包装
             //基本可以认为是零拷贝的
-            CompletableFuture<CommandResult> complete = handle(stream.readAllBytes())
+            CompletableFuture<CommandResult> complete = handle(readAll(stream))
                     .whenComplete((result, err) -> {
                         commandOnTheWay.remove(message);
                         call.sendHeaders(new Metadata());
@@ -60,6 +61,13 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private byte[] readAll(InputStream inputStream) throws IOException {
+        int available = inputStream.available();
+        byte[] bytes = new byte[available];
+        inputStream.read(bytes);
+        return bytes;
     }
 
     @Override
