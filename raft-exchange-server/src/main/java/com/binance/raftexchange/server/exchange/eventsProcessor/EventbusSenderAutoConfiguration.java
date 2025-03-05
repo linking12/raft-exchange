@@ -12,7 +12,8 @@ public class EventbusSenderAutoConfiguration implements ApplicationListener<Appl
     public void onApplicationEvent(ApplicationReadyEvent event) {
         ConfigurableEnvironment environment = event.getApplicationContext().getEnvironment();
         String topic = environment.getProperty("raftexchange.eventbus.topic");
+        String appName = environment.getProperty("spring.application.name");
         ZMQEventBusListener listener = event.getApplicationContext().getBean(ZMQEventBusListener.class);
-        EventBusSender.SENDER = new EventBusSender(listener, topic);
+        EventBusSender.SENDER = new EventBusSender(listener, topic, appName);
     }
 }

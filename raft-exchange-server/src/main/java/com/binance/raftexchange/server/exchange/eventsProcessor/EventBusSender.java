@@ -12,9 +12,12 @@ public class EventBusSender implements IEventsHandler {
 
     private final String topic;
 
-    public EventBusSender(ZMQEventBusListener zmqEventBusListener, String topic) {
+    private final String appName;
+
+    public EventBusSender(ZMQEventBusListener zmqEventBusListener, String topic, String appName) {
         this.zmqEventBusListener = zmqEventBusListener;
         this.topic = topic;
+        this.appName = appName;
     }
 
     @Override
@@ -22,6 +25,7 @@ public class EventBusSender implements IEventsHandler {
         zmqEventBusListener.handle(
                 BinanceEvent.builder()
                         .eventType(topic)
+                        .appName(appName)
                         .eventName("ApiCommand")
                         .userId(9173325L) //看文档说必须传入 我随便写一个吧
                         .data(commandResult)
@@ -34,6 +38,7 @@ public class EventBusSender implements IEventsHandler {
         zmqEventBusListener.handle(
                 BinanceEvent.builder()
                         .eventType(topic)
+                        .appName(appName)
                         .eventName("tradeEvent")
                         .userId(9173325L) //看文档说必须传入 我随便写一个吧
                         .data(tradeEvent)
@@ -56,6 +61,7 @@ public class EventBusSender implements IEventsHandler {
         zmqEventBusListener.handle(
                 BinanceEvent.builder()
                         .eventType(topic)
+                        .appName(appName)
                         .eventName("orderBook")
                         .userId(9173325L) //看文档说必须传入 我随便写一个吧
                         .data(orderBook)
