@@ -48,7 +48,7 @@ public class RaftClusterContainer {
         }
 
         // Start JRaft
-        String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "_data";
+        String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "-DATA";
         FileUtils.forceMkdir(new File(dataPath));
 
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
