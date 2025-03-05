@@ -85,8 +85,6 @@ public class RaftClusterContainer {
         return raftGroupService != null && raftGroupService.isStarted();
     }
 
-
-    //todo 不再throw exception，调用方注意调整下
     public CompletableFuture<byte[]> requestConsensus(byte[] log) {
         CompletableFuture<byte[]> future = new CompletableFuture<>();
         raftGroupService.getRaftNode().apply(new Task(ByteBuffer.wrap(log), new ReturnableClosure(future)));
@@ -100,11 +98,21 @@ public class RaftClusterContainer {
 
     public List<RaftNode> listNodes() {
         List<RaftNode> raftNodes = new ArrayList<>();
+        List<String> raftedWorkers = raftClusterDiscovery.raftWorkers();
         for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
             PeerId peerId = node.getNodeId().getPeerId();
-            raftNodes.add(new RaftNode(peerId.getIp(), peerId.getPort(), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+            raftNodes.add(new RaftNode(peerId.getIp(), port(raftedWorkers, peerId.getIp(), peerId.getPort()), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
+    }
+
+    private int port(List<String> raftedWorkers, String ip, int port) {
+        for (String raftedWorker : raftedWorkers) {
+            if (raftedWorker.startsWith(ip)) {
+                return Integer.parseInt(raftedWorker.split(":")[1]);
+            }
+        }
+        return port;
     }
 
     @Nullable

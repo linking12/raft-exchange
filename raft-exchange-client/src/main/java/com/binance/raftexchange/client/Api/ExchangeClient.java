@@ -84,7 +84,7 @@ public class ExchangeClient {
                         .stream()
                         .filter(n -> n.getType() == NodeType.LEADER)
                         .findFirst();
-                if (!optionalServerNode.isPresent()) {
+                if (optionalServerNode.isEmpty()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;
                 }

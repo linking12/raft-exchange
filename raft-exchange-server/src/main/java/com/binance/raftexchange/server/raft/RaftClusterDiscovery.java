@@ -2,6 +2,7 @@ package com.binance.raftexchange.server.raft;
 
 import static com.binance.platform.common.EurekaConstants.EUREKA_METADATA_FLOWFLAG;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +34,7 @@ public class RaftClusterDiscovery {
 
     private String lastAppsHashCode;
     private List<String> lastClusterHostAndPorts;
+    private List<String> raftWorkers;
 
     public RaftClusterDiscovery(EurekaClient eurekaClient) {
         this.raftPort = System.getProperty(RAFT_PORT, "7800");
@@ -64,6 +66,12 @@ public class RaftClusterDiscovery {
                         .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
                     .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT)))
                     .collect(Collectors.toList());
+
+                this.raftWorkers = clusterInstanceList.stream()
+                        .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
+                        .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
+                        .collect(Collectors.toList());
+
                 if (this.lastClusterHostAndPorts == null
                     || !CollectionUtils.isEqualCollection(this.lastClusterHostAndPorts, clusterHostAndPort)) {
                     this.lastClusterHostAndPorts = clusterHostAndPort;
@@ -72,6 +80,10 @@ public class RaftClusterDiscovery {
                 }
             }
         }
+    }
+
+    public List<String> raftWorkers() {
+        return Collections.unmodifiableList(raftWorkers);
     }
 
     public String raftMemberCluster() {
