@@ -33,8 +33,8 @@ public class RaftClusterDiscovery {
     private final EurekaClient eurekaClient;
 
     private String lastAppsHashCode;
-    private List<String> lastClusterHostAndPorts;
-    private List<String> raftWorkers;
+    private List<String> raftClusterHostAndPorts;
+    private List<String> raftGrpcWorkerHostAndPorts;
 
     public RaftClusterDiscovery(EurekaClient eurekaClient) {
         this.raftPort = System.getProperty(RAFT_PORT, "7800");
@@ -67,30 +67,30 @@ public class RaftClusterDiscovery {
                     .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT)))
                     .collect(Collectors.toList());
 
-                this.raftWorkers = clusterInstanceList.stream()
+                this.raftGrpcWorkerHostAndPorts = clusterInstanceList.stream()
                         .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
                         .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
                         .collect(Collectors.toList());
 
-                if (this.lastClusterHostAndPorts == null
-                    || !CollectionUtils.isEqualCollection(this.lastClusterHostAndPorts, clusterHostAndPort)) {
-                    this.lastClusterHostAndPorts = clusterHostAndPort;
-                    LOGGER.info("update last clusters to {}", this.lastClusterHostAndPorts);
+                if (this.raftClusterHostAndPorts == null
+                    || !CollectionUtils.isEqualCollection(this.raftClusterHostAndPorts, clusterHostAndPort)) {
+                    this.raftClusterHostAndPorts = clusterHostAndPort;
+                    LOGGER.info("update last clusters to {}", this.raftClusterHostAndPorts);
                     this.lastAppsHashCode = appsHashCode;
                 }
             }
         }
     }
 
-    public List<String> raftWorkers() {
-        return Collections.unmodifiableList(raftWorkers);
+    public List<String> raftGrpcWorkers() {
+        return Collections.unmodifiableList(raftGrpcWorkerHostAndPorts);
     }
 
     public String raftMemberCluster() {
-        if (lastClusterHostAndPorts == null || lastClusterHostAndPorts.size() < startupNodes) {
+        if (raftClusterHostAndPorts == null || raftClusterHostAndPorts.size() < startupNodes) {
             return null;
         }
-        return String.join(",", lastClusterHostAndPorts);
+        return String.join(",", raftClusterHostAndPorts);
     }
 
     public String raftCurrentMember() {

@@ -8,6 +8,9 @@ import java.util.Objects;
  */
 public final class RaftNode {
     private final String host;
+    /**
+     * 注意是grpc port，通信用的这个
+     */
     private final int port;
     private final NodeType nodeType;
 
