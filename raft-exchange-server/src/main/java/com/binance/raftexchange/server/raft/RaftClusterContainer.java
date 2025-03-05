@@ -2,6 +2,7 @@ package com.binance.raftexchange.server.raft;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -11,7 +12,6 @@ import com.alipay.sofa.jraft.JRaftUtils;
 import com.alipay.sofa.jraft.Node;
 import com.alipay.sofa.jraft.NodeManager;
 import com.alipay.sofa.jraft.RaftGroupService;
-import com.alipay.sofa.jraft.RouteTable;
 import com.alipay.sofa.jraft.Status;
 import com.alipay.sofa.jraft.conf.Configuration;
 import com.alipay.sofa.jraft.entity.PeerId;
@@ -22,6 +22,8 @@ import com.alipay.sofa.jraft.util.Utils;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
@@ -70,11 +72,6 @@ public class RaftClusterContainer {
         raftGroupService.start();
 
         LOGGER.info("SOFA-JRaft Node started on {}", selfPeer);
-
-        NodeManager.getInstance().addAddress(selfPeer.getEndpoint());
-        //注册RouteTable
-        RouteTable.getInstance().updateConfiguration(raftClusterName, conf);
-
     }
 
     public void doStop() throws Exception {
@@ -87,7 +84,6 @@ public class RaftClusterContainer {
     public boolean started() {
         return raftGroupService != null && raftGroupService.isStarted();
     }
-
 
 
     //todo 不再throw exception，调用方注意调整下
@@ -103,17 +99,25 @@ public class RaftClusterContainer {
     }
 
     public List<RaftNode> listNodes() {
-
-        return null;
+        List<RaftNode> raftNodes = new ArrayList<>();
+        for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
+            PeerId peerId = node.getNodeId().getPeerId();
+            raftNodes.add(new RaftNode(peerId.getIp(), peerId.getPort(), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+        }
+        return raftNodes;
     }
 
+    @Nullable
     public RaftNode leaderNode() {
-//        RouteTable.getInstance().refreshLeader()
-//        RouteTable.getInstance().selectLeader();
-        return null;
+        Node raftNode = raftGroupService.getRaftNode();
+        PeerId leaderId = raftNode.getLeaderId();
+        if (leaderId == null) {
+            return null;
+        }
+        return new RaftNode(leaderId.getIp(), leaderId.getPort(), RaftNode.NodeType.LEADER);
     }
 
-    static class ReturnableClosure implements Closure {
+    protected static class ReturnableClosure implements Closure {
         private final CompletableFuture<byte[]> future;
         private byte[] result;
 
