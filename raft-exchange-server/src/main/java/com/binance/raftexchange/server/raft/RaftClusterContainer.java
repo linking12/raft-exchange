@@ -64,8 +64,7 @@ public class RaftClusterContainer {
         nodeOptions.setRaftOptions(new RaftOptions());
         nodeOptions.setInitialConf(conf);
 
-        nodeOptions.setDisableCli(false);
-        nodeOptions.setCliRpcThreadPoolSize(Utils.cpus());// 同默认值一样，处理cli请求(leader查询、管理)
+        nodeOptions.setDisableCli(true);
         nodeOptions.setRaftRpcThreadPoolSize(Math.max(Utils.cpus() << 3, 32));// 默认值是6倍cpu，处理raft请求(日志复制、心跳检测、选举)
 
         raftGroupService = new RaftGroupService(raftClusterName, selfPeer, nodeOptions);
