@@ -27,5 +27,4 @@ nbdist/
 .nb-gradle/
 logs/
 
-RAFT-EXCHANGE_data/
-BINANCE-RAFT-EXCHANGE_data/
+RAFT-EXCHANGE-DATA/
