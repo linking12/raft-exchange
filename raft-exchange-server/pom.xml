@@ -61,6 +61,12 @@
 		<dependency>
 			<groupId>com.alipay.sofa</groupId>
 			<artifactId>jraft-core</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>net.java.dev.jna</groupId>
+					<artifactId>jna</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 		<dependency>
 			<groupId>org.rocksdb</groupId>
