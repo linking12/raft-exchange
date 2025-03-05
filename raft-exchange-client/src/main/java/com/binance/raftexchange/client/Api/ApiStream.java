@@ -31,12 +31,12 @@ public class ApiStream implements StreamObserver<ApiCommand> {
         return new StreamObserver<CommandResult>() {
             @Override
             public void onNext(CommandResult commandResult) {
-                if (commandResult.getResultCode() != CommandResultCode.NEED_MOVE) {
-                    resultStreamObserver.onNext(commandResult);
-                    return;
+                if (commandResult.getResultCode() == CommandResultCode.NEED_MOVE) {
+                    ServerNode leaderNode = commandResult.getLeaderNode();
+                    root.reportLeaderFresh(leaderNode);
                 }
-                ServerNode leaderNode = commandResult.getLeaderNode();
-                root.reportLeaderFresh(leaderNode);
+
+                resultStreamObserver.onNext(commandResult);
             }
 
             @Override

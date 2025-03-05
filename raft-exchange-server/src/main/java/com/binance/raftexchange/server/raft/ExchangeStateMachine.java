@@ -1,10 +1,11 @@
 package com.binance.raftexchange.server.raft;
 
-import java.io.DataInput;
-import java.io.DataOutput;
-
+import com.alipay.sofa.jraft.Closure;
+import com.alipay.sofa.jraft.Iterator;
+import com.alipay.sofa.jraft.Status;
+import com.alipay.sofa.jraft.core.StateMachineAdapter;
 import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
-import org.jgroups.raft.StateMachine;
+import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,12 +18,34 @@ import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
 
-public class ExchangeStateMachine implements StateMachine {
+import java.nio.ByteBuffer;
+
+public class ExchangeStateMachine extends StateMachineAdapter {
 
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
 
     @Override
-    public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
+    public void onApply(Iterator iter) {
+        while (iter.hasNext()) {
+            ByteBuffer data = iter.getData();
+            Closure closure = iter.done();
+            byte[] result = null;
+            try {
+                result = apply(data.array(), data.arrayOffset() + data.position(), data.remaining());
+            } catch (Exception e) {
+                LOG.error("Fail to apply", e);
+            }
+            if (closure != null) {
+                if (closure instanceof ReturnableClosure) {
+                    ((ReturnableClosure) closure).setResult(result);
+                }
+                closure.run(Status.OK());
+            }
+            iter.next();
+        }
+    }
+
+    private byte[] apply(byte[] data, int offset, int length) throws Exception {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data, offset, length);
         byte[] result = null;
         if (grpcMessage instanceof ApiCommand) {
@@ -67,7 +90,7 @@ public class ExchangeStateMachine implements StateMachine {
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
             }
         }
-        return serialize_response ? result : null;
+        return result;
     }
 
     private byte[] processBinaryDataCommand(BinaryDataCommand binaryDataCommand) throws Exception {
@@ -84,16 +107,6 @@ public class ExchangeStateMachine implements StateMachine {
                 LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
         }
         return result;
-    }
-
-    @Override
-    public void readContentFrom(DataInput in) throws Exception {
-
-    }
-
-    @Override
-    public void writeContentTo(DataOutput out) throws Exception {
-
     }
 
 }

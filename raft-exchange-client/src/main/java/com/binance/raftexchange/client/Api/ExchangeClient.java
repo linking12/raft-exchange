@@ -42,7 +42,7 @@ public class ExchangeClient {
 
     private final Set<ApiStream> streams = ConcurrentHashMap.newKeySet();
 
-    //todo close考虑关闭
+    // todo close考虑关闭
     private final ScheduledFuture flushTimer;
 
     public ExchangeClient(String host, int port) {
@@ -61,17 +61,14 @@ public class ExchangeClient {
     }
 
     private ManagedChannel createChannel(String host, int port) {
-        //统一放在这里 以后在这里做负载均衡的配置
-        //目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port)
-                .eventLoopGroup(DEFAULT_EVENTLOOP_GROUP)
-                .channelType(NioSocketChannel.class)
-                .usePlaintext()
-                .build();
+        // 统一放在这里 以后在这里做负载均衡的配置
+        // 目前先统一打到Leader上
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(DEFAULT_EVENTLOOP_GROUP)
+            .channelType(NioSocketChannel.class).usePlaintext().build();
     }
 
     private ScheduledFuture flushLeaderNode() {
-        //todo 暂时放长一点
+        // todo 暂时放长一点
         return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.DAYS);
     }
 
@@ -80,17 +77,16 @@ public class ExchangeClient {
         Futures.addCallback(nodeStub.listNodes(NodeListCommand.getDefaultInstance()), new FutureCallback<NodeList>() {
             @Override
             public void onSuccess(@Nullable NodeList nodeList) {
-                Optional<ServerNode> optionalServerNode = nodeList.getNodesList()
-                        .stream()
-                        .filter(n -> n.getType() == NodeType.LEADER)
-                        .findFirst();
+                Optional<ServerNode> optionalServerNode =
+                    nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;
                 }
 
                 ServerNode leaderNode = optionalServerNode.get();
-                if (isSameIp(leaderNode.getHost(), currentLeaderNode.getHost()) && currentLeaderNode.getPort() == leaderNode.getPort()) {
+                if (isSameIp(leaderNode.getHost(), currentLeaderNode.getHost())
+                    && currentLeaderNode.getPort() == leaderNode.getPort()) {
                     return;
                 }
 
@@ -102,23 +98,21 @@ public class ExchangeClient {
             public void onFailure(Throwable throwable) {
                 LOGGER.error("flashLeaderNode fail!", throwable);
             }
-        }, DEFAULT_EVENTLOOP_GROUP); //调度回去 可以省下很多streamObserver的状态同步开销
+        }, DEFAULT_EVENTLOOP_GROUP); // 调度回去 可以省下很多streamObserver的状态同步开销
     }
 
     private ManagedChannel sniffLeaderChannel(String host, int port) {
-        //先任意连一个上去
+        // 先任意连一个上去
         ManagedChannel tryChannel = createChannel(host, port);
         boolean trySuccess = false;
 
         try {
-            //这里用了阻塞的 或许之后可以改造为异步的
-            NodeList nodeList = ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
+            // 这里用了阻塞的 或许之后可以改造为异步的
+            NodeList nodeList =
+                ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
 
-            ServerNode leaderNode = nodeList.getNodesList()
-                    .stream()
-                    .filter(n -> n.getType() == NodeType.LEADER)
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
+            ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER)
+                .findFirst().orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
             this.leaderNode = leaderNode;
             if (isSameIp(host, leaderNode.getHost()) && port == leaderNode.getPort()) {
                 trySuccess = true;
@@ -154,14 +148,14 @@ public class ExchangeClient {
         streams.remove(stream);
     }
 
-    //监测到leader切换 进行刷新stream 以确保用户调用无感
+    // 监测到leader切换 进行刷新stream 以确保用户调用无感
     void reportLeaderFresh(ServerNode leaderNode) {
         this.leaderNode = leaderNode;
         String leaderHost = leaderNode.getHost();
         int leaderPort = leaderNode.getPort();
         ManagedChannel leaderChannel = createChannel(leaderHost, leaderPort);
         ApiCommandServiceGrpc.ApiCommandServiceStub stub = ApiCommandServiceGrpc.newStub(leaderChannel);
-        //node stub就不切了 每个节点都有全量的拓扑信息
+        // node stub就不切了 每个节点都有全量的拓扑信息
         this.apiStub = stub;
         for (ApiStream stream : streams) {
             StreamObserver<ApiCommand> apiCommandStreamObserver = apiStub.execApiCommand(stream.toUserObserver());

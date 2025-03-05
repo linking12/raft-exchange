@@ -42,7 +42,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     @Override
     public void onMessage(ReqT message) {
         try (InputStream stream = (InputStream)message) {
-            stream.markSupported();
             /**
              * @formatter off
              */
@@ -64,6 +63,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
              */
             commandOnTheWay.put(message, complete);
         } catch (Exception e) {
+            //不应该到这里
             throw new RuntimeException(e);
         }
     }
@@ -84,12 +84,25 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         delegate().onComplete();
     }
 
-    private CompletableFuture<CommandResult> handle(byte[] apiCommand) throws Exception {
+    private CompletableFuture<CommandResult> handle(byte[] apiCommand) {
         if (!raftClusterContainer.isLeader()) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
+
+            if(raftNode == null) {
+                return CompletableFuture.completedFuture(
+                        CommandResult.newBuilder()
+                                .setResultCode(CommandResultCode.NO_LEADER)
+                                .build()
+                );
+            }
+
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
-            return CompletableFuture.completedFuture(CommandResult.newBuilder()
-                .setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build());
+            return CompletableFuture.completedFuture(
+                    CommandResult.newBuilder()
+                            .setResultCode(CommandResultCode.NEED_MOVE)
+                            .setLeaderNode(leaderNode)
+                            .build()
+            );
         }
 
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
