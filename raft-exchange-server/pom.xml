@@ -18,6 +18,11 @@
 	</properties>
 	<dependencies>
 		<dependency>
+			<groupId>com.binance.infra.avengers</groupId>
+			<artifactId>eventbus-springboot-starter</artifactId>
+			<version>1.0.0-SNAPSHOT</version>
+		</dependency>
+		<dependency>
 			<groupId>com.binance.raft-exchange</groupId>
 			<artifactId>raft-exchange-spi</artifactId>
 		</dependency>

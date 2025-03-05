@@ -2,6 +2,7 @@ package com.binance.raftexchange.client;
 
 import com.binance.raftexchange.client.Api.ApiStream;
 import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiNop;
 import com.binance.raftexchange.stubs.response.CommandResult;
@@ -35,7 +36,11 @@ public class GrpcClientApplication {
         });
         apiStream.onNext(
                 ApiCommand.newBuilder()
-                        .setNop(ApiNop.getDefaultInstance())
+                        .setAddUser(
+                                ApiAddUser.newBuilder()
+                                        .setUid(200102014)
+                                        .build()
+                        )
                         .build()
         );
     }
