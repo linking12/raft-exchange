@@ -735,6 +735,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         final int quoteCurrency = spec.quoteCurrency;
 
+        /**
+         *  卖单：
+         *  Taker 用 baseCurrency（如 BTC）卖出，接收 quoteCurrency（如 USD）
+         *  Maker 用 quoteCurrency 购买，接收 baseCurrency
+         */
+        
         while (ev != null) {
             assert ev.eventType == MatcherEventType.TRADE;
 
@@ -752,11 +758,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // buying, use bidderHoldPrice to calculate released amount based on price difference
                 final long priceDiff = ev.bidderHoldPrice - ev.price;
                 final long amountDiffToReleaseInQuoteCurrency = CoreArithmeticUtils.calculateAmountBidReleaseCorrMaker(size, priceDiff, spec);
-                maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
-
+                long quoteCurrencyBalance = maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
                 final long gainedAmountInBaseCurrency = CoreArithmeticUtils.calculateAmountAsk(size, spec);
-                maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
-
+                long baseCurrencyBalance = maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
+                
+                /**
+                 * @modify 资金转移，给maker减去quoteCurrency，加上baseCurrency
+                 */
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance);
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance);
                 makerSizeForThisHandler += size;
             }
 
@@ -764,11 +774,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
 
         if (taker != null) {
-            taker.accounts.addToValue(quoteCurrency, takerSizePriceForThisHandler * spec.quoteScaleK - spec.takerFee * takerSizeForThisHandler);
+           long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, takerSizePriceForThisHandler * spec.quoteScaleK - spec.takerFee * takerSizeForThisHandler);
+           /**
+            * @modify 资金转移，taker加上quoteCurrency,baseCurrency已冻结阶段结算，无需处理
+            */
+           this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
-
             fees.addToValue(quoteCurrency, spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler);
         }
     }
@@ -787,6 +800,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         final int quoteCurrency = spec.quoteCurrency;
 
+        /**
+         *  买单：
+         *  Taker 支付 quoteCurrency，  接收 baseCurrency
+         *  Maker 支付 baseCurrency（已在冻结阶段处理，交易时无需额外支付），  接收 quoteCurrency
+         */
         while (ev != null) {
             assert ev.eventType == MatcherEventType.TRADE;
 
@@ -804,13 +822,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long size = ev.size;
                 final UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
                 final long gainedAmountInQuoteCurrency = CoreArithmeticUtils.calculateAmountBid(size, ev.price, spec);
-                maker.accounts.addToValue(quoteCurrency, gainedAmountInQuoteCurrency - spec.makerFee * size);
+                long userBalance = maker.accounts.addToValue(quoteCurrency, gainedAmountInQuoteCurrency - spec.makerFee * size);
+                /**
+                 * @modify 资金转移，给maker加上quoteCurrency
+                 */
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance);
                 makerSizeForThisHandler += size;
             }
 
             ev = ev.nextEvent;
         }
 
+       
         if (taker != null) {
 
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
@@ -819,8 +842,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
             // TODO IOC_BUDGET - order can be partially rejected - need held taker fee correction
 
-            taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
-            taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
+            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
+            long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
+            /**
+             * @modify 资金转移，给taker减去quoteCurrency，加上baseCurrency
+             */
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
