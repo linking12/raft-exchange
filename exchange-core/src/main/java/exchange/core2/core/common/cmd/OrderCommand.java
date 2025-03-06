@@ -70,6 +70,10 @@ public final class OrderCommand implements IOrder {
 
     // trade events chain
     public MatcherTradeEvent matcherEvent;
+    /**
+     * 冻结资金和解冻资金
+     */
+    public FundEvent fundEvent;
 
     // optional market data
     public L2MarketData marketData;

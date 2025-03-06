@@ -67,7 +67,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final IntLongHashMap adjustments;
     private final IntLongHashMap suspends;
     private final ObjectsPool objectsPool;
-
+    private final FundEventsHelper eventsHelper;
     // sharding by symbolId
     private final int shardId;
     private final long shardMask;
@@ -98,6 +98,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
 
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventPool);
+        
         // initialize object pools // TODO move to perf config
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);
@@ -491,10 +493,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         if (!canPlace) {
             // revert balance change
-            userProfile.accounts.addToValue(currency, orderHoldAmount);
-//            log.warn("orderAmount={} > userProfile.accounts.get({})={}", orderAmount, currency, userProfile.accounts.get(currency));
+            long userBalance = userProfile.accounts.addToValue(currency, orderHoldAmount);
+            // log.warn("orderAmount={} > userProfile.accounts.get({})={}", orderAmount, currency, userProfile.accounts.get(currency));
+            /**
+             * @modify 解冻资金
+             */
+            this.eventsHelper.sendReleaseEvent(cmd, userProfile.uid, currency, userBalance, 0);
             return CommandResultCode.RISK_NSF;
         } else {
+            /**
+             * @modify 冻结资金
+             */
+            this.eventsHelper.sendReleaseEvent(cmd, userProfile.uid, currency, newBalance, orderHoldAmount);
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
     }
@@ -663,16 +673,37 @@ public final class RiskEngine implements WriteBytesMarshallable {
         //log.debug("REDUCE/REJECT {} {}", cmd, ev);
 
         // for cancel/rejection only one party is involved
+        
+        /**
+         * 买单（BID）：
+                下单时：冻结 quoteCurrency（如 USD），因为用户需要支付它来购买 baseCurrency（如 BTC）。
+                拒绝/减少时：解冻 quoteCurrency，因为交易未完成，资金需要返还。
+                
+           卖单（ASK）：
+                下单时：冻结 baseCurrency（如 BTC），因为用户需要提供它来出售换取 quoteCurrency（如 USD）。
+                拒绝/减少时：解冻 baseCurrency，因为交易未完成，资产需要返还。
+         * 
+         */
         if (takerSell) {
-
-            taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size, spec));
+            long userBalance = taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size, spec));
+            /**
+             * @modify 解冻资金,卖单解冻 baseCurrency
+             */
+            this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.baseCurrency, userBalance, 0);
 
         } else {
-
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
-                taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
+                long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
+                /**
+                 * @modify 解冻资金 买单解冻 quoteCurrency
+                 */
+                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance, 0);
             } else {
-                taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
+                long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
+                /**
+                 * @modify 解冻资金 买单解冻 quoteCurrency
+                 */
+                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance, 0);
             }
             // TODO for OrderType.IOC_BUDGET - for REJECT should release leftover deposit after all trades calculated
         }
