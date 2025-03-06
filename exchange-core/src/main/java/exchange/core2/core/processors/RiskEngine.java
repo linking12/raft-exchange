@@ -766,9 +766,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 资金转移
                  */
-                long makerFee = size * spec.makerFee;
-                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance, makerFee);
-                this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance, 0);
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance);
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance);
                 
                 
                 makerSizeForThisHandler += size;
@@ -784,8 +783,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
            /**
             * @modify 资金转移
             */
-           long takerFee = spec.takerFee * takerSizeForThisHandler;
-           this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance, takerFee);
+           this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
@@ -839,8 +837,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 资金转移
                  */
-                long makerFee = spec.makerFee * size;
-                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance, makerFee);
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance);
                 makerSizeForThisHandler += size;
             }
 
@@ -863,9 +860,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 资金转移
              */
-            long takerFee = spec.takerFee * takerSizeForThisHandler;
-            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance, takerFee);
-            this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance, 0);
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
