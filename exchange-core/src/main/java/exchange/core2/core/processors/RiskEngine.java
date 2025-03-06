@@ -736,9 +736,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         final int quoteCurrency = spec.quoteCurrency;
 
         /**
-         *  卖单：
-         *  Taker 用 baseCurrency（如 BTC）卖出，接收 quoteCurrency（如 USD）
-         *  Maker 用 quoteCurrency 购买，接收 baseCurrency
+         * 卖单（ASK）：
+           Taker：支付 baseCurrency（BTC），接收 quoteCurrency（USD）。
+           Maker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
          */
         
         while (ev != null) {
@@ -801,9 +801,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         final int quoteCurrency = spec.quoteCurrency;
 
         /**
-         *  买单：
-         *  Taker 支付 quoteCurrency，  接收 baseCurrency
-         *  Maker 支付 baseCurrency（已在冻结阶段处理，交易时无需额外支付），  接收 quoteCurrency
+        买单（BID）：
+             Taker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
+             Maker：支付 baseCurrency（BTC），接收 quoteCurrency（USD）。
          */
         while (ev != null) {
             assert ev.eventType == MatcherEventType.TRADE;
