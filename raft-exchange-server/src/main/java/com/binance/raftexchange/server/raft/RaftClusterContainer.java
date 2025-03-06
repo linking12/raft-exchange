@@ -46,30 +46,23 @@ public class RaftClusterContainer {
             LOGGER.info("Starting raft: {}", raftCurrentMember);
             raftMemberCluster = raftClusterDiscovery.raftMemberCluster();
         }
-
         // Start JRaft
         String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "-DATA";
         FileUtils.forceMkdir(new File(dataPath));
-
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
         Configuration conf = JRaftUtils.getConfiguration(raftMemberCluster);
-
         NodeOptions nodeOptions = new NodeOptions();
         nodeOptions.setFsm(new ExchangeStateMachine());
-        //@see DefaultJRaftServiceFactory，log存rocksdb，snapshot和meta存文件
+        // @see DefaultJRaftServiceFactory，log存rocksdb，snapshot和meta存文件
         nodeOptions.setLogUri(dataPath + File.separator + "log");
         nodeOptions.setSnapshotUri(dataPath + File.separator + "snapshot");
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
-
         nodeOptions.setRaftOptions(new RaftOptions());
         nodeOptions.setInitialConf(conf);
-
         nodeOptions.setDisableCli(true);
         nodeOptions.setRaftRpcThreadPoolSize(Math.max(Utils.cpus() << 3, 32));// 默认值是6倍cpu，处理raft请求(日志复制、心跳检测、选举)
-
         raftGroupService = new RaftGroupService(raftClusterName, selfPeer, nodeOptions);
         raftGroupService.start();
-
         LOGGER.info("SOFA-JRaft Node started on {}", selfPeer);
     }
 
@@ -99,7 +92,8 @@ public class RaftClusterContainer {
         List<RaftNode> raftNodes = new ArrayList<>();
         for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
             PeerId peerId = node.getNodeId().getPeerId();
-            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()),
+                node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
     }
