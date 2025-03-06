@@ -66,7 +66,7 @@ public final class ExchangeCore {
     private boolean stopped = false;
 
     // enable MatcherTradeEvent pooling
-    public static final boolean EVENTS_POOLING = false;
+    public static final boolean EVENTS_POOLING = true;
 
     /**
      * Exchange core constructor.
