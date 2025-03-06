@@ -43,7 +43,7 @@ public class FundEventsHelper {
     }
 
     // 资金转移
-    public FundEvent sendTransferEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {
+    public FundEvent sendTransferEvent(final MatcherTradeEvent ev, long uid, int currency, long free, long fee) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.TRANSFER;
         event.uid = uid;

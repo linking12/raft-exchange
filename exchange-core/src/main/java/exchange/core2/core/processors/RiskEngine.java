@@ -766,8 +766,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 资金转移
                  */
-                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance);
-                this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance);
+                long makerFee = size * spec.makerFee;
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance, makerFee);
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance, 0);
+                
+                
                 makerSizeForThisHandler += size;
             }
 
@@ -781,11 +784,16 @@ public final class RiskEngine implements WriteBytesMarshallable {
            /**
             * @modify 资金转移
             */
-           this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
+           long takerFee = spec.takerFee * takerSizeForThisHandler;
+           this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance, takerFee);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
-            fees.addToValue(quoteCurrency, spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler);
+            long totalTradefee = spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler;
+            fees.addToValue(quoteCurrency, totalTradefee);
+            /**
+             * @TODO 把手续费加到Trade上面去？
+             */
         }
     }
 
@@ -831,7 +839,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 资金转移
                  */
-                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance);
+                long makerFee = spec.makerFee * size;
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance, makerFee);
                 makerSizeForThisHandler += size;
             }
 
@@ -846,6 +855,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 takerSizePriceHeldSum = cmd.price;
             }
             // TODO IOC_BUDGET - order can be partially rejected - need held taker fee correction
+            
             // 支付 quoteCurrency
             long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
             // 接收 baseCurrency
@@ -853,12 +863,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 资金转移
              */
-            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
-            this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance);
+            long takerFee = spec.takerFee * takerSizeForThisHandler;
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance, takerFee);
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance, 0);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
-            fees.addToValue(quoteCurrency, spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler);
+            long totalTradefee = spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler;
+            fees.addToValue(quoteCurrency, totalTradefee);
+            /**
+             * @TODO 把手续费加到Trade上面去？
+             */
+            
         }
     }
 
