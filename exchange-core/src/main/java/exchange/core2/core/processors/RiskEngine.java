@@ -698,7 +698,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (takerSell) {
             long userBalance = taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size, spec));
             /**
-             * @modify 解冻资金,卖单解冻 baseCurrency
+             * @modify 恢复资金,卖单解冻 baseCurrency
              */
             this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
 
@@ -706,13 +706,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
                 /**
-                 * @modify 解冻资金 买单解冻 quoteCurrency
+                 * @modify 恢复资金 买单解冻 quoteCurrency
                  */
                 this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             } else {
                 long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
                 /**
-                 * @modify 解冻资金 买单解冻 quoteCurrency
+                 * @modify 恢复资金 买单解冻 quoteCurrency
                  */
                 this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             }
