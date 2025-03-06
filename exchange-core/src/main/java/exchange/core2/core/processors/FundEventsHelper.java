@@ -25,13 +25,12 @@ public class FundEventsHelper {
         event.currency = currency;
         event.free = locked;
         event.orderId = cmd.orderId;
-        event.fee = 0;
         event.positionDelta = 0;
         return event;
     }
 
     // 恢复资金
-    public FundEvent sendReleaseEvent(final OrderCommand cmd, long uid, int currency, long free) {
+    public FundEvent sendResumeEvent(final OrderCommand cmd, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.RELEASE;
         event.uid = uid;
@@ -39,7 +38,6 @@ public class FundEventsHelper {
         event.free = free;
         event.orderId = cmd.orderId;
         event.loked = 0;
-        event.fee = 0;
         event.positionDelta = 0;
         return event;
     }
@@ -51,10 +49,8 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.fee = fee;
         event.loked = 0;
         event.orderId = ev.matchedOrderId;
-        event.fee = 0;
         event.positionDelta = 0;
         return event;
     }

@@ -509,7 +509,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 恢复资金
              */
-            this.eventsHelper.sendReleaseEvent(cmd, userProfile.uid, currency, userBalance);
+            this.eventsHelper.sendResumeEvent(cmd, userProfile.uid, currency, userBalance);
             return CommandResultCode.RISK_NSF;
         } else {
             /**
@@ -700,7 +700,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 解冻资金,卖单解冻 baseCurrency
              */
-            this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
+            this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
 
         } else {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
@@ -708,13 +708,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 解冻资金 买单解冻 quoteCurrency
                  */
-                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
+                this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             } else {
                 long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
                 /**
                  * @modify 解冻资金 买单解冻 quoteCurrency
                  */
-                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
+                this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             }
             // TODO for OrderType.IOC_BUDGET - for REJECT should release leftover deposit after all trades calculated
         }

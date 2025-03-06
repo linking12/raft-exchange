@@ -15,9 +15,8 @@ public class FundEvent {
     public long orderId; // 订单 ID
     public long uid; // 用户 ID
     public int currency; // 变动货币
-    public long free; //用户可用余额
+    public long free; // 用户可用余额
     public long loked; // 用户冻结余额
-    public long fee; // 手续费（如果有）
     public long positionDelta; // 持仓变化（期货用，现金交易为 0）
 
     public enum FundEventType {
@@ -26,7 +25,7 @@ public class FundEvent {
 
     @Override
     public int hashCode() {
-        return Objects.hash(currency, eventType, fee, free, loked, positionDelta, section, uid);
+        return Objects.hash(currency, eventType, free, loked, positionDelta, section, uid);
     }
 
     @Override
@@ -38,15 +37,14 @@ public class FundEvent {
         if (getClass() != obj.getClass())
             return false;
         FundEvent other = (FundEvent)obj;
-        return currency == other.currency && eventType == other.eventType && fee == other.fee && free == other.free
-            && loked == other.loked && positionDelta == other.positionDelta && section == other.section
-            && uid == other.uid;
+        return currency == other.currency && eventType == other.eventType && free == other.free && loked == other.loked
+            && positionDelta == other.positionDelta && section == other.section && uid == other.uid;
     }
 
     @Override
     public String toString() {
         return "FundEvent [eventType=" + eventType + ", section=" + section + ", uid=" + uid + ", currency=" + currency
-            + ", free=" + free + ", loked=" + loked + ", fee=" + fee + ", positionDelta=" + positionDelta + "]";
+            + ", free=" + free + ", loked=" + loked + ", positionDelta=" + positionDelta + "]";
     }
 
 }
