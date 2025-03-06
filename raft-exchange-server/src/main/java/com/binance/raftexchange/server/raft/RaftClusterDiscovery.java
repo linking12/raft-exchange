@@ -40,12 +40,10 @@ public class RaftClusterDiscovery {
         this.raftPort = System.getProperty(RAFT_PORT, "7800");
         this.startupNodes = Integer.parseInt(System.getProperty("raft.startupNodes", "3"));
         ApplicationInfoManager applicationInfoManager = eurekaClient.getApplicationInfoManager();
-
         Map<String, String> meta = new HashMap<>();
         meta.put(RAFT_PORT, raftPort);
         meta.put(GRPC_PORT, System.getProperty(GRPC_PORT, "5001"));
         applicationInfoManager.registerAppMetadata(meta);
-
         eurekaClient.registerEventListener(this::onEurekaEvent);
         this.eurekaClient = eurekaClient;
         this.localHost = applicationInfoManager.getInfo().getIPAddr();
@@ -66,12 +64,11 @@ public class RaftClusterDiscovery {
                         .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
                     .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT)))
                     .collect(Collectors.toList());
-
                 this.raftGrpcWorkerHostAndPorts = clusterInstanceList.stream()
-                        .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
-                        .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
-                        .collect(Collectors.toList());
-
+                    .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils
+                        .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
+                    .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
+                    .collect(Collectors.toList());
                 if (this.raftClusterHostAndPorts == null
                     || !CollectionUtils.isEqualCollection(this.raftClusterHostAndPorts, clusterHostAndPort)) {
                     this.raftClusterHostAndPorts = clusterHostAndPort;
