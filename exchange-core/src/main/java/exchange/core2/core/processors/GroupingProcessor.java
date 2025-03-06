@@ -180,23 +180,31 @@ public final class GroupingProcessor implements EventProcessor {
 
                         // cleaning attached events
                         if (EVENTS_POOLING && cmd.matcherEvent != null) {
-
-                            // update tail
                             if (tradeEventTail == null) {
                                 tradeEventHead = cmd.matcherEvent; //?
                             } else {
                                 tradeEventTail.nextEvent = cmd.matcherEvent;
                             }
-
-                            tradeEventTail = cmd.matcherEvent;
-                            tradeEventCounter++;
-
-                            // find last element in the chain and update tail accordingly
-                            while (tradeEventTail.nextEvent != null) {
-                                tradeEventTail = tradeEventTail.nextEvent;
+//                            tradeEventTail = cmd.matcherEvent;
+//                            tradeEventCounter++;
+//
+//                            // find last element in the chain and update tail accordingly
+//                            while (tradeEventTail.nextEvent != null) {
+//                                tradeEventTail = tradeEventTail.nextEvent;
+//                                tradeEventCounter++;
+//                            }
+                            
+                            // 从头部遍历整个链，回收 fundEvent 并更新 tail
+                            MatcherTradeEvent current = cmd.matcherEvent;
+                            while (current != null) {
+                                if (current.fundEvent != null) {
+                                    sharedPool.putFundEventPool(current.fundEvent);
+                                    current.fundEvent = null;
+                                }
+                                tradeEventTail = current;
                                 tradeEventCounter++;
+                                current = current.nextEvent;
                             }
-
                             if (tradeEventCounter >= tradeEventChainLengthTarget) {
                                 // chain is big enough -> send to the shared pool
                                 tradeEventCounter = 0;
@@ -204,10 +212,12 @@ public final class GroupingProcessor implements EventProcessor {
                                 tradeEventTail = null;
                                 tradeEventHead = null;
                             }
-
+                        }
+                        if (EVENTS_POOLING && cmd.fundEvent != null) {
+                            sharedPool.putFundEventPool(cmd.fundEvent);
+                            cmd.fundEvent = null; 
                         }
                         cmd.matcherEvent = null;
-
                         // TODO collect to shared buffer
                         cmd.marketData = null;
 
