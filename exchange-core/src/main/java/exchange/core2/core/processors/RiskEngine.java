@@ -15,8 +15,28 @@
  */
 package exchange.core2.core.processors;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Objects;
+import java.util.Optional;
+
+import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
+
 import exchange.core2.collections.objpool.ObjectsPool;
-import exchange.core2.core.common.*;
+import exchange.core2.core.common.BalanceAdjustmentType;
+import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.L2MarketData;
+import exchange.core2.core.common.MatcherEventType;
+import exchange.core2.core.common.MatcherTradeEvent;
+import exchange.core2.core.common.OrderAction;
+import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.StateHash;
+import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.binary.BatchAddAccountsCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
@@ -41,15 +61,6 @@ import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesMarshallable;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
-import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Stateful risk engine
@@ -496,15 +507,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long userBalance = userProfile.accounts.addToValue(currency, orderHoldAmount);
             // log.warn("orderAmount={} > userProfile.accounts.get({})={}", orderAmount, currency, userProfile.accounts.get(currency));
             /**
-             * @modify 解冻资金
+             * @modify 恢复资金
              */
-            this.eventsHelper.sendReleaseEvent(cmd, userProfile.uid, currency, userBalance, 0);
+            this.eventsHelper.sendReleaseEvent(cmd, userProfile.uid, currency, userBalance);
             return CommandResultCode.RISK_NSF;
         } else {
             /**
              * @modify 冻结资金
              */
-            this.eventsHelper.sendReleaseEvent(cmd, userProfile.uid, currency, newBalance, orderHoldAmount);
+            this.eventsHelper.sendFreezeEvent(cmd, userProfile.uid, currency, newBalance, orderHoldAmount);
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
     }
@@ -689,7 +700,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 解冻资金,卖单解冻 baseCurrency
              */
-            this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.baseCurrency, userBalance, 0);
+            this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
 
         } else {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
@@ -697,13 +708,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 解冻资金 买单解冻 quoteCurrency
                  */
-                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance, 0);
+                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             } else {
                 long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
                 /**
                  * @modify 解冻资金 买单解冻 quoteCurrency
                  */
-                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance, 0);
+                this.eventsHelper.sendReleaseEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             }
             // TODO for OrderType.IOC_BUDGET - for REJECT should release leftover deposit after all trades calculated
         }
