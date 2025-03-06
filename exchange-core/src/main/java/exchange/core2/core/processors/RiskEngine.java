@@ -737,8 +737,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         /**
          * 卖单（ASK）：
-           Taker：支付 baseCurrency（BTC），接收 quoteCurrency（USD）。
-           Maker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
+             Taker：支付 baseCurrency（BTC，已冻结），接收 quoteCurrency（USD）。
+             Maker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
          */
         
         while (ev != null) {
@@ -758,12 +758,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // buying, use bidderHoldPrice to calculate released amount based on price difference
                 final long priceDiff = ev.bidderHoldPrice - ev.price;
                 final long amountDiffToReleaseInQuoteCurrency = CoreArithmeticUtils.calculateAmountBidReleaseCorrMaker(size, priceDiff, spec);
+                // 支付 quoteCurrency
                 long quoteCurrencyBalance = maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
                 final long gainedAmountInBaseCurrency = CoreArithmeticUtils.calculateAmountAsk(size, spec);
+                // 接收 baseCurrency
                 long baseCurrencyBalance = maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
-                
                 /**
-                 * @modify 资金转移，给maker减去quoteCurrency，加上baseCurrency
+                 * @modify 资金转移
                  */
                 this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance);
                 this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance);
@@ -774,9 +775,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
 
         if (taker != null) {
+           // 支付 baseCurrency（已在冻结阶段处理）
+           // 接收 quoteCurrency
            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, takerSizePriceForThisHandler * spec.quoteScaleK - spec.takerFee * takerSizeForThisHandler);
            /**
-            * @modify 资金转移，taker加上quoteCurrency,baseCurrency已冻结阶段结算，无需处理
+            * @modify 资金转移
             */
            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
         }
@@ -802,8 +805,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         /**
         买单（BID）：
-             Taker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
-             Maker：支付 baseCurrency（BTC），接收 quoteCurrency（USD）。
+           Taker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
+           Maker：支付 baseCurrency（BTC，已冻结），接收 quoteCurrency（USD）。
          */
         while (ev != null) {
             assert ev.eventType == MatcherEventType.TRADE;
@@ -822,9 +825,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long size = ev.size;
                 final UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
                 final long gainedAmountInQuoteCurrency = CoreArithmeticUtils.calculateAmountBid(size, ev.price, spec);
+                // 支付 baseCurrency（已在冻结阶段处理）
+                // 接收 quoteCurrency
                 long userBalance = maker.accounts.addToValue(quoteCurrency, gainedAmountInQuoteCurrency - spec.makerFee * size);
                 /**
-                 * @modify 资金转移，给maker加上quoteCurrency
+                 * @modify 资金转移
                  */
                 this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance);
                 makerSizeForThisHandler += size;
@@ -841,11 +846,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 takerSizePriceHeldSum = cmd.price;
             }
             // TODO IOC_BUDGET - order can be partially rejected - need held taker fee correction
-
+            // 支付 quoteCurrency
             long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
+            // 接收 baseCurrency
             long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
             /**
-             * @modify 资金转移，给taker减去quoteCurrency，加上baseCurrency
+             * @modify 资金转移
              */
             this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
             this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance);
