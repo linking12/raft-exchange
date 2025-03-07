@@ -15,8 +15,28 @@
  */
 package exchange.core2.core.processors;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Objects;
+import java.util.Optional;
+
+import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
+
 import exchange.core2.collections.objpool.ObjectsPool;
-import exchange.core2.core.common.*;
+import exchange.core2.core.common.BalanceAdjustmentType;
+import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.L2MarketData;
+import exchange.core2.core.common.MatcherEventType;
+import exchange.core2.core.common.MatcherTradeEvent;
+import exchange.core2.core.common.OrderAction;
+import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.StateHash;
+import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.binary.BatchAddAccountsCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
@@ -41,15 +61,6 @@ import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesMarshallable;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
-import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Stateful risk engine
@@ -67,7 +78,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final IntLongHashMap adjustments;
     private final IntLongHashMap suspends;
     private final ObjectsPool objectsPool;
-
+    private final FundEventsHelper eventsHelper;
     // sharding by symbolId
     private final int shardId;
     private final long shardMask;
@@ -98,6 +109,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
 
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventPool);
+        
         // initialize object pools // TODO move to perf config
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);
@@ -491,10 +504,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         if (!canPlace) {
             // revert balance change
-            userProfile.accounts.addToValue(currency, orderHoldAmount);
-//            log.warn("orderAmount={} > userProfile.accounts.get({})={}", orderAmount, currency, userProfile.accounts.get(currency));
+            long userBalance = userProfile.accounts.addToValue(currency, orderHoldAmount);
+            // log.warn("orderAmount={} > userProfile.accounts.get({})={}", orderAmount, currency, userProfile.accounts.get(currency));
+            /**
+             * @modify 恢复资金
+             */
+            this.eventsHelper.sendResumeEvent(cmd, userProfile.uid, currency, userBalance);
             return CommandResultCode.RISK_NSF;
         } else {
+            /**
+             * @modify 冻结资金
+             */
+            this.eventsHelper.sendFreezeEvent(cmd, userProfile.uid, currency, newBalance, orderHoldAmount);
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
     }
@@ -663,16 +684,37 @@ public final class RiskEngine implements WriteBytesMarshallable {
         //log.debug("REDUCE/REJECT {} {}", cmd, ev);
 
         // for cancel/rejection only one party is involved
+        
+        /**
+         * 买单（BID）：
+                下单时：冻结 quoteCurrency（如 USD），因为用户需要支付它来购买 baseCurrency（如 BTC）。
+                拒绝/减少时：解冻 quoteCurrency，因为交易未完成，资金需要返还。
+                
+           卖单（ASK）：
+                下单时：冻结 baseCurrency（如 BTC），因为用户需要提供它来出售换取 quoteCurrency（如 USD）。
+                拒绝/减少时：解冻 baseCurrency，因为交易未完成，资产需要返还。
+         * 
+         */
         if (takerSell) {
-
-            taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size, spec));
+            long userBalance = taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size, spec));
+            /**
+             * @modify 恢复资金,卖单解冻 baseCurrency
+             */
+            this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
 
         } else {
-
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
-                taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
+                long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
+                /**
+                 * @modify 恢复资金 买单解冻 quoteCurrency
+                 */
+                this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             } else {
-                taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
+                long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
+                /**
+                 * @modify 恢复资金 买单解冻 quoteCurrency
+                 */
+                this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             }
             // TODO for OrderType.IOC_BUDGET - for REJECT should release leftover deposit after all trades calculated
         }
@@ -693,6 +735,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         final int quoteCurrency = spec.quoteCurrency;
 
+        /**
+         * 卖单（ASK）：
+             Taker：支付 baseCurrency（BTC，已冻结），接收 quoteCurrency（USD）。
+             Maker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
+         */
+        
         while (ev != null) {
             assert ev.eventType == MatcherEventType.TRADE;
 
@@ -710,11 +758,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // buying, use bidderHoldPrice to calculate released amount based on price difference
                 final long priceDiff = ev.bidderHoldPrice - ev.price;
                 final long amountDiffToReleaseInQuoteCurrency = CoreArithmeticUtils.calculateAmountBidReleaseCorrMaker(size, priceDiff, spec);
-                maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
-
+                // 支付 quoteCurrency
+                long quoteCurrencyBalance = maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
                 final long gainedAmountInBaseCurrency = CoreArithmeticUtils.calculateAmountAsk(size, spec);
-                maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
-
+                // 接收 baseCurrency
+                long baseCurrencyBalance = maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
+                /**
+                 * @modify 资金转移
+                 */
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, quoteCurrencyBalance);
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, spec.baseCurrency, baseCurrencyBalance);
+                
+                
                 makerSizeForThisHandler += size;
             }
 
@@ -722,12 +777,21 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
 
         if (taker != null) {
-            taker.accounts.addToValue(quoteCurrency, takerSizePriceForThisHandler * spec.quoteScaleK - spec.takerFee * takerSizeForThisHandler);
+           // 支付 baseCurrency（已在冻结阶段处理）
+           // 接收 quoteCurrency
+           long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, takerSizePriceForThisHandler * spec.quoteScaleK - spec.takerFee * takerSizeForThisHandler);
+           /**
+            * @modify 资金转移
+            */
+           this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
-
-            fees.addToValue(quoteCurrency, spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler);
+            long totalTradefee = spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler;
+            fees.addToValue(quoteCurrency, totalTradefee);
+            /**
+             * @TODO 把手续费加到Trade上面去？
+             */
         }
     }
 
@@ -745,6 +809,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         final int quoteCurrency = spec.quoteCurrency;
 
+        /**
+        买单（BID）：
+           Taker：支付 quoteCurrency（USD），接收 baseCurrency（BTC）。
+           Maker：支付 baseCurrency（BTC，已冻结），接收 quoteCurrency（USD）。
+         */
         while (ev != null) {
             assert ev.eventType == MatcherEventType.TRADE;
 
@@ -762,13 +831,20 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long size = ev.size;
                 final UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
                 final long gainedAmountInQuoteCurrency = CoreArithmeticUtils.calculateAmountBid(size, ev.price, spec);
-                maker.accounts.addToValue(quoteCurrency, gainedAmountInQuoteCurrency - spec.makerFee * size);
+                // 支付 baseCurrency（已在冻结阶段处理）
+                // 接收 quoteCurrency
+                long userBalance = maker.accounts.addToValue(quoteCurrency, gainedAmountInQuoteCurrency - spec.makerFee * size);
+                /**
+                 * @modify 资金转移
+                 */
+                this.eventsHelper.sendTransferEvent(ev, maker.uid, quoteCurrency, userBalance);
                 makerSizeForThisHandler += size;
             }
 
             ev = ev.nextEvent;
         }
 
+       
         if (taker != null) {
 
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
@@ -776,13 +852,25 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 takerSizePriceHeldSum = cmd.price;
             }
             // TODO IOC_BUDGET - order can be partially rejected - need held taker fee correction
-
-            taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
-            taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
+            
+            // 支付 quoteCurrency
+            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
+            // 接收 baseCurrency
+            long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
+            /**
+             * @modify 资金转移
+             */
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, quoteCurrency, quoteCurrencyBalance);
+            this.eventsHelper.sendTransferEvent(ev, taker.uid, spec.baseCurrency, baseCurrencyBalance);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
-            fees.addToValue(quoteCurrency, spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler);
+            long totalTradefee = spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler;
+            fees.addToValue(quoteCurrency, totalTradefee);
+            /**
+             * @TODO 把手续费加到Trade上面去？
+             */
+            
         }
     }
 

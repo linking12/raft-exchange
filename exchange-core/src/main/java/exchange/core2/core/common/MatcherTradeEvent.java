@@ -61,7 +61,11 @@ public final class MatcherTradeEvent {
 
     // frozen price from BID order owner (depends on activeOrderAction)
     public long bidderHoldPrice;
-
+    /**
+     * 资金转移
+     */
+    public FundEvent fundEvent; 
+    
     // reference to next event in chain
     public MatcherTradeEvent nextEvent;
 
