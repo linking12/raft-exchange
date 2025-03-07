@@ -72,18 +72,19 @@ public class KafkaSender implements IEventsHandler {
         private AtomicInteger counter = new AtomicInteger(0); //
 
         @Override
-        public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes,
+            Cluster cluster) {
             List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
             int numPartitions = partitions.size();
-            Long uid = (Long) key;
+            Long uid = (Long)key;
 
-            //部分command没有uid那么我们进行打散操作
-            //均匀进行分配
-            if(uid == IGNORE_UID) {
+            // 部分command没有uid那么我们进行打散操作
+            // 均匀进行分配
+            if (uid == IGNORE_UID) {
                 return counter.getAndIncrement() % numPartitions;
             }
 
-            return (int) (uid % numPartitions);
+            return (int)(uid % numPartitions);
         }
 
         @Override
@@ -98,8 +99,5 @@ public class KafkaSender implements IEventsHandler {
     }
 
     @Override
-    public void fundsEvent(FundsEvent fundsEvent) {
-        // TODO Auto-generated method stub
-        
-    }
+    public void fundsEvent(FundsEvent fundsEvent) {}
 }
