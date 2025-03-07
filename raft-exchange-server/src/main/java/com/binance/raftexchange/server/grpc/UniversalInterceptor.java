@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,25 +31,32 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     protected final RaftClusterContainer raftClusterContainer;
 
     protected final ConcurrentHashMap<ReqT, CompletableFuture<CommandResult>> commandOnTheWay =
-        new ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
+
+    private final AtomicBoolean halfClose;
 
     public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate,
-        ServerCall<ReqT, RespT> call) {
+                                ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
         this.call = call;
+        this.halfClose = new AtomicBoolean(false);
     }
 
     @Override
     public void onMessage(ReqT message) {
-        try (InputStream stream = (InputStream)message) {
+        try (InputStream stream = (InputStream) message) {
             /**
              * @formatter off
              */
             CompletableFuture<CommandResult> complete = handle(readAll(stream)).whenComplete((result, err) -> {
                 commandOnTheWay.remove(message);
+                if (call.isCancelled() || halfClose.get()) {
+                    cancelAll();
+                    return;
+                }
                 if (result != null) {
-                    call.sendMessage((RespT)new ByteArrayInputStream(result.toByteArray()));
+                    call.sendMessage((RespT) new ByteArrayInputStream(result.toByteArray()));
                     return;
                 }
                 if (err instanceof CancellationException) {
@@ -60,7 +68,11 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter on
              */
-            commandOnTheWay.put(message, complete);
+            //某些情况下实际上并不是异步操作 所以上面会立刻执行回调然后才到这里
+            //比如说no leader这种
+            if (!complete.isDone()) {
+                commandOnTheWay.put(message, complete);
+            }
         } catch (Exception e) {
             //不应该到这里
             throw new RuntimeException(e);
@@ -77,17 +89,35 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     @Override
     public void onComplete() {
         LOGGER.info("client onComplete");
+    }
+
+    @Override
+    public void onCancel() {
+
+    }
+
+    @Override
+    public void onHalfClose() {
+        //grpc stream是保序的
+        if (commandOnTheWay.isEmpty()) {
+            cancelAll();
+        } else {
+            halfClose.set(true);
+        }
+    }
+
+    private void cancelAll() {
         for (CompletableFuture<CommandResult> future : commandOnTheWay.values()) {
             future.cancel(false);
         }
-        delegate().onComplete();
+        call.close(Status.OK, new Metadata());
     }
 
     private CompletableFuture<CommandResult> handle(byte[] apiCommand) {
         if (!raftClusterContainer.isLeader()) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
 
-            if(raftNode == null) {
+            if (raftNode == null) {
                 return CompletableFuture.completedFuture(
                         CommandResult.newBuilder()
                                 .setResultCode(CommandResultCode.NO_LEADER)
@@ -106,8 +136,8 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
         return raftClusterContainer.requestConsensus(raftLog)
-            .thenApply(ThrowableFunction.warp(b -> SerializeHelper.bytesToEnumProto(b, CommandResultCode.class))) // 把状态机应用结果给下面
-            .thenApply(v -> CommandResult.newBuilder().setResultCode(v).build());
+                .thenApply(ThrowableFunction.warp(b -> SerializeHelper.bytesToEnumProto(b, CommandResultCode.class))) // 把状态机应用结果给下面
+                .thenApply(v -> CommandResult.newBuilder().setResultCode(v).build());
     }
 
     protected boolean allowFollowExecute(byte[] command) {
