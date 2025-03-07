@@ -37,13 +37,6 @@ import lombok.Data;
 public interface IEventsHandler {
 
     /**
-     * Method is called after each commands execution.
-     *
-     * @param commandResult - immutable object describing original command, result code, and assigned sequence number.
-     */
-    void commandResult(ApiCommandResult commandResult);
-
-    /**
      * Method is called if order execution was resulted to one or more trades.
      *
      * @param tradeEvent - immutable object describing event details
@@ -56,13 +49,6 @@ public interface IEventsHandler {
      * @param tradeEvent - immutable object describing event details
      */
     void fundsEvent(FundsEvent fundsEvent);
-
-    /**
-     * Method is called if IoC order was not possible to match with provided price limit.
-     *
-     * @param rejectEvent - immutable object describing event details
-     */
-    void rejectEvent(RejectEvent rejectEvent);
 
     /**
      * Method is called if Cancel or Reduce command was successfully executed.

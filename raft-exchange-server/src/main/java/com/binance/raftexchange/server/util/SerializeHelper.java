@@ -1,18 +1,28 @@
 package com.binance.raftexchange.server.util;
 
+import com.binance.raftexchange.stubs.OrderAction;
+import com.binance.raftexchange.stubs.OrderType;
 import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.response.CommandResult;
+import com.binance.raftexchange.stubs.response.CommandResultCode;
+import com.binance.raftexchange.stubs.response.L2MarketData;
+import com.binance.raftexchange.stubs.response.MatcherTradeEvent;
+import com.binance.raftexchange.stubs.response.OrderCommandType;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.ProtocolMessageEnum;
+import exchange.core2.core.common.cmd.OrderCommand;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.Arrays;
 
 public class SerializeHelper {
-    private SerializeHelper() {}
+    private SerializeHelper() {
+    }
 
     /**
      * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------writeUTF--------｜｜---write---｜
@@ -44,8 +54,86 @@ public class SerializeHelper {
         return Int32Value.newBuilder().setValue(enumValue.getNumber()).build().toByteArray();
     }
 
+    public static byte[] serializeToCommandResult(exchange.core2.core.common.cmd.CommandResultCode commandResultCode) {
+        return CommandResult.newBuilder()
+                .setResultCode(CommandResultCode.forNumber(Math.abs(commandResultCode.getCode())))
+                .build()
+                .toByteArray();
+    }
+
+    public static byte[] serializeToCommandResult(OrderCommand result) {
+        //这里产生了一个临时对象 但是我估计可以通过逃逸分析被jit干掉？
+        return CommandResult.newBuilder()
+                .setOrderCommand(
+                        com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
+                                .setCommand(OrderCommandType.forNumber(result.command.getCode()))
+                                .setOrderId(result.getOrderId())
+                                .setSymbol(result.symbol)
+                                .setPrice(result.price)
+                                .setSize(result.size)
+                                .setReserveBidPrice(result.reserveBidPrice)
+                                .setAction(OrderAction.forNumber(result.action.getCode()))
+                                .setOrderType(OrderType.forNumber(result.orderType.getCode()))
+                                .setUid(result.getUid())
+                                .setTimestamp(result.timestamp)
+                                .setUserCookie(result.userCookie)
+                                .setEventsGroup(result.eventsGroup)
+                                .setServiceFlags(result.serviceFlags)
+                                .setResultCode(CommandResultCode.forNumber(Math.abs(result.resultCode.getCode())))
+                                .setMatcherEvent(toPbObject(result.matcherEvent))
+                                .setMarketData(toPbObject(result.marketData))
+                                .build()
+                )
+                .build()
+                .toByteArray();
+    }
+
+    private static MatcherTradeEvent toPbObject(exchange.core2.core.common.MatcherTradeEvent matcherTradeEvent) {
+
+        if (matcherTradeEvent == null) {
+            return null;
+        }
+
+        MatcherTradeEvent.Builder baseBuilder = MatcherTradeEvent.newBuilder()
+                .setOrderId(matcherTradeEvent.matchedOrderId)
+                .setPrice(matcherTradeEvent.price)
+                .setSize(matcherTradeEvent.price);
+        if (matcherTradeEvent.nextEvent == null) {
+            return baseBuilder.build();
+        }
+
+        //todo 改为迭代
+        return baseBuilder
+                .setNextEvent(toPbObject(matcherTradeEvent.nextEvent))
+                .build();
+    }
+
+    private static L2MarketData toPbObject(exchange.core2.core.common.L2MarketData l2MarketData) {
+
+        if (l2MarketData == null) {
+            return L2MarketData.getDefaultInstance();
+        }
+
+        L2MarketData.Builder newedBuilder = L2MarketData.newBuilder();
+
+        //避免额外装箱操作
+        for (long bidPrice : l2MarketData.bidPrices) {
+            newedBuilder = newedBuilder.addBidPrices(bidPrice);
+        }
+
+        newedBuilder = newedBuilder.setBidSizes(l2MarketData.bidSize);
+
+        for (long askPrice : l2MarketData.askPrices) {
+            newedBuilder = newedBuilder.addAskPrices(askPrice);
+        }
+
+        newedBuilder = newedBuilder.setAskSizes(l2MarketData.askSize);
+
+        return newedBuilder.build();
+    }
+
     public static <T extends ProtocolMessageEnum> T bytesToEnumProto(byte[] bytes, Class<T> enumClass)
-        throws InvalidProtocolBufferException {
+            throws InvalidProtocolBufferException {
         int intValue = Int32Value.parseFrom(bytes).getValue();
         for (T value : enumClass.getEnumConstants()) {
             if (value.getNumber() == intValue) {

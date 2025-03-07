@@ -31,31 +31,26 @@ public class KafkaSender implements IEventsHandler {
     }
 
     @Override
-    public void commandResult(ApiCommandResult commandResult) {
-        sender.send(new ProducerRecord<>(topic, IGNORE_UID, toJson(commandResult)));
-    }
-
-    @Override
     public void tradeEvent(TradeEvent tradeEvent) {
-        sender.send(new ProducerRecord<>(topic, tradeEvent.getTakerUid(), toJson(tradeEvent)));
-    }
-
-    @Override
-    public void rejectEvent(RejectEvent rejectEvent) {
-        sender.send(new ProducerRecord<>(topic, rejectEvent.uid, toJson(rejectEvent)));
+        sender.send(new ProducerRecord<>(topic, tradeEvent.getTakerUid(), serialize(tradeEvent)));
     }
 
     @Override
     public void reduceEvent(ReduceEvent reduceEvent) {
-        sender.send(new ProducerRecord<>(topic, reduceEvent.uid, toJson(reduceEvent)));
+        sender.send(new ProducerRecord<>(topic, reduceEvent.uid, serialize(reduceEvent)));
     }
 
     @Override
     public void orderBook(OrderBook orderBook) {
-        sender.send(new ProducerRecord<>(topic, IGNORE_UID, toJson(orderBook)));
+        sender.send(new ProducerRecord<>(topic, IGNORE_UID, serialize(orderBook)));
     }
 
-    private byte[] toJson(Object o) {
+    @Override
+    public void fundsEvent(FundsEvent fundsEvent) {
+        sender.send(new ProducerRecord<>(topic, fundsEvent.uid, serialize(fundsEvent)));
+    }
+
+    private byte[] serialize(Object o) {
         try {
             return OBJECT_MAPPER.writeValueAsBytes(o);
         } catch (JsonProcessingException e) {
@@ -98,6 +93,4 @@ public class KafkaSender implements IEventsHandler {
         }
     }
 
-    @Override
-    public void fundsEvent(FundsEvent fundsEvent) {}
 }

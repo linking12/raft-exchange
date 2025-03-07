@@ -162,6 +162,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(RESUME_USER_TRANSLATOR, (ApiResumeUser) cmd);
         } else if (cmd instanceof ApiSuspendUser) {
             return submitCommandAsyncFullResponse(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
+        } else if (cmd instanceof ApiBinaryDataCommand) {
+            return submitBinaryDataCommandAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiReset) {
             return submitCommandAsyncFullResponse(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
@@ -210,7 +212,7 @@ public final class ExchangeApi {
         return future;
     }
 
-    private CompletableFuture<CommandResultCode> submitPersistCommandAsync(final ApiPersistState apiCommand) {
+    public CompletableFuture<CommandResultCode> submitPersistCommandAsync(final ApiPersistState apiCommand) {
 
         final CompletableFuture<CommandResultCode> future1 = new CompletableFuture<>();
         final CompletableFuture<CommandResultCode> future2 = new CompletableFuture<>();
@@ -234,6 +236,22 @@ public final class ExchangeApi {
                 (int) System.nanoTime(), // can be any value because sequence is used for result identification, not transferId
                 0L,
                 seq -> promises.put(seq, orderCommand -> future.complete(orderCommand.resultCode)));
+
+        return future;
+    }
+
+    public CompletableFuture<OrderCommand> submitBinaryDataCommandAsync(final BinaryDataCommand data) {
+
+        //跟上面那个没区别。。
+        final CompletableFuture<OrderCommand> future = new CompletableFuture<>();
+
+        publishBinaryData(
+                OrderCommandType.BINARY_DATA_COMMAND,
+                data,
+                data.getBinaryCommandTypeCode(),
+                (int) System.nanoTime(), // can be any value because sequence is used for result identification, not transferId
+                0L,
+                seq -> promises.put(seq, future::complete));
 
         return future;
     }

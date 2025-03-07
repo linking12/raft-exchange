@@ -69,9 +69,12 @@ message ServerNode {
 //pb这个编译器不允许returns(stream Enum) 这样
 // 所以需要包一下
 message CommandResult {
-    CommandResultCode resultCode = 1;
+    oneof mainMessages {
+        CommandResultCode resultCode = 1;
+        OrderCommand orderCommand = 2;
+    }
     oneof extMessage {
-        ServerNode leaderNode = 2; //当前的操作不允许在follow上执行的时候 才会返回这个
+        ServerNode leaderNode = 3; //当前的操作不允许在follow上执行的时候 才会返回这个
     }
 }
 
@@ -109,9 +112,9 @@ message MatcherTradeEvent {
 // Message for L2 Market Data (simplified placeholder)
 message L2MarketData {
     repeated int64 bid_prices = 1;
-    repeated int64 bid_sizes = 2;
+    int64 bid_sizes = 2;
     repeated int64 ask_prices = 3;
-    repeated int64 ask_sizes = 4;
+    int64 ask_sizes = 4;
 }
 
 // Main Order Command message

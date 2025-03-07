@@ -30,7 +30,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
 
-    protected final ConcurrentHashMap<ReqT, CompletableFuture<CommandResult>> commandOnTheWay =
+    protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay =
             new ConcurrentHashMap<>();
 
     private final AtomicBoolean halfClose;
@@ -49,14 +49,14 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter off
              */
-            CompletableFuture<CommandResult> complete = handle(readAll(stream)).whenComplete((result, err) -> {
+            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenComplete((result, err) -> {
                 commandOnTheWay.remove(message);
                 if (call.isCancelled() || halfClose.get()) {
                     cancelAll();
                     return;
                 }
                 if (result != null) {
-                    call.sendMessage((RespT) new ByteArrayInputStream(result.toByteArray()));
+                    call.sendMessage((RespT) new ByteArrayInputStream(result));
                     return;
                 }
                 if (err instanceof CancellationException) {
@@ -107,13 +107,20 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     private void cancelAll() {
-        for (CompletableFuture<CommandResult> future : commandOnTheWay.values()) {
+        for (CompletableFuture<byte[]> future : commandOnTheWay.values()) {
             future.cancel(false);
         }
         call.close(Status.OK, new Metadata());
     }
 
-    private CompletableFuture<CommandResult> handle(byte[] apiCommand) {
+    /**
+     * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换
+     * 这样可以节约一次序列化和反序列化开销
+     * grpc直通exchange-core
+     * @param apiCommand
+     * @return
+     */
+    private CompletableFuture<byte[]> handle(byte[] apiCommand) {
         if (!raftClusterContainer.isLeader()) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
 
@@ -122,6 +129,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                         CommandResult.newBuilder()
                                 .setResultCode(CommandResultCode.NO_LEADER)
                                 .build()
+                                .toByteArray()
                 );
             }
 
@@ -131,13 +139,11 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                             .setResultCode(CommandResultCode.NEED_MOVE)
                             .setLeaderNode(leaderNode)
                             .build()
+                            .toByteArray()
             );
         }
-
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
-        return raftClusterContainer.requestConsensus(raftLog)
-                .thenApply(ThrowableFunction.warp(b -> SerializeHelper.bytesToEnumProto(b, CommandResultCode.class))) // 把状态机应用结果给下面
-                .thenApply(v -> CommandResult.newBuilder().setResultCode(v).build());
+        return raftClusterContainer.requestConsensus(raftLog);
     }
 
     protected boolean allowFollowExecute(byte[] command) {
