@@ -1,23 +1,38 @@
 package exchange.core2.core;
 
+import java.util.List;
+
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import lombok.Data;
-
-import java.util.List;
 
 /**
  * Convenient events handler interface for non latency-critical applications.<br>
  * Custom handler implementation should be attached to SimpleEventProcessor.<br>
  * Handler method are invoked from single thread in following order:
  * <table summary="execution order">
- * <tr><td>1. </td><td> commandResult</td></tr>
- * <tr><td>2A.  </td><td> optional reduceEvent <td> optional tradeEvent</td></tr>
- * <tr><td>2B. </td><td> <td>optional rejectEvent</td></tr>
- * <tr><td>3. </td><td> orderBook - mandatory for ApiOrderBookRequest, optional for other commands</td></tr>
+ * <tr>
+ * <td>1.</td>
+ * <td>commandResult</td>
+ * </tr>
+ * <tr>
+ * <td>2A.</td>
+ * <td>optional reduceEvent
+ * <td>optional tradeEvent</td>
+ * </tr>
+ * <tr>
+ * <td>2B.</td>
+ * <td>
+ * <td>optional rejectEvent</td>
+ * </tr>
+ * <tr>
+ * <td>3.</td>
+ * <td>orderBook - mandatory for ApiOrderBookRequest, optional for other commands</td>
+ * </tr>
  * </table>
- * Events processing will stop immediately if any handler throws an exception - you should consider wrapping logic into try-catch block if necessary.
+ * Events processing will stop immediately if any handler throws an exception - you should consider wrapping logic into
+ * try-catch block if necessary.
  */
 public interface IEventsHandler {
 
@@ -36,6 +51,13 @@ public interface IEventsHandler {
     void tradeEvent(TradeEvent tradeEvent);
 
     /**
+     * Method is called if order execution was resulted to one or more trades.
+     *
+     * @param tradeEvent - immutable object describing event details
+     */
+    void fundsEvent(FundsEvent fundsEvent);
+
+    /**
      * Method is called if IoC order was not possible to match with provided price limit.
      *
      * @param rejectEvent - immutable object describing event details
@@ -50,8 +72,8 @@ public interface IEventsHandler {
     void reduceEvent(ReduceEvent reduceEvent);
 
     /**
-     * Method is called when order book snapshot (L2MarketData) was attached to commands by matching engine.
-     * That always happens for ApiOrderBookRequest, sometimes for other commands.
+     * Method is called when order book snapshot (L2MarketData) was attached to commands by matching engine. That always
+     * happens for ApiOrderBookRequest, sometimes for other commands.
      *
      * @param orderBook - immutable object containing L2 OrderBook snapshot
      */
@@ -74,6 +96,16 @@ public interface IEventsHandler {
         public final boolean takeOrderCompleted;
         public final long timestamp;
         public final List<Trade> trades;
+    }
+
+    @Data
+    class FundsEvent {
+        public final long orderId; // 订单 ID
+        public final long uid; // 用户 ID
+        public final int currency; // 变动货币
+        public final long free; // 用户可用余额
+        public final long loked; // 用户冻结余额
+        public final long positionDelta; // 持仓变化（期货用，现金交易为 0）
     }
 
     @Data
@@ -131,5 +163,3 @@ public interface IEventsHandler {
         public final int orders;
     }
 }
-
-
