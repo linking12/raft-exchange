@@ -14,13 +14,13 @@
 		<binance-infra.version>2.0.0-SNAPSHOT</binance-infra.version>
 		<grpc.version>1.70.0</grpc.version>
 		<jraft.version>1.3.11</jraft.version>
+		<kafka.version>3.9.0</kafka.version>
 		<rocksdb.version>6.29.5</rocksdb.version>
 	</properties>
 	<dependencies>
 		<dependency>
-			<groupId>com.binance.infra.avengers</groupId>
-			<artifactId>eventbus-springboot-starter</artifactId>
-			<version>1.0.0-SNAPSHOT</version>
+			<groupId>org.apache.kafka</groupId>
+			<artifactId>kafka-clients</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>com.binance.raft-exchange</groupId>
@@ -131,6 +131,11 @@
 				<groupId>io.grpc</groupId>
 				<artifactId>grpc-stub</artifactId>
 				<version>${grpc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.apache.kafka</groupId>
+				<artifactId>kafka-clients</artifactId>
+				<version>${kafka.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>

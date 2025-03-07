@@ -1,6 +1,6 @@
 package com.binance.raftexchange.server.exchange;
 
-import com.binance.raftexchange.server.exchange.eventsProcessor.EventBusSender;
+import com.binance.raftexchange.server.exchange.eventsProcessor.KafkaSender;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.SimpleEventsProcessor;
@@ -13,7 +13,7 @@ public class ExchangeApiInstance {
     private static final ExchangeApiInstance INSTANCE = new ExchangeApiInstance();
 
     private ExchangeApiInstance() {
-        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(EventBusSender.getInstance());
+        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(KafkaSender.getInstance());
         ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().build();
         ExchangeCore exchangeCore =
             ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
