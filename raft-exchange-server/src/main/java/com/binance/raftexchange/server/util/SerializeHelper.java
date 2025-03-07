@@ -36,7 +36,7 @@ public class SerializeHelper {
      * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------readUTF--------｜｜---readFully---｜
      */
     public static GeneratedMessageV3 deserializeWithType(byte[] data, int offset, int length) throws IOException {
-        //这里不需要OrderCommand了直接用apiCommand就行了
+        // 这里不需要OrderCommand了直接用apiCommand就行了
         return ApiCommand.parseFrom(new ByteArrayInputStream(data, offset, length));
     }
 
