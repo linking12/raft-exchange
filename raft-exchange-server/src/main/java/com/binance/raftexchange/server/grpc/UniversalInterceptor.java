@@ -47,7 +47,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
              */
             CompletableFuture<CommandResult> complete = handle(readAll(stream)).whenComplete((result, err) -> {
                 commandOnTheWay.remove(message);
-                call.sendHeaders(new Metadata());
                 if (result != null) {
                     call.sendMessage((RespT)new ByteArrayInputStream(result.toByteArray()));
                     return;

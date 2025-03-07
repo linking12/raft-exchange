@@ -36,6 +36,8 @@ public class ApiService extends ApiCommandServiceGrpc.ApiCommandServiceImplBase 
                     @Override
                     public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
                         ServerCall.Listener<ReqT> reqTListener = next.startCall(call, headers);
+                        call.request(Integer.MAX_VALUE);
+                        call.sendHeaders(new Metadata());
                         return new UniversalInterceptor<ReqT, RespT>(raftClusterContainer, reqTListener, call);
                     }
                 }
