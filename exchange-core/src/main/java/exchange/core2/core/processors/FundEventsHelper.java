@@ -26,6 +26,7 @@ public class FundEventsHelper {
         event.free = locked;
         event.orderId = cmd.orderId;
         event.positionDelta = 0;
+        cmd.fundEvent = event;
         return event;
     }
 
@@ -39,6 +40,7 @@ public class FundEventsHelper {
         event.orderId = cmd.orderId;
         event.loked = 0;
         event.positionDelta = 0;
+        cmd.fundEvent = event;
         return event;
     }
 
@@ -52,6 +54,7 @@ public class FundEventsHelper {
         event.loked = 0;
         event.orderId = ev.matchedOrderId;
         event.positionDelta = 0;
+        ev.fundEvent = event;
         return event;
     }
 
