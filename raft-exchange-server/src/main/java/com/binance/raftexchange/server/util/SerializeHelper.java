@@ -67,7 +67,7 @@ public class SerializeHelper {
                 .setOrderCommand(
                         com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
                                 .setCommand(OrderCommandType.forNumber(result.command.getCode()))
-                                .setOrderId(result.getOrderId())
+                                .setOrderId(result.orderId)
                                 .setSymbol(result.symbol)
                                 .setPrice(result.price)
                                 .setSize(result.size)
@@ -116,15 +116,19 @@ public class SerializeHelper {
 
         L2MarketData.Builder newedBuilder = L2MarketData.newBuilder();
 
-        //避免额外装箱操作
-        for (long bidPrice : l2MarketData.bidPrices) {
-            newedBuilder = newedBuilder.addBidPrices(bidPrice);
+        if (l2MarketData.askPrices != null) {
+            //避免额外装箱操作
+            for (long bidPrice : l2MarketData.bidPrices) {
+                newedBuilder = newedBuilder.addBidPrices(bidPrice);
+            }
         }
 
         newedBuilder = newedBuilder.setBidSizes(l2MarketData.bidSize);
 
-        for (long askPrice : l2MarketData.askPrices) {
-            newedBuilder = newedBuilder.addAskPrices(askPrice);
+        if (l2MarketData.askPrices != null) {
+            for (long askPrice : l2MarketData.askPrices) {
+                newedBuilder = newedBuilder.addAskPrices(askPrice);
+            }
         }
 
         newedBuilder = newedBuilder.setAskSizes(l2MarketData.askSize);

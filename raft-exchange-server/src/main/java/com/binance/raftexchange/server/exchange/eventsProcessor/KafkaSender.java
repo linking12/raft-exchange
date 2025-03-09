@@ -1,7 +1,12 @@
 package com.binance.raftexchange.server.exchange.eventsProcessor;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.binance.raftexchange.stubs.FundsEventPB;
+import com.binance.raftexchange.stubs.OrderAction;
+import com.binance.raftexchange.stubs.OrderBookPB;
+import com.binance.raftexchange.stubs.OrderBookRecordPB;
+import com.binance.raftexchange.stubs.ReduceEventPB;
+import com.binance.raftexchange.stubs.TradeEventPB;
+import com.binance.raftexchange.stubs.TradePB;
 import exchange.core2.core.IEventsHandler;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Partitioner;
@@ -21,8 +26,6 @@ public class KafkaSender implements IEventsHandler {
 
     private final String topic;
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
     static final long IGNORE_UID = -1L;
 
     public KafkaSender(KafkaProducer<Long, byte[]> sender, String topic) {
@@ -32,31 +35,94 @@ public class KafkaSender implements IEventsHandler {
 
     @Override
     public void tradeEvent(TradeEvent tradeEvent) {
-        sender.send(new ProducerRecord<>(topic, tradeEvent.getTakerUid(), serialize(tradeEvent)));
+        TradeEventPB.Builder builder = TradeEventPB.newBuilder()
+                .setSymbol(tradeEvent.getSymbol())
+                .setTotalVolume(tradeEvent.getTotalVolume())
+                .setTakerOrderId(tradeEvent.getTakerOrderId())
+                .setTakerUid(tradeEvent.getTakerUid())
+                .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode()))
+                .setTimestamp(tradeEvent.getTimestamp());
+        if (tradeEvent.getTrades() != null) {
+            for (Trade trade : tradeEvent.getTrades()) {
+                builder = builder.addTrades(
+                        TradePB.newBuilder()
+                                .setMakerOrderId(trade.getMakerOrderId())
+                                .setMakerUid(trade.getMakerUid())
+                                .setMakerOrderCompleted(trade.isMakerOrderCompleted())
+                                .setPrice(trade.getPrice())
+                                .setVolume(trade.getVolume())
+                                .build()
+                );
+            }
+        }
+        byte[] pbData = builder.build().toByteArray();
+        sender.send(new ProducerRecord<>(topic, tradeEvent.getTakerUid(), pbData));
     }
 
     @Override
     public void reduceEvent(ReduceEvent reduceEvent) {
-        sender.send(new ProducerRecord<>(topic, reduceEvent.uid, serialize(reduceEvent)));
+        byte[] pbData = ReduceEventPB.newBuilder()
+                .setSymbol(reduceEvent.getSymbol())
+                .setReducedVolume(reduceEvent.getReducedVolume())
+                .setOrderCompleted(reduceEvent.isOrderCompleted())
+                .setPrice(reduceEvent.getPrice())
+                .setOrderId(reduceEvent.getOrderId())
+                .setUid(reduceEvent.getOrderId())
+                .setTimestamp(reduceEvent.getTimestamp())
+                .build()
+                .toByteArray();
+        sender.send(new ProducerRecord<>(topic, reduceEvent.uid, pbData));
     }
 
     @Override
     public void orderBook(OrderBook orderBook) {
-        sender.send(new ProducerRecord<>(topic, IGNORE_UID, serialize(orderBook)));
+        OrderBookPB.Builder builder = OrderBookPB.newBuilder()
+                .setSymbol(orderBook.getSymbol())
+                .setTimestamp(orderBook.getTimestamp());
+        if (orderBook.getAsks() != null) {
+            for (OrderBookRecord ask : orderBook.getAsks()) {
+                builder = builder.addAsks(
+                        OrderBookRecordPB.newBuilder()
+                                .setPrice(ask.getPrice())
+                                .setVolume(ask.getVolume())
+                                .setOrders(ask.getOrders())
+                                .build()
+                );
+            }
+        }
+
+        if (orderBook.getBids() != null) {
+            for (OrderBookRecord bid : orderBook.getBids()) {
+                builder = builder.addBids(
+                        OrderBookRecordPB.newBuilder()
+                                .setPrice(bid.getPrice())
+                                .setVolume(bid.getVolume())
+                                .setOrders(bid.getOrders())
+                                .build()
+                );
+            }
+        }
+
+        byte[] pbData = builder
+                .build()
+                .toByteArray();
+        sender.send(new ProducerRecord<>(topic, IGNORE_UID, pbData));
     }
 
     @Override
     public void fundsEvent(FundsEvent fundsEvent) {
-        sender.send(new ProducerRecord<>(topic, fundsEvent.uid, serialize(fundsEvent)));
+        byte[] pbData = FundsEventPB.newBuilder()
+                .setOrderId(fundsEvent.getOrderId())
+                .setUid(fundsEvent.getUid())
+                .setCurrency(fundsEvent.getCurrency())
+                .setFree(fundsEvent.getFree())
+                .setLoked(fundsEvent.getLoked())
+                .setPositionDelta(fundsEvent.getPositionDelta())
+                .build()
+                .toByteArray();
+        sender.send(new ProducerRecord<>(topic, fundsEvent.uid, pbData));
     }
 
-    private byte[] serialize(Object o) {
-        try {
-            return OBJECT_MAPPER.writeValueAsBytes(o);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     public static KafkaSender getInstance() {
         return INSTANCE;
@@ -68,10 +134,10 @@ public class KafkaSender implements IEventsHandler {
 
         @Override
         public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes,
-            Cluster cluster) {
+                             Cluster cluster) {
             List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
             int numPartitions = partitions.size();
-            Long uid = (Long)key;
+            Long uid = (Long) key;
 
             // 部分command没有uid那么我们进行打散操作
             // 均匀进行分配
@@ -79,7 +145,7 @@ public class KafkaSender implements IEventsHandler {
                 return counter.getAndIncrement() % numPartitions;
             }
 
-            return (int)(uid % numPartitions);
+            return (int) (uid % numPartitions);
         }
 
         @Override
