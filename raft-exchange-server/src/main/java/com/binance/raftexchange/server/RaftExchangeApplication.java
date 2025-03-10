@@ -3,7 +3,7 @@ package com.binance.raftexchange.server;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
-import com.binance.raftexchange.server.exchange.events.KafkaSender;
+import com.binance.raftexchange.server.exchange.events.IEventsHandlerByKafka;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.slf4j.Logger;
@@ -76,9 +76,9 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
             "org.apache.kafka.common.serialization.ByteArraySerializer");
         properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
         properties.setProperty(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG, "false");
-        properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, KafkaSender.CommandPartitioner.class.getName());
+        properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, IEventsHandlerByKafka.CommandPartitioner.class.getName());
         KafkaProducer<Long, byte[]> producer = new KafkaProducer<>(properties);
-        KafkaSender.INSTANCE = new KafkaSender(producer, topic);
+        IEventsHandlerByKafka.INSTANCE = new IEventsHandlerByKafka(producer, topic);
     }
 
     @Override

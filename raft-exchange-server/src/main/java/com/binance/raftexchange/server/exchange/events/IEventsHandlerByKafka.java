@@ -22,9 +22,9 @@ import com.binance.raftexchange.stubs.TradePB;
 
 import exchange.core2.core.IEventsHandler;
 
-public class KafkaSender implements IEventsHandler {
+public class IEventsHandlerByKafka implements IEventsHandler {
 
-    public static KafkaSender INSTANCE;
+    public static IEventsHandlerByKafka INSTANCE;
 
     private final KafkaProducer<Long, byte[]> sender;
 
@@ -34,7 +34,7 @@ public class KafkaSender implements IEventsHandler {
 
     private AtomicBoolean isLeader = new AtomicBoolean(false);
 
-    public KafkaSender(KafkaProducer<Long, byte[]> sender, String topic) {
+    public IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topic) {
         this.sender = sender;
         this.topic = topic;
         RaftChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
@@ -110,7 +110,7 @@ public class KafkaSender implements IEventsHandler {
         sender.send(new ProducerRecord<>(topic, fundsEvent.uid, pbData));
     }
 
-    public static KafkaSender getInstance() {
+    public static IEventsHandlerByKafka getInstance() {
         return INSTANCE;
     }
 
