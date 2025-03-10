@@ -268,9 +268,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                      * @modify 存款/提现
                      */
                     if (cmd.resultCode == CommandResultCode.SUCCESS) {
-                        final long amountDiff = cmd.price;
-                        final int currency = cmd.symbol;
                         final long uid = cmd.uid;
+                        final int currency = cmd.symbol;
+                        final long amountDiff = cmd.price;
                         final UserProfile userProfile = userProfileService.getUserProfile(uid);
                         final long userBalance = userProfile.accounts.get(currency);
                         if (amountDiff > 0) {
