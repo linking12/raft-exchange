@@ -263,7 +263,22 @@ public final class RiskEngine implements WriteBytesMarshallable {
             case BALANCE_ADJUSTMENT:
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = adjustBalance(
-                            cmd, cmd.uid, cmd.symbol, cmd.price, cmd.orderId, BalanceAdjustmentType.of(cmd.orderType.getCode()));
+                            cmd.uid, cmd.symbol, cmd.price, cmd.orderId, BalanceAdjustmentType.of(cmd.orderType.getCode()));
+                    /**
+                     * @modify 存款/提现
+                     */
+                    if (cmd.resultCode == CommandResultCode.SUCCESS) {
+                        final long amountDiff = cmd.price;
+                        final int currency = cmd.symbol;
+                        final long uid = cmd.uid;
+                        final UserProfile userProfile = userProfileService.getUserProfile(uid);
+                        final long userBalance = userProfile.accounts.get(currency);
+                        if (amountDiff > 0) {
+                            eventsHelper.sendDepositEvent(cmd, uid, currency, userBalance);
+                        } else {
+                            eventsHelper.sendWithdrawEvent(cmd, uid, currency, userBalance);
+                        }
+                    }
                 }
                 return false;
 
@@ -314,7 +329,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
 
-    private CommandResultCode adjustBalance(OrderCommand cmd, long uid, int currency, long amountDiff, long fundingTransactionId, BalanceAdjustmentType adjustmentType) {
+    private CommandResultCode adjustBalance(long uid, int currency, long amountDiff, long fundingTransactionId, BalanceAdjustmentType adjustmentType) {
         final CommandResultCode res = userProfileService.balanceAdjustment(uid, currency, amountDiff, fundingTransactionId);
         if (res == CommandResultCode.SUCCESS) {
             switch (adjustmentType) {
@@ -325,18 +340,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 case SUSPEND: // adjust total suspends amount
                     suspends.addToValue(currency, -amountDiff);
                     break;
-            }
-            /**
-             * @modify 存款/提现，如果是批量command，说明是重建RiskEngine，不发送事件
-             */
-            if (cmd != null) {
-                final UserProfile userProfile = userProfileService.getUserProfile(uid);
-                final long userBalance = userProfile.accounts.get(currency);
-                if (amountDiff > 0) {
-                    eventsHelper.sendDepositEvent(cmd, uid, currency, userBalance);
-                } else {
-                    eventsHelper.sendWithdrawEvent(cmd, uid, currency, userBalance);
-                }
             }
         }
         return res;
@@ -360,7 +363,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             ((BatchAddAccountsCommand) message).getUsers().forEachKeyValue((uid, accounts) -> {
                 if (userProfileService.addEmptyUserProfile(uid)) {
                     accounts.forEachKeyValue((cur, bal) ->
-                            adjustBalance(null,uid, cur, bal, 1_000_000_000 + cur, BalanceAdjustmentType.ADJUSTMENT));
+                            adjustBalance(uid, cur, bal, 1_000_000_000 + cur, BalanceAdjustmentType.ADJUSTMENT));
                 } else {
                     log.debug("User already exist: {}", uid);
                 }
