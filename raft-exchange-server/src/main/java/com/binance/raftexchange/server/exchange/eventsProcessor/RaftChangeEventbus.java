@@ -1,4 +1,4 @@
-package com.binance.raftexchange.server.util;
+package com.binance.raftexchange.server.exchange.eventsProcessor;
 
 import com.binance.raftexchange.server.raft.RaftNode;
 

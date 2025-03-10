@@ -12,7 +12,6 @@ import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.PartitionInfo;
 
 import com.binance.raftexchange.server.raft.RaftNode;
-import com.binance.raftexchange.server.util.RaftChangeEventbus;
 import com.binance.raftexchange.stubs.FundsEventPB;
 import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderBookPB;
