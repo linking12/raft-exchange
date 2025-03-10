@@ -34,20 +34,4 @@
 		</dependency>
 	</dependencies>
 
-	<dependencyManagement>
-		<dependencies>
-			<dependency>
-				<groupId>com.binance.infra.avengers</groupId>
-				<artifactId>binance-infra-dependencies</artifactId>
-				<version>${binance-infra.version}</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
-			<dependency>
-				<groupId>io.grpc</groupId>
-				<artifactId>grpc-all</artifactId>
-				<version>${grpc.version}</version>
-			</dependency>
-		</dependencies>
-	</dependencyManagement>
 </project>

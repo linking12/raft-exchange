@@ -12,13 +12,6 @@
 	<artifactId>raft-exchange-spi</artifactId>
 	<version>1.0.0-SNAPSHOT</version>
 
-	<properties>
-		<maven.compiler.source>17</maven.compiler.source>
-		<maven.compiler.target>17</maven.compiler.target>
-		<grpc.version>1.70.0</grpc.version>
-		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-	</properties>
-
 	<dependencies>
 		<dependency>
 			<groupId>javax.annotation</groupId>
@@ -62,21 +55,4 @@
 			</plugin>
 		</plugins>
 	</build>
-
-	<dependencyManagement>
-		<dependencies>
-			<dependency>
-				<groupId>com.binance.infra.avengers</groupId>
-				<artifactId>binance-infra-dependencies</artifactId>
-				<version>${binance-infra.version}</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
-			<dependency>
-				<groupId>io.grpc</groupId>
-				<artifactId>grpc-all</artifactId>
-				<version>${grpc.version}</version>
-			</dependency>
-		</dependencies>
-	</dependencyManagement>
 </project>
