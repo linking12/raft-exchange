@@ -9,11 +9,8 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 
 public class GrpcServerContainer {
-
     private static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
-
     private RaftClusterContainer raftClusterContainer;
-
     private Server server;
 
     public void setRaftClusterContainer(RaftClusterContainer raftClusterContainer) {

@@ -10,7 +10,6 @@ import io.grpc.stub.StreamObserver;
 import java.util.List;
 
 public class SevererNodeService extends ServerNodeServiceGrpc.ServerNodeServiceImplBase {
-
     private final RaftClusterContainer raftClusterContainer;
 
     public SevererNodeService(RaftClusterContainer raftClusterContainer) {
