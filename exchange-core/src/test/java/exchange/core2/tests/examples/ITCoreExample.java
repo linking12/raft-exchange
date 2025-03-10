@@ -33,19 +33,15 @@ public class ITCoreExample {
             }
 
             @Override
+            public void fundsEvent(FundsEvent fundsEvent) {
+                System.out.println("Fund event: " + fundsEvent);
+            }
+
+            @Override
             public void reduceEvent(ReduceEvent reduceEvent) {
                 System.out.println("Reduce event: " + reduceEvent);
             }
 
-            @Override
-            public void rejectEvent(RejectEvent rejectEvent) {
-                System.out.println("Reject event: " + rejectEvent);
-            }
-
-            @Override
-            public void commandResult(ApiCommandResult commandResult) {
-                System.out.println("Command result: " + commandResult);
-            }
 
             @Override
             public void orderBook(OrderBook orderBook) {
