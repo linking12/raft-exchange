@@ -38,7 +38,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             }
             if (closure != null) {
                 if (closure instanceof ReturnableClosure) {
-                    ((ReturnableClosure) closure).setResult(result);
+                    ((ReturnableClosure)closure).setResult(result);
                 }
                 closure.run(Status.OK());
             }
@@ -112,10 +112,6 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
     @Override
     public void onLeaderStart(long term) {
-        //对于默认sofa raft实现来说 其底层的FSMCallerImpl中的init实现里面
-        //disruptor的处理器只有一个线程 来处理全部的事件 也就说apply和onLeaderStart是保序的
-        //不会出现一边apply一边onLeaderStart
-        //再加之publish是个同步的 所以可以安全地通知出去
         RaftChangeEventbus.INSTANCE.publish(RaftNode.NodeType.LEADER);
     }
 
