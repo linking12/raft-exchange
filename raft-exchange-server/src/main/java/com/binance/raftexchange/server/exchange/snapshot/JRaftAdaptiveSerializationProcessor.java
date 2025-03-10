@@ -1,5 +1,22 @@
 package com.binance.raftexchange.server.exchange.snapshot;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.NavigableMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.ExchangeConfiguration;
@@ -16,22 +33,6 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import net.openhft.chronicle.wire.InputStreamToWire;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.util.NavigableMap;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 
 public class JRaftAdaptiveSerializationProcessor implements ISerializationProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(JRaftAdaptiveSerializationProcessor.class);
@@ -39,28 +40,23 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
     private boolean enableCompression;
     private LZ4Compressor lz4Compressor;
 
-    public JRaftAdaptiveSerializationProcessor(ExchangeConfiguration configuration) {
-    }
+    public JRaftAdaptiveSerializationProcessor(ExchangeConfiguration configuration) {}
 
     @Override
-    public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId, WriteBytesMarshallable obj) {
+    public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId,
+        WriteBytesMarshallable obj) {
         LOG.debug("Writing state into memory stream... (Compression: {})", enableCompression);
-
         try (OutputStream bos = new BufferedOutputStream(StreamManager.build(snapshotId, type, instanceId));
-             OutputStream os = enableCompression ? new LZ4FrameOutputStream(
-                     bos,
-                     LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB,
-                     -1,
-                     lz4Compressor,
-                     XXHashFactory.fastestInstance().hash32(),
-                     LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE) : bos;
-             WireToOutputStream wireToOutputStream = new WireToOutputStream(WireType.RAW, os)) {
-
+            OutputStream os =
+                enableCompression
+                    ? new LZ4FrameOutputStream(bos, LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB, -1, lz4Compressor,
+                        XXHashFactory.fastestInstance().hash32(), LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE)
+                    : bos;
+            WireToOutputStream wireToOutputStream = new WireToOutputStream(WireType.RAW, os)) {
             Wire wire = wireToOutputStream.getWire();
             wire.writeBytes(obj);
             wireToOutputStream.flush();
             os.flush();
-
             LOG.debug("Completed writing to memory stream.");
         } catch (IOException ex) {
             LOG.error("Failed to write to memory stream: ", ex);
@@ -72,22 +68,15 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
     @Override
     public <T> T loadData(long snapshotId, SerializedModuleType type, int instanceId, Function<BytesIn, T> initFunc) {
         Path path = resolveSnapshotPath(snapshotId, type, instanceId);
-
         LOG.debug("Loading state from {}", path);
         try (final InputStream is = Files.newInputStream(path, StandardOpenOption.READ);
-             final InputStream bis = new BufferedInputStream(is);
-             final InputStream in = autoDetectInputStream(bis)) {
-
+            final InputStream bis = new BufferedInputStream(is); final InputStream in = autoDetectInputStream(bis)) {
             final InputStreamToWire inputStreamToWire = new InputStreamToWire(WireType.RAW, in);
             final Wire wire = inputStreamToWire.readOne();
-
             LOG.debug("start de-serializing...");
-
             AtomicReference<T> ref = new AtomicReference<>();
             wire.readBytes(bytes -> ref.set(initFunc.apply(bytes)));
-
             return ref.get();
-
         } catch (final IOException ex) {
             LOG.error("Can not read snapshot file: ", ex);
             throw new IllegalStateException(ex);
@@ -120,7 +109,8 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
     }
 
     @Override
-    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {
+    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration,
+        ExchangeApi exchangeApi) {
 
     }
 
@@ -133,12 +123,13 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
 
     /**
      * 自动判断读入的是否是lz4压缩的流
+     * 
      * @param inputStream
      * @return
      */
     private static InputStream autoDetectInputStream(InputStream inputStream) {
         try {
-            //读取前4字节，判断是否是LZ4
+            // 读取前4字节，判断是否是LZ4
             inputStream.mark(4);
             byte[] header = new byte[4];
             int bytesRead = inputStream.read(header);
