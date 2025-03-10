@@ -63,27 +63,38 @@ public class SerializeHelper {
 
     public static byte[] serializeToCommandResult(OrderCommand result) {
         //这里产生了一个临时对象 但是我估计可以通过逃逸分析被jit干掉？
+        CommandResultCode resultCode = result.resultCode == null ? null : CommandResultCode.forNumber(Math.abs(result.resultCode.getCode()));
+        com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
+                .setCommand(OrderCommandType.forNumber(result.command.getCode()))
+                .setOrderId(result.orderId)
+                .setSymbol(result.symbol)
+                .setPrice(result.price)
+                .setSize(result.size)
+                .setReserveBidPrice(result.reserveBidPrice)
+                .setUid(result.getUid())
+                .setTimestamp(result.timestamp)
+                .setUserCookie(result.userCookie)
+                .setEventsGroup(result.eventsGroup)
+                .setServiceFlags(result.serviceFlags)
+                .setResultCode(resultCode);
+        if (result.action != null) {
+            builder = builder.setAction(OrderAction.forNumber(result.action.getCode()));
+        }
+
+        if (result.action != null) {
+            builder = builder.setOrderType(OrderType.forNumber(result.orderType.getCode()));
+        }
+
+        if (result.matcherEvent != null) {
+            builder = builder.setMatcherEvent(toPbObject(result.matcherEvent));
+        }
+
+        if (result.marketData != null) {
+            builder = builder.setMarketData(toPbObject(result.marketData));
+        }
+
         return CommandResult.newBuilder()
-                .setOrderCommand(
-                        com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
-                                .setCommand(OrderCommandType.forNumber(result.command.getCode()))
-                                .setOrderId(result.orderId)
-                                .setSymbol(result.symbol)
-                                .setPrice(result.price)
-                                .setSize(result.size)
-                                .setReserveBidPrice(result.reserveBidPrice)
-                                .setAction(OrderAction.forNumber(result.action.getCode()))
-                                .setOrderType(OrderType.forNumber(result.orderType.getCode()))
-                                .setUid(result.getUid())
-                                .setTimestamp(result.timestamp)
-                                .setUserCookie(result.userCookie)
-                                .setEventsGroup(result.eventsGroup)
-                                .setServiceFlags(result.serviceFlags)
-                                .setResultCode(CommandResultCode.forNumber(Math.abs(result.resultCode.getCode())))
-                                .setMatcherEvent(toPbObject(result.matcherEvent))
-                                .setMarketData(toPbObject(result.marketData))
-                                .build()
-                )
+                .setOrderCommand(builder.build())
                 .build()
                 .toByteArray();
     }
@@ -102,7 +113,6 @@ public class SerializeHelper {
             return baseBuilder.build();
         }
 
-        //todo 改为迭代
         return baseBuilder
                 .setNextEvent(toPbObject(matcherTradeEvent.nextEvent))
                 .build();
@@ -111,7 +121,7 @@ public class SerializeHelper {
     private static L2MarketData toPbObject(exchange.core2.core.common.L2MarketData l2MarketData) {
 
         if (l2MarketData == null) {
-            return L2MarketData.getDefaultInstance();
+            return null;
         }
 
         L2MarketData.Builder newedBuilder = L2MarketData.newBuilder();

@@ -125,16 +125,24 @@ message OrderCommand {
     int64 price = 4;
     int64 size = 5;
     int64 reserve_bid_price = 6;
-    OrderAction action = 7;
-    OrderType order_type = 8;
+    oneof order_action_present {
+        OrderAction action = 7;
+    }
+    oneof order_type_present{
+       OrderType order_type = 8;
+    }
     int64 uid = 9;
     int64 timestamp = 10;
     int32 user_cookie = 11;
     int64 events_group = 12;
     int32 service_flags = 13;
     CommandResultCode result_code = 14;
-    MatcherTradeEvent matcher_event = 15;
-    L2MarketData market_data = 16;
+    oneof matcher_event_present {
+      MatcherTradeEvent matcher_event = 15;
+    }
+    oneof market_data_present {
+      L2MarketData market_data = 16;
+    }
 }
 
 message NodeList {
