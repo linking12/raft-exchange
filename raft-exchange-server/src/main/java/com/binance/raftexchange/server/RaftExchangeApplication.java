@@ -45,7 +45,6 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     @Override
     public void run(String... arg0) throws Exception {
-        //先启动kafka sender然后再启动raft
         startKafkaSender();
         startRaftServer();
         startGrpcServer();
@@ -71,8 +70,10 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     public void startKafkaSender() {
         Properties properties = new Properties();
         properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, servers);
-        properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
-        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
+        properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.LongSerializer");
+        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.ByteArraySerializer");
         properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
         properties.setProperty(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG, "false");
         properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, KafkaSender.CommandPartitioner.class.getName());
