@@ -18,9 +18,9 @@ public class FundEventsHelper {
     private FundEvent eventPooled;
 
     // 冻结资金
-    public FundEvent sendFreezeEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
+    public FundEvent sendLockEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
-        event.eventType = FundEvent.FundEventType.FREEZE;
+        event.eventType = FundEvent.FundEventType.LOCKED;
         event.uid = uid;
         event.currency = currency;
         event.free = locked;
@@ -31,9 +31,9 @@ public class FundEventsHelper {
     }
 
     // 恢复资金
-    public FundEvent sendResumeEvent(final OrderCommand cmd, long uid, int currency, long free) {
+    public FundEvent sendUnLockEvent(final OrderCommand cmd, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
-        event.eventType = FundEvent.FundEventType.RELEASE;
+        event.eventType = FundEvent.FundEventType.UNLOCKED;
         event.uid = uid;
         event.currency = currency;
         event.free = free;
