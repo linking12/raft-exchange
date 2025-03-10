@@ -1,5 +1,7 @@
 package com.binance.raftexchange.server.exchange.eventsProcessor;
 
+import com.binance.raftexchange.server.raft.RaftNode;
+import com.binance.raftexchange.server.util.RaftChangeEventbus;
 import com.binance.raftexchange.stubs.FundsEventPB;
 import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderBookPB;
@@ -16,6 +18,7 @@ import org.apache.kafka.common.PartitionInfo;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class KafkaSender implements IEventsHandler {
@@ -28,13 +31,21 @@ public class KafkaSender implements IEventsHandler {
 
     static final long IGNORE_UID = -1L;
 
+    private AtomicBoolean isLeader = new AtomicBoolean(false);
+
     public KafkaSender(KafkaProducer<Long, byte[]> sender, String topic) {
         this.sender = sender;
         this.topic = topic;
+        //只有leader节点我们才发送kafka
+        RaftChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
     }
 
     @Override
     public void tradeEvent(TradeEvent tradeEvent) {
+        if(!isLeader.get()) {
+            return;
+        }
+
         TradeEventPB.Builder builder = TradeEventPB.newBuilder()
                 .setSymbol(tradeEvent.getSymbol())
                 .setTotalVolume(tradeEvent.getTotalVolume())
@@ -61,6 +72,10 @@ public class KafkaSender implements IEventsHandler {
 
     @Override
     public void reduceEvent(ReduceEvent reduceEvent) {
+        if(!isLeader.get()) {
+            return;
+        }
+
         byte[] pbData = ReduceEventPB.newBuilder()
                 .setSymbol(reduceEvent.getSymbol())
                 .setReducedVolume(reduceEvent.getReducedVolume())
@@ -76,6 +91,10 @@ public class KafkaSender implements IEventsHandler {
 
     @Override
     public void orderBook(OrderBook orderBook) {
+        if(!isLeader.get()) {
+            return;
+        }
+
         OrderBookPB.Builder builder = OrderBookPB.newBuilder()
                 .setSymbol(orderBook.getSymbol())
                 .setTimestamp(orderBook.getTimestamp());
@@ -111,6 +130,10 @@ public class KafkaSender implements IEventsHandler {
 
     @Override
     public void fundsEvent(FundsEvent fundsEvent) {
+        if(!isLeader.get()) {
+            return;
+        }
+
         byte[] pbData = FundsEventPB.newBuilder()
                 .setOrderId(fundsEvent.getOrderId())
                 .setUid(fundsEvent.getUid())
