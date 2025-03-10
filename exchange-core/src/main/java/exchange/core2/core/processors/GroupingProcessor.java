@@ -194,7 +194,9 @@ public final class GroupingProcessor implements EventProcessor {
 //                                tradeEventCounter++;
 //                            }
                             
-                            // 从头部遍历整个链，回收 fundEvent 并更新 tail
+                            /**
+                             * @modify 从头部遍历整个链，回收 fundEvent下的fundEvent， 并更新 tail
+                             */
                             MatcherTradeEvent current = cmd.matcherEvent;
                             while (current != null) {
                                 if (current.fundEvent != null) {
@@ -213,6 +215,9 @@ public final class GroupingProcessor implements EventProcessor {
                                 tradeEventHead = null;
                             }
                         }
+                        /**
+                         * @modify 从头部遍历整个链，回收 orderCommand下面的fundEvent
+                         */
                         if (EVENTS_POOLING && cmd.fundEvent != null) {
                             sharedPool.putFundEventPool(cmd.fundEvent);
                             cmd.fundEvent = null; 
