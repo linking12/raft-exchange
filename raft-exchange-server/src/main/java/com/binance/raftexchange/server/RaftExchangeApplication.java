@@ -46,7 +46,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     @Override
     public void run(String... arg0) throws Exception {
         //先启动kafka sender然后再启动raft
-//        startKafkaSender();
+        startKafkaSender();
         startRaftServer();
         startGrpcServer();
 
