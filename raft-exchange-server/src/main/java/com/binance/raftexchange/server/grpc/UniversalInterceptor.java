@@ -31,12 +31,12 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     protected final RaftClusterContainer raftClusterContainer;
 
     protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay =
-            new ConcurrentHashMap<>();
+        new ConcurrentHashMap<>();
 
     private final AtomicBoolean halfClose;
 
     public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate,
-                                ServerCall<ReqT, RespT> call) {
+        ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
         this.call = call;
@@ -45,7 +45,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onMessage(ReqT message) {
-        try (InputStream stream = (InputStream) message) {
+        try (InputStream stream = (InputStream)message) {
             /**
              * @formatter off
              */
@@ -56,7 +56,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                     return;
                 }
                 if (result != null) {
-                    call.sendMessage((RespT) new ByteArrayInputStream(result));
+                    call.sendMessage((RespT)new ByteArrayInputStream(result));
                     return;
                 }
                 if (err instanceof CancellationException) {
@@ -68,13 +68,13 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter on
              */
-            //某些情况下实际上并不是异步操作 所以上面会立刻执行回调然后才到这里
-            //比如说no leader这种
+            // 某些情况下实际上并不是异步操作 所以上面会立刻执行回调然后才到这里
+            // 比如说no leader这种
             if (!complete.isDone()) {
                 commandOnTheWay.put(message, complete);
             }
         } catch (Exception e) {
-            //不应该到这里
+            // 不应该到这里
             throw new RuntimeException(e);
         }
     }
@@ -98,7 +98,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onHalfClose() {
-        //grpc stream是保序的
+        // grpc stream是保序的
         if (commandOnTheWay.isEmpty()) {
             cancelAll();
         } else {
@@ -123,16 +123,14 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     private CompletableFuture<byte[]> handle(byte[] apiCommand) {
         if (!raftClusterContainer.isLeader()) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
-
             if (raftNode == null) {
-                return CompletableFuture.completedFuture(
-                        CommandResult.newBuilder()
+                return CompletableFuture
+                    .completedFuture(CommandResult.newBuilder()
                                 .setResultCode(CommandResultCode.NO_LEADER)
                                 .build()
                                 .toByteArray()
                 );
             }
-
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
             return CompletableFuture.completedFuture(
                     CommandResult.newBuilder()
