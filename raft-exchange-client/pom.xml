@@ -28,23 +28,10 @@
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
 		</dependency>
-
 		<dependency>
 			<groupId>io.grpc</groupId>
-			<artifactId>grpc-netty-shaded</artifactId>
-			<version>1.70.0</version>
+			<artifactId>grpc-all</artifactId>
 		</dependency>
-		<dependency>
-			<groupId>io.grpc</groupId>
-			<artifactId>grpc-protobuf</artifactId>
-			<version>1.70.0</version>
-		</dependency>
-		<dependency>
-			<groupId>io.grpc</groupId>
-			<artifactId>grpc-stub</artifactId>
-			<version>1.70.0</version>
-		</dependency>
-
 	</dependencies>
 
 	<dependencyManagement>
@@ -58,17 +45,7 @@
 			</dependency>
 			<dependency>
 				<groupId>io.grpc</groupId>
-				<artifactId>grpc-netty</artifactId>
-				<version>${grpc.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>io.grpc</groupId>
-				<artifactId>grpc-protobuf</artifactId>
-				<version>${grpc.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>io.grpc</groupId>
-				<artifactId>grpc-stub</artifactId>
+				<artifactId>grpc-all</artifactId>
 				<version>${grpc.version}</version>
 			</dependency>
 		</dependencies>

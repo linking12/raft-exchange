@@ -15,6 +15,7 @@
 	<properties>
 		<maven.compiler.source>17</maven.compiler.source>
 		<maven.compiler.target>17</maven.compiler.target>
+		<grpc.version>1.70.0</grpc.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 	</properties>
 
@@ -25,21 +26,8 @@
 		</dependency>
 		<dependency>
 			<groupId>io.grpc</groupId>
-			<artifactId>grpc-netty-shaded</artifactId>
-			<version>1.70.0</version>
-			<scope>runtime</scope>
+			<artifactId>grpc-all</artifactId>
 		</dependency>
-		<dependency>
-			<groupId>io.grpc</groupId>
-			<artifactId>grpc-protobuf</artifactId>
-			<version>1.70.0</version>
-		</dependency>
-		<dependency>
-			<groupId>io.grpc</groupId>
-			<artifactId>grpc-stub</artifactId>
-			<version>1.70.0</version>
-		</dependency>
-
 	</dependencies>
 	<build>
 		<extensions>
@@ -85,28 +73,8 @@
 				<scope>import</scope>
 			</dependency>
 			<dependency>
-				<groupId>org.jgroups</groupId>
-				<artifactId>jgroups</artifactId>
-				<version>${jgroups.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>org.jgroups</groupId>
-				<artifactId>jgroups-raft</artifactId>
-				<version>${jgroups-raft.version}</version>
-			</dependency>
-			<dependency>
 				<groupId>io.grpc</groupId>
-				<artifactId>grpc-netty</artifactId>
-				<version>${grpc.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>io.grpc</groupId>
-				<artifactId>grpc-protobuf</artifactId>
-				<version>${grpc.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>io.grpc</groupId>
-				<artifactId>grpc-stub</artifactId>
+				<artifactId>grpc-all</artifactId>
 				<version>${grpc.version}</version>
 			</dependency>
 		</dependencies>
