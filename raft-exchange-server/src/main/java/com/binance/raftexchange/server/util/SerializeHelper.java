@@ -1,5 +1,10 @@
 package com.binance.raftexchange.server.util;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+
 import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderType;
 import com.binance.raftexchange.stubs.request.ApiCommand;
@@ -12,13 +17,8 @@ import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.ProtocolMessageEnum;
-import exchange.core2.core.common.cmd.OrderCommand;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.util.Arrays;
+import exchange.core2.core.common.cmd.OrderCommand;
 
 public class SerializeHelper {
     private SerializeHelper() {
