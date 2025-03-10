@@ -76,11 +76,7 @@ public class StreamManager {
     public static Path getFilePathForLoadData(long snapshotId, SerializedModuleType type, int shardId) {
         StoreId storeId = new StoreId(snapshotId, type, shardId);
         BlockingQueue<Path> queue = storeLoadFile.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
-        try {
-            return queue.peek();
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to get FilePath, storeId: " + storeId, e);
-        }
+        return queue.peek();
     }
 
     public static void saveFilePathForLoadData(long snapshotId, SerializedModuleType type, int shardId, Path path) {
