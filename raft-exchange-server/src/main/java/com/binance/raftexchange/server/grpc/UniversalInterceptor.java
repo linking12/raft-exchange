@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.util.SerializeHelper;
-import com.binance.raftexchange.server.util.ThrowableFunction;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
@@ -30,8 +29,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
 
-    protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay =
-        new ConcurrentHashMap<>();
+    protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
 
     private final AtomicBoolean halfClose;
 
@@ -114,9 +112,8 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     /**
-     * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换
-     * 这样可以节约一次序列化和反序列化开销
-     * grpc直通exchange-core
+     * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换 这样可以节约一次序列化和反序列化开销 grpc直通exchange-core
+     * 
      * @param apiCommand
      * @return
      */
@@ -124,21 +121,12 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         if (!raftClusterContainer.isLeader()) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
-                return CompletableFuture
-                    .completedFuture(CommandResult.newBuilder()
-                                .setResultCode(CommandResultCode.NO_LEADER)
-                                .build()
-                                .toByteArray()
-                );
+                return CompletableFuture.completedFuture(
+                    CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
             }
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
-            return CompletableFuture.completedFuture(
-                    CommandResult.newBuilder()
-                            .setResultCode(CommandResultCode.NEED_MOVE)
-                            .setLeaderNode(leaderNode)
-                            .build()
-                            .toByteArray()
-            );
+            return CompletableFuture.completedFuture(CommandResult.newBuilder()
+                .setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray());
         }
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
         return raftClusterContainer.requestConsensus(raftLog);
