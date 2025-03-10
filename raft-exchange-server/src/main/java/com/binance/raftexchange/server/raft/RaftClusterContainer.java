@@ -45,14 +45,12 @@ public class RaftClusterContainer {
             LOGGER.info("Starting raft: {}", raftCurrentMember);
             raftMemberCluster = raftClusterDiscovery.raftMemberCluster();
         }
-        // Start JRaft
         String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "-DATA";
         FileUtils.forceMkdir(new File(dataPath));
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
         Configuration conf = JRaftUtils.getConfiguration(raftMemberCluster);
         NodeOptions nodeOptions = new NodeOptions();
         nodeOptions.setFsm(new ExchangeStateMachine());
-        // @see DefaultJRaftServiceFactory，log存rocksdb，snapshot和meta存文件
         nodeOptions.setLogUri(dataPath + File.separator + "log");
         nodeOptions.setSnapshotUri(dataPath + File.separator + "snapshot");
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
