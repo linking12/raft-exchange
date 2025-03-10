@@ -17,23 +17,52 @@ public class FundEventsHelper {
     private final Supplier<FundEvent> eventSupplier;
     private FundEvent eventPooled;
 
-    // 冻结资金
-    public FundEvent sendFreezeEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
+    // 存款
+    public FundEvent sendDepositEvent(final OrderCommand cmd, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
-        event.eventType = FundEvent.FundEventType.FREEZE;
+        event.eventType = FundEvent.FundEventType.DEPOSIT;
         event.uid = uid;
         event.currency = currency;
-        event.free = locked;
+        event.free = free;
+        event.loked = 0;
         event.orderId = cmd.orderId;
         event.positionDelta = 0;
         cmd.fundEvent = event;
         return event;
     }
 
-    // 恢复资金
-    public FundEvent sendResumeEvent(final OrderCommand cmd, long uid, int currency, long free) {
+    // 提现
+    public FundEvent sendWithdrawEvent(final OrderCommand cmd, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
-        event.eventType = FundEvent.FundEventType.RELEASE;
+        event.eventType = FundEvent.FundEventType.WITHDRAW;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.loked = 0;
+        event.orderId = cmd.orderId;
+        event.positionDelta = 0;
+        cmd.fundEvent = event;
+        return event;
+    }
+
+    // 冻结
+    public FundEvent sendLockEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.LOCKED;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.loked = locked;
+        event.orderId = cmd.orderId;
+        event.positionDelta = 0;
+        cmd.fundEvent = event;
+        return event;
+    }
+
+    // 解冻
+    public FundEvent sendUnLockEvent(final OrderCommand cmd, long uid, int currency, long free) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.UNLOCKED;
         event.uid = uid;
         event.currency = currency;
         event.free = free;
@@ -44,7 +73,7 @@ public class FundEventsHelper {
         return event;
     }
 
-    // 资金转移
+    // 转移
     public FundEvent sendTransferEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.TRANSFER;

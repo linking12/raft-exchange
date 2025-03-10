@@ -264,6 +264,21 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = adjustBalance(
                             cmd.uid, cmd.symbol, cmd.price, cmd.orderId, BalanceAdjustmentType.of(cmd.orderType.getCode()));
+                    /**
+                     * @modify 存款/提现
+                     */
+                    if (cmd.resultCode == CommandResultCode.SUCCESS) {
+                        final long uid = cmd.uid;
+                        final int currency = cmd.symbol;
+                        final long amountDiff = cmd.price;
+                        final UserProfile userProfile = userProfileService.getUserProfile(uid);
+                        final long userBalance = userProfile.accounts.get(currency);
+                        if (amountDiff > 0) {
+                            eventsHelper.sendDepositEvent(cmd, uid, currency, userBalance);
+                        } else {
+                            eventsHelper.sendWithdrawEvent(cmd, uid, currency, userBalance);
+                        }
+                    }
                 }
                 return false;
 
@@ -509,13 +524,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 恢复资金
              */
-            this.eventsHelper.sendResumeEvent(cmd, userProfile.uid, currency, userBalance);
+            this.eventsHelper.sendUnLockEvent(cmd, userProfile.uid, currency, userBalance);
             return CommandResultCode.RISK_NSF;
         } else {
             /**
              * @modify 冻结资金
              */
-            this.eventsHelper.sendFreezeEvent(cmd, userProfile.uid, currency, newBalance, orderHoldAmount);
+            this.eventsHelper.sendLockEvent(cmd, userProfile.uid, currency, newBalance, orderHoldAmount);
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
     }
@@ -700,7 +715,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             /**
              * @modify 恢复资金,卖单解冻 baseCurrency
              */
-            this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
+            this.eventsHelper.sendUnLockEvent(cmd, taker.uid, spec.baseCurrency, userBalance);
 
         } else {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
@@ -708,13 +723,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 /**
                  * @modify 恢复资金 买单解冻 quoteCurrency
                  */
-                this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
+                this.eventsHelper.sendUnLockEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             } else {
                 long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
                 /**
                  * @modify 恢复资金 买单解冻 quoteCurrency
                  */
-                this.eventsHelper.sendResumeEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
+                this.eventsHelper.sendUnLockEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             }
             // TODO for OrderType.IOC_BUDGET - for REJECT should release leftover deposit after all trades calculated
         }

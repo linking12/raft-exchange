@@ -20,7 +20,7 @@ public class FundEvent {
     public long positionDelta; // 持仓变化（期货用，现金交易为 0）
 
     public enum FundEventType {
-        FREEZE, TRANSFER, RELEASE
+        DEPOSIT, LOCKED, TRANSFER, UNLOCKED, WITHDRAW
     }
 
     @Override
