@@ -4,9 +4,14 @@ import com.alipay.sofa.jraft.Closure;
 import com.alipay.sofa.jraft.Iterator;
 import com.alipay.sofa.jraft.Status;
 import com.alipay.sofa.jraft.core.StateMachineAdapter;
+import com.alipay.sofa.jraft.error.RaftError;
+import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
+import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
+import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
 import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
 import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
-
+import exchange.core2.core.ExchangeApi;
+import exchange.core2.core.common.api.ApiPersistState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,10 +26,15 @@ import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
 
 import java.nio.ByteBuffer;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
 
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
+
+    private final AtomicLong leaderTerm = new AtomicLong(-1L);
+    private final SnapshotHelper snapshotHelper = new SnapshotHelper();
 
     @Override
     public void onApply(Iterator iter) {
@@ -112,12 +122,63 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     }
 
     @Override
+    public boolean onSnapshotLoad(SnapshotReader reader) {
+        if (isLeader()) {
+            LOG.warn("Leader is not supposed to load snapshot");
+            return false;
+        }
+        String root = reader.getPath();
+        Set<String> files = reader.listFiles();
+        if (!snapshotHelper.checkSnapshotIntegrity(files)) {
+            LOG.error("Snapshot shard count mismatch! Update PerformanceConfiguration.DEFAULT config to match snapshot files or delete existing snapshot files.");
+            return false;
+        }
+        try {
+            snapshotHelper.loadSnapshotPath(files, root);
+        } catch (Exception e) {
+            LOG.error("Failed to load snapshot", e);
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public void onSnapshotSave(SnapshotWriter writer, Closure done) {
+        String root = writer.getPath();
+        // 触发exchange的快照
+        long snapshotId = SnapshotHelper.genSnapshotId();
+        ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        ApiPersistState apiPersist = ApiPersistState.builder().dumpId(snapshotId).build();
+        api.submitCommand(apiPersist);
+        // 保存快照
+        try {
+            for (String fileName : snapshotHelper.saveSnapshot(snapshotId, root)) {
+                if (!writer.addFile(fileName)) {
+                    throw new RuntimeException("Fail to add file[" + fileName + "] to writer");
+                }
+            }
+        } catch (Exception e) {
+            LOG.error("Fail to save snapshot", e);
+            SnapshotHelper.cleanSnapshots(root, snapshotId);
+            done.run(new Status(RaftError.EIO, "Fail to save snapshot"));
+        }
+        done.run(Status.OK());
+    }
+
+
+    @Override
     public void onLeaderStart(long term) {
+        this.leaderTerm.set(term);
         RaftChangeEventbus.INSTANCE.publish(RaftNode.NodeType.LEADER);
     }
 
     @Override
     public void onLeaderStop(Status status) {
+        this.leaderTerm.set(-1L);
         RaftChangeEventbus.INSTANCE.publish(RaftNode.NodeType.FOLLOWER);
+    }
+
+    public boolean isLeader() {
+        return this.leaderTerm.get() > 0;
     }
 }

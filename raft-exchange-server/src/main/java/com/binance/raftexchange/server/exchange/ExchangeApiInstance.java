@@ -6,6 +6,8 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.config.ExchangeConfiguration;
+import exchange.core2.core.common.config.SerializationConfiguration;
+import com.binance.raftexchange.server.exchange.snapshot.JRaftAdaptiveSerializationProcessor;
 
 public class ExchangeApiInstance {
 
@@ -15,7 +17,13 @@ public class ExchangeApiInstance {
 
     private ExchangeApiInstance() {
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(KafkaSender.getInstance());
-        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().build();
+        SerializationConfiguration serializationCfg = SerializationConfiguration.builder()
+                .enableJournaling(false)
+                .serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new)
+                .build();
+        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder()
+                .serializationCfg(serializationCfg)
+                .build();
         ExchangeCore exchangeCore =
             ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
         exchangeCore.startup();
