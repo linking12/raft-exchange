@@ -1,10 +1,15 @@
 package com.binance.raftexchange.server;
 
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
+import com.binance.raftexchange.server.exchange.events.IEventsHandlerByKafka;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -34,10 +39,18 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     private GrpcServerContainer grpcServerContainer;
 
+    @Value("${raftexchange.kafka.boostrap.servers}")
+    public String servers;
+
+    @Value("${raftexchange.eventbus.topic}")
+    public String topic;
+
     @Override
     public void run(String... arg0) throws Exception {
+        startKafkaSender();
         startRaftServer();
         startGrpcServer();
+
     }
 
     public void startRaftServer() throws Exception {
@@ -54,6 +67,20 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
             TimeUnit.SECONDS.sleep(5);
         } while (!raftClusterContainer.started());
         grpcServerContainer.doStart();
+    }
+
+    public void startKafkaSender() {
+        Properties properties = new Properties();
+        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, servers);
+        properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.LongSerializer");
+        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.ByteArraySerializer");
+        properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
+        properties.setProperty(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG, "false");
+        properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, IEventsHandlerByKafka.CommandPartitioner.class.getName());
+        KafkaProducer<Long, byte[]> producer = new KafkaProducer<>(properties);
+        IEventsHandlerByKafka.INSTANCE = new IEventsHandlerByKafka(producer, topic);
     }
 
     @Override

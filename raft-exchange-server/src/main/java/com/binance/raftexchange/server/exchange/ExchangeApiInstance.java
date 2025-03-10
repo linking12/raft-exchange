@@ -1,6 +1,6 @@
 package com.binance.raftexchange.server.exchange;
 
-import com.binance.raftexchange.server.exchange.events.KafkaSender;
+import com.binance.raftexchange.server.exchange.events.IEventsHandlerByKafka;
 
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
@@ -16,7 +16,7 @@ public class ExchangeApiInstance {
     private static final ExchangeApiInstance INSTANCE = new ExchangeApiInstance();
 
     private ExchangeApiInstance() {
-        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(KafkaSender.getInstance());
+        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance());
         SerializationConfiguration serializationCfg = SerializationConfiguration.builder()
                 .enableJournaling(false)
                 .serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new)
