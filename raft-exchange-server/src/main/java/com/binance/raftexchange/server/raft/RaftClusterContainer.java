@@ -44,7 +44,7 @@ public class RaftClusterContainer {
             raftMemberCluster = raftClusterDiscovery.raftMemberCluster();
             TimeUnit.SECONDS.sleep(5);
             LOGGER.info("Starting raft: {}", raftCurrentMember);
-        } while (raftMemberCluster != null);
+        } while (raftMemberCluster == null);
         String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "-DATA";
         FileUtils.forceMkdir(new File(dataPath));
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
