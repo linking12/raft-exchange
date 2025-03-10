@@ -1,6 +1,7 @@
 package com.binance.raftexchange.server.exchange;
 
-import com.binance.raftexchange.server.exchange.eventsProcessor.KafkaSender;
+import com.binance.raftexchange.server.exchange.events.KafkaSender;
+
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.SimpleEventsProcessor;

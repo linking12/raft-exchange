@@ -1,4 +1,4 @@
-package com.binance.raftexchange.server.exchange.eventsProcessor;
+package com.binance.raftexchange.server.exchange.events;
 
 import java.util.Properties;
 
