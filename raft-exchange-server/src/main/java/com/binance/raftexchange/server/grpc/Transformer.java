@@ -7,11 +7,8 @@ import com.binance.raftexchange.stubs.response.ServerNode;
 class Transformer {
 
     static ServerNode raftNodeTransform(RaftNode raftNode) {
-        return ServerNode.newBuilder()
-                .setHost(raftNode.host())
-                .setPort(raftNode.port())
-                .setType(transformType(raftNode.nodeType()))
-                .build();
+        return ServerNode.newBuilder().setHost(raftNode.host()).setPort(raftNode.port())
+            .setType(transformType(raftNode.nodeType())).build();
     }
 
     private static NodeType transformType(RaftNode.NodeType nodeType) {
