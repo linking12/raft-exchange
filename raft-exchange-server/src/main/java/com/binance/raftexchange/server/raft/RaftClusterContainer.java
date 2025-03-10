@@ -7,6 +7,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import javax.annotation.Nullable;
+
+import org.apache.commons.io.FileUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.alipay.sofa.jraft.Closure;
 import com.alipay.sofa.jraft.JRaftUtils;
 import com.alipay.sofa.jraft.Node;
@@ -19,18 +25,11 @@ import com.alipay.sofa.jraft.entity.Task;
 import com.alipay.sofa.jraft.option.NodeOptions;
 import com.alipay.sofa.jraft.option.RaftOptions;
 import com.alipay.sofa.jraft.util.Utils;
-import org.apache.commons.io.FileUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.annotation.Nullable;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
-
     private final RaftClusterDiscovery raftClusterDiscovery;
     private final String raftClusterName;
-
     private RaftGroupService raftGroupService;
 
     public RaftClusterContainer(RaftClusterDiscovery raftClusterDiscovery) {
@@ -117,7 +116,7 @@ public class RaftClusterContainer {
         return new RaftNode(leaderId.getIp(), getGrpcPort(leaderId.getIp()), RaftNode.NodeType.LEADER);
     }
 
-    protected static class ReturnableClosure implements Closure {
+    public static class ReturnableClosure implements Closure {
         private final CompletableFuture<byte[]> future;
         private byte[] result;
 
