@@ -39,12 +39,12 @@ public class RaftClusterContainer {
 
     public void doStart() throws Exception {
         String raftCurrentMember = raftClusterDiscovery.raftCurrentMember();
-        String raftMemberCluster = raftClusterDiscovery.raftMemberCluster();
-        while (raftMemberCluster == null) {
+        String raftMemberCluster = null;
+        do {
+            raftMemberCluster = raftClusterDiscovery.raftMemberCluster();
             TimeUnit.SECONDS.sleep(5);
             LOGGER.info("Starting raft: {}", raftCurrentMember);
-            raftMemberCluster = raftClusterDiscovery.raftMemberCluster();
-        }
+        } while (raftMemberCluster != null);
         String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "-DATA";
         FileUtils.forceMkdir(new File(dataPath));
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
