@@ -24,8 +24,8 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.orderId = cmd.orderId;
         event.loked = 0;
+        event.orderId = cmd.orderId;
         event.positionDelta = 0;
         cmd.fundEvent = event;
         return event;
@@ -38,8 +38,8 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.orderId = cmd.orderId;
         event.loked = 0;
+        event.orderId = cmd.orderId;
         event.positionDelta = 0;
         cmd.fundEvent = event;
         return event;
@@ -51,7 +51,8 @@ public class FundEventsHelper {
         event.eventType = FundEvent.FundEventType.LOCKED;
         event.uid = uid;
         event.currency = currency;
-        event.free = locked;
+        event.free = free;
+        event.loked = locked;
         event.orderId = cmd.orderId;
         event.positionDelta = 0;
         cmd.fundEvent = event;
