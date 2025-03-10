@@ -24,7 +24,7 @@ import exchange.core2.core.IEventsHandler;
 
 public class KafkaSender implements IEventsHandler {
 
-    static KafkaSender INSTANCE;
+    public static KafkaSender INSTANCE;
 
     private final KafkaProducer<Long, byte[]> sender;
 
