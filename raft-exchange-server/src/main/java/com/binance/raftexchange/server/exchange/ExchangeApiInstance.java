@@ -6,37 +6,44 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.config.ExchangeConfiguration;
+import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import com.binance.raftexchange.server.exchange.snapshot.JRaftAdaptiveSerializationProcessor;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 public class ExchangeApiInstance {
 
-    private final ExchangeApi exchangeApi;
-
-    private static final ExchangeApiInstance INSTANCE = new ExchangeApiInstance();
+    private static final AtomicReference<ExchangeCore> INSTANCE = new AtomicReference<>();
 
     private ExchangeApiInstance() {
+    }
+
+    public static void snapshotStart(long snapshotId) {
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance());
         SerializationConfiguration serializationCfg = SerializationConfiguration.builder()
                 .enableJournaling(false)
                 .serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new)
                 .build();
         ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder()
+                // exchangeId没用到，baseSeq只有journal才会用到
+                .initStateCfg(InitialStateConfiguration.fromSnapshotOnly(null, snapshotId, 0))
                 .serializationCfg(serializationCfg)
                 .build();
         ExchangeCore exchangeCore =
             ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
         exchangeCore.startup();
-        ExchangeApi api = exchangeCore.getApi();
-        this.exchangeApi = api;
-    }
-
-    public ExchangeApi getExchangeApi() {
-        return this.exchangeApi;
+        ExchangeCore old = INSTANCE.getAndSet(exchangeCore);
+        if (old != null) {
+            old.shutdown();
+        }
     }
 
     public static ExchangeApi exchangeApi() {
-        return INSTANCE.getExchangeApi();
+        if (INSTANCE.get() == null) {
+            snapshotStart(0);
+        }
+        return INSTANCE.get().getApi();
     }
 
 }

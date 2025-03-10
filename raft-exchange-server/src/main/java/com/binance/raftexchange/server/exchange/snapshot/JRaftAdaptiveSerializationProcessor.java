@@ -80,6 +80,8 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
         } catch (final IOException ex) {
             LOG.error("Can not read snapshot file: ", ex);
             throw new IllegalStateException(ex);
+        } finally {
+            StreamManager.clearFilePathForLoadData(snapshotId, type, instanceId);
         }
     }
 

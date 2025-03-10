@@ -59,17 +59,19 @@ public class SnapshotHelper {
         return (meCount == matchingEnginesNum) && (reCount == riskEnginesNum);
     }
 
-    public void loadSnapshotPath(Set<String> files, String root) {
+    public long loadSnapshotPath(Set<String> files, String root) {
+        long snapshotId = 0;
         for (String file : files) {
             String[] parts = file.substring(0, file.lastIndexOf(".dat")).split("_");
             if (parts.length != 4) {
                 throw new RuntimeException("Invalid snapshot file: " + file);
             }
-            long snapshotId = 0; // 撮合load的时候snapshotId永远是0
+            snapshotId = Long.parseLong(parts[1]);
             SerializedModuleType type = codeToModuleType(parts[2]);
             int instanceId = Integer.parseInt(parts[3]);
             StreamManager.saveFilePathForLoadData(snapshotId, type, instanceId, Paths.get(root, file));
         }
+        return snapshotId;
     }
 
     public List<String> saveSnapshot(long snapshotId, String root) {

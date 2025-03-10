@@ -77,7 +77,7 @@ public class StreamManager {
         StoreId storeId = new StoreId(snapshotId, type, shardId);
         BlockingQueue<Path> queue = storeLoadFile.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
         try {
-            return queue.take();
+            return queue.peek();
         } catch (Exception e) {
             throw new IllegalStateException("Failed to get FilePath, storeId: " + storeId, e);
         }
@@ -90,6 +90,11 @@ public class StreamManager {
             throw new IllegalStateException("Another FilePath is already present, storeId: " + storeId);
         }
         queue.add(path);
+    }
+
+    public static void clearFilePathForLoadData(long snapshotId, SerializedModuleType type, int shardId) {
+        StoreId storeId = new StoreId(snapshotId, type, shardId);
+        storeLoadFile.remove(storeId);
     }
 
     /**

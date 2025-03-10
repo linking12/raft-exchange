@@ -134,7 +134,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             return false;
         }
         try {
-            snapshotHelper.loadSnapshotPath(files, root);
+            long snapshotId = snapshotHelper.loadSnapshotPath(files, root);
+            ExchangeApiInstance.snapshotStart(snapshotId);
         } catch (Exception e) {
             LOG.error("Failed to load snapshot", e);
             return false;
