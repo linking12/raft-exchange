@@ -122,9 +122,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             eventsHandler.tradeEvent(evt);
         }
 
-        if (rejectEvent.ref != null) {
-            eventsHandler.rejectEvent(rejectEvent.ref);
-        }
     }
 
     private void sendMarketData(OrderCommand cmd) {
@@ -198,7 +195,5 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
         cmd.timestamp = timestamp;
-        final IEventsHandler.ApiCommandResult commandResult = new IEventsHandler.ApiCommandResult(cmd, resultCode, seq);
-        eventsHandler.commandResult(commandResult);
     }
 }
