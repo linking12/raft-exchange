@@ -161,6 +161,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return new State(symbolSpecificationProvider, userProfileService, binaryCommandsProcessor,
                     lastPriceCache, fees, adjustments, suspends);
             });
+        if (state.lastPriceCache == null || state.fees == null) {
+            throw new IllegalStateException("Invalid recovered state: missing critical fields");
+        }
         synchronized (this) {
             this.symbolSpecificationProvider = state.symbolSpecificationProvider;
             this.userProfileService = state.userProfileService;
