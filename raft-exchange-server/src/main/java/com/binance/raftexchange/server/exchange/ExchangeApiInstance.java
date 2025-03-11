@@ -16,20 +16,15 @@ public class ExchangeApiInstance {
 
     private static final AtomicReference<ExchangeCore> INSTANCE = new AtomicReference<>();
 
-    private ExchangeApiInstance() {
-    }
+    private ExchangeApiInstance() {}
 
     public static void snapshotStart(long snapshotId) {
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance());
-        SerializationConfiguration serializationCfg = SerializationConfiguration.builder()
-                .enableJournaling(false)
-                .serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new)
-                .build();
+        SerializationConfiguration serializationCfg = SerializationConfiguration.builder().enableJournaling(false)
+            .serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new).build();
         ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder()
-                // exchangeId没用到，baseSeq只有journal才会用到
-                .initStateCfg(InitialStateConfiguration.fromSnapshotOnly(null, snapshotId, 0))
-                .serializationCfg(serializationCfg)
-                .build();
+            .initStateCfg(InitialStateConfiguration.fromSnapshotOnly(null, snapshotId, 0))
+            .serializationCfg(serializationCfg).build();
         ExchangeCore exchangeCore =
             ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
         exchangeCore.startup();

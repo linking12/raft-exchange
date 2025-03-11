@@ -29,15 +29,15 @@ public class StreamManager {
 
     /**
      * 用于存储恢复数据的文件路径
-      */
+     */
     private static final Map<StoreId, BlockingQueue<Path>> storeLoadFile = new ConcurrentHashMap<>();
 
-    private StreamManager() {
-    }
+    private StreamManager() {}
 
     public static OutputStream build(long snapshotId, SerializedModuleType type, int shardId) throws IOException {
         StoreId storeId = new StoreId(snapshotId, type, shardId);
-        BlockingQueue<PipedInputStream> queue = storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
+        BlockingQueue<PipedInputStream> queue =
+            storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
         if (!queue.isEmpty()) {
             throw new IllegalStateException("Another PipedInputStream is already present, storeId: " + storeId);
         }
@@ -48,7 +48,8 @@ public class StreamManager {
 
     public static PipedInputStream get(long snapshotId, SerializedModuleType type, int shardId) {
         StoreId storeId = new StoreId(snapshotId, type, shardId);
-        BlockingQueue<PipedInputStream> queue = storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
+        BlockingQueue<PipedInputStream> queue =
+            storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
         try {
             return queue.take();
         } catch (Exception e) {
@@ -94,8 +95,7 @@ public class StreamManager {
     }
 
     /**
-     * StoreId，用于区分store过程中的inputStream
-     * 由于disruptor调用store本身是同步的，因此不需要记录seq，seq是disruptor中保证顺序的
+     * StoreId，用于区分store过程中的inputStream 由于disruptor调用store本身是同步的，因此不需要记录seq，seq是disruptor中保证顺序的
      */
     @AllArgsConstructor
     @EqualsAndHashCode
