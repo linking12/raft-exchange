@@ -197,6 +197,7 @@ public final class OrderBookEventsHelper {
             }
             final MatcherTradeEvent res = eventsChainHead;
             eventsChainHead = eventsChainHead.nextEvent;
+            res.nextEvent = null; // 断掉链表，借出的对象应该和下面new的对象等价
             return res;
         } else {
             return new MatcherTradeEvent();
