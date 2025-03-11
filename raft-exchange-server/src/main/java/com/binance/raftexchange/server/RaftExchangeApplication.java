@@ -15,6 +15,8 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
 
+import com.binance.platform.common.autoconfigure.AlarmAutoConfiguration;
+import com.binance.platform.common.autoconfigure.OldMasterCommonConfig;
 import com.binance.platform.common.shutdown.GracefulShutdownHook;
 import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
@@ -22,7 +24,7 @@ import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
 import com.netflix.discovery.EurekaClient;
 
 @EnableEurekaClient
-@SpringBootApplication
+@SpringBootApplication(exclude = {AlarmAutoConfiguration.class, OldMasterCommonConfig.class})
 public class RaftExchangeApplication implements CommandLineRunner, GracefulShutdownHook {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftExchangeApplication.class);
 
