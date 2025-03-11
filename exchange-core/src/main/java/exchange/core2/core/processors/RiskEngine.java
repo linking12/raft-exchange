@@ -318,6 +318,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 UnsafeUtils.setResultVolatile(cmd, true, CommandResultCode.SUCCESS, CommandResultCode.STATE_RECOVER_RISK_ENGINE_FAILED);
                 return false;
             case RECOVER_STATE_MATCHING: {
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+                }
                 return true;
             }
         }
