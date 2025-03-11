@@ -31,7 +31,6 @@ import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.journaling.DiskSerializationProcessorConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
@@ -43,9 +42,6 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Optional;
 
@@ -71,7 +67,6 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     private final long shardMask;
 
     private final String exchangeId; // TODO validate
-    private final Path folder;
 
     private final boolean cfgMarginTradingEnabled;
 
@@ -94,7 +89,6 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         }
 
         this.exchangeId = exchangeCfg.getInitStateCfg().getExchangeId();
-        this.folder = Paths.get(DiskSerializationProcessorConfiguration.DEFAULT_FOLDER);
 
         this.shardId = shardId;
         this.shardMask = numShards - 1;
@@ -115,20 +109,23 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         objectsPoolConfig.put(ObjectsPool.ART_NODE_256, 1024 * 4);
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.sharedPool = sharedPool;
-        this.binaryCommandsProcessor = new BinaryCommandsProcessor(
-                this::handleBinaryMessage,
-                this::handleReportQuery,
-                sharedPool,
-                exchangeCfg.getReportsQueriesCfg(),
-                shardId + 1024);
-
-        this.orderBooks = new IntObjectHashMap<>();
-        this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
+        this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
+        this.initState();
+    }
+    
+    private void initState() {
+        this.binaryCommandsProcessor = new BinaryCommandsProcessor(
+            this::handleBinaryMessage,
+            this::handleReportQuery,
+            sharedPool,
+            reportsQueriesConfiguration,
+            shardId + 1024);
+        this.orderBooks = new IntObjectHashMap<>();
     }
 
-    private void recoverState(long snapshotId) {
+    private void recoverStateBySnapshot(long snapshotId) {
         final DeserializedData deserialized = serializationProcessor.loadData(
                 snapshotId,
                 ISerializationProcessor.SerializedModuleType.MATCHING_ENGINE_ROUTER,
@@ -204,7 +201,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
             // Send ACCEPTED because this is a first command in series. Risk engine is second - so it will return SUCCESS
             UnsafeUtils.setResultVolatile(cmd, isSuccess, CommandResultCode.ACCEPTED, CommandResultCode.STATE_PERSIST_MATCHING_ENGINE_FAILED);
         } else if (command == OrderCommandType.RECOVER_STATE_MATCHING) {
-            recoverState(cmd.orderId);
+            recoverStateBySnapshot(cmd.orderId);
             UnsafeUtils.setResultVolatile(cmd, true, CommandResultCode.ACCEPTED, CommandResultCode.STATE_RECOVER_MATCHING_ENGINE_FAILED);
         }
 
