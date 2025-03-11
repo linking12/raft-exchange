@@ -7,4 +7,12 @@ import lombok.EqualsAndHashCode;
 @EqualsAndHashCode(callSuper = false)
 public class ApiRecoverState extends ApiCommand {
 
+    public long snapshotId;
+    public String root;
+
+    @Override
+    public String toString() {
+        return "[RECOVER]-" + snapshotId + " root=" + root;
+    }
+
 }
