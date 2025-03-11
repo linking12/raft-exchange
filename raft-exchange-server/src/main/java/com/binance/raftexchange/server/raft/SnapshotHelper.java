@@ -4,6 +4,8 @@ import com.binance.raftexchange.server.exchange.snapshot.StreamManager;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor.SerializedModuleType;
+import lombok.Getter;
+import lombok.Setter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +34,7 @@ import java.util.stream.Stream;
 
 public class SnapshotHelper {
     private static final Logger LOG = LoggerFactory.getLogger(SnapshotHelper.class);
-
+    private static String snapshotPath;
     private final ExecutorService snapshotExecutor;
     private final int matchingEnginesNum;
     private final int riskEnginesNum;
@@ -59,21 +61,6 @@ public class SnapshotHelper {
         return (meCount == matchingEnginesNum) && (reCount == riskEnginesNum);
     }
 
-    public long loadSnapshotPath(Set<String> files, String root) {
-        long snapshotId = 0;
-        for (String file : files) {
-            String[] parts = file.substring(0, file.lastIndexOf(".dat")).split("_");
-            if (parts.length != 4) {
-                throw new RuntimeException("Invalid snapshot file: " + file);
-            }
-            snapshotId = Long.parseLong(parts[1]);
-            SerializedModuleType type = codeToModuleType(parts[2]);
-            int instanceId = Integer.parseInt(parts[3]);
-            StreamManager.saveFilePathForLoadData(snapshotId, type, instanceId, Paths.get(root, file));
-        }
-        return snapshotId;
-    }
-
     public List<String> saveSnapshot(long snapshotId, String root) {
         List<CompletableFuture<String>> futures = new ArrayList<>(matchingEnginesNum + riskEnginesNum);
         futures.addAll(saveSnapshot(snapshotId, SerializedModuleType.MATCHING_ENGINE_ROUTER, matchingEnginesNum, root));
@@ -98,6 +85,20 @@ public class SnapshotHelper {
                 .collect(Collectors.toList());
     }
 
+
+
+    public static long getSnapshotId(Set<String> files) {
+        for (String file : files) {
+            String[] parts = file.split("_");
+            if (parts.length != 4) {
+                throw new RuntimeException("Invalid snapshot file: " + file);
+            } else {
+                return Long.parseLong(parts[1]);
+            }
+        }
+        return 0;
+    }
+
     /**
      * snapshot_20250307105705748_RE_0.dat
      *
@@ -106,7 +107,7 @@ public class SnapshotHelper {
      * @param shardId    分区
      * @return
      */
-    private static String genSnapshotFileName(long snapshotId, SerializedModuleType type, int shardId) {
+    public static String genSnapshotFileName(long snapshotId, SerializedModuleType type, int shardId) {
         return String.format("snapshot_%s_%s_%s.dat", snapshotId, moduleTypeToCode(type), shardId);
     }
 
@@ -166,5 +167,13 @@ public class SnapshotHelper {
             default:
                 throw new RuntimeException("Invalid SerializedModuleType: " + type);
         }
+    }
+
+    public static String getSnapshotPath() {
+        return snapshotPath;
+    }
+
+    public static void setSnapshotPath(String snapshotPath) {
+        SnapshotHelper.snapshotPath = snapshotPath;
     }
 }

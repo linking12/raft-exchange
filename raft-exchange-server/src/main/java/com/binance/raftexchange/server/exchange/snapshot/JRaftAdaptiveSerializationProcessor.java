@@ -9,11 +9,13 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.NavigableMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import com.binance.raftexchange.server.raft.SnapshotHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,8 +88,6 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
         } catch (final IOException ex) {
             LOG.error("Can not read snapshot file: ", ex);
             throw new IllegalStateException(ex);
-        } finally {
-            StreamManager.clearFilePathForLoadData(snapshotId, type, instanceId);
         }
     }
 
@@ -124,7 +124,9 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
 
     @Override
     public Path resolveSnapshotPath(long snapshotId, SerializedModuleType type, int instanceId) {
-        return StreamManager.getFilePathForLoadData(snapshotId, type, instanceId);
+        String root = SnapshotHelper.getSnapshotPath();
+        String fileName = SnapshotHelper.genSnapshotFileName(snapshotId, type, instanceId);
+        return Paths.get(root, fileName);
     }
 
     private static final int LZ4_MAGIC_INT = 0x04224D18; // LZ4文件头标识

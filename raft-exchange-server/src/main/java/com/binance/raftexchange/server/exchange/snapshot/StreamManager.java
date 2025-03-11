@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
-import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -26,11 +25,6 @@ public class StreamManager {
      * 用于存储PipedInputStream，注意"build -> get -> close"的调用顺序
      */
     private static final Map<StoreId, BlockingQueue<PipedInputStream>> storeInputStream = new ConcurrentHashMap<>();
-
-    /**
-     * 用于存储恢复数据的文件路径
-     */
-    private static final Map<StoreId, BlockingQueue<Path>> storeLoadFile = new ConcurrentHashMap<>();
 
     private StreamManager() {}
 
@@ -72,26 +66,6 @@ public class StreamManager {
                 LOG.warn("Failed to close PipedInputStream", e);
             }
         }
-    }
-
-    public static Path getFilePathForLoadData(long snapshotId, SerializedModuleType type, int shardId) {
-        StoreId storeId = new StoreId(snapshotId, type, shardId);
-        BlockingQueue<Path> queue = storeLoadFile.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
-        return queue.peek();
-    }
-
-    public static void saveFilePathForLoadData(long snapshotId, SerializedModuleType type, int shardId, Path path) {
-        StoreId storeId = new StoreId(snapshotId, type, shardId);
-        BlockingQueue<Path> queue = storeLoadFile.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
-        if (!queue.isEmpty()) {
-            throw new IllegalStateException("Another FilePath is already present, storeId: " + storeId);
-        }
-        queue.add(path);
-    }
-
-    public static void clearFilePathForLoadData(long snapshotId, SerializedModuleType type, int shardId) {
-        StoreId storeId = new StoreId(snapshotId, type, shardId);
-        storeLoadFile.remove(storeId);
     }
 
     /**

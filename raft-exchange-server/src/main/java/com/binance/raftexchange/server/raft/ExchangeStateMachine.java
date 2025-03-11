@@ -12,6 +12,7 @@ import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
 import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiPersistState;
+import exchange.core2.core.common.api.ApiRecoverState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -127,16 +128,18 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             LOG.warn("Leader is not supposed to load snapshot");
             return false;
         }
-        String root = reader.getPath();
+        SnapshotHelper.setSnapshotPath(reader.getPath());
         Set<String> files = reader.listFiles();
         if (!snapshotHelper.checkSnapshotIntegrity(files)) {
             LOG.error("Snapshot shard count mismatch! Update PerformanceConfiguration.DEFAULT config to match snapshot files or delete existing snapshot files.");
             return false;
         }
         try {
-            long snapshotId = snapshotHelper.loadSnapshotPath(files, root);
-
-//            ExchangeApiInstance.snapshotStart(snapshotId);
+            // 触发exchange的恢复快照
+            long snapshotId = SnapshotHelper.getSnapshotId(files);
+            ExchangeApi api = ExchangeApiInstance.exchangeApi();
+            ApiRecoverState apiRecoverState = ApiRecoverState.builder().snapshotId(snapshotId).build();
+            api.submitCommand(apiRecoverState);
         } catch (Exception e) {
             LOG.error("Failed to load snapshot", e);
             return false;
