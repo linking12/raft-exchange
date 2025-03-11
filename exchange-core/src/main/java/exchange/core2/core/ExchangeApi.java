@@ -99,6 +99,9 @@ public final class ExchangeApi {
         } else if (cmd instanceof ApiPersistState) {
             publishPersistCmd((ApiPersistState) cmd, (seq1, seq2) -> {
             });
+        } else if (cmd instanceof ApiRecoverState) {
+            publishRecoverCmd((ApiRecoverState) cmd, (seq1, seq2) -> {
+            });
         } else if (cmd instanceof ApiReset) {
             ringBuffer.publishEvent(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
@@ -403,6 +406,10 @@ public final class ExchangeApi {
         }
     }
 
+    private void publishRecoverCmd(final ApiRecoverState api,
+        final LongLongConsumer seqConsumer) {
+        
+    }
     private void publishPersistCmd(final ApiPersistState api,
                                    final LongLongConsumer seqConsumer) {
 
