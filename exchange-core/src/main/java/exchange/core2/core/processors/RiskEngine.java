@@ -66,7 +66,7 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 @Getter
 public final class RiskEngine implements WriteBytesMarshallable {
 
-    // state
+    // 这些都是有状态的字段 state
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private UserProfileService userProfileService;
     private BinaryCommandsProcessor binaryCommandsProcessor;
@@ -76,22 +76,20 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private IntLongHashMap suspends;
     
     
+    // 无状态的配置字段
     private final SharedPool sharedPool;
     private final ObjectsPool objectsPool;
     private final FundEventsHelper eventsHelper;
     // sharding by symbolId
     private final int shardId;
     private final long shardMask;
-
     private final String exchangeId; // TODO validate
-
     private final boolean cfgIgnoreRiskProcessing;
     private final boolean cfgMarginTradingEnabled;
-
     private final ISerializationProcessor serializationProcessor;
-
     private final boolean logDebug;
-    private final ReportsQueriesConfiguration reportsQueriesConfiguration;
+    private ReportsQueriesConfiguration reportsQueriesConfiguration;
+   
 
     public RiskEngine(final int shardId,
                       final long numShards,
@@ -112,24 +110,68 @@ public final class RiskEngine implements WriteBytesMarshallable {
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.logDebug = exchangeConfiguration.getLoggingCfg().getLoggingLevels().contains(LoggingConfiguration.LoggingLevel.LOGGING_RISK_DEBUG);
+        final OrdersProcessingConfiguration ordersProcCfg = exchangeConfiguration.getOrdersProcessingCfg();
+        this.cfgIgnoreRiskProcessing = ordersProcCfg.getRiskProcessingMode() == OrdersProcessingConfiguration.RiskProcessingMode.NO_RISK_PROCESSING;
+        this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
+        this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
+        this.initState();
+    }
+    
+    private void initState() {
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
         this.userProfileService = new UserProfileService();
         this.binaryCommandsProcessor = new BinaryCommandsProcessor(
-                this::handleBinaryMessage,
-                this::handleReportQuery,
-                sharedPool,
-                exchangeConfiguration.getReportsQueriesCfg(),
-                shardId);
-        this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
+            this::handleBinaryMessage,
+            this::handleReportQuery,
+            sharedPool, 
+            reportsQueriesConfiguration, 
+            shardId);
         this.lastPriceCache = new IntObjectHashMap<>();
         this.fees = new IntLongHashMap();
         this.adjustments = new IntLongHashMap();
         this.suspends = new IntLongHashMap();
-        final OrdersProcessingConfiguration ordersProcCfg = exchangeConfiguration.getOrdersProcessingCfg();
-        this.cfgIgnoreRiskProcessing = ordersProcCfg.getRiskProcessingMode() == OrdersProcessingConfiguration.RiskProcessingMode.NO_RISK_PROCESSING;
-        this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
     }
 
+    
+    private void recoverStateBySnapshot(long snapshotId) {
+        final State state = serializationProcessor.loadData(snapshotId,
+            ISerializationProcessor.SerializedModuleType.RISK_ENGINE, shardId, bytesIn -> {
+                if (shardId != bytesIn.readInt()) {
+                    throw new IllegalStateException("wrong shardId");
+                }
+                if (shardMask != bytesIn.readLong()) {
+                    throw new IllegalStateException("wrong shardMask");
+                }
+                final SymbolSpecificationProvider symbolSpecificationProvider =
+                    new SymbolSpecificationProvider(bytesIn);
+                final UserProfileService userProfileService = new UserProfileService(bytesIn);
+                final BinaryCommandsProcessor binaryCommandsProcessor =
+                    new BinaryCommandsProcessor(
+                        this::handleBinaryMessage, 
+                        this::handleReportQuery, 
+                        sharedPool,
+                        reportsQueriesConfiguration, 
+                        bytesIn, 
+                        shardId);
+                final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache =
+                    SerializationUtils.readIntHashMap(bytesIn, LastPriceCacheRecord::new);
+                final IntLongHashMap fees = SerializationUtils.readIntLongHashMap(bytesIn);
+                final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
+                final IntLongHashMap suspends = SerializationUtils.readIntLongHashMap(bytesIn);
+                return new State(symbolSpecificationProvider, userProfileService, binaryCommandsProcessor,
+                    lastPriceCache, fees, adjustments, suspends);
+            });
+        synchronized (this) {
+            this.symbolSpecificationProvider = state.symbolSpecificationProvider;
+            this.userProfileService = state.userProfileService;
+            this.binaryCommandsProcessor = state.binaryCommandsProcessor;
+            this.lastPriceCache = state.lastPriceCache;
+            this.fees = state.fees;
+            this.adjustments = state.adjustments;
+            this.suspends = state.suspends;
+        }
+    }
+    
     @ToString
     public static class LastPriceCacheRecord implements BytesMarshallable, StateHash {
         public long askPrice = Long.MAX_VALUE;
@@ -269,47 +311,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 UnsafeUtils.setResultVolatile(cmd, isSuccess, CommandResultCode.SUCCESS, CommandResultCode.STATE_PERSIST_RISK_ENGINE_FAILED);
                 return false;
             case RECOVER_STATE_RISK:
-                recoverState(cmd.orderId);
+                recoverStateBySnapshot(cmd.orderId);
                 UnsafeUtils.setResultVolatile(cmd, true, CommandResultCode.SUCCESS, CommandResultCode.STATE_RECOVER_RISK_ENGINE_FAILED);
                 return false;
         }
         return false;
     }
-    
-    private void recoverState(long snapshotId) {
-        final State state = serializationProcessor.loadData(snapshotId,
-            ISerializationProcessor.SerializedModuleType.RISK_ENGINE, shardId, bytesIn -> {
-                if (shardId != bytesIn.readInt()) {
-                    throw new IllegalStateException("wrong shardId");
-                }
-                if (shardMask != bytesIn.readLong()) {
-                    throw new IllegalStateException("wrong shardMask");
-                }
-                final SymbolSpecificationProvider symbolSpecificationProvider = new SymbolSpecificationProvider(bytesIn);
-                final UserProfileService userProfileService = new UserProfileService(bytesIn);
-                final BinaryCommandsProcessor binaryCommandsProcessor = new BinaryCommandsProcessor(
-                      this::handleBinaryMessage,
-                      this::handleReportQuery,
-                      sharedPool,  
-                      reportsQueriesConfiguration,
-                      bytesIn,
-                      shardId);
-                final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache = SerializationUtils.readIntHashMap(bytesIn, LastPriceCacheRecord::new);
-                final IntLongHashMap fees = SerializationUtils.readIntLongHashMap(bytesIn);
-                final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
-                final IntLongHashMap suspends = SerializationUtils.readIntLongHashMap(bytesIn);
-                return new State(symbolSpecificationProvider, userProfileService, binaryCommandsProcessor,
-                    lastPriceCache, fees, adjustments, suspends);
-            });
-        this.symbolSpecificationProvider = state.symbolSpecificationProvider;
-        this.userProfileService = state.userProfileService;
-        this.binaryCommandsProcessor = state.binaryCommandsProcessor;
-        this.lastPriceCache = state.lastPriceCache;
-        this.fees = state.fees;
-        this.adjustments = state.adjustments;
-        this.suspends = state.suspends;
-    }
-
 
     private CommandResultCode adjustBalance(long uid, int currency, long amountDiff, long fundingTransactionId, BalanceAdjustmentType adjustmentType) {
         final CommandResultCode res = userProfileService.balanceAdjustment(uid, currency, amountDiff, fundingTransactionId);
