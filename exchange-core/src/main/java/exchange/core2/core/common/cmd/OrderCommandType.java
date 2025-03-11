@@ -40,6 +40,9 @@ public enum OrderCommandType {
 
     PERSIST_STATE_MATCHING((byte) 110, true),
     PERSIST_STATE_RISK((byte) 111, true),
+    RECOVER_STATE_MATCHING((byte) 112, true),
+    RECOVER_STATE_RISK((byte) 113, true),
+    
 
     GROUPING_CONTROL((byte) 118, false),
     NOP((byte) 120, false),

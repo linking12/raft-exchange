@@ -409,6 +409,9 @@ public final class ExchangeApi {
     private void publishRecoverCmd(final ApiRecoverState api,
         final LongLongConsumer seqConsumer) {
         
+        /**
+         * @TODO  添加loadData的功能
+         */
     }
     private void publishPersistCmd(final ApiPersistState api,
                                    final LongLongConsumer seqConsumer) {
