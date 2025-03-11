@@ -15,8 +15,6 @@
  */
 package exchange.core2.core.processors;
 
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Objects;
 import java.util.Optional;
@@ -47,7 +45,7 @@ import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.LoggingConfiguration;
 import exchange.core2.core.common.config.OrdersProcessingConfiguration;
-import exchange.core2.core.processors.journaling.DiskSerializationProcessorConfiguration;
+import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
@@ -81,13 +79,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final SharedPool sharedPool;
     private final ObjectsPool objectsPool;
     private final FundEventsHelper eventsHelper;
-    private final ExchangeConfiguration exchangeConfiguration;
     // sharding by symbolId
     private final int shardId;
     private final long shardMask;
 
     private final String exchangeId; // TODO validate
-    private final Path folder;
 
     private final boolean cfgIgnoreRiskProcessing;
     private final boolean cfgMarginTradingEnabled;
@@ -95,6 +91,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final ISerializationProcessor serializationProcessor;
 
     private final boolean logDebug;
+    private final ReportsQueriesConfiguration reportsQueriesConfiguration;
 
     public RiskEngine(final int shardId,
                       final long numShards,
@@ -104,41 +101,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (Long.bitCount(numShards) != 1) {
             throw new IllegalArgumentException("Invalid number of shards " + numShards + " - must be power of 2");
         }
-
         this.exchangeId = exchangeConfiguration.getInitStateCfg().getExchangeId();
-        this.folder = Paths.get(DiskSerializationProcessorConfiguration.DEFAULT_FOLDER);
-
         this.shardId = shardId;
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
-        this.exchangeConfiguration = exchangeConfiguration;
         this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventPool);
-        
-        // initialize object pools // TODO move to perf config
+        // initialize object pools
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
-
         this.logDebug = exchangeConfiguration.getLoggingCfg().getLoggingLevels().contains(LoggingConfiguration.LoggingLevel.LOGGING_RISK_DEBUG);
-
-//        final Path SnapshotPath = serializationProcessor.resolveSnapshotPath(exchangeConfiguration.getInitStateCfg().getSnapshotId(), ISerializationProcessor.SerializedModuleType.RISK_ENGINE, shardId);
-//        if (exchangeConfiguration.getInitStateCfg().fromSnapshot() && Files.exists(SnapshotPath)) {
-//            recoverState(exchangeConfiguration.getInitStateCfg().getSnapshotId());
-//        } else {
-//            this.symbolSpecificationProvider = new SymbolSpecificationProvider();
-//            this.userProfileService = new UserProfileService();
-//            this.binaryCommandsProcessor = new BinaryCommandsProcessor(
-//                    this::handleBinaryMessage,
-//                    this::handleReportQuery,
-//                    sharedPool,
-//                    exchangeConfiguration.getReportsQueriesCfg(),
-//                    shardId);
-//            this.lastPriceCache = new IntObjectHashMap<>();
-//            this.fees = new IntLongHashMap();
-//            this.adjustments = new IntLongHashMap();
-//            this.suspends = new IntLongHashMap();
-//        }
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
         this.userProfileService = new UserProfileService();
         this.binaryCommandsProcessor = new BinaryCommandsProcessor(
@@ -147,6 +120,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 sharedPool,
                 exchangeConfiguration.getReportsQueriesCfg(),
                 shardId);
+        this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.lastPriceCache = new IntObjectHashMap<>();
         this.fees = new IntLongHashMap();
         this.adjustments = new IntLongHashMap();
@@ -311,16 +285,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (shardMask != bytesIn.readLong()) {
                     throw new IllegalStateException("wrong shardMask");
                 }
-                final SymbolSpecificationProvider symbolSpecificationProvider =
-                    new SymbolSpecificationProvider(bytesIn);
+                final SymbolSpecificationProvider symbolSpecificationProvider = new SymbolSpecificationProvider(bytesIn);
                 final UserProfileService userProfileService = new UserProfileService(bytesIn);
                 final BinaryCommandsProcessor binaryCommandsProcessor = new BinaryCommandsProcessor(
-                    this::handleBinaryMessage,
-                    this::handleReportQuery,
-                    sharedPool,
-                    exchangeConfiguration.getReportsQueriesCfg(),
-                    bytesIn,
-                    shardId);
+                      this::handleBinaryMessage,
+                      this::handleReportQuery,
+                      sharedPool,  
+                      reportsQueriesConfiguration,
+                      bytesIn,
+                      shardId);
                 final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache = SerializationUtils.readIntHashMap(bytesIn, LastPriceCacheRecord::new);
                 final IntLongHashMap fees = SerializationUtils.readIntLongHashMap(bytesIn);
                 final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
