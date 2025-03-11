@@ -24,6 +24,7 @@ import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.journaling.SnapshotDescriptor;
 import net.jpountz.lz4.LZ4Compressor;
+import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.lz4.LZ4FrameInputStream;
 import net.jpountz.lz4.LZ4FrameOutputStream;
 import net.jpountz.xxhash.XXHashFactory;
@@ -37,10 +38,15 @@ import net.openhft.chronicle.wire.WireType;
 public class JRaftAdaptiveSerializationProcessor implements ISerializationProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(JRaftAdaptiveSerializationProcessor.class);
 
-    private boolean enableCompression;
+    private final boolean enableCompression;
     private LZ4Compressor lz4Compressor;
 
-    public JRaftAdaptiveSerializationProcessor(ExchangeConfiguration configuration) {}
+    public JRaftAdaptiveSerializationProcessor(ExchangeConfiguration configuration) {
+        enableCompression = Boolean.parseBoolean(System.getProperty("raft-exchange.snapshot.compression", "false"));
+        if (enableCompression) {
+            lz4Compressor = LZ4Factory.fastestInstance().fastCompressor();
+        }
+    }
 
     @Override
     public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId,
