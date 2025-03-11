@@ -71,6 +71,9 @@ public enum CommandResultCode {
     STATE_PERSIST_RISK_ENGINE_FAILED(-8010),
     STATE_PERSIST_MATCHING_ENGINE_FAILED(-8020),
 
+    STATE_RECOVER_RISK_ENGINE_FAILED(-8021),
+    STATE_RECOVER_MATCHING_ENGINE_FAILED(-8022),
+    
     DROP(-9999);
 
     // codes below -10000 are reserved for gateways

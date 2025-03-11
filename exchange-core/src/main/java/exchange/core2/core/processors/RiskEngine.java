@@ -123,23 +123,35 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         this.logDebug = exchangeConfiguration.getLoggingCfg().getLoggingLevels().contains(LoggingConfiguration.LoggingLevel.LOGGING_RISK_DEBUG);
 
-        final Path SnapshotPath = serializationProcessor.resolveSnapshotPath(exchangeConfiguration.getInitStateCfg().getSnapshotId(), ISerializationProcessor.SerializedModuleType.RISK_ENGINE, shardId);
-        if (exchangeConfiguration.getInitStateCfg().fromSnapshot() && Files.exists(SnapshotPath)) {
-            recoverState(exchangeConfiguration.getInitStateCfg().getSnapshotId());
-        } else {
-            this.symbolSpecificationProvider = new SymbolSpecificationProvider();
-            this.userProfileService = new UserProfileService();
-            this.binaryCommandsProcessor = new BinaryCommandsProcessor(
-                    this::handleBinaryMessage,
-                    this::handleReportQuery,
-                    sharedPool,
-                    exchangeConfiguration.getReportsQueriesCfg(),
-                    shardId);
-            this.lastPriceCache = new IntObjectHashMap<>();
-            this.fees = new IntLongHashMap();
-            this.adjustments = new IntLongHashMap();
-            this.suspends = new IntLongHashMap();
-        }
+//        final Path SnapshotPath = serializationProcessor.resolveSnapshotPath(exchangeConfiguration.getInitStateCfg().getSnapshotId(), ISerializationProcessor.SerializedModuleType.RISK_ENGINE, shardId);
+//        if (exchangeConfiguration.getInitStateCfg().fromSnapshot() && Files.exists(SnapshotPath)) {
+//            recoverState(exchangeConfiguration.getInitStateCfg().getSnapshotId());
+//        } else {
+//            this.symbolSpecificationProvider = new SymbolSpecificationProvider();
+//            this.userProfileService = new UserProfileService();
+//            this.binaryCommandsProcessor = new BinaryCommandsProcessor(
+//                    this::handleBinaryMessage,
+//                    this::handleReportQuery,
+//                    sharedPool,
+//                    exchangeConfiguration.getReportsQueriesCfg(),
+//                    shardId);
+//            this.lastPriceCache = new IntObjectHashMap<>();
+//            this.fees = new IntLongHashMap();
+//            this.adjustments = new IntLongHashMap();
+//            this.suspends = new IntLongHashMap();
+//        }
+        this.symbolSpecificationProvider = new SymbolSpecificationProvider();
+        this.userProfileService = new UserProfileService();
+        this.binaryCommandsProcessor = new BinaryCommandsProcessor(
+                this::handleBinaryMessage,
+                this::handleReportQuery,
+                sharedPool,
+                exchangeConfiguration.getReportsQueriesCfg(),
+                shardId);
+        this.lastPriceCache = new IntObjectHashMap<>();
+        this.fees = new IntLongHashMap();
+        this.adjustments = new IntLongHashMap();
+        this.suspends = new IntLongHashMap();
         final OrdersProcessingConfiguration ordersProcCfg = exchangeConfiguration.getOrdersProcessingCfg();
         this.cfgIgnoreRiskProcessing = ordersProcCfg.getRiskProcessingMode() == OrdersProcessingConfiguration.RiskProcessingMode.NO_RISK_PROCESSING;
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
@@ -285,7 +297,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return false;
             case RECOVER_STATE_RISK:
                 recoverState(cmd.orderId);
-                UnsafeUtils.setResultVolatile(cmd, true, CommandResultCode.SUCCESS, CommandResultCode.STATE_PERSIST_RISK_ENGINE_FAILED);
+                UnsafeUtils.setResultVolatile(cmd, true, CommandResultCode.SUCCESS, CommandResultCode.STATE_RECOVER_RISK_ENGINE_FAILED);
                 return false;
         }
         return false;
