@@ -205,6 +205,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
             UnsafeUtils.setResultVolatile(cmd, isSuccess, CommandResultCode.ACCEPTED, CommandResultCode.STATE_PERSIST_MATCHING_ENGINE_FAILED);
         } else if (command == OrderCommandType.RECOVER_STATE_MATCHING) {
             recoverState(cmd.orderId);
+            UnsafeUtils.setResultVolatile(cmd, true, CommandResultCode.ACCEPTED, CommandResultCode.STATE_RECOVER_MATCHING_ENGINE_FAILED);
         }
 
     }
