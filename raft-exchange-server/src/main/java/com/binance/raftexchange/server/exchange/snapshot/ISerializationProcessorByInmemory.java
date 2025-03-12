@@ -37,13 +37,13 @@ import net.openhft.chronicle.wire.InputStreamToWire;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
 
-public class JRaftAdaptiveSerializationProcessor implements ISerializationProcessor {
-    private static final Logger LOG = LoggerFactory.getLogger(JRaftAdaptiveSerializationProcessor.class);
+public class ISerializationProcessorByInmemory implements ISerializationProcessor {
+    private static final Logger LOG = LoggerFactory.getLogger(ISerializationProcessorByInmemory.class);
 
     private final boolean enableCompression;
     private LZ4Compressor lz4Compressor;
 
-    public JRaftAdaptiveSerializationProcessor(ExchangeConfiguration configuration) {
+    public ISerializationProcessorByInmemory(ExchangeConfiguration configuration) {
         enableCompression = Boolean.parseBoolean(System.getProperty("raft-exchange.snapshot.compression", "false"));
         if (enableCompression) {
             lz4Compressor = LZ4Factory.fastestInstance().fastCompressor();
