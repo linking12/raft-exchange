@@ -15,3 +15,7 @@ service ApiCommandService{
 service ServerNodeService {
   rpc listNodes(com.binance.raftexchange.stubs.request.NodeListCommand) returns (com.binance.raftexchange.stubs.response.NodeList);
 }
+
+service SearchService {
+  rpc searchOrder(com.binance.raftexchange.stubs.request.ApiOrderBookRequest) returns (com.binance.raftexchange.stubs.response.CommandResult);
+}

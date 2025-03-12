@@ -1,10 +1,14 @@
 package com.binance.raftexchange.server.exchange;
 
+import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
 import com.binance.raftexchange.stubs.request.ApiReduceOrder;
+import com.binance.raftexchange.stubs.response.CommandResult;
+
+import java.util.concurrent.CompletableFuture;
 
 public class SyncTradeOrdersApiController extends AbstractApiController {
 
@@ -17,6 +21,14 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
                 .size(grpcApiOrderBookRequest.getSize()).build();
 
         return callExchange(apiOrderBookRequest);
+    }
+
+    public static CompletableFuture<CommandResult> getOrderBookAsync(ApiOrderBookRequest grpcApiOrderBookRequest) throws Exception {
+        exchange.core2.core.common.api.ApiOrderBookRequest apiOrderBookRequest =
+                exchange.core2.core.common.api.ApiOrderBookRequest.builder().symbol(grpcApiOrderBookRequest.getSymbol())
+                        .size(grpcApiOrderBookRequest.getSize()).build();
+        return callExchangeAsync(apiOrderBookRequest)
+                .thenApply(SerializeHelper::orderCommandToResult);
     }
 
     /**

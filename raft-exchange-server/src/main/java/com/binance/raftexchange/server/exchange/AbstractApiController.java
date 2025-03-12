@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.exchange;
 
+import exchange.core2.core.common.cmd.OrderCommand;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,6 +10,8 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
+
+import java.util.concurrent.CompletableFuture;
 
 public abstract class AbstractApiController {
     protected static final Logger LOG = LoggerFactory.getLogger(AbstractApiController.class);
@@ -23,6 +26,11 @@ public abstract class AbstractApiController {
         // 如果这样做会导致我们跟ringBuffer并发地持有一个“已经被归还到ring”的command引用 这样就产生了一个UB
         return api.submitCommandAsyncFullResponse(apiCommand) // submitCommandAsyncFullResponse 跟 非full版本接受的command一致
             .thenApply(SerializeHelper::serializeToCommandResult).get();
+    }
+
+    public static CompletableFuture<OrderCommand> callExchangeAsync(ApiCommand apiCommand) throws Exception {
+        ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        return api.submitCommandAsyncFullResponse(apiCommand); // submitCommandAsyncFullResponse 跟 非full版本接受的command一致
     }
 
     public static byte[] callExchange(ApiPersistState cmd) throws Exception {

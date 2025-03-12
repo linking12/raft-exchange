@@ -9,6 +9,8 @@ import java.util.concurrent.TimeUnit;
 
 import javax.annotation.Nullable;
 
+import com.alipay.sofa.jraft.closure.ReadIndexClosure;
+import com.alipay.sofa.jraft.option.ReadOnlyOption;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +30,7 @@ import com.alipay.sofa.jraft.util.Utils;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
+    private static final byte[] EMPTY_REQUEST_CONTEXT = new byte[0];
     private final RaftClusterDiscovery raftClusterDiscovery;
     private final String raftClusterName;
     private RaftGroupService raftGroupService;
@@ -54,7 +57,9 @@ public class RaftClusterContainer {
         nodeOptions.setLogUri(dataPath + File.separator + "log");
         nodeOptions.setSnapshotUri(dataPath + File.separator + "snapshot");
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
-        nodeOptions.setRaftOptions(new RaftOptions());
+        RaftOptions raftOptions = new RaftOptions();
+        raftOptions.setReadOnlyOptions(ReadOnlyOption.ReadOnlySafe); // 先使用最保守的readIndex优化
+        nodeOptions.setRaftOptions(raftOptions);
         nodeOptions.setInitialConf(conf);
         nodeOptions.setDisableCli(true);
         nodeOptions.setRaftRpcThreadPoolSize(Math.max(Utils.cpus() << 3, 32));// 默认值是6倍cpu，处理raft请求(日志复制、心跳检测、选举)
@@ -93,6 +98,21 @@ public class RaftClusterContainer {
                 node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
+    }
+
+    public CompletableFuture<Long> readFromQuorum() {
+        CompletableFuture<Long> future = new CompletableFuture<>();
+        raftGroupService.getRaftNode().readIndex(EMPTY_REQUEST_CONTEXT, new ReadIndexClosure() {
+            @Override
+            public void run(Status status, long index, byte[] reqCtx) {
+                if (status.isOk()) {
+                    future.complete(index);
+                } else {
+                    future.completeExceptionally(new RuntimeException(status.getErrorMsg()));
+                }
+            }
+        });
+        return future;
     }
 
     private int getGrpcPort(String raftIp) {

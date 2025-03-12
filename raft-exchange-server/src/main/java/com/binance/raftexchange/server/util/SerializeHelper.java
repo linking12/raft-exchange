@@ -62,6 +62,10 @@ public class SerializeHelper {
     }
 
     public static byte[] serializeToCommandResult(OrderCommand result) {
+        return orderCommandToResult(result).toByteArray();
+    }
+
+    public static CommandResult orderCommandToResult(OrderCommand result) {
         //这里产生了一个临时对象 但是我估计可以通过逃逸分析被jit干掉？
         CommandResultCode resultCode = result.resultCode == null ? null : CommandResultCode.forNumber(Math.abs(result.resultCode.getCode()));
         com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
@@ -95,8 +99,7 @@ public class SerializeHelper {
 
         return CommandResult.newBuilder()
                 .setOrderCommand(builder.build())
-                .build()
-                .toByteArray();
+                .build();
     }
 
     private static MatcherTradeEvent toPbObject(exchange.core2.core.common.MatcherTradeEvent matcherTradeEvent) {
