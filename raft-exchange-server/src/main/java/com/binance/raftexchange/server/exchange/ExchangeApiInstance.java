@@ -17,12 +17,10 @@ public class ExchangeApiInstance {
 
     private ExchangeApiInstance() {
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance());
-        SerializationConfiguration serializationCfg = SerializationConfiguration.builder().enableJournaling(false)
-            .serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new).build();
-        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder()
-            .serializationCfg(serializationCfg).build();
-        ExchangeCore exchangeCore =
-            ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
+        SerializationConfiguration serializationCfg =
+            SerializationConfiguration.builder().enableJournaling(false).serializationProcessorFactory(JRaftAdaptiveSerializationProcessor::new).build();
+        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().serializationCfg(serializationCfg).build();
+        ExchangeCore exchangeCore = ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
         exchangeCore.startup();
         exchangeApi = exchangeCore.getApi();
     }

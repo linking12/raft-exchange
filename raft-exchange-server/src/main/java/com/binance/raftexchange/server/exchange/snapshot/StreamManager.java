@@ -30,8 +30,7 @@ public class StreamManager {
 
     public static OutputStream build(long snapshotId, SerializedModuleType type, int shardId) throws IOException {
         StoreId storeId = new StoreId(snapshotId, type, shardId);
-        BlockingQueue<PipedInputStream> queue =
-            storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
+        BlockingQueue<PipedInputStream> queue = storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
         if (!queue.isEmpty()) {
             throw new IllegalStateException("Another PipedInputStream is already present, storeId: " + storeId);
         }
@@ -42,8 +41,7 @@ public class StreamManager {
 
     public static PipedInputStream get(long snapshotId, SerializedModuleType type, int shardId) {
         StoreId storeId = new StoreId(snapshotId, type, shardId);
-        BlockingQueue<PipedInputStream> queue =
-            storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
+        BlockingQueue<PipedInputStream> queue = storeInputStream.computeIfAbsent(storeId, k -> new ArrayBlockingQueue<>(1));
         try {
             return queue.take();
         } catch (Exception e) {

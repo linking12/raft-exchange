@@ -17,13 +17,11 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         Map<Integer, CoreSymbolSpecification> symbolsMap = grpcBatchAddSymbolsCommand.getSymbolsMap();
         Collection<exchange.core2.core.common.CoreSymbolSpecification> coreSymbols = new ArrayList<>(symbolsMap.size());
         for (CoreSymbolSpecification grpcSymbol : symbolsMap.values()) {
-            exchange.core2.core.common.CoreSymbolSpecification coreSymbol =
-                exchange.core2.core.common.CoreSymbolSpecification.builder().symbolId(grpcSymbol.getSymbolId())
-                    .type(SymbolType.of(grpcSymbol.getType().getNumber())).baseCurrency(grpcSymbol.getBaseCurrency())
-                    .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK())
-                    .quoteScaleK(grpcSymbol.getQuoteScaleK()).takerFee(grpcSymbol.getTakerFee())
-                    .makerFee(grpcSymbol.getMakerFee()).marginBuy(grpcSymbol.getMarginBuy())
-                    .marginSell(grpcSymbol.getMarginSell()).build();
+            exchange.core2.core.common.CoreSymbolSpecification coreSymbol = exchange.core2.core.common.CoreSymbolSpecification.builder()
+                .symbolId(grpcSymbol.getSymbolId()).type(SymbolType.of(grpcSymbol.getType().getNumber())).baseCurrency(grpcSymbol.getBaseCurrency())
+                .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK()).quoteScaleK(grpcSymbol.getQuoteScaleK())
+                .takerFee(grpcSymbol.getTakerFee()).makerFee(grpcSymbol.getMakerFee()).marginBuy(grpcSymbol.getMarginBuy())
+                .marginSell(grpcSymbol.getMarginSell()).build();
             coreSymbols.add(coreSymbol);
         }
         exchange.core2.core.common.api.binary.BatchAddSymbolsCommand batchAddSymbolsCommand =

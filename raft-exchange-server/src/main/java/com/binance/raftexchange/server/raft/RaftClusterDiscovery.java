@@ -60,17 +60,14 @@ public class RaftClusterDiscovery {
             if (!Objects.equals(this.lastAppsHashCode, appsHashCode)) {
                 List<InstanceInfo> clusterInstanceList = eurekaClient.getApplication(raftClusterName).getInstances();
                 List<String> clusterHostAndPort = clusterInstanceList.stream()
-                    .filter(instance -> (instance.getMetadata().containsKey(RAFT_PORT) && StringUtils
-                        .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
-                    .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT)))
-                    .collect(Collectors.toList());
+                    .filter(instance -> (instance.getMetadata().containsKey(RAFT_PORT)
+                        && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
+                    .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT))).collect(Collectors.toList());
                 this.raftGrpcWorkerHostAndPorts = clusterInstanceList.stream()
-                    .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT) && StringUtils
-                        .equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
-                    .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT)))
-                    .collect(Collectors.toList());
-                if (this.raftClusterHostAndPorts == null
-                    || !CollectionUtils.isEqualCollection(this.raftClusterHostAndPorts, clusterHostAndPort)) {
+                    .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT)
+                        && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
+                    .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT))).collect(Collectors.toList());
+                if (this.raftClusterHostAndPorts == null || !CollectionUtils.isEqualCollection(this.raftClusterHostAndPorts, clusterHostAndPort)) {
                     this.raftClusterHostAndPorts = clusterHostAndPort;
                     LOGGER.info("update last clusters to {}", this.raftClusterHostAndPorts);
                     this.lastAppsHashCode = appsHashCode;

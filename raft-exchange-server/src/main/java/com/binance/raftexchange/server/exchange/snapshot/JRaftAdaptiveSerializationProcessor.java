@@ -51,15 +51,11 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
     }
 
     @Override
-    public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId,
-        WriteBytesMarshallable obj) {
+    public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId, WriteBytesMarshallable obj) {
         LOG.debug("Writing state into memory stream... (Compression: {})", enableCompression);
         try (OutputStream bos = new BufferedOutputStream(StreamManager.build(snapshotId, type, instanceId));
-            OutputStream os =
-                enableCompression
-                    ? new LZ4FrameOutputStream(bos, LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB, -1, lz4Compressor,
-                        XXHashFactory.fastestInstance().hash32(), LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE)
-                    : bos;
+            OutputStream os = enableCompression ? new LZ4FrameOutputStream(bos, LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB, -1, lz4Compressor,
+                XXHashFactory.fastestInstance().hash32(), LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE) : bos;
             WireToOutputStream wireToOutputStream = new WireToOutputStream(WireType.RAW, os)) {
             Wire wire = wireToOutputStream.getWire();
             wire.writeBytes(obj);
@@ -77,8 +73,8 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
     public <T> T loadData(long snapshotId, SerializedModuleType type, int instanceId, Function<BytesIn, T> initFunc) {
         Path path = resolveSnapshotPath(snapshotId, type, instanceId);
         LOG.debug("Loading state from {}", path);
-        try (final InputStream is = Files.newInputStream(path, StandardOpenOption.READ);
-            final InputStream bis = new BufferedInputStream(is); final InputStream in = autoDetectInputStream(bis)) {
+        try (final InputStream is = Files.newInputStream(path, StandardOpenOption.READ); final InputStream bis = new BufferedInputStream(is);
+            final InputStream in = autoDetectInputStream(bis)) {
             final InputStreamToWire inputStreamToWire = new InputStreamToWire(WireType.RAW, in);
             final Wire wire = inputStreamToWire.readOne();
             LOG.debug("start de-serializing...");
@@ -117,8 +113,7 @@ public class JRaftAdaptiveSerializationProcessor implements ISerializationProces
     }
 
     @Override
-    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration,
-        ExchangeApi exchangeApi) {
+    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {
 
     }
 

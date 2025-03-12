@@ -1,14 +1,5 @@
 package com.binance.raftexchange.server.raft;
 
-import com.binance.raftexchange.server.exchange.snapshot.StreamManager;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import exchange.core2.core.common.config.PerformanceConfiguration;
-import exchange.core2.core.processors.journaling.ISerializationProcessor.SerializedModuleType;
-import lombok.Getter;
-import lombok.Setter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -32,6 +23,15 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.binance.raftexchange.server.exchange.snapshot.StreamManager;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
+import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.processors.journaling.ISerializationProcessor.SerializedModuleType;
+
 public class SnapshotHelper {
     private static final Logger LOG = LoggerFactory.getLogger(SnapshotHelper.class);
     private static String snapshotPath;
@@ -43,15 +43,13 @@ public class SnapshotHelper {
         matchingEnginesNum = PerformanceConfiguration.DEFAULT.getMatchingEnginesNum();
         riskEnginesNum = PerformanceConfiguration.DEFAULT.getRiskEnginesNum();
         int maxThreads = matchingEnginesNum + riskEnginesNum;
-        snapshotExecutor = new ThreadPoolExecutor(0, maxThreads, 60L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(maxThreads),
-                new ThreadFactoryBuilder().setNameFormat("SnapshotHelper-%d").setDaemon(true).build(),
-                new ThreadPoolExecutor.CallerRunsPolicy()
-        );
+        snapshotExecutor = new ThreadPoolExecutor(0, maxThreads, 60L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(maxThreads),
+            new ThreadFactoryBuilder().setNameFormat("SnapshotHelper-%d").setDaemon(true).build(), new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
     /**
      * 校验snp的分区文件数和当前的shard数是否一致
+     * 
      * @param files
      * @return
      */
@@ -69,23 +67,19 @@ public class SnapshotHelper {
     }
 
     private List<CompletableFuture<String>> saveSnapshot(long snapshotId, SerializedModuleType type, int shardNum, String root) {
-        return IntStream.range(0, shardNum)
-                .mapToObj(shardId -> CompletableFuture.supplyAsync(() -> {
-                    String fileName = genSnapshotFileName(snapshotId, type, shardId);
-                    Path path = Paths.get(root, fileName);
-                    try {
-                        PipedInputStream pipedInputStream = StreamManager.get(snapshotId, type, shardId);
-                        writeStreamToFile(pipedInputStream, path);
-                        StreamManager.close(snapshotId, type, shardId);
-                        return fileName;
-                    } catch (Exception e) {
-                        throw new RuntimeException("saveSnapshot file " + path + " failed", e);
-                    }
-                }, snapshotExecutor))
-                .collect(Collectors.toList());
+        return IntStream.range(0, shardNum).mapToObj(shardId -> CompletableFuture.supplyAsync(() -> {
+            String fileName = genSnapshotFileName(snapshotId, type, shardId);
+            Path path = Paths.get(root, fileName);
+            try {
+                PipedInputStream pipedInputStream = StreamManager.get(snapshotId, type, shardId);
+                writeStreamToFile(pipedInputStream, path);
+                StreamManager.close(snapshotId, type, shardId);
+                return fileName;
+            } catch (Exception e) {
+                throw new RuntimeException("saveSnapshot file " + path + " failed", e);
+            }
+        }, snapshotExecutor)).collect(Collectors.toList());
     }
-
-
 
     public static long getSnapshotId(Set<String> files) {
         for (String file : files) {
@@ -103,8 +97,8 @@ public class SnapshotHelper {
      * snapshot_20250307105705748_RE_0.dat
      *
      * @param snapshotId 时间
-     * @param type       ME/RE
-     * @param shardId    分区
+     * @param type ME/RE
+     * @param shardId 分区
      * @return
      */
     public static String genSnapshotFileName(long snapshotId, SerializedModuleType type, int shardId) {
@@ -113,7 +107,7 @@ public class SnapshotHelper {
 
     private static void writeStreamToFile(InputStream inputStream, Path filePath) {
         try (OutputStream fileOutputStream = Files.newOutputStream(filePath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-             BufferedOutputStream bos = new BufferedOutputStream(fileOutputStream)) {
+            BufferedOutputStream bos = new BufferedOutputStream(fileOutputStream)) {
             byte[] buffer = new byte[8192]; // 8K缓冲区
             int bytesRead;
             while ((bytesRead = inputStream.read(buffer)) != -1) {
@@ -140,10 +134,10 @@ public class SnapshotHelper {
             }).forEach(file -> {
                 try {
                     Files.delete(file);
-                } catch (IOException ignored) {//ignore
+                } catch (IOException ignored) {// ignore
                 }
             });
-        } catch (IOException ignored) {//ignore
+        } catch (IOException ignored) {// ignore
         }
     }
 

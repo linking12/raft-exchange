@@ -57,7 +57,7 @@ public class RaftClusterContainer {
         nodeOptions.setRaftOptions(new RaftOptions());
         nodeOptions.setInitialConf(conf);
 
-        //test
+        // test
         nodeOptions.setSnapshotIntervalSecs(30);
 
         nodeOptions.setDisableCli(true);
@@ -93,8 +93,7 @@ public class RaftClusterContainer {
         List<RaftNode> raftNodes = new ArrayList<>();
         for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
             PeerId peerId = node.getNodeId().getPeerId();
-            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()),
-                node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
     }

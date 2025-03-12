@@ -131,7 +131,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         SnapshotHelper.setSnapshotPath(reader.getPath());
         Set<String> files = reader.listFiles();
         if (!snapshotHelper.checkSnapshotIntegrity(files)) {
-            LOG.error("Snapshot shard count mismatch! Update PerformanceConfiguration.DEFAULT config to match snapshot files or delete existing snapshot files.");
+            LOG.error(
+                "Snapshot shard count mismatch! Update PerformanceConfiguration.DEFAULT config to match snapshot files or delete existing snapshot files.");
             return false;
         }
         try {
@@ -169,7 +170,6 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         }
         done.run(Status.OK());
     }
-
 
     @Override
     public void onLeaderStart(long term) {

@@ -45,16 +45,13 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        TradeEventPB.Builder builder =
-            TradeEventPB.newBuilder().setSymbol(tradeEvent.getSymbol()).setTotalVolume(tradeEvent.getTotalVolume())
-                .setTakerOrderId(tradeEvent.getTakerOrderId()).setTakerUid(tradeEvent.getTakerUid())
-                .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode()))
-                .setTimestamp(tradeEvent.getTimestamp());
+        TradeEventPB.Builder builder = TradeEventPB.newBuilder().setSymbol(tradeEvent.getSymbol()).setTotalVolume(tradeEvent.getTotalVolume())
+            .setTakerOrderId(tradeEvent.getTakerOrderId()).setTakerUid(tradeEvent.getTakerUid())
+            .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode())).setTimestamp(tradeEvent.getTimestamp());
         if (tradeEvent.getTrades() != null) {
             for (Trade trade : tradeEvent.getTrades()) {
-                builder = builder.addTrades(TradePB.newBuilder().setMakerOrderId(trade.getMakerOrderId())
-                    .setMakerUid(trade.getMakerUid()).setMakerOrderCompleted(trade.isMakerOrderCompleted())
-                    .setPrice(trade.getPrice()).setVolume(trade.getVolume()).build());
+                builder = builder.addTrades(TradePB.newBuilder().setMakerOrderId(trade.getMakerOrderId()).setMakerUid(trade.getMakerUid())
+                    .setMakerOrderCompleted(trade.isMakerOrderCompleted()).setPrice(trade.getPrice()).setVolume(trade.getVolume()).build());
             }
         }
         byte[] pbData = builder.build().toByteArray();
@@ -66,10 +63,9 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        byte[] pbData = ReduceEventPB.newBuilder().setSymbol(reduceEvent.getSymbol())
-            .setReducedVolume(reduceEvent.getReducedVolume()).setOrderCompleted(reduceEvent.isOrderCompleted())
-            .setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId()).setUid(reduceEvent.getOrderId())
-            .setTimestamp(reduceEvent.getTimestamp()).build().toByteArray();
+        byte[] pbData = ReduceEventPB.newBuilder().setSymbol(reduceEvent.getSymbol()).setReducedVolume(reduceEvent.getReducedVolume())
+            .setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId())
+            .setUid(reduceEvent.getOrderId()).setTimestamp(reduceEvent.getTimestamp()).build().toByteArray();
         sender.send(new ProducerRecord<>(topic, reduceEvent.uid, pbData));
     }
 
@@ -78,19 +74,18 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        OrderBookPB.Builder builder =
-            OrderBookPB.newBuilder().setSymbol(orderBook.getSymbol()).setTimestamp(orderBook.getTimestamp());
+        OrderBookPB.Builder builder = OrderBookPB.newBuilder().setSymbol(orderBook.getSymbol()).setTimestamp(orderBook.getTimestamp());
         if (orderBook.getAsks() != null) {
             for (OrderBookRecord ask : orderBook.getAsks()) {
-                builder = builder.addAsks(OrderBookRecordPB.newBuilder().setPrice(ask.getPrice())
-                    .setVolume(ask.getVolume()).setOrders(ask.getOrders()).build());
+                builder =
+                    builder.addAsks(OrderBookRecordPB.newBuilder().setPrice(ask.getPrice()).setVolume(ask.getVolume()).setOrders(ask.getOrders()).build());
             }
         }
 
         if (orderBook.getBids() != null) {
             for (OrderBookRecord bid : orderBook.getBids()) {
-                builder = builder.addBids(OrderBookRecordPB.newBuilder().setPrice(bid.getPrice())
-                    .setVolume(bid.getVolume()).setOrders(bid.getOrders()).build());
+                builder =
+                    builder.addBids(OrderBookRecordPB.newBuilder().setPrice(bid.getPrice()).setVolume(bid.getVolume()).setOrders(bid.getOrders()).build());
             }
         }
 
@@ -104,9 +99,8 @@ public class IEventsHandlerByKafka implements IEventsHandler {
             return;
         }
 
-        byte[] pbData = FundsEventPB.newBuilder().setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid())
-            .setCurrency(fundsEvent.getCurrency()).setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLoked())
-            .setPositionDelta(fundsEvent.getPositionDelta()).build().toByteArray();
+        byte[] pbData = FundsEventPB.newBuilder().setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
+            .setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLoked()).setPositionDelta(fundsEvent.getPositionDelta()).build().toByteArray();
         sender.send(new ProducerRecord<>(topic, fundsEvent.uid, pbData));
     }
 
@@ -119,8 +113,7 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         private AtomicInteger counter = new AtomicInteger(0); //
 
         @Override
-        public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes,
-            Cluster cluster) {
+        public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
             List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
             int numPartitions = partitions.size();
             Long uid = (Long)key;
