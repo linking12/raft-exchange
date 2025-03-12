@@ -114,7 +114,7 @@ public class ISerializationProcessorInmemory implements ISerializationProcessor 
 
     @Override
     public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {
-        throw new UnsupportedOperationException();
+
     }
 
     @Override
