@@ -99,6 +99,9 @@ public final class ExchangeApi {
         } else if (cmd instanceof ApiPersistState) {
             publishPersistCmd((ApiPersistState) cmd, (seq1, seq2) -> {
             });
+        } else if (cmd instanceof ApiRecoverState) {
+            publishRecoverCmd((ApiRecoverState) cmd, (seq1, seq2) -> {
+            });
         } else if (cmd instanceof ApiReset) {
             ringBuffer.publishEvent(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
@@ -403,6 +406,35 @@ public final class ExchangeApi {
         }
     }
 
+    private void publishRecoverCmd(final ApiRecoverState api,
+        final LongLongConsumer seqConsumer) {
+        long secondSeq = ringBuffer.next(2);
+        long firstSeq = secondSeq - 1;
+        try {
+            long snapshotId = api.snapshotId;
+            final OrderCommand cmdMatching = ringBuffer.get(firstSeq);
+            cmdMatching.command = OrderCommandType.RECOVER_STATE_MATCHING;
+            cmdMatching.orderId = snapshotId;
+            cmdMatching.symbol = -1;
+            cmdMatching.uid = 0;
+            cmdMatching.price = 0;
+            cmdMatching.timestamp = api.timestamp;
+            cmdMatching.resultCode = CommandResultCode.NEW;
+
+
+            final OrderCommand cmdRisk = ringBuffer.get(secondSeq);
+            cmdRisk.command = OrderCommandType.RECOVER_STATE_RISK;
+            cmdRisk.orderId = snapshotId;
+            cmdRisk.symbol = -1;
+            cmdRisk.uid = 0;
+            cmdRisk.price = 0;
+            cmdRisk.timestamp = api.timestamp;
+            cmdRisk.resultCode = CommandResultCode.NEW;
+        } finally {
+            seqConsumer.accept(firstSeq, secondSeq);
+            ringBuffer.publish(firstSeq, secondSeq);
+        }
+    }
     private void publishPersistCmd(final ApiPersistState api,
                                    final LongLongConsumer seqConsumer) {
 

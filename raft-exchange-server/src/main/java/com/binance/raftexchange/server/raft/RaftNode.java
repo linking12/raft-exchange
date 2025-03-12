@@ -3,8 +3,7 @@ package com.binance.raftexchange.server.raft;
 import java.util.Objects;
 
 /**
- * 代表了raft层的对象 不要使用grpc的
- * 这里代表了raft真实提供出去的交互接口
+ * 代表了raft层的对象 不要使用grpc的 这里代表了raft真实提供出去的交互接口
  */
 public final class RaftNode {
     private final String host;
@@ -34,9 +33,11 @@ public final class RaftNode {
 
     @Override
     public boolean equals(Object obj) {
-        if (obj == this) return true;
-        if (obj == null || obj.getClass() != this.getClass()) return false;
-        RaftNode that = (RaftNode) obj;
+        if (obj == this)
+            return true;
+        if (obj == null || obj.getClass() != this.getClass())
+            return false;
+        RaftNode that = (RaftNode)obj;
         return Objects.equals(this.host, that.host) && this.port == that.port && Objects.equals(this.nodeType, that.nodeType);
     }
 
@@ -51,7 +52,6 @@ public final class RaftNode {
     }
 
     public enum NodeType {
-        LEADER,
-        FOLLOWER
+        LEADER, FOLLOWER
     }
 }

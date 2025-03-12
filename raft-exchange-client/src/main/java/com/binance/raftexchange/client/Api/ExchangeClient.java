@@ -10,6 +10,7 @@ import com.binance.raftexchange.stubs.response.NodeType;
 import com.binance.raftexchange.stubs.response.ServerNode;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
+import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
@@ -28,7 +29,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-public class ExchangeClient {
+public class ExchangeClient implements AutoCloseable{
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
@@ -42,7 +43,6 @@ public class ExchangeClient {
 
     private final Set<ApiStream> streams = ConcurrentHashMap.newKeySet();
 
-    // todo close考虑关闭
     private final ScheduledFuture flushTimer;
 
     public ExchangeClient(String host, int port) {
@@ -68,8 +68,7 @@ public class ExchangeClient {
     }
 
     private ScheduledFuture flushLeaderNode() {
-        // todo 暂时放长一点
-        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.DAYS);
+        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.MINUTES);
     }
 
     private void flushLeaderNode0() {
@@ -161,5 +160,13 @@ public class ExchangeClient {
             StreamObserver<ApiCommand> apiCommandStreamObserver = apiStub.execApiCommand(stream.toUserObserver());
             stream.replaceInternalObserver(apiCommandStreamObserver);
         }
+    }
+
+    @Override
+    public void close() throws Exception {
+        flushTimer.cancel(false);
+        Channel channel = apiStub.getChannel();
+        ManagedChannel managedChannel = (ManagedChannel) channel;
+        managedChannel.shutdown();
     }
 }

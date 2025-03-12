@@ -56,6 +56,10 @@ public class RaftClusterContainer {
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
         nodeOptions.setRaftOptions(new RaftOptions());
         nodeOptions.setInitialConf(conf);
+
+        // test
+        nodeOptions.setSnapshotIntervalSecs(30);
+
         nodeOptions.setDisableCli(true);
         nodeOptions.setRaftRpcThreadPoolSize(Math.max(Utils.cpus() << 3, 32));// 默认值是6倍cpu，处理raft请求(日志复制、心跳检测、选举)
         raftGroupService = new RaftGroupService(raftClusterName, selfPeer, nodeOptions);
@@ -89,8 +93,7 @@ public class RaftClusterContainer {
         List<RaftNode> raftNodes = new ArrayList<>();
         for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
             PeerId peerId = node.getNodeId().getPeerId();
-            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()),
-                node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
     }
