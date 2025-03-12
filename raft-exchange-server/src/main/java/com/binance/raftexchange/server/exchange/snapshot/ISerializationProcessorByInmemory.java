@@ -89,32 +89,32 @@ public class ISerializationProcessorByInmemory implements ISerializationProcesso
 
     @Override
     public void writeToJournal(OrderCommand cmd, long dSeq, boolean eob) throws IOException {
-
+        throw new UnsupportedOperationException();
     }
 
     @Override
     public void enableJournaling(long afterSeq, ExchangeApi api) {
-
+        throw new UnsupportedOperationException();
     }
 
     @Override
     public NavigableMap<Long, SnapshotDescriptor> findAllSnapshotPoints() {
-        return null;
+        throw new UnsupportedOperationException();
     }
 
     @Override
     public void replayJournalStep(long snapshotId, long seqFrom, long seqTo, ExchangeApi api) {
-
+        throw new UnsupportedOperationException();
     }
 
     @Override
     public long replayJournalFull(InitialStateConfiguration initialStateConfiguration, ExchangeApi api) {
-        return 0;
+        throw new UnsupportedOperationException();
     }
 
     @Override
     public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {
-
+        throw new UnsupportedOperationException();
     }
 
     @Override
