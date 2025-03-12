@@ -31,9 +31,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
-
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
-
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
     private final SnapshotHelper snapshotHelper = new SnapshotHelper();
 
@@ -135,7 +133,6 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 "Snapshot shard count mismatch! Update PerformanceConfiguration.DEFAULT config to match snapshot files or delete existing snapshot files.");
             return false;
         }
-        // 触发exchange的恢复快照
         long snapshotId = SnapshotHelper.getSnapshotId(files);
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
         ApiRecoverState apiRecoverState = ApiRecoverState.builder().snapshotId(snapshotId).build();
