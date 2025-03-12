@@ -29,7 +29,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-public class ExchangeClient implements AutoCloseable{
+public class ExchangeClient implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
@@ -43,7 +43,7 @@ public class ExchangeClient implements AutoCloseable{
 
     private final Set<ApiStream> streams = ConcurrentHashMap.newKeySet();
 
-    private final ScheduledFuture flushTimer;
+    private final ScheduledFuture<?> flushTimer;
 
     public ExchangeClient(String host, int port) {
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
@@ -63,11 +63,10 @@ public class ExchangeClient implements AutoCloseable{
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(DEFAULT_EVENTLOOP_GROUP)
-            .channelType(NioSocketChannel.class).usePlaintext().build();
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(DEFAULT_EVENTLOOP_GROUP).channelType(NioSocketChannel.class).usePlaintext().build();
     }
 
-    private ScheduledFuture flushLeaderNode() {
+    private ScheduledFuture<?> flushLeaderNode() {
         return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.MINUTES);
     }
 
@@ -76,16 +75,14 @@ public class ExchangeClient implements AutoCloseable{
         Futures.addCallback(nodeStub.listNodes(NodeListCommand.getDefaultInstance()), new FutureCallback<NodeList>() {
             @Override
             public void onSuccess(@Nullable NodeList nodeList) {
-                Optional<ServerNode> optionalServerNode =
-                    nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
+                Optional<ServerNode> optionalServerNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;
                 }
 
                 ServerNode leaderNode = optionalServerNode.get();
-                if (isSameIp(leaderNode.getHost(), currentLeaderNode.getHost())
-                    && currentLeaderNode.getPort() == leaderNode.getPort()) {
+                if (isSameIp(leaderNode.getHost(), currentLeaderNode.getHost()) && currentLeaderNode.getPort() == leaderNode.getPort()) {
                     return;
                 }
 
@@ -107,11 +104,10 @@ public class ExchangeClient implements AutoCloseable{
 
         try {
             // 这里用了阻塞的 或许之后可以改造为异步的
-            NodeList nodeList =
-                ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
+            NodeList nodeList = ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
 
-            ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER)
-                .findFirst().orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
+            ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst()
+                .orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
             this.leaderNode = leaderNode;
             if (isSameIp(host, leaderNode.getHost()) && port == leaderNode.getPort()) {
                 trySuccess = true;
@@ -166,7 +162,7 @@ public class ExchangeClient implements AutoCloseable{
     public void close() throws Exception {
         flushTimer.cancel(false);
         Channel channel = apiStub.getChannel();
-        ManagedChannel managedChannel = (ManagedChannel) channel;
+        ManagedChannel managedChannel = (ManagedChannel)channel;
         managedChannel.shutdown();
     }
 }
