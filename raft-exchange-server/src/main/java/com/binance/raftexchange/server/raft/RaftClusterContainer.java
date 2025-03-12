@@ -56,14 +56,13 @@ public class RaftClusterContainer {
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
         nodeOptions.setRaftOptions(new RaftOptions());
         nodeOptions.setInitialConf(conf);
-
-        // test
-        nodeOptions.setSnapshotIntervalSecs(30);
-
+        int snapshotIntervalSecs = Integer.parseInt(System.getProperty("raft-exchange.snapshot.interval", "28800")); //8h
+        nodeOptions.setSnapshotIntervalSecs(snapshotIntervalSecs);
         nodeOptions.setDisableCli(true);
         nodeOptions.setRaftRpcThreadPoolSize(Math.max(Utils.cpus() << 3, 32));// 默认值是6倍cpu，处理raft请求(日志复制、心跳检测、选举)
         raftGroupService = new RaftGroupService(raftClusterName, selfPeer, nodeOptions);
-        raftGroupService.start();
+        Node node = raftGroupService.start();
+        node.resetPeers(conf); // 防止eks环境下，snapshot中的peers信息不一致，以当前节点列表为准
         LOGGER.info("SOFA-JRaft Node started on {}", selfPeer);
     }
 
