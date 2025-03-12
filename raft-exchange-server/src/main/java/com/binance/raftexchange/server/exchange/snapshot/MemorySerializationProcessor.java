@@ -37,13 +37,13 @@ import net.openhft.chronicle.wire.InputStreamToWire;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
 
-public class ISerializationProcessorByInmemory implements ISerializationProcessor {
-    private static final Logger LOG = LoggerFactory.getLogger(ISerializationProcessorByInmemory.class);
+public class MemorySerializationProcessor implements ISerializationProcessor {
+    private static final Logger LOG = LoggerFactory.getLogger(MemorySerializationProcessor.class);
 
     private final boolean enableCompression;
     private LZ4Compressor lz4Compressor;
 
-    public ISerializationProcessorByInmemory(ExchangeConfiguration configuration) {
+    public MemorySerializationProcessor(ExchangeConfiguration configuration) {
         enableCompression = Boolean.parseBoolean(System.getProperty("raft-exchange.snapshot.compression", "false"));
         if (enableCompression) {
             lz4Compressor = LZ4Factory.fastestInstance().fastCompressor();
@@ -114,7 +114,7 @@ public class ISerializationProcessorByInmemory implements ISerializationProcesso
 
     @Override
     public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {
-        throw new UnsupportedOperationException();
+
     }
 
     @Override
