@@ -12,6 +12,7 @@ import exchange.core2.core.common.api.binary.BinaryDataCommand;
 
 public abstract class AbstractApiController {
     protected static final Logger LOG = LoggerFactory.getLogger(AbstractApiController.class);
+
     public static byte[] callExchange(ApiCommand apiCommand) throws Exception {
         if (apiCommand instanceof ApiPersistState) {
             return callExchange((ApiPersistState)apiCommand);
@@ -32,8 +33,7 @@ public abstract class AbstractApiController {
 
     public static byte[] callExchange(BinaryDataCommand binaryDataCommand) throws Exception {
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
-        exchange.core2.core.common.cmd.CommandResultCode resultCode =
-            api.submitBinaryDataAsync(binaryDataCommand).get();
+        exchange.core2.core.common.cmd.CommandResultCode resultCode = api.submitBinaryDataAsync(binaryDataCommand).get();
         LOG.info("{} called, result: {}", binaryDataCommand.getClass().getSimpleName(), resultCode);
         return SerializeHelper.serializeToCommandResult(resultCode);
     }

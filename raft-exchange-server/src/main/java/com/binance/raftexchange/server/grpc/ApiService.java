@@ -32,8 +32,8 @@ public class ApiService extends ApiCommandServiceGrpc.ApiCommandServiceImplBase 
             // 让我们简单把第一个参数转为inputstream
             ServerInterceptors.useInputStreamMessages(this.bindService()), new ServerInterceptor() {
                 @Override
-                public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call,
-                    Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+                public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers,
+                    ServerCallHandler<ReqT, RespT> next) {
                     ServerCall.Listener<ReqT> reqTListener = next.startCall(call, headers);
                     call.request(Integer.MAX_VALUE);
                     call.sendHeaders(new Metadata());
