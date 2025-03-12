@@ -135,16 +135,11 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 "Snapshot shard count mismatch! Update PerformanceConfiguration.DEFAULT config to match snapshot files or delete existing snapshot files.");
             return false;
         }
-        try {
-            // 触发exchange的恢复快照
-            long snapshotId = SnapshotHelper.getSnapshotId(files);
-            ExchangeApi api = ExchangeApiInstance.exchangeApi();
-            ApiRecoverState apiRecoverState = ApiRecoverState.builder().snapshotId(snapshotId).build();
-            api.submitCommand(apiRecoverState);
-        } catch (Exception e) {
-            LOG.error("Failed to load snapshot", e);
-            return false;
-        }
+        // 触发exchange的恢复快照
+        long snapshotId = SnapshotHelper.getSnapshotId(files);
+        ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        ApiRecoverState apiRecoverState = ApiRecoverState.builder().snapshotId(snapshotId).build();
+        api.submitCommand(apiRecoverState);
         return true;
     }
 
@@ -157,16 +152,11 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         ApiPersistState apiPersist = ApiPersistState.builder().dumpId(snapshotId).build();
         api.submitCommand(apiPersist);
         // 保存快照
-        try {
-            for (String fileName : snapshotHelper.saveSnapshot(snapshotId, root)) {
-                if (!writer.addFile(fileName)) {
-                    throw new RuntimeException("Fail to add file[" + fileName + "] to writer");
-                }
+        for (String fileName : snapshotHelper.saveSnapshot(snapshotId, root)) {
+            if (!writer.addFile(fileName)) {
+                SnapshotHelper.cleanSnapshots(root, snapshotId);
+                done.run(new Status(RaftError.EIO, "Fail to save snapshot"));
             }
-        } catch (Exception e) {
-            LOG.error("Fail to save snapshot", e);
-            SnapshotHelper.cleanSnapshots(root, snapshotId);
-            done.run(new Status(RaftError.EIO, "Fail to save snapshot"));
         }
         done.run(Status.OK());
     }
