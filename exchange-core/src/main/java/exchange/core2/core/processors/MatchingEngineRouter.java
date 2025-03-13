@@ -254,7 +254,13 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
             // posting market data for risk processor makes sense only if command execution is successful, otherwise it will be ignored (possible garbage from previous cycle)
             // TODO don't need for EXCHANGE mode order books?
             // TODO doing this for many order books simultaneously can introduce hiccups
-            if (cmd.command != OrderCommandType.ORDER_BOOK_REQUEST && cmd.resultCode == CommandResultCode.SUCCESS) {
+            /**
+             * 非订单查询的命令，每10ms返回一次L2数据，方便风控处理。每条都返回没必要，高qps下性能影响很大。
+             * @see GroupingProcessor#L2_PUBLISH_INTERVAL_NS
+             */
+            if (((cmd.serviceFlags & 1) != 0)
+                    && cmd.command != OrderCommandType.ORDER_BOOK_REQUEST
+                    && cmd.resultCode == CommandResultCode.SUCCESS) {
                 cmd.marketData = orderBook.getL2MarketDataSnapshot(Integer.MAX_VALUE);
             }
         }
