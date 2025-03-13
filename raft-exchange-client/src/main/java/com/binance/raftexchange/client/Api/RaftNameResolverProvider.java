@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 public class RaftNameResolverProvider extends NameResolverProvider {
@@ -24,8 +25,11 @@ public class RaftNameResolverProvider extends NameResolverProvider {
 
     private CopyOnWriteArrayList<RaftExchangeNameResolver> resolvers;
 
+    private final ReentrantLock refreshLock;
+
     public RaftNameResolverProvider() {
         this.resolvers = new CopyOnWriteArrayList<>();
+        this.refreshLock = new ReentrantLock();
     }
 
     @Override
@@ -50,7 +54,7 @@ public class RaftNameResolverProvider extends NameResolverProvider {
         return SCHEMA;
     }
 
-    private void freshAll(NameResolver.ResolutionResult resolutionResult) {
+    private void refreshAll(NameResolver.ResolutionResult resolutionResult) {
         for (RaftExchangeNameResolver resolver : resolvers) {
             resolver.refreshNodes(resolutionResult);
         }
@@ -61,26 +65,37 @@ public class RaftNameResolverProvider extends NameResolverProvider {
     }
 
     static void refresh(List<ServerNode> nodes) {
-        //如果找到多个节点那么要把主节点排除
-        //主节点目前不承担read任务
-        if (nodes.size() != 1) {
-            nodes = nodes.stream()
-                    .filter(s -> s.getType() != NodeType.LEADER)
-                    .collect(Collectors.toList());
-        }
-
-        List<EquivalentAddressGroup> addressGroups = nodes.stream()
-                .map(s -> new InetSocketAddress(s.getHost(), s.getPort()))
-                .map(a -> (SocketAddress) a)
-                .map(Collections::singletonList)
-                .map(EquivalentAddressGroup::new)//  // every socket address is a single EquivalentAddressGroup, so they can be accessed randomly
-                .collect(Collectors.toList());
-        NameResolver.ResolutionResult resolutionResult = NameResolver.ResolutionResult.newBuilder()
-                .setAddresses(addressGroups)
-                .build();
         //拿出来全局注册的RaftNameResolverProvider
         RaftNameResolverProvider provider = (RaftNameResolverProvider) NameResolverRegistry.getDefaultRegistry().getProviderForScheme(SCHEMA);
-        provider.freshAll(resolutionResult);
+
+        //防止并发刷新
+        ReentrantLock lock = provider.refreshLock;
+        if (!lock.tryLock()) {
+            return;
+        }
+
+        try {
+            //如果找到多个节点那么要把主节点排除
+            //主节点目前不承担read任务
+            if (nodes.size() != 1) {
+                nodes = nodes.stream()
+                        .filter(s -> s.getType() != NodeType.LEADER)
+                        .collect(Collectors.toList());
+            }
+
+            List<EquivalentAddressGroup> addressGroups = nodes.stream()
+                    .map(s -> new InetSocketAddress(s.getHost(), s.getPort()))
+                    .map(a -> (SocketAddress) a)
+                    .map(Collections::singletonList)
+                    .map(EquivalentAddressGroup::new)//  // every socket address is a single EquivalentAddressGroup, so they can be accessed randomly
+                    .collect(Collectors.toList());
+            NameResolver.ResolutionResult resolutionResult = NameResolver.ResolutionResult.newBuilder()
+                    .setAddresses(addressGroups)
+                    .build();
+            provider.refreshAll(resolutionResult);
+        } finally {
+            lock.unlock();
+        }
     }
 
 }
