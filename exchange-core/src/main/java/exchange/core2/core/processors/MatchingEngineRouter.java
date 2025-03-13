@@ -152,9 +152,10 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
 
                     return DeserializedData.builder().binaryCommandsProcessor(bcp).orderBooks(ob).build();
                 });
-
-        this.binaryCommandsProcessor = deserialized.binaryCommandsProcessor;
-        this.orderBooks = deserialized.orderBooks;
+        synchronized (this) {
+            this.binaryCommandsProcessor = deserialized.binaryCommandsProcessor;
+            this.orderBooks = deserialized.orderBooks;
+        }
     }
 
     public void processOrder(long seq, OrderCommand cmd) {
