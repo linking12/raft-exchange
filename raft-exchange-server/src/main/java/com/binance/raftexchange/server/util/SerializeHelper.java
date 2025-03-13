@@ -4,7 +4,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -24,6 +23,7 @@ import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.L2MarketData;
 import com.binance.raftexchange.stubs.response.MatcherTradeEvent;
 import com.binance.raftexchange.stubs.response.OrderCommandType;
+import com.google.common.collect.Maps;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -184,13 +184,13 @@ public class SerializeHelper {
     }
 
     public static Map<Integer, Long> convertToHashMap(IntLongHashMap intLongHashMap) {
-        Map<Integer, Long> result = new HashMap<>(intLongHashMap.size());
+        Map<Integer, Long> result = Maps.newHashMapWithExpectedSize(intLongHashMap.size());
         intLongHashMap.forEachKeyValue(result::put);
         return result;
     }
 
     public static <V, R> Map<Integer, R> convertToHashMap(IntObjectHashMap<V> intObjectHashMap, Function<V, R> valueConverter) {
-        Map<Integer, R> result = new HashMap<>();
+        Map<Integer, R> result = Maps.newHashMapWithExpectedSize(intObjectHashMap.size());
         intObjectHashMap.forEachKeyValue((key, value) -> result.put(key, valueConverter.apply(value)));
         return result;
     }
