@@ -3,6 +3,7 @@ package com.binance.raftexchange.client.Api;
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
 import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.request.NodeListCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.NodeList;
@@ -24,16 +25,21 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-public class ExchangeClient implements AutoCloseable{
+public class ExchangeClient implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
     private static EventLoopGroup DEFAULT_EVENTLOOP_GROUP = new NioEventLoopGroup(1);
+
+    static volatile List<ServerNode> nodes;
 
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
 
@@ -45,11 +51,14 @@ public class ExchangeClient implements AutoCloseable{
 
     private final ScheduledFuture flushTimer;
 
+    private final ExchangeReadOnlyClient readOnlyClient;
+
     public ExchangeClient(String host, int port) {
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
-        this.flushTimer = flushLeaderNode();
+        this.flushTimer = flushNodesInfo();
+        this.readOnlyClient = new ExchangeReadOnlyClient();
     }
 
     public ApiStream createStream(StreamObserver<CommandResult> resultStreamObserver) {
@@ -60,6 +69,15 @@ public class ExchangeClient implements AutoCloseable{
         return stream;
     }
 
+    public CompletableFuture<CommandResult> searchOrderBook(int symbol, int size) {
+        return readOnlyClient.searchOrderBook(
+                ApiOrderBookRequest.newBuilder()
+                        .setSymbol(symbol)
+                        .setSize(size)
+                        .build()
+        );
+    }
+
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
@@ -67,17 +85,21 @@ public class ExchangeClient implements AutoCloseable{
             .channelType(NioSocketChannel.class).usePlaintext().build();
     }
 
-    private ScheduledFuture flushLeaderNode() {
-        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.MINUTES);
+    private ScheduledFuture flushNodesInfo() {
+        //先flush下确保client那边正常
+        flushNodes();
+        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushNodes, 30, TimeUnit.MINUTES);
     }
 
-    private void flushLeaderNode0() {
+    private void flushNodes() {
         ServerNode currentLeaderNode = this.leaderNode;
         Futures.addCallback(nodeStub.listNodes(NodeListCommand.getDefaultInstance()), new FutureCallback<NodeList>() {
             @Override
             public void onSuccess(@Nullable NodeList nodeList) {
+                List<ServerNode> nodesList = nodeList.getNodesList();
+                nodes = new ArrayList<>(nodesList);
                 Optional<ServerNode> optionalServerNode =
-                    nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
+                    nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;

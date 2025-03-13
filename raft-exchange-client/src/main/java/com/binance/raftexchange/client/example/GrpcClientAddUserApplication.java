@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
-public class GrpcClientApplication {
+public class GrpcClientAddUserApplication {
 
     public static void main(String[] args) throws Exception {
         //让我们简化一下 不启动Spring了
