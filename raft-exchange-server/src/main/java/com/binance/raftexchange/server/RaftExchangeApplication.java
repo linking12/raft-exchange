@@ -3,7 +3,6 @@ package com.binance.raftexchange.server;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
-import com.binance.raftexchange.server.exchange.events.IEventsHandlerByKafka;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.slf4j.Logger;
@@ -18,6 +17,7 @@ import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
 import com.binance.platform.common.autoconfigure.AlarmAutoConfiguration;
 import com.binance.platform.common.autoconfigure.OldMasterCommonConfig;
 import com.binance.platform.common.shutdown.GracefulShutdownHook;
+import com.binance.raftexchange.server.exchange.events.IEventsHandlerByKafka;
 import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
@@ -40,7 +40,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     private GrpcServerContainer grpcServerContainer;
 
     @Value("${raftexchange.kafka.boostrap.servers}")
-    public String servers;
+    public String kafkaServers;
 
     @Value("${raftexchange.eventbus.topic}")
     public String topic;
@@ -71,13 +71,13 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     public void startKafkaSender() {
         Properties properties = new Properties();
-        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, servers);
+        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaServers);
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
         properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
         properties.setProperty(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG, "false");
         properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, IEventsHandlerByKafka.CommandPartitioner.class.getName());
-        KafkaProducer<Long, byte[]> producer = new KafkaProducer<>(properties);
+        KafkaProducer<Long, byte[]> producer = new KafkaProducer<Long, byte[]>(properties);
         IEventsHandlerByKafka.INSTANCE = new IEventsHandlerByKafka(producer, topic);
     }
 
