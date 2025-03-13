@@ -120,6 +120,7 @@ public final class SingleUserReportResult implements ReportResult {
 
     }
 
+    @Getter
     public enum QueryExecutionStatus {
         OK(0),
         USER_NOT_FOUND(1);

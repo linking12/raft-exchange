@@ -4,9 +4,20 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderType;
+import com.binance.raftexchange.stubs.report.Order;
+import com.binance.raftexchange.stubs.report.OrderList;
+import com.binance.raftexchange.stubs.report.Position;
+import com.binance.raftexchange.stubs.report.PositionDirection;
+import com.binance.raftexchange.stubs.report.QueryExecutionStatus;
+import com.binance.raftexchange.stubs.report.UserStatus;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
@@ -18,7 +29,13 @@ import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.ProtocolMessageEnum;
 
+import exchange.core2.core.common.api.reports.ReportResult;
+import exchange.core2.core.common.api.reports.SingleUserReportResult;
+import exchange.core2.core.common.api.reports.StateHashReportResult;
+import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.OrderCommand;
+import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 public class SerializeHelper {
     private SerializeHelper() {}
@@ -134,5 +151,47 @@ public class SerializeHelper {
             }
         }
         throw new IllegalArgumentException("Unknown enum value: " + intValue);
+    }
+
+    private static final Function<SingleUserReportResult.Position, Position> positionMapping = p ->
+            Position.newBuilder().setQuoteCurrency(p.getQuoteCurrency())
+                    .setDirection(PositionDirection.forNumber(p.getDirection().getMultiplier() & 0xFF))
+                    .build();
+
+    private static final Function<List<exchange.core2.core.common.Order>, OrderList> ordersMapping = l ->
+            OrderList.newBuilder().addAllOrders(l.stream().map(o -> Order.newBuilder()
+                    .setOrderId(o.getOrderId()).setPrice(o.getPrice()).setSize(o.getSize()).setFilled(o.getFilled())
+                    .setReserveBidPrice(o.getReserveBidPrice()).setAction(OrderAction.forNumber(o.getAction().getCode()))
+                    .setUid(o.getUid()).setTimestamp(o.getTimestamp()).build()).collect(Collectors.toList())).build();
+
+    public static <T extends ReportResult> byte[] serializeToReportResult(T reportResult) {
+        if (reportResult instanceof SingleUserReportResult) {
+            SingleUserReportResult singleUserReportResult = (SingleUserReportResult) reportResult;
+            return com.binance.raftexchange.stubs.report.SingleUserReportResult.newBuilder()
+                    .setUserId(singleUserReportResult.getUid())
+                    .setUserStatus(UserStatus.forNumber(singleUserReportResult.getUserStatus().getCode()))
+                    .putAllAccounts(convertToHashMap(singleUserReportResult.getAccounts()))
+                    .putAllPositions(convertToHashMap(singleUserReportResult.getPositions(), positionMapping))
+                    .putAllOrders(convertToHashMap(singleUserReportResult.getOrders(), ordersMapping))
+                    .setQueryExecutionStatus(QueryExecutionStatus.forNumber(singleUserReportResult.getQueryExecutionStatus().getCode()))
+                    .build().toByteArray();
+        } else if (reportResult instanceof StateHashReportResult) {
+
+        } else if (reportResult instanceof TotalCurrencyBalanceReportResult) {
+
+        }
+        throw new IllegalArgumentException("Unknown reportResult: " + reportResult.getClass().getSimpleName());
+    }
+
+    public static Map<Integer, Long> convertToHashMap(IntLongHashMap intLongHashMap) {
+        Map<Integer, Long> result = new HashMap<>(intLongHashMap.size());
+        intLongHashMap.forEachKeyValue(result::put);
+        return result;
+    }
+
+    public static <V, R> Map<Integer, R> convertToHashMap(IntObjectHashMap<V> intObjectHashMap, Function<V, R> valueConverter) {
+        Map<Integer, R> result = new HashMap<>();
+        intObjectHashMap.forEachKeyValue((key, value) -> result.put(key, valueConverter.apply(value)));
+        return result;
     }
 }
