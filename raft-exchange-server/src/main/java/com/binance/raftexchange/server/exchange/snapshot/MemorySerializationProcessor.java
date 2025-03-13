@@ -113,9 +113,7 @@ public class MemorySerializationProcessor implements ISerializationProcessor {
     }
 
     @Override
-    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {
-
-    }
+    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {}
 
     @Override
     public Path resolveSnapshotPath(long snapshotId, SerializedModuleType type, int instanceId) {
