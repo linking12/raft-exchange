@@ -6,22 +6,23 @@ import com.binance.raftexchange.stubs.response.CommandResult;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.NameResolver;
 import io.grpc.NameResolverProvider;
 import io.grpc.NameResolverRegistry;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 
 import javax.annotation.Nullable;
 import java.net.URI;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 
-class ExchangeReadOnlyClient {
+class ExchangeReadOnlyClient implements AutoCloseable {
 
     final SearchServiceGrpc.SearchServiceFutureStub searchServiceFutureStub;
 
-    ExchangeReadOnlyClient() {
-        this.searchServiceFutureStub = initStub();
+    ExchangeReadOnlyClient(EventLoopGroup masterLoopGroup) {
+        this.searchServiceFutureStub = initStub(masterLoopGroup);
     }
 
     public CompletableFuture<CommandResult> searchOrderBook(ApiOrderBookRequest request) {
@@ -41,35 +42,21 @@ class ExchangeReadOnlyClient {
         return future;
     }
 
-    private SearchServiceGrpc.SearchServiceFutureStub initStub() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget(RaftExchangeNameResolver.SCHEMA + "://search")
+    private SearchServiceGrpc.SearchServiceFutureStub initStub(EventLoopGroup masterLoopGroup) {
+        ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search")
+                .eventLoopGroup(masterLoopGroup)
                 .defaultLoadBalancingPolicy("round_robin")
-                .usePlaintext()
-                .build();
+                .channelType(NioSocketChannel.class)
+                .usePlaintext().build();
         return SearchServiceGrpc.newFutureStub(channel);
     }
 
     static {
-        NameResolverRegistry.getDefaultRegistry().register(new NameResolverProvider() {
-            @Override
-            protected boolean isAvailable() {
-                return true;
-            }
+        NameResolverRegistry.getDefaultRegistry().register(new RaftNameResolverProvider());
+    }
 
-            @Override
-            protected int priority() {
-                return 0;
-            }
-
-            @Override
-            public NameResolver newNameResolver(URI targetUri, NameResolver.Args args) {
-                return new RaftExchangeNameResolver(targetUri);
-            }
-
-            @Override
-            public String getDefaultScheme() {
-                return RaftExchangeNameResolver.SCHEMA;
-            }
-        });
+    @Override
+    public void close() throws Exception {
+        ((ManagedChannel) searchServiceFutureStub.getChannel()).shutdown();
     }
 }

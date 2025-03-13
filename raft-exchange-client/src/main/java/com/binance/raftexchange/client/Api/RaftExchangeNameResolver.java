@@ -1,25 +1,22 @@
 package com.binance.raftexchange.client.Api;
 
-import io.grpc.EquivalentAddressGroup;
 import io.grpc.NameResolver;
 
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
 import java.net.URI;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
-import java.util.stream.Collectors;
 
 class RaftExchangeNameResolver extends NameResolver {
-    //放在这里这样触发对应的类加载
-    //scheme需要小写 我看grpc代码是这样的
-    static final String SCHEMA = "raftExchange".toLowerCase(Locale.US);
 
     private final URI uri;
 
-    RaftExchangeNameResolver(URI uri) {
+    private volatile Listener2 listener2;
+
+    private ResolutionResult lastResult;
+
+    private final RaftNameResolverProvider parent;
+
+    RaftExchangeNameResolver(URI uri, RaftNameResolverProvider parent) {
         this.uri = uri;
+        this.parent = parent;
     }
 
     @Override
@@ -32,20 +29,26 @@ class RaftExchangeNameResolver extends NameResolver {
 
     @Override
     public void shutdown() {
-
+       parent.removeListener(this);
     }
 
     @Override
     public void start(Listener2 listener) {
-        List<EquivalentAddressGroup> addressGroups = ExchangeClient.nodes.stream()
-                .map(s -> new InetSocketAddress(s.getHost(), s.getPort()))
-                .map(a -> (SocketAddress) a)
-                .map(Collections::singletonList)
-                .map(EquivalentAddressGroup::new)//  // every socket address is a single EquivalentAddressGroup, so they can be accessed randomly
-                .collect(Collectors.toList());
-        listener.onResult(ResolutionResult.newBuilder()
-                .setAddresses(addressGroups)
-                .build());
+        this.listener2 = listener;
+        //因为是先刷node触发refreshNodes然后才有这个start
+        //这个start被第一次调用进行触发 所以晚于第一次refreshNodes
+        //进而要发布一次
+        if (lastResult != null) {
+            listener2.onResult(lastResult);
+        }
     }
 
+    void refreshNodes(ResolutionResult resolutionResult) {
+        Listener2 local = listener2;
+        lastResult = resolutionResult;
+        if(local == null) {
+            return;
+        }
+        local.onResult(resolutionResult);
+    }
 }

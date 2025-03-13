@@ -11,7 +11,8 @@ public class GrpcClientSearchApplication {
             CompletableFuture<CommandResult> orderBook = exchangeClient.searchOrderBook(1, 1);
             CommandResult commandResult = orderBook.get();
             System.out.println(commandResult);
-            CompletableFuture<CommandResult> orderBook1 = exchangeClient.searchOrderBook(1, 1);
+            CommandResult orderBook1 = exchangeClient.searchOrderBook(1, 1).get();
+            System.out.println(orderBook1);
         }
     }
 }

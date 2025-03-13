@@ -25,7 +25,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -37,9 +36,7 @@ public class ExchangeClient implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
-    private static EventLoopGroup DEFAULT_EVENTLOOP_GROUP = new NioEventLoopGroup(1);
-
-    static volatile List<ServerNode> nodes;
+    private EventLoopGroup eventLoopgroup;
 
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
 
@@ -54,11 +51,12 @@ public class ExchangeClient implements AutoCloseable {
     private final ExchangeReadOnlyClient readOnlyClient;
 
     public ExchangeClient(String host, int port) {
+        this.eventLoopgroup = new NioEventLoopGroup(1);
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
+        this.readOnlyClient = new ExchangeReadOnlyClient(eventLoopgroup);
         this.flushTimer = flushNodesInfo();
-        this.readOnlyClient = new ExchangeReadOnlyClient();
     }
 
     public ApiStream createStream(StreamObserver<CommandResult> resultStreamObserver) {
@@ -81,14 +79,14 @@ public class ExchangeClient implements AutoCloseable {
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(DEFAULT_EVENTLOOP_GROUP)
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup)
             .channelType(NioSocketChannel.class).usePlaintext().build();
     }
 
     private ScheduledFuture flushNodesInfo() {
         //先flush下确保client那边正常
         flushNodes();
-        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushNodes, 30, TimeUnit.MINUTES);
+        return eventLoopgroup.schedule(this::flushNodes, 30, TimeUnit.MINUTES);
     }
 
     private void flushNodes() {
@@ -97,7 +95,7 @@ public class ExchangeClient implements AutoCloseable {
             @Override
             public void onSuccess(@Nullable NodeList nodeList) {
                 List<ServerNode> nodesList = nodeList.getNodesList();
-                nodes = new ArrayList<>(nodesList);
+                RaftNameResolverProvider.refresh(nodesList);
                 Optional<ServerNode> optionalServerNode =
                     nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
@@ -119,7 +117,7 @@ public class ExchangeClient implements AutoCloseable {
             public void onFailure(Throwable throwable) {
                 LOGGER.error("flashLeaderNode fail!", throwable);
             }
-        }, DEFAULT_EVENTLOOP_GROUP); // 调度回去 可以省下很多streamObserver的状态同步开销
+        }, eventLoopgroup); // 调度回去 可以省下很多streamObserver的状态同步开销
     }
 
     private ManagedChannel sniffLeaderChannel(String host, int port) {
@@ -190,5 +188,6 @@ public class ExchangeClient implements AutoCloseable {
         Channel channel = apiStub.getChannel();
         ManagedChannel managedChannel = (ManagedChannel) channel;
         managedChannel.shutdown();
+        readOnlyClient.close();
     }
 }
