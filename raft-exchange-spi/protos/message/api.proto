@@ -17,12 +17,7 @@ service ServerNodeService {
   rpc listNodes(com.binance.raftexchange.stubs.request.NodeListCommand) returns (com.binance.raftexchange.stubs.response.NodeList);
 }
 
-service SearchService {
+service QueryService {
   rpc searchOrder(com.binance.raftexchange.stubs.request.ApiOrderBookRequest) returns (com.binance.raftexchange.stubs.response.CommandResult);
-}
-
-service ReportQueriesService {
-  rpc querySingleUserReport(stream com.binance.raftexchange.stubs.report.SingleUserReportQuery) returns (stream com.binance.raftexchange.stubs.report.SingleUserReportResult);
-  rpc queryStateHashReport(stream com.binance.raftexchange.stubs.report.StateHashReportQuery) returns (stream com.binance.raftexchange.stubs.report.StateHashReportResult);
-  rpc queryTotalCurrencyBalanceReport(stream com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery) returns (stream com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult);
+  rpc query(com.binance.raftexchange.stubs.report.ReportQuery) returns (com.binance.raftexchange.stubs.report.ReportResult);
 }

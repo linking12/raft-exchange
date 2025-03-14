@@ -9,10 +9,7 @@ import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
 import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
 import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
-import com.binance.raftexchange.server.exchange.SyncTradeAccountApiController;
-import com.binance.raftexchange.server.exchange.SyncTradeMiscApiController;
 import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
-import com.binance.raftexchange.stubs.report.ReportQuery;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiRecoverState;
@@ -102,22 +99,6 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                     break;
                 default:
                     LOG.warn("Unsupported ApiCommand: {}", commandCase);
-            }
-        } else if (grpcMessage instanceof ReportQuery) {
-            int transferId = ((ReportQuery) grpcMessage).getTransferId();
-            ReportQuery.TypeCase typeCase = ((ReportQuery) grpcMessage).getTypeCase();
-            switch (typeCase) {
-                case SINGLE_USER_REPORT:
-                    result = SyncTradeAccountApiController.getUserState(((ReportQuery) grpcMessage).getSingleUserReport(), transferId);
-                    break;
-                case STATE_HASH:
-                    result = SyncTradeMiscApiController.getStateHash(((ReportQuery) grpcMessage).getStateHash(), transferId);
-                    break;
-                case TOTAL_CURRENCY_BALANCE:
-                    result = SyncTradeMiscApiController.getTotalCurrencyBalance(((ReportQuery) grpcMessage).getTotalCurrencyBalance(), transferId);
-                    break;
-                default:
-                    LOG.warn("Unsupported ReportQuery: {}", typeCase);
             }
         }
         return result;

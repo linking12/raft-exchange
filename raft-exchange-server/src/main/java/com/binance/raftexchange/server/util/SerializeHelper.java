@@ -39,7 +39,8 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 public class SerializeHelper {
-    private SerializeHelper() {}
+    private SerializeHelper() {
+    }
 
     /**
      * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------writeUTF--------｜｜---write---｜
@@ -83,9 +84,9 @@ public class SerializeHelper {
         // 这里产生了一个临时对象 但是我估计可以通过逃逸分析被jit干掉？
         CommandResultCode resultCode = result.resultCode == null ? null : CommandResultCode.forNumber(Math.abs(result.resultCode.getCode()));
         com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
-            .setCommand(OrderCommandType.forNumber(result.command.getCode())).setOrderId(result.orderId).setSymbol(result.symbol).setPrice(result.price)
-            .setSize(result.size).setReserveBidPrice(result.reserveBidPrice).setUid(result.getUid()).setTimestamp(result.timestamp)
-            .setUserCookie(result.userCookie).setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
+                .setCommand(OrderCommandType.forNumber(result.command.getCode())).setOrderId(result.orderId).setSymbol(result.symbol).setPrice(result.price)
+                .setSize(result.size).setReserveBidPrice(result.reserveBidPrice).setUid(result.getUid()).setTimestamp(result.timestamp)
+                .setUserCookie(result.userCookie).setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
         if (result.action != null) {
             builder = builder.setAction(OrderAction.forNumber(result.action.getCode()));
         }
@@ -114,7 +115,7 @@ public class SerializeHelper {
         }
 
         MatcherTradeEvent.Builder baseBuilder =
-            MatcherTradeEvent.newBuilder().setOrderId(matcherTradeEvent.matchedOrderId).setPrice(matcherTradeEvent.price).setSize(matcherTradeEvent.price);
+                MatcherTradeEvent.newBuilder().setOrderId(matcherTradeEvent.matchedOrderId).setPrice(matcherTradeEvent.price).setSize(matcherTradeEvent.price);
         if (matcherTradeEvent.nextEvent == null) {
             return baseBuilder.build();
         }
@@ -171,42 +172,51 @@ public class SerializeHelper {
                     .setReserveBidPrice(o.getReserveBidPrice()).setActionValue(o.getAction().getCode())
                     .setUid(o.getUid()).setTimestamp(o.getTimestamp()).build()).collect(Collectors.toList())).build();
 
-    public static <T extends ReportResult> byte[] serializeToReportResult(T reportResult) {
-        if (reportResult instanceof SingleUserReportResult) {
-            SingleUserReportResult singleUserReportResult = (SingleUserReportResult) reportResult;
-            return com.binance.raftexchange.stubs.report.SingleUserReportResult.newBuilder()
-                    .setUserId(singleUserReportResult.getUid())
-                    .setUserStatus(UserStatus.forNumber(singleUserReportResult.getUserStatus().getCode()))
-                    .putAllAccounts(convertToHashMap(singleUserReportResult.getAccounts()))
-                    .putAllPositions(convertToHashMap(singleUserReportResult.getPositions(), positionMapping))
-                    .putAllOrders(convertToHashMap(singleUserReportResult.getOrders(), ordersMapping))
-                    .setQueryExecutionStatus(QueryExecutionStatus.forNumber(singleUserReportResult.getQueryExecutionStatus().getCode()))
-                    .build().toByteArray();
-        } else if (reportResult instanceof StateHashReportResult) {
-            StateHashReportResult stateHashReportResult = (StateHashReportResult) reportResult;
-            List<HashCodeEntry> hashCodeEntries = stateHashReportResult.getHashCodes().entrySet().stream()
-                    .map(e -> HashCodeEntry.newBuilder()
-                            .setKey(SubmoduleKey.newBuilder()
-                                    .setModuleId(e.getKey().moduleId)
-                                    .setSubmoduleTypeValue(e.getKey().submodule.code))
-                            .setValue(e.getValue())
-                            .build())
-                    .collect(Collectors.toList());
-            return com.binance.raftexchange.stubs.report.StateHashReportResult.newBuilder()
-                    .addAllHashCodes(hashCodeEntries).build().toByteArray();
-        } else if (reportResult instanceof TotalCurrencyBalanceReportResult) {
-            TotalCurrencyBalanceReportResult totalCurrencyBalanceReportResult = (TotalCurrencyBalanceReportResult) reportResult;
-            return com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult.newBuilder()
-                    .putAllAccountBalances(convertToHashMap(totalCurrencyBalanceReportResult.getAccountBalances()))
-                    .putAllFees(convertToHashMap(totalCurrencyBalanceReportResult.getFees()))
-                    .putAllAdjustments(convertToHashMap(totalCurrencyBalanceReportResult.getAdjustments()))
-                    .putAllSuspends(convertToHashMap(totalCurrencyBalanceReportResult.getSuspends()))
-                    .putAllOrdersBalances(convertToHashMap(totalCurrencyBalanceReportResult.getOrdersBalances()))
-                    .putAllOpenInterestLong(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestLong()))
-                    .putAllOpenInterestShort(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestShort()))
-                    .build().toByteArray();
-        }
-        throw new IllegalArgumentException("Unknown reportResult: " + reportResult.getClass().getSimpleName());
+    public static com.binance.raftexchange.stubs.report.ReportResult serializeToPb(SingleUserReportResult singleUserReportResult) {
+        com.binance.raftexchange.stubs.report.SingleUserReportResult result = com.binance.raftexchange.stubs.report.SingleUserReportResult.newBuilder()
+                .setUserId(singleUserReportResult.getUid())
+                .setUserStatus(UserStatus.forNumber(singleUserReportResult.getUserStatus().getCode()))
+                .putAllAccounts(convertToHashMap(singleUserReportResult.getAccounts()))
+                .putAllPositions(convertToHashMap(singleUserReportResult.getPositions(), positionMapping))
+                .putAllOrders(convertToHashMap(singleUserReportResult.getOrders(), ordersMapping))
+                .setQueryExecutionStatus(QueryExecutionStatus.forNumber(singleUserReportResult.getQueryExecutionStatus().getCode()))
+                .build();
+
+        return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
+                .setSingleUserReport(result)
+                .build();
+    }
+
+    public static com.binance.raftexchange.stubs.report.ReportResult serializeToPb(StateHashReportResult stateHashReportResult) {
+        List<HashCodeEntry> hashCodeEntries = stateHashReportResult.getHashCodes().entrySet().stream()
+                .map(e -> HashCodeEntry.newBuilder()
+                        .setKey(SubmoduleKey.newBuilder()
+                                .setModuleId(e.getKey().moduleId)
+                                .setSubmoduleTypeValue(e.getKey().submodule.code))
+                        .setValue(e.getValue())
+                        .build())
+                .collect(Collectors.toList());
+        com.binance.raftexchange.stubs.report.StateHashReportResult result = com.binance.raftexchange.stubs.report.StateHashReportResult.newBuilder()
+                .addAllHashCodes(hashCodeEntries).build();
+
+        return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
+                .setStateHash(result)
+                .build();
+    }
+
+    public static com.binance.raftexchange.stubs.report.ReportResult serializeToPb(TotalCurrencyBalanceReportResult totalCurrencyBalanceReportResult) {
+        com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult result = com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult.newBuilder()
+                .putAllAccountBalances(convertToHashMap(totalCurrencyBalanceReportResult.getAccountBalances()))
+                .putAllFees(convertToHashMap(totalCurrencyBalanceReportResult.getFees()))
+                .putAllAdjustments(convertToHashMap(totalCurrencyBalanceReportResult.getAdjustments()))
+                .putAllSuspends(convertToHashMap(totalCurrencyBalanceReportResult.getSuspends()))
+                .putAllOrdersBalances(convertToHashMap(totalCurrencyBalanceReportResult.getOrdersBalances()))
+                .putAllOpenInterestLong(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestLong()))
+                .putAllOpenInterestShort(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestShort()))
+                .build();
+        return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
+                .setTotalCurrencyBalance(result)
+                .build();
     }
 
     public static Map<Integer, Long> convertToHashMap(IntLongHashMap intLongHashMap) {

@@ -48,9 +48,8 @@ public abstract class AbstractApiController {
         return SerializeHelper.serializeToCommandResult(resultCode);
     }
 
-    public static <T extends ReportResult> byte[] callExchange(ReportQuery<T> reportQuery, int transferId) throws Exception {
+    public static <T extends ReportResult> CompletableFuture<T> callExchange(ReportQuery<T> reportQuery, int transferId) throws Exception {
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
-        return api.processReport(reportQuery, transferId)
-            .thenApply(SerializeHelper::serializeToReportResult).get();
+        return api.processReport(reportQuery, transferId);
     }
 }

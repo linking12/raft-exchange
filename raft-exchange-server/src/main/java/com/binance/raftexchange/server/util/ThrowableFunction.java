@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.util;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 public interface ThrowableFunction<T, R> {
@@ -17,5 +18,11 @@ public interface ThrowableFunction<T, R> {
 
     static <T, R> Function<T, R> warp(ThrowableFunction<T, R> tf) {
         return tf.toFunction();
+    }
+
+    static <T> CompletableFuture<T> failureFuture(String msg) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        future.completeExceptionally(new RuntimeException(msg));
+        return future;
     }
 }

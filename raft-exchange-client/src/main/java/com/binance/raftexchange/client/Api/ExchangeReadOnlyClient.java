@@ -1,25 +1,22 @@
 package com.binance.raftexchange.client.Api;
 
-import com.binance.raftexchange.stubs.api.SearchServiceGrpc;
+import com.binance.raftexchange.stubs.api.QueryServiceGrpc;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import io.grpc.ManagedChannel;
-import io.grpc.NameResolver;
-import io.grpc.NameResolverProvider;
 import io.grpc.NameResolverRegistry;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 
 import javax.annotation.Nullable;
-import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
 class ExchangeReadOnlyClient implements AutoCloseable {
 
-    final SearchServiceGrpc.SearchServiceFutureStub searchServiceFutureStub;
+    final QueryServiceGrpc.QueryServiceFutureStub searchServiceFutureStub;
 
     ExchangeReadOnlyClient(EventLoopGroup masterLoopGroup) {
         this.searchServiceFutureStub = initStub(masterLoopGroup);
@@ -42,13 +39,13 @@ class ExchangeReadOnlyClient implements AutoCloseable {
         return future;
     }
 
-    private SearchServiceGrpc.SearchServiceFutureStub initStub(EventLoopGroup masterLoopGroup) {
+    private QueryServiceGrpc.QueryServiceFutureStub initStub(EventLoopGroup masterLoopGroup) {
         ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search")
                 .eventLoopGroup(masterLoopGroup)
                 .defaultLoadBalancingPolicy("round_robin")
                 .channelType(NioSocketChannel.class)
                 .usePlaintext().build();
-        return SearchServiceGrpc.newFutureStub(channel);
+        return QueryServiceGrpc.newFutureStub(channel);
     }
 
     static {
