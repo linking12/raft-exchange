@@ -7,6 +7,7 @@ option java_multiple_files = true;
 
 import "message/request.proto";
 import "message/response.proto";
+import "message/report.proto";
 
 service ApiCommandService{
   rpc execApiCommand(stream com.binance.raftexchange.stubs.request.ApiCommand) returns (stream com.binance.raftexchange.stubs.response.CommandResult); // BI-DIRECTIONAL STREAMING
@@ -18,4 +19,10 @@ service ServerNodeService {
 
 service SearchService {
   rpc searchOrder(com.binance.raftexchange.stubs.request.ApiOrderBookRequest) returns (com.binance.raftexchange.stubs.response.CommandResult);
+}
+
+service ReportQueriesService {
+  rpc querySingleUserReport(stream com.binance.raftexchange.stubs.report.SingleUserReportQuery) returns (stream com.binance.raftexchange.stubs.report.SingleUserReportResult);
+  rpc queryStateHashReport(stream com.binance.raftexchange.stubs.report.StateHashReportQuery) returns (stream com.binance.raftexchange.stubs.report.StateHashReportResult);
+  rpc queryTotalCurrencyBalanceReport(stream com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery) returns (stream com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult);
 }

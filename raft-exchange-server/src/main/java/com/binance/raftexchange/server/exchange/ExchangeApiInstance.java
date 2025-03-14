@@ -6,6 +6,8 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.config.ExchangeConfiguration;
+import exchange.core2.core.common.config.SerializationConfiguration;
+import com.binance.raftexchange.server.exchange.snapshot.MemorySerializationProcessor;
 
 public class ExchangeApiInstance {
 
@@ -15,20 +17,16 @@ public class ExchangeApiInstance {
 
     private ExchangeApiInstance() {
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance());
-        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().build();
-        ExchangeCore exchangeCore =
-            ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
+        SerializationConfiguration serializationCfg =
+            SerializationConfiguration.builder().enableJournaling(false).serializationProcessorFactory(MemorySerializationProcessor::new).build();
+        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().serializationCfg(serializationCfg).build();
+        ExchangeCore exchangeCore = ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
         exchangeCore.startup();
-        ExchangeApi api = exchangeCore.getApi();
-        this.exchangeApi = api;
-    }
-
-    public ExchangeApi getExchangeApi() {
-        return this.exchangeApi;
+        exchangeApi = exchangeCore.getApi();
     }
 
     public static ExchangeApi exchangeApi() {
-        return INSTANCE.getExchangeApi();
+        return INSTANCE.exchangeApi;
     }
 
 }

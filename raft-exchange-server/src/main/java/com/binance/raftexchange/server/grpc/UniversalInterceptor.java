@@ -41,8 +41,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private final int READ_TYPE_COMMAND_NUMBER = ApiCommand.ORDER_BOOK_REQUEST_FIELD_NUMBER;
 
-    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate,
-        ServerCall<ReqT, RespT> call) {
+    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate, ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
         this.call = call;
@@ -129,12 +128,11 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         if (!raftClusterContainer.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
-                return CompletableFuture.completedFuture(
-                    CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
+                return CompletableFuture.completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
             }
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
-            return CompletableFuture.completedFuture(CommandResult.newBuilder()
-                .setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray());
+            return CompletableFuture
+                .completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray());
         }
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
         return raftClusterContainer.requestConsensus(raftLog);

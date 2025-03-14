@@ -61,10 +61,13 @@ public class RaftClusterContainer {
         raftOptions.setReadOnlyOptions(ReadOnlyOption.ReadOnlySafe); // 先使用最保守的readIndex优化
         nodeOptions.setRaftOptions(raftOptions);
         nodeOptions.setInitialConf(conf);
+        int snapshotIntervalSecs = Integer.parseInt(System.getProperty("raft-exchange.snapshot.interval", "28800")); //8h
+        nodeOptions.setSnapshotIntervalSecs(snapshotIntervalSecs);
         nodeOptions.setDisableCli(true);
         nodeOptions.setRaftRpcThreadPoolSize(Math.max(Utils.cpus() << 3, 32));// 默认值是6倍cpu，处理raft请求(日志复制、心跳检测、选举)
         raftGroupService = new RaftGroupService(raftClusterName, selfPeer, nodeOptions);
-        raftGroupService.start();
+        Node node = raftGroupService.start();
+        node.resetPeers(conf); // 防止eks环境下，snapshot中的peers信息不一致，以当前节点列表为准
         LOGGER.info("SOFA-JRaft Node started on {}", selfPeer);
     }
 
@@ -94,8 +97,7 @@ public class RaftClusterContainer {
         List<RaftNode> raftNodes = new ArrayList<>();
         for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
             PeerId peerId = node.getNodeId().getPeerId();
-            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()),
-                node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
     }

@@ -16,9 +16,8 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
      * 获取OrderBook
      */
     public static byte[] getOrderBook(ApiOrderBookRequest grpcApiOrderBookRequest) throws Exception {
-        exchange.core2.core.common.api.ApiOrderBookRequest apiOrderBookRequest =
-            exchange.core2.core.common.api.ApiOrderBookRequest.builder().symbol(grpcApiOrderBookRequest.getSymbol())
-                .size(grpcApiOrderBookRequest.getSize()).build();
+        exchange.core2.core.common.api.ApiOrderBookRequest apiOrderBookRequest = exchange.core2.core.common.api.ApiOrderBookRequest.builder()
+            .symbol(grpcApiOrderBookRequest.getSymbol()).size(grpcApiOrderBookRequest.getSize()).build();
 
         return callExchange(apiOrderBookRequest);
     }
@@ -35,13 +34,11 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
      * 下单
      */
     public static byte[] placeOrder(ApiPlaceOrder grpcApiPlaceOrder) throws Exception {
-        exchange.core2.core.common.api.ApiPlaceOrder apiPlaceOrder = exchange.core2.core.common.api.ApiPlaceOrder
-            .builder().price(grpcApiPlaceOrder.getPrice()).size(grpcApiPlaceOrder.getSize())
-            .orderId(grpcApiPlaceOrder.getOrderId())
-            .action(exchange.core2.core.common.OrderAction.of((byte)grpcApiPlaceOrder.getAction().getNumber()))
-            .orderType(exchange.core2.core.common.OrderType.of((byte)grpcApiPlaceOrder.getOrderType().getNumber()))
-            .uid(grpcApiPlaceOrder.getUid()).symbol(grpcApiPlaceOrder.getSymbol())
-            .userCookie(grpcApiPlaceOrder.getUserCookie()).reservePrice(grpcApiPlaceOrder.getReservePrice()).build();
+        exchange.core2.core.common.api.ApiPlaceOrder apiPlaceOrder =
+            exchange.core2.core.common.api.ApiPlaceOrder.builder().price(grpcApiPlaceOrder.getPrice()).size(grpcApiPlaceOrder.getSize())
+                .orderId(grpcApiPlaceOrder.getOrderId()).action(exchange.core2.core.common.OrderAction.of((byte)grpcApiPlaceOrder.getAction().getNumber()))
+                .orderType(exchange.core2.core.common.OrderType.of((byte)grpcApiPlaceOrder.getOrderType().getNumber())).uid(grpcApiPlaceOrder.getUid())
+                .symbol(grpcApiPlaceOrder.getSymbol()).userCookie(grpcApiPlaceOrder.getUserCookie()).reservePrice(grpcApiPlaceOrder.getReservePrice()).build();
 
         return callExchange(apiPlaceOrder);
     }
@@ -50,9 +47,8 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
      * 修改订单
      */
     public static byte[] moveOrder(ApiMoveOrder grpcApiMoveOrder) throws Exception {
-        exchange.core2.core.common.api.ApiMoveOrder apiMoveOrder = exchange.core2.core.common.api.ApiMoveOrder.builder()
-            .orderId(grpcApiMoveOrder.getOrderId()).newPrice(grpcApiMoveOrder.getNewPrice())
-            .uid(grpcApiMoveOrder.getUid()).symbol(grpcApiMoveOrder.getSymbol()).build();
+        exchange.core2.core.common.api.ApiMoveOrder apiMoveOrder = exchange.core2.core.common.api.ApiMoveOrder.builder().orderId(grpcApiMoveOrder.getOrderId())
+            .newPrice(grpcApiMoveOrder.getNewPrice()).uid(grpcApiMoveOrder.getUid()).symbol(grpcApiMoveOrder.getSymbol()).build();
 
         return callExchange(apiMoveOrder);
     }
@@ -61,9 +57,8 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
      * 撤单
      */
     public static byte[] cancelOrder(ApiCancelOrder grpcApiCancelOrder) throws Exception {
-        exchange.core2.core.common.api.ApiCancelOrder apiCancelOrder =
-            exchange.core2.core.common.api.ApiCancelOrder.builder().orderId(grpcApiCancelOrder.getOrderId())
-                .uid(grpcApiCancelOrder.getUid()).symbol(grpcApiCancelOrder.getSymbol()).build();
+        exchange.core2.core.common.api.ApiCancelOrder apiCancelOrder = exchange.core2.core.common.api.ApiCancelOrder.builder()
+            .orderId(grpcApiCancelOrder.getOrderId()).uid(grpcApiCancelOrder.getUid()).symbol(grpcApiCancelOrder.getSymbol()).build();
 
         return callExchange(apiCancelOrder);
     }
@@ -72,9 +67,9 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
      * 改单
      */
     public static byte[] reduceOrder(ApiReduceOrder grpcApiReduceOrder) throws Exception {
-        exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder = exchange.core2.core.common.api.ApiReduceOrder
-            .builder().orderId(grpcApiReduceOrder.getOrderId()).uid(grpcApiReduceOrder.getUid())
-            .symbol(grpcApiReduceOrder.getSymbol()).reduceSize(grpcApiReduceOrder.getReduceSize()).build();
+        exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder =
+            exchange.core2.core.common.api.ApiReduceOrder.builder().orderId(grpcApiReduceOrder.getOrderId()).uid(grpcApiReduceOrder.getUid())
+                .symbol(grpcApiReduceOrder.getSymbol()).reduceSize(grpcApiReduceOrder.getReduceSize()).build();
 
         return callExchange(apiReduceOrder);
     }

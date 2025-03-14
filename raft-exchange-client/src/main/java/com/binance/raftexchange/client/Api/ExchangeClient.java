@@ -46,7 +46,7 @@ public class ExchangeClient implements AutoCloseable {
 
     private final Set<ApiStream> streams = ConcurrentHashMap.newKeySet();
 
-    private final ScheduledFuture flushTimer;
+    private final ScheduledFuture<?> flushTimer;
 
     private final ExchangeReadOnlyClient readOnlyClient;
 
@@ -79,8 +79,7 @@ public class ExchangeClient implements AutoCloseable {
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup)
-            .channelType(NioSocketChannel.class).usePlaintext().build();
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup).channelType(NioSocketChannel.class).usePlaintext().build();
     }
 
     private ScheduledFuture flushNodesInfo() {
@@ -104,8 +103,7 @@ public class ExchangeClient implements AutoCloseable {
                 }
 
                 ServerNode leaderNode = optionalServerNode.get();
-                if (isSameIp(leaderNode.getHost(), currentLeaderNode.getHost())
-                    && currentLeaderNode.getPort() == leaderNode.getPort()) {
+                if (isSameIp(leaderNode.getHost(), currentLeaderNode.getHost()) && currentLeaderNode.getPort() == leaderNode.getPort()) {
                     return;
                 }
 
@@ -127,11 +125,10 @@ public class ExchangeClient implements AutoCloseable {
 
         try {
             // 这里用了阻塞的 或许之后可以改造为异步的
-            NodeList nodeList =
-                ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
+            NodeList nodeList = ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
 
-            ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER)
-                .findFirst().orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
+            ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst()
+                .orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
             this.leaderNode = leaderNode;
             if (isSameIp(host, leaderNode.getHost()) && port == leaderNode.getPort()) {
                 trySuccess = true;
@@ -186,7 +183,7 @@ public class ExchangeClient implements AutoCloseable {
     public void close() throws Exception {
         flushTimer.cancel(false);
         Channel channel = apiStub.getChannel();
-        ManagedChannel managedChannel = (ManagedChannel) channel;
+        ManagedChannel managedChannel = (ManagedChannel)channel;
         managedChannel.shutdown();
         readOnlyClient.close();
     }

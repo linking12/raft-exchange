@@ -10,11 +10,14 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
+import exchange.core2.core.common.api.reports.ReportQuery;
+import exchange.core2.core.common.api.reports.ReportResult;
 
 import java.util.concurrent.CompletableFuture;
 
 public abstract class AbstractApiController {
     protected static final Logger LOG = LoggerFactory.getLogger(AbstractApiController.class);
+
     public static byte[] callExchange(ApiCommand apiCommand) throws Exception {
         if (apiCommand instanceof ApiPersistState) {
             return callExchange((ApiPersistState)apiCommand);
@@ -40,9 +43,14 @@ public abstract class AbstractApiController {
 
     public static byte[] callExchange(BinaryDataCommand binaryDataCommand) throws Exception {
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
-        exchange.core2.core.common.cmd.CommandResultCode resultCode =
-            api.submitBinaryDataAsync(binaryDataCommand).get();
+        exchange.core2.core.common.cmd.CommandResultCode resultCode = api.submitBinaryDataAsync(binaryDataCommand).get();
         LOG.info("{} called, result: {}", binaryDataCommand.getClass().getSimpleName(), resultCode);
         return SerializeHelper.serializeToCommandResult(resultCode);
+    }
+
+    public static <T extends ReportResult> byte[] callExchange(ReportQuery<T> reportQuery, int transferId) throws Exception {
+        ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        return api.processReport(reportQuery, transferId)
+            .thenApply(SerializeHelper::serializeToReportResult).get();
     }
 }
