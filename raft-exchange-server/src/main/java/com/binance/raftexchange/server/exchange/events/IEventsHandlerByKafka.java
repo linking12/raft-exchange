@@ -25,17 +25,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class IEventsHandlerByKafka implements IEventsHandler {
-
     private static final Logger LOG = LoggerFactory.getLogger(IEventsHandlerByKafka.class);
-
     public static IEventsHandlerByKafka INSTANCE;
-
     private final KafkaProducer<Long, byte[]> sender;
-
     private final String topic;
-
-    static final long IGNORE_UID = -1L;
-
+    private static final long IGNORE_UID = -1L;
     private AtomicBoolean isLeader = new AtomicBoolean(false);
 
     public IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topic) {
@@ -60,9 +54,9 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         }
         TradeEventPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {
-            //在本地测试环境打出来当前要发送的pb对象内容 方便调试
+            // 在本地测试环境打出来当前要发送的pb对象内容 方便调试
             String formateString = pbObject.toString();
-            LOG.debug("tradeEvent: {}" ,formateString);
+            LOG.debug("tradeEvent: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
         sender.send(new ProducerRecord<>(topic, tradeEvent.getTakerUid(), pbData));
@@ -74,11 +68,11 @@ public class IEventsHandlerByKafka implements IEventsHandler {
             return;
         }
         ReduceEventPB pbObject = ReduceEventPB.newBuilder().setSymbol(reduceEvent.getSymbol()).setReducedVolume(reduceEvent.getReducedVolume())
-                .setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId())
-                .setUid(reduceEvent.getOrderId()).setTimestamp(reduceEvent.getTimestamp()).build();
+            .setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId())
+            .setUid(reduceEvent.getOrderId()).setTimestamp(reduceEvent.getTimestamp()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
-            LOG.debug("reduceEvent: {}" ,formateString);
+            LOG.debug("reduceEvent: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
         sender.send(new ProducerRecord<>(topic, reduceEvent.uid, pbData));
@@ -96,18 +90,16 @@ public class IEventsHandlerByKafka implements IEventsHandler {
                     builder.addAsks(OrderBookRecordPB.newBuilder().setPrice(ask.getPrice()).setVolume(ask.getVolume()).setOrders(ask.getOrders()).build());
             }
         }
-
         if (orderBook.getBids() != null) {
             for (OrderBookRecord bid : orderBook.getBids()) {
                 builder =
                     builder.addBids(OrderBookRecordPB.newBuilder().setPrice(bid.getPrice()).setVolume(bid.getVolume()).setOrders(bid.getOrders()).build());
             }
         }
-
         OrderBookPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
-            LOG.debug("orderBook: {}" ,formateString);
+            LOG.debug("orderBook: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
         sender.send(new ProducerRecord<>(topic, IGNORE_UID, pbData));
@@ -118,12 +110,11 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-
         FundsEventPB pbObject = FundsEventPB.newBuilder().setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
-                .setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLoked()).setPositionDelta(fundsEvent.getPositionDelta()).build();
+            .setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLoked()).setPositionDelta(fundsEvent.getPositionDelta()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
-            LOG.debug("fundsEvent: {}" ,formateString);
+            LOG.debug("fundsEvent: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
         sender.send(new ProducerRecord<>(topic, fundsEvent.uid, pbData));
@@ -134,7 +125,6 @@ public class IEventsHandlerByKafka implements IEventsHandler {
     }
 
     public static class CommandPartitioner implements Partitioner {
-
         private AtomicInteger counter = new AtomicInteger(0); //
 
         @Override
@@ -145,7 +135,6 @@ public class IEventsHandlerByKafka implements IEventsHandler {
             if (uid == IGNORE_UID) {
                 return counter.getAndIncrement() % numPartitions;
             }
-
             return (int)(uid % numPartitions);
         }
 
