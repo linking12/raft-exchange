@@ -12,8 +12,7 @@
  */
 package exchange.core2.core.processors;
 
-import java.util.concurrent.LinkedBlockingQueue;
-
+import exchange.core2.collections.queue.DisruptorBlockingQueue;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
 import lombok.Getter;
@@ -22,9 +21,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class SharedPool {
 
-    private final LinkedBlockingQueue<MatcherTradeEvent> eventChainsBuffer;
+    private final DisruptorBlockingQueue<MatcherTradeEvent> eventChainsBuffer;
 
-    private final LinkedBlockingQueue<FundEvent> fundEventBuffer;
+    private final DisruptorBlockingQueue<FundEvent> fundEventBuffer;
 
     @Getter
     private final int chainLength;
@@ -48,8 +47,8 @@ public final class SharedPool {
             throw new IllegalArgumentException("too big poolInitialSize");
         }
 
-        this.eventChainsBuffer = new LinkedBlockingQueue<>(poolMaxSize);
-        this.fundEventBuffer = new LinkedBlockingQueue<>(poolMaxSize);
+        this.eventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
+        this.fundEventBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.chainLength = chainLength;
 
         for (int i = 0; i < poolInitialSize; i++) {
