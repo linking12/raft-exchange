@@ -136,6 +136,8 @@ public final class ExchangeApi {
             return submitBinaryDataAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiPersistState) {
             return submitPersistCommandAsync((ApiPersistState) cmd);
+        } else if (cmd instanceof ApiRecoverState) {
+            return submitRecoverCommandAsync((ApiRecoverState) cmd);
         } else if (cmd instanceof ApiReset) {
             return submitCommandAsync(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
@@ -221,6 +223,18 @@ public final class ExchangeApi {
         final CompletableFuture<CommandResultCode> future2 = new CompletableFuture<>();
 
         publishPersistCmd(apiCommand, (seq1, seq2) -> {
+            promises.put(seq1, cmd -> future1.complete(cmd.resultCode));
+            promises.put(seq2, cmd -> future2.complete(cmd.resultCode));
+        });
+
+        return future1.thenCombineAsync(future2, CommandResultCode::mergeToFirstFailed);
+    }
+
+    public CompletableFuture<CommandResultCode> submitRecoverCommandAsync(final ApiRecoverState apiRecoverState) {
+        final CompletableFuture<CommandResultCode> future1 = new CompletableFuture<>();
+        final CompletableFuture<CommandResultCode> future2 = new CompletableFuture<>();
+
+        publishRecoverCmd(apiRecoverState, (seq1, seq2) -> {
             promises.put(seq1, cmd -> future1.complete(cmd.resultCode));
             promises.put(seq2, cmd -> future2.complete(cmd.resultCode));
         });
