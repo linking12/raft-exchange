@@ -2,6 +2,12 @@ package com.binance.raftexchange.client.Api;
 
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
+import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
+import com.binance.raftexchange.stubs.report.SingleUserReportResult;
+import com.binance.raftexchange.stubs.report.StateHashReportQuery;
+import com.binance.raftexchange.stubs.report.StateHashReportResult;
+import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
+import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.request.NodeListCommand;
@@ -73,6 +79,29 @@ public class ExchangeClient implements AutoCloseable {
                         .setSymbol(symbol)
                         .setSize(size)
                         .build()
+        );
+    }
+
+    public CompletableFuture<SingleUserReportResult> singleUserReport(int transferId, long userId) {
+        return readOnlyClient.singleUserReport(
+                transferId,
+                SingleUserReportQuery.newBuilder()
+                        .setUserId(userId)
+                        .build()
+        );
+    }
+
+    public CompletableFuture<StateHashReportResult> stateHashReport(int transferId) {
+        return readOnlyClient.stateHashReport(
+                transferId,
+                StateHashReportQuery.getDefaultInstance()
+        );
+    }
+
+    public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId) {
+        return readOnlyClient.totalCurrencyBalanceReport(
+                transferId,
+                TotalCurrencyBalanceReportQuery.getDefaultInstance()
         );
     }
 
