@@ -268,7 +268,7 @@ public class DisruptorBlockingQueue<T> extends AbstractQueue<T> implements Block
     }
 
     static class HybridTimeoutBlockingWaitStrategy implements WaitStrategy {
-        private static final int SPIN_TRIES = 10000;
+        private static final int SPIN_TRIES = 1000;
         private final Lock lock = new ReentrantLock();
         private final Condition processorNotifyCondition = lock.newCondition();
         private final AtomicBoolean signalNeeded = new AtomicBoolean(false);
