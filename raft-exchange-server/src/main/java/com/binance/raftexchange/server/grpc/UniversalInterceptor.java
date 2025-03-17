@@ -8,12 +8,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.binance.raftexchange.stubs.request.ApiAddUser;
-import com.binance.raftexchange.stubs.request.ApiNop;
-import com.binance.raftexchange.stubs.request.ApiResumeUser;
-import com.google.protobuf.CodedInputStream;
-import com.google.protobuf.DescriptorProtos;
-import com.google.protobuf.Descriptors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +18,7 @@ import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.ServerNode;
+import com.google.protobuf.CodedInputStream;
 
 import io.grpc.ForwardingServerCallListener;
 import io.grpc.Metadata;

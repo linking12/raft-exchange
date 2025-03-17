@@ -1,5 +1,10 @@
 package com.binance.raftexchange.server.grpc;
 
+import java.util.concurrent.CompletableFuture;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.binance.raftexchange.server.exchange.SyncTradeAccountApiController;
 import com.binance.raftexchange.server.exchange.SyncTradeMiscApiController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
@@ -9,15 +14,10 @@ import com.binance.raftexchange.server.util.ThrowableFunction;
 import com.binance.raftexchange.stubs.api.QueryServiceGrpc;
 import com.binance.raftexchange.stubs.report.ReportQuery;
 import com.binance.raftexchange.stubs.report.ReportResult;
-import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
-import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.response.CommandResult;
-import io.grpc.stub.StreamObserver;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.CompletableFuture;
+import io.grpc.stub.StreamObserver;
 
 public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
 
