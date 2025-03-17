@@ -1,5 +1,7 @@
 package com.binance.raftexchange.server.grpc;
 
+import io.grpc.netty.NettyServerBuilder;
+import io.netty.channel.ChannelOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,11 +21,20 @@ public class GrpcServerContainer {
 
     public void doStart() throws Exception {
         String grpcPort = System.getProperty("grpc.port", "5001");
-        this.server = ServerBuilder.forPort(Integer.parseInt(grpcPort))//
-            .addService(new ApiService(raftClusterContainer).transform())//
-            .addService(new SevererNodeService(raftClusterContainer))
-            .addService(new QueryService(raftClusterContainer))
-            .build();
+        //grpc默认会判断epoll可不可用 可用就使用
+        //EventLoop线程数为一倍核数 不用调整
+        this.server = NettyServerBuilder.forPort(Integer.parseInt(grpcPort))
+                .withChildOption(ChannelOption.TCP_NODELAY, true)
+                .withChildOption(ChannelOption.SO_LINGER, -1)//
+                .withChildOption(ChannelOption.SO_KEEPALIVE, Boolean.TRUE)//
+                .withChildOption(ChannelOption.TCP_NODELAY, Boolean.FALSE)//
+                .withChildOption(ChannelOption.SO_REUSEADDR, Boolean.TRUE)//
+                .withOption(ChannelOption.SO_REUSEADDR, true)//
+                .withOption(ChannelOption.SO_BACKLOG, 8192)
+                .addService(new ApiService(raftClusterContainer).transform())
+                .addService(new SevererNodeService(raftClusterContainer))
+                .addService(new QueryService(raftClusterContainer))
+                .build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
     }
