@@ -54,7 +54,6 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         }
         TradeEventPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {
-            // 在本地测试环境打出来当前要发送的pb对象内容 方便调试
             String formateString = pbObject.toString();
             LOG.debug("tradeEvent: {}", formateString);
         }

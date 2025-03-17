@@ -27,7 +27,6 @@ public class RaftChangeEventbus {
 
     public void registerListener(Consumer<RaftNode.NodeType> listener) {
         listeners.add(listener);
-        // 由于启动顺序不同 所以保证在raft启动后的listener也可以获取到当前的节点信息
         listener.accept(isLeader.get() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER);
     }
 
