@@ -1,14 +1,13 @@
 package com.binance.raftexchange.server.grpc;
 
-import io.grpc.netty.NettyServerBuilder;
-import io.netty.channel.ChannelOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
+import io.grpc.netty.NettyServerBuilder;
+import io.netty.channel.ChannelOption;
 
 public class GrpcServerContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
