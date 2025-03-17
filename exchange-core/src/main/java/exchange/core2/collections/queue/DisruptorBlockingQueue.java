@@ -247,10 +247,13 @@ public class DisruptorBlockingQueue<T> extends AbstractQueue<T> implements Block
     }
 
     private T processElement(long sequence) {
-        Event<T> eventHolder = ringBuffer.get(sequence);
-        T t = eventHolder.removeValue();
-        consumedSeq.incrementAndGet();
-        return t;
+        // 使用CAS确保只有一个线程能够消费sequence
+        if (consumedSeq.compareAndSet(sequence - 1, sequence)) {
+            Event<T> eventHolder = ringBuffer.get(sequence);
+            return eventHolder.removeValue();
+        } else {
+            return null;
+        }
     }
 
     private void updatePublishedSequence() {
