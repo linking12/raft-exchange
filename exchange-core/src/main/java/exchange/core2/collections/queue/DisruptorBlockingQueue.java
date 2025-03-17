@@ -188,16 +188,29 @@ public class DisruptorBlockingQueue<T> extends AbstractQueue<T> implements Block
         try {
             this.timeoutBlockingWaitStrategy.setTimeout(timeout, unit);
             long l = consumedSeq.get() + 1;
-            while (knownPublishedSeq < l) {
-                try {
-                    knownPublishedSeq = barrier.waitFor(l);
-                } catch (AlertException e) {
-                    throw new InterruptedException(e.getMessage());
-                } catch (TimeoutException e) {
-                    return null;
+            long deadline = System.nanoTime() + unit.toNanos(timeout);
+            while (true) {
+                // 检查是否有新的数据可消费
+                if (knownPublishedSeq < l) {
+                    if (System.nanoTime() >= deadline) {
+                        return null; // 超时退出
+                    }
+                    try {
+                        knownPublishedSeq = barrier.waitFor(l);
+                    } catch (AlertException e) {
+                        throw new InterruptedException(e.getMessage());
+                    } catch (TimeoutException e) {
+                        return null;
+                    }
                 }
+                // 处理数据
+                T result = processElement(l);
+                if (result != null) {
+                    return result;
+                }
+                // 继续尝试获取下一个可用的数据
+                l = consumedSeq.get() + 1;
             }
-            return processElement(l);
         } finally {
             this.timeoutBlockingWaitStrategy.resetTimeOut();
         }
@@ -223,16 +236,25 @@ public class DisruptorBlockingQueue<T> extends AbstractQueue<T> implements Block
     public T take() throws InterruptedException {
         long l = consumedSeq.get() + 1;
         this.timeoutBlockingWaitStrategy.resetTimeOut();
-        while (knownPublishedSeq < l) {
-            try {
-                knownPublishedSeq = barrier.waitFor(l);
-            } catch (AlertException e) {
-                throw new InterruptedException(e.getMessage());
-            } catch (TimeoutException e) {
-                throw new InterruptedException(e.getMessage());
+        while (true) {
+            // 如果没有已发布的数据，则等待
+            if (knownPublishedSeq < l) {
+                try {
+                    knownPublishedSeq = barrier.waitFor(l);
+                } catch (AlertException e) {
+                    throw new InterruptedException(e.getMessage());
+                } catch (TimeoutException e) {
+                    throw new InterruptedException(e.getMessage());
+                }
             }
+            // 处理数据
+            T result = processElement(l);
+            if (result != null) {
+                return result;
+            }
+            // 继续尝试获取下一个可用的数据
+            l = consumedSeq.get() + 1;
         }
-        return processElement(l);
     }
 
     @Override
