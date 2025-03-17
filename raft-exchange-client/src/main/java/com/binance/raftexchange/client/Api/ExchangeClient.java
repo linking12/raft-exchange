@@ -2,7 +2,14 @@ package com.binance.raftexchange.client.Api;
 
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
+import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
+import com.binance.raftexchange.stubs.report.SingleUserReportResult;
+import com.binance.raftexchange.stubs.report.StateHashReportQuery;
+import com.binance.raftexchange.stubs.report.StateHashReportResult;
+import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
+import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.request.NodeListCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.NodeList;
@@ -24,8 +31,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -33,7 +42,7 @@ public class ExchangeClient implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
-    private static EventLoopGroup DEFAULT_EVENTLOOP_GROUP = new NioEventLoopGroup(1);
+    private EventLoopGroup eventLoopgroup;
 
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
 
@@ -45,11 +54,15 @@ public class ExchangeClient implements AutoCloseable {
 
     private final ScheduledFuture<?> flushTimer;
 
+    private final ExchangeReadOnlyClient readOnlyClient;
+
     public ExchangeClient(String host, int port) {
+        this.eventLoopgroup = new NioEventLoopGroup(1);
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
-        this.flushTimer = flushLeaderNode();
+        this.readOnlyClient = new ExchangeReadOnlyClient(eventLoopgroup);
+        this.flushTimer = flushNodesInfo();
     }
 
     public ApiStream createStream(StreamObserver<CommandResult> resultStreamObserver) {
@@ -60,22 +73,59 @@ public class ExchangeClient implements AutoCloseable {
         return stream;
     }
 
+    public CompletableFuture<CommandResult> searchOrderBook(int symbol, int size) {
+        return readOnlyClient.searchOrderBook(
+                ApiOrderBookRequest.newBuilder()
+                        .setSymbol(symbol)
+                        .setSize(size)
+                        .build()
+        );
+    }
+
+    public CompletableFuture<SingleUserReportResult> singleUserReport(int transferId, long userId) {
+        return readOnlyClient.singleUserReport(
+                transferId,
+                SingleUserReportQuery.newBuilder()
+                        .setUserId(userId)
+                        .build()
+        );
+    }
+
+    public CompletableFuture<StateHashReportResult> stateHashReport(int transferId) {
+        return readOnlyClient.stateHashReport(
+                transferId,
+                StateHashReportQuery.getDefaultInstance()
+        );
+    }
+
+    public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId) {
+        return readOnlyClient.totalCurrencyBalanceReport(
+                transferId,
+                TotalCurrencyBalanceReportQuery.getDefaultInstance()
+        );
+    }
+
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(DEFAULT_EVENTLOOP_GROUP).channelType(NioSocketChannel.class).usePlaintext().build();
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup).channelType(NioSocketChannel.class).usePlaintext().build();
     }
 
-    private ScheduledFuture<?> flushLeaderNode() {
-        return DEFAULT_EVENTLOOP_GROUP.schedule(this::flushLeaderNode0, 30, TimeUnit.MINUTES);
+    private ScheduledFuture flushNodesInfo() {
+        //先flush下确保client那边正常
+        flushNodes();
+        return eventLoopgroup.schedule(this::flushNodes, 30, TimeUnit.MINUTES);
     }
 
-    private void flushLeaderNode0() {
+    private void flushNodes() {
         ServerNode currentLeaderNode = this.leaderNode;
         Futures.addCallback(nodeStub.listNodes(NodeListCommand.getDefaultInstance()), new FutureCallback<NodeList>() {
             @Override
             public void onSuccess(@Nullable NodeList nodeList) {
-                Optional<ServerNode> optionalServerNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
+                List<ServerNode> nodesList = nodeList.getNodesList();
+                RaftNameResolverProvider.refresh(nodesList);
+                Optional<ServerNode> optionalServerNode =
+                    nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;
@@ -94,7 +144,7 @@ public class ExchangeClient implements AutoCloseable {
             public void onFailure(Throwable throwable) {
                 LOGGER.error("flashLeaderNode fail!", throwable);
             }
-        }, DEFAULT_EVENTLOOP_GROUP); // 调度回去 可以省下很多streamObserver的状态同步开销
+        }, eventLoopgroup); // 调度回去 可以省下很多streamObserver的状态同步开销
     }
 
     private ManagedChannel sniffLeaderChannel(String host, int port) {
@@ -164,5 +214,6 @@ public class ExchangeClient implements AutoCloseable {
         Channel channel = apiStub.getChannel();
         ManagedChannel managedChannel = (ManagedChannel)channel;
         managedChannel.shutdown();
+        readOnlyClient.close();
     }
 }

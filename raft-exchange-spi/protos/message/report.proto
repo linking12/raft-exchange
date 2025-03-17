@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs.report;
+
+option java_package = "com.binance.raftexchange.stubs.report";
+option java_multiple_files = true;
+
+import "message/common.proto";
+
+// Report Type Enum
+enum ReportType {
+  REPORT_TYPE_INVALID = 0; // proto3 enum必须从0开始
+  STATE_HASH = 10001;
+  SINGLE_USER_REPORT = 10002;
+  TOTAL_CURRENCY_BALANCE = 10003;
+}
+
+// Base Report Query Message
+message ReportQuery {
+  int32 transfer_id = 1;
+  oneof type {
+    SingleUserReportQuery single_user_report = 2;
+    StateHashReportQuery state_hash = 3;
+    TotalCurrencyBalanceReportQuery total_currency_balance = 4;
+  }
+}
+
+// Single User Report Query
+message SingleUserReportQuery {
+  int64 user_id = 1;
+}
+
+// State Hash Report Query
+message StateHashReportQuery {
+}
+
+// Total Currency Balance Report Query
+message TotalCurrencyBalanceReportQuery {
+}
+
+// Base Report Result Message
+message ReportResult {
+  oneof result {
+    SingleUserReportResult single_user_report = 1;
+    StateHashReportResult state_hash = 2;
+    TotalCurrencyBalanceReportResult total_currency_balance = 3;
+  }
+}
+
+enum UserStatus {
+  ACTIVE = 0; // normal user
+  SUSPENDED = 1;
+}
+
+message Position {
+  int32 quote_currency = 1;
+  PositionDirection direction = 2;
+  int64 open_volume = 3;
+  int64 open_price_sum = 4;
+  int64 profit = 5;
+  int64 pending_sell_size = 6;
+  int64 pending_buy_size = 7;
+}
+
+enum PositionDirection {
+  EMPTY = 0;
+  LONG = 1;
+  SHORT = 255;  // -1 in byte becomes 255 in unsigned context
+}
+
+message Order {
+  int64 order_id = 1;
+  int64 price = 2;
+  int64 size = 3;
+  int64 filled = 4;
+  int64 reserve_bid_price = 5;
+  OrderAction action = 6;
+  int64 uid = 7;
+  int64 timestamp = 8;
+}
+
+message OrderList {
+  repeated Order orders = 1;
+}
+
+enum QueryExecutionStatus {
+  OK = 0;
+  USER_NOT_FOUND = 1;
+}
+
+// Single User Report Result
+message SingleUserReportResult {
+  int64 user_id = 1;
+  UserStatus user_status = 2;
+  map<int32, int64> accounts = 3;
+  map<int32, Position> positions = 4;
+  map<int32, OrderList> orders = 5;
+  QueryExecutionStatus query_execution_status = 6;
+}
+
+enum SubmoduleType {
+  RISK_SYMBOL_SPEC_PROVIDER = 0;
+  RISK_USER_PROFILE_SERVICE = 1;
+  RISK_BINARY_CMD_PROCESSOR = 2;
+  RISK_LAST_PRICE_CACHE = 3;
+  RISK_FEES = 4;
+  RISK_ADJUSTMENTS = 5;
+  RISK_SUSPENDS = 6;
+  RISK_SHARD_MASK = 7;
+  MATCHING_BINARY_CMD_PROCESSOR = 64;
+  MATCHING_ORDER_BOOKS = 65;
+  MATCHING_SHARD_MASK = 66;
+}
+
+message SubmoduleKey {
+  int32 module_id = 1;
+  SubmoduleType submodule_type = 2;
+}
+
+message HashCodeEntry {
+  SubmoduleKey key = 1;
+  int32 value = 2;
+}
+
+// State Hash Report Result
+message StateHashReportResult {
+  repeated HashCodeEntry hash_codes = 1;
+}
+
+// Total Currency Balance Report Result
+message TotalCurrencyBalanceReportResult {
+  map<int32, int64> account_balances = 1;
+  map<int32, int64> fees = 2;
+  map<int32, int64> adjustments = 3;
+  map<int32, int64> suspends = 4;
+  map<int32, int64> orders_balances = 5;
+  map<int32, int64> open_interest_long = 6;
+  map<int32, int64> open_interest_short = 7;
+}

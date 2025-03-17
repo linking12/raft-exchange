@@ -8,6 +8,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiNop;
+import com.binance.raftexchange.stubs.request.ApiResumeUser;
+import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.DescriptorProtos;
+import com.google.protobuf.Descriptors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +38,8 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
 
     private final AtomicBoolean halfClose;
+
+    private final int READ_TYPE_COMMAND_NUMBER = ApiCommand.ORDER_BOOK_REQUEST_FIELD_NUMBER;
 
     public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate, ServerCall<ReqT, RespT> call) {
         super(delegate);
@@ -117,7 +125,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
      * @return
      */
     private CompletableFuture<byte[]> handle(byte[] apiCommand) {
-        if (!raftClusterContainer.isLeader()) {
+        if (!raftClusterContainer.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
                 return CompletableFuture.completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
@@ -131,6 +139,24 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     protected boolean allowFollowExecute(byte[] command) {
-        return false;
+        int fieldNumber = commandFieldNumber(command);
+        if (fieldNumber == -1) {
+            return false;
+        }
+        return fieldNumber != READ_TYPE_COMMAND_NUMBER;
     }
+
+    public static int commandFieldNumber(byte[] data) {
+       try {
+           CodedInputStream input = CodedInputStream.newInstance(data);
+           //跳过timestamp
+           int timeStampTag = input.readTag();
+           input.skipField(timeStampTag);
+           return input.readTag() >>> 3;
+       } catch (IOException e) {
+           LOGGER.warn("parse commandFieldNumber");
+           return -1;
+       }
+    }
+
 }
