@@ -4,6 +4,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -30,7 +32,6 @@ import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.ProtocolMessageEnum;
 
-import exchange.core2.core.common.api.reports.ReportResult;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.api.reports.StateHashReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
@@ -91,7 +92,7 @@ public class SerializeHelper {
             builder = builder.setAction(OrderAction.forNumber(result.action.getCode()));
         }
 
-        if (result.action != null) {
+        if (result.orderType != null) {
             builder = builder.setOrderType(OrderType.forNumber(result.orderType.getCode()));
         }
 
@@ -109,46 +110,74 @@ public class SerializeHelper {
     }
 
     private static MatcherTradeEvent toPbObject(exchange.core2.core.common.MatcherTradeEvent matcherTradeEvent) {
-
         if (matcherTradeEvent == null) {
             return null;
         }
 
-        MatcherTradeEvent.Builder baseBuilder =
-                MatcherTradeEvent.newBuilder().setOrderId(matcherTradeEvent.matchedOrderId).setPrice(matcherTradeEvent.price).setSize(matcherTradeEvent.price);
-        if (matcherTradeEvent.nextEvent == null) {
-            return baseBuilder.build();
+        // 使用栈来模拟递归调用
+        Deque<exchange.core2.core.common.MatcherTradeEvent> stack = new ArrayDeque<>();
+        while (matcherTradeEvent != null) {
+            stack.push(matcherTradeEvent);
+            matcherTradeEvent = matcherTradeEvent.nextEvent;
         }
-
-        return baseBuilder.setNextEvent(toPbObject(matcherTradeEvent.nextEvent)).build();
+        MatcherTradeEvent.Builder builder = null;
+        while (!stack.isEmpty()) {
+            exchange.core2.core.common.MatcherTradeEvent currentEvent = stack.pop();
+            MatcherTradeEvent.Builder newBuilder = MatcherTradeEvent.newBuilder()
+                    .setOrderId(currentEvent.matchedOrderId)
+                    .setPrice(currentEvent.price)
+                    .setSize(currentEvent.size)
+                    .setEventTypeValue(currentEvent.eventType.ordinal())
+                    .setActiveOrderCompleted(currentEvent.activeOrderCompleted)
+                    .setMatchedOrderCompleted(currentEvent.matchedOrderCompleted);
+            if (builder != null) {
+                newBuilder.setNextEvent(builder.build()); // 先构建 nextEvent
+            }
+            builder = newBuilder; // 更新 builder
+        }
+        return builder != null ? builder.build() : null;
     }
 
     private static L2MarketData toPbObject(exchange.core2.core.common.L2MarketData l2MarketData) {
-
         if (l2MarketData == null) {
             return null;
         }
 
-        L2MarketData.Builder newedBuilder = L2MarketData.newBuilder();
-
-        if (l2MarketData.askPrices != null) {
-            // 避免额外装箱操作
-            for (long bidPrice : l2MarketData.bidPrices) {
-                newedBuilder = newedBuilder.addBidPrices(bidPrice);
-            }
-        }
-
-        newedBuilder = newedBuilder.setBidSizes(l2MarketData.bidSize);
+        L2MarketData.Builder builder = L2MarketData.newBuilder();
+        builder.setAskSizes(l2MarketData.askSize);
+        builder.setBidSizes(l2MarketData.bidSize);
 
         if (l2MarketData.askPrices != null) {
             for (long askPrice : l2MarketData.askPrices) {
-                newedBuilder = newedBuilder.addAskPrices(askPrice);
+                builder.addAskPrices(askPrice);
             }
         }
-
-        newedBuilder = newedBuilder.setAskSizes(l2MarketData.askSize);
-
-        return newedBuilder.build();
+        if (l2MarketData.askVolumes != null) {
+            for (long askVolume : l2MarketData.askVolumes) {
+                builder.addAskVolumes(askVolume);
+            }
+        }
+        if (l2MarketData.askOrders != null) {
+            for (long askOrder : l2MarketData.askOrders) {
+                builder.addAskOrders(askOrder);
+            }
+        }
+        if (l2MarketData.bidPrices != null) {
+            for (long bidPrice : l2MarketData.bidPrices) {
+                builder.addBidPrices(bidPrice);
+            }
+        }
+        if (l2MarketData.bidVolumes != null) {
+            for (long bidVolume : l2MarketData.bidVolumes) {
+                builder.addBidVolumes(bidVolume);
+            }
+        }
+        if (l2MarketData.bidOrders != null) {
+            for (long bidOrder : l2MarketData.bidOrders) {
+                builder.addBidOrders(bidOrder);
+            }
+        }
+        return builder.build();
     }
 
     public static <T extends ProtocolMessageEnum> T bytesToEnumProto(byte[] bytes, Class<T> enumClass) throws InvalidProtocolBufferException {

@@ -101,20 +101,36 @@ enum OrderCommandType {
     RESERVED_COMPRESSED = 255;  // -1 in byte becomes 255 in unsigned context
 }
 
+enum MatcherEventType {
+    TRADE = 0;
+    REJECT = 1;
+    REDUCE = 2;
+    BINARY_EVENT = 3;
+}
+
 // Message for Matcher Trade Event (simplified, as full structure not provided)
 message MatcherTradeEvent {
     int64 order_id = 1;
     int64 price = 2;
     int64 size = 3;
-    MatcherTradeEvent next_event = 4;  // Linked list structure
+
+    MatcherEventType eventType = 4;
+    bool activeOrderCompleted = 5;
+    bool matchedOrderCompleted = 6;
+
+    MatcherTradeEvent next_event = 7;  // Linked list structure
 }
 
 // Message for L2 Market Data (simplified placeholder)
 message L2MarketData {
-    repeated int64 bid_prices = 1;
+    int64 ask_sizes = 1;
     int64 bid_sizes = 2;
     repeated int64 ask_prices = 3;
-    int64 ask_sizes = 4;
+    repeated int64 ask_volumes = 4;
+    repeated int64 ask_orders = 5;
+    repeated int64 bid_prices = 6;
+    repeated int64 bid_volumes = 7;
+    repeated int64 bid_orders = 8;
 }
 
 // Main Order Command message
