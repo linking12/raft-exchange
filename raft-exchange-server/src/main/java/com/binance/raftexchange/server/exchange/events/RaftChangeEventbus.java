@@ -12,7 +12,7 @@ public class RaftChangeEventbus {
 
     private CopyOnWriteArrayList<Consumer<RaftNode.NodeType>> listeners;
 
-    private AtomicBoolean isLeader = new AtomicBoolean(true);
+    private AtomicBoolean isLeader = new AtomicBoolean(false);
 
     private RaftChangeEventbus() {
         this.listeners = new CopyOnWriteArrayList<>();
