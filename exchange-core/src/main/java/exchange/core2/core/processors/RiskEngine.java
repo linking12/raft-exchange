@@ -25,11 +25,13 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
@@ -655,7 +657,71 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         return false;
     }
+    
+    /**
+     * 校验维持保证金并触发强平逻辑
+     */
+    private void checkAndLiquidateAllPositions(OrderCommand cmd) {
+        symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
+            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
+            if (spec.type == SymbolType.FUTURES_CONTRACT) {
+                userProfileService.getAllUserProfiles().forEach(userProfile -> {
+                    SymbolPositionRecord position = userProfile.positions.get(symbol);
+                    if (position != null && position.direction != PositionDirection.EMPTY) {
+                        long balance = userProfile.accounts.getIfAbsent(spec.quoteCurrency, 0L);
+                        long profit = position.estimateProfit(spec, lastPriceCache.get(symbol));
+                        long equity = balance + profit;
+                        long maintenanceMargin = position.calculateMaintenanceMargin(spec);
+                        long warningThreshold = (long) (maintenanceMargin * 1.2);
 
+                        if (equity < maintenanceMargin) {
+                            long deficit = maintenanceMargin - equity;
+                            long price = position.direction == PositionDirection.LONG ?
+                                lastPriceCache.get(symbol).bidPrice : lastPriceCache.get(symbol).askPrice;
+                            if (price == 0 || price == Long.MAX_VALUE) {
+                                price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+                            }
+                            long sizeToLiquidate = Math.min(position.openVolume, (long) Math.ceil(deficit / (double) price));
+
+                            if (sizeToLiquidate > 0) {
+                                OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+                                position.liquidate(action, sizeToLiquidate, price);
+                                long fee = spec.takerFee * sizeToLiquidate;
+                                userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
+
+                                if (position.isEmpty()) {
+                                    userProfile.positions.remove(symbol);
+                                }
+                             /**
+                              * @TODO
+                              */
+
+//                                FundEvent event = sharedPool.getFundEventPool();
+//                                event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "LIQUIDATION",
+//                                          symbol, sizeToLiquidate, position.direction, price);
+//                                eventsHelper.sendLiquidationEvent(event);
+//                                sharedPool.putFundEventPool(event);
+//
+//                                log.warn("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
+                            }
+                        } else if (equity < warningThreshold) {
+                            /**
+                             * @TODO 
+                             */
+//                            FundEvent event = sharedPool.getFundEventPool();
+//                            event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "MARGIN_CALL",
+//                                      symbol, position.openVolume, position.direction, position.openPriceSum / position.openVolume);
+//                            eventsHelper.sendMarginCallEvent(event);
+//                            sharedPool.putFundEventPool(event);
+//
+//                            log.info("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
+                        }
+                    }
+                });
+            }
+        });
+    }
+    
     private void handleMatcherEventMargin(final MatcherTradeEvent ev,
                                           final CoreSymbolSpecification spec,
                                           final OrderAction takerAction,

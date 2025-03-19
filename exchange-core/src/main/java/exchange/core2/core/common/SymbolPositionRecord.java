@@ -125,6 +125,14 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         }
     }
 
+    public long calculateMaintenanceMargin(CoreSymbolSpecification spec) {
+        return direction == PositionDirection.EMPTY ? 0 : openVolume * spec.maintenanceMargin;
+    }
+    
+    public void liquidate(OrderAction action, long size, long price) {
+        updatePositionForMarginTrade(action, size, price);
+    }
+    
     /**
      * Calculate required margin based on specification and current position/orders
      *

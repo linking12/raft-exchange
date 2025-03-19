@@ -16,6 +16,11 @@
 package exchange.core2.core.processors;
 
 
+import java.util.Objects;
+
+import org.eclipse.collections.api.set.primitive.MutableIntSet;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
+
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.utils.HashingUtils;
@@ -24,9 +29,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
-
-import java.util.Objects;
 
 @Slf4j
 public final class SymbolSpecificationProvider implements WriteBytesMarshallable, StateHash {
@@ -43,6 +45,10 @@ public final class SymbolSpecificationProvider implements WriteBytesMarshallable
     }
 
 
+    public MutableIntSet getAllSymbols() {
+        return symbolSpecs.keySet();
+    }
+    
     public boolean addSymbol(final CoreSymbolSpecification symbolSpecification) {
         if (getSymbolSpecification(symbolSpecification.symbolId) != null) {
             return false; // CommandResultCode.SYMBOL_MGMT_SYMBOL_ALREADY_EXISTS;
