@@ -646,6 +646,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
             final RiskEngine.LastPriceCacheRecord record = lastPriceCache.getIfAbsentPut(symbol, RiskEngine.LastPriceCacheRecord::new);
             record.askPrice = (marketData.askSize != 0) ? marketData.askPrices[0] : Long.MAX_VALUE;
             record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : 0;
+            
+            //维持保证金的计算
+            if (spec.type == SymbolType.FUTURES_CONTRACT) {
+                checkAndLiquidateAllPositions(cmd);
+            }
         }
 
         return false;
