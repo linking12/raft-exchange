@@ -680,9 +680,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
             if (spec.type == SymbolType.FUTURES_CONTRACT) {
                 // 遍历所有用户
-                userProfileService.getAllUserProfiles()
-                    .filter(up -> !up.positions.isEmpty())
-                    .forEach(userProfile -> {
+                userProfileService.getAllUserProfiles().filter(up -> !up.positions.isEmpty()).forEach(userProfile -> {
                     SymbolPositionRecord position = userProfile.positions.get(symbol);
                     // 仅检查有持仓的用户（direction != EMPTY）
                     if (position != null && position.direction != PositionDirection.EMPTY) {
@@ -696,7 +694,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         // 维持保证金需求 = 持仓数量 × 单单位维持保证金
                         long maintenanceMargin = position.calculateMaintenanceMargin(spec);
                         // 预警阈值 = 1.2 * 维持保证金（可配置，提示用户追加资金）
-                        long warningThreshold = (long) (maintenanceMargin * 1.2);
+                        long warningThreshold = (long)(maintenanceMargin * 1.2);
                         // 权益低于维持保证金，触发强平
                         if (equity < maintenanceMargin) {
                             // 计算缺口：需要多少资金使权益回到维持保证金水平
@@ -709,8 +707,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             }
                             // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整）
                             // 限制不超过当前持仓量（openVolume）
-                            long sizeToLiquidate = Math.min(position.openVolume, (long) Math.ceil(deficit / (double) price));
-
+                            long sizeToLiquidate = Math.min(position.openVolume, (long)Math.ceil(deficit / (double)price));
                             if (sizeToLiquidate > 0) {
                                 // 确定强平方向：多头卖出（ASK），空头买入（BID）
                                 OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
@@ -724,24 +721,25 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                     userProfile.positions.remove(symbol);
                                 }
                                 // 创建强平事件，记录用户信息和交易细节
-//                                FundEvent event = sharedPool.getFundEventPool();
-//                                event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "LIQUIDATION",
-//                                          symbol, sizeToLiquidate, position.direction, price);
-//                                eventsHelper.sendLiquidationEvent(event);
-//                                sharedPool.putFundEventPool(event);
+                                // FundEvent event = sharedPool.getFundEventPool();
+                                // event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "LIQUIDATION",
+                                // symbol, sizeToLiquidate, position.direction, price);
+                                // eventsHelper.sendLiquidationEvent(event);
+                                // sharedPool.putFundEventPool(event);
 
                                 log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
                             }
                         }
                         // 权益低于预警阈值但高于维持保证金，发送 Margin Call
                         else if (equity < warningThreshold) {
-//                            FundEvent event = sharedPool.getFundEventPool();
-//                            // 使用平均开仓价格作为参考
-//                            long avgOpenPrice = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
-//                            event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "MARGIN_CALL",
-//                                      symbol, position.openVolume, position.direction, avgOpenPrice);
-//                            eventsHelper.sendMarginCallEvent(event);
-//                            sharedPool.putFundEventPool(event);
+                            // FundEvent event = sharedPool.getFundEventPool();
+                            // // 使用平均开仓价格作为参考
+                            // long avgOpenPrice = position.openVolume > 0 ? position.openPriceSum / position.openVolume
+                            // : 0;
+                            // event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "MARGIN_CALL",
+                            // symbol, position.openVolume, position.direction, avgOpenPrice);
+                            // eventsHelper.sendMarginCallEvent(event);
+                            // sharedPool.putFundEventPool(event);
 
                             log.info("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
                         }
