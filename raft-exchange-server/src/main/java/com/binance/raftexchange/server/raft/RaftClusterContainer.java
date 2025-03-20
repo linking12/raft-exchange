@@ -11,6 +11,7 @@ import javax.annotation.Nullable;
 
 import com.alipay.sofa.jraft.closure.ReadIndexClosure;
 import com.alipay.sofa.jraft.option.ReadOnlyOption;
+import com.binance.raftexchange.server.exchange.events.RaftChangeEventbus;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,8 +90,7 @@ public class RaftClusterContainer {
     }
 
     public boolean isLeader() {
-        Node raftNode = raftGroupService.getRaftNode();
-        return raftNode != null && raftNode.isLeader();
+       return RaftChangeEventbus.isLeader();
     }
 
     public List<RaftNode> listNodes() {

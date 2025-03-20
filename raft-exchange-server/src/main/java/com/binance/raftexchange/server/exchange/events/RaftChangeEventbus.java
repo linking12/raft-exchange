@@ -30,4 +30,8 @@ public class RaftChangeEventbus {
         listener.accept(isLeader.get() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER);
     }
 
+    public static boolean isLeader() {
+        return INSTANCE.isLeader.get();
+    }
+
 }
