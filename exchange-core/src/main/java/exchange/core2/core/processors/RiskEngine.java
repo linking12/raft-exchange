@@ -181,38 +181,43 @@ public final class RiskEngine implements WriteBytesMarshallable {
     public static class LastPriceCacheRecord implements BytesMarshallable, StateHash {
         public long askPrice = Long.MAX_VALUE;
         public long bidPrice = 0L;
+        public long markPrice = 0;
 
         public LastPriceCacheRecord() {
         }
 
-        public LastPriceCacheRecord(long askPrice, long bidPrice) {
+        public LastPriceCacheRecord(long askPrice, long bidPrice, long markPrice) {
             this.askPrice = askPrice;
             this.bidPrice = bidPrice;
+            this.markPrice = markPrice;
         }
 
         public LastPriceCacheRecord(BytesIn bytes) {
             this.askPrice = bytes.readLong();
             this.bidPrice = bytes.readLong();
+            this.markPrice = bytes.readLong();
         }
 
         @Override
         public void writeMarshallable(BytesOut bytes) {
             bytes.writeLong(askPrice);
             bytes.writeLong(bidPrice);
+            bytes.writeLong(markPrice);
         }
 
         public LastPriceCacheRecord averagingRecord() {
             LastPriceCacheRecord average = new LastPriceCacheRecord();
             average.askPrice = (this.askPrice + this.bidPrice) >> 1;
             average.bidPrice = average.askPrice;
+            average.markPrice = average.askPrice;
             return average;
         }
 
-        public static LastPriceCacheRecord dummy = new LastPriceCacheRecord(42, 42);
+        public static LastPriceCacheRecord dummy = new LastPriceCacheRecord(42, 42,42);
 
         @Override
         public int stateHash() {
-            return Objects.hash(askPrice, bidPrice);
+            return Objects.hash(askPrice, bidPrice, markPrice);
         }
     }
 
@@ -648,7 +653,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
             final RiskEngine.LastPriceCacheRecord record = lastPriceCache.getIfAbsentPut(symbol, RiskEngine.LastPriceCacheRecord::new);
             record.askPrice = (marketData.askSize != 0) ? marketData.askPrices[0] : Long.MAX_VALUE;
             record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : 0;
-            
+            // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
+            record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ?
+                (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
             //维持保证金的计算
             if (spec.type == SymbolType.FUTURES_CONTRACT) {
                 checkAndLiquidateAllPositions(cmd);
@@ -674,14 +681,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
             if (spec.type == SymbolType.FUTURES_CONTRACT) {
                 // 遍历所有用户
-                userProfileService.getAllUserProfiles().forEach(userProfile -> {
+                userProfileService.getAllUserProfiles()
+                    .filter(up -> !up.positions.isEmpty())
+                    .forEach(userProfile -> {
                     SymbolPositionRecord position = userProfile.positions.get(symbol);
                     // 仅检查有持仓的用户（direction != EMPTY）
                     if (position != null && position.direction != PositionDirection.EMPTY) {
+                        LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
                         // 获取账户余额（quoteCurrency 为期货的计价货币）
                         long balance = userProfile.accounts.getIfAbsent(spec.quoteCurrency, 0L);
-                        // 计算未实现盈亏，基于当前市场价格和平均开仓价格
-                        long profit = position.estimateProfit(spec, lastPriceCache.get(symbol));
+                        // 计算未实现盈亏，基于 LastPriceCache 中的 markPrice，提供平滑的价格参考
+                        long profit = position.estimateProfit(spec, priceRecord);
                         // 账户权益 = 余额 + 未实现盈亏
                         long equity = balance + profit;
                         // 维持保证金需求 = 持仓数量 × 单单位维持保证金
@@ -692,9 +702,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         if (equity < maintenanceMargin) {
                             // 计算缺口：需要多少资金使权益回到维持保证金水平
                             long deficit = maintenanceMargin - equity;
-                            // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice）
-                            long price = position.direction == PositionDirection.LONG ?
-                                lastPriceCache.get(symbol).bidPrice : lastPriceCache.get(symbol).askPrice;
+                            // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice），用于实际清算
+                            long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
                             // 若市场无流动性（价格无效），使用平均开仓价格作为兜底
                             if (price == 0 || price == Long.MAX_VALUE) {
                                 price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
@@ -702,6 +711,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整）
                             // 限制不超过当前持仓量（openVolume）
                             long sizeToLiquidate = Math.min(position.openVolume, (long) Math.ceil(deficit / (double) price));
+
                             if (sizeToLiquidate > 0) {
                                 // 确定强平方向：多头卖出（ASK），空头买入（BID）
                                 OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
@@ -715,34 +725,27 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 if (position.isEmpty()) {
                                     userProfile.positions.remove(symbol);
                                 }
-
                                 // 创建强平事件，记录用户信息和交易细节
-                                /**
-                                 * @TODO
-                                 */
 //                                FundEvent event = sharedPool.getFundEventPool();
 //                                event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "LIQUIDATION",
 //                                          symbol, sizeToLiquidate, position.direction, price);
 //                                eventsHelper.sendLiquidationEvent(event);
 //                                sharedPool.putFundEventPool(event);
-//
-//                                log.warn("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
+
+                                log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
                             }
                         }
                         // 权益低于预警阈值但高于维持保证金，发送 Margin Call
                         else if (equity < warningThreshold) {
-                            FundEvent event = sharedPool.getFundEventPool();
-                            // 使用平均开仓价格作为参考
-                            /**
-                             * @TODO
-                             */
+//                            FundEvent event = sharedPool.getFundEventPool();
+//                            // 使用平均开仓价格作为参考
 //                            long avgOpenPrice = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
 //                            event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "MARGIN_CALL",
 //                                      symbol, position.openVolume, position.direction, avgOpenPrice);
 //                            eventsHelper.sendMarginCallEvent(event);
 //                            sharedPool.putFundEventPool(event);
-//
-//                            log.info("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
+
+                            log.info("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
                         }
                     }
                 });

@@ -102,24 +102,43 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         } else {
             pendingBuySize -= size;
         }
-
-//        if (pendingSellSize < 0 || pendingBuySize < 0) {
-//            log.error("uid {} : pendingSellSize:{} pendingBuySize:{}", uid, pendingSellSize, pendingBuySize);
-//        }
     }
 
+//    public long estimateProfit(final CoreSymbolSpecification spec, final RiskEngine.LastPriceCacheRecord lastPriceCacheRecord) {
+//        switch (direction) {
+//            case EMPTY:
+//                return profit;
+//            case LONG:
+//                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0)
+//                        ? (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum)
+//                        : spec.marginBuy * openVolume); // unknown price - no liquidity - require extra margin
+//            case SHORT:
+//                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE)
+//                        ? (openPriceSum - openVolume * lastPriceCacheRecord.askPrice)
+//                        : spec.marginSell * openVolume); // unknown price - no liquidity - require extra margin
+//            default:
+//                throw new IllegalStateException();
+//        }
+//    }
+    
+    /**
+     * 计算未实现盈亏，基于标记价格。
+     * - 多头：(markPrice - 开仓价格) * 数量 + 已实现盈亏。
+     * - 空头：(开仓价格 - markPrice) * 数量 + 已实现盈亏。
+     * - 若 markPrice 无效（0），使用初始保证金作为保守估计。
+     */
     public long estimateProfit(final CoreSymbolSpecification spec, final RiskEngine.LastPriceCacheRecord lastPriceCacheRecord) {
         switch (direction) {
             case EMPTY:
                 return profit;
             case LONG:
-                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0)
-                        ? (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum)
-                        : spec.marginBuy * openVolume); // unknown price - no liquidity - require extra margin
+                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0)
+                    ? (openVolume * lastPriceCacheRecord.markPrice - openPriceSum)
+                    : spec.marginBuy * openVolume);
             case SHORT:
-                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE)
-                        ? (openPriceSum - openVolume * lastPriceCacheRecord.askPrice)
-                        : spec.marginSell * openVolume); // unknown price - no liquidity - require extra margin
+                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0)
+                    ? (openPriceSum - openVolume * lastPriceCacheRecord.markPrice)
+                    : spec.marginSell * openVolume);
             default:
                 throw new IllegalStateException();
         }
