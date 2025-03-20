@@ -738,7 +738,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             // symbol, position.openVolume, position.direction, avgOpenPrice);
                             // eventsHelper.sendMarginCallEvent(event);
                             // sharedPool.putFundEventPool(event);
-                            log.info("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
+                            log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
                         }
                     }
                 });
