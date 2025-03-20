@@ -4,15 +4,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-public class RaftRoleChangeEventbus {
+public class RoleChangeEventbus {
 
-    public static final RaftRoleChangeEventbus INSTANCE = new RaftRoleChangeEventbus();
+    public static final RoleChangeEventbus INSTANCE = new RoleChangeEventbus();
 
     private CopyOnWriteArrayList<Consumer<RaftNode.NodeType>> listeners;
 
     private AtomicBoolean isLeader = new AtomicBoolean(false);
 
-    private RaftRoleChangeEventbus() {
+    private RoleChangeEventbus() {
         this.listeners = new CopyOnWriteArrayList<>();
     }
 
