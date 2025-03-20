@@ -160,13 +160,13 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     @Override
     public void onLeaderStart(long term) {
         this.leaderTerm.set(term);
-        RaftRoleChangeEventbus.INSTANCE.publish(RaftNode.NodeType.LEADER);
+        RoleChangeEventbus.INSTANCE.publish(RaftNode.NodeType.LEADER);
     }
 
     @Override
     public void onLeaderStop(Status status) {
         this.leaderTerm.set(-1L);
-        RaftRoleChangeEventbus.INSTANCE.publish(RaftNode.NodeType.FOLLOWER);
+        RoleChangeEventbus.INSTANCE.publish(RaftNode.NodeType.FOLLOWER);
     }
 
     public boolean isLeader() {

@@ -90,7 +90,7 @@ public class RaftClusterContainer {
     }
 
     public boolean isLeader() {
-       return RaftRoleChangeEventbus.isLeader();
+       return RoleChangeEventbus.isLeader();
     }
 
     public List<RaftNode> listNodes() {
