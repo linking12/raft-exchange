@@ -25,7 +25,6 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreSymbolSpecification;
-import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
@@ -720,7 +719,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 // 计算交易费用（takerFee），从账户扣除
                                 long fee = spec.takerFee * sizeToLiquidate;
                                 userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
-
                                 // 若仓位清空，从用户持仓记录中移除
                                 if (position.isEmpty()) {
                                     userProfile.positions.remove(symbol);
