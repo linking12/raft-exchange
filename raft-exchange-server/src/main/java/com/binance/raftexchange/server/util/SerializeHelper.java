@@ -202,6 +202,16 @@ public class SerializeHelper {
                     .setUid(o.getUid()).setTimestamp(o.getTimestamp()).build()).collect(Collectors.toList())).build();
 
     public static com.binance.raftexchange.stubs.report.ReportResult serializeToPb(SingleUserReportResult singleUserReportResult) {
+
+        if (singleUserReportResult.getQueryExecutionStatus() == SingleUserReportResult.QueryExecutionStatus.USER_NOT_FOUND) {
+            com.binance.raftexchange.stubs.report.SingleUserReportResult result = com.binance.raftexchange.stubs.report.SingleUserReportResult.newBuilder()
+                    .setUserId(singleUserReportResult.getUid())
+                    .build();
+            return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
+                    .setSingleUserReport(result)
+                    .build();
+        }
+
         com.binance.raftexchange.stubs.report.SingleUserReportResult result = com.binance.raftexchange.stubs.report.SingleUserReportResult.newBuilder()
                 .setUserId(singleUserReportResult.getUid())
                 .setUserStatus(UserStatus.forNumber(singleUserReportResult.getUserStatus().getCode()))

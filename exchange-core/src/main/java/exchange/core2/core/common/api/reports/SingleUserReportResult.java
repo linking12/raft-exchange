@@ -149,7 +149,9 @@ public final class SingleUserReportResult implements ReportResult {
                 .reduce(
                         IDENTITY,
                         (a, b) -> new SingleUserReportResult(
-                                a.uid,
+                                //以前是a.uid 因为这里是个reduce 所以旧的实现会导致a.uid一直是IDENTITY.uid 一直为0
+                                //不符合预期 所以改成这样了
+                                a.uid == 0 ? b.uid : a.uid,
 //                                SerializationUtils.preferNotNull(a.userProfile, b.userProfile),
                                 SerializationUtils.preferNotNull(a.userStatus, b.userStatus),
                                 SerializationUtils.preferNotNull(a.accounts, b.accounts),
