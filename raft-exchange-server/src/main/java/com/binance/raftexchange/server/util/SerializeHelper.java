@@ -206,6 +206,7 @@ public class SerializeHelper {
         if (singleUserReportResult.getQueryExecutionStatus() == SingleUserReportResult.QueryExecutionStatus.USER_NOT_FOUND) {
             com.binance.raftexchange.stubs.report.SingleUserReportResult result = com.binance.raftexchange.stubs.report.SingleUserReportResult.newBuilder()
                     .setUserId(singleUserReportResult.getUid())
+                    .setQueryExecutionStatus(QueryExecutionStatus.forNumber(singleUserReportResult.getQueryExecutionStatus().getCode()))
                     .build();
             return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
                     .setSingleUserReport(result)
