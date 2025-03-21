@@ -19,7 +19,6 @@ import org.slf4j.LoggerFactory;
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
-import com.binance.raftexchange.server.exchange.events.RaftChangeEventbus;
 import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCommand;
@@ -161,13 +160,13 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     @Override
     public void onLeaderStart(long term) {
         this.leaderTerm.set(term);
-        RaftChangeEventbus.INSTANCE.publish(RaftNode.NodeType.LEADER);
+        RoleChangeEventbus.INSTANCE.publish(RaftNode.NodeType.LEADER);
     }
 
     @Override
     public void onLeaderStop(Status status) {
         this.leaderTerm.set(-1L);
-        RaftChangeEventbus.INSTANCE.publish(RaftNode.NodeType.FOLLOWER);
+        RoleChangeEventbus.INSTANCE.publish(RaftNode.NodeType.FOLLOWER);
     }
 
     public boolean isLeader() {

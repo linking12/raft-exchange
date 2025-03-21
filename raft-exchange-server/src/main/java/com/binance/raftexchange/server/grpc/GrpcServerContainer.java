@@ -3,11 +3,15 @@ package com.binance.raftexchange.server.grpc;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.alipay.sofa.jraft.util.Utils;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 
 import io.grpc.Server;
+import io.grpc.internal.GrpcUtil;
 import io.grpc.netty.NettyServerBuilder;
 import io.netty.channel.ChannelOption;
+
+import java.util.concurrent.Executors;
 
 public class GrpcServerContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
@@ -33,6 +37,7 @@ public class GrpcServerContainer {
                 .addService(new ApiService(raftClusterContainer).transform())
                 .addService(new SevererNodeService(raftClusterContainer))
                 .addService(new QueryService(raftClusterContainer))
+                .executor(Executors.newFixedThreadPool(Math.max(Utils.cpus() << 3, 32), GrpcUtil.getThreadFactory("grpc-biz-%d", true)))
                 .build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);

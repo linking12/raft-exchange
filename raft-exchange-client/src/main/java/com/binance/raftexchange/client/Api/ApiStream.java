@@ -9,7 +9,7 @@ import io.grpc.stub.StreamObserver;
 import java.util.concurrent.atomic.AtomicInteger;
 
 //向server进行通讯的streaming
-public class ApiStream implements StreamObserver<ApiCommand> {
+public class ApiStream implements StreamObserver<ApiCommand>, AutoCloseable {
 
     private volatile StreamObserver<ApiCommand> internalObserver;
 
@@ -77,5 +77,10 @@ public class ApiStream implements StreamObserver<ApiCommand> {
             internalObserver.onCompleted();
         }
         this.internalObserver = observer;
+    }
+
+    @Override
+    public void close() {
+        this.onCompleted();
     }
 }

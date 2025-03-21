@@ -1,20 +1,18 @@
-package com.binance.raftexchange.server.exchange.events;
-
-import com.binance.raftexchange.server.raft.RaftNode;
+package com.binance.raftexchange.server.raft;
 
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-public class RaftChangeEventbus {
+public class RoleChangeEventbus {
 
-    public static final RaftChangeEventbus INSTANCE = new RaftChangeEventbus();
+    public static final RoleChangeEventbus INSTANCE = new RoleChangeEventbus();
 
     private CopyOnWriteArrayList<Consumer<RaftNode.NodeType>> listeners;
 
     private AtomicBoolean isLeader = new AtomicBoolean(false);
 
-    private RaftChangeEventbus() {
+    private RoleChangeEventbus() {
         this.listeners = new CopyOnWriteArrayList<>();
     }
 

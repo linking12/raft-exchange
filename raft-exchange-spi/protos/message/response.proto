@@ -123,8 +123,8 @@ message MatcherTradeEvent {
 
 // Message for L2 Market Data (simplified placeholder)
 message L2MarketData {
-    int64 ask_sizes = 1;
-    int64 bid_sizes = 2;
+    int32 ask_sizes = 1;
+    int32 bid_sizes = 2;
     repeated int64 ask_prices = 3;
     repeated int64 ask_volumes = 4;
     repeated int64 ask_orders = 5;

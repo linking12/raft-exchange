@@ -11,6 +11,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.PartitionInfo;
 
+import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.stubs.FundsEventPB;
 import com.binance.raftexchange.stubs.OrderAction;
@@ -35,7 +36,7 @@ public class IEventsHandlerByKafka implements IEventsHandler {
     public IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topic) {
         this.sender = sender;
         this.topic = topic;
-        RaftChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
+        RoleChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
     }
 
     @Override
