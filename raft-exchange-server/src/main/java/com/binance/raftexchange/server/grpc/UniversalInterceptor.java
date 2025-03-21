@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftNode;
+import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
@@ -120,7 +121,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
      * @return
      */
     private CompletableFuture<byte[]> handle(byte[] apiCommand) {
-        if (!raftClusterContainer.isLeader() && !allowFollowExecute(apiCommand)) {
+        if (!RoleChangeEventbus.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
                 return CompletableFuture.completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
@@ -142,16 +143,16 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     public static int commandFieldNumber(byte[] data) {
-       try {
-           CodedInputStream input = CodedInputStream.newInstance(data);
-           //跳过timestamp
-           int timeStampTag = input.readTag();
-           input.skipField(timeStampTag);
-           return input.readTag() >>> 3;
-       } catch (IOException e) {
-           LOGGER.warn("parse commandFieldNumber");
-           return -1;
-       }
+        try {
+            CodedInputStream input = CodedInputStream.newInstance(data);
+            // 跳过timestamp
+            int timeStampTag = input.readTag();
+            input.skipField(timeStampTag);
+            return input.readTag() >>> 3;
+        } catch (IOException e) {
+            LOGGER.warn("parse commandFieldNumber");
+            return -1;
+        }
     }
 
 }
