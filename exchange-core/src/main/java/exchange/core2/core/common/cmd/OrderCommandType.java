@@ -28,6 +28,7 @@ public enum OrderCommandType {
     MOVE_ORDER((byte) 3, true),
     REDUCE_ORDER((byte) 4, true),
 
+    SYSTEM_CHECK_POSITION((byte) 5, false),
     ORDER_BOOK_REQUEST((byte) 6, false),
 
     ADD_USER((byte) 10, true),

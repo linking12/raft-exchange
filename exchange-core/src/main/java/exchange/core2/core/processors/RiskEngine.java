@@ -329,6 +329,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return true;
             }
+            case SYSTEM_CHECK_POSITION: {
+                checkAndLiquidateAllPositions();
+                return false;
+            }
         }
         return false;
     }
@@ -655,11 +659,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
             // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
             record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
             //维持保证金的计算
-            if (spec.type == SymbolType.FUTURES_CONTRACT) {
-                if (mte != null) {
-                    checkAndLiquidateAllPositions(mte);
-                }
-            }
+//            if (spec.type == SymbolType.FUTURES_CONTRACT) {
+//                if (mte != null) {
+//                    checkAndLiquidateAllPositions();
+//                }
+//            }
         }
 
         return false;
@@ -675,14 +679,16 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 
      * @param cmd 当前处理的 OrderCommand，包含时间戳和市场数据，用于事件记录
      */
-    private void checkAndLiquidateAllPositions(MatcherTradeEvent mte) {
+    private void checkAndLiquidateAllPositions() {
         // 遍历所有期货符号（不仅是当前 cmd.symbol，确保全面检查）
         symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
             if (spec.type == SymbolType.FUTURES_CONTRACT) {
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
                 // 遍历所有用户
-                userProfileService.getAllUserProfiles().filter(up -> !up.positions.isEmpty()).forEach(userProfile -> {
+                userProfileService.getAllUserProfiles()
+                        .filter(up -> uidForThisHandler(up.uid)) //多个riskEngine分片加快 只处理自己的分片
+                        .filter(up -> !up.positions.isEmpty()).forEach(userProfile -> {
                     SymbolPositionRecord position = userProfile.positions.get(symbol);
                     // 仅检查有持仓的用户（direction != EMPTY）
                     if (position != null && position.direction != PositionDirection.EMPTY) {
