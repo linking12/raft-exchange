@@ -6,7 +6,9 @@ import java.io.InputStream;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,8 +30,16 @@ import io.grpc.Status;
 
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
+    /**
+     * jraft默认的处理buffer是16k个，因此需要控制grpc的每次request的拉取量
+     * 如果一次拉取8个，可以支持2k个client的并发
+     * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
+     */
+    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "8"));
+
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
+    protected final ExecutorService offloadWorker;
 
     protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
 
@@ -37,11 +47,22 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private final int READ_TYPE_COMMAND_NUMBER = ApiCommand.ORDER_BOOK_REQUEST_FIELD_NUMBER;
 
-    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate, ServerCall<ReqT, RespT> call) {
+    private final AtomicInteger inflight = new AtomicInteger(0);
+
+    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ExecutorService offloadWorker, ServerCall.Listener<ReqT> delegate, ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
+        this.offloadWorker = offloadWorker;
         this.call = call;
         this.halfClose = new AtomicBoolean(false);
+    }
+
+    @Override
+    public void onReady() {
+        super.onReady();
+        int requested = WINDOW_SIZE;
+        inflight.set(requested);
+        call.request(requested);
     }
 
     @Override
@@ -50,7 +71,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter off
              */
-            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenComplete((result, err) -> {
+            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
                 commandOnTheWay.remove(message);
                 if (call.isCancelled() || halfClose.get()) {
                     cancelAll();
@@ -58,6 +79,11 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                 }
                 if (result != null) {
                     call.sendMessage((RespT)new ByteArrayInputStream(result));
+                    if (inflight.decrementAndGet() == 0) {
+                        int requested = WINDOW_SIZE;
+                        inflight.set(requested);
+                        call.request(requested);
+                    }
                     return;
                 }
                 if (err instanceof CancellationException) {
@@ -65,7 +91,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                 }
                 LOGGER.error("exchange core error!", err);
                 call.close(Status.INTERNAL.withCause(err), new Metadata());
-            });
+            }, offloadWorker);
             /**
              * @formatter on
              */
