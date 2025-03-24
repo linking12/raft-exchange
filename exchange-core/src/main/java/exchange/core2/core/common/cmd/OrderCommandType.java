@@ -50,6 +50,9 @@ public enum OrderCommandType {
     SHUTDOWN_SIGNAL((byte) 127, false),
 
     RESERVED_COMPRESSED((byte) -1, false);
+    
+    
+    
 
     private byte code;
     private boolean mutate;
