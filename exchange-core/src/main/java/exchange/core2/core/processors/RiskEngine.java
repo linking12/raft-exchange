@@ -685,7 +685,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     // 仅检查有持仓的用户（direction != EMPTY）
                     if (position != null && position.direction != PositionDirection.EMPTY) {
                         // 获取账户余额（quoteCurrency 为期货的计价货币）
-                        long balance = userProfile.accounts.getIfAbsent(spec.quoteCurrency, 0L);
+                        long balance = userProfile.accounts.get(spec.quoteCurrency);
                         // 计算未实现盈亏，基于 LastPriceCache 中的 markPrice，提供平滑的价格参考
                         long profit = position.liquidateEstimateProfit(spec, priceRecord);
                         // 账户权益 = 余额 + 未实现盈亏
