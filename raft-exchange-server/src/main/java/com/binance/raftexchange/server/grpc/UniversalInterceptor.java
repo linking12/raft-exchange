@@ -32,10 +32,10 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     /**
      * jraft默认的处理buffer是16k个，因此需要控制grpc的每次request的拉取量
-     * 如果一次拉取8个，可以支持2k个client的并发
+     * 如果一次拉取16个，同一时刻可以支持1k个client的并发
      * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
      */
-    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "8"));
+    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "16"));
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
