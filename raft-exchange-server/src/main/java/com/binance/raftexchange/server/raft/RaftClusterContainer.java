@@ -7,11 +7,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import javax.annotation.Nullable;
-
-import com.alipay.sofa.jraft.closure.ReadIndexClosure;
-import com.alipay.sofa.jraft.option.ReadOnlyOption;
-
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,11 +17,13 @@ import com.alipay.sofa.jraft.Node;
 import com.alipay.sofa.jraft.NodeManager;
 import com.alipay.sofa.jraft.RaftGroupService;
 import com.alipay.sofa.jraft.Status;
+import com.alipay.sofa.jraft.closure.ReadIndexClosure;
 import com.alipay.sofa.jraft.conf.Configuration;
 import com.alipay.sofa.jraft.entity.PeerId;
 import com.alipay.sofa.jraft.entity.Task;
 import com.alipay.sofa.jraft.option.NodeOptions;
 import com.alipay.sofa.jraft.option.RaftOptions;
+import com.alipay.sofa.jraft.option.ReadOnlyOption;
 import com.alipay.sofa.jraft.util.Utils;
 
 public class RaftClusterContainer {
@@ -122,7 +119,6 @@ public class RaftClusterContainer {
         return -1;
     }
 
-    @Nullable
     public RaftNode leaderNode() {
         Node raftNode = raftGroupService.getRaftNode();
         PeerId leaderId = raftNode.getLeaderId();
