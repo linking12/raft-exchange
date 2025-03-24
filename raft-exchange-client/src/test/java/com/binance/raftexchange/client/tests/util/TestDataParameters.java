@@ -19,7 +19,7 @@ public class TestDataParameters {
 
     public static TestDataParametersBuilder singlePairMarginBuilder() {
         return TestDataParameters.builder()
-                .totalTransactionsNumber(300_000) // 3w 300w 不影响tps
+                .totalTransactionsNumber(3_000_000) // 3w 300w 不影响tps
                 .targetOrderBookOrdersTotal(1000)
                 .numAccounts(2000)
                 .currenciesAllowed(TestConstants.CURRENCIES_FUTURES)

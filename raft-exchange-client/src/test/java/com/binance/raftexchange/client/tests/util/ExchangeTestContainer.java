@@ -448,18 +448,22 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
             tStart = System.currentTimeMillis();
 
-            IntStream.range(0, userCount).parallel().forEach(i -> {
-                BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
-                ExchangeClient client = clients.get(i);
-                List<ApiCommand> cmdOnEachClient = groupCmds.get(i);
-                try (ApiStream apiStream = newApiStream(client, futures)) {
-                    cmdOnEachClient.forEach(apiStream::onNext);
-                    waitResult(futures, cmdOnEachClient.size());
-                    countDownLatch.countDown();
-                    client.close();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
+            ExecutorService executor = Executors.newFixedThreadPool(userCount);
+
+            IntStream.range(0, userCount).forEach(i -> {
+                executor.submit(() -> {
+                    BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
+                    ExchangeClient client = clients.get(i);
+                    List<ApiCommand> cmdOnEachClient = groupCmds.get(i);
+                    try (ApiStream apiStream = newApiStream(client, futures)) {
+                        cmdOnEachClient.forEach(apiStream::onNext);
+                        waitResult(futures, cmdOnEachClient.size());
+                        countDownLatch.countDown();
+                        client.close();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
             });
             try {
                 countDownLatch.await();
