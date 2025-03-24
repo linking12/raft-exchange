@@ -713,7 +713,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 // 执行强平：更新仓位状态，减少 openVolume 和 openPriceSum
                                 position.liquidate(action, sizeToLiquidate, price);
                                 // 计算交易费用（takerFee），从账户扣除
-                                long fee = spec.takerFee * sizeToLiquidate;
+                                long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec); 
                                 userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
                                 // 若仓位清空，从用户持仓记录中移除
                                 if (position.isEmpty()) {
