@@ -656,7 +656,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
             record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
             //维持保证金的计算
             if (spec.type == SymbolType.FUTURES_CONTRACT) {
-                checkAndLiquidateAllPositions();
+                if (mte != null) {
+                    checkAndLiquidateAllPositions(mte);
+                }
             }
         }
 
@@ -673,7 +675,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 
      * @param cmd 当前处理的 OrderCommand，包含时间戳和市场数据，用于事件记录
      */
-    private void checkAndLiquidateAllPositions() {
+    private void checkAndLiquidateAllPositions(MatcherTradeEvent mte) {
         // 遍历所有期货符号（不仅是当前 cmd.symbol，确保全面检查）
         symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
