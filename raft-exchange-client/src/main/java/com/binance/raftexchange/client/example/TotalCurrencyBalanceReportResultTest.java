@@ -1,15 +1,15 @@
 package com.binance.raftexchange.client.example;
 
 import com.binance.raftexchange.client.Api.ExchangeClient;
-import com.binance.raftexchange.stubs.response.CommandResult;
+import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 
 import java.util.concurrent.CompletableFuture;
 
-public class GrpcClientSearchApplication {
+public class TotalCurrencyBalanceReportResultTest {
     public static void main(String[] args) throws Exception {
         try (ExchangeClient exchangeClient = new ExchangeClient("localhost", 5001)) {
-            CompletableFuture<CommandResult> orderBook = exchangeClient.searchOrderBook(1, 1);
-            CommandResult commandResult = orderBook.get();
+            CompletableFuture<TotalCurrencyBalanceReportResult> result = exchangeClient.totalCurrencyBalanceReport(80);
+            TotalCurrencyBalanceReportResult commandResult = result.get();
             System.out.println(commandResult);
         }
     }
