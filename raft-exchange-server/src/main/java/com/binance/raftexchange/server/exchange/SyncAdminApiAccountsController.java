@@ -10,13 +10,14 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 public class SyncAdminApiAccountsController extends AbstractApiController {
 
     /**
      * 创建用户
      */
-    public static byte[] createUser(ApiAddUser grpcApiAddUser) throws Exception {
+    public static CompletableFuture<byte[]> createUser(ApiAddUser grpcApiAddUser) {
         exchange.core2.core.common.api.ApiAddUser apiAddUser = exchange.core2.core.common.api.ApiAddUser.builder().uid(grpcApiAddUser.getUid()).build();
         LOG.info("ApiAddUser applied, msg: {}", apiAddUser);
         return callExchange(apiAddUser);
@@ -25,7 +26,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 增加资金
      */
-    public static byte[] adjustBalance(ApiAdjustUserBalance grpcApiAdjustUserBalance) throws Exception {
+    public static CompletableFuture<byte[]> adjustBalance(ApiAdjustUserBalance grpcApiAdjustUserBalance) {
         exchange.core2.core.common.api.ApiAdjustUserBalance apiAdjustUserBalance = exchange.core2.core.common.api.ApiAdjustUserBalance.builder()
             .uid(grpcApiAdjustUserBalance.getUid()).currency(grpcApiAdjustUserBalance.getCurrency()).amount(grpcApiAdjustUserBalance.getAmount())
             .transactionId(grpcApiAdjustUserBalance.getTransactionId()).build();
@@ -36,7 +37,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 禁用用户
      */
-    public static byte[] suspendUser(ApiSuspendUser grpcApiSuspendUser) throws Exception {
+    public static CompletableFuture<byte[]> suspendUser(ApiSuspendUser grpcApiSuspendUser) {
         exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser =
             exchange.core2.core.common.api.ApiSuspendUser.builder().uid(grpcApiSuspendUser.getUid()).build();
         LOG.info("ApiSuspendUser applied, msg: {}", apiSuspendUser);
@@ -46,7 +47,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 解禁用户
      */
-    public static byte[] resumeUser(ApiResumeUser grpcApiResumeUser) throws Exception {
+    public static CompletableFuture<byte[]> resumeUser(ApiResumeUser grpcApiResumeUser) {
         exchange.core2.core.common.api.ApiResumeUser apiResumeUser =
             exchange.core2.core.common.api.ApiResumeUser.builder().uid(grpcApiResumeUser.getUid()).build();
         LOG.info("ApiResumeUser applied, msg: {}", apiResumeUser);
@@ -56,7 +57,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 批量创建账户
      */
-    public static byte[] batchAddAccounts(BatchAddAccountsCommand grpcBatchAddAccountsCommand) throws Exception {
+    public static CompletableFuture<byte[]> batchAddAccounts(BatchAddAccountsCommand grpcBatchAddAccountsCommand) {
         Map<Long, AccountBalanceMap> usersMap = grpcBatchAddAccountsCommand.getUsersMap();
         LongObjectHashMap<IntLongHashMap> users = new LongObjectHashMap<>(usersMap.size());
         for (Map.Entry<Long, AccountBalanceMap> entry : usersMap.entrySet()) {

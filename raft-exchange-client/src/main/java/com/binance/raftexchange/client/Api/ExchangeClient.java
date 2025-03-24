@@ -19,8 +19,11 @@ import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
+import io.grpc.internal.GrpcUtil;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.epoll.Epoll;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.nio.NioEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import io.grpc.netty.shaded.io.netty.util.concurrent.ScheduledFuture;
@@ -36,6 +39,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 public class ExchangeClient implements AutoCloseable {
@@ -57,7 +61,8 @@ public class ExchangeClient implements AutoCloseable {
     private final ExchangeReadOnlyClient readOnlyClient;
 
     public ExchangeClient(String host, int port) {
-        this.eventLoopgroup = new NioEventLoopGroup(1);
+        ThreadFactory threadFactory = GrpcUtil.getThreadFactory("grpc-worker-%d", true);
+        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(1, threadFactory): new NioEventLoopGroup(1, threadFactory);
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
