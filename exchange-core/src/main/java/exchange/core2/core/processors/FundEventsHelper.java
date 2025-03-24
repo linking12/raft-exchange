@@ -17,6 +17,9 @@ public class FundEventsHelper {
     private final Supplier<FundEvent> eventSupplier;
     private FundEvent eventPooled;
 
+    /**
+     * ***********现货************
+     */
     // 存款
     public FundEvent sendDepositEvent(final OrderCommand cmd, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
@@ -24,9 +27,8 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.loked = 0;
+        event.locked = 0;
         event.orderId = cmd.orderId;
-        event.positionDelta = 0;
         cmd.fundEvent = event;
         return event;
     }
@@ -38,9 +40,8 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.loked = 0;
+        event.locked = 0;
         event.orderId = cmd.orderId;
-        event.positionDelta = 0;
         cmd.fundEvent = event;
         return event;
     }
@@ -52,9 +53,8 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.loked = locked;
+        event.locked = locked;
         event.orderId = cmd.orderId;
-        event.positionDelta = 0;
         cmd.fundEvent = event;
         return event;
     }
@@ -67,8 +67,7 @@ public class FundEventsHelper {
         event.currency = currency;
         event.free = free;
         event.orderId = cmd.orderId;
-        event.loked = 0;
-        event.positionDelta = 0;
+        event.locked = 0;
         cmd.fundEvent = event;
         return event;
     }
@@ -80,10 +79,99 @@ public class FundEventsHelper {
         event.uid = uid;
         event.currency = currency;
         event.free = free;
-        event.loked = 0;
+        event.locked = 0;
         event.orderId = ev.matchedOrderId;
-        event.positionDelta = 0;
         ev.fundEvent = event;
+        return event;
+    }
+
+    /**
+     * ***********现货************
+     */
+
+    // 开仓
+    public FundEvent sendOpenPositionEvent(final OrderCommand cmd, long uid, int symbol, FundEvent.PositionDirection direction, long position, long price,
+        int currency, long free, long locked, long marginDelta) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.OPEN_POSITION;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.locked = locked; // 当前冻结保证金
+        event.symbol = symbol;
+        event.direction = direction;
+        event.position = position; // 用户剩余持仓
+        event.price = price;
+        event.marginDelta = marginDelta; // 本次保证金变化
+        event.orderId = cmd.orderId;
+        cmd.fundEvent = event;
+        return event;
+    }
+
+    // 平仓
+    public FundEvent sendClosePositionEvent(final MatcherTradeEvent ev, long uid, int symbol, FundEvent.PositionDirection direction, long position, long price,
+        long pnl, int currency, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.CLOSE_POSITION;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.locked = locked; // 更新后的冻结保证金
+        event.symbol = symbol;
+        event.direction = direction;
+        event.position = position; // 用户剩余持仓
+        event.price = price;
+        event.pnl = pnl;
+        event.orderId = ev.matchedOrderId;
+        ev.fundEvent = event;
+        return event;
+    }
+
+    // 强平
+    public FundEvent sendLiquidationEvent(long uid, int symbol, FundEvent.PositionDirection direction, long position, long price, long fee, int currency,
+        long free, long locked, long timestamp, long orderId) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.LIQUIDATION;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.locked = locked; // 更新后的冻结保证金
+        event.symbol = symbol;
+        event.direction = direction;
+        event.position = position; // 用户剩余持仓
+        event.price = price;
+        event.fee = fee;
+        event.orderId = orderId;
+        event.timestamp = timestamp; // 手动指定时间戳
+        return event;
+    }
+
+    // 保证金调整事件
+    public FundEvent sendMarginAdjustmentEvent(final OrderCommand cmd, long uid, int currency, long marginDelta, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.MARGIN_ADJUSTMENT;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.locked = locked; // 更新后的冻结保证金
+        event.marginDelta = marginDelta;
+        event.orderId = cmd.orderId;
+        cmd.fundEvent = event;
+        return event;
+    }
+
+    // 盈亏结算事件
+    public FundEvent sendPnlSettlementEvent(long uid, int symbol, long pnl, int currency, long free, long locked, long timestamp, long orderId) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.PNL_SETTLEMENT;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.locked = locked; // 当前冻结保证金
+        event.symbol = symbol;
+        event.pnl = pnl;
+        event.orderId = orderId;
+        event.timestamp = timestamp; // 手动指定时间戳
         return event;
     }
 
@@ -94,6 +182,21 @@ public class FundEventsHelper {
             }
             final FundEvent event = eventPooled;
             eventPooled = null;
+            event.eventType = null;
+            event.section = 0;
+            event.orderId = 0;
+            event.uid = 0;
+            event.currency = 0;
+            event.free = 0;
+            event.locked = 0;
+            event.symbol = 0;
+            event.direction = FundEvent.PositionDirection.EMPTY;
+            event.position = 0;
+            event.price = 0;
+            event.pnl = 0;
+            event.marginDelta = 0;
+            event.fee = 0;
+            event.timestamp = 0;
             return event;
         } else {
             return new FundEvent();
