@@ -27,6 +27,7 @@ import com.google.protobuf.GeneratedMessageV3;
 
 import java.nio.ByteBuffer;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
@@ -39,7 +40,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         while (iter.hasNext()) {
             ByteBuffer data = iter.getData();
             Closure closure = iter.done();
-            byte[] result = null;
+            CompletableFuture<byte[]> result = null;
             try {
                 result = apply(data.array(), data.arrayOffset() + data.position(), data.remaining());
             } catch (Exception e) {
@@ -55,9 +56,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         }
     }
 
-    private byte[] apply(byte[] data, int offset, int length) throws Exception {
+    private CompletableFuture<byte[]> apply(byte[] data, int offset, int length) throws Exception {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data, offset, length);
-        byte[] result = null;
+        CompletableFuture<byte[]> result = null;
         if (grpcMessage instanceof ApiCommand) {
             ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
             switch (commandCase) {
@@ -103,8 +104,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         return result;
     }
 
-    private byte[] processBinaryDataCommand(BinaryDataCommand binaryDataCommand) throws Exception {
-        byte[] result = null;
+    private CompletableFuture<byte[]> processBinaryDataCommand(BinaryDataCommand binaryDataCommand) {
+        CompletableFuture<byte[]> result = null;
         BinaryDataCommand.CommandCase commandCase = binaryDataCommand.getCommandCase();
         switch (commandCase) {
             case ADD_ACCOUNTS:

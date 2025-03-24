@@ -7,13 +7,14 @@ import exchange.core2.core.common.SymbolType;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 public class SyncAdminApiSymbolsController extends AbstractApiController {
 
     /**
      * 
      */
-    public static byte[] batchAddSymbols(BatchAddSymbolsCommand grpcBatchAddSymbolsCommand) throws Exception {
+    public static CompletableFuture<byte[]> batchAddSymbols(BatchAddSymbolsCommand grpcBatchAddSymbolsCommand) {
         Map<Integer, CoreSymbolSpecification> symbolsMap = grpcBatchAddSymbolsCommand.getSymbolsMap();
         Collection<exchange.core2.core.common.CoreSymbolSpecification> coreSymbols = new ArrayList<>(symbolsMap.size());
         for (CoreSymbolSpecification grpcSymbol : symbolsMap.values()) {

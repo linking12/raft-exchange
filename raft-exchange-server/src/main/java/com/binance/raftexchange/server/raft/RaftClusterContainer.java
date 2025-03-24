@@ -134,21 +134,24 @@ public class RaftClusterContainer {
 
     public static class ReturnableClosure implements Closure {
         private final CompletableFuture<byte[]> future;
-        private byte[] result;
 
         public ReturnableClosure(CompletableFuture<byte[]> future) {
             this.future = future;
         }
 
-        public void setResult(byte[] result) {
-            this.result = result;
+        public void setResult(CompletableFuture<byte[]> result) {
+            result.whenComplete((res, ex) -> {
+                if (ex == null) {
+                    future.complete(res);
+                } else {
+                    future.completeExceptionally(ex);
+                }
+            });
         }
 
         @Override
         public void run(Status status) {
-            if (status.isOk()) {
-                future.complete(result);
-            } else {
+            if (!status.isOk()) {
                 future.completeExceptionally(new RuntimeException(status.getErrorMsg()));
             }
         }
