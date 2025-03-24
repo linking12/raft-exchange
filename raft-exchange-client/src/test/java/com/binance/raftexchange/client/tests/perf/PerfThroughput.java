@@ -20,4 +20,11 @@ final class PerfThroughput {
                 50);
     }
 
+    @Test
+    void testThroughputExchange() {
+        ThroughputTestsModule.throughputTestImpl(
+                TestDataParameters.singlePairExchangeBuilder().build(),
+                50);
+    }
+
 }

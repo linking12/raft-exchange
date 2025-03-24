@@ -28,5 +28,16 @@ public class TestDataParameters {
                 .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER);
     }
 
+    public static TestDataParameters.TestDataParametersBuilder singlePairExchangeBuilder() {
+        return TestDataParameters.builder()
+                .totalTransactionsNumber(300_000)
+                .targetOrderBookOrdersTotal(1000)
+                .numAccounts(2000)
+                .currenciesAllowed(TestConstants.CURRENCIES_EXCHANGE)
+                .numSymbols(1)
+                .allowedSymbolTypes(ExchangeTestContainer.AllowedSymbolTypes.CURRENCY_EXCHANGE_PAIR)
+                .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER);
+    }
+
 
 }
