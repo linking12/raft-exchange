@@ -66,7 +66,6 @@ public final class ExchangeApi {
     //由于ExchangeApi是到处用的 所以防止可见性问题导致的计数错误影响性能
     private final AtomicLong lastTimestamp = new AtomicLong(System.currentTimeMillis());
 
-
     public void processResult(final long seq, final OrderCommand cmd) {
 
 //        if (cmd.command == OrderCommandType.BINARY_DATA_COMMAND
@@ -197,6 +196,9 @@ public final class ExchangeApi {
         }
     }
 
+    void submitSystemSettlePNL() {
+        ringBuffer.publishEvent(SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR, ApiSystemSettlePNLCommand.INSTANCE);
+    }
 
     public void submitCommandsSync(List<? extends ApiCommand> cmd) {
         if (cmd.isEmpty()) {
@@ -606,6 +608,14 @@ public final class ExchangeApi {
     private static final EventTranslatorOneArg<OrderCommand, ApiSystemCheckPositionCommand> SYSTEM_CHECK_POSITION_ORDER_EVENT_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.SYSTEM_CHECK_POSITION;
         cmd.timestamp = api.timestamp;
+        cmd.orderId = -1;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiSystemSettlePNLCommand> SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.SYSTEM_SETTLE_PNL;
+        cmd.timestamp = api.timestamp;
+        cmd.orderId = -1;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

@@ -333,6 +333,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 checkAndLiquidateAllPositions(cmd);
                 return false;
             }
+            case SYSTEM_SETTLE_PNL: {
+                settlePnl(cmd);
+                return false;
+            }
         }
         return false;
     }

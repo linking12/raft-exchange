@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.ObjLongConsumer;
@@ -80,6 +81,8 @@ public final class ExchangeCore {
 
     // enable MatcherTradeEvent pooling
     public static final boolean EVENTS_POOLING = true;
+
+    private static final ScheduledExecutorService INTERNAL_TIMER = Executors.newSingleThreadScheduledExecutor();
 
     /**
      * Exchange core constructor.
@@ -237,7 +240,7 @@ public final class ExchangeCore {
             log.debug("Starting disruptor...");
             disruptor.start();
             started = true;
-
+            INTERNAL_TIMER.schedule(api::submitSystemSettlePNL, 8, TimeUnit.HOURS);
             serializationProcessor.replayJournalFullAndThenEnableJouraling(exchangeConfiguration.getInitStateCfg(), api);
         }
     }
@@ -277,6 +280,7 @@ public final class ExchangeCore {
                 log.info("Shutdown disruptor...");
                 ringBuffer.publishEvent(SHUTDOWN_SIGNAL_TRANSLATOR);
                 disruptor.shutdown(timeout, timeUnit);
+                INTERNAL_TIMER.shutdownNow();
                 log.info("Disruptor stopped");
             } catch (TimeoutException e) {
                 throw new IllegalStateException("could not stop a disruptor gracefully. Not all events may be executed.");

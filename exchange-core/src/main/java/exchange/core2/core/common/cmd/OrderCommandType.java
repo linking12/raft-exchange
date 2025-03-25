@@ -35,6 +35,7 @@ public enum OrderCommandType {
     BALANCE_ADJUSTMENT((byte) 11, true),
     SUSPEND_USER((byte) 12, true),
     RESUME_USER((byte) 13, true),
+    SYSTEM_SETTLE_PNL((byte) 14, false), //没地方放了 先这样吧
 
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
