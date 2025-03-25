@@ -897,7 +897,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(spec.symbolId);
             long prevMargin = makerSpr.calculateRequiredMarginForFutures(spec);
             long sizeOpen = makerSpr.updatePositionForMarginTrade(takerAction.opposite(), ev.size, ev.price);
-            long fee = CoreArithmeticUtils.calculateTakerFee(ev.size, spec);
+            long fee = CoreArithmeticUtils.calculateMakerFee(ev.size, spec);
             long locked = makerSpr.calculateRequiredMarginForFutures(spec);
             long marginDiff = locked - prevMargin;
             if (sizeOpen > 0) {
