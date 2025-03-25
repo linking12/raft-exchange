@@ -30,7 +30,7 @@ public class TestDataParameters {
 
     public static TestDataParameters.TestDataParametersBuilder singlePairExchangeBuilder() {
         return TestDataParameters.builder()
-                .totalTransactionsNumber(300_000)
+                .totalTransactionsNumber(3_000_000)
                 .targetOrderBookOrdersTotal(1000)
                 .numAccounts(2000)
                 .currenciesAllowed(TestConstants.CURRENCIES_EXCHANGE)
