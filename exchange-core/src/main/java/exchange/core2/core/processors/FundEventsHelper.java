@@ -163,7 +163,7 @@ public class FundEventsHelper {
 
     // 强平
     public FundEvent sendLiquidationEvent(final OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long remainingPosition,
-        long sizeLiquidated, long liquidationPrice, long fee, long pnl, long releasedMargin) {
+        long sizeLiquidated, long liquidationPrice, long fee, long pnl) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.LIQUIDATION;
         event.uid = position.uid;

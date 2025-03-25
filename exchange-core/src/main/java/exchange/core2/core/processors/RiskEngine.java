@@ -766,6 +766,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl - fee);
                                 // 更新当前持仓所需的初始保证金，反映强平后的状态
                                 locked = position.calculateRequiredMarginForFutures(spec);
+                                // 释放保证金
                                 long releasedMargin = prevLocked - locked;
                                 // 剩余持仓量，可能为 0（全平）或部分剩余
                                 long remainingPosition = position.openVolume;
@@ -774,7 +775,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                     userProfile.positions.remove(symbol);
                                 }
                                 // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-                                eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl, releasedMargin);
+                                eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
                                 log.debug("Liquidated: uid={} symbol={} size={} price={} pnl={}", userProfile.uid, symbol, sizeToLiquidate, price,
                                     liquidationPnl);
                             }
