@@ -695,6 +695,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             long maintenanceMargin = position.calculateMaintenanceMargin(spec);
                             // 预警阈值 = 1.2 * 维持保证金（可配置，提示用户追加资金）
                             long warningThreshold = (long)(maintenanceMargin * 1.2);
+                            // 冻结保证金
+                            long locked = position.calculateRequiredMarginForFutures(spec);
                             // 权益低于维持保证金，触发强平
                             if (equity < maintenanceMargin) {
                                 // 计算缺口：需要多少资金使权益回到维持保证金水平
@@ -711,11 +713,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 if (sizeToLiquidate > 0) {
                                     // 确定强平方向：多头卖出（ASK），空头买入（BID）
                                     OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-                                    // 执行强平：更新仓位状态，减少 openVolume 和 openPriceSum，获取本次强平盈亏
+                                    // 执行强平，返回本次盈亏
                                     long liquidationPnl = position.liquidate(action, sizeToLiquidate, price);
+                                    // 计算手续费
                                     long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec);
+                                    // 更新账户余额
                                     long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl - fee);
-                                    long locked = position.calculateRequiredMarginForFutures(spec);
+                                    // 更新冻结保证金
+                                    locked = position.calculateRequiredMarginForFutures(spec);
                                     long remainingPosition = position.openVolume;
                                     // 若仓位清空，从用户持仓记录中移除
                                     if (position.isEmpty()) {
@@ -730,7 +735,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             // 权益低于预警阈值但高于维持保证金，发送 Margin Call
                             else if (equity < warningThreshold) {
                                 long free = balance; // 当前可用余额
-                                long locked = position.calculateRequiredMarginForFutures(spec);
                                 eventsHelper.sendMarginAdjustmentEvent(cmd, position, free, locked);
                                 log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
                             }
