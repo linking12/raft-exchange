@@ -827,16 +827,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     if (position == null || position.direction == PositionDirection.EMPTY) {
                         return;
                     }
-
                     long balance = userProfile.accounts.get(spec.quoteCurrency);
                     long unrealizedPnl = position.liquidateEstimateProfit(spec, priceRecord);
                     if (unrealizedPnl != 0) {
                         long free = userProfile.accounts.addToValue(spec.quoteCurrency, unrealizedPnl);
-                        position.profit += unrealizedPnl; // 更新已实现盈亏
+                        position.profit += unrealizedPnl;
+                        position.openPriceSum = position.openVolume * priceRecord.markPrice; // 重置
                         long locked = position.calculateRequiredMarginForFutures(spec);
-
                         eventsHelper.sendPnlSettlementEvent(cmd, position, free, locked, unrealizedPnl);
-                        log.debug("PnL settled: uid={} symbol={} settledPnl={}", userProfile.uid, symbol, unrealizedPnl);
                     }
                 });
         });
@@ -852,7 +850,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // update taker's position
                 long prevMargin = takerSpr.calculateRequiredMarginForFutures(spec);
                 final long sizeOpen = takerSpr.updatePositionForMarginTrade(takerAction, ev.size, ev.price);
-                final long fee = spec.takerFee * sizeOpen;
+                final long fee = CoreArithmeticUtils.calculateTakerFee(Math.abs(sizeOpen), spec);
                 long locked = takerSpr.calculateRequiredMarginForFutures(spec);
                 long marginDiff = locked - prevMargin; // 保证金变化量
                 if (sizeOpen > 0) {
@@ -880,9 +878,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 
             } else if (ev.eventType == MatcherEventType.REJECT || ev.eventType == MatcherEventType.REDUCE) {
                 // for cancel/rejection only one party is involved
+                long prevMargin = takerSpr.calculateRequiredMarginForFutures(spec);
                 takerSpr.pendingRelease(takerAction, ev.size);
+                long locked = takerSpr.calculateRequiredMarginForFutures(spec);
+                long releasedMargin = prevMargin - locked;
+                if (releasedMargin > 0) {
+                    long free = takerUp.accounts.addToValue(spec.quoteCurrency, releasedMargin);
+                    eventsHelper.sendUnLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, releasedMargin);
+                }
             }
-
             if (takerSpr.isEmpty()) {
                 removePositionRecord(takerSpr, takerUp);
             }
