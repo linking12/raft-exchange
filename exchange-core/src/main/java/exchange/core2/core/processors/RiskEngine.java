@@ -658,12 +658,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : 0;
             // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
             record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
-            //维持保证金的计算
-//            if (spec.type == SymbolType.FUTURES_CONTRACT) {
-//                if (mte != null) {
-//                    checkAndLiquidateAllPositions();
-//                }
-//            }
         }
 
         return false;
