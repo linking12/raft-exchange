@@ -225,6 +225,26 @@ public class FundEventsHelper {
         return event;
     }
 
+    public FundEvent sendPnlSettlementEvent(final MatcherTradeEvent ev, final SymbolPositionRecord position, long free, long locked, long settledPnl) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.PNL_SETTLEMENT;
+        event.uid = position.uid;
+        event.currency = position.currency;
+        event.free = free;
+        event.locked = locked;
+        event.symbol = position.symbol;
+        event.direction = position.direction;
+        event.position = position.openVolume;
+        event.positionLiquidated = 0;
+        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+        event.liquidationPrice = 0;
+        event.fee = 0;
+        event.pnl = settledPnl; // 结算盈亏
+        event.orderId = ev.matchedOrderId;
+        ev.fundEvent = event;
+        return event;
+    }
+
     private FundEvent newFundEvent() {
         if (EVENTS_POOLING) {
             if (eventPooled == null) {

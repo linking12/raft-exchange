@@ -477,7 +477,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             } else {
                 // try to cleanup position if refusing to place
                 if (position.isEmpty()) {
-                    removePositionRecord(position, userProfile);
+                    removePositionRecord(cmd, position, userProfile);
                 }
                 return CommandResultCode.RISK_NSF;
             }
@@ -773,7 +773,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 long remainingPosition = position.openVolume;
                                 // 若仓位清空，从用户持仓记录中移除，释放内存
                                 if (position.isEmpty()) {
-                                    removePositionRecord(position, userProfile);
+                                    removePositionRecord(cmd, position, userProfile);
                                 }
                                 // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
                                 eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
@@ -889,7 +889,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
             }
             if (takerSpr.isEmpty()) {
-                removePositionRecord(takerSpr, takerUp);
+                removePositionRecord(ev, takerSpr, takerUp);
             }
         }
 
@@ -917,7 +917,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendClosePositionEvent(ev, makerSpr, free, locked, sizeClosed, ev.price, fee, closePnl);
             }
             if (makerSpr.isEmpty()) {
-                removePositionRecord(makerSpr, maker);
+                removePositionRecord(ev, makerSpr, maker);
             }
         }
 
@@ -1125,8 +1125,20 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
     }
 
-    private void removePositionRecord(SymbolPositionRecord record, UserProfile userProfile) {
-        userProfile.accounts.addToValue(record.currency, record.profit);
+    private void removePositionRecord(OrderCommand cmd , SymbolPositionRecord record, UserProfile userProfile) {
+        long free = userProfile.accounts.addToValue(record.currency, record.profit);
+        if (record.profit != 0) {
+            eventsHelper.sendPnlSettlementEvent(cmd, record, free, 0, record.profit);
+        }
+        userProfile.positions.removeKey(record.symbol);
+        objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
+    }
+    
+    private void removePositionRecord(MatcherTradeEvent ev , SymbolPositionRecord record, UserProfile userProfile) {
+        long free = userProfile.accounts.addToValue(record.currency, record.profit);
+        if (record.profit != 0) {
+            eventsHelper.sendPnlSettlementEvent(ev, record, free, 0, record.profit);
+        }
         userProfile.positions.removeKey(record.symbol);
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
