@@ -763,12 +763,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec);
                                 // 更新手续费统计，用于平台收入记录
                                 fees.addToValue(spec.quoteCurrency, fee);
-                                // 更新账户可用余额：加上强平盈亏，扣除手续费（释放的保证金已隐式处理）
-                                long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl - fee);
                                 // 更新当前持仓所需的初始保证金，反映强平后的状态
                                 locked = position.calculateRequiredMarginForFutures(spec);
                                 // 释放保证金
                                 long releasedMargin = prevLocked - locked;
+                                // 更新账户可用余额：加上强平盈亏，扣除手续费（释放的保证金已隐式处理）
+                                long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl + releasedMargin - fee);
                                 if (releasedMargin > 0) {
                                     eventsHelper.sendUnLockEvent(cmd, userProfile.uid, spec.quoteCurrency, free, releasedMargin);
                                 }
@@ -1099,21 +1099,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
        
         if (taker != null) {
-
+            long leftover = 0;
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 // for FOK budget held sum calculated differently
                 takerSizePriceHeldSum = cmd.price;
             }else if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.IOC_BUDGET) {
-                /** === 修改开始 === **/
-                // 计算实际成交部分的手续费，释放剩余冻结金额
                 long totalHeld = CoreArithmeticUtils.calculateAmountBidTakerFee(cmd.size, cmd.reserveBidPrice, spec);
                 long usedAmount = CoreArithmeticUtils.calculateAmountBidTakerFee(takerSizeForThisHandler, cmd.reserveBidPrice, spec);
-                long leftover = totalHeld - usedAmount;
-                /** === 修改结束 === **/
-                takerSizePriceHeldSum = takerSizePriceSum; // 仅用成交部分计算
+                leftover = totalHeld - usedAmount;
+                takerSizePriceHeldSum = takerSizePriceSum;
             }
             // 支付 quoteCurrency
-            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
+            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK + leftover);
             // 接收 baseCurrency
             long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
             /**
