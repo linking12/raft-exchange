@@ -182,7 +182,18 @@ public class FundEventsHelper {
         cmd.fundEvents.add(event);
         return event;
     }
-
+    
+    public FundEvent sendUnLockEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.UNLOCKED;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.orderId = cmd.orderId;
+        event.locked = locked;
+        cmd.fundEvents.add(event);
+        return event;
+    }
     // 调整保证金
     public FundEvent sendMarginAdjustmentEvent(final OrderCommand cmd, final SymbolPositionRecord position, long free, long locked) {
         FundEvent event = newFundEvent();

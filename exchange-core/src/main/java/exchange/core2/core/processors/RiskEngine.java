@@ -769,6 +769,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 locked = position.calculateRequiredMarginForFutures(spec);
                                 // 释放保证金
                                 long releasedMargin = prevLocked - locked;
+                                if (releasedMargin > 0) {
+                                    eventsHelper.sendUnLockEvent(cmd, userProfile.uid, spec.quoteCurrency, free, releasedMargin);
+                                }
                                 // 剩余持仓量，可能为 0（全平）或部分剩余
                                 long remainingPosition = position.openVolume;
                                 // 若仓位清空，从用户持仓记录中移除，释放内存
@@ -1100,9 +1103,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 // for FOK budget held sum calculated differently
                 takerSizePriceHeldSum = cmd.price;
+            }else if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.IOC_BUDGET) {
+                /** === 修改开始 === **/
+                // 计算实际成交部分的手续费，释放剩余冻结金额
+                long totalHeld = CoreArithmeticUtils.calculateAmountBidTakerFee(cmd.size, cmd.reserveBidPrice, spec);
+                long usedAmount = CoreArithmeticUtils.calculateAmountBidTakerFee(takerSizeForThisHandler, cmd.reserveBidPrice, spec);
+                long leftover = totalHeld - usedAmount;
+                /** === 修改结束 === **/
+                takerSizePriceHeldSum = takerSizePriceSum; // 仅用成交部分计算
             }
-            // TODO IOC_BUDGET - order can be partially rejected - need held taker fee correction
-            
             // 支付 quoteCurrency
             long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK);
             // 接收 baseCurrency
