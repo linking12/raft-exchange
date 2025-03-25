@@ -754,13 +754,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT) {
                 return;
             }
-
             LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
             if (priceRecord == null) {
                 log.warn("No price record for symbol={}", symbol);
                 return;
             }
-
             userProfileService.getAllUserProfiles()
                 .filter(up -> uidForThisHandler(up.uid))
                 .filter(up -> !up.positions.isEmpty())
