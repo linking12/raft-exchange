@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
@@ -69,6 +70,8 @@ public final class TestOrdersGenerator {
 
     public static final UnaryOperator<Integer> UID_PLAIN_MAPPER = i -> i + 1;
 
+    // 单线程执行器，OrderBookNaiveImpl中用的OrderBookEventsHelper是共享的，不能多线程使用
+    public static final Executor executor = Executors.newSingleThreadExecutor();
 
     public static MultiSymbolGenResult generateMultipleSymbols(final TestOrdersGeneratorConfig config) {
 
@@ -99,7 +102,7 @@ public final class TestOrdersGenerator {
                     final int numUsers = uidsAvailableForSymbol.length;
                     final UnaryOperator<Integer> uidMapper = idx -> uidsAvailableForSymbol[idx];
                     return generateCommands(commandsNum, orderBookSizeTarget, numUsers, uidMapper, spec.getSymbolId(), false, config.avalancheIOC, sharedProgressLogger, seed);
-                }, Executors.newSingleThreadExecutor()));
+                }, executor));
             }
 
             futures.forEach((symbol, future) -> {
