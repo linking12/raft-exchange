@@ -711,11 +711,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 if (sizeToLiquidate > 0) {
                                     // 确定强平方向：多头卖出（ASK），空头买入（BID）
                                     OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-                                    // 执行强平：更新仓位状态，减少 openVolume 和 openPriceSum
-                                    position.liquidate(action, sizeToLiquidate, price);
-                                    // 计算交易费用（takerFee），从账户扣除
+                                    // 执行强平：更新仓位状态，减少 openVolume 和 openPriceSum，获取本次强平盈亏
+                                    long liquidationPnl = position.liquidate(action, sizeToLiquidate, price);
                                     long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec);
-                                    long free = userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
+                                    long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl - fee);
                                     long locked = position.calculateRequiredMarginForFutures(spec);
                                     long remainingPosition = position.openVolume;
                                     // 若仓位清空，从用户持仓记录中移除
@@ -723,12 +722,16 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                         userProfile.positions.remove(symbol);
                                     }
                                     // 创建强平事件，记录用户信息和交易细节
-                                    eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition);
+                                    eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee,
+                                        liquidationPnl);
                                     log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
                                 }
                             }
                             // 权益低于预警阈值但高于维持保证金，发送 Margin Call
                             else if (equity < warningThreshold) {
+                                long free = balance; // 当前可用余额
+                                long locked = position.calculateRequiredMarginForFutures(spec);
+                                eventsHelper.sendMarginAdjustmentEvent(cmd, position, free, locked);
                                 log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
                             }
                         }

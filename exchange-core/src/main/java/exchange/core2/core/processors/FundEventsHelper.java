@@ -31,7 +31,7 @@ public class FundEventsHelper {
         event.free = free;
         event.locked = 0;
         event.orderId = cmd.orderId;
-        cmd.fundEvent = event;
+        cmd.fundEvents.add(event);
         return event;
     }
 
@@ -44,7 +44,7 @@ public class FundEventsHelper {
         event.free = free;
         event.locked = 0;
         event.orderId = cmd.orderId;
-        cmd.fundEvent = event;
+        cmd.fundEvents.add(event);
         return event;
     }
 
@@ -57,7 +57,7 @@ public class FundEventsHelper {
         event.free = free;
         event.locked = locked;
         event.orderId = cmd.orderId;
-        cmd.fundEvent = event;
+        cmd.fundEvents.add(event);
         return event;
     }
 
@@ -70,7 +70,7 @@ public class FundEventsHelper {
         event.free = free;
         event.orderId = cmd.orderId;
         event.locked = 0;
-        cmd.fundEvent = event;
+        cmd.fundEvents.add(event);
         return event;
     }
 
@@ -87,6 +87,9 @@ public class FundEventsHelper {
         return event;
     }
 
+    /**
+     * ***********期货************
+     */
     // 强平
     public FundEvent sendLiquidationEvent(final OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long remainingPosition,
         long sizeLiquidated, long liquidationPrice, long fee, long pnl) {
@@ -105,7 +108,28 @@ public class FundEventsHelper {
         event.fee = fee;
         event.pnl = pnl;
         event.orderId = cmd.orderId;
-        cmd.fundEvent = event;
+        cmd.fundEvents.add(event);
+        return event;
+    }
+
+    // 调整保证金
+    public FundEvent sendMarginAdjustmentEvent(final OrderCommand cmd, final SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.MARGIN_ADJUSTMENT;
+        event.uid = position.uid;
+        event.currency = position.currency;
+        event.free = free;
+        event.locked = locked;
+        event.symbol = position.symbol;
+        event.direction = position.direction;
+        event.position = position.openVolume; // 当前仓位数量
+        event.positionLiquidated = 0; // 无清算
+        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0; // 平均开仓价格
+        event.liquidationPrice = 0; // 无清算价格
+        event.fee = 0; // 无交易费用
+        event.pnl = 0; // 无盈亏变动
+        event.orderId = cmd.orderId;
+        cmd.fundEvents.add(event);
         return event;
     }
 

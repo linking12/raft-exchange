@@ -219,9 +219,9 @@ public final class GroupingProcessor implements EventProcessor {
                         /**
                          * @modify 回收当前orderCommand下面的fundEvent
                          */
-                        if (EVENTS_POOLING && cmd.fundEvent != null) {
-                            sharedPool.putFundEventPool(cmd.fundEvent);
-                            cmd.fundEvent = null; 
+                        if (EVENTS_POOLING && cmd.fundEvents != null) {
+                            sharedPool.putFundEventPool(cmd.fundEvents);
+                            cmd.fundEvents.clear();
                         }
                         cmd.matcherEvent = null;
                         // TODO collect to shared buffer

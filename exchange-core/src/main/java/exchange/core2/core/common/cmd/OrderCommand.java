@@ -15,12 +15,24 @@
  */
 package exchange.core2.core.common.cmd;
 
-import exchange.core2.core.common.*;
-import lombok.*;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
+
+import exchange.core2.core.common.FundEvent;
+import exchange.core2.core.common.IOrder;
+import exchange.core2.core.common.L2MarketData;
+import exchange.core2.core.common.MatcherTradeEvent;
+import exchange.core2.core.common.OrderAction;
+import exchange.core2.core.common.OrderType;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @Builder
 @NoArgsConstructor
@@ -73,7 +85,7 @@ public final class OrderCommand implements IOrder {
     /**
      * 冻结资金和解冻资金
      */
-    public FundEvent fundEvent;
+    public MutableList<FundEvent> fundEvents = new FastList<FundEvent>();
 
     // optional market data
     public L2MarketData marketData;
