@@ -7,6 +7,7 @@ import java.util.function.ObjLongConsumer;
 import org.agrona.collections.MutableBoolean;
 import org.agrona.collections.MutableLong;
 import org.agrona.collections.MutableReference;
+import org.eclipse.collections.api.list.MutableList;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
@@ -48,7 +49,10 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     // 发送order下面的fundEvent，主要是资金冻结及恢复
     private void sendOrderFundEvents(OrderCommand cmd) {
-        sendFundEvents(cmd.fundEvent);
+        MutableList<FundEvent> fundEvents = cmd.fundEvents;
+        fundEvents.forEach(fundEvent -> {
+            sendFundEvents(fundEvent);
+        });
     }
 
     private void sendTradeEvents(OrderCommand cmd) {
@@ -56,7 +60,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         if (firstEvent == null) {
             return;
         }
-
         if (firstEvent.eventType == MatcherEventType.REDUCE) {
 
             final IEventsHandler.ReduceEvent evt = new IEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,

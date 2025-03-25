@@ -85,7 +85,7 @@ public final class OrderCommand implements IOrder {
     /**
      * 冻结资金和解冻资金
      */
-    public MutableList<FundEvent> fundEvents = new FastList<FundEvent>();
+    public final MutableList<FundEvent> fundEvents = new FastList<FundEvent>();
 
     // optional market data
     public L2MarketData marketData;
