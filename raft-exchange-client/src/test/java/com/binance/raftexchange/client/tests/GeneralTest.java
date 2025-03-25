@@ -43,8 +43,9 @@ public class GeneralTest {
 
             CommandResult commandResult = future.get();
             System.out.println(commandResult);
+            apiStream.onCompleted();
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            e.printStackTrace();
         }
     }
 }
