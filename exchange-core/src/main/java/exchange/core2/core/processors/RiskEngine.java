@@ -731,14 +731,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         long balance = userProfile.accounts.get(spec.quoteCurrency);
                         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
                         long profit = position.liquidateEstimateProfit(spec, priceRecord);
-                        // 账户总权益 = 可用余额 + 未实现盈亏，表示账户的整体抗风险能力
-                        long equity = balance + profit;
+                        // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
+                        long locked = position.calculateRequiredMarginForFutures(spec);
+                        // 账户总权益 = 可用余额 + 未实现盈亏 + 冻结保证金，表示账户的整体抗风险能力
+                        long equity = balance + profit + locked; // 包含冻结保证金
                         // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
                         long maintenanceMargin = position.calculateMaintenanceMargin(spec);
                         // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
                         long warningThreshold = (long)(maintenanceMargin * 1.2);
-                        // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
-                        long locked = position.calculateRequiredMarginForFutures(spec);
                         // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
                         if (equity < maintenanceMargin) {
                             // 计算资金缺口：需要多少权益恢复到维持保证金水平
@@ -751,7 +751,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 log.debug("Fallback to average open price={} for symbol={}", price, symbol);
                             }
                             // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整），限制不超过当前持仓量
-                            long sizeToLiquidate = Math.min(position.openVolume, (long)Math.ceil(deficit / (double)price));
+                            long sizeToLiquidate = Math.min(position.openVolume,
+                                (long)Math.ceil((deficit + CoreArithmeticUtils.calculateTakerFee(position.openVolume, spec)) / (double)price));
                             if (sizeToLiquidate > 0) {
                                 // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
                                 OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
@@ -772,7 +773,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 long remainingPosition = position.openVolume;
                                 // 若仓位清空，从用户持仓记录中移除，释放内存
                                 if (position.isEmpty()) {
-                                    userProfile.positions.remove(symbol);
+                                    removePositionRecord(position, userProfile);
                                 }
                                 // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
                                 eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
