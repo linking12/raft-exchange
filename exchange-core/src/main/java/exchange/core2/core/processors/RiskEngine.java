@@ -670,8 +670,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 2. 计算账户权益（Equity = 余额 + 未实现盈亏）。
      * 3. 若权益 < 维持保证金，触发部分强平，清算足够仓位使权益恢复。
      * 4. 若权益 < 预警阈值（1.2 * 维持保证金），但未低于维持保证金，发送 Margin Call。
-     * 
-     * @param cmd 当前处理的 OrderCommand，包含时间戳和市场数据，用于事件记录
      */
     private void checkAndLiquidateAllPositions(OrderCommand cmd) {
         // 遍历所有期货符号（不仅是当前 cmd.symbol，确保全面检查）
@@ -717,6 +715,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                     long liquidationPnl = position.liquidate(action, sizeToLiquidate, price);
                                     // 计算手续费
                                     long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec);
+                                    fees.addToValue(spec.quoteCurrency, fee);
                                     // 更新账户余额
                                     long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl - fee);
                                     // 更新冻结保证金
@@ -744,6 +743,47 @@ public final class RiskEngine implements WriteBytesMarshallable {
         });
     }
     
+    
+    /**
+     * 周期性结算期货仓位的未实现盈亏。
+     * 将未实现盈亏转为已实现盈亏并更新账户余额。
+     */
+    private void settlePnl(OrderCommand cmd) {
+        symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
+            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
+            if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT) {
+                return;
+            }
+
+            LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
+            if (priceRecord == null) {
+                log.warn("No price record for symbol={}", symbol);
+                return;
+            }
+
+            userProfileService.getAllUserProfiles()
+                .filter(up -> uidForThisHandler(up.uid))
+                .filter(up -> !up.positions.isEmpty())
+                .forEach(userProfile -> {
+                    SymbolPositionRecord position = userProfile.positions.get(symbol);
+                    if (position == null || position.direction == PositionDirection.EMPTY) {
+                        return;
+                    }
+
+                    long balance = userProfile.accounts.get(spec.quoteCurrency);
+                    long unrealizedPnl = position.liquidateEstimateProfit(spec, priceRecord);
+                    if (unrealizedPnl != 0) {
+                        long free = userProfile.accounts.addToValue(spec.quoteCurrency, unrealizedPnl);
+                        position.profit += unrealizedPnl; // 更新已实现盈亏
+                        long locked = position.calculateRequiredMarginForFutures(spec);
+
+                        eventsHelper.sendPnlSettlementEvent(cmd, position, free, locked, unrealizedPnl);
+                        log.debug("PnL settled: uid={} symbol={} settledPnl={}", userProfile.uid, symbol, unrealizedPnl);
+                    }
+                });
+        });
+    }
+    
     private void handleMatcherEventMargin(final MatcherTradeEvent ev,
                                           final CoreSymbolSpecification spec,
                                           final OrderAction takerAction,
@@ -754,8 +794,24 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // update taker's position
                 final long sizeOpen = takerSpr.updatePositionForMarginTrade(takerAction, ev.size, ev.price);
                 final long fee = spec.takerFee * sizeOpen;
-                takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
+                long userBalance = takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
                 fees.addToValue(spec.quoteCurrency, fee);
+                
+                long locked = takerSpr.calculateRequiredMarginForFutures(spec);
+                if (sizeOpen > 0) {
+                    // 开仓
+                    eventsHelper.sendOpenPositionEvent(ev, takerSpr, userBalance, locked, sizeOpen, ev.price, fee);
+                    log.debug("Opened position: uid={} symbol={} size={} price={}", takerUp.uid, spec.symbolId, sizeOpen, ev.price);
+                } else if (sizeOpen < 0) {
+                    // 平仓
+                    long sizeClosed = -sizeOpen;
+                    long closePnl = (takerAction == OrderAction.BID ? (ev.price - takerSpr.openPriceSum / takerSpr.openVolume) : 
+                                    (takerSpr.openPriceSum / takerSpr.openVolume - ev.price)) * sizeClosed * spec.quoteScaleK;
+                    eventsHelper.sendClosePositionEvent(ev, takerSpr, userBalance, locked, sizeClosed, ev.price, fee, closePnl);
+                    log.debug("Closed position: uid={} symbol={} size={} price={} pnl={}", takerUp.uid, spec.symbolId, sizeClosed, ev.price, closePnl);
+                }
+                
+                
             } else if (ev.eventType == MatcherEventType.REJECT || ev.eventType == MatcherEventType.REDUCE) {
                 // for cancel/rejection only one party is involved
                 takerSpr.pendingRelease(takerAction, ev.size);
@@ -772,8 +828,23 @@ public final class RiskEngine implements WriteBytesMarshallable {
             final SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(spec.symbolId);
             long sizeOpen = makerSpr.updatePositionForMarginTrade(takerAction.opposite(), ev.size, ev.price);
             final long fee = spec.makerFee * sizeOpen;
-            maker.accounts.addToValue(spec.quoteCurrency, -fee);
+            long userBalance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
             fees.addToValue(spec.quoteCurrency, fee);
+            
+            long locked = makerSpr.calculateRequiredMarginForFutures(spec);
+            if (sizeOpen > 0) {
+                // 开仓
+                eventsHelper.sendOpenPositionEvent(ev, makerSpr, userBalance, locked, sizeOpen, ev.price, fee);
+                log.debug("Opened position (maker): uid={} symbol={} size={} price={}", maker.uid, spec.symbolId, sizeOpen, ev.price);
+            } else if (sizeOpen < 0) {
+                // 平仓
+                long sizeClosed = -sizeOpen;
+                long closePnl = (takerAction.opposite() == OrderAction.BID ? (ev.price - makerSpr.openPriceSum / makerSpr.openVolume) : 
+                                (makerSpr.openPriceSum / makerSpr.openVolume - ev.price)) * sizeClosed * spec.quoteScaleK;
+                eventsHelper.sendClosePositionEvent(ev, makerSpr, userBalance, locked, sizeClosed, ev.price, fee, closePnl);
+                log.debug("Closed position (maker): uid={} symbol={} size={} price={} pnl={}", maker.uid, spec.symbolId, sizeClosed, ev.price, closePnl);
+            }
+            
             if (makerSpr.isEmpty()) {
                 removePositionRecord(makerSpr, maker);
             }

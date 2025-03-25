@@ -90,6 +90,51 @@ public class FundEventsHelper {
     /**
      * ***********期货************
      */
+
+    // 开仓
+    public FundEvent sendOpenPositionEvent(final MatcherTradeEvent ev, final SymbolPositionRecord position, long free, long locked, long sizeOpened, long price,
+        long fee) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.OPEN_POSITION;
+        event.uid = position.uid;
+        event.currency = position.currency;
+        event.free = free;
+        event.locked = locked;
+        event.symbol = position.symbol;
+        event.direction = position.direction;
+        event.position = position.openVolume; // 当前总仓位
+        event.positionLiquidated = 0;
+        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+        event.liquidationPrice = price; // 开仓价格
+        event.fee = fee;
+        event.pnl = 0; // 开仓无即时盈亏
+        event.orderId = ev.matchedOrderId;
+        ev.fundEvent = event;
+        return event;
+    }
+
+    // 平仓
+    public FundEvent sendClosePositionEvent(final MatcherTradeEvent ev, final SymbolPositionRecord position, long free, long locked, long sizeClosed, long price,
+        long fee, long closePnl) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.CLOSE_POSITION;
+        event.uid = position.uid;
+        event.currency = position.currency;
+        event.free = free;
+        event.locked = locked;
+        event.symbol = position.symbol;
+        event.direction = position.direction;
+        event.position = position.openVolume; // 剩余仓位
+        event.positionLiquidated = sizeClosed; // 平仓数量
+        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+        event.liquidationPrice = price; // 平仓价格
+        event.fee = fee;
+        event.pnl = closePnl; // 本次平仓盈亏
+        event.orderId = ev.matchedOrderId;
+        ev.fundEvent = event;
+        return event;
+    }
+
     // 强平
     public FundEvent sendLiquidationEvent(final OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long remainingPosition,
         long sizeLiquidated, long liquidationPrice, long fee, long pnl) {
@@ -128,6 +173,27 @@ public class FundEventsHelper {
         event.liquidationPrice = 0; // 无清算价格
         event.fee = 0; // 无交易费用
         event.pnl = 0; // 无盈亏变动
+        event.orderId = cmd.orderId;
+        cmd.fundEvents.add(event);
+        return event;
+    }
+
+    // 生成盈亏结算事件 (PNL_SETTLEMENT)。
+    public FundEvent sendPnlSettlementEvent(final OrderCommand cmd, final SymbolPositionRecord position, long free, long locked, long settledPnl) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.PNL_SETTLEMENT;
+        event.uid = position.uid;
+        event.currency = position.currency;
+        event.free = free;
+        event.locked = locked;
+        event.symbol = position.symbol;
+        event.direction = position.direction;
+        event.position = position.openVolume;
+        event.positionLiquidated = 0;
+        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+        event.liquidationPrice = 0;
+        event.fee = 0;
+        event.pnl = settledPnl; // 结算盈亏
         event.orderId = cmd.orderId;
         cmd.fundEvents.add(event);
         return event;
