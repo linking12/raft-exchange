@@ -42,7 +42,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             Closure closure = iter.done();
             CompletableFuture<byte[]> result = null;
             try {
-                result = apply(data.array(), data.arrayOffset() + data.position(), data.remaining());
+                result = apply(data);
             } catch (Exception e) {
                 LOG.error("Fail to apply", e);
             }
@@ -56,8 +56,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         }
     }
 
-    private CompletableFuture<byte[]> apply(byte[] data, int offset, int length) throws Exception {
-        GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data, offset, length);
+    private CompletableFuture<byte[]> apply(ByteBuffer data) throws Exception {
+        GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data);
         CompletableFuture<byte[]> result = null;
         if (grpcMessage instanceof ApiCommand) {
             ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
