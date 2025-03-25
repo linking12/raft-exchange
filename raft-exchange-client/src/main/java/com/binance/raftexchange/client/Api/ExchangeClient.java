@@ -119,7 +119,7 @@ public class ExchangeClient implements AutoCloseable {
     private ScheduledFuture flushNodesInfo() {
         //先flush下确保client那边正常
         flushNodes();
-        return eventLoopgroup.schedule(this::flushNodes, 30, TimeUnit.MINUTES);
+        return eventLoopgroup.scheduleWithFixedDelay(this::flushNodes, 30, 30, TimeUnit.MINUTES);
     }
 
     private void flushNodes() {

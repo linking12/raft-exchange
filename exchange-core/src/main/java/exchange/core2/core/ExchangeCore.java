@@ -240,7 +240,7 @@ public final class ExchangeCore {
             log.debug("Starting disruptor...");
             disruptor.start();
             started = true;
-            INTERNAL_TIMER.schedule(api::submitSystemSettlePNL, 8, TimeUnit.HOURS);
+            INTERNAL_TIMER.scheduleWithFixedDelay(api::submitSystemSettlePNL, 8, 8, TimeUnit.HOURS);
             serializationProcessor.replayJournalFullAndThenEnableJouraling(exchangeConfiguration.getInitStateCfg(), api);
         }
     }
