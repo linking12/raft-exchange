@@ -330,7 +330,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return true;
             }
             case SYSTEM_CHECK_POSITION: {
-                checkAndLiquidateAllPositions();
+                checkAndLiquidateAllPositions(cmd);
                 return false;
             }
         }
@@ -673,7 +673,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 
      * @param cmd 当前处理的 OrderCommand，包含时间戳和市场数据，用于事件记录
      */
-    private void checkAndLiquidateAllPositions() {
+    private void checkAndLiquidateAllPositions(OrderCommand cmd) {
         // 遍历所有期货符号（不仅是当前 cmd.symbol，确保全面检查）
         symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
