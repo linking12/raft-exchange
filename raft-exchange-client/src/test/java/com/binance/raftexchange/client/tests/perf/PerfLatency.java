@@ -42,4 +42,51 @@ final class PerfLatency {
                 16);
     }
 
+    /**
+     * This is medium load latency test for verifying "triple million" capability:
+     * - 1M active users (3M currency accounts)
+     * - 1M pending limit-orders
+     * - 1M+ messages per second throughput
+     * - 10K symbols
+     * - less than 1 millisecond 99.99% latency
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testLatencyMultiSymbolMedium() {
+        latencyTestImpl(
+                TestDataParameters.mediumBuilder().build(),
+                8);
+    }
+
+    /**
+     * This is high load latency test for verifying exchange core scalability:
+     * - 3M active users (10M currency accounts)
+     * - 3M pending limit-orders
+     * - 1M+ messages per second throughput
+     * - 100K symbols
+     * - less than 1 millisecond 99.99% latency
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testLatencyMultiSymbolLarge() {
+        latencyTestImpl(
+                TestDataParameters.largeBuilder().build(),
+                4);
+    }
+
+    /**
+     * This is high load latency test for verifying exchange core scalability:
+     * - 10M active users (33M currency accounts)
+     * - 30M pending limit-orders
+     * - 200K symbols
+     * - 1M+ messages per second throughput
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testLatencyMultiSymbolHuge() {
+        latencyTestImpl(
+                TestDataParameters.hugeBuilder().build(),
+                2);
+    }
+
 }
