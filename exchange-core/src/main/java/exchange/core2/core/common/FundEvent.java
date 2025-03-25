@@ -29,7 +29,6 @@ public class FundEvent implements WriteBytesMarshallable {
     public long position; // 用户剩余持仓（期货用，现货为 0）
     public long price; // 成交价格（期货用，现货忽略）
     public long pnl; // 盈亏金额（期货用，现货忽略）
-    public long timestamp; // 事件时间戳
 
     /**
      * 事件类型枚举。 前五种为现货事件，后五种为期货事件。
@@ -79,7 +78,7 @@ public class FundEvent implements WriteBytesMarshallable {
     public String toString() {
         return "FundEvent [eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
             + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", price=" + price + ", pnl=" + pnl
-            + ", timestamp=" + timestamp + "]";
+            + "]";
     }
 
     @Override
@@ -96,7 +95,6 @@ public class FundEvent implements WriteBytesMarshallable {
         bytes.writeLong(position);
         bytes.writeLong(price);
         bytes.writeLong(pnl);
-        bytes.writeLong(timestamp);
     }
 
     public FundEvent(BytesIn bytes) {
@@ -112,6 +110,5 @@ public class FundEvent implements WriteBytesMarshallable {
         this.position = bytes.readLong();
         this.price = bytes.readLong();
         this.pnl = bytes.readLong();
-        this.timestamp = bytes.readLong();
     }
 }
