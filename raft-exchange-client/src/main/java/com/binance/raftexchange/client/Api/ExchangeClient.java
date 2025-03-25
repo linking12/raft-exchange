@@ -24,6 +24,7 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.epoll.Epoll;
 import io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollSocketChannel;
 import io.grpc.netty.shaded.io.netty.channel.nio.NioEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import io.grpc.netty.shaded.io.netty.util.concurrent.ScheduledFuture;
@@ -113,7 +114,10 @@ public class ExchangeClient implements AutoCloseable {
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup).channelType(NioSocketChannel.class).usePlaintext().build();
+        return NettyChannelBuilder.forAddress(host, port)
+                .eventLoopGroup(eventLoopgroup)
+                .channelType(eventLoopgroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class)
+                .usePlaintext().build();
     }
 
     private ScheduledFuture flushNodesInfo() {
