@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
@@ -64,9 +65,9 @@ public class SerializeHelper {
     /**
      * [2-byte length] [类型字符串] [protobuf byte[]] ｜--------readUTF--------｜｜---readFully---｜
      */
-    public static GeneratedMessageV3 deserializeWithType(byte[] data, int offset, int length) throws IOException {
+    public static GeneratedMessageV3 deserializeWithType(ByteBuffer data) throws IOException {
         // 这里不需要OrderCommand了直接用apiCommand就行了
-        return ApiCommand.parseFrom(new ByteArrayInputStream(data, offset, length));
+        return ApiCommand.parseFrom(data);
     }
 
     public static byte[] enumToBytesProto(ProtocolMessageEnum enumValue) {

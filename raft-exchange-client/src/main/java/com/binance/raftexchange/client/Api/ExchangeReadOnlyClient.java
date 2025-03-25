@@ -17,7 +17,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.NameResolverRegistry;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
-import io.grpc.netty.shaded.io.netty.channel.epoll.Epoll;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.epoll.EpollSocketChannel;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 
@@ -85,7 +85,7 @@ class ExchangeReadOnlyClient implements AutoCloseable {
         ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search")
                 .eventLoopGroup(masterLoopGroup)
                 .defaultLoadBalancingPolicy("round_robin")
-                .channelType(Epoll.isAvailable() ? EpollSocketChannel.class : NioSocketChannel.class)
+                .channelType(masterLoopGroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class)
                 .usePlaintext().build();
         return QueryServiceGrpc.newFutureStub(channel);
     }
