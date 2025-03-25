@@ -82,8 +82,6 @@ public final class ExchangeCore {
     // enable MatcherTradeEvent pooling
     public static final boolean EVENTS_POOLING = true;
 
-    private static final ScheduledExecutorService INTERNAL_TIMER = Executors.newSingleThreadScheduledExecutor();
-
     /**
      * Exchange core constructor.
      *  @param resultsConsumer       - custom consumer of processed commands
@@ -240,7 +238,6 @@ public final class ExchangeCore {
             log.debug("Starting disruptor...");
             disruptor.start();
             started = true;
-            INTERNAL_TIMER.scheduleWithFixedDelay(api::submitSystemSettlePNL, 8, 8, TimeUnit.HOURS);
             serializationProcessor.replayJournalFullAndThenEnableJouraling(exchangeConfiguration.getInitStateCfg(), api);
         }
     }
@@ -280,7 +277,6 @@ public final class ExchangeCore {
                 log.info("Shutdown disruptor...");
                 ringBuffer.publishEvent(SHUTDOWN_SIGNAL_TRANSLATOR);
                 disruptor.shutdown(timeout, timeUnit);
-                INTERNAL_TIMER.shutdownNow();
                 log.info("Disruptor stopped");
             } catch (TimeoutException e) {
                 throw new IllegalStateException("could not stop a disruptor gracefully. Not all events may be executed.");

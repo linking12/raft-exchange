@@ -196,7 +196,7 @@ public final class ExchangeApi {
         }
     }
 
-    void submitSystemSettlePNL() {
+    public void submitSystemSettlePNL() {
         ringBuffer.publishEvent(SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR, ApiSystemSettlePNLCommand.INSTANCE);
     }
 
