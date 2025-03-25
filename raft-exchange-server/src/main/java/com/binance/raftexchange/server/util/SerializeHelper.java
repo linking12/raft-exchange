@@ -4,6 +4,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -37,6 +39,9 @@ import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.api.reports.StateHashReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.OrderCommand;
+import io.grpc.Drainable;
+import io.grpc.KnownLength;
+import io.grpc.internal.MessageFramer;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
@@ -270,5 +275,29 @@ public class SerializeHelper {
         Map<Integer, R> result = Maps.newHashMapWithExpectedSize(intObjectHashMap.size());
         intObjectHashMap.forEachKeyValue((key, value) -> result.put(key, valueConverter.apply(value)));
         return result;
+    }
+
+    public static InputStream wrapKnownBytes(byte[] bytes) {
+        return new FastByteArrayInputStream(bytes);
+    }
+
+    /**
+     * 优化grpc writeMessage性能，避免copy
+     * @see MessageFramer#writeToOutputStream(InputStream, OutputStream)
+     */
+    public static class FastByteArrayInputStream extends ByteArrayInputStream implements Drainable, KnownLength {
+
+        public FastByteArrayInputStream(byte[] buf) {
+            super(buf);
+        }
+
+        @Override
+        public int drainTo(OutputStream out) throws IOException {
+            // zero-copy drain
+            out.write(buf, pos, count - pos);
+            int written = count - pos;
+            pos = count; // move position to the end
+            return written;
+        }
     }
 }

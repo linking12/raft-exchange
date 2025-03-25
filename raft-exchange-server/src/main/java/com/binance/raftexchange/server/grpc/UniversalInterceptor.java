@@ -78,7 +78,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                     return;
                 }
                 if (result != null) {
-                    call.sendMessage((RespT)new ByteArrayInputStream(result));
+                    call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
                     if (inflight.decrementAndGet() == 0) {
                         int requested = WINDOW_SIZE;
                         inflight.set(requested);
