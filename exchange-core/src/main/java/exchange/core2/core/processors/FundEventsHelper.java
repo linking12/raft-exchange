@@ -114,8 +114,8 @@ public class FundEventsHelper {
     }
 
     // 平仓
-    public FundEvent sendClosePositionEvent(final MatcherTradeEvent ev, final SymbolPositionRecord position, long free, long locked, long sizeClosed, long price,
-        long fee, long closePnl) {
+    public FundEvent sendClosePositionEvent(final MatcherTradeEvent ev, final SymbolPositionRecord position, long free, long locked, long sizeClosed,
+        long price, long fee, long closePnl) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.CLOSE_POSITION;
         event.uid = position.uid;
@@ -135,9 +135,35 @@ public class FundEventsHelper {
         return event;
     }
 
+    // 冻结保证金
+    public FundEvent sendLockEvent(final MatcherTradeEvent ev, long uid, int currency, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.LOCKED;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.locked = locked;
+        event.orderId = ev.matchedOrderId;
+        ev.fundEvent = event;
+        return event;
+    }
+
+    // 解冻保证金
+    public FundEvent sendUnLockEvent(final MatcherTradeEvent ev, long uid, int currency, long free, long locked) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.UNLOCKED;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.orderId = ev.matchedOrderId;
+        event.locked = locked;
+        ev.fundEvent = event;
+        return event;
+    }
+
     // 强平
     public FundEvent sendLiquidationEvent(final OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long remainingPosition,
-        long sizeLiquidated, long liquidationPrice, long fee, long pnl) {
+        long sizeLiquidated, long liquidationPrice, long fee, long pnl, long releasedMargin) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.LIQUIDATION;
         event.uid = position.uid;

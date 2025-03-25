@@ -609,7 +609,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
                     freeMargin += positionRecord.estimateProfit(spec2, lastPriceCache.get(recSymbol));
-                    freeMargin -= positionRecord.calculateRequiredMarginForFutures(spec2);
+                    //freeMargin 使用维持保证金，提升检查严格性
+                    freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
                 }
             } else {
                 freeMargin = position.estimateProfit(spec, lastPriceCache.get(spec.symbolId));
@@ -754,6 +755,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             if (sizeToLiquidate > 0) {
                                 // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
                                 OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+                                long prevLocked = position.calculateRequiredMarginForFutures(spec);
                                 // 执行强平，更新持仓并返回本次盈亏（基于强平价格）
                                 long liquidationPnl = position.liquidate(action, sizeToLiquidate, price);
                                 // 计算强平手续费，基于清算量和规格中的 takerFee
@@ -764,6 +766,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl - fee);
                                 // 更新当前持仓所需的初始保证金，反映强平后的状态
                                 locked = position.calculateRequiredMarginForFutures(spec);
+                                long releasedMargin = prevLocked - locked;
                                 // 剩余持仓量，可能为 0（全平）或部分剩余
                                 long remainingPosition = position.openVolume;
                                 // 若仓位清空，从用户持仓记录中移除，释放内存
@@ -771,7 +774,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                     userProfile.positions.remove(symbol);
                                 }
                                 // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-                                eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
+                                eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl, releasedMargin);
                                 log.debug("Liquidated: uid={} symbol={} size={} price={} pnl={}", userProfile.uid, symbol, sizeToLiquidate, price,
                                     liquidationPnl);
                             }
@@ -855,6 +858,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     // 开仓：扣除手续费和新增保证金
                     long free = takerUp.accounts.addToValue(spec.quoteCurrency, -fee - marginDiff);
                     fees.addToValue(spec.quoteCurrency, fee);
+                    eventsHelper.sendLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, marginDiff); // 新增
                     eventsHelper.sendOpenPositionEvent(ev, takerSpr, free, locked, sizeOpen, ev.price, fee);
                     log.debug("Opened position: uid={} symbol={} size={} price={} marginDiff={}", 
                              takerUp.uid, spec.symbolId, sizeOpen, ev.price, marginDiff);
@@ -866,6 +870,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     long free = takerUp.accounts.addToValue(spec.quoteCurrency, closePnl - fee - marginDiff); // marginDiff
                                                                                                               // 为负值
                     fees.addToValue(spec.quoteCurrency, fee);
+                    eventsHelper.sendUnLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, -marginDiff);
                     eventsHelper.sendClosePositionEvent(ev, takerSpr, free, locked, sizeClosed, ev.price, fee, closePnl);
                     log.debug("Closed position: uid={} symbol={} size={} price={} pnl={} marginDiff={}", takerUp.uid, spec.symbolId, sizeClosed, ev.price,
                         closePnl, marginDiff);
@@ -893,6 +898,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (sizeOpen > 0) {
                 long free = maker.accounts.addToValue(spec.quoteCurrency, -fee - marginDiff);
                 fees.addToValue(spec.quoteCurrency, fee);
+                eventsHelper.sendLockEvent(ev, maker.uid, spec.quoteCurrency, free, marginDiff);
                 eventsHelper.sendOpenPositionEvent(ev, makerSpr, free, locked, sizeOpen, ev.price, fee);
             } else if (sizeOpen < 0) {
                 long sizeClosed = -sizeOpen;
@@ -901,6 +907,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 (makerSpr.openPriceSum / makerSpr.openVolume - ev.price)) * sizeClosed * spec.quoteScaleK;
                 long free = maker.accounts.addToValue(spec.quoteCurrency, closePnl - fee - marginDiff);
                 fees.addToValue(spec.quoteCurrency, fee);
+                eventsHelper.sendUnLockEvent(ev, maker.uid, spec.quoteCurrency, free, -marginDiff);
                 eventsHelper.sendClosePositionEvent(ev, makerSpr, free, locked, sizeClosed, ev.price, fee, closePnl);
             }
             if (makerSpr.isEmpty()) {
