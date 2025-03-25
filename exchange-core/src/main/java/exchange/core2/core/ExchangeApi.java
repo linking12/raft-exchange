@@ -55,6 +55,7 @@ public final class ExchangeApi {
 
     private final RingBuffer<OrderCommand> ringBuffer;
     private final LZ4Compressor lz4Compressor;
+    private final boolean cfgMarginTradingEnabled;
 
     // promises cache (TODO can be changed to queue)
     private final Map<Long, Consumer<OrderCommand>> promises = new ConcurrentHashMap<>();
@@ -78,11 +79,12 @@ public final class ExchangeApi {
     }
 
     public void tryCheckAndLiquidateAllPositions() {
-        long last = lastTimestamp.get();
-        long currentTimeMillis = System.currentTimeMillis();
-        //防止触发多次
-        if(currentTimeMillis - last >= MAX_WAIT_TIME_MS && lastTimestamp.compareAndSet(last, currentTimeMillis)) {
-            ringBuffer.publishEvent(SYSTEM_CHECK_POSITION_ORDER_EVENT_TRANSLATOR, ApiSystemCheckPositionCommand.INSTANCE);
+        if (cfgMarginTradingEnabled) {
+            long last = lastTimestamp.get();
+            long currentTimeMillis = System.currentTimeMillis();
+            if (currentTimeMillis - last >= MAX_WAIT_TIME_MS && lastTimestamp.compareAndSet(last, currentTimeMillis)) {
+                ringBuffer.publishEvent(SYSTEM_CHECK_POSITION_ORDER_EVENT_TRANSLATOR, ApiSystemCheckPositionCommand.INSTANCE);
+            }
         }
     }
 
