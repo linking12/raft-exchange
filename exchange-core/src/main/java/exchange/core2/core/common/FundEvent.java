@@ -29,8 +29,6 @@ public class FundEvent implements WriteBytesMarshallable {
     public long position; // 用户剩余持仓（期货用，现货为 0）
     public long price; // 成交价格（期货用，现货忽略）
     public long pnl; // 盈亏金额（期货用，现货忽略）
-    public long marginDelta; // 保证金变化（期货用，正增负减，现货忽略）
-    public long fee; // 手续费金额（期货用，现货可记录交易费）
     public long timestamp; // 事件时间戳
 
     /**
@@ -61,36 +59,6 @@ public class FundEvent implements WriteBytesMarshallable {
         }
     }
 
-    /**
-     * 仓位方向枚举。
-     */
-    public enum PositionDirection {
-        EMPTY(0), LONG(1), SHORT(-1);
-
-        private final int multiplier;
-
-        PositionDirection(int multiplier) {
-            this.multiplier = multiplier;
-        }
-
-        public int getMultiplier() {
-            return multiplier;
-        }
-
-        public static PositionDirection of(byte code) {
-            switch (code) {
-                case 1:
-                    return LONG;
-                case -1:
-                    return SHORT;
-                case 0:
-                    return EMPTY;
-                default:
-                    throw new IllegalArgumentException("unknown PositionDirection:" + code);
-            }
-        }
-    }
-
     @Override
     public int hashCode() {
         return Objects.hash(currency, eventType, free, locked, position, section, uid, orderId, symbol, direction);
@@ -111,7 +79,7 @@ public class FundEvent implements WriteBytesMarshallable {
     public String toString() {
         return "FundEvent [eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
             + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", price=" + price + ", pnl=" + pnl
-            + ", marginDelta=" + marginDelta + ", fee=" + fee + ", timestamp=" + timestamp + "]";
+            + ", timestamp=" + timestamp + "]";
     }
 
     @Override
@@ -128,8 +96,6 @@ public class FundEvent implements WriteBytesMarshallable {
         bytes.writeLong(position);
         bytes.writeLong(price);
         bytes.writeLong(pnl);
-        bytes.writeLong(marginDelta);
-        bytes.writeLong(fee);
         bytes.writeLong(timestamp);
     }
 
@@ -146,8 +112,6 @@ public class FundEvent implements WriteBytesMarshallable {
         this.position = bytes.readLong();
         this.price = bytes.readLong();
         this.pnl = bytes.readLong();
-        this.marginDelta = bytes.readLong();
-        this.fee = bytes.readLong();
         this.timestamp = bytes.readLong();
     }
 }

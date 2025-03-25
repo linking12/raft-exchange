@@ -680,70 +680,59 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (spec.type == SymbolType.FUTURES_CONTRACT) {
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
                 // 遍历所有用户
-                userProfileService.getAllUserProfiles()
-                        .filter(up -> uidForThisHandler(up.uid)) //多个riskEngine分片加快 只处理自己的分片
-                        .filter(up -> !up.positions.isEmpty()).forEach(userProfile -> {
-                    SymbolPositionRecord position = userProfile.positions.get(symbol);
-                    // 仅检查有持仓的用户（direction != EMPTY）
-                    if (position != null && position.direction != PositionDirection.EMPTY) {
-                        // 获取账户余额（quoteCurrency 为期货的计价货币）
-                        long balance = userProfile.accounts.get(spec.quoteCurrency);
-                        // 计算未实现盈亏，基于 LastPriceCache 中的 markPrice，提供平滑的价格参考
-                        long profit = position.liquidateEstimateProfit(spec, priceRecord);
-                        // 账户权益 = 余额 + 未实现盈亏
-                        long equity = balance + profit;
-                        // 维持保证金需求 = 持仓数量 × 单位维持保证金
-                        long maintenanceMargin = position.calculateMaintenanceMargin(spec);
-                        // 预警阈值 = 1.2 * 维持保证金（可配置，提示用户追加资金）
-                        long warningThreshold = (long)(maintenanceMargin * 1.2);
-                        // 权益低于维持保证金，触发强平
-                        if (equity < maintenanceMargin) {
-                            // 计算缺口：需要多少资金使权益回到维持保证金水平
-                            long deficit = maintenanceMargin - equity;
-                            // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice），用于实际清算
-                            long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
-                            // 若市场无流动性（价格无效），使用平均开仓价格作为兜底
-                            if (price == 0 || price == Long.MAX_VALUE) {
-                                price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
-                            }
-                            // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整）
-                            // 限制不超过当前持仓量（openVolume）
-                            long sizeToLiquidate = Math.min(position.openVolume, (long)Math.ceil(deficit / (double)price));
-                            if (sizeToLiquidate > 0) {
-                                // 确定强平方向：多头卖出（ASK），空头买入（BID）
-                                OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-                                // 执行强平：更新仓位状态，减少 openVolume 和 openPriceSum
-                                position.liquidate(action, sizeToLiquidate, price);
-                                // 计算交易费用（takerFee），从账户扣除
-                                long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec); 
-                                userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
-                                // 若仓位清空，从用户持仓记录中移除
-                                if (position.isEmpty()) {
-                                    userProfile.positions.remove(symbol);
+                userProfileService.getAllUserProfiles().filter(up -> uidForThisHandler(up.uid)) // 多个riskEngine分片加快,只处理自己的分片
+                    .filter(up -> !up.positions.isEmpty()).forEach(userProfile -> {
+                        SymbolPositionRecord position = userProfile.positions.get(symbol);
+                        // 仅检查有持仓的用户（direction != EMPTY）
+                        if (position != null && position.direction != PositionDirection.EMPTY) {
+                            // 获取账户余额（quoteCurrency 为期货的计价货币）
+                            long balance = userProfile.accounts.get(spec.quoteCurrency);
+                            // 计算未实现盈亏，基于 LastPriceCache 中的 markPrice，提供平滑的价格参考
+                            long profit = position.liquidateEstimateProfit(spec, priceRecord);
+                            // 账户权益 = 余额 + 未实现盈亏
+                            long equity = balance + profit;
+                            // 维持保证金需求 = 持仓数量 × 单位维持保证金
+                            long maintenanceMargin = position.calculateMaintenanceMargin(spec);
+                            // 预警阈值 = 1.2 * 维持保证金（可配置，提示用户追加资金）
+                            long warningThreshold = (long)(maintenanceMargin * 1.2);
+                            // 权益低于维持保证金，触发强平
+                            if (equity < maintenanceMargin) {
+                                // 计算缺口：需要多少资金使权益回到维持保证金水平
+                                long deficit = maintenanceMargin - equity;
+                                // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice），用于实际清算
+                                long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
+                                // 若市场无流动性（价格无效），使用平均开仓价格作为兜底
+                                if (price == 0 || price == Long.MAX_VALUE) {
+                                    price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
                                 }
-                                // 创建强平事件，记录用户信息和交易细节
-                                // FundEvent event = sharedPool.getFundEventPool();
-                                // event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "LIQUIDATION",
-                                // symbol, sizeToLiquidate, position.direction, price);
-                                // eventsHelper.sendLiquidationEvent(event);
-                                // sharedPool.putFundEventPool(event);
-                                log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
+                                // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整）
+                                // 限制不超过当前持仓量（openVolume）
+                                long sizeToLiquidate = Math.min(position.openVolume, (long)Math.ceil(deficit / (double)price));
+                                if (sizeToLiquidate > 0) {
+                                    // 确定强平方向：多头卖出（ASK），空头买入（BID）
+                                    OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+                                    // 执行强平：更新仓位状态，减少 openVolume 和 openPriceSum
+                                    position.liquidate(action, sizeToLiquidate, price);
+                                    // 计算交易费用（takerFee），从账户扣除
+                                    long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec);
+                                    long free = userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
+                                    long locked = position.calculateRequiredMarginForFutures(spec);
+                                    long remainingPosition = position.openVolume;
+                                    // 若仓位清空，从用户持仓记录中移除
+                                    if (position.isEmpty()) {
+                                        userProfile.positions.remove(symbol);
+                                    }
+                                    // 创建强平事件，记录用户信息和交易细节
+                                    eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition);
+                                    log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, symbol, sizeToLiquidate, price);
+                                }
+                            }
+                            // 权益低于预警阈值但高于维持保证金，发送 Margin Call
+                            else if (equity < warningThreshold) {
+                                log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
                             }
                         }
-                        // 权益低于预警阈值但高于维持保证金，发送 Margin Call
-                        else if (equity < warningThreshold) {
-                            // FundEvent event = sharedPool.getFundEventPool();
-                            // // 使用平均开仓价格作为参考
-                            // long avgOpenPrice = position.openVolume > 0 ? position.openPriceSum / position.openVolume
-                            // : 0;
-                            // event.set(cmd, userProfile.uid, spec.quoteCurrency, equity, "MARGIN_CALL",
-                            // symbol, position.openVolume, position.direction, avgOpenPrice);
-                            // eventsHelper.sendMarginCallEvent(event);
-                            // sharedPool.putFundEventPool(event);
-                            log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
-                        }
-                    }
-                });
+                    });
             }
         });
     }
