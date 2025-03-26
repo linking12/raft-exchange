@@ -200,10 +200,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long currentRiskBuySize = pendingBuySize + signedPosition;
         final long currentRiskSellSize = pendingSellSize - signedPosition;
 
-        final long marginBuy = specMarginBuy * currentRiskBuySize;
-        final long marginSell = specMarginSell * currentRiskSellSize;
-        // marginBuy or marginSell can be negative, but not both of them
-        return Math.max(marginBuy, marginSell);
+        try {
+            final long marginBuy = currentRiskBuySize >= 0 ? Math.multiplyExact(specMarginBuy, currentRiskBuySize) : 0;
+            final long marginSell = currentRiskSellSize >= 0 ? Math.multiplyExact(specMarginSell, currentRiskSellSize) : 0;
+            return Math.max(marginBuy, marginSell);
+        } catch (ArithmeticException e) {
+            log.error("Overflow in calculateRequiredMarginForFutures: uid={} symbol={} openVolume={} direction={} pendingBuySize={} pendingSellSize={}",
+                    uid, symbol, openVolume, direction, pendingBuySize, pendingSellSize, e);
+            throw new IllegalStateException("Margin calculation overflow for symbol " + symbol, e);
+        }
     }
 
     /**
@@ -253,9 +258,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (pendingBuySize == 0 && pendingSellSize == 0) {
             return 0;
         }
-        final long marginBuy = spec.marginBuy * pendingBuySize;
-        final long marginSell = spec.marginSell * pendingSellSize;
-        return Math.max(marginBuy, marginSell);
+        try {
+            final long marginBuy = pendingBuySize > 0 ? Math.multiplyExact(spec.marginBuy, pendingBuySize) : 0;
+            final long marginSell = pendingSellSize > 0 ? Math.multiplyExact(spec.marginSell, pendingSellSize) : 0;
+            return Math.max(marginBuy, marginSell);
+        } catch (ArithmeticException e) {
+            log.error("Overflow in calculateRequiredMarginForPending: uid={} symbol={} pendingBuySize={} pendingSellSize={}",
+                    uid, symbol, pendingBuySize, pendingSellSize, e);
+            throw new IllegalStateException("Pending margin calculation overflow for symbol " + symbol, e);
+        }
     }
     /**
      * Update position for one user

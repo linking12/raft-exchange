@@ -503,10 +503,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     final int recSymbol = position.symbol;
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
-                    freeFuturesMargin +=
+                    try {
+                        freeFuturesMargin +=
                             (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - position.calculateRequiredMarginForFutures(spec2));
-                    // 减去未成交订单的保证金需求，避免重复使用
-                    freeFuturesMargin -= position.calculateRequiredMarginForPending(spec2);
+                        // 减去未成交订单的保证金需求，避免重复使用
+                        freeFuturesMargin -= position.calculateRequiredMarginForPending(spec2);
+                    } catch (IllegalStateException e) {
+                        log.error("Margin overflow for uid={} symbol={}", userProfile.uid, position.symbol, e);
+                        return CommandResultCode.RISK_INVALID_AMOUNT;
+                    }
                 }
             }
         }
