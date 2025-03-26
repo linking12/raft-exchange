@@ -182,7 +182,7 @@ public class FundEventsHelper {
         cmd.fundEvents.add(event);
         return event;
     }
-
+    // 强平解冻保证金
     public FundEvent sendUnLockEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.UNLOCKED;
