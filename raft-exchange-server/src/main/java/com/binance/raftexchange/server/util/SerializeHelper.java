@@ -7,15 +7,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import com.binance.raftexchange.stubs.OrderAction;
-import com.binance.raftexchange.stubs.OrderType;
 import com.binance.raftexchange.stubs.report.HashCodeEntry;
 import com.binance.raftexchange.stubs.report.Order;
 import com.binance.raftexchange.stubs.report.OrderList;
@@ -33,6 +33,7 @@ import com.google.common.collect.Maps;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.Message.Builder;
 import com.google.protobuf.ProtocolMessageEnum;
 
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -47,6 +48,14 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 public class SerializeHelper {
     private SerializeHelper() {
+    }
+
+    private static final ProtoBuilderPool builderPool;
+
+    static {
+        builderPool = new ProtoBuilderPool();
+        builderPool.register(com.binance.raftexchange.stubs.response.OrderCommand.Builder.class, com.binance.raftexchange.stubs.response.OrderCommand::newBuilder);
+        builderPool.register(CommandResult.Builder.class, CommandResult::newBuilder);
     }
 
     /**
@@ -88,29 +97,28 @@ public class SerializeHelper {
     }
 
     public static CommandResult orderCommandToResult(OrderCommand result) {
-        // 这里产生了一个临时对象 但是我估计可以通过逃逸分析被jit干掉？
         CommandResultCode resultCode = result.resultCode == null ? null : CommandResultCode.forNumber(Math.abs(result.resultCode.getCode()));
-        com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = com.binance.raftexchange.stubs.response.OrderCommand.newBuilder()
+        com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = builderPool.get(com.binance.raftexchange.stubs.response.OrderCommand.Builder.class)
                 .setCommand(OrderCommandType.forNumber(result.command.getCode())).setOrderId(result.orderId).setSymbol(result.symbol).setPrice(result.price)
                 .setSize(result.size).setReserveBidPrice(result.reserveBidPrice).setUid(result.getUid()).setTimestamp(result.timestamp)
                 .setUserCookie(result.userCookie).setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
         if (result.action != null) {
-            builder = builder.setAction(OrderAction.forNumber(result.action.getCode()));
+            builder.setActionValue(result.action.getCode());
         }
 
         if (result.orderType != null) {
-            builder = builder.setOrderType(OrderType.forNumber(result.orderType.getCode()));
+            builder.setOrderTypeValue(result.orderType.getCode());
         }
 
         if (result.matcherEvent != null) {
-            builder = builder.setMatcherEvent(toPbObject(result.matcherEvent));
+            builder.setMatcherEvent(toPbObject(result.matcherEvent));
         }
 
         if (result.marketData != null) {
-            builder = builder.setMarketData(toPbObject(result.marketData));
+            builder.setMarketData(toPbObject(result.marketData));
         }
 
-        return CommandResult.newBuilder()
+        return builderPool.get(CommandResult.Builder.class)
                 .setOrderCommand(builder.build())
                 .build();
     }
@@ -121,7 +129,7 @@ public class SerializeHelper {
         }
 
         // 使用栈来模拟递归调用
-        Deque<exchange.core2.core.common.MatcherTradeEvent> stack = new ArrayDeque<>();
+        Deque<exchange.core2.core.common.MatcherTradeEvent> stack = new LinkedList<>();
         while (matcherTradeEvent != null) {
             stack.push(matcherTradeEvent);
             matcherTradeEvent = matcherTradeEvent.nextEvent;
@@ -298,6 +306,34 @@ public class SerializeHelper {
             int written = count - pos;
             pos = count; // move position to the end
             return written;
+        }
+    }
+
+    /**
+     * 优化grpc，缓存以复用builder
+     */
+    public static class ProtoBuilderPool {
+
+        private final Map<Class<?>, ThreadLocal<? extends Builder>> pools = new ConcurrentHashMap<>();
+
+        /**
+         * 注册一个类型的Builder缓存池（必须提前注册）
+         */
+        public <T extends Builder> void register(Class<T> builderClass, Supplier<T> supplier) {
+            pools.putIfAbsent(builderClass, ThreadLocal.withInitial(supplier));
+        }
+
+        /**
+         * 获取已注册的Builder
+         */
+        public <T extends Builder> T get(Class<T> builderClass) {
+            ThreadLocal<T> local = (ThreadLocal<T>) pools.get(builderClass);
+            if (local == null) {
+                throw new IllegalStateException("Builder not registered for: " + builderClass.getName());
+            }
+            T builder = local.get();
+            builder.clear(); // 清理，确保拿到的是干净的builder
+            return builder;
         }
     }
 }
