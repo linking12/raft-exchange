@@ -270,7 +270,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     if (amountDiff < 0 && cfgMarginTradingEnabled ) { 
                         long withdrawalAmount = -amountDiff;
                         long minRequiredBalance = calculateMinRequiredBalance(userProfile, cmd.symbol);
-                        if (currentBalance - withdrawalAmount < minRequiredBalance) {
+                        long lockedMargin = calculateLockedMargin(userProfile, cmd.symbol); // 检查冻结保证金
+                        if (currentBalance - lockedMargin - withdrawalAmount < minRequiredBalance) {
                             cmd.resultCode = CommandResultCode.RISK_NSF;
                             return false;
                         }
@@ -504,6 +505,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     // add P&L subtract margin
                     freeFuturesMargin +=
                             (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - position.calculateRequiredMarginForFutures(spec2));
+                    // 减去未成交订单的保证金需求，避免重复使用
+                    freeFuturesMargin -= position.calculateRequiredMarginForPending(spec2);
                 }
             }
         }
@@ -623,13 +626,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     LastPriceCacheRecord priceRecord = lastPriceCache.get(recSymbol);
                     if (priceRecord == null) {
                         log.warn("No price data for symbol={}, assuming zero profit", recSymbol);
-                        freeMargin -= positionRecord.calculateMaintenanceMargin(spec2); // 仅扣除保证金
-                        continue;
+                        freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
+                    } else {
+                        freeMargin += positionRecord.estimateProfit(spec2, priceRecord);
+                        freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
                     }
-                    // add P&L subtract margin
-                    freeMargin += positionRecord.estimateProfit(spec2, lastPriceCache.get(recSymbol));
-                    //freeMargin 使用维持保证金，提升检查严格性
-                    freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
+                    // 减去未成交订单的保证金需求，避免重复使用
+                    freeMargin -= positionRecord.calculateRequiredMarginForPending(spec2);
                 }
             } else {
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);

@@ -242,6 +242,22 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
 
     /**
+     * 计算未成交订单（pendingBuySize 和 pendingSellSize）所需的初始保证金。
+     * - 多头：pendingBuySize * marginBuy
+     * - 空头：pendingSellSize * marginSell
+     * - 返回两者中的较大值，与 calculateRequiredMarginForFutures 逻辑一致。
+     * @param spec 符号规格
+     * @return 未成交订单所需的保证金，若无未成交订单则返回 0
+     */
+    public long calculateRequiredMarginForPending(CoreSymbolSpecification spec) {
+        if (pendingBuySize == 0 && pendingSellSize == 0) {
+            return 0;
+        }
+        final long marginBuy = spec.marginBuy * pendingBuySize;
+        final long marginSell = spec.marginSell * pendingSellSize;
+        return Math.max(marginBuy, marginSell);
+    }
+    /**
      * Update position for one user
      * 1. Un-hold pending size
      * 2. Reduce opposite position accordingly (if exists)
