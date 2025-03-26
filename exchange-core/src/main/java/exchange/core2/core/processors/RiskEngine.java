@@ -520,6 +520,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
 
                 orderHoldAmount = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(size, cmd.price, spec);
+                if (orderHoldAmount < 0) { // 检查溢出
+                    log.warn("Order hold amount overflow: size={} price={}", size, cmd.price);
+                    return CommandResultCode.RISK_INVALID_AMOUNT;
+                }
                 if (logDebug) log.debug("hold amount budget buy {} = {} * {} + {} * {}", cmd.price, size, spec.quoteScaleK, size, spec.takerFee);
 
             } else {
@@ -529,6 +533,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     return CommandResultCode.RISK_INVALID_RESERVE_BID_PRICE;
                 }
                 orderHoldAmount = CoreArithmeticUtils.calculateAmountBidTakerFee(size, cmd.reserveBidPrice, spec);
+                if (orderHoldAmount < 0) { // 检查溢出
+                    log.warn("Order hold amount overflow: size={} reserveBidPrice={}", size, cmd.reserveBidPrice);
+                    return CommandResultCode.RISK_INVALID_AMOUNT;
+                }
                 if (logDebug) log.debug("hold amount buy {} = {} * ( {} * {} + {} )", orderHoldAmount, size, cmd.reserveBidPrice, spec.quoteScaleK, spec.takerFee);
             }
 
@@ -541,6 +549,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
 
             orderHoldAmount = CoreArithmeticUtils.calculateAmountAsk(size, spec);
+            if (orderHoldAmount < 0) { // 检查溢出
+                log.warn("Order hold amount overflow: size={}", size);
+                return CommandResultCode.RISK_INVALID_AMOUNT;
+            }
             if (logDebug) log.debug("hold sell {} = {} * {} ", orderHoldAmount, size, spec.baseScaleK);
         }
 
@@ -608,13 +620,25 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (recSymbol != symbol) {
                 if (positionRecord.currency == spec.quoteCurrency) {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
+                    LastPriceCacheRecord priceRecord = lastPriceCache.get(recSymbol);
+                    if (priceRecord == null) {
+                        log.warn("No price data for symbol={}, assuming zero profit", recSymbol);
+                        freeMargin -= positionRecord.calculateMaintenanceMargin(spec2); // 仅扣除保证金
+                        continue;
+                    }
                     // add P&L subtract margin
                     freeMargin += positionRecord.estimateProfit(spec2, lastPriceCache.get(recSymbol));
                     //freeMargin 使用维持保证金，提升检查严格性
                     freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
                 }
             } else {
-                freeMargin = position.estimateProfit(spec, lastPriceCache.get(spec.symbolId));
+                LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
+                if (priceRecord == null) {
+                    log.warn("No price data for symbol={}, assuming zero profit", spec.symbolId);
+                    freeMargin = 0; // 默认无盈亏
+                } else {
+                    freeMargin = position.estimateProfit(spec, priceRecord);
+                }
             }
         }
 
@@ -688,8 +712,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
             record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : 0;
             // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
             record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
+        } else if (cfgMarginTradingEnabled) {
+            log.warn("No market data for symbol={}, lastPriceCache not updated", symbol);
         }
-
         return false;
     }
     
@@ -979,7 +1004,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  */
                 this.eventsHelper.sendUnLockEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             }
-            // TODO for OrderType.IOC_BUDGET - for REJECT should release leftover deposit after all trades calculated
         }
 
     }
