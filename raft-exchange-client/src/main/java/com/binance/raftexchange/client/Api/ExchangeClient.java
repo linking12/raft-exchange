@@ -47,11 +47,11 @@ public class ExchangeClient implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
-    private EventLoopGroup eventLoopgroup;
-
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
 
     private volatile ServerNode leaderNode;
+
+    private final EventLoopGroup eventLoopgroup;
 
     private final ServerNodeServiceGrpc.ServerNodeServiceFutureStub nodeStub;
 
