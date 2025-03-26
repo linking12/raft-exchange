@@ -73,19 +73,6 @@ public class FundEventsHelper {
         cmd.fundEvents.add(event);
         return event;
     }
-    
-    // 解冻
-    public FundEvent sendUnLockEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {
-        FundEvent event = newFundEvent();
-        event.eventType = FundEvent.FundEventType.UNLOCKED;
-        event.uid = uid;
-        event.currency = currency;
-        event.free = free;
-        event.orderId = ev.matchedOrderId;
-        event.orderId = ev.matchedOrderId;
-        ev.fundEvent = event;
-        return event;
-    }
 
     // 转移
     public FundEvent sendTransferEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {
@@ -195,7 +182,7 @@ public class FundEventsHelper {
         cmd.fundEvents.add(event);
         return event;
     }
-    
+
     public FundEvent sendUnLockEvent(final OrderCommand cmd, long uid, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
         event.eventType = FundEvent.FundEventType.UNLOCKED;
@@ -207,6 +194,7 @@ public class FundEventsHelper {
         cmd.fundEvents.add(event);
         return event;
     }
+
     // 调整保证金
     public FundEvent sendMarginAdjustmentEvent(final OrderCommand cmd, final SymbolPositionRecord position, long free, long locked) {
         FundEvent event = newFundEvent();
