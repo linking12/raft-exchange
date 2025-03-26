@@ -73,6 +73,19 @@ public class FundEventsHelper {
         cmd.fundEvents.add(event);
         return event;
     }
+    
+    // 解冻
+    public FundEvent sendUnLockEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {
+        FundEvent event = newFundEvent();
+        event.eventType = FundEvent.FundEventType.UNLOCKED;
+        event.uid = uid;
+        event.currency = currency;
+        event.free = free;
+        event.orderId = ev.matchedOrderId;
+        event.orderId = ev.matchedOrderId;
+        ev.fundEvent = event;
+        return event;
+    }
 
     // 转移
     public FundEvent sendTransferEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {

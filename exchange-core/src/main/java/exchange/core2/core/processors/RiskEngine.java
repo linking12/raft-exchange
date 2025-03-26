@@ -281,10 +281,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                      * @modify 存款/提现
                      */
                     if (cmd.resultCode == CommandResultCode.SUCCESS) {
+                        long newBalance = userProfile.accounts.get(cmd.symbol); // 获取调整后的余额
                         if (amountDiff > 0) {
-                            eventsHelper.sendDepositEvent(cmd, uid, currency, currentBalance);
+                            eventsHelper.sendDepositEvent(cmd, uid, currency, newBalance);
                         } else {
-                            eventsHelper.sendWithdrawEvent(cmd, uid, currency, currentBalance);
+                            eventsHelper.sendWithdrawEvent(cmd, uid, currency, newBalance);
                         }
                     }
                 }
@@ -747,8 +748,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
                             // 若市场无流动性（价格为 0 或 MAX_VALUE），回退到平均开仓价作为兜底
                             if (price == 0 || price == Long.MAX_VALUE) {
-                                price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
-                                log.debug("Fallback to average open price={} for symbol={}", price, symbol);
+                                price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
+                                if (price == 0) price = 1; // 防止除零，默认最小价格
+                                log.debug("Fallback to average open price={} or markPrice for symbol={}", price, symbol);
                             }
                             // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整），限制不超过当前持仓量
                             long sizeToLiquidate = Math.min(position.openVolume,
@@ -868,8 +870,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 } else if (sizeOpen < 0) {
                     // 平仓：返还释放的保证金，加上平仓盈亏，扣除手续费
                     long sizeClosed = -sizeOpen;
-                    long closePnl = (takerAction == OrderAction.BID ? (ev.price - takerSpr.openPriceSum / takerSpr.openVolume)
-                        : (takerSpr.openPriceSum / takerSpr.openVolume - ev.price)) * sizeClosed * spec.quoteScaleK;
+                    long avgOpenPrice = takerSpr.openVolume > 0 ? takerSpr.openPriceSum / takerSpr.openVolume : ev.price;
+                    long closePnl = (takerAction == OrderAction.BID ? (ev.price - avgOpenPrice)
+                        : (avgOpenPrice - ev.price)) * sizeClosed * spec.quoteScaleK;
+                    
                     long free = takerUp.accounts.addToValue(spec.quoteCurrency, closePnl - fee - marginDiff); // marginDiff
                                                                                                               // 为负值
                     fees.addToValue(spec.quoteCurrency, fee);
@@ -911,9 +915,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendOpenPositionEvent(ev, makerSpr, free, locked, sizeOpen, ev.price, fee);
             } else if (sizeOpen < 0) {
                 long sizeClosed = -sizeOpen;
+                long avgOpenPrice = makerSpr.openVolume > 0 ? makerSpr.openPriceSum / makerSpr.openVolume : ev.price;
                 long closePnl = (takerAction.opposite() == OrderAction.BID ? 
-                                (ev.price - makerSpr.openPriceSum / makerSpr.openVolume) : 
-                                (makerSpr.openPriceSum / makerSpr.openVolume - ev.price)) * sizeClosed * spec.quoteScaleK;
+                                (ev.price - avgOpenPrice) : 
+                                (avgOpenPrice - ev.price)) * sizeClosed * spec.quoteScaleK;
                 long free = maker.accounts.addToValue(spec.quoteCurrency, closePnl - fee - marginDiff);
                 fees.addToValue(spec.quoteCurrency, fee);
                 eventsHelper.sendUnLockEvent(ev, maker.uid, spec.quoteCurrency, free, -marginDiff);
@@ -961,8 +966,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  */
                 this.eventsHelper.sendUnLockEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
             } else {
-                long userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
-                /**
+                long userBalance;
+                if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.IOC_BUDGET && ev.eventType == MatcherEventType.REJECT) {
+                    // 对于 IOC_BUDGET 的 REJECT，释放全部冻结资金
+                    userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(cmd.size, cmd.reserveBidPrice, spec));
+                } else {
+                    // 其他情况（包括 REDUCE 或非 IOC_BUDGET），释放指定大小的冻结资金
+                    userBalance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
+                }
+               /**
                  * @modify 恢复资金 买单解冻 quoteCurrency
                  */
                 this.eventsHelper.sendUnLockEvent(cmd, taker.uid, spec.quoteCurrency, userBalance);
@@ -1109,8 +1121,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 leftover = totalHeld - usedAmount;
                 takerSizePriceHeldSum = takerSizePriceSum;
             }
+            long totalAdjustment = (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK + leftover;
             // 支付 quoteCurrency
-            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK + leftover);
+            long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, totalAdjustment);
+            if (leftover > 0) {
+                this.eventsHelper.sendUnLockEvent(tradeEventHead, taker.uid, quoteCurrency, quoteCurrencyBalance, leftover);
+            }
             // 接收 baseCurrency
             long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
             /**
