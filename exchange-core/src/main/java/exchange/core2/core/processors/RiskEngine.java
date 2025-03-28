@@ -269,9 +269,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     // 如果是提款操作，并且杠杆交易，需要校验下最小保证金
                     if (amountDiff < 0 && cfgMarginTradingEnabled ) { 
                         long withdrawalAmount = -amountDiff;
-                        long minRequiredBalance = calculateMinRequiredBalance(userProfile, cmd.symbol);
                         long lockedMargin = calculateLockedMargin(userProfile, cmd.symbol); // 检查冻结保证金
-                        if (currentBalance - lockedMargin - withdrawalAmount < minRequiredBalance) {
+                        /**
+                         *  用lockedMargin（基于开仓保证金）就行，不用考虑持仓保证金
+                         */
+                        if (currentBalance - withdrawalAmount < lockedMargin) {
                             cmd.resultCode = CommandResultCode.RISK_NSF;
                             return false;
                         }
@@ -371,17 +373,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         return res;
     }
-
-    private long calculateMinRequiredBalance(UserProfile userProfile, int currency) {
-        long minRequired = 0;
-        for (SymbolPositionRecord position : userProfile.positions) {
-            if (position.currency == currency && position.direction != PositionDirection.EMPTY) {
-                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                minRequired += position.calculateMaintenanceMargin(spec);
-            }
-        }
-        return minRequired;
-    }
     
     private void handleBinaryMessage(BinaryDataCommand message) {
 
@@ -479,7 +470,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             } else {
                 // try to cleanup position if refusing to place
                 if (position.isEmpty()) {
-                    removePositionRecord(cmd, position, userProfile);
+                    removePositionRecord(position, userProfile);
                 }
                 return CommandResultCode.RISK_NSF;
             }
@@ -497,6 +488,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         // futures positions check for this currency
         long freeFuturesMargin = 0L;
+        long totalLockedMargin = 0L;
         if (cfgMarginTradingEnabled) {
             for (final SymbolPositionRecord position : userProfile.positions) {
                 if (position.currency == currency) {
@@ -504,10 +496,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
                     try {
-                        freeFuturesMargin +=
-                            (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - position.calculateRequiredMarginForFutures(spec2));
-                        // 减去未成交订单的保证金需求，避免重复使用
-                        freeFuturesMargin -= position.calculateRequiredMarginForPending(spec2);
+                        long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
+                        freeFuturesMargin += (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - requiredMarginForFutures);
+                        totalLockedMargin += requiredMarginForFutures;
                     } catch (IllegalStateException e) {
                         log.error("Margin overflow for uid={} symbol={}", userProfile.uid, position.symbol, e);
                         return CommandResultCode.RISK_INVALID_AMOUNT;
@@ -576,18 +567,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         if (!canPlace) {
             // revert balance change
-            long userBalance = userProfile.accounts.addToValue(currency, orderHoldAmount);
+            userProfile.accounts.addToValue(currency, orderHoldAmount);
             // log.warn("orderAmount={} > userProfile.accounts.get({})={}", orderAmount, currency, userProfile.accounts.get(currency));
-            /**
-             * @modify 恢复资金
-             */
-            this.eventsHelper.sendUnLockEvent(cmd, userProfile.uid, currency, userBalance);
             return CommandResultCode.RISK_NSF;
         } else {
             /**
              * @modify 冻结资金
              */
-            this.eventsHelper.sendLockEvent(cmd, userProfile.uid, currency, free, orderHoldAmount);
+            this.eventsHelper.sendLockEvent(cmd, userProfile.uid, currency, free - totalLockedMargin, totalLockedMargin);
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
     }
@@ -628,25 +615,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (recSymbol != symbol) {
                 if (positionRecord.currency == spec.quoteCurrency) {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
-                    LastPriceCacheRecord priceRecord = lastPriceCache.get(recSymbol);
-                    if (priceRecord == null) {
-                        log.warn("No price data for symbol={}, assuming zero profit", recSymbol);
-                        freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
-                    } else {
-                        freeMargin += positionRecord.estimateProfit(spec2, priceRecord);
-                        freeMargin -= positionRecord.calculateMaintenanceMargin(spec2);
-                    }
-                    // 减去未成交订单的保证金需求，避免重复使用
-                    freeMargin -= positionRecord.calculateRequiredMarginForPending(spec2);
+                    // add P&L subtract margin
+                    freeMargin += positionRecord.estimateProfit(spec2, lastPriceCache.get(recSymbol));
+                    freeMargin -= positionRecord.calculateRequiredMarginForFutures(spec2);
                 }
             } else {
-                LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
-                if (priceRecord == null) {
-                    log.warn("No price data for symbol={}, assuming zero profit", spec.symbolId);
-                    freeMargin = 0; // 默认无盈亏
-                } else {
-                    freeMargin = position.estimateProfit(spec, priceRecord);
-                }
+                freeMargin = position.estimateProfit(spec, lastPriceCache.get(spec.symbolId));
             }
         }
 
@@ -743,91 +717,114 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * - 该方法为周期性检查的一部分，通常由外部调度（如定时器）触发，频率影响风险控制的及时性。
      */
     private void checkAndLiquidateAllPositions(OrderCommand cmd) {
-        // 遍历所有符号，仅处理期货合约类型，确保不干扰现货交易
-        symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
-            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
-            if (spec.type != SymbolType.FUTURES_CONTRACT)
-                return; // 跳过非期货符号
-            // 获取最新价格记录，用于计算未实现盈亏和确定强平价格
-            LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
-            if (priceRecord == null) {
-                log.warn("No price record for symbol={}", symbol); // 缺少价格数据，跳过处理
-                return;
-            }
-            // 遍历所有用户，仅处理当前分片（shard）且有持仓的用户，提高并行效率
-            userProfileService.getAllUserProfiles().filter(up -> uidForThisHandler(up.uid)) // 确保只处理本分片用户
-                .filter(up -> !up.positions.isEmpty()) // 跳过无持仓用户
+        // 遍历所有用户（分片过滤 + 有持仓）
+        userProfileService.getAllUserProfiles()
+                .filter(up -> uidForThisHandler(up.uid))
+                .filter(up -> !up.positions.isEmpty())
                 .forEach(userProfile -> {
-                    SymbolPositionRecord position = userProfile.positions.get(symbol);
-                    // 仅处理有持仓（方向非 EMPTY）的用户
-                    if (position != null && position.direction != PositionDirection.EMPTY) {
-                        // 当前账户可用余额，已扣除开仓时的初始保证金，反映用户可自由支配的资金
-                        long balance = userProfile.accounts.get(spec.quoteCurrency);
-                        // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
-                        long profit = position.liquidateEstimateProfit(spec, priceRecord);
-                        // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
-                        long locked = position.calculateRequiredMarginForFutures(spec);
-                        // 账户总权益 = 可用余额 + 未实现盈亏 + 冻结保证金，表示账户的整体抗风险能力
-                        long equity = balance + profit + locked; // 包含冻结保证金
-                        // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
-                        long maintenanceMargin = position.calculateMaintenanceMargin(spec);
-                        // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
-                        long warningThreshold = (long)(maintenanceMargin * 1.2);
-                        // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
-                        if (equity < maintenanceMargin) {
-                            // 计算资金缺口：需要多少权益恢复到维持保证金水平
-                            long deficit = maintenanceMargin - equity;
-                            // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice），反映市场可执行价格
-                            long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
-                            // 若市场无流动性（价格为 0 或 MAX_VALUE），回退到平均开仓价作为兜底
-                            if (price == 0 || price == Long.MAX_VALUE) {
-                                price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
-                                if (price == 0) price = 1; // 防止除零，默认最小价格
-                                log.debug("Fallback to average open price={} or markPrice for symbol={}", price, symbol);
-                            }
-                            // 计算需要清算的仓位数量：缺口 / 当前价格（向上取整），限制不超过当前持仓量
-                            long sizeToLiquidate = Math.min(position.openVolume,
-                                (long)Math.ceil((deficit + CoreArithmeticUtils.calculateTakerFee(position.openVolume, spec)) / (double)price));
-                            if (sizeToLiquidate > 0) {
-                                // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
-                                OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-                                long prevLocked = position.calculateRequiredMarginForFutures(spec);
-                                // 执行强平，更新持仓并返回本次盈亏（基于强平价格）
-                                long liquidationPnl = position.liquidate(action, sizeToLiquidate, price);
-                                // 计算强平手续费，基于清算量和规格中的 takerFee
-                                long fee = CoreArithmeticUtils.calculateTakerFee(sizeToLiquidate, spec);
-                                // 更新手续费统计，用于平台收入记录
-                                fees.addToValue(spec.quoteCurrency, fee);
-                                // 更新当前持仓所需的初始保证金，反映强平后的状态
-                                locked = position.calculateRequiredMarginForFutures(spec);
-                                // 释放保证金
-                                long releasedMargin = prevLocked - locked;
-                                // 更新账户可用余额：加上强平盈亏，扣除手续费（释放的保证金已隐式处理）
-                                long free = userProfile.accounts.addToValue(spec.quoteCurrency, liquidationPnl + releasedMargin - fee);
-                                if (releasedMargin > 0) {
-                                    eventsHelper.sendUnLockEvent(cmd, userProfile.uid, spec.quoteCurrency, free, releasedMargin);
-                                }
-                                // 剩余持仓量，可能为 0（全平）或部分剩余
-                                long remainingPosition = position.openVolume;
-                                // 若仓位清空，从用户持仓记录中移除，释放内存
-                                if (position.isEmpty()) {
-                                    removePositionRecord(cmd, position, userProfile);
-                                }
-                                // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-                                eventsHelper.sendLiquidationEvent(cmd, position, free, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
-                                log.debug("Liquidated: uid={} symbol={} size={} price={} pnl={}", userProfile.uid, symbol, sizeToLiquidate, price,
-                                    liquidationPnl);
-                            }
+                    // 遍历每个用户的所有持仓
+                    userProfile.positions.stream().forEach(position -> {
+                        int symbol = position.symbol;
+                        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
+                        if (spec.type != SymbolType.FUTURES_CONTRACT) {
+                            return; // 跳过非期货持仓
                         }
-                        // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
-                        else if (equity < warningThreshold) {
-                            // 发送提醒事件，包含当前余额和冻结保证金，便于用户了解资金状态
-                            eventsHelper.sendMarginAdjustmentEvent(cmd, position, balance, locked);
-                            log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, symbol, equity, warningThreshold);
+                        // 获取最新价格记录
+                        LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
+                        if (priceRecord == null) {
+                            log.warn("No price record for symbol={}", symbol);
+                            return;
                         }
-                    }
+                        // 强平判断和处理逻辑
+                        evaluateForLiquidation(cmd, userProfile, spec, priceRecord, position);
+                    });
                 });
-        });
+    }
+
+    private void evaluateForLiquidation(OrderCommand cmd, UserProfile userProfile,
+                                        CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
+                                        SymbolPositionRecord position) {
+        // 仅处理有持仓（方向非 EMPTY）的用户
+        if (position != null && position.direction != PositionDirection.EMPTY) {
+            // 当前账户可用余额，已扣除开仓时的初始保证金，反映用户可自由支配的资金
+            long balance = userProfile.accounts.get(spec.quoteCurrency);
+            // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
+            long profit = position.liquidateEstimateProfit(spec, priceRecord);
+            // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
+            long locked = position.calculateRequiredMarginForFutures(spec);
+            // 账户总权益 = 可用余额(隐式冻结) + 未实现盈亏，表示账户的整体抗风险能力
+            long equity = balance + profit;
+            // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
+            long maintenanceMargin = position.calculateMaintenanceMargin(spec);
+            // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
+            long warningThreshold = (long) (maintenanceMargin * 1.2);
+            // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
+            if (equity < maintenanceMargin) {
+                // 计算资金缺口：需要多少权益恢复到维持保证金水平
+                long deficit = maintenanceMargin - equity;
+                // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice），反映市场可执行价格
+                long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
+                // 若市场无流动性（价格为 0 或 MAX_VALUE），回退到平均开仓价作为兜底
+                if (price == 0 || price == Long.MAX_VALUE) {
+                    price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
+                    if (price == 0) price = 1; // 防止除零，默认最小价格
+                    log.debug("Fallback to average open price={} or markPrice for symbol={}", price, position.symbol);
+                }
+                /**
+                 * 计算需要清算的仓位数量：缺口 / 当前价格（向上取整），限制不超过当前持仓量
+                 *
+                 * 强平是吃单（减少流动性的一方），使用takerFee
+                 *
+                 * 找一个 x（强平数量），满足：x × price ≥ deficit + x × taker_fee
+                 * x ≥ deficit / (price - taker_fee)
+                 */
+                long x = (long) Math.ceil((double) deficit / (price - spec.takerFee));
+                long sizeToLiquidate = Math.min(position.openVolume, x);
+                if (sizeToLiquidate > 0) {
+                    // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
+                    OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+                    long prevLocked = position.calculateRequiredMarginForFutures(spec);
+                    long prevProfit = position.profit;
+                    /**
+                     * 和下单同样的逻辑处理
+                     * 我们是单边收费模型，只有开仓收手续费，平仓不收
+                     * @see SymbolPositionRecord#closeCurrentPositionFutures(OrderAction, long, long)
+                     */
+                    final long sizeOpen = position.updatePositionForMarginTrade(action, sizeToLiquidate, price);
+                    final long fee = spec.takerFee * sizeOpen;
+                    userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
+                    fees.addToValue(spec.quoteCurrency, fee);
+                    final long liquidationPnl = position.profit - prevProfit;
+                    // 更新当前持仓所需的初始保证金，反映强平后的状态
+                    locked = position.calculateRequiredMarginForFutures(spec);
+                    // 释放保证金
+                    long releasedMargin = prevLocked - locked;
+                    /**
+                     * 减仓后，不需要主动“返还资金”，因为是“隐式冻结”的逻辑
+                     * 只要你在减仓时更新了openVolume，那么下次调用calculateRequiredMarginForFutures 的值就自然变小了
+                     */
+                    if (releasedMargin > 0) {
+                        eventsHelper.sendUnLockEvent(cmd, userProfile.uid, spec.quoteCurrency, balance - locked, locked);
+                    }
+                    // 剩余持仓量，可能为 0（全平）或部分剩余
+                    long remainingPosition = position.openVolume;
+                    // 若仓位清空，从用户持仓记录中移除，释放内存
+                    if (position.isEmpty()) {
+                        removePositionRecord(position, userProfile);
+                    }
+                    // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
+                    eventsHelper.sendLiquidationEvent(cmd, position, balance - locked, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
+                    log.debug("Liquidated: uid={} symbol={} size={} price={} pnl={}", userProfile.uid, position.symbol, sizeToLiquidate, price,
+                            liquidationPnl);
+                }
+            }
+            // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
+            else if (equity < warningThreshold) {
+                // 发送提醒事件，包含当前余额和冻结保证金，便于用户了解资金状态
+                eventsHelper.sendMarginAdjustmentEvent(cmd, position, balance - locked, locked);
+                log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
+            }
+        }
     }
     
     /**
@@ -843,6 +840,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         return locked;
     }
+
     /**
      * 周期性结算期货仓位的未实现盈亏。
      * 将未实现盈亏转为已实现盈亏并更新账户余额。
@@ -869,8 +867,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     long balance = userProfile.accounts.get(spec.quoteCurrency);
                     long unrealizedPnl = position.liquidateEstimateProfit(spec, priceRecord);
                     if (unrealizedPnl != 0) {
+                        // 相当于按现价帮用户平仓，再重新开仓相同的仓位
                         long free = userProfile.accounts.addToValue(spec.quoteCurrency, unrealizedPnl);
                         position.profit += unrealizedPnl;
+                        //重新设置开仓成本为 markPrice（变相“重开仓”）
                         position.openPriceSum = position.openVolume * priceRecord.markPrice; // 重置
                         long locked = position.calculateRequiredMarginForFutures(spec);
                         eventsHelper.sendPnlSettlementEvent(cmd, position, free, locked, unrealizedPnl);
@@ -887,78 +887,65 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (takerUp != null) {
             if (ev.eventType == MatcherEventType.TRADE) {
                 // update taker's position
-                long prevMargin = takerSpr.calculateRequiredMarginForFutures(spec);
+                long preVolume = takerSpr.openVolume;
+                long prePriceSum = takerSpr.openPriceSum;
+
                 final long sizeOpen = takerSpr.updatePositionForMarginTrade(takerAction, ev.size, ev.price);
-                final long fee = CoreArithmeticUtils.calculateTakerFee(Math.abs(sizeOpen), spec);
-                long locked = takerSpr.calculateRequiredMarginForFutures(spec);
-                long marginDiff = locked - prevMargin; // 保证金变化量
-                if (sizeOpen > 0) {
-                    // 开仓：扣除手续费和新增保证金
-                    long free = takerUp.accounts.addToValue(spec.quoteCurrency, -fee - marginDiff);
-                    fees.addToValue(spec.quoteCurrency, fee);
-                    eventsHelper.sendLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, marginDiff); // 新增
+                final long fee = spec.takerFee * sizeOpen;
+                long balance = takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
+                fees.addToValue(spec.quoteCurrency, fee);
+                long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+                long free = balance - locked;
+
+                if (sizeOpen == 0) {
+                    long closedSize = preVolume - takerSpr.openVolume;
+                    long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : 0;
+                    long closePnl = (ev.price - avgOpenPrice) * closedSize * takerSpr.direction.getMultiplier();
+                    eventsHelper.sendUnLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, locked);
+                    eventsHelper.sendClosePositionEvent(ev, takerSpr, free, locked, closedSize, ev.price, fee, closePnl);
+                } else {
+                    eventsHelper.sendLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, locked);
                     eventsHelper.sendOpenPositionEvent(ev, takerSpr, free, locked, sizeOpen, ev.price, fee);
-                    log.debug("Opened position: uid={} symbol={} size={} price={} marginDiff={}", 
-                             takerUp.uid, spec.symbolId, sizeOpen, ev.price, marginDiff);
-                } else if (sizeOpen < 0) {
-                    // 平仓：返还释放的保证金，加上平仓盈亏，扣除手续费
-                    long sizeClosed = -sizeOpen;
-                    long avgOpenPrice = takerSpr.openVolume > 0 ? takerSpr.openPriceSum / takerSpr.openVolume : ev.price;
-                    long closePnl = (takerAction == OrderAction.BID ? (ev.price - avgOpenPrice)
-                        : (avgOpenPrice - ev.price)) * sizeClosed * spec.quoteScaleK;
-                    
-                    long free = takerUp.accounts.addToValue(spec.quoteCurrency, closePnl - fee - marginDiff); // marginDiff
-                                                                                                              // 为负值
-                    fees.addToValue(spec.quoteCurrency, fee);
-                    eventsHelper.sendUnLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, -marginDiff);
-                    eventsHelper.sendClosePositionEvent(ev, takerSpr, free, locked, sizeClosed, ev.price, fee, closePnl);
-                    log.debug("Closed position: uid={} symbol={} size={} price={} pnl={} marginDiff={}", takerUp.uid, spec.symbolId, sizeClosed, ev.price,
-                        closePnl, marginDiff);
                 }
-                
-                
             } else if (ev.eventType == MatcherEventType.REJECT || ev.eventType == MatcherEventType.REDUCE) {
                 // for cancel/rejection only one party is involved
-                long prevMargin = takerSpr.calculateRequiredMarginForFutures(spec);
                 takerSpr.pendingRelease(takerAction, ev.size);
-                long locked = takerSpr.calculateRequiredMarginForFutures(spec);
-                long releasedMargin = prevMargin - locked;
-                if (releasedMargin > 0) {
-                    long free = takerUp.accounts.addToValue(spec.quoteCurrency, releasedMargin);
-                    eventsHelper.sendUnLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, releasedMargin);
-                }
+                /**
+                 * 这里不需要动用户金额，因为cancel order总是把未成单的取消掉，因此总会走到后面的removePositionRecord
+                 */
             }
             if (takerSpr.isEmpty()) {
-                removePositionRecord(ev, takerSpr, takerUp);
+                removePositionRecord(takerSpr, takerUp);
             }
         }
 
         if (ev.eventType == MatcherEventType.TRADE && uidForThisHandler(ev.matchedOrderUid)) {
+            // update maker's position
             UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
             SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(spec.symbolId);
-            long prevMargin = makerSpr.calculateRequiredMarginForFutures(spec);
+            long preVolume = makerSpr.openVolume;
+            long prePriceSum = makerSpr.openPriceSum;
+
             long sizeOpen = makerSpr.updatePositionForMarginTrade(takerAction.opposite(), ev.size, ev.price);
-            long fee = CoreArithmeticUtils.calculateMakerFee(ev.size, spec);
+            final long fee = spec.makerFee * sizeOpen;
+            long balance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
+            fees.addToValue(spec.quoteCurrency, fee);
+
             long locked = makerSpr.calculateRequiredMarginForFutures(spec);
-            long marginDiff = locked - prevMargin;
-            if (sizeOpen > 0) {
-                long free = maker.accounts.addToValue(spec.quoteCurrency, -fee - marginDiff);
-                fees.addToValue(spec.quoteCurrency, fee);
-                eventsHelper.sendLockEvent(ev, maker.uid, spec.quoteCurrency, free, marginDiff);
-                eventsHelper.sendOpenPositionEvent(ev, makerSpr, free, locked, sizeOpen, ev.price, fee);
-            } else if (sizeOpen < 0) {
-                long sizeClosed = -sizeOpen;
-                long avgOpenPrice = makerSpr.openVolume > 0 ? makerSpr.openPriceSum / makerSpr.openVolume : ev.price;
-                long closePnl = (takerAction.opposite() == OrderAction.BID ? 
-                                (ev.price - avgOpenPrice) : 
-                                (avgOpenPrice - ev.price)) * sizeClosed * spec.quoteScaleK;
-                long free = maker.accounts.addToValue(spec.quoteCurrency, closePnl - fee - marginDiff);
-                fees.addToValue(spec.quoteCurrency, fee);
-                eventsHelper.sendUnLockEvent(ev, maker.uid, spec.quoteCurrency, free, -marginDiff);
+            long free = balance - locked;
+
+            if (sizeOpen <= 0) {
+                long sizeClosed = preVolume - makerSpr.openVolume;
+                long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : ev.price;
+                long closePnl = (ev.price - avgOpenPrice) * sizeClosed * makerSpr.direction.getMultiplier();
+                eventsHelper.sendUnLockEvent(ev, maker.uid, spec.quoteCurrency, free, locked);
                 eventsHelper.sendClosePositionEvent(ev, makerSpr, free, locked, sizeClosed, ev.price, fee, closePnl);
+            } else {
+                eventsHelper.sendLockEvent(ev, maker.uid, spec.quoteCurrency, free, locked);
+                eventsHelper.sendOpenPositionEvent(ev, makerSpr, free, locked, sizeOpen, ev.price, fee);
             }
             if (makerSpr.isEmpty()) {
-                removePositionRecord(ev, makerSpr, maker);
+                removePositionRecord(makerSpr, maker);
             }
         }
 
@@ -1170,8 +1157,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
-            long totalTradefee = spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler;
-            fees.addToValue(quoteCurrency, totalTradefee);
+            long totalTradeFee = spec.takerFee * takerSizeForThisHandler + spec.makerFee * makerSizeForThisHandler;
+            fees.addToValue(quoteCurrency, totalTradeFee);
             /**
              * @TODO 把手续费加到Trade上面去？
              */
@@ -1179,20 +1166,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
     }
 
-    private void removePositionRecord(OrderCommand cmd , SymbolPositionRecord record, UserProfile userProfile) {
+    private void removePositionRecord(SymbolPositionRecord record, UserProfile userProfile) {
         long free = userProfile.accounts.addToValue(record.currency, record.profit);
-        if (record.profit != 0) {
-            eventsHelper.sendPnlSettlementEvent(cmd, record, free, 0, record.profit);
-        }
-        userProfile.positions.removeKey(record.symbol);
-        objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
-    }
-    
-    private void removePositionRecord(MatcherTradeEvent ev , SymbolPositionRecord record, UserProfile userProfile) {
-        long free = userProfile.accounts.addToValue(record.currency, record.profit);
-        if (record.profit != 0) {
-            eventsHelper.sendPnlSettlementEvent(ev, record, free, 0, record.profit);
-        }
+        //todo 这个平仓时候也会触发，不单单是pnl的事件，先不发吧
+//        if (record.profit != 0) {
+//            eventsHelper.sendPnlSettlementEvent(cmd, record, free, 0, record.profit);
+//        }
         userProfile.positions.removeKey(record.symbol);
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }

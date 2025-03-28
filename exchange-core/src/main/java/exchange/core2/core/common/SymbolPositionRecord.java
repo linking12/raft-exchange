@@ -104,6 +104,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         }
     }
 
+    /**
+     * P&L = (持仓方向 *（当前价格 - 开仓均价）) × 持仓张数
+     * 返回纯利润，不包含冻结保证金。
+     */
     public long estimateProfit(final CoreSymbolSpecification spec, final RiskEngine.LastPriceCacheRecord lastPriceCacheRecord) {
         switch (direction) {
             case EMPTY:
@@ -142,52 +146,20 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         }
     }
 
+    /**
+     * 【强平风险评估用】只计算持仓*维持保证金，不看挂单。
+     * @param spec
+     * @return
+     */
     public long calculateMaintenanceMargin(CoreSymbolSpecification spec) {
         return direction == PositionDirection.EMPTY ? 0 : openVolume * spec.maintenanceMargin;
     }
     
     /**
-     * 执行强平，关闭指定数量的仓位，并返回本次强平的盈亏。
-     * @param action 强平方向（ASK 表示卖出多头，BID 表示买入空头）
-     * @param size 强平数量
-     * @param price 强平价格
-     * @return 本次强平的盈亏（liquidationPnl），正数为盈利，负数为亏损
-     */
-    public long liquidate(OrderAction action, long size, long price) {
-        if (direction == PositionDirection.EMPTY || openVolume == 0) {
-            return 0; // 无仓位可关闭，无盈亏
-        }
-        // 限制强平数量不超过当前持仓
-        long sizeToClose = Math.min(size, openVolume);
-        if (sizeToClose <= 0) {
-            return 0; // 无需关闭
-        }
-        // 计算平均开仓价格
-        long avgOpenPrice = openPriceSum / openVolume;
-        // 计算本次强平的盈亏
-        long liquidationPnl;
-        if (direction == PositionDirection.LONG) {
-            liquidationPnl = (price - avgOpenPrice) * sizeToClose; // 多头：(强平价 - 开仓均价) * 数量
-        } else if (direction == PositionDirection.SHORT) {
-            liquidationPnl = (avgOpenPrice - price) * sizeToClose; // 空头：(开仓均价 - 强平价) * 数量
-        } else {
-            liquidationPnl = 0; // 不应发生，但保持健壮性
-        }
-        // 更新仓位状态
-        openVolume -= sizeToClose;
-        openPriceSum -= avgOpenPrice * sizeToClose; // 按平均价格减少总和
-        profit += liquidationPnl; // 将盈亏记录到已实现盈亏中
-        if (openVolume == 0) {
-            direction = PositionDirection.EMPTY;
-            openPriceSum = 0; // 清空仓位时重置
-        }
-        // 验证内部状态（可选）
-        validateInternalState();
-        return liquidationPnl;
-    }
-    
-    /**
      * Calculate required margin based on specification and current position/orders
+     *
+     * 当前这笔合约持仓（含挂单）所需要冻结的保证金总额
+     * 【下单前风控用】不考虑维持保证金，是因为它已经用openVolume*初始保证金计算了，而初始保证金本来就大于维持保证金
      *
      * @param spec core symbol specification
      * @return required margin
@@ -245,29 +217,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return (newMargin <= currentMargin) ? -1 : newMargin;
     }
 
-
-    /**
-     * 计算未成交订单（pendingBuySize 和 pendingSellSize）所需的初始保证金。
-     * - 多头：pendingBuySize * marginBuy
-     * - 空头：pendingSellSize * marginSell
-     * - 返回两者中的较大值，与 calculateRequiredMarginForFutures 逻辑一致。
-     * @param spec 符号规格
-     * @return 未成交订单所需的保证金，若无未成交订单则返回 0
-     */
-    public long calculateRequiredMarginForPending(CoreSymbolSpecification spec) {
-        if (pendingBuySize == 0 && pendingSellSize == 0) {
-            return 0;
-        }
-        try {
-            final long marginBuy = pendingBuySize > 0 ? Math.multiplyExact(spec.marginBuy, pendingBuySize) : 0;
-            final long marginSell = pendingSellSize > 0 ? Math.multiplyExact(spec.marginSell, pendingSellSize) : 0;
-            return Math.max(marginBuy, marginSell);
-        } catch (ArithmeticException e) {
-            log.error("Overflow in calculateRequiredMarginForPending: uid={} symbol={} pendingBuySize={} pendingSellSize={}",
-                    uid, symbol, pendingBuySize, pendingSellSize, e);
-            throw new IllegalStateException("Pending margin calculation overflow for symbol " + symbol, e);
-        }
-    }
     /**
      * Update position for one user
      * 1. Un-hold pending size
