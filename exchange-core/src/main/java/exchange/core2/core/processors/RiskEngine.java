@@ -791,9 +791,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                      * @see SymbolPositionRecord#closeCurrentPositionFutures(OrderAction, long, long)
                      */
                     final long sizeOpen = position.updatePositionForMarginTrade(action, sizeToLiquidate, price);
+                    /**
+                     * fee一定是0
+                     * sizeOpen一定是0，因为强平size最大就是现有仓位，不会新开仓，这也符合我们的单边收费设计。
+                     */
                     final long fee = spec.takerFee * sizeOpen;
-                    userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
-                    fees.addToValue(spec.quoteCurrency, fee);
+                    //userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
+                    //fees.addToValue(spec.quoteCurrency, fee);
                     final long liquidationPnl = position.profit - prevProfit;
                     // 更新当前持仓所需的初始保证金，反映强平后的状态
                     locked = position.calculateRequiredMarginForFutures(spec);
