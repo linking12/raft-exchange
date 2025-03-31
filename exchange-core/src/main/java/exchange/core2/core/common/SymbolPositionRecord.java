@@ -243,6 +243,24 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return sizeToOpen;
     }
 
+    /**
+     * 执行平仓操作，返回剩余未被反向抵消的部分，即需要新开仓的数量
+     */
+    public long closeOppositePosition(OrderAction action, long size, long price) {
+        // 1. Un-hold pending size
+        pendingRelease(action, size);
+
+        // 2. Reduce opposite position accordingly (if exists)
+        return closeCurrentPositionFutures(action, size, price);
+    }
+
+    /**
+     * 执行剩余开仓操作
+     */
+    public void openRemainingPosition(OrderAction action, long sizeToOpen, long price) {
+        openPositionMargin(action, sizeToOpen, price);
+    }
+
     private long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
 
         // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize, profit);

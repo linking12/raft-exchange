@@ -890,29 +890,41 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 long preVolume = takerSpr.openVolume;
                 long prePriceSum = takerSpr.openPriceSum;
 
-                final long sizeOpen = takerSpr.updatePositionForMarginTrade(takerAction, ev.size, ev.price);
-                final long fee = spec.takerFee * sizeOpen;
-                long balance = takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
-                fees.addToValue(spec.quoteCurrency, fee);
-                long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
-                long free = balance - locked;
+                // 先平反方向仓位，返回剩余未成交数量
+                final long sizeToOpen = takerSpr.closeOppositePosition(takerAction, ev.size, ev.price);
+                long closedSize = Math.max(0, preVolume - takerSpr.openVolume);
 
-                if (sizeOpen == 0) {
-                    long closedSize = preVolume - takerSpr.openVolume;
+                // 平仓事件
+                if (closedSize > 0) {
                     long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : 0;
                     long closePnl = (ev.price - avgOpenPrice) * closedSize * takerSpr.direction.getMultiplier();
+                    long locked = takerSpr.calculateRequiredMarginForFutures(spec);
+                    long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
                     eventsHelper.sendUnLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, locked);
-                    eventsHelper.sendClosePositionEvent(ev, takerSpr, free, locked, closedSize, ev.price, fee, closePnl);
-                } else {
+                    eventsHelper.sendClosePositionEvent(ev, takerSpr, free, locked, closedSize, ev.price, 0, closePnl);
+                }
+
+                // 开仓事件
+                if (sizeToOpen > 0) {
+                    // 再开新方向仓位
+                    takerSpr.openRemainingPosition(takerAction, sizeToOpen, ev.price);
+
+                    // 计算开仓手续费
+                    final long fee = spec.takerFee * sizeToOpen;
+                    long balance = takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
+                    fees.addToValue(spec.quoteCurrency, fee);
+                    long locked = takerSpr.calculateRequiredMarginForFutures(spec);
+                    long free = balance - locked;
+
                     eventsHelper.sendLockEvent(ev, takerUp.uid, spec.quoteCurrency, free, locked);
-                    eventsHelper.sendOpenPositionEvent(ev, takerSpr, free, locked, sizeOpen, ev.price, fee);
+                    eventsHelper.sendOpenPositionEvent(ev, takerSpr, free, locked, sizeToOpen, ev.price, fee);
                 }
             } else if (ev.eventType == MatcherEventType.REJECT || ev.eventType == MatcherEventType.REDUCE) {
                 // for cancel/rejection only one party is involved
-                takerSpr.pendingRelease(takerAction, ev.size);
                 /**
                  * 这里不需要动用户金额，因为cancel order总是把未成单的取消掉，因此总会走到后面的removePositionRecord
                  */
+                takerSpr.pendingRelease(takerAction, ev.size);
             }
             if (takerSpr.isEmpty()) {
                 removePositionRecord(takerSpr, takerUp);
@@ -926,23 +938,33 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long preVolume = makerSpr.openVolume;
             long prePriceSum = makerSpr.openPriceSum;
 
-            long sizeOpen = makerSpr.updatePositionForMarginTrade(takerAction.opposite(), ev.size, ev.price);
-            final long fee = spec.makerFee * sizeOpen;
-            long balance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
-            fees.addToValue(spec.quoteCurrency, fee);
+            // 先平仓
+            final long sizeToOpen = makerSpr.closeOppositePosition(takerAction.opposite(), ev.size, ev.price);
+            long sizeClosed = Math.max(0, preVolume - makerSpr.openVolume);
 
-            long locked = makerSpr.calculateRequiredMarginForFutures(spec);
-            long free = balance - locked;
-
-            if (sizeOpen <= 0) {
-                long sizeClosed = preVolume - makerSpr.openVolume;
+            // 计算平仓信息
+            if (sizeClosed > 0) {
                 long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : ev.price;
                 long closePnl = (ev.price - avgOpenPrice) * sizeClosed * makerSpr.direction.getMultiplier();
+                long locked = makerSpr.calculateRequiredMarginForFutures(spec);
+                long free = maker.accounts.get(spec.quoteCurrency) - locked;
+                // todo sendClosePositionEvent已经包含sendUnLockEvent的信息了，是不是可以只发一个
                 eventsHelper.sendUnLockEvent(ev, maker.uid, spec.quoteCurrency, free, locked);
-                eventsHelper.sendClosePositionEvent(ev, makerSpr, free, locked, sizeClosed, ev.price, fee, closePnl);
-            } else {
+                eventsHelper.sendClosePositionEvent(ev, makerSpr, free, locked, sizeClosed, ev.price, 0, closePnl);
+            }
+
+            // 再看是否需要新开仓
+            if (sizeToOpen > 0) {
+                makerSpr.openRemainingPosition(takerAction.opposite(), sizeToOpen, ev.price);
+
+                final long fee = spec.makerFee * sizeToOpen;
+                long balance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
+                fees.addToValue(spec.quoteCurrency, fee);
+                long locked = makerSpr.calculateRequiredMarginForFutures(spec);
+                long free = balance - locked;
+
                 eventsHelper.sendLockEvent(ev, maker.uid, spec.quoteCurrency, free, locked);
-                eventsHelper.sendOpenPositionEvent(ev, makerSpr, free, locked, sizeOpen, ev.price, fee);
+                eventsHelper.sendOpenPositionEvent(ev, makerSpr, free, locked, sizeToOpen, ev.price, fee);
             }
             if (makerSpr.isEmpty()) {
                 removePositionRecord(makerSpr, maker);
