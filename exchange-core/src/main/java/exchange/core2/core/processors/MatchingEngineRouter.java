@@ -262,12 +262,6 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
                     && cmd.command != OrderCommandType.ORDER_BOOK_REQUEST
                     && cmd.resultCode == CommandResultCode.SUCCESS) {
                 cmd.marketData = orderBook.getL2MarketDataSnapshot(Integer.MAX_VALUE);
-            } else if (cfgMarginTradingEnabled) {
-                /**
-                 * 如果是期货下单，在后处理中需要用到marketData
-                 * @see RiskEngine#handlerRiskRelease(long, OrderCommand)
-                 */
-                cmd.marketData = orderBook.getL2MarketDataSnapshot(Integer.MAX_VALUE);
             }
         }
     }

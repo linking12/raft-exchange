@@ -636,7 +636,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         MatcherTradeEvent mte = cmd.matcherEvent;
 
         // skip events processing if no events (or if contains BINARY EVENT)
-        if (marketData == null && (mte == null || mte.eventType == MatcherEventType.BINARY_EVENT)) {
+        if (mte == null || mte.eventType == MatcherEventType.BINARY_EVENT) {
             return false;
         }
 
