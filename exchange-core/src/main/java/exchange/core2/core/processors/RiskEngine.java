@@ -180,7 +180,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     public static class LastPriceCacheRecord implements BytesMarshallable, StateHash {
         public long askPrice = Long.MAX_VALUE;
         public long bidPrice = 0L;
-        public long markPrice = 0;
+        public long markPrice = 0L;
 
         public LastPriceCacheRecord() {
         }
@@ -239,6 +239,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             case CANCEL_ORDER:
             case REDUCE_ORDER:
             case ORDER_BOOK_REQUEST:
+            case FORCE_LIQUIDATION:
                 return false;
 
             case PLACE_ORDER:
@@ -345,10 +346,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
                 }
                 return true;
-            }
-            case SYSTEM_CHECK_POSITION: {
-                checkAndLiquidateAllPositions(cmd);
-                return false;
             }
             case SYSTEM_SETTLE_PNL: {
                 settlePnl(cmd);
@@ -698,137 +695,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             log.warn("No market data for symbol={}, lastPriceCache not updated", symbol);
         }
         return false;
-    }
-    
-    /**
-     * 检查并强平所有用户的期货仓位，基于维持保证金规则，确保账户权益满足最低要求。
-     * 
-     * 业务逻辑：
-     * 1. 遍历所有期货符号，获取对应的规格和最新价格数据，用于计算未实现盈亏和强平价格。
-     * 2. 对每个用户，检查其持仓的账户权益（Equity = 可用余额 + 未实现盈亏）。
-     * 3. 若权益低于维持保证金（Maintenance Margin），触发部分强平，计算并清算足够仓位以恢复权益至维持保证金水平。
-     * 4. 若权益低于预警阈值（1.2 * 维持保证金）但高于维持保证金，发送 Margin Call 提醒用户追加资金，避免进一步恶化。
-     * 5. 更新账户可用余额、持仓状态，并生成相应的事件（如强平或 Margin Call），记录交易细节。
-     * 
-     * 注意事项：
-     * - accounts 表示扣除初始保证金后的可用余额，冻结的保证金通过余额减少隐式体现，不单独记录。
-     * - 未实现盈亏基于 markPrice 计算，提供平滑的价格参考，但依赖价格数据的实时性。
-     * - 强平价格优先使用市场价格（bid/ask），若无流动性则回退到开仓均价，可能影响盈亏准确性。
-     * - 该方法为周期性检查的一部分，通常由外部调度（如定时器）触发，频率影响风险控制的及时性。
-     */
-    private void checkAndLiquidateAllPositions(OrderCommand cmd) {
-        // 遍历所有用户（分片过滤 + 有持仓）
-        userProfileService.getAllUserProfiles()
-                .filter(up -> uidForThisHandler(up.uid))
-                .filter(up -> !up.positions.isEmpty())
-                .forEach(userProfile -> {
-                    // 遍历每个用户的所有持仓
-                    userProfile.positions.stream().forEach(position -> {
-                        int symbol = position.symbol;
-                        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
-                        if (spec.type != SymbolType.FUTURES_CONTRACT) {
-                            return; // 跳过非期货持仓
-                        }
-                        // 获取最新价格记录
-                        LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
-                        if (priceRecord == null) {
-                            log.warn("No price record for symbol={}", symbol);
-                            return;
-                        }
-                        // 强平判断和处理逻辑
-                        evaluateForLiquidation(cmd, userProfile, spec, priceRecord, position);
-                    });
-                });
-    }
-
-    private void evaluateForLiquidation(OrderCommand cmd, UserProfile userProfile,
-                                        CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
-                                        SymbolPositionRecord position) {
-        // 仅处理有持仓（方向非 EMPTY）的用户
-        if (position != null && position.direction != PositionDirection.EMPTY) {
-            // 当前账户可用余额，已扣除开仓时的初始保证金，反映用户可自由支配的资金
-            long balance = userProfile.accounts.get(spec.quoteCurrency);
-            // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
-            long profit = position.liquidateEstimateProfit(spec, priceRecord);
-            // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
-            long locked = position.calculateRequiredMarginForFutures(spec);
-            // 账户总权益 = 可用余额(隐式冻结) + 未实现盈亏，表示账户的整体抗风险能力
-            long equity = balance + profit;
-            // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
-            long maintenanceMargin = position.calculateMaintenanceMargin(spec);
-            // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
-            long warningThreshold = (long) (maintenanceMargin * 1.2);
-            // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
-            if (equity < maintenanceMargin) {
-                // 计算资金缺口：需要多少权益恢复到维持保证金水平
-                long deficit = maintenanceMargin - equity;
-                // 强平价格：多头用买价（bidPrice），空头用卖价（askPrice），反映市场可执行价格
-                long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
-                // 若市场无流动性（价格为 0 或 MAX_VALUE），回退到平均开仓价作为兜底
-                if (price == 0 || price == Long.MAX_VALUE) {
-                    price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
-                    if (price == 0) price = 1; // 防止除零，默认最小价格
-                    log.debug("Fallback to average open price={} or markPrice for symbol={}", price, position.symbol);
-                }
-                /**
-                 * 计算需要清算的仓位数量：缺口 / 当前价格（向上取整），限制不超过当前持仓量
-                 *
-                 * 强平是吃单（减少流动性的一方），使用takerFee
-                 *
-                 * 找一个 x（强平数量），满足：x × price ≥ deficit + x × taker_fee
-                 * x ≥ deficit / (price - taker_fee)
-                 */
-                long x = (long) Math.ceil((double) deficit / (price - spec.takerFee));
-                long sizeToLiquidate = Math.min(position.openVolume, x);
-                if (sizeToLiquidate > 0) {
-                    // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
-                    OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-                    long prevLocked = position.calculateRequiredMarginForFutures(spec);
-                    long prevProfit = position.profit;
-                    /**
-                     * 和下单同样的逻辑处理
-                     * 我们是单边收费模型，只有开仓收手续费，平仓不收
-                     * @see SymbolPositionRecord#closeCurrentPositionFutures(OrderAction, long, long)
-                     */
-                    final long sizeOpen = position.updatePositionForMarginTrade(action, sizeToLiquidate, price);
-                    /**
-                     * fee一定是0
-                     * sizeOpen一定是0，因为强平size最大就是现有仓位，不会新开仓，这也符合我们的单边收费设计。
-                     */
-                    final long fee = spec.takerFee * sizeOpen;
-                    //userProfile.accounts.addToValue(spec.quoteCurrency, -fee);
-                    //fees.addToValue(spec.quoteCurrency, fee);
-                    final long liquidationPnl = position.profit - prevProfit;
-                    // 更新当前持仓所需的初始保证金，反映强平后的状态
-                    locked = position.calculateRequiredMarginForFutures(spec);
-                    // 释放保证金
-                    long releasedMargin = prevLocked - locked;
-                    /**
-                     * 减仓后，不需要主动“返还资金”，因为是“隐式冻结”的逻辑
-                     * 只要你在减仓时更新了openVolume，那么下次调用calculateRequiredMarginForFutures 的值就自然变小了
-                     */
-                    if (releasedMargin > 0) {
-                        eventsHelper.sendUnLockEvent(cmd, userProfile.uid, spec.quoteCurrency, balance - locked, locked);
-                    }
-                    // 剩余持仓量，可能为 0（全平）或部分剩余
-                    long remainingPosition = position.openVolume;
-                    // 若仓位清空，从用户持仓记录中移除，释放内存
-                    if (position.isEmpty()) {
-                        removePositionRecord(position, userProfile);
-                    }
-                    // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-                    eventsHelper.sendLiquidationEvent(cmd, position, balance - locked, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
-                    log.debug("Liquidated: uid={} symbol={} size={} price={} pnl={}", userProfile.uid, position.symbol, sizeToLiquidate, price,
-                            liquidationPnl);
-                }
-            }
-            // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
-            else if (equity < warningThreshold) {
-                // 发送提醒事件，包含当前余额和冻结保证金，便于用户了解资金状态
-                eventsHelper.sendMarginAdjustmentEvent(cmd, position, balance - locked, locked);
-                log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
-            }
-        }
     }
     
     /**

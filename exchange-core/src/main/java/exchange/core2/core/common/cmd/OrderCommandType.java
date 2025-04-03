@@ -28,14 +28,15 @@ public enum OrderCommandType {
     MOVE_ORDER((byte) 3, true),
     REDUCE_ORDER((byte) 4, true),
 
-    SYSTEM_CHECK_POSITION((byte) 5, false),
     ORDER_BOOK_REQUEST((byte) 6, false),
 
     ADD_USER((byte) 10, true),
     BALANCE_ADJUSTMENT((byte) 11, true),
     SUSPEND_USER((byte) 12, true),
     RESUME_USER((byte) 13, true),
-    SYSTEM_SETTLE_PNL((byte) 14, false), //没地方放了 先这样吧
+
+    FORCE_LIQUIDATION((byte) 20, true),
+    SYSTEM_SETTLE_PNL((byte) 21, true),
 
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),

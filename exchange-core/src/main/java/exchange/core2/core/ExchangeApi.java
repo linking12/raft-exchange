@@ -43,7 +43,6 @@ import org.eclipse.collections.impl.map.mutable.ConcurrentHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
@@ -55,16 +54,11 @@ public final class ExchangeApi {
 
     private final RingBuffer<OrderCommand> ringBuffer;
     private final LZ4Compressor lz4Compressor;
-    private final boolean cfgMarginTradingEnabled;
 
     // promises cache (TODO can be changed to queue)
     private final Map<Long, Consumer<OrderCommand>> promises = new ConcurrentHashMap<>();
 
     public static final int LONGS_PER_MESSAGE = 5;
-
-    private static final int MAX_WAIT_TIME_MS = 1_000;
-    //由于ExchangeApi是到处用的 所以防止可见性问题导致的计数错误影响性能
-    private final AtomicLong lastTimestamp = new AtomicLong(System.currentTimeMillis());
 
     public void processResult(final long seq, final OrderCommand cmd) {
 
@@ -77,23 +71,12 @@ public final class ExchangeApi {
         }
     }
 
-    public void tryCheckAndLiquidateAllPositions() {
-        if (cfgMarginTradingEnabled) {
-            long last = lastTimestamp.get();
-            long currentTimeMillis = System.currentTimeMillis();
-            if (currentTimeMillis - last >= MAX_WAIT_TIME_MS && lastTimestamp.compareAndSet(last, currentTimeMillis)) {
-                ringBuffer.publishEvent(SYSTEM_CHECK_POSITION_ORDER_EVENT_TRANSLATOR, ApiSystemCheckPositionCommand.INSTANCE);
-            }
-        }
-    }
-
     public void submitCommand(ApiCommand cmd) {
         //log.debug("{}", cmd);
 
         if (cmd instanceof ApiMoveOrder) {
             ringBuffer.publishEvent(MOVE_ORDER_TRANSLATOR, (ApiMoveOrder) cmd);
         } else if (cmd instanceof ApiPlaceOrder) {
-            tryCheckAndLiquidateAllPositions();
             ringBuffer.publishEvent(NEW_ORDER_TRANSLATOR, (ApiPlaceOrder) cmd);
         } else if (cmd instanceof ApiCancelOrder) {
             ringBuffer.publishEvent(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder) cmd);
@@ -109,6 +92,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(RESUME_USER_TRANSLATOR, (ApiResumeUser) cmd);
         } else if (cmd instanceof ApiSuspendUser) {
             ringBuffer.publishEvent(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
+        } else if (cmd instanceof ApiLiquidationOrder) {
+            ringBuffer.publishEvent(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             publishBinaryData((ApiBinaryDataCommand) cmd, seq -> {
             });
@@ -133,7 +118,6 @@ public final class ExchangeApi {
         if (cmd instanceof ApiMoveOrder) {
             return submitCommandAsync(MOVE_ORDER_TRANSLATOR, (ApiMoveOrder) cmd);
         } else if (cmd instanceof ApiPlaceOrder) {
-            tryCheckAndLiquidateAllPositions();
             return submitCommandAsync(NEW_ORDER_TRANSLATOR, (ApiPlaceOrder) cmd);
         } else if (cmd instanceof ApiCancelOrder) {
             return submitCommandAsync(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder) cmd);
@@ -149,6 +133,8 @@ public final class ExchangeApi {
             return submitCommandAsync(RESUME_USER_TRANSLATOR, (ApiResumeUser) cmd);
         } else if (cmd instanceof ApiSuspendUser) {
             return submitCommandAsync(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
+        } else if (cmd instanceof ApiLiquidationOrder) {
+            return submitCommandAsync(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiPersistState) {
@@ -169,7 +155,6 @@ public final class ExchangeApi {
         if (cmd instanceof ApiMoveOrder) {
             return submitCommandAsyncFullResponse(MOVE_ORDER_TRANSLATOR, (ApiMoveOrder) cmd);
         } else if (cmd instanceof ApiPlaceOrder) {
-            tryCheckAndLiquidateAllPositions();
             return submitCommandAsyncFullResponse(NEW_ORDER_TRANSLATOR, (ApiPlaceOrder) cmd);
         } else if (cmd instanceof ApiCancelOrder) {
             return submitCommandAsyncFullResponse(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder) cmd);
@@ -185,6 +170,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(RESUME_USER_TRANSLATOR, (ApiResumeUser) cmd);
         } else if (cmd instanceof ApiSuspendUser) {
             return submitCommandAsyncFullResponse(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
+        } else if (cmd instanceof ApiLiquidationOrder) {
+            return submitCommandAsyncFullResponse(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataCommandAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiReset) {
@@ -524,6 +511,19 @@ public final class ExchangeApi {
         cmd.resultCode = CommandResultCode.NEW;
     };
 
+    private static final EventTranslatorOneArg<OrderCommand, ApiLiquidationOrder> LIQUIDATION_ORDER_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.FORCE_LIQUIDATION;
+        cmd.price = api.price;
+        cmd.size = api.size;
+        cmd.orderId = api.orderId;
+        cmd.timestamp = api.timestamp;
+        cmd.action = api.action;
+        cmd.orderType = api.orderType;
+        cmd.symbol = api.symbol;
+        cmd.uid = api.uid;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
     private static final EventTranslatorOneArg<OrderCommand, ApiMoveOrder> MOVE_ORDER_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.MOVE_ORDER;
         cmd.price = api.newPrice;
@@ -602,13 +602,6 @@ public final class ExchangeApi {
     private static final EventTranslatorOneArg<OrderCommand, ApiNop> NOP_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.NOP;
         cmd.timestamp = api.timestamp;
-        cmd.resultCode = CommandResultCode.NEW;
-    };
-
-    private static final EventTranslatorOneArg<OrderCommand, ApiSystemCheckPositionCommand> SYSTEM_CHECK_POSITION_ORDER_EVENT_TRANSLATOR = (cmd, seq, api) -> {
-        cmd.command = OrderCommandType.SYSTEM_CHECK_POSITION;
-        cmd.timestamp = api.timestamp;
-        cmd.orderId = -1;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

@@ -22,7 +22,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.ObjLongConsumer;
@@ -48,6 +47,7 @@ import exchange.core2.core.common.config.SerializationConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.processors.DisruptorExceptionHandler;
 import exchange.core2.core.processors.GroupingProcessor;
+import exchange.core2.core.processors.LiquidationScanner;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.ResultsHandler;
 import exchange.core2.core.processors.RiskEngine;
@@ -112,8 +112,7 @@ public final class ExchangeCore {
 
         this.ringBuffer = disruptor.getRingBuffer();
 
-        this.api = new ExchangeApi(ringBuffer, perfCfg.getBinaryCommandsLz4CompressorFactory().get(),
-            exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED);
+        this.api = new ExchangeApi(ringBuffer, perfCfg.getBinaryCommandsLz4CompressorFactory().get());
 
         final IOrderBook.OrderBookFactory orderBookFactory = perfCfg.getOrderBookFactory();
 
@@ -224,6 +223,10 @@ public final class ExchangeCore {
 
         // attach slave processors to master processor
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
+
+        if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
+            new LiquidationScanner(api, riskEngines.values()).start();
+        }
 
         try {
             loaderExecutor.shutdown();
