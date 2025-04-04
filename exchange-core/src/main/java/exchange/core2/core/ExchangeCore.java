@@ -82,6 +82,8 @@ public final class ExchangeCore {
     // enable MatcherTradeEvent pooling
     public static final boolean EVENTS_POOLING = true;
 
+    private LiquidationScanner liquidationScanner;
+
     /**
      * Exchange core constructor.
      *  @param resultsConsumer       - custom consumer of processed commands
@@ -225,7 +227,8 @@ public final class ExchangeCore {
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
 
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
-            new LiquidationScanner(api, riskEngines.values()).start();
+            liquidationScanner = new LiquidationScanner(api, riskEngines.values());
+            liquidationScanner.start();
         }
 
         try {
@@ -276,6 +279,11 @@ public final class ExchangeCore {
         if (!stopped) {
             stopped = true;
             // TODO stop accepting new events first
+            if (liquidationScanner != null) {
+                log.info("Shutdown liquidation scanner...");
+                liquidationScanner.stop(timeout, timeUnit);
+                log.info("Liquidation scanner stopped");
+            }
             try {
                 log.info("Shutdown disruptor...");
                 ringBuffer.publishEvent(SHUTDOWN_SIGNAL_TRANSLATOR);

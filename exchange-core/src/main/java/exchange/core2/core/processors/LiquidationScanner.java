@@ -38,7 +38,7 @@ public final class LiquidationScanner {
     public LiquidationScanner(ExchangeApi api, Collection<RiskEngine> riskEngines) {
         this.api = api;
         this.riskEngines = riskEngines;
-        this.scheduler = Executors.newScheduledThreadPool(riskEngines.size());
+        this.scheduler = Executors.newScheduledThreadPool(riskEngines.size(), r -> new Thread(r, "LiquidationScanner"));
     }
 
     public void start() {
@@ -54,7 +54,29 @@ public final class LiquidationScanner {
         }
     }
 
-    public void checkLiquidations(RiskEngine riskEngine) {
+    public void stop(long timeout, TimeUnit timeUnit) {
+        scheduler.shutdown();
+        try {
+            if (!scheduler.awaitTermination(timeout, timeUnit)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            scheduler.shutdownNow();
+        }
+    }
+
+    public void triggerOnce() {
+        for (RiskEngine riskEngine : riskEngines) {
+            try {
+                log.info("Manual trigger: Checking liquidation for shard {}", riskEngine.getShardId());
+                checkLiquidations(riskEngine);
+            } catch (Throwable e) {
+                log.error("Manual trigger failed for shard {}", riskEngine.getShardId(), e);
+            }
+        }
+    }
+
+    private void checkLiquidations(RiskEngine riskEngine) {
         SymbolSpecificationProvider symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
         MutableLongObjectMap<UserProfile> userProfiles = riskEngine.getUserProfileService().getUserProfiles().asUnmodifiable();
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
@@ -106,7 +128,7 @@ public final class LiquidationScanner {
                 if (price == 0 || price == Long.MAX_VALUE) {
                     price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
                     if (price == 0) price = 1; // 防止除零，默认最小价格
-                    log.debug("Fallback to average open price={} or markPrice for symbol={}", price, position.symbol);
+                    log.debug("Fallback to average open price={} for symbol={}", price, position.symbol);
                 }
                 /**
                  * 计算强平数量：
@@ -152,7 +174,7 @@ public final class LiquidationScanner {
         }
     }
 
-    public static long generateLiquidationOrderId(int symbolId, long uid) {
+    private long generateLiquidationOrderId(int symbolId, long uid) {
         long uidHash = (uid * 31 + 17) & 0xFFFFF;  // 取前 20 bit
         long tsPart = (System.currentTimeMillis() / 1000) & 0xFFF; // 取后12bit，支持4096秒 ≈ 1.13小时内不重复
         return  ((long) symbolId << 32) | (uidHash << 12) | tsPart;

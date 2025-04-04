@@ -684,15 +684,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
         }
 
-        // Process marked data
-        if (marketData != null && cfgMarginTradingEnabled) {
-            final RiskEngine.LastPriceCacheRecord record = lastPriceCache.getIfAbsentPut(symbol, RiskEngine.LastPriceCacheRecord::new);
-            record.askPrice = (marketData.askSize != 0) ? marketData.askPrices[0] : Long.MAX_VALUE;
-            record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : 0;
-            // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
-            record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
-        } else if (cfgMarginTradingEnabled) {
-            log.warn("No market data for symbol={}, lastPriceCache not updated", symbol);
+        // update LastPriceRecord
+        if (cfgMarginTradingEnabled) {
+            final LastPriceCacheRecord record = lastPriceCache.getIfAbsentPut(symbol, LastPriceCacheRecord::new);
+            if (marketData != null) {
+                record.askPrice = (marketData.askSize != 0) ? marketData.askPrices[0] : Long.MAX_VALUE;
+                record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : 0;
+                // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
+                record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
+            }
         }
         return false;
     }
