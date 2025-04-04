@@ -149,13 +149,12 @@ public final class LiquidationScanner {
                             .size(sizeToLiquidate)
                             .action(action).build());
                     liquidationFuture.whenCompleteAsync((cmd, err) -> {
-                        List<MatcherTradeEvent> matcherEvents = cmd.extractEvents();
                         /**
                          * 如果第一个事件是reject，说明没有完全成交。
                          * todo 后续需要降级处理 IFC ADL等
                          * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
                          */
-                        MatcherTradeEvent firstEvent = matcherEvents.get(0);
+                        MatcherTradeEvent firstEvent = cmd.matcherEvent;
                         if (firstEvent.eventType == MatcherEventType.REJECT) {
                             long remainSize = firstEvent.size;
                         }
