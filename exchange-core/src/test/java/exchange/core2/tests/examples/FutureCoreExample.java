@@ -23,6 +23,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
@@ -719,7 +720,7 @@ public class FutureCoreExample {
         ApiPlaceOrder order;
         // 模拟撮合：5 单成交，5 单拒绝
         for (int i = 0; i < ordersCount; i++) {
-            if (i < ordersCount/2) {
+            if (i < ordersCount / 2) {
                 order = ApiPlaceOrder.builder()
                         .uid(userId1)
                         .orderId(getRandomTransactionId())
@@ -761,8 +762,8 @@ public class FutureCoreExample {
         assertEquals(userStatus1.getPositions().getFirst().pendingSellSize, 0);
         assertEquals(userStatus1.getPositions().getFirst().pendingBuySize, 0);
         assertEquals(userStatus1.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus1.getPositions().getFirst().openVolume, ordersCount * size/2);
-        assertEquals(userStatus1.getPositions().getFirst().openPriceSum, ordersCount * size/2 * price);
+        assertEquals(userStatus1.getPositions().getFirst().openVolume, ordersCount * size / 2);
+        assertEquals(userStatus1.getPositions().getFirst().openPriceSum, ordersCount * size / 2 * price);
 
         SingleUserReportResult userStatus2 = getUserStatus(userId2);
         // 成交后postion会被清空
@@ -771,8 +772,55 @@ public class FutureCoreExample {
         assertEquals(userStatus2.getPositions().getFirst().pendingSellSize, 0);
         assertEquals(userStatus2.getPositions().getFirst().pendingBuySize, 0);
         assertEquals(userStatus2.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus2.getPositions().getFirst().openVolume, ordersCount * size/2);
-        assertEquals(userStatus2.getPositions().getFirst().openPriceSum, ordersCount * size/2 * price);
+        assertEquals(userStatus2.getPositions().getFirst().openVolume, ordersCount * size / 2);
+        assertEquals(userStatus2.getPositions().getFirst().openPriceSum, ordersCount * size / 2 * price);
+    }
+
+    // withdraw时应考虑用户当前持仓
+    @Test
+    public void testWithdrawConstrain() throws Exception {
+        // suppose current price is 10000
+        // userId1下2个期货买单, 价格为10000
+        int balance = 100;
+        int delta = -10;
+        long userId1 = createRandomUserWithMoney(balance);
+        createBid(userId1, 1, 10000L);
+
+        SingleUserReportResult userStatus = getUserStatus(userId1);
+        // 成交后postion会被清空
+        checkPosition(userStatus, 1);
+        checkOrder(userStatus, 1);
+        // 账面资金和初始资金一致
+        assertEquals(userStatus.getAccounts().get(quoteId), balance);
+        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().openVolume, 0);
+        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
+
+        // do withdraw -> 此时期待结果为提现失败
+        ApiAdjustUserBalance order2 = ApiAdjustUserBalance.builder()
+                .uid(userId1)
+                .currency(quoteId)
+                .amount(delta)
+                .transactionId(getRandomTransactionId())
+                .build();
+        CompletableFuture<CommandResultCode> result = api.submitCommandAsync(order2);
+        CommandResultCode code = result.get();
+        assertEquals(code, CommandResultCode.SUCCESS);
+
+        SingleUserReportResult userStatus1 = getUserStatus(userId1);
+        assertEquals(userStatus1.getAccounts().get(quoteId), balance + delta);
+
+        long userId2 = createRandomUserWithMoney();
+        createAsk(userId2, 1, 10000L);
+
+        // 此时不应该允许userId1开仓成功, 因为其保证金不够了
+        SingleUserReportResult userStatus2 = getUserStatus(userId1);
+        assertEquals(userStatus2.getAccounts().get(quoteId), balance + delta);
+        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus2.getPositions().getFirst().openVolume, 1);
+        assertEquals(userStatus2.getPositions().getFirst().pendingBuySize, 0);
+        assertEquals(userStatus2.getPositions().getFirst().pendingSellSize, 0);
     }
 
 }
