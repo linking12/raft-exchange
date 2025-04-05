@@ -56,6 +56,7 @@ import exchange.core2.core.processors.TwoStepMasterProcessor;
 import exchange.core2.core.processors.TwoStepSlaveProcessor;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import lombok.Builder;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -82,7 +83,8 @@ public final class ExchangeCore {
     // enable MatcherTradeEvent pooling
     public static final boolean EVENTS_POOLING = true;
 
-    private LiquidationScanner liquidationScanner;
+    @Getter
+    public LiquidationScanner liquidationScanner;
 
     /**
      * Exchange core constructor.

@@ -422,11 +422,11 @@ public class FutureCoreExample {
         updateCurrentPriceTo(10500);
 
         // userId1下反向单, 主动平仓
-        createAsk(userId1, 1, 10000L);
+        createAsk(userId1, 1, 10500L);
 
         // userId6需要吃掉userId1的平仓单后userId1才能平仓成功
         long userId6 = createRandomUserWithMoney();
-        createBid(userId6, 1, 10000L);
+        createBid(userId6, 1, 10500L);
 
         // check profit, 平仓后应该按照市场价给定收益
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
@@ -461,11 +461,11 @@ public class FutureCoreExample {
         updateCurrentPriceTo(10500);
 
         // userId1下反向单, 主动平仓
-        createBid(userId1, 1, 10000L);
+        createBid(userId1, 1, 10500);
 
         // userId6需要吃掉userId1的平仓单后userId1才能平仓成功
         long userId6 = createRandomUserWithMoney();
-        createAsk(userId6, 1, 10000L);
+        createAsk(userId6, 1, 10500);
 
         // check profit, 平仓后应该按照市场价给定收益
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
@@ -562,26 +562,102 @@ public class FutureCoreExample {
 
     // 持仓到警戒线, 发预警通知 - 做多
     @Test
-    public void testLongPostionWarning() {
+    public void testLongPostionWarning() throws ExecutionException, InterruptedException {
+        long userId1 = createRandomUserWithMoney(1000);
+        createBid(userId1, 1, 10000L);
 
+        SingleUserReportResult userStatus = getUserStatus(userId1);
+        checkPosition(userStatus, 1);
+        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+
+        long userId2 = createRandomUserWithMoney(1000);
+        // order2成交后, userId1持有long仓位
+        createAsk(userId2, 1, 10000L);
+        SingleUserReportResult userStatus2 = getUserStatus(userId1);
+        checkPosition(userStatus2, 1);
+        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
+
+        // 模拟市价波动
+        updateCurrentPriceTo(8000);
+
+        // trigger强平逻辑
+        exchangeCore.liquidationScanner.triggerOnce();
+        // should raise Margin call warning
     }
 
     // 持仓到警戒线, 发预警通知 - 做空
     @Test
-    public void testShortPostionWarning() {
+    public void testShortPostionWarning() throws ExecutionException, InterruptedException {
+        long userId1 = createRandomUserWithMoney(1000);
+        createAsk(userId1, 1, 10000L);
 
+        SingleUserReportResult userStatus = getUserStatus(userId1);
+        checkPosition(userStatus, 1);
+        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
+
+        long userId2 = createRandomUserWithMoney(1000);
+        // order2成交后, userId1持有long仓位
+        createBid(userId2, 1, 10000L);
+        SingleUserReportResult userStatus2 = getUserStatus(userId1);
+        checkPosition(userStatus2, 1);
+        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
+
+        // 模拟市价波动
+        updateCurrentPriceTo(11000);
+
+        // trigger强平逻辑
+        exchangeCore.liquidationScanner.triggerOnce();
+        // should raise Margin call warning
     }
 
     // 做多被强制平仓
     @Test
-    public void testLongPostionForcedLiquadate() {
+    public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
+        long userId1 = createRandomUserWithMoney(1000);
+        createBid(userId1, 1, 10000L);
 
+        SingleUserReportResult userStatus = getUserStatus(userId1);
+        checkPosition(userStatus, 1);
+        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+
+        long userId2 = createRandomUserWithMoney(1000);
+        // order2成交后, userId1持有long仓位
+        createAsk(userId2, 1, 10000L);
+        SingleUserReportResult userStatus2 = getUserStatus(userId1);
+        checkPosition(userStatus2, 1);
+        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
+
+        // 模拟市价波动
+        updateCurrentPriceTo(5000);
+
+        // trigger强平逻辑
+        exchangeCore.liquidationScanner.triggerOnce();
+        // should trigger liquidate
     }
 
     // 做空被强制平仓
     @Test
-    public void testShortPostionForcedLiquadate() {
+    public void testShortPostionForcedLiquadate() throws ExecutionException, InterruptedException {
+        long userId1 = createRandomUserWithMoney(1000);
+        createAsk(userId1, 1, 10000L);
 
+        SingleUserReportResult userStatus = getUserStatus(userId1);
+        checkPosition(userStatus, 1);
+        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
+
+        long userId2 = createRandomUserWithMoney(1000);
+        // order2成交后, userId1持有long仓位
+        createBid(userId2, 1, 10000L);
+        SingleUserReportResult userStatus2 = getUserStatus(userId1);
+        checkPosition(userStatus2, 1);
+        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
+
+        // 模拟市价波动
+        updateCurrentPriceTo(15000);
+
+        // trigger强平逻辑
+        exchangeCore.liquidationScanner.triggerOnce();
+        // should raise liquidate
     }
 
     // 模拟初始保证金不够的场景
