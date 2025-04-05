@@ -698,12 +698,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
     
     /**
-     * 计算用户在指定货币中的冻结保证金总额（实时计算）。
+     * 计算用户在指定货币中的冻结保证金总额（包含pending部分，隐式锁定）。
      */
     private long calculateLockedMargin(UserProfile userProfile, int currency) {
         long locked = 0;
         for (SymbolPositionRecord position : userProfile.positions) {
-            if (position.currency == currency && position.direction != PositionDirection.EMPTY) {
+            if (position.currency == currency) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 locked += position.calculateRequiredMarginForFutures(spec);
             }
