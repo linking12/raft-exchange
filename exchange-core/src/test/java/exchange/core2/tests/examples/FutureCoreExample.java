@@ -630,8 +630,8 @@ public class FutureCoreExample {
 
         // 模拟市价波动
         createBiasPrice(5000);
-        sleep(20);
-        int cnt = 200;
+        sleep(500);
+        int cnt = 500;
         for (int i = 0; i < cnt; i++) {
             updateCurrentPriceTo(5000);
         }
@@ -640,6 +640,8 @@ public class FutureCoreExample {
         exchangeCore.liquidationScanner.triggerOnce();
         // should trigger liquidate
         // search log Liquidated: uid=
+//        SingleUserReportResult userStatus3 = getUserStatus(userId1);
+//        checkPosition(userStatus3, 0);
     }
 
     private void sleep(int sleepMil) {
@@ -650,7 +652,7 @@ public class FutureCoreExample {
         }
     }
     private void createBiasPrice(int price) {
-        int time = 20;
+        int time = 100;
         int cnt = 10;
         for (int i = 0; i < cnt; i++) {
             long userId = createRandomUserWithMoney();
@@ -690,8 +692,8 @@ public class FutureCoreExample {
 
         // 模拟市价波动
         createBiasPrice(15000);
-        sleep(20);
-        int cnt = 200;
+        sleep(500);
+        int cnt = 500;
         for (int i = 0; i < cnt; i++) {
             updateCurrentPriceTo(15000);
         }
@@ -700,6 +702,8 @@ public class FutureCoreExample {
         exchangeCore.liquidationScanner.triggerOnce();
         // should trigger liquidate
         // search log Liquidated: uid=
+        // SingleUserReportResult userStatus3 = getUserStatus(userId1);
+        // checkPosition(userStatus3, 0);
     }
 
     // 模拟初始保证金不够的场景
