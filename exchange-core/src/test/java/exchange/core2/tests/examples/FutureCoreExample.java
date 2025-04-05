@@ -629,11 +629,46 @@ public class FutureCoreExample {
         assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
 
         // 模拟市价波动
-        updateCurrentPriceTo(5000);
+        createBiasPrice(5000);
+        sleep(20);
+        int cnt = 200;
+        for (int i = 0; i < cnt; i++) {
+            updateCurrentPriceTo(5000);
+        }
 
         // trigger强平逻辑
         exchangeCore.liquidationScanner.triggerOnce();
         // should trigger liquidate
+        // search log Liquidated: uid=
+    }
+
+    private void sleep(int sleepMil) {
+        try {
+            Thread.sleep(sleepMil);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    private void createBiasPrice(int price) {
+        int time = 20;
+        int cnt = 10;
+        for (int i = 0; i < cnt; i++) {
+            long userId = createRandomUserWithMoney();
+            createBid(userId, 100, price - i * 10);
+            sleep(time);
+        }
+        for (int i = 0; i < cnt; i++) {
+            long userId = createRandomUserWithMoney();
+            createAsk(userId, 100, price + i * 10);
+            sleep(time);
+        }
+
+        long userId1 = createRandomUserWithMoney();
+        createBid(userId1, 5, price - 5);
+        sleep(time);
+        long userId2 = createRandomUserWithMoney();
+        createAsk(userId2, 5, price + 5);
+        sleep(time);
     }
 
     // 做空被强制平仓
@@ -654,11 +689,17 @@ public class FutureCoreExample {
         assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
 
         // 模拟市价波动
-        updateCurrentPriceTo(15000);
+        createBiasPrice(15000);
+        sleep(20);
+        int cnt = 200;
+        for (int i = 0; i < cnt; i++) {
+            updateCurrentPriceTo(15000);
+        }
 
         // trigger强平逻辑
         exchangeCore.liquidationScanner.triggerOnce();
-        // should raise liquidate
+        // should trigger liquidate
+        // search log Liquidated: uid=
     }
 
     // 模拟初始保证金不够的场景
@@ -806,21 +847,10 @@ public class FutureCoreExample {
                 .build();
         CompletableFuture<CommandResultCode> result = api.submitCommandAsync(order2);
         CommandResultCode code = result.get();
-        assertEquals(code, CommandResultCode.SUCCESS);
+        assertEquals(code, CommandResultCode.RISK_NSF);
 
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
-        assertEquals(userStatus1.getAccounts().get(quoteId), balance + delta);
-
-        long userId2 = createRandomUserWithMoney();
-        createAsk(userId2, 1, 10000L);
-
-        // 此时不应该允许userId1开仓成功, 因为其保证金不够了
-        SingleUserReportResult userStatus2 = getUserStatus(userId1);
-        assertEquals(userStatus2.getAccounts().get(quoteId), balance + delta);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
-        assertEquals(userStatus2.getPositions().getFirst().openVolume, 1);
-        assertEquals(userStatus2.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus2.getPositions().getFirst().pendingSellSize, 0);
+        assertEquals(userStatus1.getAccounts().get(quoteId), balance);
     }
 
 }
