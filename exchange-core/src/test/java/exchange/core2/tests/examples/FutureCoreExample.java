@@ -146,6 +146,21 @@ public class FutureCoreExample {
         return uid;
     }
 
+    private void initSpotSymbol() {
+        CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
+                .symbolId(symbolId + 1)
+                .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(1)
+                .quoteCurrency(quoteId)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(10)
+                .takerFee(20)
+                .build();
+
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
+    }
+
     private void initializeUserAndSymbols() throws Exception {
         Future<CommandResultCode> future;
 
@@ -848,6 +863,49 @@ public class FutureCoreExample {
                 .currency(quoteId)
                 .amount(delta)
                 .transactionId(getRandomTransactionId())
+                .build();
+        CompletableFuture<CommandResultCode> result = api.submitCommandAsync(order2);
+        CommandResultCode code = result.get();
+        assertEquals(code, CommandResultCode.RISK_NSF);
+
+        SingleUserReportResult userStatus1 = getUserStatus(userId1);
+        assertEquals(userStatus1.getAccounts().get(quoteId), balance);
+    }
+
+    // 先下future单, 再下现货单。现货下单时需要考虑期货持仓
+    @Test
+    public void testFutureThenSpot() throws Exception {
+        // suppose current price is 10000
+        // userId1下2个期货买单, 价格为10000
+        int balance = 100;
+        long userId1 = createRandomUserWithMoney(balance);
+        createBid(userId1, 1, 10000L);
+
+        SingleUserReportResult userStatus = getUserStatus(userId1);
+        // 成交后postion会被清空
+        checkPosition(userStatus, 1);
+        checkOrder(userStatus, 1);
+        // 账面资金和初始资金一致
+        assertEquals(userStatus.getAccounts().get(quoteId), balance);
+        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().openVolume, 0);
+        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
+
+        // 下现货单
+        // 1. 生产现货交易对
+        initSpotSymbol();
+
+        // 2. 下单
+        ApiPlaceOrder order2 = ApiPlaceOrder.builder()
+                .uid(userId1)
+                .orderId(getRandomTransactionId())
+                .action(OrderAction.BID)
+                .size(1L)
+                .price(1L)
+                .symbol(symbolId+1)
+                .reservePrice(1L)
+                .orderType(OrderType.GTC)
                 .build();
         CompletableFuture<CommandResultCode> result = api.submitCommandAsync(order2);
         CommandResultCode code = result.get();
