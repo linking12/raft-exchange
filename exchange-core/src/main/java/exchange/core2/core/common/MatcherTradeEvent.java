@@ -19,6 +19,8 @@ package exchange.core2.core.common;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.NoArgsConstructor;
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
@@ -64,7 +66,7 @@ public final class MatcherTradeEvent {
     /**
      * 资金转移
      */
-    public FundEvent fundEvent; 
+    public final MutableList<FundEvent> fundEvents = new FastList<FundEvent>();
     
     // reference to next event in chain
     public MatcherTradeEvent nextEvent;

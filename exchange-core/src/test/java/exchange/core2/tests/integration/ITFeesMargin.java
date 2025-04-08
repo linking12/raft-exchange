@@ -110,6 +110,7 @@ public abstract class ITFeesMargin {
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
                 assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
                 assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(10L));
+                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -121,6 +122,7 @@ public abstract class ITFeesMargin {
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
                 assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
                 assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L)); // 成交总价
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -132,6 +134,7 @@ public abstract class ITFeesMargin {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_JPY), is(jpyAmount1 + jpyAmount2 - jpyFees));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(30L));
+            assertThat(totalBal2.getOpenInterestShort().get(symbolId), is(30L));
         }
     }
 
@@ -196,6 +199,7 @@ public abstract class ITFeesMargin {
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
                 assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(20L));
                 assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -207,6 +211,7 @@ public abstract class ITFeesMargin {
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
                 assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
                 assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -218,6 +223,7 @@ public abstract class ITFeesMargin {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_JPY), is(jpyAmount1 + jpyAmount2 - jpyFees));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(30L));
+            assertThat(totalBal2.getOpenInterestShort().get(symbolId), is(30L));
         }
     }
 
@@ -285,6 +291,7 @@ public abstract class ITFeesMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_JPY), is(0L));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(0L));
+            assertThat(totalBal2.getOpenInterestShort().get(symbolId), is(0L));
         }
     }
 

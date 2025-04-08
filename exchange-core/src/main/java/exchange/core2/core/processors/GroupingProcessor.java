@@ -199,9 +199,9 @@ public final class GroupingProcessor implements EventProcessor {
                              */
                             MatcherTradeEvent current = cmd.matcherEvent;
                             while (current != null) {
-                                if (current.fundEvent != null) {
-                                    sharedPool.putFundEventPool(current.fundEvent);
-                                    current.fundEvent = null;
+                                if (!current.fundEvents.isEmpty()) {
+                                    sharedPool.putFundEventPool(current.fundEvents);
+                                    current.fundEvents.clear();
                                 }
                                 tradeEventTail = current;
                                 tradeEventCounter++;
@@ -219,9 +219,9 @@ public final class GroupingProcessor implements EventProcessor {
                         /**
                          * @modify 回收当前orderCommand下面的fundEvent
                          */
-                        if (EVENTS_POOLING && cmd.fundEvent != null) {
-                            sharedPool.putFundEventPool(cmd.fundEvent);
-                            cmd.fundEvent = null; 
+                        if (EVENTS_POOLING && cmd.fundEvents != null) {
+                            sharedPool.putFundEventPool(cmd.fundEvents);
+                            cmd.fundEvents.clear();
                         }
                         cmd.matcherEvent = null;
                         // TODO collect to shared buffer

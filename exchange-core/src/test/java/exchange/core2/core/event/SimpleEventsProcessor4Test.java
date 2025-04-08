@@ -1,39 +1,30 @@
-package exchange.core2.core;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.ObjLongConsumer;
-
-import org.agrona.collections.MutableBoolean;
-import org.agrona.collections.MutableLong;
-import org.agrona.collections.MutableReference;
-import org.eclipse.collections.api.list.MutableList;
+package exchange.core2.core.event;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
-import exchange.core2.core.common.api.ApiAddUser;
-import exchange.core2.core.common.api.ApiAdjustUserBalance;
-import exchange.core2.core.common.api.ApiBinaryDataCommand;
-import exchange.core2.core.common.api.ApiCancelOrder;
-import exchange.core2.core.common.api.ApiCommand;
-import exchange.core2.core.common.api.ApiMoveOrder;
-import exchange.core2.core.common.api.ApiOrderBookRequest;
-import exchange.core2.core.common.api.ApiPlaceOrder;
-import exchange.core2.core.common.api.ApiReduceOrder;
+import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.agrona.collections.MutableBoolean;
+import org.agrona.collections.MutableLong;
+import org.agrona.collections.MutableReference;
+import org.eclipse.collections.api.list.MutableList;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.ObjLongConsumer;
 
 @RequiredArgsConstructor
 @Getter
 @Slf4j
-public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
+public class SimpleEventsProcessor4Test implements ObjLongConsumer<OrderCommand> {
 
-    private final IEventsHandler eventsHandler;
+    private final IEventsHandler4Test eventsHandler;
 
     @Override
     public void accept(OrderCommand cmd, long seq) {
@@ -50,7 +41,9 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     // 发送order下面的fundEvent，主要是资金冻结及恢复
     private void sendOrderFundEvents(OrderCommand cmd) {
         MutableList<FundEvent> fundEvents = cmd.fundEvents;
-        fundEvents.forEach(this::sendFundEvents);
+        fundEvents.forEach(fundEvent -> {
+            sendFundEvents(fundEvent);
+        });
     }
 
     private void sendTradeEvents(OrderCommand cmd) {
@@ -60,7 +53,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
         if (firstEvent.eventType == MatcherEventType.REDUCE) {
 
-            final IEventsHandler.ReduceEvent evt = new IEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,
+            final IEventsHandler4Test.ReduceEvent evt = new IEventsHandler4Test.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,
                 firstEvent.price, cmd.orderId, cmd.uid, cmd.timestamp);
 
             eventsHandler.reduceEvent(evt);
@@ -79,10 +72,8 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         if (fundEvent == null) {
             return;
         }
-        final IEventsHandler.FundsEvent evt =
-            new IEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
-                    fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged,
-                    fundEvent.openPriceAvg, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl);
+        final IEventsHandler4Test.FundsEvent evt =
+            new IEventsHandler4Test.FundsEvent(fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free, fundEvent.locked, fundEvent.position);
         eventsHandler.fundsEvent(evt);
     }
 
@@ -90,16 +81,16 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
         final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
         final MutableLong mutableLong = new MutableLong(0L);
-        final List<IEventsHandler.Trade> trades = new ArrayList<>();
+        final List<IEventsHandler4Test.Trade> trades = new ArrayList<>();
 
-        final MutableReference<IEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
+        final MutableReference<IEventsHandler4Test.RejectEvent> rejectEvent = new MutableReference<>(null);
 
         cmd.processMatcherEvents(evt -> {
 
             if (evt.eventType == MatcherEventType.TRADE) {
 
-                final IEventsHandler.Trade trade =
-                    new IEventsHandler.Trade(evt.matchedOrderId, evt.matchedOrderUid, evt.matchedOrderCompleted, evt.price, evt.size);
+                final IEventsHandler4Test.Trade trade =
+                    new IEventsHandler4Test.Trade(evt.matchedOrderId, evt.matchedOrderUid, evt.matchedOrderCompleted, evt.price, evt.size);
 
                 trades.add(trade);
                 mutableLong.value += evt.size;
@@ -110,18 +101,22 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
             } else if (evt.eventType == MatcherEventType.REJECT) {
 
-                rejectEvent.set(new IEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
+                rejectEvent.set(new IEventsHandler4Test.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
             // 发送trade下面的fundEvent，主要是资金转移
-            evt.fundEvents.forEach(this::sendFundEvents);
+            sendFundEvents(evt.fundEvent);
         });
 
         if (!trades.isEmpty()) {
 
-            final IEventsHandler.TradeEvent evt = new IEventsHandler.TradeEvent(cmd.symbol, mutableLong.value, cmd.orderId, cmd.uid, cmd.action,
+            final IEventsHandler4Test.TradeEvent evt = new IEventsHandler4Test.TradeEvent(cmd.symbol, mutableLong.value, cmd.orderId, cmd.uid, cmd.action,
                 takerOrderCompleted.value, cmd.timestamp, trades);
 
             eventsHandler.tradeEvent(evt);
+        }
+
+        if (rejectEvent.ref != null) {
+            eventsHandler.rejectEvent(rejectEvent.ref);
         }
 
     }
@@ -129,17 +124,17 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     private void sendMarketData(OrderCommand cmd) {
         final L2MarketData marketData = cmd.marketData;
         if (marketData != null) {
-            final List<IEventsHandler.OrderBookRecord> asks = new ArrayList<>(marketData.askSize);
+            final List<IEventsHandler4Test.OrderBookRecord> asks = new ArrayList<>(marketData.askSize);
             for (int i = 0; i < marketData.askSize; i++) {
-                asks.add(new IEventsHandler.OrderBookRecord(marketData.askPrices[i], marketData.askVolumes[i], (int)marketData.askOrders[i]));
+                asks.add(new IEventsHandler4Test.OrderBookRecord(marketData.askPrices[i], marketData.askVolumes[i], (int)marketData.askOrders[i]));
             }
 
-            final List<IEventsHandler.OrderBookRecord> bids = new ArrayList<>(marketData.bidSize);
+            final List<IEventsHandler4Test.OrderBookRecord> bids = new ArrayList<>(marketData.bidSize);
             for (int i = 0; i < marketData.bidSize; i++) {
-                bids.add(new IEventsHandler.OrderBookRecord(marketData.bidPrices[i], marketData.bidVolumes[i], (int)marketData.bidOrders[i]));
+                bids.add(new IEventsHandler4Test.OrderBookRecord(marketData.bidPrices[i], marketData.bidVolumes[i], (int)marketData.bidOrders[i]));
             }
 
-            eventsHandler.orderBook(new IEventsHandler.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
+            eventsHandler.orderBook(new IEventsHandler4Test.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
         }
     }
 
@@ -190,5 +185,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
         cmd.timestamp = timestamp;
+        final IEventsHandler4Test.ApiCommandResult commandResult = new IEventsHandler4Test.ApiCommandResult(cmd, resultCode, seq);
+        eventsHandler.commandResult(commandResult);
     }
 }

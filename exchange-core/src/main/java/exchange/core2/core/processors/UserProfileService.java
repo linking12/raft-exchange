@@ -15,6 +15,10 @@
  */
 package exchange.core2.core.processors;
 
+import java.util.stream.Stream;
+
+import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
+
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
@@ -26,7 +30,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 /**
  * Stateful (!) User profile service
@@ -50,6 +53,10 @@ public final class UserProfileService implements WriteBytesMarshallable, StateHa
         this.userProfiles = SerializationUtils.readLongHashMap(bytes, UserProfile::new);
     }
 
+    public Stream<UserProfile> getAllUserProfiles() {
+        return userProfiles.values().stream();
+    }
+    
     /**
      * Find user profile
      *
