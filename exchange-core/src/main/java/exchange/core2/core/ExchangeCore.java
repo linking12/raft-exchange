@@ -47,7 +47,6 @@ import exchange.core2.core.common.config.SerializationConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.processors.DisruptorExceptionHandler;
 import exchange.core2.core.processors.GroupingProcessor;
-import exchange.core2.core.processors.LiquidationScanner;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.ResultsHandler;
 import exchange.core2.core.processors.RiskEngine;
