@@ -199,9 +199,9 @@ public final class GroupingProcessor implements EventProcessor {
                              */
                             MatcherTradeEvent current = cmd.matcherEvent;
                             while (current != null) {
-                                if (current.fundEvent != null) {
-                                    sharedPool.putFundEventPool(current.fundEvent);
-                                    current.fundEvent = null;
+                                if (!current.fundEvents.isEmpty()) {
+                                    sharedPool.putFundEventPool(current.fundEvents);
+                                    current.fundEvents.clear();
                                 }
                                 tradeEventTail = current;
                                 tradeEventCounter++;

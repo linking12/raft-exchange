@@ -10,6 +10,7 @@ import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
 import org.eclipse.collections.api.map.primitive.MutableLongObjectMap;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
@@ -19,6 +20,7 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
+import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
@@ -141,10 +143,10 @@ public final class LiquidationScanner {
                 if (sizeToLiquidate > 0) {
                     // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
                     OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+                    long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
                     CompletableFuture<OrderCommand> liquidationFuture =
                         api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
-                            .orderId(generateLiquidationOrderId(position.symbol, position.uid)) // IOC的单子不插入orderBook的
-                            .uid(position.uid).symbol(position.symbol).price(price).size(sizeToLiquidate).action(action).build());
+                            .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(sizeToLiquidate).action(action).build());
                     liquidationFuture.whenCompleteAsync((cmd, err) -> {
                         /**
                          * 如果第一个事件是reject，说明没有完全成交。 todo 后续需要降级处理 IFC ADL等
@@ -157,22 +159,33 @@ public final class LiquidationScanner {
                         }
                     });
                     // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-                    //eventsHelper.sendLiquidationEvent(cmd, position, balance - locked, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
+                    FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position, balance - locked, locked, price, sizeToLiquidate);
+                    api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
                     log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, sizeToLiquidate, price);
                 }
             }
             // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
             else if (equity < warningThreshold) {
                 // 发送提醒事件，包含当前余额和冻结保证金，便于用户了解资金状态
-                //eventsHelper.sendMarginAdjustmentEvent(cmd, position, balance - locked, locked);
+                FundEvent event = eventsHelper.sendMarginAdjustmentEvent(position, balance - locked, locked);
+                api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
                 log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
             }
         }
     }
 
-    private long generateLiquidationOrderId(int symbolId, long uid) {
+    private static long generateLiquidationOrderId(int symbol, long uid) {
         long uidHash = (uid * 31 + 17) & 0xFFFFF; // 取前 20 bit
         long tsPart = (System.currentTimeMillis() / 1000) & 0xFFF; // 取后12bit，支持4096秒 ≈ 1.13小时内不重复
-        return ((long)symbolId << 32) | (uidHash << 12) | tsPart;
+        return ((long)symbol << 32) | (uidHash << 12) | tsPart;
+    }
+
+    public static boolean isLiquidationOrderId(long orderId, int symbol, long uid) {
+        long expectedSymbol = (orderId >>> 32); // 高 32 位
+        if (expectedSymbol != symbol) return false;
+
+        long expectedUidHash = (uid * 31 + 17) & 0xFFFFF; // 计算 uidHash
+        long actualUidHash = (orderId >>> 12) & 0xFFFFF;  // 中间 20 位
+        return expectedUidHash == actualUidHash;
     }
 }

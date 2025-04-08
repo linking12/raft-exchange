@@ -10,7 +10,10 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 资金事件类，用于记录现货和期货的资金及仓位变动。 现货和期货通过部署上下文和 FundEventType 区分，locked 的含义根据事件类型动态解释。
+ * 资金事件类，用于记录现货和期货的资金及仓位变动。
+ * free + locked = total。
+ * 现货和期货通过FundEventType区分。
+ * 如果是在前置处理中产生的事件，就挂在cmd下，如果是后置处理产生的事件，就挂在matcherEvent下。
  */
 @AllArgsConstructor
 @NoArgsConstructor
@@ -21,15 +24,16 @@ public class FundEvent implements WriteBytesMarshallable {
     public long orderId; // 订单 ID
     public long uid; // 用户 ID
     public int currency; // 变动货币
-    public long free; // 用户可用余额
-    public long locked; // 用户冻结余额（订单锁定金额，如挂单预留） 期货: 冻结保证金（持仓锁定的总保证金）
-    // 期货使用字段
+    public long free; // 当前可用余额
+    public long locked; // 当前冻结金额（隐式保证金+挂单预扣）
+
+    // 期货使用字段（能根据期货事件 反向构建出用户的仓位）
     public int symbol; // 交易对 ID
     public PositionDirection direction; // 仓位方向
     public long position; // 剩余持仓量
-    public long positionLiquidated; // 本次强平/平仓数量
+    public long positionChanged; // 本次变动的仓位（如平仓/开仓数量）
     public long openPriceAvg; // 平均开仓价格（替代 openPriceSum / openVolume）
-    public long liquidationPrice; // 强平/平仓价格
+    public long tradePrice; // 本次成交价格（开仓或平仓价）
     public long fee; // 手续费
     public long pnl; // 本次事件的盈亏金额
 
@@ -38,9 +42,21 @@ public class FundEvent implements WriteBytesMarshallable {
      */
     public enum FundEventType {
         // 现货事件
-        DEPOSIT(1), LOCKED(2), TRANSFER(3), UNLOCKED(4), WITHDRAW(5),
+        DEPOSIT(1),         // 现货充值（free 增加）
+        LOCKED(2),          // 现货下单前冻结（free -> locked）
+        TRANSFER(3),        // 现货撮合成交后资产互换（买方减少quote，加base）
+        UNLOCKED(4),        // 订单取消或未成交释放（locked -> free）
+        WITHDRAW(5),        // 现货提现（free 减少）
         // 期货事件
-        OPEN_POSITION(6), CLOSE_POSITION(7), LIQUIDATION(8), MARGIN_ADJUSTMENT(9), PNL_SETTLEMENT(10);
+        LOCK_PENDING(6),     // 提交期货订单冻结初始保证金（pendingHold）（free -> locked）
+        UNLOCK_PENDING(7),   // 未成交释放初始保证金（pendingHold 释放，locked -> free）
+        OPEN_POSITION(8),    // 新增持仓记录（仅标记持仓信息）
+        CLOSE_POSITION(9),   // 平仓：释放保证金 + 盈亏落地 + 手续费
+        LIQUIDATION(10),     // 强平（与 CLOSE_POSITION 类似，但来源特殊）
+        PNL_SETTLEMENT(11),
+        // 通知类事件
+        MARGIN_ALERT(12),       // 通知追加保证金
+        LIQUIDATION_ALERT(13);  // 通知强平单创建
 
         private final int code;
 
@@ -73,17 +89,17 @@ public class FundEvent implements WriteBytesMarshallable {
         bytes.writeInt(symbol);
         bytes.writeByte((byte)direction.getMultiplier());
         bytes.writeLong(position);
-        bytes.writeLong(positionLiquidated);
+        bytes.writeLong(positionChanged);
         bytes.writeLong(openPriceAvg);
-        bytes.writeLong(liquidationPrice);
+        bytes.writeLong(tradePrice);
         bytes.writeLong(fee);
         bytes.writeLong(pnl);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventType, section, orderId, uid, currency, free, locked, symbol, direction, position, positionLiquidated, openPriceAvg,
-            liquidationPrice, fee, pnl);
+        return Objects.hash(eventType, section, orderId, uid, currency, free, locked, symbol, direction, position, positionChanged, openPriceAvg,
+            tradePrice, fee, pnl);
     }
 
     @Override
@@ -95,15 +111,15 @@ public class FundEvent implements WriteBytesMarshallable {
         FundEvent other = (FundEvent)obj;
         return eventType == other.eventType && section == other.section && orderId == other.orderId && uid == other.uid && currency == other.currency
             && free == other.free && locked == other.locked && symbol == other.symbol && direction == other.direction && position == other.position
-            && positionLiquidated == other.positionLiquidated && openPriceAvg == other.openPriceAvg && liquidationPrice == other.liquidationPrice
+            && positionChanged == other.positionChanged && openPriceAvg == other.openPriceAvg && tradePrice == other.tradePrice
             && fee == other.fee && pnl == other.pnl;
     }
 
     @Override
     public String toString() {
         return "FundEvent [eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
-            + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", positionLiquidated="
-            + positionLiquidated + ", openPriceAvg=" + openPriceAvg + ", liquidationPrice=" + liquidationPrice + ", fee=" + fee + ", pnl=" + pnl + "]";
+            + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", positionChanged="
+            + positionChanged + ", openPriceAvg=" + openPriceAvg + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl + "]";
     }
 
     public FundEvent(BytesIn bytes) {
@@ -117,9 +133,9 @@ public class FundEvent implements WriteBytesMarshallable {
         this.symbol = bytes.readInt();
         this.direction = PositionDirection.of(bytes.readByte());
         this.position = bytes.readLong();
-        this.positionLiquidated = bytes.readLong();
+        this.positionChanged = bytes.readLong();
         this.openPriceAvg = bytes.readLong();
-        this.liquidationPrice = bytes.readLong();
+        this.tradePrice = bytes.readLong();
         this.fee = bytes.readLong();
         this.pnl = bytes.readLong();
     }

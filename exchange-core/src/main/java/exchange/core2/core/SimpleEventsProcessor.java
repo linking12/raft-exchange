@@ -50,9 +50,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     // 发送order下面的fundEvent，主要是资金冻结及恢复
     private void sendOrderFundEvents(OrderCommand cmd) {
         MutableList<FundEvent> fundEvents = cmd.fundEvents;
-        fundEvents.forEach(fundEvent -> {
-            sendFundEvents(fundEvent);
-        });
+        fundEvents.forEach(this::sendFundEvents);
     }
 
     private void sendTradeEvents(OrderCommand cmd) {
@@ -82,7 +80,9 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             return;
         }
         final IEventsHandler.FundsEvent evt =
-            new IEventsHandler.FundsEvent(fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free, fundEvent.locked, fundEvent.position);
+            new IEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
+                    fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged,
+                    fundEvent.openPriceAvg, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl);
         eventsHandler.fundsEvent(evt);
     }
 
@@ -113,7 +113,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
                 rejectEvent.set(new IEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
             // 发送trade下面的fundEvent，主要是资金转移
-            sendFundEvents(evt.fundEvent);
+            evt.fundEvents.forEach(this::sendFundEvents);
         });
 
         if (!trades.isEmpty()) {

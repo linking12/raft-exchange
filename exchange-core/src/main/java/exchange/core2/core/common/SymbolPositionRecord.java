@@ -96,12 +96,16 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         }
     }
 
-    public void pendingRelease(OrderAction orderAction, long size) {
+    public long pendingRelease(OrderAction orderAction, long size) {
+        long released;
         if (orderAction == OrderAction.ASK) {
-            pendingSellSize -= size;
+            released = Math.min(pendingSellSize, size);
+            pendingSellSize -= released;
         } else {
-            pendingBuySize -= size;
+            released = Math.min(pendingBuySize, size);
+            pendingBuySize -= released;
         }
+        return released;
     }
 
     /**
@@ -243,25 +247,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return sizeToOpen;
     }
 
-    /**
-     * 执行平仓操作，返回剩余未被反向抵消的部分，即需要新开仓的数量
-     */
-    public long closeOppositePosition(OrderAction action, long size, long price) {
-        // 1. Un-hold pending size
-        pendingRelease(action, size);
-
-        // 2. Reduce opposite position accordingly (if exists)
-        return closeCurrentPositionFutures(action, size, price);
-    }
-
-    /**
-     * 执行剩余开仓操作
-     */
-    public void openRemainingPosition(OrderAction action, long sizeToOpen, long price) {
-        openPositionMargin(action, sizeToOpen, price);
-    }
-
-    private long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
+    public long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
 
         // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize, profit);
 
@@ -289,7 +275,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return sizeToOpen;
     }
 
-    private void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice) {
+    public void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice) {
         openVolume += sizeToOpen;
         openPriceSum += tradePrice * sizeToOpen;
         direction = PositionDirection.of(action);

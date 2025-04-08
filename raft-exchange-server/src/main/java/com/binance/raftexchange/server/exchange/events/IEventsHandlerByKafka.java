@@ -110,8 +110,8 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        FundsEventPB pbObject = FundsEventPB.newBuilder().setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
-            .setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLoked()).setPositionDelta(fundsEvent.getPositionDelta()).build();
+        FundsEventPB pbObject = FundsEventPB.newBuilder().setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid())
+            .setCurrency(fundsEvent.getCurrency()).setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLocked()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("fundsEvent: {}", formateString);
@@ -125,7 +125,7 @@ public class IEventsHandlerByKafka implements IEventsHandler {
     }
 
     public static class CommandPartitioner implements Partitioner {
-        private AtomicInteger counter = new AtomicInteger(0); //
+        private final AtomicInteger counter = new AtomicInteger(0);
 
         @Override
         public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {

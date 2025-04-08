@@ -107,6 +107,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
             ringBuffer.publishEvent(NOP_TRANSLATOR, (ApiNop) cmd);
+        } else if (cmd instanceof ApiSystemLiquidationNotify) {
+            ringBuffer.publishEvent(SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR, (ApiSystemLiquidationNotify) cmd);
         } else {
             throw new IllegalArgumentException("Unsupported command type: " + cmd.getClass().getSimpleName());
         }
@@ -145,6 +147,8 @@ public final class ExchangeApi {
             return submitCommandAsync(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
             return submitCommandAsync(NOP_TRANSLATOR, (ApiNop) cmd);
+        } else if (cmd instanceof ApiSystemLiquidationNotify) {
+            return submitCommandAsync(SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR, (ApiSystemLiquidationNotify) cmd);
         } else {
             throw new IllegalArgumentException("Unsupported command type: " + cmd.getClass().getSimpleName());
         }
@@ -178,6 +182,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(RESET_TRANSLATOR, (ApiReset) cmd);
         } else if (cmd instanceof ApiNop) {
             return submitCommandAsyncFullResponse(NOP_TRANSLATOR, (ApiNop) cmd);
+        } else if (cmd instanceof ApiSystemLiquidationNotify) {
+            return submitCommandAsyncFullResponse(SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR, (ApiSystemLiquidationNotify) cmd);
         } else {
             throw new IllegalArgumentException("Unsupported command type: " + cmd.getClass().getSimpleName());
         }
@@ -603,6 +609,13 @@ public final class ExchangeApi {
         cmd.command = OrderCommandType.NOP;
         cmd.timestamp = api.timestamp;
         cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiSystemLiquidationNotify> SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY;
+        cmd.timestamp = api.timestamp;
+        cmd.fundEvents.add(api.fundEvent);
+        cmd.resultCode = CommandResultCode.SUCCESS;
     };
 
     private static final EventTranslatorOneArg<OrderCommand, ApiSystemSettlePNLCommand> SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR = (cmd, seq, api) -> {
