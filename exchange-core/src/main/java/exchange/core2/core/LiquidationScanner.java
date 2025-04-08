@@ -20,6 +20,7 @@ import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
@@ -81,6 +82,7 @@ public final class LiquidationScanner {
         SymbolSpecificationProvider symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
         MutableLongObjectMap<UserProfile> userProfiles = riskEngine.getUserProfileService().getUserProfiles().asUnmodifiable();
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
+        FundEventsHelper eventsHelper = riskEngine.getEventsHelper();
         userProfiles.forEachValue(userProfile -> {
             // 遍历每个用户的所有持仓
             MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
@@ -97,14 +99,13 @@ public final class LiquidationScanner {
                     return;
                 }
                 // 强平判断和处理逻辑
-                evaluateForLiquidation(userProfile, spec, priceRecord, position);
+                evaluateForLiquidation(userProfile, spec, priceRecord, position, eventsHelper);
             });
         });
     }
 
-    private void evaluateForLiquidation(UserProfile userProfile,
-                                        CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
-                                        SymbolPositionRecord position) {
+    private void evaluateForLiquidation(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord, SymbolPositionRecord position,
+        FundEventsHelper eventsHelper) {
         // 仅处理有持仓（方向非 EMPTY）的用户
         if (position != null && position.direction != PositionDirection.EMPTY) {
             // 当前账户可用余额，已扣除开仓时的初始保证金，反映用户可自由支配的资金
@@ -118,7 +119,7 @@ public final class LiquidationScanner {
             // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
             long maintenanceMargin = position.calculateMaintenanceMargin(spec);
             // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
-            long warningThreshold = (long) (maintenanceMargin * 1.2);
+            long warningThreshold = (long)(maintenanceMargin * 1.2);
             // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
             if (equity < maintenanceMargin) {
                 // 计算资金缺口：需要多少权益恢复到维持保证金水平
@@ -128,31 +129,26 @@ public final class LiquidationScanner {
                 // 若市场无流动性（价格为 0 或 MAX_VALUE），回退到平均开仓价作为兜底
                 if (price == 0 || price == Long.MAX_VALUE) {
                     price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
-                    if (price == 0) price = 1; // 防止除零，默认最小价格
+                    if (price == 0)
+                        price = 1; // 防止除零，默认最小价格
                     log.debug("Fallback to average open price={} for symbol={}", price, position.symbol);
                 }
                 /**
-                 * 计算强平数量：
-                 * 找一个x，满足：x × price ≥ deficit + x × taker_fee
-                 * x ≥ deficit / (price - taker_fee)
+                 * 计算强平数量： 找一个x，满足：x × price ≥ deficit + x × taker_fee x ≥ deficit / (price - taker_fee)
                  */
-                long x = (long) Math.ceil((double) deficit / (price - spec.takerFee));
+                long x = (long)Math.ceil((double)deficit / (price - spec.takerFee));
                 long sizeToLiquidate = Math.min(position.openVolume, x);
                 if (sizeToLiquidate > 0) {
                     // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
                     OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-                    CompletableFuture<OrderCommand> liquidationFuture = api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder()
-                            .orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
+                    CompletableFuture<OrderCommand> liquidationFuture =
+                        api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
                             .orderId(generateLiquidationOrderId(position.symbol, position.uid)) // IOC的单子不插入orderBook的
-                            .uid(position.uid)
-                            .symbol(position.symbol)
-                            .price(price)
-                            .size(sizeToLiquidate)
-                            .action(action).build());
+                            .uid(position.uid).symbol(position.symbol).price(price).size(sizeToLiquidate).action(action).build());
                     liquidationFuture.whenCompleteAsync((cmd, err) -> {
                         /**
-                         * 如果第一个事件是reject，说明没有完全成交。
-                         * todo 后续需要降级处理 IFC ADL等
+                         * 如果第一个事件是reject，说明没有完全成交。 todo 后续需要降级处理 IFC ADL等
+                         * 
                          * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
                          */
                         MatcherTradeEvent firstEvent = cmd.matcherEvent;
@@ -161,22 +157,22 @@ public final class LiquidationScanner {
                         }
                     });
                     // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-//                    eventsHelper.sendLiquidationEvent(cmd, position, balance - locked, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
+                    //eventsHelper.sendLiquidationEvent(cmd, position, balance - locked, locked, remainingPosition, sizeToLiquidate, price, fee, liquidationPnl);
                     log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, sizeToLiquidate, price);
                 }
             }
             // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
             else if (equity < warningThreshold) {
                 // 发送提醒事件，包含当前余额和冻结保证金，便于用户了解资金状态
-//                eventsHelper.sendMarginAdjustmentEvent(cmd, position, balance - locked, locked);
+                //eventsHelper.sendMarginAdjustmentEvent(cmd, position, balance - locked, locked);
                 log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
             }
         }
     }
 
     private long generateLiquidationOrderId(int symbolId, long uid) {
-        long uidHash = (uid * 31 + 17) & 0xFFFFF;  // 取前 20 bit
+        long uidHash = (uid * 31 + 17) & 0xFFFFF; // 取前 20 bit
         long tsPart = (System.currentTimeMillis() / 1000) & 0xFFF; // 取后12bit，支持4096秒 ≈ 1.13小时内不重复
-        return  ((long) symbolId << 32) | (uidHash << 12) | tsPart;
+        return ((long)symbolId << 32) | (uidHash << 12) | tsPart;
     }
 }
