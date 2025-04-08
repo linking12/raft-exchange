@@ -104,7 +104,7 @@ public class SimpleEventsProcessor4Test implements ObjLongConsumer<OrderCommand>
                 rejectEvent.set(new IEventsHandler4Test.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
             // 发送trade下面的fundEvent，主要是资金转移
-            sendFundEvents(evt.fundEvent);
+//            sendFundEvents(evt.fundEvent);
         });
 
         if (!trades.isEmpty()) {
