@@ -1,10 +1,6 @@
 package exchange.core2.tests.examples;
 
-import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.ExchangeCore;
-import exchange.core2.core.IEventsHandler;
-import exchange.core2.core.LiquidationScanner;
-import exchange.core2.core.SimpleEventsProcessor;
+import exchange.core2.core.*;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
@@ -13,16 +9,15 @@ import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.OrdersProcessingConfiguration;
-import exchange.core2.core.processors.RiskEngine;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -36,9 +31,6 @@ public class FutureCoreExample {
 
     private ExchangeCore exchangeCore;
     private ExchangeApi api;
-    private List<MatcherTradeEvent> tradeEvents;
-    private List<IEventsHandler.RejectEvent> rejectEvents;
-    private List<IEventsHandler.FundsEvent> fundEvents;
 
     private int symbolId = 2;
     private int quoteId = 840;
@@ -59,14 +51,15 @@ public class FutureCoreExample {
 
     @Before
     public void setUp() throws Exception {
-        // 初始化事件处理器
-        tradeEvents = new ArrayList<>();
-        rejectEvents = new ArrayList<>();
-
-        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new IEventsHandler() {
+        SimpleEventsProcessor4Test eventsProcessor = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
             @Override
             public void tradeEvent(TradeEvent tradeEvent) {
                 log.debug("tradeEvent: {}", tradeEvent);
+            }
+
+            @Override
+            public void rejectEvent(RejectEvent rejectEvent) {
+                log.debug("rejectEvent: {}", rejectEvent);
             }
 
             @Override
@@ -79,6 +72,10 @@ public class FutureCoreExample {
                 log.debug("Reduce event: {}", reduceEvent);
             }
 
+            @Override
+            public void commandResult(ApiCommandResult commandResult) {
+                log.debug("Command result: " + commandResult);
+            }
 
             @Override
             public void orderBook(OrderBook orderBook) {
@@ -644,7 +641,7 @@ public class FutureCoreExample {
         assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
 
         // 模拟市价波动
-        createBiasPrice(5000);
+        createBiasPrice(9000);
         sleep(500);
         int cnt = 500;
         for (int i = 0; i < cnt; i++) {
@@ -706,7 +703,7 @@ public class FutureCoreExample {
         assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
 
         // 模拟市价波动
-        createBiasPrice(15000);
+        createBiasPrice(11001);
         sleep(500);
         int cnt = 500;
         for (int i = 0; i < cnt; i++) {
