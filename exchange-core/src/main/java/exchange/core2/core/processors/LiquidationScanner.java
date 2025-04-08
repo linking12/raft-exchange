@@ -1,5 +1,14 @@
 package exchange.core2.core.processors;
 
+import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
+import org.eclipse.collections.api.map.primitive.MutableLongObjectMap;
+
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MatcherEventType;
@@ -14,15 +23,6 @@ import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
-import org.eclipse.collections.api.map.primitive.MutableLongObjectMap;
-
-import java.util.Collection;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Liquidation scanner for checking user profiles and triggering liquidations.
