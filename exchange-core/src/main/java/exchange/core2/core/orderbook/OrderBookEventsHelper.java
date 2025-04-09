@@ -35,11 +35,18 @@ import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 @RequiredArgsConstructor
 public final class OrderBookEventsHelper {
 
-    public static final OrderBookEventsHelper NON_POOLED_EVENTS_HELPER = new OrderBookEventsHelper(MatcherTradeEvent::new);
+    public static final OrderBookEventsHelper NON_POOLED_EVENTS_HELPER = new OrderBookEventsHelper(MatcherTradeEvent::new, false);
 
     private final Supplier<MatcherTradeEvent> eventChainsSupplier;
 
+    private boolean pooling = EVENTS_POOLING;
+
     private MatcherTradeEvent eventsChainHead;
+
+    public OrderBookEventsHelper(Supplier<MatcherTradeEvent> supplier, boolean pooling) {
+        this.eventChainsSupplier = supplier;
+        this.pooling = pooling;
+    }
 
     public MatcherTradeEvent sendTradeEvent(final IOrder matchingOrder,
                                             final boolean makerCompleted,
@@ -190,7 +197,7 @@ public final class OrderBookEventsHelper {
 
     private MatcherTradeEvent newMatcherEvent() {
 
-        if (EVENTS_POOLING) {
+        if (pooling) {
             if (eventsChainHead == null) {
                 eventsChainHead = eventChainsSupplier.get();
 //            log.debug("UPDATED HEAD size={}", eventsChainHead == null ? 0 : eventsChainHead.getChainSize());

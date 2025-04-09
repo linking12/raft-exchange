@@ -66,7 +66,7 @@ public final class MatcherTradeEvent {
     /**
      * 资金转移
      */
-    public final MutableList<FundEvent> fundEvents = new FastList<FundEvent>();
+    public final MutableList<FundEvent> fundEvents = FastList.newList();
     
     // reference to next event in chain
     public MatcherTradeEvent nextEvent;
