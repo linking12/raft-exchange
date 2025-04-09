@@ -75,7 +75,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         sendTradeEvent(cmd);
     }
 
-    private void sendFundEvents(FundEvent fundEvent) {
+    public void sendFundEvents(FundEvent fundEvent) {
         if (fundEvent == null) {
             return;
         }
@@ -86,7 +86,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         eventsHandler.fundsEvent(evt);
     }
 
-    private void sendTradeEvent(OrderCommand cmd) {
+    public void sendTradeEvent(OrderCommand cmd) {
 
         final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
         final MutableLong mutableLong = new MutableLong(0L);
@@ -188,7 +188,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     }
 
-    private void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
+    public void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
         cmd.timestamp = timestamp;
     }
 }

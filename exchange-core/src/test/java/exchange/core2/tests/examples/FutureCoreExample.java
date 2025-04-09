@@ -645,7 +645,7 @@ public class FutureCoreExample {
         sleep(500);
         int cnt = 500;
         for (int i = 0; i < cnt; i++) {
-            updateCurrentPriceTo(5000);
+            updateCurrentPriceTo(9000);
         }
 
         // trigger强平逻辑
@@ -707,7 +707,7 @@ public class FutureCoreExample {
         sleep(500);
         int cnt = 500;
         for (int i = 0; i < cnt; i++) {
-            updateCurrentPriceTo(15000);
+            updateCurrentPriceTo(11001);
         }
 
         // trigger强平逻辑
