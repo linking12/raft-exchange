@@ -152,43 +152,14 @@ public class FundEventsHelper {
     }
 
     // 生成盈亏结算事件 (PNL_SETTLEMENT)。
-    public FundEvent sendPnlSettlementEvent(final OrderCommand cmd, final SymbolPositionRecord position, long free, long locked, long settledPnl) {
-        FundEvent event = newFundEvent();
-        event.eventType = FundEventType.PNL_SETTLEMENT;
-        event.uid = position.uid;
-        event.currency = position.currency;
-        event.free = free;
-        event.locked = locked;
-        event.symbol = position.symbol;
-        event.direction = position.direction;
-        event.position = position.openVolume;
+    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPnl) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
         event.positionChanged = 0;
         event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
         event.tradePrice = 0;
         event.fee = 0;
         event.pnl = settledPnl; // 结算盈亏
-        event.orderId = cmd.orderId;
         cmd.fundEvents.add(event);
-        return event;
-    }
-
-    public FundEvent sendPnlSettlementEvent(final MatcherTradeEvent ev, final SymbolPositionRecord position, long free, long locked, long settledPnl) {
-        FundEvent event = newFundEvent();
-        event.eventType = FundEventType.PNL_SETTLEMENT;
-        event.uid = position.uid;
-        event.currency = position.currency;
-        event.free = free;
-        event.locked = locked;
-        event.symbol = position.symbol;
-        event.direction = position.direction;
-        event.position = position.openVolume;
-        event.positionChanged = 0;
-        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
-        event.tradePrice = 0;
-        event.fee = 0;
-        event.pnl = settledPnl; // 结算盈亏
-        event.orderId = ev.matchedOrderId;
-        ev.fundEvents.add(event);
         return event;
     }
 

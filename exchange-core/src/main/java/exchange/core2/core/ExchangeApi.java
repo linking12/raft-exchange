@@ -615,7 +615,7 @@ public final class ExchangeApi {
         cmd.command = OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY;
         cmd.timestamp = api.timestamp;
         cmd.fundEvents.add(api.fundEvent);
-        cmd.resultCode = CommandResultCode.SUCCESS;
+        cmd.resultCode = CommandResultCode.NEW;
     };
 
     private static final EventTranslatorOneArg<OrderCommand, ApiSystemSettlePNLCommand> SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR = (cmd, seq, api) -> {

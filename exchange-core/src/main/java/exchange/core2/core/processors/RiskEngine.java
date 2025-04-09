@@ -31,7 +31,6 @@ import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
-import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
@@ -348,8 +347,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return true;
             }
+            case SYSTEM_LIQUIDATION_NOTIFY: {
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
+            }
             case SYSTEM_SETTLE_PNL: {
                 settlePnl(cmd);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
                 return false;
             }
         }
@@ -719,36 +727,30 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 将未实现盈亏转为已实现盈亏并更新账户余额。
      */
     private void settlePnl(OrderCommand cmd) {
-        symbolSpecificationProvider.getAllSymbols().forEach(symbol -> {
-            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
-            if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT) {
-                return;
-            }
-            LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
-            if (priceRecord == null) {
-                log.warn("No price record for symbol={}", symbol);
-                return;
-            }
-            userProfileService.getAllUserProfiles()
-                .filter(up -> uidForThisHandler(up.uid))
-                .filter(up -> !up.positions.isEmpty())
-                .forEach(userProfile -> {
-                    SymbolPositionRecord position = userProfile.positions.get(symbol);
-                    if (position == null || position.direction == PositionDirection.EMPTY) {
-                        return;
-                    }
-                    long balance = userProfile.accounts.get(spec.quoteCurrency);
-                    long unrealizedPnl = position.liquidateEstimateProfit(spec, priceRecord);
-                    if (unrealizedPnl != 0) {
-                        // 相当于按现价帮用户平仓，再重新开仓相同的仓位
-                        long free = userProfile.accounts.addToValue(spec.quoteCurrency, unrealizedPnl);
-                        position.profit += unrealizedPnl;
-                        //重新设置开仓成本为 markPrice（变相“重开仓”）
-                        position.openPriceSum = position.openVolume * priceRecord.markPrice; // 重置
-                        long locked = position.calculateRequiredMarginForFutures(spec);
-                        eventsHelper.sendPnlSettlementEvent(cmd, position, free, locked, unrealizedPnl);
-                    }
-                });
+        userProfileService.getUserProfiles().asUnmodifiable().forEachValue(userProfile -> {
+            // 遍历每个用户的所有持仓
+            userProfile.positions.asUnmodifiable().forEach(position -> {
+                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                if (spec.type != SymbolType.FUTURES_CONTRACT) {
+                    return;
+                }
+                LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
+                if (priceRecord == null) {
+                    log.warn("No price record for symbol={}", position.symbol);
+                    return;
+                }
+                long unrealizedPnl = position.liquidateEstimateProfit(spec, priceRecord);
+                if (unrealizedPnl != 0) {
+                    // 相当于按现价帮用户平仓，再重新开仓相同的仓位
+                    long balance = userProfile.accounts.addToValue(spec.quoteCurrency, unrealizedPnl);
+                    position.profit += unrealizedPnl;
+                    // 重新设置开仓成本为 markPrice（变相“重开仓”）
+                    position.openPriceSum = position.openVolume * priceRecord.markPrice; // 重置
+                    long locked = position.calculateRequiredMarginForFutures(spec);
+                    long free = balance - locked;
+                    eventsHelper.sendPnlSettlementEvent(cmd, position, free, locked, unrealizedPnl);
+                }
+            });
         });
     }
     
