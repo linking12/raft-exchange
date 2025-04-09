@@ -1,9 +1,7 @@
 package exchange.core2.core.event;
 
-import exchange.core2.core.common.MatcherEventType;
-import exchange.core2.core.common.MatcherTradeEvent;
-import exchange.core2.core.common.OrderAction;
-import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiReduceOrder;
@@ -20,6 +18,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 
 import java.util.List;
+
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -445,6 +444,47 @@ public final class SimpleEventsProcessorTest {
         assertThat(source.timestamp, Is.is(result.timestamp));
         assertThat(source.userCookie, Is.is(result.userCookie));
         assertThat(source.resultCode, Is.is(result.resultCode));
+    }
+
+    private OrderCommand sampleBalanceAdjustCommand() {
+        OrderCommand cmd = OrderCommand.builder()
+                .command(OrderCommandType.BALANCE_ADJUSTMENT)
+                .uid(301L)
+                .symbol(30)
+                .orderId(13143L)
+                .price(12800L)
+                .timestamp(1978930983745201L)
+                .resultCode(CommandResultCode.SUCCESS).build();
+
+        return cmd;
+    }
+
+    @Test
+    public void shouldGenFundEventWhenBalanceChange() {
+        OrderCommand cmd = sampleBalanceAdjustCommand();
+        FundEvent event = FundEvent.builder()
+                .uid(301L)
+                .symbol(30)
+                .orderId(13143L)
+                .currency(10000)
+                .build();
+        cmd.fundEvents.add(event);
+
+        processor.accept(cmd, 192837L);
+
+        verify(handler, times(1)).commandResult(commandResultCaptor.capture());
+        verify(handler, never()).tradeEvent(any());
+        verify(handler, times(1)).fundsEvent(fundEventCaptor.capture());
+        verify(handler, never()).reduceEvent(any());
+        verify(handler, never()).rejectEvent(rejectEventCaptor.capture());
+
+        assertThat(commandResultCaptor.getValue().getCommand(),
+                Is.is(ApiAdjustUserBalance.builder()
+                        .uid(301L)
+                        .currency(30)
+                        .amount(12800L)
+                        .transactionId(13143L)
+                        .build()));
     }
 
 }
