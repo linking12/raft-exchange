@@ -23,6 +23,8 @@ import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.hamcrest.core.Is;
@@ -51,10 +53,10 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 public abstract class ITExchangeCoreIntegrationRejection {
 
-    private SimpleEventsProcessor processor;
+    private SimpleEventsProcessor4Test processor;
 
     @Mock
-    private IEventsHandler handler;
+    private IEventsHandler4Test handler;
 
     @Captor
     private ArgumentCaptor<IEventsHandler.ApiCommandResult> commandResultCaptor;
@@ -67,7 +69,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
 
     @BeforeEach
     public void before() {
-        processor = new SimpleEventsProcessor(handler);
+        processor = new SimpleEventsProcessor4Test(handler);
     }
 
 
@@ -123,37 +125,37 @@ public abstract class ITExchangeCoreIntegrationRejection {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, GTC, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiBuyWithRejectionExchangeIoc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiBuyWithRejectionMarginIoc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiBuyWithSizeRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiBuyWithSizeRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiBuyWithBudgetRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_BUDGET);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiBuyWithBudgetRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_BUDGET);
@@ -211,37 +213,37 @@ public abstract class ITExchangeCoreIntegrationRejection {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, GTC, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiSellWithRejectionMarginIoc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiSellWithRejectionExchangeIoc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiSellWithSizeRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiSellWithSizeRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiSellWithExpectationRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_BUDGET);
     }
 
-//    @Test
+    @Test
     @Timeout(5)
     public void testMultiSellWithExpectationRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_BUDGET);
@@ -285,7 +287,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
 
-//        verify(handler, times(5)).commandResult(commandResultCaptor.capture());
+        verify(handler, times(5)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).reduceEvent(any());
 
         if (orderType == FOK_BUDGET && rejectionCause != NO_REJECTION) {
@@ -333,14 +335,14 @@ public abstract class ITExchangeCoreIntegrationRejection {
         }
 
         if (rejectionCause != NO_REJECTION && orderType != GTC) { // rejection can not happen for GTC orders
-//            verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
+            verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
             final IEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
             assertThat(rejectEvent.getSymbol(), Is.is(symbolId));
             assertThat(rejectEvent.getRejectedVolume(), Is.is((orderType == FOK_BUDGET) ? size : 1L));
             assertThat(rejectEvent.getOrderId(), Is.is(405L));
             assertThat(rejectEvent.getUid(), Is.is(UID_4));
         } else {
-//            verify(handler, never()).rejectEvent(any());
+            verify(handler, never()).rejectEvent(any());
         }
 
     }
@@ -372,7 +374,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
 
-//        verify(handler, times(5)).commandResult(commandResultCaptor.capture());
+        verify(handler, times(5)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).reduceEvent(any());
 
         if (orderType == FOK_BUDGET && rejectionCause != NO_REJECTION) {
@@ -420,14 +422,14 @@ public abstract class ITExchangeCoreIntegrationRejection {
         }
 
         if (rejectionCause != NO_REJECTION && orderType != GTC) { // rejection can not happen for GTC orders
-//            verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
+            verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
             final IEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
             assertThat(rejectEvent.getSymbol(), Is.is(symbolId));
             assertThat(rejectEvent.getRejectedVolume(), Is.is((orderType == FOK_BUDGET) ? size : 1L));
             assertThat(rejectEvent.getOrderId(), Is.is(405L));
             assertThat(rejectEvent.getUid(), Is.is(UID_4));
         } else {
-//            verify(handler, never()).rejectEvent(any());
+            verify(handler, never()).rejectEvent(any());
         }
 
     }
