@@ -97,7 +97,7 @@ public final class LiquidationScanner {
                 // 获取最新价格记录
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(symbol);
                 if (priceRecord == null) {
-                    log.warn("No price record for symbol={}", symbol);
+                    log.debug("No price record for symbol={}", symbol);
                     return;
                 }
                 // 强平判断和处理逻辑

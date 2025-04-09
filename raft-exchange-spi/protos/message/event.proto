@@ -43,12 +43,40 @@ message OrderBookPB {
 }
 
 message FundsEventPB {
-  int64 orderId = 1; // 订单 ID
-  int64 uid = 2; // 用户 ID
-  int32 currency = 3; // 变动货币
-  int64 free = 4; // 用户可用余额
-  int64 loked = 5; // 用户冻结余额
-  int64 positionDelta = 6; // 持仓变化（期货用，现金交易为 0）
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 currency = 3;
+  int64 free = 4;
+  int64 locked = 5;
+  FundEventType eventType = 6;
+  int32 symbol = 7;
+  PositionDirection direction = 8;
+  int64 position = 9;
+  int64 positionChanged = 10;
+  int64 openPriceAvg = 11;
+  int64 tradePrice = 12;
+  int64 fee = 13;
+  int64 pnl = 14;
+}
+
+enum FundEventType {
+  FUND_EVENT_TYPE_INVALID = 0; // proto3 enum必须从0开始
+
+  DEPOSIT = 1;
+  LOCKED = 2;
+  TRANSFER = 3;
+  UNLOCKED = 4;
+  WITHDRAW = 5;
+
+  LOCK_PENDING = 6;
+  UNLOCK_PENDING = 7;
+  OPEN_POSITION = 8;
+  CLOSE_POSITION = 9;
+  LIQUIDATION = 10;
+  PNL_SETTLEMENT = 11;
+
+  MARGIN_ALERT = 12;
+  LIQUIDATION_ALERT = 13;
 }
 
 message TradePB {

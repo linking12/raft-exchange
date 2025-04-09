@@ -11,9 +11,7 @@ import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import com.binance.raftexchange.stubs.report.HashCodeEntry;
@@ -33,7 +31,6 @@ import com.google.common.collect.Maps;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.Int32Value;
 import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.Message.Builder;
 import com.google.protobuf.ProtocolMessageEnum;
 
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -309,31 +306,4 @@ public class SerializeHelper {
         }
     }
 
-    /**
-     * 优化grpc，缓存以复用builder
-     */
-    public static class ProtoBuilderPool {
-
-        private final Map<Class<?>, ThreadLocal<? extends Builder>> pools = new ConcurrentHashMap<>();
-
-        /**
-         * 注册一个类型的Builder缓存池（必须提前注册）
-         */
-        public <T extends Builder> void register(Class<T> builderClass, Supplier<T> supplier) {
-            pools.putIfAbsent(builderClass, ThreadLocal.withInitial(supplier));
-        }
-
-        /**
-         * 获取已注册的Builder
-         */
-        public <T extends Builder> T get(Class<T> builderClass) {
-            ThreadLocal<T> local = (ThreadLocal<T>) pools.get(builderClass);
-            if (local == null) {
-                throw new IllegalStateException("Builder not registered for: " + builderClass.getName());
-            }
-            T builder = local.get();
-            builder.clear(); // 清理，确保拿到的是干净的builder
-            return builder;
-        }
-    }
 }

@@ -62,12 +62,6 @@ message Position {
   int64 pending_buy_size = 7;
 }
 
-enum PositionDirection {
-  EMPTY = 0;
-  LONG = 1;
-  SHORT = 255;  // -1 in byte becomes 255 in unsigned context
-}
-
 message Order {
   int64 order_id = 1;
   int64 price = 2;

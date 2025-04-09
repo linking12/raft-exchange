@@ -33,3 +33,9 @@ enum SymbolType {
   FUTURES_CONTRACT = 1;
   OPTION = 2;
 }
+
+enum PositionDirection {
+  EMPTY = 0;
+  LONG = 1;
+  SHORT = 255;  // -1 in byte becomes 255 in unsigned context
+}
