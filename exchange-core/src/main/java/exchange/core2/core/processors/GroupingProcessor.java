@@ -193,7 +193,7 @@ public final class GroupingProcessor implements EventProcessor {
 //                                tradeEventTail = tradeEventTail.nextEvent;
 //                                tradeEventCounter++;
 //                            }
-                            
+
                             /**
                              * @modify 从头部遍历整个链，回收 matcherEvent下的fundEvent， 并更新 tail
                              */
@@ -219,7 +219,7 @@ public final class GroupingProcessor implements EventProcessor {
                         /**
                          * @modify 回收当前orderCommand下面的fundEvent
                          */
-                        if (EVENTS_POOLING && cmd.fundEvents != null) {
+                        if (EVENTS_POOLING && !cmd.fundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
                             sharedPool.putFundEventPool(cmd.fundEvents);
                             cmd.fundEvents.clear();
                         }
