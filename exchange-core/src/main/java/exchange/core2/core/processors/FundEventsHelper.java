@@ -18,7 +18,6 @@ import lombok.extern.slf4j.Slf4j;
 public class FundEventsHelper {
     public static final FundEventsHelper NON_POOLED_EVENTS_HELPER = new FundEventsHelper(FundEvent::new);
     private final Supplier<FundEvent> eventSupplier;
-    private FundEvent eventPooled;
 
     private FundEvent buildSpotEvent(long orderId, long uid, FundEventType type, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
@@ -165,11 +164,7 @@ public class FundEventsHelper {
 
     private FundEvent newFundEvent() {
         if (EVENTS_POOLING) {
-            if (eventPooled == null) {
-                eventPooled = eventSupplier.get();
-            }
-            final FundEvent event = eventPooled;
-            eventPooled = null;
+            final FundEvent event = eventSupplier.get();
             event.eventType = null;
             event.section = 0;
             event.orderId = 0;

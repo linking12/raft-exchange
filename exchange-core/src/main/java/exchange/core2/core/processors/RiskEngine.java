@@ -825,7 +825,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long preVolume = makerSpr.openVolume;
             long prePriceSum = makerSpr.openPriceSum;
 
-            // todo  不需要释放maker的pending
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);
             if (pendingReleasedSize > 0) {
                 long totalBalance = maker.accounts.get(makerSpr.currency);
@@ -848,7 +847,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendClosePositionEvent(ev, false, makerSpr, free, locked, sizeClosed, ev.price, avgOpenPrice, 0, closePnl);
             }
 
-            // todo maker 仅撮合其已有仓位的挂单，永不开仓
             if (sizeToOpen > 0) {
                 makerSpr.openPositionMargin(takerAction.opposite(), sizeToOpen, ev.price);
 
