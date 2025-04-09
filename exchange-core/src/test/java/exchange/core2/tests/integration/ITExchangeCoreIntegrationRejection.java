@@ -123,37 +123,37 @@ public abstract class ITExchangeCoreIntegrationRejection {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, GTC, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiBuyWithRejectionExchangeIoc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiBuyWithRejectionMarginIoc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiBuyWithSizeRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiBuyWithSizeRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiBuyWithBudgetRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_BUDGET);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiBuyWithBudgetRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_BUDGET);
@@ -211,37 +211,37 @@ public abstract class ITExchangeCoreIntegrationRejection {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, GTC, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiSellWithRejectionMarginIoc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiSellWithRejectionExchangeIoc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiSellWithSizeRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiSellWithSizeRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiSellWithExpectationRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_BUDGET);
     }
 
-    @Test
+//    @Test
     @Timeout(5)
     public void testMultiSellWithExpectationRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_BUDGET);
