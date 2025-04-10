@@ -12,6 +12,8 @@
  */
 package exchange.core2.core.processors;
 
+import java.util.List;
+
 import exchange.core2.collections.queue.DisruptorBlockingQueue;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
@@ -96,6 +98,13 @@ public final class SharedPool {
 
     public void putFundEventPool(FundEvent polled) {
         boolean offer = fundEventBuffer.offer(polled);
+        // log.debug(">>> OFFER CHAIN HEAD size={} orrder={}", head.getChainSize(), offer);
+    }
+
+    public void putFundEventPool(List<FundEvent> polled) {
+        polled.forEach(fundEvent -> {
+            boolean offer = fundEventBuffer.offer(fundEvent);
+        });
         // log.debug(">>> OFFER CHAIN HEAD size={} orrder={}", head.getChainSize(), offer);
     }
 

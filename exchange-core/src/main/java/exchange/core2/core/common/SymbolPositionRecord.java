@@ -96,18 +96,22 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         }
     }
 
-    public void pendingRelease(OrderAction orderAction, long size) {
+    public long pendingRelease(OrderAction orderAction, long size) {
+        long released;
         if (orderAction == OrderAction.ASK) {
-            pendingSellSize -= size;
+            released = Math.min(pendingSellSize, size);
+            pendingSellSize -= released;
         } else {
-            pendingBuySize -= size;
+            released = Math.min(pendingBuySize, size);
+            pendingBuySize -= released;
         }
-
-//        if (pendingSellSize < 0 || pendingBuySize < 0) {
-//            log.error("uid {} : pendingSellSize:{} pendingBuySize:{}", uid, pendingSellSize, pendingBuySize);
-//        }
+        return released;
     }
 
+    /**
+     * P&L = (持仓方向 *（当前价格 - 开仓均价）) × 持仓张数
+     * 返回纯利润，不包含冻结保证金。
+     */
     public long estimateProfit(final CoreSymbolSpecification spec, final RiskEngine.LastPriceCacheRecord lastPriceCacheRecord) {
         switch (direction) {
             case EMPTY:
@@ -124,9 +128,42 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 throw new IllegalStateException();
         }
     }
+    
+    /**
+     * 计算未实现盈亏，基于标记价格。
+     * - 多头：(markPrice - 开仓价格) * 数量 + 已实现盈亏。
+     * - 空头：(开仓价格 - markPrice) * 数量 + 已实现盈亏。
+     * - 若 markPrice 无效（0），使用初始保证金作为保守估计。
+     */
+    public long liquidateEstimateProfit(final CoreSymbolSpecification spec, final RiskEngine.LastPriceCacheRecord lastPriceCacheRecord) {
+        switch (direction) {
+            case EMPTY:
+                return profit;
+            case LONG:
+                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0)
+                    ? (openVolume * lastPriceCacheRecord.markPrice - openPriceSum) : spec.marginBuy * openVolume);
+            case SHORT:
+                return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0)
+                    ? (openPriceSum - openVolume * lastPriceCacheRecord.markPrice) : spec.marginSell * openVolume);
+            default:
+                throw new IllegalStateException();
+        }
+    }
 
     /**
+     * 【强平风险评估用】只计算持仓*维持保证金，不看挂单。
+     * @param spec
+     * @return
+     */
+    public long calculateMaintenanceMargin(CoreSymbolSpecification spec) {
+        return direction == PositionDirection.EMPTY ? 0 : openVolume * spec.maintenanceMargin;
+    }
+    
+    /**
      * Calculate required margin based on specification and current position/orders
+     *
+     * 当前这笔合约持仓（含挂单）所需要冻结的保证金总额
+     * 【下单前风控用】不考虑维持保证金，是因为它已经用openVolume*初始保证金计算了，而初始保证金本来就大于维持保证金
      *
      * @param spec core symbol specification
      * @return required margin
@@ -139,10 +176,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long currentRiskBuySize = pendingBuySize + signedPosition;
         final long currentRiskSellSize = pendingSellSize - signedPosition;
 
-        final long marginBuy = specMarginBuy * currentRiskBuySize;
-        final long marginSell = specMarginSell * currentRiskSellSize;
-        // marginBuy or marginSell can be negative, but not both of them
-        return Math.max(marginBuy, marginSell);
+        try {
+            final long marginBuy = currentRiskBuySize >= 0 ? Math.multiplyExact(specMarginBuy, currentRiskBuySize) : 0;
+            final long marginSell = currentRiskSellSize >= 0 ? Math.multiplyExact(specMarginSell, currentRiskSellSize) : 0;
+            return Math.max(marginBuy, marginSell);
+        } catch (ArithmeticException e) {
+            log.error("Overflow in calculateRequiredMarginForFutures: uid={} symbol={} openVolume={} direction={} pendingBuySize={} pendingSellSize={}",
+                    uid, symbol, openVolume, direction, pendingBuySize, pendingSellSize, e);
+            throw new IllegalStateException("Margin calculation overflow for symbol " + symbol, e);
+        }
     }
 
     /**
@@ -179,7 +221,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return (newMargin <= currentMargin) ? -1 : newMargin;
     }
 
-
     /**
      * Update position for one user
      * 1. Un-hold pending size
@@ -206,7 +247,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return sizeToOpen;
     }
 
-    private long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
+    public long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
 
         // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize, profit);
 
@@ -234,7 +275,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return sizeToOpen;
     }
 
-    private void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice) {
+    public void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice) {
         openVolume += sizeToOpen;
         openPriceSum += tradePrice * sizeToOpen;
         direction = PositionDirection.of(action);

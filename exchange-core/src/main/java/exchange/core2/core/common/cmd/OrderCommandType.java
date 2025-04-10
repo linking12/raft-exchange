@@ -35,6 +35,10 @@ public enum OrderCommandType {
     SUSPEND_USER((byte) 12, true),
     RESUME_USER((byte) 13, true),
 
+    FORCE_LIQUIDATION((byte) 20, true),
+    SYSTEM_LIQUIDATION_NOTIFY((byte) 21, true),
+    SYSTEM_SETTLE_PNL((byte) 22, true),
+
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
 
@@ -50,6 +54,9 @@ public enum OrderCommandType {
     SHUTDOWN_SIGNAL((byte) 127, false),
 
     RESERVED_COMPRESSED((byte) -1, false);
+    
+    
+    
 
     private byte code;
     private boolean mutate;

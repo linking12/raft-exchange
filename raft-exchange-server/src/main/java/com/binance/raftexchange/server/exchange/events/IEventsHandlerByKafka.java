@@ -13,6 +13,7 @@ import org.apache.kafka.common.PartitionInfo;
 
 import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.raft.RaftNode;
+import com.binance.raftexchange.server.util.ProtoBuilderPool;
 import com.binance.raftexchange.stubs.FundsEventPB;
 import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderBookPB;
@@ -27,13 +28,27 @@ import org.slf4j.LoggerFactory;
 
 public class IEventsHandlerByKafka implements IEventsHandler {
     private static final Logger LOG = LoggerFactory.getLogger(IEventsHandlerByKafka.class);
-    public static IEventsHandlerByKafka INSTANCE;
+    private static final long IGNORE_UID = -1L;
+    private static final ProtoBuilderPool builderPool;
+    private static IEventsHandlerByKafka INSTANCE;
+
+    static {
+        builderPool = new ProtoBuilderPool();
+        builderPool.register(TradeEventPB.Builder.class, TradeEventPB::newBuilder);
+        builderPool.register(ReduceEventPB.Builder.class, ReduceEventPB::newBuilder);
+        builderPool.register(OrderBookPB.Builder.class, OrderBookPB::newBuilder);
+        builderPool.register(FundsEventPB.Builder.class, FundsEventPB::newBuilder);
+    }
+
     private final KafkaProducer<Long, byte[]> sender;
     private final String topic;
-    private static final long IGNORE_UID = -1L;
-    private AtomicBoolean isLeader = new AtomicBoolean(false);
+    private final AtomicBoolean isLeader = new AtomicBoolean(false);
 
-    public IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topic) {
+    public static void init(KafkaProducer<Long, byte[]> sender, String topic) {
+        INSTANCE = new IEventsHandlerByKafka(sender, topic);
+    }
+
+    private IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topic) {
         this.sender = sender;
         this.topic = topic;
         RoleChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
@@ -44,12 +59,12 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        TradeEventPB.Builder builder = TradeEventPB.newBuilder().setSymbol(tradeEvent.getSymbol()).setTotalVolume(tradeEvent.getTotalVolume())
+        TradeEventPB.Builder builder = builderPool.get(TradeEventPB.Builder.class).setSymbol(tradeEvent.getSymbol()).setTotalVolume(tradeEvent.getTotalVolume())
             .setTakerOrderId(tradeEvent.getTakerOrderId()).setTakerUid(tradeEvent.getTakerUid())
             .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode())).setTimestamp(tradeEvent.getTimestamp());
         if (tradeEvent.getTrades() != null) {
             for (Trade trade : tradeEvent.getTrades()) {
-                builder = builder.addTrades(TradePB.newBuilder().setMakerOrderId(trade.getMakerOrderId()).setMakerUid(trade.getMakerUid())
+                builder.addTrades(TradePB.newBuilder().setMakerOrderId(trade.getMakerOrderId()).setMakerUid(trade.getMakerUid())
                     .setMakerOrderCompleted(trade.isMakerOrderCompleted()).setPrice(trade.getPrice()).setVolume(trade.getVolume()).build());
             }
         }
@@ -67,7 +82,7 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        ReduceEventPB pbObject = ReduceEventPB.newBuilder().setSymbol(reduceEvent.getSymbol()).setReducedVolume(reduceEvent.getReducedVolume())
+        ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol()).setReducedVolume(reduceEvent.getReducedVolume())
             .setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId())
             .setUid(reduceEvent.getOrderId()).setTimestamp(reduceEvent.getTimestamp()).build();
         if (LOG.isDebugEnabled()) {
@@ -83,17 +98,15 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        OrderBookPB.Builder builder = OrderBookPB.newBuilder().setSymbol(orderBook.getSymbol()).setTimestamp(orderBook.getTimestamp());
+        OrderBookPB.Builder builder = builderPool.get(OrderBookPB.Builder.class).setSymbol(orderBook.getSymbol()).setTimestamp(orderBook.getTimestamp());
         if (orderBook.getAsks() != null) {
             for (OrderBookRecord ask : orderBook.getAsks()) {
-                builder =
-                    builder.addAsks(OrderBookRecordPB.newBuilder().setPrice(ask.getPrice()).setVolume(ask.getVolume()).setOrders(ask.getOrders()).build());
+                builder.addAsks(OrderBookRecordPB.newBuilder().setPrice(ask.getPrice()).setVolume(ask.getVolume()).setOrders(ask.getOrders()).build());
             }
         }
         if (orderBook.getBids() != null) {
             for (OrderBookRecord bid : orderBook.getBids()) {
-                builder =
-                    builder.addBids(OrderBookRecordPB.newBuilder().setPrice(bid.getPrice()).setVolume(bid.getVolume()).setOrders(bid.getOrders()).build());
+                builder.addBids(OrderBookRecordPB.newBuilder().setPrice(bid.getPrice()).setVolume(bid.getVolume()).setOrders(bid.getOrders()).build());
             }
         }
         OrderBookPB pbObject = builder.build();
@@ -110,8 +123,12 @@ public class IEventsHandlerByKafka implements IEventsHandler {
         if (!isLeader.get()) {
             return;
         }
-        FundsEventPB pbObject = FundsEventPB.newBuilder().setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
-            .setFree(fundsEvent.getFree()).setLoked(fundsEvent.getLoked()).setPositionDelta(fundsEvent.getPositionDelta()).build();
+        FundsEventPB pbObject = builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid())
+            .setCurrency(fundsEvent.getCurrency()).setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked())
+            .setEventTypeValue(fundsEvent.getEventType().getCode()).setSymbol(fundsEvent.getSymbol())
+            .setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setPosition(fundsEvent.getPosition())
+            .setPositionChanged(fundsEvent.getPositionChanged()).setOpenPriceAvg(fundsEvent.getOpenPriceAvg())
+            .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).setPnl(fundsEvent.getPnl()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("fundsEvent: {}", formateString);
@@ -121,11 +138,14 @@ public class IEventsHandlerByKafka implements IEventsHandler {
     }
 
     public static IEventsHandlerByKafka getInstance() {
+        if (INSTANCE == null) {
+            throw new IllegalStateException("IEventsHandlerByKafka has not been initialized. Call init(sender, topic) first.");
+        }
         return INSTANCE;
     }
 
     public static class CommandPartitioner implements Partitioner {
-        private AtomicInteger counter = new AtomicInteger(0); //
+        private final AtomicInteger counter = new AtomicInteger(0);
 
         @Override
         public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {

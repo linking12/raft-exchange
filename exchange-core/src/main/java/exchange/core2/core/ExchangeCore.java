@@ -15,6 +15,19 @@
  */
 package exchange.core2.core;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.function.ObjLongConsumer;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
 import com.lmax.disruptor.EventHandler;
 import com.lmax.disruptor.EventTranslator;
 import com.lmax.disruptor.RingBuffer;
@@ -22,27 +35,28 @@ import com.lmax.disruptor.TimeoutException;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.EventHandlerGroup;
 import com.lmax.disruptor.dsl.ProducerType;
+
 import exchange.core2.core.common.CoreWaitStrategy;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.ExchangeConfiguration;
+import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
-import exchange.core2.core.processors.*;
+import exchange.core2.core.processors.DisruptorExceptionHandler;
+import exchange.core2.core.processors.GroupingProcessor;
+import exchange.core2.core.processors.MatchingEngineRouter;
+import exchange.core2.core.processors.ResultsHandler;
+import exchange.core2.core.processors.RiskEngine;
+import exchange.core2.core.processors.SharedPool;
+import exchange.core2.core.processors.TwoStepMasterProcessor;
+import exchange.core2.core.processors.TwoStepSlaveProcessor;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import lombok.Builder;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.*;
-import java.util.function.ObjLongConsumer;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 /**
  * Main exchange core class.
@@ -67,6 +81,9 @@ public final class ExchangeCore {
 
     // enable MatcherTradeEvent pooling
     public static final boolean EVENTS_POOLING = true;
+
+    @Getter
+    public LiquidationScanner liquidationScanner;
 
     /**
      * Exchange core constructor.
@@ -210,6 +227,11 @@ public final class ExchangeCore {
         // attach slave processors to master processor
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
 
+        if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
+            liquidationScanner = new LiquidationScanner(api, riskEngines.values());
+            liquidationScanner.start();
+        }
+
         try {
             loaderExecutor.shutdown();
             loaderExecutor.awaitTermination(1, TimeUnit.SECONDS);
@@ -223,7 +245,6 @@ public final class ExchangeCore {
             log.debug("Starting disruptor...");
             disruptor.start();
             started = true;
-
             serializationProcessor.replayJournalFullAndThenEnableJouraling(exchangeConfiguration.getInitStateCfg(), api);
         }
     }
@@ -259,6 +280,11 @@ public final class ExchangeCore {
         if (!stopped) {
             stopped = true;
             // TODO stop accepting new events first
+            if (liquidationScanner != null) {
+                log.info("Shutdown liquidation scanner...");
+                liquidationScanner.stop(timeout, timeUnit);
+                log.info("Liquidation scanner stopped");
+            }
             try {
                 log.info("Shutdown disruptor...");
                 ringBuffer.publishEvent(SHUTDOWN_SIGNAL_TRANSLATOR);
