@@ -624,7 +624,7 @@ public class FutureCoreExample {
     }
 
     // 做多被强制平仓
-//    @Test
+    @Test
     public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
@@ -686,7 +686,7 @@ public class FutureCoreExample {
     }
 
     // 做空被强制平仓
-//    @Test
+    @Test
     public void testShortPostionForcedLiquadate() throws ExecutionException, InterruptedException {
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
