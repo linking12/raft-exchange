@@ -25,6 +25,7 @@ import com.alipay.sofa.jraft.option.NodeOptions;
 import com.alipay.sofa.jraft.option.RaftOptions;
 import com.alipay.sofa.jraft.option.ReadOnlyOption;
 import com.alipay.sofa.jraft.util.Utils;
+import com.binance.platform.common.EnvUtil;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
@@ -47,6 +48,9 @@ public class RaftClusterContainer {
             LOGGER.info("Starting raft: {}", raftCurrentMember);
         } while (raftMemberCluster == null);
         String dataPath = System.getProperty("user.dir") + File.separator + raftClusterName + "-DATA";
+        if (EnvUtil.isMacOs()) {
+            dataPath += File.separator + raftCurrentMember;
+        }
         FileUtils.forceMkdir(new File(dataPath));
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
         Configuration conf = JRaftUtils.getConfiguration(raftMemberCluster);
