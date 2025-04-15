@@ -82,10 +82,14 @@ public final class OrderCommand implements IOrder {
 
     // trade events chain
     public MatcherTradeEvent matcherEvent;
+
     /**
-     * 冻结资金和解冻资金
+     * 资金转移事件
+     * 【注意并发】risk后处理有makerUid和takerUid 2个id，很可能分布在2个riskEnginEngine上，有可能同时add事件；
+     *  risk的预处理只有1个uid，一定在某一个riskEngine上处理；
+     *  OrderCmd上的fundEvents是线程安全的，因为matchEngine是按symbol分区的，一定只在一个matchEngine上。
      */
-    public final MutableList<FundEvent> fundEvents = FastList.newList();
+    public final MutableList<FundEvent> fundEvents = FastList.<FundEvent>newList().asSynchronized();
 
     // optional market data
     public L2MarketData marketData;

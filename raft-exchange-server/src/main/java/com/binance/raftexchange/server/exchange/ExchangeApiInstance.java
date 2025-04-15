@@ -16,7 +16,7 @@ public class ExchangeApiInstance {
     private static final ExchangeApiInstance INSTANCE = new ExchangeApiInstance();
 
     private ExchangeApiInstance() {
-        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance());
+        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(IEventsHandlerByKafka.getInstance(), IEventsHandlerByKafka.getInstance());
         SerializationConfiguration serializationCfg =
             SerializationConfiguration.builder().enableJournaling(false).serializationProcessorFactory(MemorySerializationProcessor::new).build();
         ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().serializationCfg(serializationCfg).build();

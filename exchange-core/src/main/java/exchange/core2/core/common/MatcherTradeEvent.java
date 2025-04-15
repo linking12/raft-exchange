@@ -63,13 +63,6 @@ public final class MatcherTradeEvent {
 
     // frozen price from BID order owner (depends on activeOrderAction)
     public long bidderHoldPrice;
-    /**
-     * 资金转移事件
-     * 【注意并发】risk后处理有makerUid和takerUid 2个id，很可能分布在2个riskEnginEngine上，有可能同时add事件；
-     *  risk的预处理只有1个uid，一定在某一个riskEngine上处理；
-     *  OrderCmd上的fundEvents是线程安全的，因为matchEngine是按symbol分区的，一定只在一个matchEngine上。
-     */
-    public final MutableList<FundEvent> fundEvents = FastList.<FundEvent>newList().asSynchronized();
 
     // reference to next event in chain
     public MatcherTradeEvent nextEvent;

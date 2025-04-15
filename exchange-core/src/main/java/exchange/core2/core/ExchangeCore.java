@@ -24,7 +24,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.function.ObjLongConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -57,6 +56,7 @@ import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import net.openhft.chronicle.wire.TriConsumer;
 
 /**
  * Main exchange core class.
@@ -91,7 +91,7 @@ public final class ExchangeCore {
      * @param exchangeConfiguration - exchange configuration
      */
     @Builder
-    public ExchangeCore(final ObjLongConsumer<OrderCommand> resultsConsumer,
+    public ExchangeCore(final TriConsumer<OrderCommand, Long, Boolean> resultsConsumer,
                         final ExchangeConfiguration exchangeConfiguration) {
 
         log.debug("Building exchange core from configuration: {}", exchangeConfiguration);
@@ -203,12 +203,15 @@ public final class ExchangeCore {
 
         // 3. risk release (R2) after matching engine (ME)
         final EventHandlerGroup<OrderCommand> afterMatchingEngine = disruptor.after(matchingEngineHandlers);
+        final ResultsHandler resultsHandler = new ResultsHandler(resultsConsumer);
 
         riskEngines.forEach((idx, riskEngine) -> afterMatchingEngine.handleEventsWith(
                 (rb, bs) -> {
                     final TwoStepSlaveProcessor r2 = new TwoStepSlaveProcessor(rb, rb.newBarrier(bs), riskEngine::handlerRiskRelease, exceptionHandler, "R2_" + idx);
                     procR2.add(r2);
                     return r2;
+                }).then((cmd, seq, eob) -> {
+                    resultsHandler.onEvent(cmd, seq, true);
                 }));
 
 
@@ -217,10 +220,8 @@ public final class ExchangeCore {
                 ? disruptor.after(arraysAddHandler(matchingEngineHandlers, jh))
                 : afterMatchingEngine;
 
-        final ResultsHandler resultsHandler = new ResultsHandler(resultsConsumer);
-
         mainHandlerGroup.handleEventsWith((cmd, seq, eob) -> {
-            resultsHandler.onEvent(cmd, seq, eob);
+            resultsHandler.onEvent(cmd, seq, false);
             api.processResult(seq, cmd); // TODO SLOW ?(volatile operations)
         });
 
