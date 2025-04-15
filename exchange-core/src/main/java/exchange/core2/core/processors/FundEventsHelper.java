@@ -6,7 +6,6 @@ import java.util.function.Supplier;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
-import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -48,43 +47,43 @@ public class FundEventsHelper {
      * ***********现货************
      */
     // 存款
-    public FundEvent sendDepositEvent(final OrderCommand cmd, int currency, long free) {
+    public FundEvent sendDepositEvent(OrderCommand cmd, int currency, long free) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.DEPOSIT, currency, free, 0);
         cmd.fundEvents.add(event);
         return event;
     }
 
     // 提现
-    public FundEvent sendWithdrawEvent(final OrderCommand cmd, int currency, long free) {
+    public FundEvent sendWithdrawEvent(OrderCommand cmd, int currency, long free) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.WITHDRAW, currency, free, 0);
         cmd.fundEvents.add(event);
         return event;
     }
 
     // 冻结
-    public FundEvent sendLockEvent(final OrderCommand cmd, int currency, long free, long locked) {
+    public FundEvent sendLockEvent(OrderCommand cmd, int currency, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.LOCKED, currency, free, locked);
         cmd.fundEvents.add(event);
         return event;
     }
 
     // 解冻
-    public FundEvent sendUnLockEvent(final MatcherTradeEvent ev, int currency, long free) {
-        FundEvent event = buildSpotEvent(ev.matchedOrderId, ev.matchedOrderUid, FundEventType.UNLOCKED, currency, free, 0);
-        ev.fundEvents.add(event);
+    public FundEvent sendUnLockEvent(OrderCommand cmd, int currency, long free) {
+        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.UNLOCKED, currency, free, 0);
+        cmd.fundEvents.add(event);
         return event;
     }
 
     // 转移
-    public FundEvent sendTransferEvent(final MatcherTradeEvent ev, long uid, int currency, long free) {
+    public FundEvent sendTransferEvent(OrderCommand cmd, long orderId, long uid, int currency, long free) {
         FundEvent event = newFundEvent();
         event.eventType = FundEventType.TRANSFER;
+        event.orderId = orderId;
         event.uid = uid;
         event.currency = currency;
         event.free = free;
         event.locked = 0;
-        event.orderId = ev.matchedOrderId;
-        ev.fundEvents.add(event);
+        cmd.fundEvents.add(event);
         return event;
     }
 
@@ -99,36 +98,36 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendUnlockPendingEvent(MatcherTradeEvent ev, SymbolPositionRecord position, long free, long locked) {
-        FundEvent event = buildFuturesEvent(ev.matchedOrderId, FundEventType.UNLOCK_PENDING, position, free, locked);
-        ev.fundEvents.add(event);
+    public FundEvent sendUnlockPendingEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.UNLOCK_PENDING, position, free, locked);
+        cmd.fundEvents.add(event);
         return event;
     }
 
-    public FundEvent sendClosePositionEvent(MatcherTradeEvent ev, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
+    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
                                             long sizeClosed, long avgOpenPrice, long price, long fee, long pnl) {
-        FundEvent event = buildFuturesEvent(ev.matchedOrderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
+        FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
         event.positionChanged = sizeClosed;
         event.openPriceAvg = avgOpenPrice;
         event.tradePrice = price;
         event.fee = fee;
         event.pnl = pnl;
-        ev.fundEvents.add(event);
+        cmd.fundEvents.add(event);
         return event;
     }
 
-    public FundEvent sendOpenPositionEvent(MatcherTradeEvent ev, SymbolPositionRecord position, long free, long locked,
+    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked,
                                            long sizeOpened, long price, long fee) {
-        FundEvent event = buildFuturesEvent(ev.matchedOrderId, FundEventType.OPEN_POSITION, position, free, locked);
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
         event.positionChanged = sizeOpened;
         event.tradePrice = price;
         event.fee = fee;
-        ev.fundEvents.add(event);
+        cmd.fundEvents.add(event);
         return event;
     }
 
     // 通知调整保证金
-    public FundEvent sendMarginAdjustmentEvent(final SymbolPositionRecord position, long free, long locked) {
+    public FundEvent sendMarginAdjustmentEvent(SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, free, locked);
         event.positionChanged = 0; // 无清算
         event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0; // 平均开仓价格

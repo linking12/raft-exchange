@@ -22,11 +22,12 @@ import com.binance.raftexchange.stubs.ReduceEventPB;
 import com.binance.raftexchange.stubs.TradeEventPB;
 import com.binance.raftexchange.stubs.TradePB;
 
-import exchange.core2.core.IEventsHandler;
+import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class IEventsHandlerByKafka implements IEventsHandler {
+public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHandler {
     private static final Logger LOG = LoggerFactory.getLogger(IEventsHandlerByKafka.class);
     private static final long IGNORE_UID = -1L;
     private static final ProtoBuilderPool builderPool;
