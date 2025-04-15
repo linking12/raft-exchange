@@ -15,7 +15,8 @@
  */
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.IEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -60,19 +61,19 @@ class ITFutureBasic {
     private IEventsHandler4Test handler;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.ApiCommandResult> commandResultCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.ApiCommandResult> commandResultCaptor;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.TradeEvent> tradeEventCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.TradeEvent> tradeEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.FundsEvent> fundEventCapor;
+    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCapor;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.ReduceEvent> reduceEventCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.ReduceEvent> reduceEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.RejectEvent> rejectEventCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.RejectEvent> rejectEventCaptor;
 
 
     @BeforeEach
@@ -101,7 +102,7 @@ class ITFutureBasic {
         verify(handler, never()).tradeEvent(any());
         verify(handler, times(1)).fundsEvent(fundEventCapor.capture());
 
-        IEventsHandler.FundsEvent fundEvent = fundEventCapor.getValue();
+        IFundEventsHandler.FundsEvent fundEvent = fundEventCapor.getValue();
         assertThat(SYMBOL_MARGIN, Is.is(fundEvent.currency));
         assertThat(0, Is.is(fundEvent.symbol));
         assertThat(0L, Is.is(fundEvent.fee));
@@ -134,8 +135,8 @@ class ITFutureBasic {
         verify(handler, never()).tradeEvent(any());
         verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
 
-        List<IEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-        IEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
+        List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+        IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
         assertThat(UID_1, Is.is(depositEvent.uid));
         assertThat(SYMBOL_MARGIN, Is.is(depositEvent.currency));
         assertThat(0, Is.is(depositEvent.symbol));
@@ -150,7 +151,7 @@ class ITFutureBasic {
         assertThat(0L, Is.is(depositEvent.positionChanged));
         assertThat(0L, Is.is(depositEvent.tradePrice));
 
-        IEventsHandler.FundsEvent withdrawEvent = fundEvents.get(1);
+        IFundEventsHandler.FundsEvent withdrawEvent = fundEvents.get(1);
         assertThat(UID_1, Is.is(withdrawEvent.uid));
         assertThat(SYMBOL_MARGIN, Is.is(withdrawEvent.currency));
         assertThat(0, Is.is(withdrawEvent.symbol));
@@ -186,8 +187,8 @@ class ITFutureBasic {
             verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
 
             // deposit first
-            List<IEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
 
             assertThat(userId1, Is.is(depositEvent.uid));
             assertThat(quoteId, Is.is(depositEvent.currency));
@@ -204,7 +205,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(depositEvent.tradePrice));
 
             // place order second
-            IEventsHandler.FundsEvent placeEvent = fundEvents.get(1);
+            IFundEventsHandler.FundsEvent placeEvent = fundEvents.get(1);
             assertThat(userId1, Is.is(placeEvent.uid));
             assertThat(quoteId, Is.is(placeEvent.currency));
             assertThat(symbolId, Is.is(placeEvent.symbol));
@@ -220,8 +221,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(placeEvent.tradePrice));
 
             // TODO: should we fire UNLOCKED_PENDING here
-            List<IEventsHandler.FundsEvent> events = fundEventCapor.getAllValues();
-            IEventsHandler.FundsEvent event = fundEvents.get(0);
+            List<IFundEventsHandler.FundsEvent> events = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent event = fundEvents.get(0);
         } catch (Exception e) {
 
         }
@@ -249,7 +250,7 @@ class ITFutureBasic {
         verify(handler, never()).rejectEvent(any());
         verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
 
-        final IEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
+        final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
         assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
         assertThat(tradeEvent.getTotalVolume(), Is.is(1L));
         assertThat(tradeEvent.getTakerUid(), Is.is(userId2));
@@ -263,8 +264,8 @@ class ITFutureBasic {
         verify(handler, times(4)).fundsEvent(fundEventCapor.capture());
 
         // check fund event
-        List<IEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-        IEventsHandler.FundsEvent takerEvent = fundEvents.get(2);
+        List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+        IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(2);
         assertThat(userId1, Is.is(takerEvent.uid));
         assertThat(quoteId, Is.is(takerEvent.currency));
         assertThat(symbolId, Is.is(takerEvent.symbol));
@@ -279,7 +280,7 @@ class ITFutureBasic {
         assertThat(0L, Is.is(takerEvent.positionChanged));
         assertThat(0L, Is.is(takerEvent.tradePrice));
 
-        IEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
+        IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
         assertThat(userId2, Is.is(makerEvent.uid));
         assertThat(quoteId, Is.is(makerEvent.currency));
         assertThat(symbolId, Is.is(makerEvent.symbol));
@@ -331,9 +332,9 @@ class ITFutureBasic {
 
 //            container.printUser(userId1);
             // check fund event
-            List<IEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
 
-            IEventsHandler.FundsEvent takerEvent = fundEvents.get(cnt * 4 + 6 - 2);
+            IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(cnt * 4 + 6 - 2);
             assertThat(userId1, Is.is(takerEvent.uid));
             assertThat(quoteId, Is.is(takerEvent.currency));
             assertThat(symbolId, Is.is(takerEvent.symbol));
@@ -348,7 +349,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.positionChanged));
             assertThat(0L, Is.is(takerEvent.tradePrice));
 
-            IEventsHandler.FundsEvent makerEvent = fundEvents.get(cnt * 4 + 6 - 1);
+            IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(cnt * 4 + 6 - 1);
             assertThat(userId2, Is.is(makerEvent.uid));
             assertThat(quoteId, Is.is(makerEvent.currency));
             assertThat(symbolId, Is.is(makerEvent.symbol));
@@ -618,7 +619,7 @@ class ITFutureBasic {
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
 
             // validating first event
-            final IEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
+            final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
             assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
             assertThat(tradeEvent.getTotalVolume(), Is.is(40L));
             assertThat(tradeEvent.getTakerOrderId(), Is.is(405L));
@@ -626,7 +627,7 @@ class ITFutureBasic {
             assertThat(tradeEvent.getTakerAction(), Is.is(OrderAction.BID));
             assertThat(tradeEvent.isTakeOrderCompleted(), Is.is(rejectionCause == RejectionCause.NO_REJECTION)); // completed only if no rejection was happened
 
-            final List<IEventsHandler.Trade> trades = tradeEvent.getTrades();
+            final List<ITradeEventsHandler.Trade> trades = tradeEvent.getTrades();
             assertThat(trades.size(), Is.is(4));
 
             assertThat(trades.get(0).getMakerOrderId(), Is.is(202L));
@@ -656,7 +657,7 @@ class ITFutureBasic {
 
         if (rejectionCause != RejectionCause.NO_REJECTION && orderType != GTC) { // rejection can not happen for GTC orders
             verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
-            final IEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
+            final ITradeEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
             assertThat(rejectEvent.getSymbol(), Is.is(symbolId));
             assertThat(rejectEvent.getRejectedVolume(), Is.is((orderType == FOK_BUDGET) ? size : 1L));
             assertThat(rejectEvent.getOrderId(), Is.is(405L));
@@ -705,7 +706,7 @@ class ITFutureBasic {
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
 
             // validating first event
-            final IEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
+            final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
             assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
             assertThat(tradeEvent.getTotalVolume(), Is.is(22L));
             assertThat(tradeEvent.getTakerOrderId(), Is.is(405L));
@@ -713,7 +714,7 @@ class ITFutureBasic {
             assertThat(tradeEvent.getTakerAction(), Is.is(ASK));
             assertThat(tradeEvent.isTakeOrderCompleted(), Is.is(rejectionCause == RejectionCause.NO_REJECTION)); // completed only if no rejection was happened
 
-            final List<IEventsHandler.Trade> trades = tradeEvent.getTrades();
+            final List<ITradeEventsHandler.Trade> trades = tradeEvent.getTrades();
             assertThat(trades.size(), Is.is(4));
 
             assertThat(trades.get(0).getMakerOrderId(), Is.is(304L));
@@ -743,7 +744,7 @@ class ITFutureBasic {
 
         if (rejectionCause != RejectionCause.NO_REJECTION && orderType != GTC) { // rejection can not happen for GTC orders
             verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
-            final IEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
+            final ITradeEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
             assertThat(rejectEvent.getSymbol(), Is.is(symbolId));
             assertThat(rejectEvent.getRejectedVolume(), Is.is((orderType == FOK_BUDGET) ? size : 1L));
             assertThat(rejectEvent.getOrderId(), Is.is(405L));

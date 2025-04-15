@@ -100,7 +100,7 @@ public abstract class ITExchangeCoreIntegrationStress {
 
             log.debug("Running benchmark...");
             final CountDownLatch ordersLatch = new CountDownLatch(apiCommands.size());
-            container.setConsumer((cmd, seq) -> ordersLatch.countDown());
+            container.setConsumer((cmd, seq, fundEvents) -> ordersLatch.countDown());
             for (ApiCommand cmd : apiCommands) {
                 cmd.timestamp = System.currentTimeMillis();
                 api.submitCommand(cmd);

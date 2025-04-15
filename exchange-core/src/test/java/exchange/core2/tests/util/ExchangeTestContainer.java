@@ -32,6 +32,7 @@ import lombok.Data;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import net.openhft.chronicle.wire.TriConsumer;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.hamcrest.core.Is;
 
@@ -64,7 +65,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
     @Setter
-    private ObjLongConsumer<OrderCommand> consumer = (cmd, seq) -> {
+    private TriConsumer<OrderCommand, Long, Boolean> consumer = (cmd, seq, fundEvents) -> {
     };
 
     public static final Consumer<OrderCommand> CHECK_SUCCESS = cmd -> assertEquals(CommandResultCode.SUCCESS, cmd.resultCode);
@@ -139,7 +140,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         this.exchangeCore = ExchangeCore.builder()
-                .resultsConsumer((cmd, seq) -> consumer.accept(cmd, seq))
+                .resultsConsumer((cmd, seq, fundEvents) -> consumer.accept(cmd, seq, fundEvents))
                 .exchangeConfiguration(exchangeConfiguration)
                 .build();
 

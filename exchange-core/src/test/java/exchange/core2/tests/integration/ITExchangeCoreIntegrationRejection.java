@@ -15,8 +15,7 @@
  */
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.IEventsHandler;
-import exchange.core2.core.SimpleEventsProcessor;
+import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
@@ -59,13 +58,13 @@ public abstract class ITExchangeCoreIntegrationRejection {
     private IEventsHandler4Test handler;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.ApiCommandResult> commandResultCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.ApiCommandResult> commandResultCaptor;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.TradeEvent> tradeEventCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.TradeEvent> tradeEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IEventsHandler.RejectEvent> rejectEventCaptor;
+    private ArgumentCaptor<ITradeEventsHandler.RejectEvent> rejectEventCaptor;
 
     @BeforeEach
     public void before() {
@@ -298,7 +297,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
 
             // validating first event
-            final IEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
+            final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
             assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
             assertThat(tradeEvent.getTotalVolume(), Is.is(40L));
             assertThat(tradeEvent.getTakerOrderId(), Is.is(405L));
@@ -306,7 +305,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
             assertThat(tradeEvent.getTakerAction(), Is.is(OrderAction.BID));
             assertThat(tradeEvent.isTakeOrderCompleted(), Is.is(rejectionCause == NO_REJECTION)); // completed only if no rejection was happened
 
-            final List<IEventsHandler.Trade> trades = tradeEvent.getTrades();
+            final List<ITradeEventsHandler.Trade> trades = tradeEvent.getTrades();
             assertThat(trades.size(), Is.is(4));
 
             assertThat(trades.get(0).getMakerOrderId(), Is.is(202L));
@@ -336,7 +335,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
 
         if (rejectionCause != NO_REJECTION && orderType != GTC) { // rejection can not happen for GTC orders
             verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
-            final IEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
+            final ITradeEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
             assertThat(rejectEvent.getSymbol(), Is.is(symbolId));
             assertThat(rejectEvent.getRejectedVolume(), Is.is((orderType == FOK_BUDGET) ? size : 1L));
             assertThat(rejectEvent.getOrderId(), Is.is(405L));
@@ -385,7 +384,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
 
             // validating first event
-            final IEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
+            final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
             assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
             assertThat(tradeEvent.getTotalVolume(), Is.is(22L));
             assertThat(tradeEvent.getTakerOrderId(), Is.is(405L));
@@ -393,7 +392,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
             assertThat(tradeEvent.getTakerAction(), Is.is(ASK));
             assertThat(tradeEvent.isTakeOrderCompleted(), Is.is(rejectionCause == NO_REJECTION)); // completed only if no rejection was happened
 
-            final List<IEventsHandler.Trade> trades = tradeEvent.getTrades();
+            final List<ITradeEventsHandler.Trade> trades = tradeEvent.getTrades();
             assertThat(trades.size(), Is.is(4));
 
             assertThat(trades.get(0).getMakerOrderId(), Is.is(304L));
@@ -423,7 +422,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
 
         if (rejectionCause != NO_REJECTION && orderType != GTC) { // rejection can not happen for GTC orders
             verify(handler, times(1)).rejectEvent(rejectEventCaptor.capture());
-            final IEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
+            final ITradeEventsHandler.RejectEvent rejectEvent = rejectEventCaptor.getValue();
             assertThat(rejectEvent.getSymbol(), Is.is(symbolId));
             assertThat(rejectEvent.getRejectedVolume(), Is.is((orderType == FOK_BUDGET) ? size : 1L));
             assertThat(rejectEvent.getOrderId(), Is.is(405L));
