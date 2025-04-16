@@ -38,10 +38,16 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     @Override
     public void accept(OrderCommand cmd, long seq) {
         try {
-            sendCommandResult(cmd, seq);
-            sendTradeEvents(cmd);
-            sendFundEvents(cmd);
-            sendMarketData(cmd);
+            if (seq < 0) {
+                // 来自R2风控阶段
+                sendFundEvents(cmd);
+            } else {
+                // 主流程撮合结果处理
+                sendCommandResult(cmd, seq);
+                sendTradeEvents(cmd);
+                sendFundEvents(cmd);
+                sendMarketData(cmd);
+            }
         } catch (Exception ex) {
             log.error("Exception when handling command result data", ex);
         }
@@ -69,7 +75,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         sendTradeEvent(cmd);
     }
 
-    public void sendFundEvents(OrderCommand cmd) {
+    private void sendFundEvents(OrderCommand cmd) {
         cmd.takerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
         cmd.makerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
     }

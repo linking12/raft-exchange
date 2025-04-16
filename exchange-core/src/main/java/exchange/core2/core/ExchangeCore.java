@@ -211,7 +211,8 @@ public final class ExchangeCore {
                     procR2.add(r2);
                     return r2;
                 }).then((cmd, seq, eob) -> {
-                    resultsHandler.onEvent(cmd, seq, eob);
+                    // 负值seq标识该cmd来自R2风控路径，仅处理fundEvents，不做交易结果处理
+                    resultsHandler.onEvent(cmd, -seq, eob);
                 }));
 
 
