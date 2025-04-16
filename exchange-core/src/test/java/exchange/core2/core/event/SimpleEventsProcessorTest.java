@@ -60,7 +60,7 @@ public final class SimpleEventsProcessorTest {
 
         OrderCommand cmd = sampleCancelCommand();
 
-        processor.accept(cmd, 192837L, true);
+        processor.accept(cmd, 192837L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).tradeEvent(any());
@@ -85,7 +85,7 @@ public final class SimpleEventsProcessorTest {
                 .nextEvent(null)
                 .build();
 
-        processor.accept(cmd, 192837L, true);
+        processor.accept(cmd, 192837L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).tradeEvent(any());
@@ -119,7 +119,7 @@ public final class SimpleEventsProcessorTest {
                 .build();
 
 
-        processor.accept(cmd, 192837L, true);
+        processor.accept(cmd, 192837L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).fundsEvent(any());
@@ -190,7 +190,7 @@ public final class SimpleEventsProcessorTest {
         cmd.matcherEvent = firstTrade;
         firstTrade.nextEvent = secondTrade;
 
-        processor.accept(cmd, 12981721239L, true);
+        processor.accept(cmd, 12981721239L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).fundsEvent(any());
@@ -276,7 +276,7 @@ public final class SimpleEventsProcessorTest {
         firstTrade.nextEvent = secondTrade;
         secondTrade.nextEvent = reject;
 
-        processor.accept(cmd, 12981721239L, true);
+        processor.accept(cmd, 12981721239L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, times(0)).fundsEvent(fundEventCaptor.capture());
@@ -339,7 +339,7 @@ public final class SimpleEventsProcessorTest {
                 .nextEvent(null)
                 .build();
 
-        processor.accept(cmd, 192837L, true);
+        processor.accept(cmd, 192837L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).tradeEvent(any());
@@ -468,9 +468,9 @@ public final class SimpleEventsProcessorTest {
                 .orderId(13143L)
                 .currency(10000)
                 .build();
-        cmd.fundEvents.add(event);
+        cmd.takerFundEvents.add(event);
 
-        processor.accept(cmd, 192837L, true);
+        processor.accept(cmd, 192837L);
 
         verify(handler, times(1)).commandResult(commandResultCaptor.capture());
         verify(handler, never()).tradeEvent(any());

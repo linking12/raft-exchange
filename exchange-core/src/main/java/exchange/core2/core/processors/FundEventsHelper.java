@@ -49,28 +49,28 @@ public class FundEventsHelper {
     // 存款
     public FundEvent sendDepositEvent(OrderCommand cmd, int currency, long free) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.DEPOSIT, currency, free, 0);
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 提现
     public FundEvent sendWithdrawEvent(OrderCommand cmd, int currency, long free) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.WITHDRAW, currency, free, 0);
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 冻结
     public FundEvent sendLockEvent(OrderCommand cmd, int currency, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.LOCKED, currency, free, locked);
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 解冻
     public FundEvent sendUnLockEvent(OrderCommand cmd, int currency, long free) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.UNLOCKED, currency, free, 0);
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
@@ -83,7 +83,7 @@ public class FundEventsHelper {
         event.currency = currency;
         event.free = free;
         event.locked = 0;
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
@@ -94,13 +94,13 @@ public class FundEventsHelper {
     // 这里如果direction=empty说明是初始下单，还没有仓位
     public FundEvent sendLockPendingEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.LOCK_PENDING, position, free, locked);
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     public FundEvent sendUnlockPendingEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.UNLOCK_PENDING, position, free, locked);
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
@@ -112,7 +112,7 @@ public class FundEventsHelper {
         event.tradePrice = price;
         event.fee = fee;
         event.pnl = pnl;
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
@@ -122,7 +122,7 @@ public class FundEventsHelper {
         event.positionChanged = sizeOpened;
         event.tradePrice = price;
         event.fee = fee;
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
@@ -157,13 +157,22 @@ public class FundEventsHelper {
         event.tradePrice = 0;
         event.fee = 0;
         event.pnl = settledPnl; // 结算盈亏
-        cmd.fundEvents.add(event);
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
+    }
+
+    private void addFundEvent(OrderCommand cmd, long orderId, FundEvent event) {
+        if (orderId == cmd.orderId) {
+            cmd.takerFundEvents.add(event);
+        } else {
+            cmd.makerFundEvents.add(event);
+        }
     }
 
     private FundEvent newFundEvent() {
         if (EVENTS_POOLING) {
             final FundEvent event = eventSupplier.get();
+            event.processed = false;
             event.eventType = null;
             event.section = 0;
             event.orderId = 0;

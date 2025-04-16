@@ -28,8 +28,9 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
     }
 
     @Override
-    public void sendFundEvents(FundEvent fundEvent) {
-        super.sendFundEvents(fundEvent);
+    public void sendFundEvent(FundEvent fundEvent) {
+        // todo override for test
+        super.sendFundEvent(fundEvent);
     }
 
     @Override

@@ -2,8 +2,8 @@ package exchange.core2.core;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ObjLongConsumer;
 
-import net.openhft.chronicle.wire.TriConsumer;
 import org.agrona.collections.MutableBoolean;
 import org.agrona.collections.MutableLong;
 import org.agrona.collections.MutableReference;
@@ -30,21 +30,18 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @Getter
 @Slf4j
-public class SimpleEventsProcessor implements TriConsumer<OrderCommand, Long, Boolean> {
+public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
-    private final ITradeEventsHandler eventsHandler;
+    private final ITradeEventsHandler tradeEventsHandler;
     private final IFundEventsHandler fundEventsHandler;
 
     @Override
-    public void accept(OrderCommand cmd, Long seq, Boolean processFundEvents) {
+    public void accept(OrderCommand cmd, long seq) {
         try {
-            if (Boolean.TRUE.equals(processFundEvents)) {
-                cmd.fundEvents.forEach(this::sendFundEvents);
-            } else {
-                sendCommandResult(cmd, seq);
-                sendTradeEvents(cmd);
-                sendMarketData(cmd);
-            }
+            sendCommandResult(cmd, seq);
+            sendTradeEvents(cmd);
+            sendFundEvents(cmd);
+            sendMarketData(cmd);
         } catch (Exception ex) {
             log.error("Exception when handling command result data", ex);
         }
@@ -60,7 +57,7 @@ public class SimpleEventsProcessor implements TriConsumer<OrderCommand, Long, Bo
             final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,
                 firstEvent.price, cmd.orderId, cmd.uid, cmd.timestamp);
 
-            eventsHandler.reduceEvent(evt);
+            tradeEventsHandler.reduceEvent(evt);
 
             if (firstEvent.nextEvent != null) {
                 throw new IllegalStateException("Only single REDUCE event is expected");
@@ -72,10 +69,16 @@ public class SimpleEventsProcessor implements TriConsumer<OrderCommand, Long, Bo
         sendTradeEvent(cmd);
     }
 
-    public void sendFundEvents(FundEvent fundEvent) {
+    public void sendFundEvents(OrderCommand cmd) {
+        cmd.takerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+        cmd.makerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+    }
+
+    public void sendFundEvent(FundEvent fundEvent) {
         if (fundEvent == null) {
             return;
         }
+        fundEvent.processed = true;
         final IFundEventsHandler.FundsEvent evt =
             new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
                     fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged,
@@ -116,7 +119,7 @@ public class SimpleEventsProcessor implements TriConsumer<OrderCommand, Long, Bo
             final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, mutableLong.value, cmd.orderId, cmd.uid, cmd.action,
                 takerOrderCompleted.value, cmd.timestamp, trades);
 
-            eventsHandler.tradeEvent(evt);
+            tradeEventsHandler.tradeEvent(evt);
         }
 
     }
@@ -134,7 +137,7 @@ public class SimpleEventsProcessor implements TriConsumer<OrderCommand, Long, Bo
                 bids.add(new ITradeEventsHandler.OrderBookRecord(marketData.bidPrices[i], marketData.bidVolumes[i], (int)marketData.bidOrders[i]));
             }
 
-            eventsHandler.orderBook(new ITradeEventsHandler.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
+            tradeEventsHandler.orderBook(new ITradeEventsHandler.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
         }
     }
 

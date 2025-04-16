@@ -185,23 +185,13 @@ public final class GroupingProcessor implements EventProcessor {
                             } else {
                                 tradeEventTail.nextEvent = cmd.matcherEvent;
                             }
-//                            tradeEventTail = cmd.matcherEvent;
-//                            tradeEventCounter++;
-//
-//                            // find last element in the chain and update tail accordingly
-//                            while (tradeEventTail.nextEvent != null) {
-//                                tradeEventTail = tradeEventTail.nextEvent;
-//                                tradeEventCounter++;
-//                            }
+                            tradeEventTail = cmd.matcherEvent;
+                            tradeEventCounter++;
 
-                            /**
-                             * @modify 从头部遍历整个链，回收 matcherEvent下的fundEvent， 并更新 tail
-                             */
-                            MatcherTradeEvent current = cmd.matcherEvent;
-                            while (current != null) {
-                                tradeEventTail = current;
+                            // find last element in the chain and update tail accordingly
+                            while (tradeEventTail.nextEvent != null) {
+                                tradeEventTail = tradeEventTail.nextEvent;
                                 tradeEventCounter++;
-                                current = current.nextEvent;
                             }
 
                             if (tradeEventCounter >= tradeEventChainLengthTarget) {
@@ -212,13 +202,21 @@ public final class GroupingProcessor implements EventProcessor {
                                 tradeEventHead = null;
                             }
                         }
+
                         /**
                          * @modify 回收当前orderCommand下面的fundEvent
                          */
-                        if (EVENTS_POOLING && !cmd.fundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
-                            sharedPool.putFundEventPool(cmd.fundEvents);
-                            cmd.fundEvents.clear();
+                        if (EVENTS_POOLING) {
+                            if (!cmd.takerFundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
+                                sharedPool.putFundEventPool(cmd.takerFundEvents);
+                                cmd.takerFundEvents.clear();
+                            }
+                            if (!cmd.makerFundEvents.isEmpty()) {
+                                sharedPool.putFundEventPool(cmd.makerFundEvents);
+                                cmd.makerFundEvents.clear();
+                            }
                         }
+
                         cmd.matcherEvent = null;
                         // TODO collect to shared buffer
                         cmd.marketData = null;

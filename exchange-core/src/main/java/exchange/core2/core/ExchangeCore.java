@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.function.ObjLongConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -56,7 +57,6 @@ import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import net.openhft.chronicle.wire.TriConsumer;
 
 /**
  * Main exchange core class.
@@ -91,7 +91,7 @@ public final class ExchangeCore {
      * @param exchangeConfiguration - exchange configuration
      */
     @Builder
-    public ExchangeCore(final TriConsumer<OrderCommand, Long, Boolean> resultsConsumer,
+    public ExchangeCore(final ObjLongConsumer<OrderCommand> resultsConsumer,
                         final ExchangeConfiguration exchangeConfiguration) {
 
         log.debug("Building exchange core from configuration: {}", exchangeConfiguration);
@@ -211,7 +211,7 @@ public final class ExchangeCore {
                     procR2.add(r2);
                     return r2;
                 }).then((cmd, seq, eob) -> {
-                    resultsHandler.onEvent(cmd, seq, true);
+                    resultsHandler.onEvent(cmd, seq, eob);
                 }));
 
 
@@ -221,7 +221,7 @@ public final class ExchangeCore {
                 : afterMatchingEngine;
 
         mainHandlerGroup.handleEventsWith((cmd, seq, eob) -> {
-            resultsHandler.onEvent(cmd, seq, false);
+            resultsHandler.onEvent(cmd, seq, eob);
             api.processResult(seq, cmd); // TODO SLOW ?(volatile operations)
         });
 

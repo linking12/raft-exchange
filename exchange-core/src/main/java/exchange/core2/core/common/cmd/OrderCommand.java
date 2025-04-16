@@ -89,7 +89,9 @@ public final class OrderCommand implements IOrder {
      *  risk的预处理只有1个uid，一定在某一个riskEngine上处理；
      *  OrderCmd上的fundEvents是线程安全的，因为matchEngine是按symbol分区的，一定只在一个matchEngine上。
      */
-    public final MutableList<FundEvent> fundEvents = FastList.<FundEvent>newList().asSynchronized();
+    public final MutableList<FundEvent> takerFundEvents = FastList.newList();
+
+    public final MutableList<FundEvent> makerFundEvents = FastList.newList();
 
     // optional market data
     public L2MarketData marketData;
