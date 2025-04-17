@@ -921,7 +921,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         long takerSizePriceForThisHandler = 0L;
 
-        MatcherTradeEvent tradeEventHead = ev;
         final int quoteCurrency = spec.quoteCurrency;
 
         /**
@@ -957,8 +956,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  */
                 this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, quoteCurrencyBalance);
                 this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, spec.baseCurrency, baseCurrencyBalance);
-                
-                
+
                 makerSizeForThisHandler += size;
             }
 
@@ -973,7 +971,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             * @modify 资金转移
             */
            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, quoteCurrency, quoteCurrencyBalance);
-           tradeEventHead = null;
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
