@@ -2,9 +2,10 @@ package exchange.core2.core.processors;
 
 import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 
-import java.util.Deque;
-import java.util.LinkedList;
 import java.util.function.Supplier;
+
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
@@ -13,8 +14,6 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.impl.list.mutable.FastList;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -117,7 +116,7 @@ public class FundEventsHelper {
     }
 
     public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
-                                            long sizeClosed, long avgOpenPrice, long price, long fee, long pnl) {
+        long sizeClosed, long avgOpenPrice, long price, long fee, long pnl) {
         FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
         event.positionChanged = sizeClosed;
         event.openPriceAvg = avgOpenPrice;
@@ -128,8 +127,8 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked,
-                                           long sizeOpened, long price, long fee) {
+    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked, long sizeOpened, long price,
+        long fee) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
         event.positionChanged = sizeOpened;
         event.tradePrice = price;
@@ -150,12 +149,11 @@ public class FundEventsHelper {
     }
 
     // 通知强平
-    public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long free, long locked,
-                                               long markPrice, long sizeToLiquidate) {
+    public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long free, long locked, long markPrice, long sizeToLiquidate) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_ALERT, position, free, locked);
         event.positionChanged = sizeToLiquidate; // 清算仓位
         event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
-        event.tradePrice = markPrice;  // 清算价格
+        event.tradePrice = markPrice; // 清算价格
         event.fee = 0; // 无交易费用
         event.pnl = 0; // 无盈亏变动
         return event;

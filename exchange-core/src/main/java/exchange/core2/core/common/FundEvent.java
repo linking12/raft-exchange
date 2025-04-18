@@ -13,7 +13,6 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
  * 资金事件类，用于记录现货和期货的资金及仓位变动。
  * free + locked = total。
  * 现货和期货通过FundEventType区分。
- * 如果是在前置处理中产生的事件，就挂在cmd下，如果是后置处理产生的事件，就挂在matcherEvent下。
  */
 @AllArgsConstructor
 @NoArgsConstructor
