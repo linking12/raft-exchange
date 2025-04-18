@@ -2,6 +2,8 @@ package exchange.core2.core.processors;
 
 import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 
+import java.util.Deque;
+import java.util.LinkedList;
 import java.util.function.Supplier;
 
 import exchange.core2.core.common.FundEvent;
@@ -11,12 +13,22 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 
 @Slf4j
 @RequiredArgsConstructor
 public class FundEventsHelper {
-    public static final FundEventsHelper NON_POOLED_EVENTS_HELPER = new FundEventsHelper(FundEvent::new);
-    private final Supplier<FundEvent> eventSupplier;
+    public static final FundEventsHelper NON_POOLED_EVENTS_HELPER = new FundEventsHelper(FastList::new, false);
+    private final Supplier<MutableList<FundEvent>> eventSupplier;
+
+    private boolean pooling = EVENTS_POOLING;
+    private MutableList<FundEvent> eventQueue;
+
+    public FundEventsHelper(Supplier<MutableList<FundEvent>> supplier, boolean pooling) {
+        this.eventSupplier = supplier;
+        this.pooling = pooling;
+    }
 
     private FundEvent buildSpotEvent(long orderId, long uid, FundEventType type, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
@@ -170,8 +182,11 @@ public class FundEventsHelper {
     }
 
     private FundEvent newFundEvent() {
-        if (EVENTS_POOLING) {
-            final FundEvent event = eventSupplier.get();
+        if (pooling) {
+            if (eventQueue == null || eventQueue.isEmpty()) {
+                eventQueue = eventSupplier.get();
+            }
+            final FundEvent event = eventQueue.remove(eventQueue.size() - 1);
             event.processed = false;
             event.eventType = null;
             event.section = 0;

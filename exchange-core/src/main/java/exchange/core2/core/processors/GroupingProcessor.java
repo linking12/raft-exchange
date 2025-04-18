@@ -17,13 +17,18 @@ package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
 import exchange.core2.core.common.CoreWaitStrategy;
+import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 
+import java.util.Deque;
+import java.util.LinkedList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
@@ -126,6 +131,7 @@ public final class GroupingProcessor implements EventProcessor {
         MatcherTradeEvent tradeEventHead = null;
         MatcherTradeEvent tradeEventTail = null;
         int tradeEventCounter = 0; // counter
+        MutableList<FundEvent> fundEventQueue = FastList.newList(tradeEventChainLengthTarget);
 
         boolean groupingEnabled = true;
 
@@ -208,12 +214,17 @@ public final class GroupingProcessor implements EventProcessor {
                          */
                         if (EVENTS_POOLING) {
                             if (!cmd.takerFundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
-                                sharedPool.putFundEventPool(cmd.takerFundEvents);
+                                fundEventQueue.addAll(cmd.takerFundEvents);
                                 cmd.takerFundEvents.clear();
                             }
                             if (!cmd.makerFundEvents.isEmpty()) {
-                                sharedPool.putFundEventPool(cmd.makerFundEvents);
+                                fundEventQueue.addAll(cmd.makerFundEvents);
                                 cmd.makerFundEvents.clear();
+                            }
+
+                            if (fundEventQueue.size() >= tradeEventChainLengthTarget) {
+                                sharedPool.putFundEventQueue(fundEventQueue);
+                                fundEventQueue = FastList.newList(tradeEventChainLengthTarget);
                             }
                         }
 

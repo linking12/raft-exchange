@@ -1,10 +1,12 @@
 package exchange.core2.core;
 
 import java.util.Collection;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
 import org.eclipse.collections.api.map.primitive.MutableLongObjectMap;
@@ -36,12 +38,14 @@ public final class LiquidationScanner {
 
     private final ExchangeApi api;
     private final Collection<RiskEngine> riskEngines;
-
+    private final Map<Integer, FundEventsHelper> fundEventsHelpers;
     private final ScheduledExecutorService scheduler;
 
     public LiquidationScanner(ExchangeApi api, Collection<RiskEngine> riskEngines) {
         this.api = api;
         this.riskEngines = riskEngines;
+        this.fundEventsHelpers = riskEngines.stream()
+            .collect(Collectors.toMap(RiskEngine::getShardId, r-> new FundEventsHelper(() -> r.getSharedPool().getFundEventQueue())));
         this.scheduler = Executors.newScheduledThreadPool(riskEngines.size(), r -> new Thread(r, "LiquidationScanner"));
     }
 
@@ -84,7 +88,7 @@ public final class LiquidationScanner {
         SymbolSpecificationProvider symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
         MutableLongObjectMap<UserProfile> userProfiles = riskEngine.getUserProfileService().getUserProfiles().asUnmodifiable();
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
-        FundEventsHelper eventsHelper = riskEngine.getEventsHelper();
+        FundEventsHelper eventsHelper = fundEventsHelpers.get(riskEngine.getShardId());
         userProfiles.forEachValue(userProfile -> {
             // 遍历每个用户的所有持仓
             MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
