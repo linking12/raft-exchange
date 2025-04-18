@@ -27,8 +27,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.impl.list.mutable.FastList;
 
-import java.util.Deque;
-import java.util.LinkedList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
