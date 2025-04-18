@@ -215,11 +215,12 @@ public final class GroupingProcessor implements EventProcessor {
                                 fundEventQueue.addAll(cmd.takerFundEvents);
                                 cmd.takerFundEvents.clear();
                             }
-                            if (!cmd.makerFundEvents.isEmpty()) {
-                                fundEventQueue.addAll(cmd.makerFundEvents);
-                                cmd.makerFundEvents.clear();
+                            for (MutableList<FundEvent> makerFundEvents : cmd.makerFundEventsByShard) {
+                                if (!makerFundEvents.isEmpty()) {
+                                    fundEventQueue.addAll(makerFundEvents);
+                                    makerFundEvents.clear();
+                                }
                             }
-
                             if (fundEventQueue.size() >= tradeEventChainLengthTarget) {
                                 sharedPool.putFundEventQueue(fundEventQueue);
                                 fundEventQueue = FastList.newList(tradeEventChainLengthTarget);

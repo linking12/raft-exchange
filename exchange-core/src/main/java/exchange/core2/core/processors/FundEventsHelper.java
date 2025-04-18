@@ -5,7 +5,6 @@ import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 import java.util.function.Supplier;
 
 import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.impl.list.mutable.FastList;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
@@ -18,16 +17,10 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RequiredArgsConstructor
 public class FundEventsHelper {
-    public static final FundEventsHelper NON_POOLED_EVENTS_HELPER = new FundEventsHelper(FastList::new, false);
     private final Supplier<MutableList<FundEvent>> eventSupplier;
+    private final int riskEngineShardId;
 
-    private boolean pooling = EVENTS_POOLING;
     private MutableList<FundEvent> eventQueue;
-
-    public FundEventsHelper(Supplier<MutableList<FundEvent>> supplier, boolean pooling) {
-        this.eventSupplier = supplier;
-        this.pooling = pooling;
-    }
 
     private FundEvent buildSpotEvent(long orderId, long uid, FundEventType type, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
@@ -175,12 +168,12 @@ public class FundEventsHelper {
         if (orderId == cmd.orderId) {
             cmd.takerFundEvents.add(event);
         } else {
-            cmd.makerFundEvents.add(event);
+            cmd.makerFundEventsByShard[riskEngineShardId].add(event);
         }
     }
 
     private FundEvent newFundEvent() {
-        if (pooling) {
+        if (EVENTS_POOLING) {
             if (eventQueue == null || eventQueue.isEmpty()) {
                 eventQueue = eventSupplier.get();
             }

@@ -106,6 +106,10 @@ public final class ExchangeCore {
 
         final CoreWaitStrategy coreWaitStrategy = perfCfg.getWaitStrategy();
 
+        final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
+        final int riskEnginesNum = perfCfg.getRiskEnginesNum();
+        OrderCommand.RISK_ENGINE_NUM = riskEnginesNum;
+
         this.disruptor = new Disruptor<>(
                 OrderCommand::new,
                 ringBufferSize,
@@ -118,9 +122,6 @@ public final class ExchangeCore {
         this.api = new ExchangeApi(ringBuffer, perfCfg.getBinaryCommandsLz4CompressorFactory().get());
 
         final IOrderBook.OrderBookFactory orderBookFactory = perfCfg.getOrderBookFactory();
-
-        final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
-        final int riskEnginesNum = perfCfg.getRiskEnginesNum();
 
         final SerializationConfiguration serializationCfg = exchangeConfiguration.getSerializationCfg();
 

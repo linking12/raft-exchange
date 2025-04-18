@@ -26,6 +26,7 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.list.MutableList;
 
 @RequiredArgsConstructor
 @Getter
@@ -77,7 +78,9 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private void sendFundEvents(OrderCommand cmd) {
         cmd.takerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
-        cmd.makerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+        for (MutableList<FundEvent> makerFundEvents : cmd.makerFundEventsByShard) {
+            makerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+        }
     }
 
     public void sendFundEvent(FundEvent fundEvent) {
