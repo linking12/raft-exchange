@@ -85,7 +85,7 @@ public final class OrderCommand implements IOrder {
 
     /**
      * 资金转移事件
-     * 【注意并发】risk后处理有可能涉及takerUid和多个makerUid，他们可能分布在多个shared上，这会导致taker和maker/多个maker之间同时发生add事件；
+     * 【注意并发】risk后处理有可能涉及takerUid和多个makerUid，他们可能分布在多个shard上，这会导致taker和maker/多个maker之间同时发生add事件；
      *  risk的预处理只有1个uid，一定在某一个riskEngine上处理；
      *  OrderCmd上的fundEvents是线程安全的，因为matchEngine是按symbol分区的，一定只在一个matchEngine上。
      */
