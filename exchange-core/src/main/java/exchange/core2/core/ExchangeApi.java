@@ -32,36 +32,67 @@ import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
 import exchange.core2.core.processors.BinaryCommandsProcessor;
 import exchange.core2.core.utils.SerializationUtils;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.jpountz.lz4.LZ4Compressor;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import net.openhft.chronicle.wire.Wire;
 import org.agrona.collections.LongLongConsumer;
-import org.eclipse.collections.impl.map.mutable.ConcurrentHashMap;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
 import java.util.stream.Stream;
 
 @Slf4j
-@RequiredArgsConstructor
 public final class ExchangeApi {
 
     private final RingBuffer<OrderCommand> ringBuffer;
     private final LZ4Compressor lz4Compressor;
 
-    // promises cache (TODO can be changed to queue)
-    private final Map<Long, Consumer<OrderCommand>> promises = new ConcurrentHashMap<>();
+    // promises cache
+    private final PromiseBuffer promises;
 
     public static final int LONGS_PER_MESSAGE = 5;
 
-    public void processResult(final long seq, final OrderCommand cmd) {
+    public ExchangeApi(RingBuffer<OrderCommand> ringBuffer, LZ4Compressor lz4Compressor) {
+        this.ringBuffer = ringBuffer;
+        this.lz4Compressor = lz4Compressor;
+        this.promises = new PromiseBuffer(ringBuffer.getBufferSize());
+    }
 
+    private static class PromiseBuffer {
+        // 直接用数组会有false sharing问题，性能不如AtomicReferenceArray高
+        private final AtomicReferenceArray<Consumer<OrderCommand>> buffer;
+        private final int mask;
+
+        public PromiseBuffer(int sizePowerOfTwo) {
+            if (Integer.bitCount(sizePowerOfTwo) != 1) {
+                throw new IllegalArgumentException("Size must be power of 2");
+            }
+            this.buffer = new AtomicReferenceArray<>(sizePowerOfTwo);
+            this.mask = sizePowerOfTwo - 1;
+        }
+
+        public void put(long seq, Consumer<OrderCommand> c) {
+            int index = (int) (seq & mask);
+            boolean ok = buffer.compareAndSet(index, null, c);
+            if (!ok) {
+                throw new IllegalStateException("Slot already occupied! seq=" + seq + ", index=" + index);
+            }
+        }
+
+        public Consumer<OrderCommand> remove(long seq) {
+            int index = (int) (seq & mask);
+            Consumer<OrderCommand> c = buffer.get(index);
+            buffer.set(index, null); // ensure GC and reuse
+            return c;
+        }
+    }
+
+    public void processResult(final long seq, final OrderCommand cmd) {
 //        if (cmd.command == OrderCommandType.BINARY_DATA_COMMAND
 //                || cmd.command == OrderCommandType.BINARY_DATA_QUERY) {
 
