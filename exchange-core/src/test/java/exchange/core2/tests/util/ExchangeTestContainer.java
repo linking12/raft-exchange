@@ -185,6 +185,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
+                .marginBuy(100)
+                .marginSell(100)
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));

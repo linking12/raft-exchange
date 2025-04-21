@@ -153,6 +153,8 @@ public class FutureCoreExample {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
+                .marginSell(100)
+                .marginBuy(100)
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));

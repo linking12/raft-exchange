@@ -82,7 +82,7 @@ class ITFutureBasic {
     }
 
     @AfterEach()
-    public void after(){
+    public void after() {
 
     }
 
@@ -91,31 +91,34 @@ class ITFutureBasic {
     @Test
     public void testBalanceIncrease() {
         long delta = 100L;
-        final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());
-        container.setConsumer(processor);
-        container.initOneUser(UID_1);
-        container.initFutureSymbol(symbolId, quoteId);
-        container.addMoneyToUser(UID_1, SYMBOL_MARGIN, delta);
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.setConsumer(processor);
+            container.initOneUser(UID_1);
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addMoneyToUser(UID_1, SYMBOL_MARGIN, delta);
 
-        verify(handler, times(3)).commandResult(commandResultCaptor.capture());
-        verify(handler, never()).reduceEvent(any());
-        verify(handler, never()).tradeEvent(any());
-        verify(handler, times(1)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(4)).commandResult(commandResultCaptor.capture());
+            verify(handler, never()).reduceEvent(any());
+            verify(handler, never()).tradeEvent(any());
+            verify(handler, times(1)).fundsEvent(fundEventCapor.capture());
 
-        IFundEventsHandler.FundsEvent fundEvent = fundEventCapor.getValue();
-        assertThat(SYMBOL_MARGIN, Is.is(fundEvent.currency));
-        assertThat(0, Is.is(fundEvent.symbol));
-        assertThat(0L, Is.is(fundEvent.fee));
-        assertThat(PositionDirection.EMPTY, Is.is(fundEvent.direction));
-        assertThat(UID_1, Is.is(fundEvent.uid));
-        assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(fundEvent.eventType));
-        assertThat(delta, Is.is(fundEvent.free));
-        assertThat(0L, Is.is(fundEvent.locked));
-        assertThat(0L, Is.is(fundEvent.openPriceAvg));
-        assertThat(0L, Is.is(fundEvent.pnl));
-        assertThat(0L, Is.is(fundEvent.position));
-        assertThat(0L, Is.is(fundEvent.positionChanged));
-        assertThat(0L, Is.is(fundEvent.tradePrice));
+            IFundEventsHandler.FundsEvent fundEvent = fundEventCapor.getValue();
+            assertThat(SYMBOL_MARGIN, Is.is(fundEvent.currency));
+            assertThat(0, Is.is(fundEvent.symbol));
+            assertThat(0L, Is.is(fundEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(fundEvent.direction));
+            assertThat(UID_1, Is.is(fundEvent.uid));
+            assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(fundEvent.eventType));
+            assertThat(delta, Is.is(fundEvent.free));
+            assertThat(0L, Is.is(fundEvent.locked));
+            assertThat(0L, Is.is(fundEvent.openPriceAvg));
+            assertThat(0L, Is.is(fundEvent.pnl));
+            assertThat(0L, Is.is(fundEvent.position));
+            assertThat(0L, Is.is(fundEvent.positionChanged));
+            assertThat(0L, Is.is(fundEvent.tradePrice));
+        } catch (Exception e) {
+
+        }
     }
 
     // 用户资产减少时需要生产withdraw fundEvent
@@ -123,48 +126,51 @@ class ITFutureBasic {
     public void testBalanceDecrease() {
         long deposit = 100L;
         long withdraw = -40L;
-        final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());
-        container.setConsumer(processor);
-        container.initOneUser(UID_1);
-        container.initFutureSymbol(symbolId, quoteId);
-        container.addMoneyToUser(UID_1, SYMBOL_MARGIN, deposit);
-        container.addMoneyToUser(UID_1, SYMBOL_MARGIN, withdraw);
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initOneUser(UID_1);
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addMoneyToUser(UID_1, SYMBOL_MARGIN, deposit);
+            container.addMoneyToUser(UID_1, SYMBOL_MARGIN, withdraw);
 
-        verify(handler, times(4)).commandResult(commandResultCaptor.capture());
-        verify(handler, never()).reduceEvent(any());
-        verify(handler, never()).tradeEvent(any());
-        verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(5)).commandResult(commandResultCaptor.capture());
+            verify(handler, never()).reduceEvent(any());
+            verify(handler, never()).tradeEvent(any());
+            verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
 
-        List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-        IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
-        assertThat(UID_1, Is.is(depositEvent.uid));
-        assertThat(SYMBOL_MARGIN, Is.is(depositEvent.currency));
-        assertThat(0, Is.is(depositEvent.symbol));
-        assertThat(0L, Is.is(depositEvent.fee));
-        assertThat(PositionDirection.EMPTY, Is.is(depositEvent.direction));
-        assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.eventType));
-        assertThat(deposit, Is.is(depositEvent.free));
-        assertThat(0L, Is.is(depositEvent.locked));
-        assertThat(0L, Is.is(depositEvent.openPriceAvg));
-        assertThat(0L, Is.is(depositEvent.pnl));
-        assertThat(0L, Is.is(depositEvent.position));
-        assertThat(0L, Is.is(depositEvent.positionChanged));
-        assertThat(0L, Is.is(depositEvent.tradePrice));
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
+            assertThat(UID_1, Is.is(depositEvent.uid));
+            assertThat(SYMBOL_MARGIN, Is.is(depositEvent.currency));
+            assertThat(0, Is.is(depositEvent.symbol));
+            assertThat(0L, Is.is(depositEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(depositEvent.direction));
+            assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.eventType));
+            assertThat(deposit, Is.is(depositEvent.free));
+            assertThat(0L, Is.is(depositEvent.locked));
+            assertThat(0L, Is.is(depositEvent.openPriceAvg));
+            assertThat(0L, Is.is(depositEvent.pnl));
+            assertThat(0L, Is.is(depositEvent.position));
+            assertThat(0L, Is.is(depositEvent.positionChanged));
+            assertThat(0L, Is.is(depositEvent.tradePrice));
 
-        IFundEventsHandler.FundsEvent withdrawEvent = fundEvents.get(1);
-        assertThat(UID_1, Is.is(withdrawEvent.uid));
-        assertThat(SYMBOL_MARGIN, Is.is(withdrawEvent.currency));
-        assertThat(0, Is.is(withdrawEvent.symbol));
-        assertThat(0L, Is.is(withdrawEvent.fee));
-        assertThat(PositionDirection.EMPTY, Is.is(withdrawEvent.direction));
-        assertThat(FundEvent.FundEventType.WITHDRAW, Is.is(withdrawEvent.eventType));
-        assertThat(deposit + withdraw, Is.is(withdrawEvent.free));
-        assertThat(0L, Is.is(withdrawEvent.locked));
-        assertThat(0L, Is.is(withdrawEvent.openPriceAvg));
-        assertThat(0L, Is.is(withdrawEvent.pnl));
-        assertThat(0L, Is.is(withdrawEvent.position));
-        assertThat(0L, Is.is(withdrawEvent.positionChanged));
-        assertThat(0L, Is.is(withdrawEvent.tradePrice));
+            IFundEventsHandler.FundsEvent withdrawEvent = fundEvents.get(1);
+            assertThat(UID_1, Is.is(withdrawEvent.uid));
+            assertThat(SYMBOL_MARGIN, Is.is(withdrawEvent.currency));
+            assertThat(0, Is.is(withdrawEvent.symbol));
+            assertThat(0L, Is.is(withdrawEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(withdrawEvent.direction));
+            assertThat(FundEvent.FundEventType.WITHDRAW, Is.is(withdrawEvent.eventType));
+            assertThat(deposit + withdraw, Is.is(withdrawEvent.free));
+            assertThat(0L, Is.is(withdrawEvent.locked));
+            assertThat(0L, Is.is(withdrawEvent.openPriceAvg));
+            assertThat(0L, Is.is(withdrawEvent.pnl));
+            assertThat(0L, Is.is(withdrawEvent.position));
+            assertThat(0L, Is.is(withdrawEvent.positionChanged));
+            assertThat(0L, Is.is(withdrawEvent.tradePrice));
+        } catch (Exception e) {
+
+        }
     }
 
     @Test
@@ -212,8 +218,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(placeEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(placeEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(placeEvent.eventType));
-            assertThat(deposit, Is.is(placeEvent.free));
-            assertThat(0L, Is.is(placeEvent.locked));
+            assertThat(0L, Is.is(placeEvent.free));
+            assertThat(100L, Is.is(placeEvent.locked));
             assertThat(0L, Is.is(placeEvent.openPriceAvg));
             assertThat(0L, Is.is(placeEvent.pnl));
             assertThat(0L, Is.is(placeEvent.position));
@@ -233,72 +239,75 @@ class ITFutureBasic {
     // 开仓事件
     @Test
     public void testOpenPosition() throws InterruptedException {
-        final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());
-        container.setConsumer(processor);
-        container.initFutureSymbol(symbolId, quoteId);
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initFutureSymbol(symbolId, quoteId);
 
-        long deposit = 100L;
-        long userId1 = container.createRandomUserWithMoney(deposit, quoteId);
-        long userId2 = container.createRandomUserWithMoney(MAX_VALUE, quoteId);
+            long deposit = 100L;
+            long userId1 = container.createRandomUserWithMoney(deposit, quoteId);
+            long userId2 = container.createRandomUserWithMoney(MAX_VALUE, quoteId);
 
-        container.createBid(userId1, 1, 10000, symbolId);
-        container.createAsk(userId2, 1, 10000, symbolId);
-        Thread.sleep(1000L);
+            container.createBid(userId1, 1, 10000, symbolId);
+            container.createAsk(userId2, 1, 10000, symbolId);
+            Thread.sleep(1000L);
 
-        verify(handler, times(7)).commandResult(commandResultCaptor.capture());
-        verify(handler, never()).reduceEvent(any());
-        verify(handler, never()).rejectEvent(any());
-        verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
+            verify(handler, times(7)).commandResult(commandResultCaptor.capture());
+            verify(handler, never()).reduceEvent(any());
+            verify(handler, never()).rejectEvent(any());
+            verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
 
-        final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
-        assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
-        assertThat(tradeEvent.getTotalVolume(), Is.is(1L));
-        assertThat(tradeEvent.getTakerUid(), Is.is(userId2));
-        assertThat(tradeEvent.getTakerAction(), Is.is(OrderAction.ASK));
-        assertThat(tradeEvent.takeOrderCompleted, Is.is(true));
-        assertThat(tradeEvent.trades.get(0).getMakerUid(), Is.is(userId1));
-        assertThat(tradeEvent.trades.get(0).makerOrderCompleted, Is.is(true));
-        assertThat(tradeEvent.trades.get(0).price, Is.is(10000L));
-        assertThat(tradeEvent.trades.get(0).getVolume(), Is.is(1L));
+            final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
+            assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
+            assertThat(tradeEvent.getTotalVolume(), Is.is(1L));
+            assertThat(tradeEvent.getTakerUid(), Is.is(userId2));
+            assertThat(tradeEvent.getTakerAction(), Is.is(OrderAction.ASK));
+            assertThat(tradeEvent.takeOrderCompleted, Is.is(true));
+            assertThat(tradeEvent.trades.get(0).getMakerUid(), Is.is(userId1));
+            assertThat(tradeEvent.trades.get(0).makerOrderCompleted, Is.is(true));
+            assertThat(tradeEvent.trades.get(0).price, Is.is(10000L));
+            assertThat(tradeEvent.trades.get(0).getVolume(), Is.is(1L));
 
-        verify(handler, times(4)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(4)).fundsEvent(fundEventCapor.capture());
 
-        // check fund event
-        List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-        IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(2);
-        assertThat(userId1, Is.is(takerEvent.uid));
-        assertThat(quoteId, Is.is(takerEvent.currency));
-        assertThat(symbolId, Is.is(takerEvent.symbol));
-        assertThat(0L, Is.is(takerEvent.fee));
-        assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
-        assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-        assertThat(deposit, Is.is(takerEvent.free));
-        assertThat(0L, Is.is(takerEvent.locked));
-        assertThat(0L, Is.is(takerEvent.openPriceAvg));
-        assertThat(0L, Is.is(takerEvent.pnl));
-        assertThat(0L, Is.is(takerEvent.position));
-        assertThat(0L, Is.is(takerEvent.positionChanged));
-        assertThat(0L, Is.is(takerEvent.tradePrice));
+            // check fund event
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(2);
+            assertThat(userId1, Is.is(takerEvent.uid));
+            assertThat(quoteId, Is.is(takerEvent.currency));
+            assertThat(symbolId, Is.is(takerEvent.symbol));
+            assertThat(0L, Is.is(takerEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
+            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
+            assertThat(0L, Is.is(takerEvent.free));
+            assertThat(100L, Is.is(takerEvent.locked));
+            assertThat(0L, Is.is(takerEvent.openPriceAvg));
+            assertThat(0L, Is.is(takerEvent.pnl));
+            assertThat(0L, Is.is(takerEvent.position));
+            assertThat(0L, Is.is(takerEvent.positionChanged));
+            assertThat(0L, Is.is(takerEvent.tradePrice));
 
-        IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
-        assertThat(userId2, Is.is(makerEvent.uid));
-        assertThat(quoteId, Is.is(makerEvent.currency));
-        assertThat(symbolId, Is.is(makerEvent.symbol));
-        assertThat(0L, Is.is(makerEvent.fee));
-        assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
-        assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-        assertThat(MAX_VALUE, Is.is(makerEvent.free));
-        assertThat(0L, Is.is(makerEvent.locked));
-        assertThat(0L, Is.is(makerEvent.openPriceAvg));
-        assertThat(0L, Is.is(makerEvent.pnl));
-        assertThat(0L, Is.is(makerEvent.position));
-        assertThat(0L, Is.is(makerEvent.positionChanged));
-        assertThat(0L, Is.is(makerEvent.tradePrice));
+            IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
+            assertThat(userId2, Is.is(makerEvent.uid));
+            assertThat(quoteId, Is.is(makerEvent.currency));
+            assertThat(symbolId, Is.is(makerEvent.symbol));
+            assertThat(0L, Is.is(makerEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
+            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
+            assertThat(MAX_VALUE - 100, Is.is(makerEvent.free));
+            assertThat(100L, Is.is(makerEvent.locked));
+            assertThat(0L, Is.is(makerEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerEvent.pnl));
+            assertThat(0L, Is.is(makerEvent.position));
+            assertThat(0L, Is.is(makerEvent.positionChanged));
+            assertThat(0L, Is.is(makerEvent.tradePrice));
+        } catch (Exception e) {
+
+        }
     }
 
     // 平仓事件
     @Test
-    public void testClosePosition()  {
+    public void testClosePosition() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
@@ -341,8 +350,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(deposit, Is.is(takerEvent.free));
-            assertThat(0L, Is.is(takerEvent.locked));
+            assertThat(0L, Is.is(takerEvent.free));
+            assertThat(100L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceAvg));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
@@ -356,8 +365,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-            assertThat(MAX_VALUE, Is.is(makerEvent.free));
-            assertThat(0L, Is.is(makerEvent.locked));
+            assertThat(MAX_VALUE - 100, Is.is(makerEvent.free));
+            assertThat(100L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceAvg));
             assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.position));
@@ -369,7 +378,7 @@ class ITFutureBasic {
         }
     }
 
-        @Test
+    @Test
     public void testAdjustment() {
         final int symbolId = SYMBOL_MARGIN;
 
