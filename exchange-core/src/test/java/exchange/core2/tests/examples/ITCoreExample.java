@@ -2,7 +2,8 @@ package exchange.core2.tests.examples;
 
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
-import exchange.core2.core.IEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
@@ -20,21 +21,16 @@ import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 
 @Slf4j
-public class ITCoreExample {
+class ITCoreExample {
 
     @Test
-    public void sampleTest() throws Exception {
+    void sampleTest() throws Exception {
 
         // simple async events handler
-        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new IEventsHandler() {
+        SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new ITradeEventsHandler() {
             @Override
             public void tradeEvent(TradeEvent tradeEvent) {
                 System.out.println("Trade event: " + tradeEvent);
-            }
-
-            @Override
-            public void fundsEvent(FundsEvent fundsEvent) {
-                System.out.println("Fund event: " + fundsEvent);
             }
 
             @Override
@@ -42,10 +38,14 @@ public class ITCoreExample {
                 System.out.println("Reduce event: " + reduceEvent);
             }
 
-
             @Override
             public void orderBook(OrderBook orderBook) {
                 System.out.println("OrderBook event: " + orderBook);
+            }
+        }, new IFundEventsHandler() {
+            @Override
+            public void fundsEvent(FundsEvent fundsEvent) {
+                System.out.println("Fund event: " + fundsEvent);
             }
         });
 

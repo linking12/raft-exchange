@@ -31,14 +31,14 @@ import exchange.core2.core.common.OrderType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
-import lombok.NoArgsConstructor;
 import lombok.ToString;
 
 @Builder
-@NoArgsConstructor
 @AllArgsConstructor
 @ToString
 public final class OrderCommand implements IOrder {
+
+    public static int RISK_ENGINE_NUM = 0;
 
     public OrderCommandType command;
 
@@ -82,10 +82,18 @@ public final class OrderCommand implements IOrder {
 
     // trade events chain
     public MatcherTradeEvent matcherEvent;
+
     /**
-     * 冻结资金和解冻资金
+     * 资金转移事件
+     * 【注意并发】risk后处理有可能涉及takerUid和多个makerUid，他们可能分布在多个shard上，这会导致taker和maker/多个maker之间同时发生add事件；
+     *  risk的预处理只有1个uid，一定在某一个riskEngine上处理；
+     *  OrderCmd上的fundEvents是线程安全的，因为matchEngine是按symbol分区的，一定只在一个matchEngine上。
      */
-    public final MutableList<FundEvent> fundEvents = FastList.newList();
+    public final MutableList<FundEvent> takerFundEvents;
+    /**
+     * 【注意并发】防止多个maker之间的并发问题，把maker按照shard拆分；用数组维护，下标是shardId。
+     */
+    public final MutableList<FundEvent>[] makerFundEventsByShard;
 
     // optional market data
     public L2MarketData marketData;
@@ -93,6 +101,14 @@ public final class OrderCommand implements IOrder {
     // sequence of last available for this command
     //public long matcherEventSequence;
     // ---- potential false sharing section ------
+
+    public OrderCommand() {
+        this.takerFundEvents = FastList.newList();
+        this.makerFundEventsByShard = new MutableList[RISK_ENGINE_NUM];
+        for (int i = 0; i < RISK_ENGINE_NUM; i++) {
+            makerFundEventsByShard[i] = FastList.newList();
+        }
+    }
 
     public static OrderCommand newOrder(OrderType orderType, long orderId, long uid, long price, long reserveBidPrice, long size, OrderAction action) {
         OrderCommand cmd = new OrderCommand();

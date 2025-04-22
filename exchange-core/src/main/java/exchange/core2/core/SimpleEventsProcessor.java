@@ -7,7 +7,6 @@ import java.util.function.ObjLongConsumer;
 import org.agrona.collections.MutableBoolean;
 import org.agrona.collections.MutableLong;
 import org.agrona.collections.MutableReference;
-import org.eclipse.collections.api.list.MutableList;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
@@ -27,30 +26,32 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.list.MutableList;
 
 @RequiredArgsConstructor
 @Getter
 @Slf4j
 public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
-    private final IEventsHandler eventsHandler;
+    private final ITradeEventsHandler tradeEventsHandler;
+    private final IFundEventsHandler fundEventsHandler;
 
     @Override
     public void accept(OrderCommand cmd, long seq) {
         try {
-            sendCommandResult(cmd, seq);
-            sendTradeEvents(cmd);
-            sendOrderFundEvents(cmd);
-            sendMarketData(cmd);
+            if (seq < 0) {
+                // 来自R2风控阶段
+                sendFundEvents(cmd);
+            } else {
+                // 主流程撮合结果处理
+                sendCommandResult(cmd, seq);
+                sendTradeEvents(cmd);
+                sendFundEvents(cmd);
+                sendMarketData(cmd);
+            }
         } catch (Exception ex) {
             log.error("Exception when handling command result data", ex);
         }
-    }
-
-    // 发送order下面的fundEvent，主要是资金冻结及恢复
-    private void sendOrderFundEvents(OrderCommand cmd) {
-        MutableList<FundEvent> fundEvents = cmd.fundEvents;
-        fundEvents.forEach(this::sendFundEvents);
     }
 
     private void sendTradeEvents(OrderCommand cmd) {
@@ -60,10 +61,10 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
         if (firstEvent.eventType == MatcherEventType.REDUCE) {
 
-            final IEventsHandler.ReduceEvent evt = new IEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,
+            final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,
                 firstEvent.price, cmd.orderId, cmd.uid, cmd.timestamp);
 
-            eventsHandler.reduceEvent(evt);
+            tradeEventsHandler.reduceEvent(evt);
 
             if (firstEvent.nextEvent != null) {
                 throw new IllegalStateException("Only single REDUCE event is expected");
@@ -75,31 +76,39 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         sendTradeEvent(cmd);
     }
 
-    public void sendFundEvents(FundEvent fundEvent) {
+    private void sendFundEvents(OrderCommand cmd) {
+        cmd.takerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+        for (MutableList<FundEvent> makerFundEvents : cmd.makerFundEventsByShard) {
+            makerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+        }
+    }
+
+    public void sendFundEvent(FundEvent fundEvent) {
         if (fundEvent == null) {
             return;
         }
-        final IEventsHandler.FundsEvent evt =
-            new IEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
+        fundEvent.processed = true;
+        final IFundEventsHandler.FundsEvent evt =
+            new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
                     fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged,
                     fundEvent.openPriceAvg, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl);
-        eventsHandler.fundsEvent(evt);
+        fundEventsHandler.fundsEvent(evt);
     }
 
     public void sendTradeEvent(OrderCommand cmd) {
 
         final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
         final MutableLong mutableLong = new MutableLong(0L);
-        final List<IEventsHandler.Trade> trades = new ArrayList<>();
+        final List<ITradeEventsHandler.Trade> trades = new ArrayList<>();
 
-        final MutableReference<IEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
+        final MutableReference<ITradeEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
 
         cmd.processMatcherEvents(evt -> {
 
             if (evt.eventType == MatcherEventType.TRADE) {
 
-                final IEventsHandler.Trade trade =
-                    new IEventsHandler.Trade(evt.matchedOrderId, evt.matchedOrderUid, evt.matchedOrderCompleted, evt.price, evt.size);
+                final ITradeEventsHandler.Trade trade =
+                    new ITradeEventsHandler.Trade(evt.matchedOrderId, evt.matchedOrderUid, evt.matchedOrderCompleted, evt.price, evt.size);
 
                 trades.add(trade);
                 mutableLong.value += evt.size;
@@ -110,18 +119,16 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
             } else if (evt.eventType == MatcherEventType.REJECT) {
 
-                rejectEvent.set(new IEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
+                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
-            // 发送trade下面的fundEvent，主要是资金转移
-            evt.fundEvents.forEach(this::sendFundEvents);
         });
 
         if (!trades.isEmpty()) {
 
-            final IEventsHandler.TradeEvent evt = new IEventsHandler.TradeEvent(cmd.symbol, mutableLong.value, cmd.orderId, cmd.uid, cmd.action,
+            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, mutableLong.value, cmd.orderId, cmd.uid, cmd.action,
                 takerOrderCompleted.value, cmd.timestamp, trades);
 
-            eventsHandler.tradeEvent(evt);
+            tradeEventsHandler.tradeEvent(evt);
         }
 
     }
@@ -129,17 +136,17 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     private void sendMarketData(OrderCommand cmd) {
         final L2MarketData marketData = cmd.marketData;
         if (marketData != null) {
-            final List<IEventsHandler.OrderBookRecord> asks = new ArrayList<>(marketData.askSize);
+            final List<ITradeEventsHandler.OrderBookRecord> asks = new ArrayList<>(marketData.askSize);
             for (int i = 0; i < marketData.askSize; i++) {
-                asks.add(new IEventsHandler.OrderBookRecord(marketData.askPrices[i], marketData.askVolumes[i], (int)marketData.askOrders[i]));
+                asks.add(new ITradeEventsHandler.OrderBookRecord(marketData.askPrices[i], marketData.askVolumes[i], (int)marketData.askOrders[i]));
             }
 
-            final List<IEventsHandler.OrderBookRecord> bids = new ArrayList<>(marketData.bidSize);
+            final List<ITradeEventsHandler.OrderBookRecord> bids = new ArrayList<>(marketData.bidSize);
             for (int i = 0; i < marketData.bidSize; i++) {
-                bids.add(new IEventsHandler.OrderBookRecord(marketData.bidPrices[i], marketData.bidVolumes[i], (int)marketData.bidOrders[i]));
+                bids.add(new ITradeEventsHandler.OrderBookRecord(marketData.bidPrices[i], marketData.bidVolumes[i], (int)marketData.bidOrders[i]));
             }
 
-            eventsHandler.orderBook(new IEventsHandler.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
+            tradeEventsHandler.orderBook(new ITradeEventsHandler.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
         }
     }
 

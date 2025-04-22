@@ -12,20 +12,20 @@
  */
 package exchange.core2.core.processors;
 
-import java.util.List;
-
 import exchange.core2.collections.queue.DisruptorBlockingQueue;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 
 @Slf4j
 public final class SharedPool {
 
     private final DisruptorBlockingQueue<MatcherTradeEvent> eventChainsBuffer;
 
-    private final DisruptorBlockingQueue<FundEvent> fundEventBuffer;
+    private final DisruptorBlockingQueue<MutableList<FundEvent>> fundEventQueueBuffer;
 
     @Getter
     private final int chainLength;
@@ -50,7 +50,7 @@ public final class SharedPool {
         }
 
         this.eventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
-        this.fundEventBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
+        this.fundEventQueueBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.chainLength = chainLength;
 
         for (int i = 0; i < poolInitialSize; i++) {
@@ -58,7 +58,7 @@ public final class SharedPool {
         }
 
         for (int i = 0; i < poolInitialSize; i++) {
-            this.fundEventBuffer.add(new FundEvent());
+            this.fundEventQueueBuffer.add(createFundEventQueue(chainLength));
         }
 
     }
@@ -88,24 +88,24 @@ public final class SharedPool {
         // log.debug(">>> OFFER CHAIN HEAD size={} orrder={}", head.getChainSize(), offer);
     }
 
-    public FundEvent getFundEventPool() {
-        FundEvent poll = fundEventBuffer.poll();
+    private MutableList<FundEvent> createFundEventQueue(int size) {
+        MutableList<FundEvent> fundEventQueue = FastList.newList(size);
+        for (int i = 0; i < size; i++) {
+            fundEventQueue.add(new FundEvent());
+        }
+        return fundEventQueue;
+    }
+
+    public MutableList<FundEvent> getFundEventQueue() {
+        MutableList<FundEvent> poll = fundEventQueueBuffer.poll();
         if (poll == null) {
-            poll = new FundEvent();
+            poll = createFundEventQueue(chainLength);
         }
         return poll;
     }
 
-    public void putFundEventPool(FundEvent polled) {
-        boolean offer = fundEventBuffer.offer(polled);
-        // log.debug(">>> OFFER CHAIN HEAD size={} orrder={}", head.getChainSize(), offer);
-    }
-
-    public void putFundEventPool(List<FundEvent> polled) {
-        polled.forEach(fundEvent -> {
-            boolean offer = fundEventBuffer.offer(fundEvent);
-        });
-        // log.debug(">>> OFFER CHAIN HEAD size={} orrder={}", head.getChainSize(), offer);
+    public void putFundEventQueue(MutableList<FundEvent> queue) {
+        fundEventQueueBuffer.offer(queue);
     }
 
 }

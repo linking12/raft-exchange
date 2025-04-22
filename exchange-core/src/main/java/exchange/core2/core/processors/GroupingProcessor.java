@@ -17,12 +17,15 @@ package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
 import exchange.core2.core.common.CoreWaitStrategy;
+import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -126,6 +129,7 @@ public final class GroupingProcessor implements EventProcessor {
         MatcherTradeEvent tradeEventHead = null;
         MatcherTradeEvent tradeEventTail = null;
         int tradeEventCounter = 0; // counter
+        MutableList<FundEvent> fundEventQueue = FastList.newList(tradeEventChainLengthTarget);
 
         boolean groupingEnabled = true;
 
@@ -185,27 +189,13 @@ public final class GroupingProcessor implements EventProcessor {
                             } else {
                                 tradeEventTail.nextEvent = cmd.matcherEvent;
                             }
-//                            tradeEventTail = cmd.matcherEvent;
-//                            tradeEventCounter++;
-//
-//                            // find last element in the chain and update tail accordingly
-//                            while (tradeEventTail.nextEvent != null) {
-//                                tradeEventTail = tradeEventTail.nextEvent;
-//                                tradeEventCounter++;
-//                            }
+                            tradeEventTail = cmd.matcherEvent;
+                            tradeEventCounter++;
 
-                            /**
-                             * @modify 从头部遍历整个链，回收 matcherEvent下的fundEvent， 并更新 tail
-                             */
-                            MatcherTradeEvent current = cmd.matcherEvent;
-                            while (current != null) {
-                                if (!current.fundEvents.isEmpty()) {
-                                    sharedPool.putFundEventPool(current.fundEvents);
-                                    current.fundEvents.clear();
-                                }
-                                tradeEventTail = current;
+                            // find last element in the chain and update tail accordingly
+                            while (tradeEventTail.nextEvent != null) {
+                                tradeEventTail = tradeEventTail.nextEvent;
                                 tradeEventCounter++;
-                                current = current.nextEvent;
                             }
 
                             if (tradeEventCounter >= tradeEventChainLengthTarget) {
@@ -216,13 +206,27 @@ public final class GroupingProcessor implements EventProcessor {
                                 tradeEventHead = null;
                             }
                         }
+
                         /**
                          * @modify 回收当前orderCommand下面的fundEvent
                          */
-                        if (EVENTS_POOLING && !cmd.fundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
-                            sharedPool.putFundEventPool(cmd.fundEvents);
-                            cmd.fundEvents.clear();
+                        if (EVENTS_POOLING) {
+                            if (!cmd.takerFundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
+                                fundEventQueue.addAll(cmd.takerFundEvents);
+                                cmd.takerFundEvents.clear();
+                            }
+                            for (MutableList<FundEvent> makerFundEvents : cmd.makerFundEventsByShard) {
+                                if (!makerFundEvents.isEmpty()) {
+                                    fundEventQueue.addAll(makerFundEvents);
+                                    makerFundEvents.clear();
+                                }
+                            }
+                            if (fundEventQueue.size() >= tradeEventChainLengthTarget) {
+                                sharedPool.putFundEventQueue(fundEventQueue);
+                                fundEventQueue = FastList.newList(tradeEventChainLengthTarget);
+                            }
                         }
+
                         cmd.matcherEvent = null;
                         // TODO collect to shared buffer
                         cmd.marketData = null;

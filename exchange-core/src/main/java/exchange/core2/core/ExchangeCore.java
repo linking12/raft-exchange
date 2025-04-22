@@ -106,6 +106,10 @@ public final class ExchangeCore {
 
         final CoreWaitStrategy coreWaitStrategy = perfCfg.getWaitStrategy();
 
+        final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
+        final int riskEnginesNum = perfCfg.getRiskEnginesNum();
+        OrderCommand.RISK_ENGINE_NUM = riskEnginesNum;
+
         this.disruptor = new Disruptor<>(
                 OrderCommand::new,
                 ringBufferSize,
@@ -118,9 +122,6 @@ public final class ExchangeCore {
         this.api = new ExchangeApi(ringBuffer, perfCfg.getBinaryCommandsLz4CompressorFactory().get());
 
         final IOrderBook.OrderBookFactory orderBookFactory = perfCfg.getOrderBookFactory();
-
-        final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
-        final int riskEnginesNum = perfCfg.getRiskEnginesNum();
 
         final SerializationConfiguration serializationCfg = exchangeConfiguration.getSerializationCfg();
 
@@ -203,12 +204,16 @@ public final class ExchangeCore {
 
         // 3. risk release (R2) after matching engine (ME)
         final EventHandlerGroup<OrderCommand> afterMatchingEngine = disruptor.after(matchingEngineHandlers);
+        final ResultsHandler resultsHandler = new ResultsHandler(resultsConsumer);
 
         riskEngines.forEach((idx, riskEngine) -> afterMatchingEngine.handleEventsWith(
                 (rb, bs) -> {
                     final TwoStepSlaveProcessor r2 = new TwoStepSlaveProcessor(rb, rb.newBarrier(bs), riskEngine::handlerRiskRelease, exceptionHandler, "R2_" + idx);
                     procR2.add(r2);
                     return r2;
+                }).then((cmd, seq, eob) -> {
+                    // 负值seq标识该cmd来自R2风控路径，仅处理fundEvents，不做交易结果处理
+                    resultsHandler.onEvent(cmd, -seq, eob);
                 }));
 
 
@@ -216,8 +221,6 @@ public final class ExchangeCore {
         final EventHandlerGroup<OrderCommand> mainHandlerGroup = enableJournaling
                 ? disruptor.after(arraysAddHandler(matchingEngineHandlers, jh))
                 : afterMatchingEngine;
-
-        final ResultsHandler resultsHandler = new ResultsHandler(resultsConsumer);
 
         mainHandlerGroup.handleEventsWith((cmd, seq, eob) -> {
             resultsHandler.onEvent(cmd, seq, eob);

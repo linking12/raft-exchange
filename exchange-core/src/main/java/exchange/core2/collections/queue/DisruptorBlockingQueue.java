@@ -94,7 +94,7 @@ public class DisruptorBlockingQueue<T> extends AbstractQueue<T> implements Block
         }
         int c = 0;
         try {
-            while (pos <= knownPublishedSeq && c <= maxElements) {
+            while (pos <= knownPublishedSeq && c < maxElements) {
                 Event<T> eventHolder = ringBuffer.get(pos);
                 collection.add(eventHolder.removeValue());
                 c++;

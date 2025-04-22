@@ -614,7 +614,7 @@ public final class ExchangeApi {
     private static final EventTranslatorOneArg<OrderCommand, ApiSystemLiquidationNotify> SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY;
         cmd.timestamp = api.timestamp;
-        cmd.fundEvents.add(api.fundEvent);
+        cmd.takerFundEvents.add(api.fundEvent);
         cmd.resultCode = CommandResultCode.NEW;
     };
 

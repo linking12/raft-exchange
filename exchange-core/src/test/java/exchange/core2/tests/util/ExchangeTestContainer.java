@@ -18,9 +18,7 @@ package exchange.core2.tests.util;
 import com.google.common.collect.Lists;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
-import exchange.core2.core.common.CoreSymbolSpecification;
-import exchange.core2.core.common.L2MarketData;
-import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
@@ -175,6 +173,111 @@ public final class ExchangeTestContainer implements AutoCloseable {
         initFeeUser(TestConstants.UID_2);
         initFeeUser(TestConstants.UID_3);
         initFeeUser(TestConstants.UID_4);
+    }
+
+    public void initFutureSymbol(int symbolId, int quoteId) {
+        CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
+                .symbolId(symbolId)
+                .type(SymbolType.FUTURES_CONTRACT)
+                .baseCurrency(1)
+                .quoteCurrency(quoteId)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(10)
+                .takerFee(20)
+                .marginBuy(100)
+                .marginSell(100)
+                .build();
+
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
+    }
+
+    public void initOneUser(long uid) {
+        assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
+    }
+
+    public long createBid(long userId, int size, long price, int symbolId) {
+        long orderId = getRandomTransactionId();
+        ApiPlaceOrder order = ApiPlaceOrder.builder()
+                .uid(userId)
+                .orderId(orderId)
+                .action(OrderAction.BID)
+                .size(size)
+                .price(price)
+                .symbol(symbolId)
+                .orderType(OrderType.GTC)
+                .build();
+        try {
+            api.submitCommandAsync(order).get();
+        } catch (Exception e) {
+
+        }
+        return orderId;
+    }
+
+    public void cancelOrder(long userId, long orderId, int symbolId) {
+        ApiCancelOrder order = ApiCancelOrder.builder()
+                .uid(userId)
+                .orderId(orderId)
+                .symbol(symbolId)
+                .build();
+        try {
+            api.submitCommandAsync(order).get();
+        } catch (Exception e) {
+
+        }
+    }
+
+    public void sleepSeconds(int time) {
+        try {
+            Thread.sleep(time * 1000L);
+        } catch (InterruptedException e) {
+
+        }
+    }
+
+    public long createAsk(long userId, int size, long price, int symbolId) {
+        long orderId = getRandomTransactionId();
+        ApiPlaceOrder order = ApiPlaceOrder.builder()
+                .uid(userId)
+                .orderId(orderId)
+                .action(OrderAction.ASK)
+                .size(size)
+                .price(price)
+                .symbol(symbolId)
+                .orderType(OrderType.GTC)
+                .build();
+        try {
+            api.submitCommandAsync(order).get();
+        } catch (Exception e) {
+
+        }
+        return orderId;
+    }
+
+    public void updateCurrentPriceTo(int price, int symbolId, int quoteId) {
+        // 模拟两个用户分别下买卖单, 使得成交价为price
+        long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
+        createBid(userId1, 10, price, symbolId);
+
+        long userId2 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
+        createAsk(userId2, 10, price, symbolId);
+    }
+
+    public long createRandomUserWithMoney(long amount, int quoteId) {
+        long uid = 100000 + getRandomTransactionId();
+        final List<ApiCommand> cmds = new ArrayList<>();
+        cmds.add(ApiAddUser.builder().uid(uid).build());
+        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(quoteId).build());
+        api.submitCommandsSync(cmds);
+        return uid;
+    }
+
+    public void printUser(long userId) throws ExecutionException, InterruptedException {
+        Future<SingleUserReportResult> report = api.processReport(new SingleUserReportQuery(userId), 0);
+        System.out.println("------------------");
+        System.out.println("userId=" + userId);
+        System.out.println("accounts: " + report.get());
     }
 
     public void initBasicUser(long uid) {

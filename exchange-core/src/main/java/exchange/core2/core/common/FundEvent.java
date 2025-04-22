@@ -13,12 +13,14 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
  * 资金事件类，用于记录现货和期货的资金及仓位变动。
  * free + locked = total。
  * 现货和期货通过FundEventType区分。
- * 如果是在前置处理中产生的事件，就挂在cmd下，如果是后置处理产生的事件，就挂在matcherEvent下。
  */
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
 public class FundEvent implements WriteBytesMarshallable {
+    public boolean processed; // 是否已处理
+
+    // 基础字段
     public FundEventType eventType; // 事件类型
     public int section; // 分区 ID
     public long orderId; // 订单 ID
@@ -79,6 +81,7 @@ public class FundEvent implements WriteBytesMarshallable {
 
     @Override
     public void writeMarshallable(BytesOut bytes) {
+        bytes.writeBoolean(this.processed);
         bytes.writeByte((byte)eventType.getCode());
         bytes.writeInt(section);
         bytes.writeLong(orderId);
@@ -98,8 +101,8 @@ public class FundEvent implements WriteBytesMarshallable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventType, section, orderId, uid, currency, free, locked, symbol, direction, position, positionChanged, openPriceAvg,
-            tradePrice, fee, pnl);
+        return Objects.hash(processed, eventType, section, orderId, uid, currency, free, locked, symbol, direction,
+            position, positionChanged, openPriceAvg, tradePrice, fee, pnl);
     }
 
     @Override
@@ -109,7 +112,7 @@ public class FundEvent implements WriteBytesMarshallable {
         if (obj == null || getClass() != obj.getClass())
             return false;
         FundEvent other = (FundEvent)obj;
-        return eventType == other.eventType && section == other.section && orderId == other.orderId && uid == other.uid && currency == other.currency
+        return processed == other.processed && eventType == other.eventType && section == other.section && orderId == other.orderId && uid == other.uid && currency == other.currency
             && free == other.free && locked == other.locked && symbol == other.symbol && direction == other.direction && position == other.position
             && positionChanged == other.positionChanged && openPriceAvg == other.openPriceAvg && tradePrice == other.tradePrice
             && fee == other.fee && pnl == other.pnl;
@@ -117,12 +120,13 @@ public class FundEvent implements WriteBytesMarshallable {
 
     @Override
     public String toString() {
-        return "FundEvent [eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
+        return "FundEvent [processed=" + processed + ", eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
             + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", positionChanged="
             + positionChanged + ", openPriceAvg=" + openPriceAvg + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl + "]";
     }
 
     public FundEvent(BytesIn bytes) {
+        this.processed = bytes.readBoolean();
         this.eventType = FundEventType.of(bytes.readByte());
         this.section = bytes.readInt();
         this.orderId = bytes.readLong();
