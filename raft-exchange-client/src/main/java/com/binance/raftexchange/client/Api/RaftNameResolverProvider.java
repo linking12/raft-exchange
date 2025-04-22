@@ -6,6 +6,7 @@ import io.grpc.EquivalentAddressGroup;
 import io.grpc.NameResolver;
 import io.grpc.NameResolverProvider;
 import io.grpc.NameResolverRegistry;
+import io.grpc.StatusOr;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -19,8 +20,8 @@ import java.util.stream.Collectors;
 
 public class RaftNameResolverProvider extends NameResolverProvider {
 
-    //放在这里这样触发对应的类加载
-    //scheme需要小写 我看grpc代码是这样的
+    // 放在这里这样触发对应的类加载
+    // scheme需要小写 我看grpc代码是这样的
     static final String SCHEMA = "raftExchange".toLowerCase(Locale.US);
 
     private CopyOnWriteArrayList<RaftExchangeNameResolver> resolvers;
@@ -65,33 +66,29 @@ public class RaftNameResolverProvider extends NameResolverProvider {
     }
 
     static void refresh(List<ServerNode> nodes) {
-        //拿出来全局注册的RaftNameResolverProvider
-        RaftNameResolverProvider provider = (RaftNameResolverProvider) NameResolverRegistry.getDefaultRegistry().getProviderForScheme(SCHEMA);
+        // 拿出来全局注册的RaftNameResolverProvider
+        RaftNameResolverProvider provider = (RaftNameResolverProvider)NameResolverRegistry.getDefaultRegistry().getProviderForScheme(SCHEMA);
 
-        //防止并发刷新
+        // 防止并发刷新
         ReentrantLock lock = provider.refreshLock;
         if (!lock.tryLock()) {
             return;
         }
 
         try {
-            //如果找到多个节点那么要把主节点排除
-            //主节点目前不承担read任务
+            // 如果找到多个节点那么要把主节点排除
+            // 主节点目前不承担read任务
             if (nodes.size() != 1) {
-                nodes = nodes.stream()
-                        .filter(s -> s.getType() != NodeType.LEADER)
-                        .collect(Collectors.toList());
+                nodes = nodes.stream().filter(s -> s.getType() != NodeType.LEADER).collect(Collectors.toList());
             }
 
-            List<EquivalentAddressGroup> addressGroups = nodes.stream()
-                    .map(s -> new InetSocketAddress(s.getHost(), s.getPort()))
-                    .map(a -> (SocketAddress) a)
-                    .map(Collections::singletonList)
-                    .map(EquivalentAddressGroup::new)//  // every socket address is a single EquivalentAddressGroup, so they can be accessed randomly
-                    .collect(Collectors.toList());
-            NameResolver.ResolutionResult resolutionResult = NameResolver.ResolutionResult.newBuilder()
-                    .setAddresses(addressGroups)
-                    .build();
+            List<EquivalentAddressGroup> addressGroups = nodes.stream().map(s -> new InetSocketAddress(s.getHost(), s.getPort())).map(a -> (SocketAddress)a)
+                .map(Collections::singletonList).map(EquivalentAddressGroup::new)// // every socket address is a single
+                                                                                 // EquivalentAddressGroup, so they can
+                                                                                 // be accessed randomly
+                .collect(Collectors.toList());
+            NameResolver.ResolutionResult resolutionResult =
+                NameResolver.ResolutionResult.newBuilder().setAddressesOrError(StatusOr.fromValue(addressGroups)).build();
             provider.refreshAll(resolutionResult);
         } finally {
             lock.unlock();
