@@ -198,6 +198,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public long createBid(long userId, int size, long price, int symbolId) {
         long orderId = getRandomTransactionId();
+        return createBidWithOrderId(orderId, userId, size, price, symbolId);
+    }
+
+    public long createBidWithOrderId(long orderId, long userId, int size, long price, int symbolId) {
         ApiPlaceOrder order = ApiPlaceOrder.builder()
                 .uid(userId)
                 .orderId(orderId)
@@ -238,6 +242,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public long createAsk(long userId, int size, long price, int symbolId) {
         long orderId = getRandomTransactionId();
+        return createAskWithOrderId(orderId, userId, size, price, symbolId);
+    }
+
+    public long createAskWithOrderId(long orderId, long userId, int size, long price, int symbolId) {
         ApiPlaceOrder order = ApiPlaceOrder.builder()
                 .uid(userId)
                 .orderId(orderId)
@@ -266,11 +274,15 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public long createRandomUserWithMoney(long amount, int quoteId) {
         long uid = 100000 + getRandomTransactionId();
+        return createUserWithSpecificMoney(uid, amount, quoteId);
+    }
+
+    public long createUserWithSpecificMoney(long userId, long amount, int quoteId) {
         final List<ApiCommand> cmds = new ArrayList<>();
-        cmds.add(ApiAddUser.builder().uid(uid).build());
-        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(quoteId).build());
+        cmds.add(ApiAddUser.builder().uid(userId).build());
+        cmds.add(ApiAdjustUserBalance.builder().uid(userId).transactionId(getRandomTransactionId()).amount(amount).currency(quoteId).build());
         api.submitCommandsSync(cmds);
-        return uid;
+        return userId;
     }
 
     public void printUser(long userId) throws ExecutionException, InterruptedException {
