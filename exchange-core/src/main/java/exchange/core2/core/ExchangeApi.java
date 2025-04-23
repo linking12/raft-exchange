@@ -48,7 +48,35 @@ import java.util.stream.Stream;
 
 @Slf4j
 public final class ExchangeApi {
+    private static final class PromiseBuffer {
+        // 直接用数组会有false sharing问题，性能不如AtomicReferenceArray高
+        private final AtomicReferenceArray<Consumer<OrderCommand>> buffer;
+        private final int mask;
 
+        public PromiseBuffer(int sizePowerOfTwo) {
+            if (Integer.bitCount(sizePowerOfTwo) != 1) {
+                throw new IllegalArgumentException("Size must be power of 2");
+            }
+            this.buffer = new AtomicReferenceArray<>(sizePowerOfTwo);
+            this.mask = sizePowerOfTwo - 1;
+        }
+
+        public void put(long seq, Consumer<OrderCommand> c) {
+            int index = (int)(seq & mask);
+            boolean ok = buffer.compareAndSet(index, null, c);
+            if (!ok) {
+                throw new IllegalStateException("Slot already occupied! seq=" + seq + ", index=" + index);
+            }
+        }
+
+        public Consumer<OrderCommand> remove(long seq) {
+            int index = (int)(seq & mask);
+            Consumer<OrderCommand> c = buffer.get(index);
+            buffer.set(index, null); // ensure GC and reuse
+            return c;
+        }
+    }
+    
     private final RingBuffer<OrderCommand> ringBuffer;
     private final LZ4Compressor lz4Compressor;
 
@@ -63,39 +91,9 @@ public final class ExchangeApi {
         this.promises = new PromiseBuffer(ringBuffer.getBufferSize());
     }
 
-    private static class PromiseBuffer {
-        // 直接用数组会有false sharing问题，性能不如AtomicReferenceArray高
-        private final AtomicReferenceArray<Consumer<OrderCommand>> buffer;
-        private final int mask;
-
-        public PromiseBuffer(int sizePowerOfTwo) {
-            if (Integer.bitCount(sizePowerOfTwo) != 1) {
-                throw new IllegalArgumentException("Size must be power of 2");
-            }
-            this.buffer = new AtomicReferenceArray<>(sizePowerOfTwo);
-            this.mask = sizePowerOfTwo - 1;
-        }
-
-        public void put(long seq, Consumer<OrderCommand> c) {
-            int index = (int) (seq & mask);
-            boolean ok = buffer.compareAndSet(index, null, c);
-            if (!ok) {
-                throw new IllegalStateException("Slot already occupied! seq=" + seq + ", index=" + index);
-            }
-        }
-
-        public Consumer<OrderCommand> remove(long seq) {
-            int index = (int) (seq & mask);
-            Consumer<OrderCommand> c = buffer.get(index);
-            buffer.set(index, null); // ensure GC and reuse
-            return c;
-        }
-    }
-
     public void processResult(final long seq, final OrderCommand cmd) {
 //        if (cmd.command == OrderCommandType.BINARY_DATA_COMMAND
 //                || cmd.command == OrderCommandType.BINARY_DATA_QUERY) {
-
         final Consumer<OrderCommand> consumer = promises.remove(seq);
         if (consumer != null) {
             consumer.accept(cmd);
