@@ -264,7 +264,6 @@ class ITFutureBasic {
 
             container.createBidWithOrderId(makerOrderId, userId1, 1, 10000, symbolId);
             container.createAskWithOrderId(takerOrderId, userId2, 1, 10000, symbolId);
-            Thread.sleep(1000L);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -420,7 +419,7 @@ class ITFutureBasic {
             container.createAskWithOrderId(makerOrderId3, userId1, 1, 10500, symbolId);
             container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId);
 
-            verify(handler, times( 9)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(2)).tradeEvent(tradeEventCaptor.capture());
@@ -433,6 +432,7 @@ class ITFutureBasic {
             assertThat(userId2, Is.is(takerCloseEvent.uid));
             assertThat(quoteId, Is.is(takerCloseEvent.currency));
             assertThat(symbolId, Is.is(takerCloseEvent.symbol));
+            // 关仓不收手续费
             assertThat(0L, Is.is(takerCloseEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerCloseEvent.direction));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.eventType));
@@ -462,6 +462,39 @@ class ITFutureBasic {
             assertThat(1L, Is.is(makerCloseEvent.positionChanged));
             // trade price?
             assertThat(10000L, Is.is(makerCloseEvent.tradePrice));
+        }
+    }
+
+    // 强制平仓事件
+    @Test
+    public void testForceClosePosition() {
+        int deposit = 100;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        int cnt = 500;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initFutureSymbol(symbolId, quoteId);
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+
+            // 开仓成功
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
+
+            // 模拟行情变动
+            for (int i = 0; i < cnt; i++) {
+                container.updateCurrentPriceTo(500, symbolId, quoteId);
+            }
+
+        } finally {
+            verify(handler, times(cnt * 8 + 8)).fundsEvent(fundEventCapor.capture());
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+
+            IFundEventsHandler.FundsEvent takerCloseEvent = fundEvents.get(0);
         }
     }
 
