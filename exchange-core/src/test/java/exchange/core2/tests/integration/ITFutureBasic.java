@@ -439,12 +439,12 @@ class ITFutureBasic {
             // free is not correct
             assertThat(3999980L, Is.is(takerCloseEvent.free));
             assertThat(0L, Is.is(takerCloseEvent.locked));
-            assertThat(10500L, Is.is(takerCloseEvent.openPriceAvg));
-            assertThat(0L, Is.is(takerCloseEvent.pnl));
+            assertThat(10000L, Is.is(takerCloseEvent.openPriceAvg));
+            assertThat(-500L, Is.is(takerCloseEvent.pnl));
             assertThat(0L, Is.is(takerCloseEvent.position));
             assertThat(1L, Is.is(takerCloseEvent.positionChanged));
             // trade price?
-            assertThat(10000L, Is.is(takerCloseEvent.tradePrice));
+            assertThat(10500L, Is.is(takerCloseEvent.tradePrice));
 
             IFundEventsHandler.FundsEvent makerCloseEvent = fundEvents.get(13);
             assertThat(userId1, Is.is(makerCloseEvent.uid));
@@ -456,12 +456,12 @@ class ITFutureBasic {
             // free = init money - fee
             assertThat(90L, Is.is(makerCloseEvent.free));
             assertThat(0L, Is.is(makerCloseEvent.locked));
-            assertThat(10500L, Is.is(makerCloseEvent.openPriceAvg));
-            assertThat(0L, Is.is(makerCloseEvent.pnl));
+            assertThat(10000L, Is.is(makerCloseEvent.openPriceAvg));
+            assertThat(500L, Is.is(makerCloseEvent.pnl));
             assertThat(0L, Is.is(makerCloseEvent.position));
             assertThat(1L, Is.is(makerCloseEvent.positionChanged));
             // trade price?
-            assertThat(10000L, Is.is(makerCloseEvent.tradePrice));
+            assertThat(10500L, Is.is(makerCloseEvent.tradePrice));
         }
     }
 
