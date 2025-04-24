@@ -246,7 +246,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         final int numUsers = userCurrencies.size() - 1;
         if (waitAllResponse) {
             BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
-            final int BATCH_SIZE = 5000;
+            final int BATCH_SIZE = 2000;
             AtomicInteger reqCount = new AtomicInteger();
             try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
                 IntStream.rangeClosed(1, numUsers).forEach(uid -> {
@@ -447,6 +447,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         List<ApiCommand> apiCommandsBenchmark = testDataFutures.getGenResult().join().apiCommandsBenchmark.join();
 
         long tStart = System.currentTimeMillis();
+        final int BATCH_SIZE = 2000;
         if (waitAllResponse) {
 //            int userCount = testDataFutures.getUsersAccounts().join().size();
             int userCount = 50; //创建太多也不好
@@ -464,8 +465,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
                     ExchangeClient client = clients.get(i);
                     List<ApiCommand> cmdOnEachClient = groupCmds.get(i);
                     try (ApiStream apiStream = newApiStream(client, futures)) {
-                        cmdOnEachClient.forEach(apiStream::onNext);
-                        waitResult(futures, cmdOnEachClient.size());
+                        AtomicInteger count = new AtomicInteger();
+                        for (ApiCommand cmd : cmdOnEachClient) {
+                            apiStream.onNext(cmd);
+                            if (count.incrementAndGet() >= BATCH_SIZE) {
+                                waitResult(futures, count.getAndSet(0));
+                            }
+                        }
+                        waitResult(futures, count.get());
                         countDownLatch.countDown();
                         client.close();
                     } catch (Exception e) {
