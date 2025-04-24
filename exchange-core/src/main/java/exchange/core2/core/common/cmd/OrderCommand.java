@@ -28,13 +28,11 @@ import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
 
 @Builder
-@AllArgsConstructor
 @ToString
 public final class OrderCommand implements IOrder {
 
@@ -108,6 +106,42 @@ public final class OrderCommand implements IOrder {
         for (int i = 0; i < RISK_ENGINE_NUM; i++) {
             makerFundEventsByShard[i] = FastList.newList();
         }
+    }
+
+    public OrderCommand(OrderCommandType command, long orderId, int symbol, long price, long size, long reserveBidPrice,
+                        OrderAction action, OrderType orderType, long uid, long timestamp, int userCookie, long eventsGroup,
+                        int serviceFlags, CommandResultCode resultCode, MatcherTradeEvent matcherEvent,
+                        MutableList<FundEvent> takerFundEvents, MutableList<FundEvent>[] makerFundEventsByShard,
+                        L2MarketData marketData) {
+        this.command = command;
+        this.orderId = orderId;
+        this.symbol = symbol;
+        this.price = price;
+        this.size = size;
+        this.reserveBidPrice = reserveBidPrice;
+        this.action = action;
+        this.orderType = orderType;
+        this.uid = uid;
+        this.timestamp = timestamp;
+        this.userCookie = userCookie;
+        this.eventsGroup = eventsGroup;
+        this.serviceFlags = serviceFlags;
+        this.resultCode = resultCode;
+        this.matcherEvent = matcherEvent;
+        if (takerFundEvents != null) {
+            this.takerFundEvents = takerFundEvents;
+        } else {
+            this.takerFundEvents = FastList.newList();
+        }
+        if (makerFundEventsByShard != null) {
+            this.makerFundEventsByShard = makerFundEventsByShard;
+        } else {
+            this.makerFundEventsByShard = new MutableList[RISK_ENGINE_NUM];
+            for (int i = 0; i < RISK_ENGINE_NUM; i++) {
+                this.makerFundEventsByShard[i] = FastList.newList();
+            }
+        }
+        this.marketData = marketData;
     }
 
     public static OrderCommand newOrder(OrderType orderType, long orderId, long uid, long price, long reserveBidPrice, long size, OrderAction action) {
