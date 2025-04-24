@@ -63,7 +63,9 @@ public class ExchangeClient implements AutoCloseable {
 
     public ExchangeClient(String host, int port) {
         ThreadFactory threadFactory = GrpcUtil.getThreadFactory("grpc-worker-%d", true);
-        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(1, threadFactory): new NioEventLoopGroup(1, threadFactory);
+        //先使用一倍核数看看
+        int threadCount = Runtime.getRuntime().availableProcessors();
+        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(threadCount, threadFactory): new NioEventLoopGroup(threadCount, threadFactory);
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
