@@ -100,24 +100,24 @@ class ITFutureBasic {
             verify(handler, times(4)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).tradeEvent(any());
+
+        } finally {
             verify(handler, times(1)).fundsEvent(fundEventCapor.capture());
 
             IFundEventsHandler.FundsEvent fundEvent = fundEventCapor.getValue();
+            assertThat(UID_1, Is.is(fundEvent.uid));
             assertThat(SYMBOL_MARGIN, Is.is(fundEvent.currency));
+            assertThat(delta, Is.is(fundEvent.free));
             assertThat(0, Is.is(fundEvent.symbol));
             assertThat(0L, Is.is(fundEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(fundEvent.direction));
-            assertThat(UID_1, Is.is(fundEvent.uid));
             assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(fundEvent.eventType));
-            assertThat(delta, Is.is(fundEvent.free));
             assertThat(0L, Is.is(fundEvent.locked));
             assertThat(0L, Is.is(fundEvent.openPriceAvg));
             assertThat(0L, Is.is(fundEvent.pnl));
             assertThat(0L, Is.is(fundEvent.position));
             assertThat(0L, Is.is(fundEvent.positionChanged));
             assertThat(0L, Is.is(fundEvent.tradePrice));
-        } catch (Exception e) {
-
         }
     }
 
@@ -136,17 +136,19 @@ class ITFutureBasic {
             verify(handler, times(5)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).tradeEvent(any());
+
+        } finally {
             verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
 
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
             IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
             assertThat(UID_1, Is.is(depositEvent.uid));
             assertThat(SYMBOL_MARGIN, Is.is(depositEvent.currency));
+            assertThat(deposit, Is.is(depositEvent.free));
             assertThat(0, Is.is(depositEvent.symbol));
             assertThat(0L, Is.is(depositEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(depositEvent.direction));
             assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.eventType));
-            assertThat(deposit, Is.is(depositEvent.free));
             assertThat(0L, Is.is(depositEvent.locked));
             assertThat(0L, Is.is(depositEvent.openPriceAvg));
             assertThat(0L, Is.is(depositEvent.pnl));
@@ -157,32 +159,32 @@ class ITFutureBasic {
             IFundEventsHandler.FundsEvent withdrawEvent = fundEvents.get(1);
             assertThat(UID_1, Is.is(withdrawEvent.uid));
             assertThat(SYMBOL_MARGIN, Is.is(withdrawEvent.currency));
+            assertThat(deposit + withdraw, Is.is(withdrawEvent.free));
             assertThat(0, Is.is(withdrawEvent.symbol));
             assertThat(0L, Is.is(withdrawEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(withdrawEvent.direction));
             assertThat(FundEvent.FundEventType.WITHDRAW, Is.is(withdrawEvent.eventType));
-            assertThat(deposit + withdraw, Is.is(withdrawEvent.free));
             assertThat(0L, Is.is(withdrawEvent.locked));
             assertThat(0L, Is.is(withdrawEvent.openPriceAvg));
             assertThat(0L, Is.is(withdrawEvent.pnl));
             assertThat(0L, Is.is(withdrawEvent.position));
             assertThat(0L, Is.is(withdrawEvent.positionChanged));
             assertThat(0L, Is.is(withdrawEvent.tradePrice));
-        } catch (Exception e) {
-
         }
     }
 
     @Test
     public void testCancelSuccess() {
+        long deposit = 100L;
+        long userId1 = 1003L;
+        long orderId = 1005L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
 
-            long deposit = 100L;
-            long userId1 = container.createRandomUserWithMoney(deposit, quoteId);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createBidWithOrderId(orderId, userId1, 1, 10000, symbolId);
 
-            long orderId = container.createBid(userId1, 1, 10000, symbolId);
             // cancel order
             container.cancelOrder(userId1, orderId, symbolId);
             container.sleepSeconds(1);
@@ -190,8 +192,9 @@ class ITFutureBasic {
             verify(handler, times(5)).commandResult(commandResultCaptor.capture());
             verify(handler, times(1)).reduceEvent(reduceEventCaptor.capture());
             verify(handler, never()).rejectEvent(any());
-            verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
 
+        } finally {
+            verify(handler, times(3)).fundsEvent(fundEventCapor.capture());
             // deposit first
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
             IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
@@ -210,7 +213,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(depositEvent.positionChanged));
             assertThat(0L, Is.is(depositEvent.tradePrice));
 
-            // place order second
+            // lock pending second, should lock money
             IFundEventsHandler.FundsEvent placeEvent = fundEvents.get(1);
             assertThat(userId1, Is.is(placeEvent.uid));
             assertThat(quoteId, Is.is(placeEvent.currency));
@@ -226,30 +229,41 @@ class ITFutureBasic {
             assertThat(0L, Is.is(placeEvent.positionChanged));
             assertThat(0L, Is.is(placeEvent.tradePrice));
 
-            // TODO: should we fire UNLOCKED_PENDING here
-            List<IFundEventsHandler.FundsEvent> events = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event = fundEvents.get(0);
-        } catch (Exception e) {
-
+            // unlock pending event, free should be returned back
+            IFundEventsHandler.FundsEvent unLockEvent = fundEvents.get(2);
+            assertThat(userId1, Is.is(unLockEvent.uid));
+            assertThat(quoteId, Is.is(unLockEvent.currency));
+            assertThat(symbolId, Is.is(unLockEvent.symbol));
+            assertThat(0L, Is.is(unLockEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(unLockEvent.direction));
+            assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(unLockEvent.eventType));
+            assertThat(100L, Is.is(unLockEvent.free));
+            assertThat(0L, Is.is(unLockEvent.locked));
+            assertThat(0L, Is.is(unLockEvent.openPriceAvg));
+            assertThat(0L, Is.is(unLockEvent.pnl));
+            assertThat(0L, Is.is(unLockEvent.position));
+            assertThat(0L, Is.is(unLockEvent.positionChanged));
+            assertThat(0L, Is.is(unLockEvent.tradePrice));
         }
-
-
     }
 
     // 开仓事件
     @Test
     public void testOpenPosition() throws InterruptedException {
+        int deposit = 100;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long makerOrderId = 1005L;
+        long takerOrderId = 1006L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
 
-            long deposit = 100L;
-            long userId1 = container.createRandomUserWithMoney(deposit, quoteId);
-            long userId2 = container.createRandomUserWithMoney(MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createBid(userId1, 1, 10000, symbolId);
-            container.createAsk(userId2, 1, 10000, symbolId);
-            Thread.sleep(1000L);
+            container.createBidWithOrderId(makerOrderId, userId1, 1, 10000, symbolId);
+            container.createAskWithOrderId(takerOrderId, userId2, 1, 10000, symbolId);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -259,22 +273,27 @@ class ITFutureBasic {
             final ITradeEventsHandler.TradeEvent tradeEvent = tradeEventCaptor.getAllValues().get(0);
             assertThat(tradeEvent.getSymbol(), Is.is(symbolId));
             assertThat(tradeEvent.getTotalVolume(), Is.is(1L));
+            assertThat(tradeEvent.getTakerOrderId(), Is.is(takerOrderId));
             assertThat(tradeEvent.getTakerUid(), Is.is(userId2));
             assertThat(tradeEvent.getTakerAction(), Is.is(OrderAction.ASK));
             assertThat(tradeEvent.takeOrderCompleted, Is.is(true));
             assertThat(tradeEvent.trades.get(0).getMakerUid(), Is.is(userId1));
+            assertThat(tradeEvent.trades.get(0).makerOrderId, Is.is(makerOrderId));
             assertThat(tradeEvent.trades.get(0).makerOrderCompleted, Is.is(true));
             assertThat(tradeEvent.trades.get(0).price, Is.is(10000L));
             assertThat(tradeEvent.trades.get(0).getVolume(), Is.is(1L));
 
-            verify(handler, times(4)).fundsEvent(fundEventCapor.capture());
-
+        } finally {
+            verify(handler, times(8)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
             IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(2);
+
+            // check lock_pending event for maker, orderId should be maker's
             assertThat(userId1, Is.is(takerEvent.uid));
             assertThat(quoteId, Is.is(takerEvent.currency));
             assertThat(symbolId, Is.is(takerEvent.symbol));
+            assertThat(makerOrderId, Is.is(takerEvent.orderId));
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
@@ -286,10 +305,12 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.positionChanged));
             assertThat(0L, Is.is(takerEvent.tradePrice));
 
+            // check lock_pending event for taker, orderId should be maker's
             IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
             assertThat(userId2, Is.is(makerEvent.uid));
             assertThat(quoteId, Is.is(makerEvent.currency));
             assertThat(symbolId, Is.is(makerEvent.symbol));
+            assertThat(makerOrderId, Is.is(takerEvent.orderId));
             assertThat(0L, Is.is(makerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
@@ -300,81 +321,180 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.position));
             assertThat(0L, Is.is(makerEvent.positionChanged));
             assertThat(0L, Is.is(makerEvent.tradePrice));
-        } catch (Exception e) {
 
+            // check unlock_pending event for taker
+            IFundEventsHandler.FundsEvent takerUnlockEvent = fundEvents.get(4);
+            assertThat(userId2, Is.is(takerUnlockEvent.uid));
+            assertThat(quoteId, Is.is(takerUnlockEvent.currency));
+            assertThat(symbolId, Is.is(takerUnlockEvent.symbol));
+            assertThat(takerOrderId, Is.is(takerUnlockEvent.orderId));
+            assertThat(0L, Is.is(takerUnlockEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(takerUnlockEvent.direction));
+            assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(takerUnlockEvent.eventType));
+            assertThat(MAX_VALUE, Is.is(takerUnlockEvent.free));
+            assertThat(0L, Is.is(takerUnlockEvent.locked));
+            assertThat(0L, Is.is(takerUnlockEvent.openPriceAvg));
+            assertThat(0L, Is.is(takerUnlockEvent.pnl));
+            assertThat(0L, Is.is(takerUnlockEvent.position));
+            assertThat(0L, Is.is(takerUnlockEvent.positionChanged));
+            assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
+
+            // check open position event for taker
+            IFundEventsHandler.FundsEvent takerOpenPositionEvent = fundEvents.get(5);
+            assertThat(userId2, Is.is(takerOpenPositionEvent.uid));
+            assertThat(quoteId, Is.is(takerOpenPositionEvent.currency));
+            assertThat(symbolId, Is.is(takerOpenPositionEvent.symbol));
+            assertThat(takerOrderId, Is.is(takerOpenPositionEvent.orderId));
+            assertThat(20L, Is.is(takerOpenPositionEvent.fee));
+            assertThat(PositionDirection.SHORT, Is.is(takerOpenPositionEvent.direction));
+            assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(takerOpenPositionEvent.eventType));
+            // free = init value - cost - fee
+            assertThat(MAX_VALUE - 100 - 20, Is.is(takerOpenPositionEvent.free));
+            assertThat(100L, Is.is(takerOpenPositionEvent.locked));
+            assertThat(0L, Is.is(takerOpenPositionEvent.openPriceAvg));
+            assertThat(0L, Is.is(takerOpenPositionEvent.pnl));
+            assertThat(1L, Is.is(takerOpenPositionEvent.position));
+            assertThat(1L, Is.is(takerOpenPositionEvent.positionChanged));
+            assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
+
+            // check unlock_pending event for maker
+            IFundEventsHandler.FundsEvent makerUnlockEvent = fundEvents.get(6);
+            assertThat(userId1, Is.is(makerUnlockEvent.uid));
+            assertThat(quoteId, Is.is(makerUnlockEvent.currency));
+            assertThat(symbolId, Is.is(makerUnlockEvent.symbol));
+            assertThat(makerOrderId, Is.is(makerUnlockEvent.orderId));
+            assertThat(0L, Is.is(makerUnlockEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
+            assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
+            assertThat(100L, Is.is(makerUnlockEvent.free));
+            assertThat(0L, Is.is(makerUnlockEvent.locked));
+            assertThat(0L, Is.is(makerUnlockEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerUnlockEvent.pnl));
+            assertThat(0L, Is.is(makerUnlockEvent.position));
+            assertThat(0L, Is.is(makerUnlockEvent.positionChanged));
+            assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
+
+            // check open position event
+            IFundEventsHandler.FundsEvent makerOpenPositionEvent = fundEvents.get(7);
+            assertThat(userId1, Is.is(makerOpenPositionEvent.uid));
+            assertThat(quoteId, Is.is(makerOpenPositionEvent.currency));
+            assertThat(symbolId, Is.is(makerOpenPositionEvent.symbol));
+            assertThat(makerOrderId, Is.is(makerOpenPositionEvent.orderId));
+            assertThat(10L, Is.is(makerOpenPositionEvent.fee));
+            assertThat(PositionDirection.LONG, Is.is(makerOpenPositionEvent.direction));
+            assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
+            // this is not a desire
+            assertThat(-10L, Is.is(makerOpenPositionEvent.free));
+            assertThat(100L, Is.is(makerOpenPositionEvent.locked));
+            assertThat(0L, Is.is(makerOpenPositionEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
+            assertThat(1L, Is.is(makerOpenPositionEvent.position));
+            assertThat(1L, Is.is(makerOpenPositionEvent.positionChanged));
+            assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
         }
     }
 
     // 平仓事件
     @Test
     public void testClosePosition() {
+        int deposit = 100;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
 
-            long deposit = 100L;
-            long userId1 = container.createRandomUserWithMoney(deposit, quoteId);
-            long userId2 = container.createRandomUserWithMoney(MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
             // 开仓成功
-            long initId = container.createBid(userId1, 1, 10000, symbolId);
-            long initId2 = container.createAsk(userId2, 1, 10000, symbolId);
-
-            // 模拟市价波动
-            int cnt = 1;
-            for (int i = 0; i < cnt; i++) {
-                container.updateCurrentPriceTo(10500, symbolId, quoteId);
-            }
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
 
             // 平仓成功
-            long askId = container.createAsk(userId1, 1, 10500, symbolId);
-            long orderTmp = container.createBid(userId2, 1, 10500, symbolId);
-            System.out.println(askId);
-            System.out.println(orderTmp);
-            Thread.sleep(1000L);
+            container.createAskWithOrderId(makerOrderId3, userId1, 1, 10500, symbolId);
+            container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId);
 
-            verify(handler, times(cnt * 6 + 9)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
-            verify(handler, times(cnt + 2)).tradeEvent(tradeEventCaptor.capture());
-            verify(handler, times(cnt * 4 + 6)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(2)).tradeEvent(tradeEventCaptor.capture());
 
-//            container.printUser(userId1);
-            // check fund event
+        } finally {
+            verify(handler, times(14)).fundsEvent(fundEventCapor.capture());
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
 
-            IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(cnt * 4 + 6 - 2);
-            assertThat(userId1, Is.is(takerEvent.uid));
-            assertThat(quoteId, Is.is(takerEvent.currency));
-            assertThat(symbolId, Is.is(takerEvent.symbol));
-            assertThat(0L, Is.is(takerEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
-            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(0L, Is.is(takerEvent.free));
-            assertThat(100L, Is.is(takerEvent.locked));
-            assertThat(0L, Is.is(takerEvent.openPriceAvg));
-            assertThat(0L, Is.is(takerEvent.pnl));
-            assertThat(0L, Is.is(takerEvent.position));
-            assertThat(0L, Is.is(takerEvent.positionChanged));
-            assertThat(0L, Is.is(takerEvent.tradePrice));
+            IFundEventsHandler.FundsEvent takerCloseEvent = fundEvents.get(11);
+            assertThat(userId2, Is.is(takerCloseEvent.uid));
+            assertThat(quoteId, Is.is(takerCloseEvent.currency));
+            assertThat(symbolId, Is.is(takerCloseEvent.symbol));
+            // 关仓不收手续费
+            assertThat(0L, Is.is(takerCloseEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(takerCloseEvent.direction));
+            assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.eventType));
+            // free is not correct
+            assertThat(3999980L, Is.is(takerCloseEvent.free));
+            assertThat(0L, Is.is(takerCloseEvent.locked));
+            assertThat(10500L, Is.is(takerCloseEvent.openPriceAvg));
+            assertThat(0L, Is.is(takerCloseEvent.pnl));
+            assertThat(0L, Is.is(takerCloseEvent.position));
+            assertThat(1L, Is.is(takerCloseEvent.positionChanged));
+            // trade price?
+            assertThat(10000L, Is.is(takerCloseEvent.tradePrice));
 
-            IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(cnt * 4 + 6 - 1);
-            assertThat(userId2, Is.is(makerEvent.uid));
-            assertThat(quoteId, Is.is(makerEvent.currency));
-            assertThat(symbolId, Is.is(makerEvent.symbol));
-            assertThat(0L, Is.is(makerEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
-            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-            assertThat(MAX_VALUE - 100, Is.is(makerEvent.free));
-            assertThat(100L, Is.is(makerEvent.locked));
-            assertThat(0L, Is.is(makerEvent.openPriceAvg));
-            assertThat(0L, Is.is(makerEvent.pnl));
-            assertThat(0L, Is.is(makerEvent.position));
-            assertThat(0L, Is.is(makerEvent.positionChanged));
-            assertThat(0L, Is.is(makerEvent.tradePrice));
+            IFundEventsHandler.FundsEvent makerCloseEvent = fundEvents.get(13);
+            assertThat(userId1, Is.is(makerCloseEvent.uid));
+            assertThat(quoteId, Is.is(makerCloseEvent.currency));
+            assertThat(symbolId, Is.is(makerCloseEvent.symbol));
+            assertThat(0L, Is.is(makerCloseEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(makerCloseEvent.direction));
+            assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(makerCloseEvent.eventType));
+            // free = init money - fee
+            assertThat(90L, Is.is(makerCloseEvent.free));
+            assertThat(0L, Is.is(makerCloseEvent.locked));
+            assertThat(10500L, Is.is(makerCloseEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerCloseEvent.pnl));
+            assertThat(0L, Is.is(makerCloseEvent.position));
+            assertThat(1L, Is.is(makerCloseEvent.positionChanged));
+            // trade price?
+            assertThat(10000L, Is.is(makerCloseEvent.tradePrice));
+        }
+    }
 
-        } catch (Exception e) {
+    // 强制平仓事件
+    @Test
+    public void testForceClosePosition() {
+        int deposit = 100;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        int cnt = 500;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initFutureSymbol(symbolId, quoteId);
 
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+
+            // 开仓成功
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
+
+            // 模拟行情变动
+            for (int i = 0; i < cnt; i++) {
+                container.updateCurrentPriceTo(500, symbolId, quoteId);
+            }
+
+        } finally {
+            verify(handler, times(cnt * 8 + 8)).fundsEvent(fundEventCapor.capture());
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+
+            IFundEventsHandler.FundsEvent takerCloseEvent = fundEvents.get(0);
         }
     }
 
