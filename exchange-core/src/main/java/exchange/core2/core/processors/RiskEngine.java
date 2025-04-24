@@ -93,7 +93,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
    
 
     public RiskEngine(final int shardId,
-                      final long numShards,
+                      final int numShards,
                       final ISerializationProcessor serializationProcessor,
                       final SharedPool sharedPool,
                       final ExchangeConfiguration exchangeConfiguration) {
@@ -105,7 +105,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
-        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId);
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
         // initialize object pools
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);

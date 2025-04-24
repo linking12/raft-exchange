@@ -15,11 +15,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RequiredArgsConstructor
 public class FundEventsHelper {
-
-    public static int RISK_ENGINE_NUM = 0;
-
     private final Supplier<FundEvent> eventSupplier;
     private final int riskEngineShardId;
+    private final int numShards;
 
     private FundEvent eventsChainHead;
 
@@ -178,7 +176,7 @@ public class FundEventsHelper {
             }
         } else {
             if (cmd.makerFundEventsByShard == null) {
-                cmd.makerFundEventsByShard = new FundEvent[RISK_ENGINE_NUM];
+                cmd.makerFundEventsByShard = new FundEvent[numShards];
             }
             FundEvent head = cmd.makerFundEventsByShard[riskEngineShardId];
             if (head == null) {

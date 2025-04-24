@@ -41,11 +41,11 @@ public final class LiquidationScanner {
     private final Map<Integer, FundEventsHelper> fundEventsHelpers;
     private final ScheduledExecutorService scheduler;
 
-    public LiquidationScanner(ExchangeApi api, Collection<RiskEngine> riskEngines) {
+    public LiquidationScanner(ExchangeApi api, Collection<RiskEngine> riskEngines, int riskEnginesNum) {
         this.api = api;
         this.riskEngines = riskEngines;
-        this.fundEventsHelpers = riskEngines.stream()
-            .collect(Collectors.toMap(RiskEngine::getShardId, r-> new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(), r.getShardId())));
+        this.fundEventsHelpers = riskEngines.stream().collect(
+            Collectors.toMap(RiskEngine::getShardId, r -> new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(), r.getShardId(), riskEnginesNum)));
         this.scheduler = Executors.newScheduledThreadPool(riskEngines.size(), r -> new Thread(r, "LiquidationScanner"));
     }
 
