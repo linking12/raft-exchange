@@ -46,6 +46,7 @@ import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.processors.DisruptorExceptionHandler;
+import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.GroupingProcessor;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.ResultsHandler;
@@ -108,7 +109,7 @@ public final class ExchangeCore {
 
         final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
         final int riskEnginesNum = perfCfg.getRiskEnginesNum();
-        OrderCommand.RISK_ENGINE_NUM = riskEnginesNum;
+        FundEventsHelper.RISK_ENGINE_NUM = riskEnginesNum;
 
         this.disruptor = new Disruptor<>(
                 OrderCommand::new,

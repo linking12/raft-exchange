@@ -129,7 +129,9 @@ public final class GroupingProcessor implements EventProcessor {
         MatcherTradeEvent tradeEventHead = null;
         MatcherTradeEvent tradeEventTail = null;
         int tradeEventCounter = 0; // counter
-        MutableList<FundEvent> fundEventQueue = FastList.newList(tradeEventChainLengthTarget);
+        FundEvent fundEventHead = null;
+        FundEvent fundEventTail = null;
+        int fundEventCounter = 0;
 
         boolean groupingEnabled = true;
 
@@ -211,19 +213,50 @@ public final class GroupingProcessor implements EventProcessor {
                          * @modify 回收当前orderCommand下面的fundEvent
                          */
                         if (EVENTS_POOLING) {
-                            if (!cmd.takerFundEvents.isEmpty() && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
-                                fundEventQueue.addAll(cmd.takerFundEvents);
-                                cmd.takerFundEvents.clear();
+                            if (cmd.takerFundEvents != null && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
+                                if (fundEventTail == null) {
+                                    fundEventHead = cmd.takerFundEvents;
+                                } else {
+                                    fundEventTail.nextEvent = cmd.takerFundEvents;
+                                }
+                                fundEventTail = cmd.takerFundEvents;
+                                fundEventCounter++;
+                                // 找到 tail
+                                while (fundEventTail.nextEvent != null) {
+                                    fundEventTail = fundEventTail.nextEvent;
+                                    fundEventCounter++;
+                                }
+                                cmd.takerFundEvents = null;
                             }
-                            for (MutableList<FundEvent> makerFundEvents : cmd.makerFundEventsByShard) {
-                                if (!makerFundEvents.isEmpty()) {
-                                    fundEventQueue.addAll(makerFundEvents);
-                                    makerFundEvents.clear();
+
+                            // 回收每个 maker shard 的链
+                            if (cmd.makerFundEventsByShard != null) {
+                                for (int i = 0; i < cmd.makerFundEventsByShard.length; i++) {
+                                    FundEvent shardHead = cmd.makerFundEventsByShard[i];
+                                    if (shardHead != null) {
+                                        if (fundEventTail == null) {
+                                            fundEventHead = shardHead;
+                                        } else {
+                                            fundEventTail.nextEvent = shardHead;
+                                        }
+                                        fundEventTail = shardHead;
+                                        fundEventCounter++;
+
+                                        while (fundEventTail.nextEvent != null) {
+                                            fundEventTail = fundEventTail.nextEvent;
+                                            fundEventCounter++;
+                                        }
+
+                                        cmd.makerFundEventsByShard[i] = null;
+                                    }
                                 }
                             }
-                            if (fundEventQueue.size() >= tradeEventChainLengthTarget) {
-                                sharedPool.putFundEventQueue(fundEventQueue);
-                                fundEventQueue = FastList.newList(tradeEventChainLengthTarget);
+
+                            if (fundEventCounter >= tradeEventChainLengthTarget) {
+                                sharedPool.putFundEventChain(fundEventHead);
+                                fundEventHead = null;
+                                fundEventTail = null;
+                                fundEventCounter = 0;
                             }
                         }
 

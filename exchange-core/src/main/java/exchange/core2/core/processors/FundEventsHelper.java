@@ -4,8 +4,6 @@ import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 
 import java.util.function.Supplier;
 
-import org.eclipse.collections.api.list.MutableList;
-
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
 import exchange.core2.core.common.PositionDirection;
@@ -17,10 +15,13 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RequiredArgsConstructor
 public class FundEventsHelper {
-    private final Supplier<MutableList<FundEvent>> eventSupplier;
+
+    public static int RISK_ENGINE_NUM = 0;
+
+    private final Supplier<FundEvent> eventSupplier;
     private final int riskEngineShardId;
 
-    private MutableList<FundEvent> eventQueue;
+    private FundEvent eventsChainHead;
 
     private FundEvent buildSpotEvent(long orderId, long uid, FundEventType type, int currency, long free, long locked) {
         FundEvent event = newFundEvent();
@@ -166,18 +167,40 @@ public class FundEventsHelper {
 
     private void addFundEvent(OrderCommand cmd, long orderId, FundEvent event) {
         if (orderId == cmd.orderId) {
-            cmd.takerFundEvents.add(event);
+            if (cmd.takerFundEvents == null) {
+                cmd.takerFundEvents = event;
+            } else {
+                FundEvent current = cmd.takerFundEvents;
+                while (current.nextEvent != null) {
+                    current = current.nextEvent;
+                }
+                current.nextEvent = event;
+            }
         } else {
-            cmd.makerFundEventsByShard[riskEngineShardId].add(event);
+            if (cmd.makerFundEventsByShard == null) {
+                cmd.makerFundEventsByShard = new FundEvent[RISK_ENGINE_NUM];
+            }
+            FundEvent head = cmd.makerFundEventsByShard[riskEngineShardId];
+            if (head == null) {
+                cmd.makerFundEventsByShard[riskEngineShardId] = event;
+            } else {
+                FundEvent current = head;
+                while (current.nextEvent != null) {
+                    current = current.nextEvent;
+                }
+                current.nextEvent = event;
+            }
         }
     }
 
     private FundEvent newFundEvent() {
         if (EVENTS_POOLING) {
-            if (eventQueue == null || eventQueue.isEmpty()) {
-                eventQueue = eventSupplier.get();
+            if (eventsChainHead == null) {
+                eventsChainHead = eventSupplier.get();
             }
-            final FundEvent event = eventQueue.remove(eventQueue.size() - 1);
+            final FundEvent event = eventsChainHead;
+            eventsChainHead = eventsChainHead.nextEvent;
+            event.nextEvent = null; // 断掉链表，借出的对象应该和下面new的对象等价
             event.processed = false;
             event.eventType = null;
             event.section = 0;

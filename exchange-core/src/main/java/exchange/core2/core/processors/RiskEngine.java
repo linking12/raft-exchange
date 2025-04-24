@@ -105,7 +105,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
-        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventQueue, shardId);
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId);
         // initialize object pools
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);

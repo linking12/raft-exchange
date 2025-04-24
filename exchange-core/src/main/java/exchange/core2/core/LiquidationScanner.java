@@ -45,14 +45,14 @@ public final class LiquidationScanner {
         this.api = api;
         this.riskEngines = riskEngines;
         this.fundEventsHelpers = riskEngines.stream()
-            .collect(Collectors.toMap(RiskEngine::getShardId, r-> new FundEventsHelper(() -> r.getSharedPool().getFundEventQueue(), r.getShardId())));
+            .collect(Collectors.toMap(RiskEngine::getShardId, r-> new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(), r.getShardId())));
         this.scheduler = Executors.newScheduledThreadPool(riskEngines.size(), r -> new Thread(r, "LiquidationScanner"));
     }
 
     public void start() {
         for (RiskEngine riskEngine : riskEngines) {
             scheduler.scheduleWithFixedDelay(() -> {
-                log.info("Checking liquidation for shard {}", riskEngine.getShardId());
+                log.debug("Checking liquidation for shard {}", riskEngine.getShardId());
                 try {
                     checkLiquidations(riskEngine);
                 } catch (Throwable e) {
@@ -90,9 +90,11 @@ public final class LiquidationScanner {
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
         FundEventsHelper eventsHelper = fundEventsHelpers.get(riskEngine.getShardId());
         userProfiles.forEachValue(userProfile -> {
+            if (userProfile == null) return;
             // 遍历每个用户的所有持仓
             MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
             positions.forEachValue(position -> {
+                if (position == null) return;
                 int symbol = position.symbol;
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
                 if (spec.type != SymbolType.FUTURES_CONTRACT) {
