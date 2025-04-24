@@ -1,5 +1,20 @@
 package com.binance.raftexchange.client.Api;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+
+import javax.annotation.Nullable;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
 import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
@@ -17,6 +32,7 @@ import com.binance.raftexchange.stubs.response.NodeType;
 import com.binance.raftexchange.stubs.response.ServerNode;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
+
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.internal.GrpcUtil;
@@ -29,22 +45,8 @@ import io.grpc.netty.shaded.io.netty.channel.nio.NioEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import io.grpc.netty.shaded.io.netty.util.concurrent.ScheduledFuture;
 import io.grpc.stub.StreamObserver;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.annotation.Nullable;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
 
 public class ExchangeClient implements AutoCloseable {
-
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
@@ -63,7 +65,7 @@ public class ExchangeClient implements AutoCloseable {
 
     public ExchangeClient(String host, int port) {
         ThreadFactory threadFactory = GrpcUtil.getThreadFactory("grpc-worker-%d", true);
-        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(1, threadFactory): new NioEventLoopGroup(1, threadFactory);
+        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(1, threadFactory) : new NioEventLoopGroup(1, threadFactory);
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
@@ -80,48 +82,30 @@ public class ExchangeClient implements AutoCloseable {
     }
 
     public CompletableFuture<CommandResult> searchOrderBook(int symbol, int size) {
-        return readOnlyClient.searchOrderBook(
-                ApiOrderBookRequest.newBuilder()
-                        .setSymbol(symbol)
-                        .setSize(size)
-                        .build()
-        );
+        return readOnlyClient.searchOrderBook(ApiOrderBookRequest.newBuilder().setSymbol(symbol).setSize(size).build());
     }
 
     public CompletableFuture<SingleUserReportResult> singleUserReport(int transferId, long userId) {
-        return readOnlyClient.singleUserReport(
-                transferId,
-                SingleUserReportQuery.newBuilder()
-                        .setUserId(userId)
-                        .build()
-        );
+        return readOnlyClient.singleUserReport(transferId, SingleUserReportQuery.newBuilder().setUserId(userId).build());
     }
 
     public CompletableFuture<StateHashReportResult> stateHashReport(int transferId) {
-        return readOnlyClient.stateHashReport(
-                transferId,
-                StateHashReportQuery.getDefaultInstance()
-        );
+        return readOnlyClient.stateHashReport(transferId, StateHashReportQuery.getDefaultInstance());
     }
 
     public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId) {
-        return readOnlyClient.totalCurrencyBalanceReport(
-                transferId,
-                TotalCurrencyBalanceReportQuery.getDefaultInstance()
-        );
+        return readOnlyClient.totalCurrencyBalanceReport(transferId, TotalCurrencyBalanceReportQuery.getDefaultInstance());
     }
 
     private ManagedChannel createChannel(String host, int port) {
         // 统一放在这里 以后在这里做负载均衡的配置
         // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port)
-                .eventLoopGroup(eventLoopgroup)
-                .channelType(eventLoopgroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class)
-                .usePlaintext().build();
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup)
+            .channelType(eventLoopgroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class).usePlaintext().build();
     }
 
-    private ScheduledFuture flushNodesInfo() {
-        //先flush下确保client那边正常
+    private ScheduledFuture<?> flushNodesInfo() {
+        // 先flush下确保client那边正常
         flushNodes();
         return eventLoopgroup.scheduleWithFixedDelay(this::flushNodes, 30, 30, TimeUnit.MINUTES);
     }
@@ -133,8 +117,7 @@ public class ExchangeClient implements AutoCloseable {
             public void onSuccess(@Nullable NodeList nodeList) {
                 List<ServerNode> nodesList = nodeList.getNodesList();
                 RaftNameResolverProvider.refresh(nodesList);
-                Optional<ServerNode> optionalServerNode =
-                    nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
+                Optional<ServerNode> optionalServerNode = nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;
@@ -160,11 +143,9 @@ public class ExchangeClient implements AutoCloseable {
         // 先任意连一个上去
         ManagedChannel tryChannel = createChannel(host, port);
         boolean trySuccess = false;
-
         try {
             // 这里用了阻塞的 或许之后可以改造为异步的
             NodeList nodeList = ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
-
             ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst()
                 .orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
             this.leaderNode = leaderNode;
