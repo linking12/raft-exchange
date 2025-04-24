@@ -203,7 +203,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
             BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
             try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
                 apiStream.onNext(ApiCommand.newBuilder().setBinaryData(ApiBinaryDataCommand.newBuilder().setData(data)).build());
-                assertThat(futures.poll(timeOutMs, TimeUnit.MILLISECONDS).getResultCode(), Is.is(CommandResultCode.SUCCESS));
+                CommandResult result = futures.poll(timeOutMs, TimeUnit.MILLISECONDS);
+                assertThat(result.getResultCode(), Is.is(CommandResultCode.SUCCESS));
             } catch (final Exception ex) {
                 log.error("Failed sending binary data command", ex);
                 throw new RuntimeException(ex);
@@ -245,6 +246,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         final int numUsers = userCurrencies.size() - 1;
         if (waitAllResponse) {
             BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
+            final int BATCH_SIZE = 5000;
             AtomicInteger reqCount = new AtomicInteger();
             try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
                 IntStream.rangeClosed(1, numUsers).forEach(uid -> {
@@ -257,7 +259,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
                                 .setAmount(amountPerAccount.get(currency))
                                 .setCurrency(currency)
                         ).build());
-                        reqCount.getAndIncrement();
+                        if (reqCount.incrementAndGet() >= BATCH_SIZE) {
+                            try {
+                                waitResult(futures, reqCount.getAndSet(0));
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
                     });
                 });
                 apiStream.onNext(ApiCommand.newBuilder().setNop(ApiNop.newBuilder()).build());
