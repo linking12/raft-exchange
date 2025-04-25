@@ -77,9 +77,23 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     }
 
     private void sendFundEvents(OrderCommand cmd) {
-        cmd.takerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
-        for (MutableList<FundEvent> makerFundEvents : cmd.makerFundEventsByShard) {
-            makerFundEvents.select(f -> !f.processed).forEach(this::sendFundEvent);
+        FundEvent event = cmd.takerFundEvents;
+        while (event != null) {
+            if (!event.processed) {
+                sendFundEvent(event);
+            }
+            event = event.nextEvent;
+        }
+        if (cmd.makerFundEventsByShard != null) {
+            for (FundEvent shardHead : cmd.makerFundEventsByShard) {
+                FundEvent e = shardHead;
+                while (e != null) {
+                    if (!e.processed) {
+                        sendFundEvent(e);
+                    }
+                    e = e.nextEvent;
+                }
+            }
         }
     }
 

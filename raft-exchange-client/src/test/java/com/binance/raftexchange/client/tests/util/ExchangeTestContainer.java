@@ -203,7 +203,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
             BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
             try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
                 apiStream.onNext(ApiCommand.newBuilder().setBinaryData(ApiBinaryDataCommand.newBuilder().setData(data)).build());
-                assertThat(futures.poll(timeOutMs, TimeUnit.MILLISECONDS).getResultCode(), Is.is(CommandResultCode.SUCCESS));
+                CommandResult result = futures.poll(timeOutMs, TimeUnit.MILLISECONDS);
+                assertThat(result.getResultCode(), Is.is(CommandResultCode.SUCCESS));
             } catch (final Exception ex) {
                 log.error("Failed sending binary data command", ex);
                 throw new RuntimeException(ex);
@@ -245,6 +246,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         final int numUsers = userCurrencies.size() - 1;
         if (waitAllResponse) {
             BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
+            final int BATCH_SIZE = 2000;
             AtomicInteger reqCount = new AtomicInteger();
             try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
                 IntStream.rangeClosed(1, numUsers).forEach(uid -> {
@@ -257,7 +259,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
                                 .setAmount(amountPerAccount.get(currency))
                                 .setCurrency(currency)
                         ).build());
-                        reqCount.getAndIncrement();
+                        if (reqCount.incrementAndGet() >= BATCH_SIZE) {
+                            try {
+                                waitResult(futures, reqCount.getAndSet(0));
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
                     });
                 });
                 apiStream.onNext(ApiCommand.newBuilder().setNop(ApiNop.newBuilder()).build());
@@ -439,6 +447,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         List<ApiCommand> apiCommandsBenchmark = testDataFutures.getGenResult().join().apiCommandsBenchmark.join();
 
         long tStart = System.currentTimeMillis();
+        final int BATCH_SIZE = 2000;
         if (waitAllResponse) {
 //            int userCount = testDataFutures.getUsersAccounts().join().size();
             int userCount = 50; //创建太多也不好
@@ -456,8 +465,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
                     ExchangeClient client = clients.get(i);
                     List<ApiCommand> cmdOnEachClient = groupCmds.get(i);
                     try (ApiStream apiStream = newApiStream(client, futures)) {
-                        cmdOnEachClient.forEach(apiStream::onNext);
-                        waitResult(futures, cmdOnEachClient.size());
+                        AtomicInteger count = new AtomicInteger();
+                        for (ApiCommand cmd : cmdOnEachClient) {
+                            apiStream.onNext(cmd);
+                            if (count.incrementAndGet() >= BATCH_SIZE) {
+                                waitResult(futures, count.getAndSet(0));
+                            }
+                        }
+                        waitResult(futures, count.get());
                         countDownLatch.countDown();
                         client.close();
                     } catch (Exception e) {

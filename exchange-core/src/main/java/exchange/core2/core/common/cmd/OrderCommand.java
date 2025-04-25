@@ -19,24 +19,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
-import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.impl.list.mutable.FastList;
-
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.IOrder;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.ToString;
 
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 @ToString
 public final class OrderCommand implements IOrder {
-
-    public static int RISK_ENGINE_NUM = 0;
 
     public OrderCommandType command;
 
@@ -87,11 +86,11 @@ public final class OrderCommand implements IOrder {
      *  risk的预处理只有1个uid，一定在某一个riskEngine上处理；
      *  OrderCmd上的fundEvents是线程安全的，因为matchEngine是按symbol分区的，一定只在一个matchEngine上。
      */
-    public final MutableList<FundEvent> takerFundEvents;
+    public FundEvent takerFundEvents;
     /**
      * 【注意并发】防止多个maker之间的并发问题，把maker按照shard拆分；用数组维护，下标是shardId。
      */
-    public final MutableList<FundEvent>[] makerFundEventsByShard;
+    public FundEvent[] makerFundEventsByShard;
 
     // optional market data
     public L2MarketData marketData;
@@ -99,50 +98,6 @@ public final class OrderCommand implements IOrder {
     // sequence of last available for this command
     //public long matcherEventSequence;
     // ---- potential false sharing section ------
-
-    public OrderCommand() {
-        this.takerFundEvents = FastList.newList();
-        this.makerFundEventsByShard = new MutableList[RISK_ENGINE_NUM];
-        for (int i = 0; i < RISK_ENGINE_NUM; i++) {
-            makerFundEventsByShard[i] = FastList.newList();
-        }
-    }
-
-    public OrderCommand(OrderCommandType command, long orderId, int symbol, long price, long size, long reserveBidPrice,
-                        OrderAction action, OrderType orderType, long uid, long timestamp, int userCookie, long eventsGroup,
-                        int serviceFlags, CommandResultCode resultCode, MatcherTradeEvent matcherEvent,
-                        MutableList<FundEvent> takerFundEvents, MutableList<FundEvent>[] makerFundEventsByShard,
-                        L2MarketData marketData) {
-        this.command = command;
-        this.orderId = orderId;
-        this.symbol = symbol;
-        this.price = price;
-        this.size = size;
-        this.reserveBidPrice = reserveBidPrice;
-        this.action = action;
-        this.orderType = orderType;
-        this.uid = uid;
-        this.timestamp = timestamp;
-        this.userCookie = userCookie;
-        this.eventsGroup = eventsGroup;
-        this.serviceFlags = serviceFlags;
-        this.resultCode = resultCode;
-        this.matcherEvent = matcherEvent;
-        if (takerFundEvents != null) {
-            this.takerFundEvents = takerFundEvents;
-        } else {
-            this.takerFundEvents = FastList.newList();
-        }
-        if (makerFundEventsByShard != null) {
-            this.makerFundEventsByShard = makerFundEventsByShard;
-        } else {
-            this.makerFundEventsByShard = new MutableList[RISK_ENGINE_NUM];
-            for (int i = 0; i < RISK_ENGINE_NUM; i++) {
-                this.makerFundEventsByShard[i] = FastList.newList();
-            }
-        }
-        this.marketData = marketData;
-    }
 
     public static OrderCommand newOrder(OrderType orderType, long orderId, long uid, long price, long reserveBidPrice, long size, OrderAction action) {
         OrderCommand cmd = new OrderCommand();

@@ -468,7 +468,7 @@ public final class SimpleEventsProcessorTest {
                 .orderId(13143L)
                 .currency(10000)
                 .build();
-        cmd.takerFundEvents.add(event);
+        cmd.takerFundEvents = event;
 
         processor.accept(cmd, 192837L);
 

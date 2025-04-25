@@ -108,7 +108,6 @@ public final class ExchangeCore {
 
         final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
         final int riskEnginesNum = perfCfg.getRiskEnginesNum();
-        OrderCommand.RISK_ENGINE_NUM = riskEnginesNum;
 
         this.disruptor = new Disruptor<>(
                 OrderCommand::new,
@@ -231,7 +230,7 @@ public final class ExchangeCore {
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
 
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
-            liquidationScanner = new LiquidationScanner(api, riskEngines.values());
+            liquidationScanner = new LiquidationScanner(api, riskEngines.values(), riskEnginesNum);
             liquidationScanner.start();
         }
 

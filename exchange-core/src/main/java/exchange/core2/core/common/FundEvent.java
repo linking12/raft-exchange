@@ -5,9 +5,6 @@ import java.util.Objects;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.NoArgsConstructor;
-import net.openhft.chronicle.bytes.BytesIn;
-import net.openhft.chronicle.bytes.BytesOut;
-import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
  * 资金事件类，用于记录现货和期货的资金及仓位变动。
@@ -17,7 +14,7 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-public class FundEvent implements WriteBytesMarshallable {
+public class FundEvent {
     public boolean processed; // 是否已处理
 
     // 基础字段
@@ -38,6 +35,8 @@ public class FundEvent implements WriteBytesMarshallable {
     public long tradePrice; // 本次成交价格（开仓或平仓价）
     public long fee; // 手续费
     public long pnl; // 本次事件的盈亏金额
+
+    public FundEvent nextEvent;
 
     /**
      * 事件类型枚举。 前五种为现货事件，后五种为期货事件。
@@ -79,30 +78,21 @@ public class FundEvent implements WriteBytesMarshallable {
         }
     }
 
-    @Override
-    public void writeMarshallable(BytesOut bytes) {
-        bytes.writeBoolean(this.processed);
-        bytes.writeByte((byte)eventType.getCode());
-        bytes.writeInt(section);
-        bytes.writeLong(orderId);
-        bytes.writeLong(uid);
-        bytes.writeInt(currency);
-        bytes.writeLong(free);
-        bytes.writeLong(locked);
-        bytes.writeInt(symbol);
-        bytes.writeByte((byte)direction.getMultiplier());
-        bytes.writeLong(position);
-        bytes.writeLong(positionChanged);
-        bytes.writeLong(openPriceAvg);
-        bytes.writeLong(tradePrice);
-        bytes.writeLong(fee);
-        bytes.writeLong(pnl);
+    public static FundEvent createEventChain(int chainLength) {
+        final FundEvent head = new FundEvent();
+        FundEvent current = head;
+        for (int i = 1; i < chainLength; i++) {
+            FundEvent next = new FundEvent();
+            current.nextEvent = next;
+            current = next;
+        }
+        return head;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(processed, eventType, section, orderId, uid, currency, free, locked, symbol, direction,
-            position, positionChanged, openPriceAvg, tradePrice, fee, pnl);
+            position, positionChanged, openPriceAvg, tradePrice, fee, pnl, nextEvent);
     }
 
     @Override
@@ -115,32 +105,15 @@ public class FundEvent implements WriteBytesMarshallable {
         return processed == other.processed && eventType == other.eventType && section == other.section && orderId == other.orderId && uid == other.uid && currency == other.currency
             && free == other.free && locked == other.locked && symbol == other.symbol && direction == other.direction && position == other.position
             && positionChanged == other.positionChanged && openPriceAvg == other.openPriceAvg && tradePrice == other.tradePrice
-            && fee == other.fee && pnl == other.pnl;
+            && fee == other.fee && pnl == other.pnl
+            && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
 
     @Override
     public String toString() {
         return "FundEvent [processed=" + processed + ", eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
             + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", positionChanged="
-            + positionChanged + ", openPriceAvg=" + openPriceAvg + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl + "]";
+            + positionChanged + ", openPriceAvg=" + openPriceAvg + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl + ", nextEvent=" + (nextEvent != null) + "]";
     }
 
-    public FundEvent(BytesIn bytes) {
-        this.processed = bytes.readBoolean();
-        this.eventType = FundEventType.of(bytes.readByte());
-        this.section = bytes.readInt();
-        this.orderId = bytes.readLong();
-        this.uid = bytes.readLong();
-        this.currency = bytes.readInt();
-        this.free = bytes.readLong();
-        this.locked = bytes.readLong();
-        this.symbol = bytes.readInt();
-        this.direction = PositionDirection.of(bytes.readByte());
-        this.position = bytes.readLong();
-        this.positionChanged = bytes.readLong();
-        this.openPriceAvg = bytes.readLong();
-        this.tradePrice = bytes.readLong();
-        this.fee = bytes.readLong();
-        this.pnl = bytes.readLong();
-    }
 }
