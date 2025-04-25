@@ -22,6 +22,7 @@ import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
 import com.netflix.discovery.EurekaClient;
+import com.vip.vjtools.vjkit.net.NetUtil;
 
 @EnableEurekaClient
 @SpringBootApplication(exclude = {AlarmAutoConfiguration.class, OldMasterCommonConfig.class})
@@ -47,6 +48,8 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     @Override
     public void run(String... arg0) throws Exception {
+        System.setProperty("localhost.default.nic.list", "bond0,eth0,em0,br0,en0,gpd0");
+        System.setProperty("local-ip", NetUtil.getLocalHost());
         startKafkaSender();
         startRaftServer();
         startGrpcServer();
