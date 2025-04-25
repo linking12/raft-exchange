@@ -63,9 +63,9 @@ public class ExchangeClient implements AutoCloseable {
 
     public ExchangeClient(String host, int port) {
         ThreadFactory threadFactory = GrpcUtil.getThreadFactory("grpc-worker-%d", true);
-        //先使用一倍核数看看
+        // 先使用一倍核数看看
         int threadCount = Runtime.getRuntime().availableProcessors();
-        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(threadCount, threadFactory): new NioEventLoopGroup(threadCount, threadFactory);
+        this.eventLoopgroup = Epoll.isAvailable() ? new EpollEventLoopGroup(threadCount, threadFactory) : new NioEventLoopGroup(threadCount, threadFactory);
         ManagedChannel leaderChannel = sniffLeaderChannel(host, port);
         this.nodeStub = ServerNodeServiceGrpc.newFutureStub(leaderChannel);
         this.apiStub = ApiCommandServiceGrpc.newStub(leaderChannel);
@@ -82,48 +82,27 @@ public class ExchangeClient implements AutoCloseable {
     }
 
     public CompletableFuture<CommandResult> searchOrderBook(int symbol, int size) {
-        return readOnlyClient.searchOrderBook(
-                ApiOrderBookRequest.newBuilder()
-                        .setSymbol(symbol)
-                        .setSize(size)
-                        .build()
-        );
+        return readOnlyClient.searchOrderBook(ApiOrderBookRequest.newBuilder().setSymbol(symbol).setSize(size).build());
     }
 
     public CompletableFuture<SingleUserReportResult> singleUserReport(int transferId, long userId) {
-        return readOnlyClient.singleUserReport(
-                transferId,
-                SingleUserReportQuery.newBuilder()
-                        .setUserId(userId)
-                        .build()
-        );
+        return readOnlyClient.singleUserReport(transferId, SingleUserReportQuery.newBuilder().setUserId(userId).build());
     }
 
     public CompletableFuture<StateHashReportResult> stateHashReport(int transferId) {
-        return readOnlyClient.stateHashReport(
-                transferId,
-                StateHashReportQuery.getDefaultInstance()
-        );
+        return readOnlyClient.stateHashReport(transferId, StateHashReportQuery.getDefaultInstance());
     }
 
     public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId) {
-        return readOnlyClient.totalCurrencyBalanceReport(
-                transferId,
-                TotalCurrencyBalanceReportQuery.getDefaultInstance()
-        );
+        return readOnlyClient.totalCurrencyBalanceReport(transferId, TotalCurrencyBalanceReportQuery.getDefaultInstance());
     }
 
     private ManagedChannel createChannel(String host, int port) {
-        // 统一放在这里 以后在这里做负载均衡的配置
-        // 目前先统一打到Leader上
-        return NettyChannelBuilder.forAddress(host, port)
-                .eventLoopGroup(eventLoopgroup)
-                .channelType(eventLoopgroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class)
-                .usePlaintext().build();
+        return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup)
+            .channelType(eventLoopgroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class).usePlaintext().build();
     }
 
-    private ScheduledFuture flushNodesInfo() {
-        //先flush下确保client那边正常
+    private ScheduledFuture<?> flushNodesInfo() {
         flushNodes();
         return eventLoopgroup.scheduleWithFixedDelay(this::flushNodes, 30, 30, TimeUnit.MINUTES);
     }
@@ -135,8 +114,7 @@ public class ExchangeClient implements AutoCloseable {
             public void onSuccess(@Nullable NodeList nodeList) {
                 List<ServerNode> nodesList = nodeList.getNodesList();
                 RaftNameResolverProvider.refresh(nodesList);
-                Optional<ServerNode> optionalServerNode =
-                    nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
+                Optional<ServerNode> optionalServerNode = nodesList.stream().filter(n -> n.getType() == NodeType.LEADER).findFirst();
                 if (!optionalServerNode.isPresent()) {
                     LOGGER.error("Cant find any leaderNode!");
                     return;
@@ -155,18 +133,14 @@ public class ExchangeClient implements AutoCloseable {
             public void onFailure(Throwable throwable) {
                 LOGGER.error("flashLeaderNode fail!", throwable);
             }
-        }, eventLoopgroup); // 调度回去 可以省下很多streamObserver的状态同步开销
+        }, eventLoopgroup);
     }
 
     private ManagedChannel sniffLeaderChannel(String host, int port) {
-        // 先任意连一个上去
         ManagedChannel tryChannel = createChannel(host, port);
         boolean trySuccess = false;
-
         try {
-            // 这里用了阻塞的 或许之后可以改造为异步的
             NodeList nodeList = ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
-
             ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst()
                 .orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
             this.leaderNode = leaderNode;
@@ -204,14 +178,12 @@ public class ExchangeClient implements AutoCloseable {
         streams.remove(stream);
     }
 
-    // 监测到leader切换 进行刷新stream 以确保用户调用无感
     void reportLeaderFresh(ServerNode leaderNode) {
         this.leaderNode = leaderNode;
         String leaderHost = leaderNode.getHost();
         int leaderPort = leaderNode.getPort();
         ManagedChannel leaderChannel = createChannel(leaderHost, leaderPort);
         ApiCommandServiceGrpc.ApiCommandServiceStub stub = ApiCommandServiceGrpc.newStub(leaderChannel);
-        // node stub就不切了 每个节点都有全量的拓扑信息
         this.apiStub = stub;
         for (ApiStream stream : streams) {
             StreamObserver<ApiCommand> apiCommandStreamObserver = apiStub.execApiCommand(stream.toUserObserver());

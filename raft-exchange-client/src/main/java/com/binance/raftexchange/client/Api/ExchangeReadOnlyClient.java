@@ -34,7 +34,6 @@ class ExchangeReadOnlyClient implements AutoCloseable {
 
     public CompletableFuture<CommandResult> searchOrderBook(ApiOrderBookRequest request) {
         CompletableFuture<CommandResult> future = new CompletableFuture<>();
-        //转一下。。 ListenableFuture是真的难用
         Futures.addCallback(searchServiceFutureStub.searchOrder(request), new FutureCallback<CommandResult>() {
             @Override
             public void onSuccess(@Nullable CommandResult commandResult) {
@@ -50,23 +49,20 @@ class ExchangeReadOnlyClient implements AutoCloseable {
     }
 
     public CompletableFuture<SingleUserReportResult> singleUserReport(int transferId, SingleUserReportQuery query) {
-        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setSingleUserReport(query).build())
-                .thenApply(ReportResult::getSingleUserReport);
+        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setSingleUserReport(query).build()).thenApply(ReportResult::getSingleUserReport);
     }
 
     public CompletableFuture<StateHashReportResult> stateHashReport(int transferId, StateHashReportQuery query) {
-        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setStateHash(query).build())
-                .thenApply(ReportResult::getStateHash);
+        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setStateHash(query).build()).thenApply(ReportResult::getStateHash);
     }
 
     public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId, TotalCurrencyBalanceReportQuery query) {
         return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setTotalCurrencyBalance(query).build())
-                .thenApply(ReportResult::getTotalCurrencyBalance);
+            .thenApply(ReportResult::getTotalCurrencyBalance);
     }
 
     private CompletableFuture<ReportResult> rawReporter(ReportQuery request) {
         CompletableFuture<ReportResult> future = new CompletableFuture<>();
-        //转一下。。 ListenableFuture是真的难用
         Futures.addCallback(searchServiceFutureStub.query(request), new FutureCallback<ReportResult>() {
             @Override
             public void onSuccess(@Nullable ReportResult commandResult) {
@@ -82,11 +78,9 @@ class ExchangeReadOnlyClient implements AutoCloseable {
     }
 
     private QueryServiceGrpc.QueryServiceFutureStub initStub(EventLoopGroup masterLoopGroup) {
-        ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search")
-                .eventLoopGroup(masterLoopGroup)
-                .defaultLoadBalancingPolicy("round_robin")
-                .channelType(masterLoopGroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class)
-                .usePlaintext().build();
+        ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search").eventLoopGroup(masterLoopGroup)
+            .defaultLoadBalancingPolicy("round_robin")
+            .channelType(masterLoopGroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class).usePlaintext().build();
         return QueryServiceGrpc.newFutureStub(channel);
     }
 
@@ -96,6 +90,6 @@ class ExchangeReadOnlyClient implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        ((ManagedChannel) searchServiceFutureStub.getChannel()).shutdown();
+        ((ManagedChannel)searchServiceFutureStub.getChannel()).shutdown();
     }
 }
