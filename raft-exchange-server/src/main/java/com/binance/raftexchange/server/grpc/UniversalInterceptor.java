@@ -59,9 +59,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     @Override
     public void onReady() {
         super.onReady();
-        int requested = WINDOW_SIZE;
-        inflight.set(requested);
-        call.request(requested);
+        maybeRequestMore();
     }
 
     @Override
@@ -72,17 +70,15 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
              */
             CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
                 commandOnTheWay.remove(message);
+                if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
+                    maybeRequestMore();
+                }
                 if (call.isCancelled() || halfClose.get()) {
                     cancelAll();
                     return;
                 }
                 if (result != null) {
                     call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
-                    if (inflight.decrementAndGet() == 0) {
-                        int requested = WINDOW_SIZE;
-                        inflight.set(requested);
-                        call.request(requested);
-                    }
                     return;
                 }
                 if (err instanceof CancellationException) {
@@ -102,6 +98,14 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         } catch (Exception e) {
             // 不应该到这里
             throw new RuntimeException(e);
+        }
+    }
+
+    private void maybeRequestMore() {
+        int needed = WINDOW_SIZE - inflight.get();
+        if (needed >= WINDOW_SIZE / 2) { // 只有缺了一半，才补
+            inflight.addAndGet(needed);
+            call.request(needed);
         }
     }
 
