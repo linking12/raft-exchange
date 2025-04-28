@@ -1,20 +1,5 @@
 package com.binance.raftexchange.client.Api;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-
-import javax.annotation.Nullable;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
 import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
@@ -32,7 +17,6 @@ import com.binance.raftexchange.stubs.response.NodeType;
 import com.binance.raftexchange.stubs.response.ServerNode;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
-
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.internal.GrpcUtil;
@@ -45,8 +29,22 @@ import io.grpc.netty.shaded.io.netty.channel.nio.NioEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import io.grpc.netty.shaded.io.netty.util.concurrent.ScheduledFuture;
 import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 
 public class ExchangeClient implements AutoCloseable {
+
     private static final Logger LOGGER = LoggerFactory.getLogger(ExchangeClient.class);
 
     private ApiCommandServiceGrpc.ApiCommandServiceStub apiStub;
@@ -98,14 +96,11 @@ public class ExchangeClient implements AutoCloseable {
     }
 
     private ManagedChannel createChannel(String host, int port) {
-        // 统一放在这里 以后在这里做负载均衡的配置
-        // 目前先统一打到Leader上
         return NettyChannelBuilder.forAddress(host, port).eventLoopGroup(eventLoopgroup)
             .channelType(eventLoopgroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class).usePlaintext().build();
     }
 
     private ScheduledFuture<?> flushNodesInfo() {
-        // 先flush下确保client那边正常
         flushNodes();
         return eventLoopgroup.scheduleWithFixedDelay(this::flushNodes, 30, 30, TimeUnit.MINUTES);
     }
@@ -136,15 +131,13 @@ public class ExchangeClient implements AutoCloseable {
             public void onFailure(Throwable throwable) {
                 LOGGER.error("flashLeaderNode fail!", throwable);
             }
-        }, eventLoopgroup); // 调度回去 可以省下很多streamObserver的状态同步开销
+        }, eventLoopgroup);
     }
 
     private ManagedChannel sniffLeaderChannel(String host, int port) {
-        // 先任意连一个上去
         ManagedChannel tryChannel = createChannel(host, port);
         boolean trySuccess = false;
         try {
-            // 这里用了阻塞的 或许之后可以改造为异步的
             NodeList nodeList = ServerNodeServiceGrpc.newBlockingStub(tryChannel).listNodes(NodeListCommand.getDefaultInstance());
             ServerNode leaderNode = nodeList.getNodesList().stream().filter(n -> n.getType() == NodeType.LEADER).findFirst()
                 .orElseThrow(() -> new IllegalStateException("Cant find any leaderNode!"));
@@ -183,14 +176,12 @@ public class ExchangeClient implements AutoCloseable {
         streams.remove(stream);
     }
 
-    // 监测到leader切换 进行刷新stream 以确保用户调用无感
     void reportLeaderFresh(ServerNode leaderNode) {
         this.leaderNode = leaderNode;
         String leaderHost = leaderNode.getHost();
         int leaderPort = leaderNode.getPort();
         ManagedChannel leaderChannel = createChannel(leaderHost, leaderPort);
         ApiCommandServiceGrpc.ApiCommandServiceStub stub = ApiCommandServiceGrpc.newStub(leaderChannel);
-        // node stub就不切了 每个节点都有全量的拓扑信息
         this.apiStub = stub;
         for (ApiStream stream : streams) {
             StreamObserver<ApiCommand> apiCommandStreamObserver = apiStub.execApiCommand(stream.toUserObserver());

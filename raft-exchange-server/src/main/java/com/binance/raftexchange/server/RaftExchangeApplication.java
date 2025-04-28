@@ -22,6 +22,7 @@ import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
 import com.netflix.discovery.EurekaClient;
+import com.vip.vjtools.vjkit.net.NetUtil;
 
 @EnableEurekaClient
 @SpringBootApplication(exclude = {AlarmAutoConfiguration.class, OldMasterCommonConfig.class})
@@ -47,20 +48,25 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     @Override
     public void run(String... arg0) throws Exception {
+        System.setProperty("localhost.default.nic.list", "bond0,eth0,em0,br0,en0,gpd0");
+        System.setProperty("local-ip", NetUtil.getLocalHost());
+        this.doStart();
+    }
+
+    private void doStart() throws Exception {
         startKafkaSender();
         startRaftServer();
         startGrpcServer();
-
     }
 
-    public void startRaftServer() throws Exception {
+    private void startRaftServer() throws Exception {
         RaftClusterDiscovery raftClusterDiscovery = new RaftClusterDiscovery(eurekaClient);
         RaftClusterContainer raftClusterContainer = new RaftClusterContainer(raftClusterDiscovery);
         raftClusterContainer.doStart();
         this.raftClusterContainer = raftClusterContainer;
     }
 
-    public void startGrpcServer() throws Exception {
+    private void startGrpcServer() throws Exception {
         GrpcServerContainer grpcServerContainer = new GrpcServerContainer();
         do {
             grpcServerContainer.setRaftClusterContainer(raftClusterContainer);
@@ -69,7 +75,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         grpcServerContainer.doStart();
     }
 
-    public void startKafkaSender() {
+    private void startKafkaSender() {
         Properties properties = new Properties();
         properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaServers);
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
