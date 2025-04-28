@@ -448,7 +448,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         List<ApiCommand> apiCommandsBenchmark = testDataFutures.getGenResult().join().apiCommandsBenchmark.join();
 
         long tStart = System.currentTimeMillis();
-        final int BATCH_SIZE = 2000;
+        final int BATCH_SIZE = 20000;
         if (waitAllResponse) {
 //            int userCount = testDataFutures.getUsersAccounts().join().size();
             int userCount = 50; //创建太多也不好
