@@ -77,6 +77,19 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     private void startKafkaSender() {
         Properties properties = new Properties();
+        properties.put("retries", 5);
+        properties.put("retry.backoff.ms", 200);
+        properties.put("linger.ms", 5);
+        properties.put("batch.size", 512 * 1024);
+        properties.put("buffer.memory", 512 * 1024 * 1024);
+        properties.put("compression.type", "lz4");
+        properties.put("max.request.size", 2 * 1024 * 1024);
+        properties.put("request.timeout.ms", 1000);
+        properties.put("delivery.timeout.ms", 6 * 1000);
+        properties.put("auto.include.jmx.reporter", false);
+        properties.put("max.in.flight.requests.per.connection", 5); // 控制并发inflight请求数量
+        properties.put("enable.idempotence", false);  // 禁止幂等（重试/leader切换/broker挂掉导致重复，以及局部乱序）
+        properties.put("connections.max.idle.ms", 60000); // 保持连接活跃1分钟
         properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaServers);
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
