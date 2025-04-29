@@ -15,7 +15,7 @@ public class SyncTradeMiscApiController extends AbstractApiController {
     public static CompletableFuture<StateHashReportResult> getStateHash(StateHashReportQuery grpcStateHashReportQuery, int transferId) {
         exchange.core2.core.common.api.reports.StateHashReportQuery stateHashReportQuery =
             new exchange.core2.core.common.api.reports.StateHashReportQuery();
-        LOG.info("stateHashReportQuery applied");
+        LOG.debug("stateHashReportQuery applied");
 
         return callExchange(stateHashReportQuery, transferId);
     }
@@ -26,7 +26,7 @@ public class SyncTradeMiscApiController extends AbstractApiController {
     public static CompletableFuture<TotalCurrencyBalanceReportResult> getTotalCurrencyBalance(TotalCurrencyBalanceReportQuery grpcTotalCurrencyBalanceReportQuery, int transferId) {
         exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportQuery totalCurrencyBalanceReportQuery =
             new exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportQuery();
-        LOG.info("totalCurrencyBalanceReportQuery applied");
+        LOG.debug("totalCurrencyBalanceReportQuery applied");
 
         return callExchange(totalCurrencyBalanceReportQuery, transferId);
     }

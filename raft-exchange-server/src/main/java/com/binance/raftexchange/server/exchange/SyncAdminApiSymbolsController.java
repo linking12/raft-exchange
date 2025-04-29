@@ -27,7 +27,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         }
         exchange.core2.core.common.api.binary.BatchAddSymbolsCommand batchAddSymbolsCommand =
             new exchange.core2.core.common.api.binary.BatchAddSymbolsCommand(coreSymbols);
-        LOG.info("batchAddSymbolsCommand applied, msg: {}", batchAddSymbolsCommand);
+        LOG.debug("batchAddSymbolsCommand applied, msg: {}", batchAddSymbolsCommand);
 
         return callExchange(batchAddSymbolsCommand);
     }
