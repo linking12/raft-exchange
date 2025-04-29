@@ -13,7 +13,6 @@ import io.grpc.netty.shaded.io.netty.channel.DefaultEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
 import io.netty.channel.ChannelOption;
 
-
 public class GrpcServerContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(GrpcServerContainer.class);
     private RaftClusterContainer raftClusterContainer;
@@ -27,21 +26,18 @@ public class GrpcServerContainer {
 
     public void doStart() throws Exception {
         String grpcPort = System.getProperty("grpc.port", "5001");
-        //grpc默认会判断epoll可不可用 可用就使用
-        //EventLoop线程数为一倍核数 不用调整
-        this.server = NettyServerBuilder.forPort(Integer.parseInt(grpcPort))
-                .withChildOption(ChannelOption.TCP_NODELAY, true)
-                .withChildOption(ChannelOption.SO_LINGER, -1)//
-                .withChildOption(ChannelOption.SO_KEEPALIVE, Boolean.TRUE)//
-                .withChildOption(ChannelOption.TCP_NODELAY, Boolean.FALSE)//
-                .withChildOption(ChannelOption.SO_REUSEADDR, Boolean.TRUE)//
-                .withOption(ChannelOption.SO_REUSEADDR, true)//
-                .withOption(ChannelOption.SO_BACKLOG, 8192)
-                .addService(new ApiService(raftClusterContainer, offloadWorker).transform())
-                .addService(new SevererNodeService(raftClusterContainer))
-                .addService(new QueryService(raftClusterContainer, offloadWorker))
-                .executor(offloadWorker)
-                .build();
+        // grpc默认会判断epoll可不可用 可用就使用
+        // EventLoop线程数为一倍核数 不用调整
+        this.server = NettyServerBuilder.forPort(Integer.parseInt(grpcPort)).withChildOption(ChannelOption.TCP_NODELAY, true)//
+            .withChildOption(ChannelOption.SO_LINGER, -1)//
+            .withChildOption(ChannelOption.SO_KEEPALIVE, Boolean.TRUE)//
+            .withChildOption(ChannelOption.TCP_NODELAY, Boolean.FALSE)//
+            .withChildOption(ChannelOption.SO_REUSEADDR, Boolean.TRUE)//
+            .withOption(ChannelOption.SO_REUSEADDR, true)//
+            .withOption(ChannelOption.SO_BACKLOG, 8192).addService(new ApiService(raftClusterContainer, offloadWorker).transform())
+            .addService(new SevererNodeService(raftClusterContainer))//
+            .addService(new QueryService(raftClusterContainer, offloadWorker))//
+            .executor(offloadWorker).build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
     }

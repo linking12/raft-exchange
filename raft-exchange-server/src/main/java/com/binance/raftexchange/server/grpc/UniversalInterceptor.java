@@ -124,9 +124,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     @Override
-    public void onCancel() {
-
-    }
+    public void onCancel() {}
 
     @Override
     public void onHalfClose() {

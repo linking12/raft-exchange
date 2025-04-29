@@ -39,39 +39,34 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
 
     @Override
     public void query(ReportQuery request, StreamObserver<ReportResult> responseObserver) {
-        searchTemplate(
-                request, responseObserver,
-                query -> {
-                    int transferId = query.getTransferId();
-                    ReportQuery.TypeCase queryTypeCase = query.getTypeCase();
-                    switch (queryTypeCase) {
-                        case SINGLE_USER_REPORT:
-                            return SyncTradeAccountApiController.getUserState(request.getSingleUserReport(), transferId)
-                                    .thenApply(SerializeHelper::serializeToPb);
-                        case STATE_HASH:
-                            return SyncTradeMiscApiController.getStateHash(request.getStateHash(), transferId)
-                                    .thenApply(SerializeHelper::serializeToPb);
-                        case TOTAL_CURRENCY_BALANCE:
-                            return SyncTradeMiscApiController.getTotalCurrencyBalance(request.getTotalCurrencyBalance(), transferId)
-                             .thenApply(SerializeHelper::serializeToPb);
-                        default: return ThrowableFunction.failureFuture("Unsupported ReportQuery: " + queryTypeCase);
-                    }
-                }
-        );
+        searchTemplate(request, responseObserver, query -> {
+            int transferId = query.getTransferId();
+            ReportQuery.TypeCase queryTypeCase = query.getTypeCase();
+            switch (queryTypeCase) {
+                case SINGLE_USER_REPORT:
+                    return SyncTradeAccountApiController.getUserState(request.getSingleUserReport(), transferId).thenApply(SerializeHelper::serializeToPb);
+                case STATE_HASH:
+                    return SyncTradeMiscApiController.getStateHash(request.getStateHash(), transferId).thenApply(SerializeHelper::serializeToPb);
+                case TOTAL_CURRENCY_BALANCE:
+                    return SyncTradeMiscApiController.getTotalCurrencyBalance(request.getTotalCurrencyBalance(), transferId)
+                        .thenApply(SerializeHelper::serializeToPb);
+                default:
+                    return ThrowableFunction.failureFuture("Unsupported ReportQuery: " + queryTypeCase);
+            }
+        });
     }
 
-    private <Request, Response> void searchTemplate(Request request, StreamObserver<Response> responseObserver, ThrowableFunction<Request, CompletableFuture<Response>> asyncOp) {
-        raftClusterContainer.readFromQuorum()
-                .thenCompose((_index) -> asyncOp.toFunction().apply(request))
-                .whenCompleteAsync((result, t) -> {
-                    if (t != null) {
-                        LOGGER.warn("searchTemplate fail!", t);
-                        responseObserver.onError(t);
-                    } else {
-                        responseObserver.onNext(result);
-                        responseObserver.onCompleted();
-                    }
-                }, offloadWorker);
+    private <Request, Response> void searchTemplate(Request request, StreamObserver<Response> responseObserver,
+        ThrowableFunction<Request, CompletableFuture<Response>> asyncOp) {
+        raftClusterContainer.readFromQuorum().thenCompose((_index) -> asyncOp.toFunction().apply(request)).whenCompleteAsync((result, t) -> {
+            if (t != null) {
+                LOGGER.warn("searchTemplate fail!", t);
+                responseObserver.onError(t);
+            } else {
+                responseObserver.onNext(result);
+                responseObserver.onCompleted();
+            }
+        }, offloadWorker);
 
     }
 }
