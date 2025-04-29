@@ -122,8 +122,8 @@ public final class LiquidationScanner {
             long profit = position.liquidateEstimateProfit(spec, priceRecord);
             // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
             long locked = position.calculateRequiredMarginForFutures(spec);
-            // 账户总权益 = 可用余额(隐式冻结) + 未实现盈亏，表示账户的整体抗风险能力
-            long equity = balance + profit;
+            // 账户总权益 = 初始保证金 + 未实现盈亏，表示账户的整体抗风险能力
+            long equity = locked + profit;
             // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
             long maintenanceMargin = position.calculateMaintenanceMargin(spec);
             // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
