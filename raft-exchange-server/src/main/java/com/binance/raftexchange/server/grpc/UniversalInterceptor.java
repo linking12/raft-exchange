@@ -30,8 +30,8 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     /**
-     * jraft处理buffer是8M
-     * 如果一次拉取4k个，同一时刻可以支持2k个client的并发
+     * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
+     * 
      * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
      */
     private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "4096"));
@@ -48,7 +48,8 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private final AtomicInteger inflight = new AtomicInteger(0);
 
-    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ExecutorService offloadWorker, ServerCall.Listener<ReqT> delegate, ServerCall<ReqT, RespT> call) {
+    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ExecutorService offloadWorker, ServerCall.Listener<ReqT> delegate,
+        ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
         this.offloadWorker = offloadWorker;
@@ -68,6 +69,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter off
              */
+            @SuppressWarnings("unchecked")
             CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
                 commandOnTheWay.remove(message);
                 if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
