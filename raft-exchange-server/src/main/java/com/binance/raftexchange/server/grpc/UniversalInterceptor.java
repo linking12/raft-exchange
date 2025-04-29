@@ -30,11 +30,11 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     /**
-     * jraft默认的处理buffer是16k个，因此需要控制grpc的每次request的拉取量
-     * 如果一次拉取16个，同一时刻可以支持1k个client的并发
+     * jraft处理buffer是8M
+     * 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
      */
-    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "16"));
+    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "4096"));
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
@@ -59,9 +59,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     @Override
     public void onReady() {
         super.onReady();
-        int requested = WINDOW_SIZE;
-        inflight.set(requested);
-        call.request(requested);
+        maybeRequestMore();
     }
 
     @Override
@@ -72,17 +70,15 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
              */
             CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
                 commandOnTheWay.remove(message);
+                if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
+                    maybeRequestMore();
+                }
                 if (call.isCancelled() || halfClose.get()) {
                     cancelAll();
                     return;
                 }
                 if (result != null) {
                     call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
-                    if (inflight.decrementAndGet() == 0) {
-                        int requested = WINDOW_SIZE;
-                        inflight.set(requested);
-                        call.request(requested);
-                    }
                     return;
                 }
                 if (err instanceof CancellationException) {
@@ -102,6 +98,14 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         } catch (Exception e) {
             // 不应该到这里
             throw new RuntimeException(e);
+        }
+    }
+
+    private void maybeRequestMore() {
+        int needed = WINDOW_SIZE - inflight.get();
+        if (needed >= WINDOW_SIZE / 2) { // 只有缺了一半，才补
+            inflight.addAndGet(needed);
+            call.request(needed);
         }
     }
 

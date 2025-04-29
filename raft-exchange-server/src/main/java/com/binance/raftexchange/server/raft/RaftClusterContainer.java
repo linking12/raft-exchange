@@ -60,6 +60,7 @@ public class RaftClusterContainer {
         nodeOptions.setSnapshotUri(dataPath + File.separator + "snapshot");
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
         RaftOptions raftOptions = new RaftOptions();
+        raftOptions.setDisruptorBufferSize(8 * 1024 * 1024); // 撮合5MT/s，buffer给到8M条，每条log(用户数据[ApiCommand]+元数据[idx term type])大概是128字节，大约1G内存
         raftOptions.setReadOnlyOptions(ReadOnlyOption.ReadOnlySafe); // 先使用最保守的readIndex优化
         nodeOptions.setRaftOptions(raftOptions);
         nodeOptions.setInitialConf(conf);
