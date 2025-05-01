@@ -28,6 +28,7 @@ import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -141,10 +142,8 @@ public final class LiquidationScanner {
                         price = 1; // 防止除零，默认最小价格
                     log.debug("Fallback to average open price={} for symbol={}", price, position.symbol);
                 }
-                /**
-                 * 计算强平数量： 找一个x，满足：x × price ≥ deficit + x × taker_fee x ≥ deficit / (price - taker_fee)
-                 */
-                long x = (long)Math.ceil((double)deficit / (price - spec.takerFee));
+                // 计算强平数量
+                long x = CoreArithmeticUtils.calculateSizeToLiquidate(deficit, price, spec);
                 long sizeToLiquidate = Math.min(position.openVolume, x);
                 if (sizeToLiquidate > 0) {
                     // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算

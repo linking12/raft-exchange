@@ -27,53 +27,106 @@ public final class CoreArithmeticUtils {
     }
 
     public static long calculateAmountBidTakerFee(long size, long price, CoreSymbolSpecification spec) {
-        return size * (price * spec.quoteScaleK + spec.takerFee);
+        long tradeAmount = size * price * spec.quoteScaleK;
+        long fee = spec.isFixedFee()
+                ? size * spec.takerFee
+                : tradeAmount * spec.takerFee / spec.feeScaleK;
+        return tradeAmount + fee;
     }
 
-    public static long calculateAmountBidReleaseCorrMaker(long size, long priceDiff, CoreSymbolSpecification spec) {
-        return size * (priceDiff * spec.quoteScaleK + (spec.takerFee - spec.makerFee));
+    public static void logAmountBidTakerFee(long result, long size, long price, CoreSymbolSpecification spec) {
+        if (spec.isFixedFee()) {
+            log.debug("hold amount buy {} = {} * ({} * {} + {})",
+                    result, size, price, spec.quoteScaleK, spec.takerFee);
+        } else {
+            log.debug("hold amount buy {} = {} * {} * {} * (1 + {})",
+                    result, size, price, spec.quoteScaleK, spec.takerFee / spec.feeScaleK);
+        }
+    }
+
+    /**
+     * 计算订单成交后，返还给Maker的超额冻结资金
+     * <br>
+     * 假设taker费 固定2｜浮动0.1；maker费 固定1｜浮动0.01
+     * <br>
+     * 下单（taker）5块，100手，扣500；手续费 固定 2 * 100 = 200｜浮动 0.1 * 500 = 50
+     * <br>
+     * 最终 4块和别人成单（maker），100手，交易额400；手续费 固定 1 * 100 = 100｜浮动 0.01 * 400 = 4
+     * <br>
+     * 交易部分要退还 (5 - 4) * 100 = 100
+     * <br>
+     * 手续费退还 固定 100 * (2 - 1) = 100 ｜ 浮动 5 * 100 * 0.1 - 4 * 100 * 0.01 = 46
+     * <br>
+     *
+     * @param size            成交手数
+     * @param bidderHoldPrice 下单时的冻结参考价格
+     * @param price           实际成交价格
+     * @param spec            币种配置
+     * @return 应返还的资金（本金差额 + 手续费差额）
+     */
+    public static long calculateAmountBidReleaseCorrMaker(long size, long bidderHoldPrice, long price, CoreSymbolSpecification spec) {
+        long tradeAmountDiff = size * (bidderHoldPrice - price) * spec.quoteScaleK;
+        long feeDiff = spec.isFixedFee()
+                ? size * (spec.takerFee - spec.makerFee)
+                : (price * size * spec.takerFee - bidderHoldPrice * size * spec.makerFee) / spec.feeScaleK;
+        return tradeAmountDiff + feeDiff;
     }
 
     public static long calculateAmountBidTakerFeeForBudget(long size, long budgetInSteps, CoreSymbolSpecification spec) {
+        long budgetAmount = budgetInSteps * spec.quoteScaleK;
+        long fee = spec.isFixedFee()
+                ? size * spec.takerFee
+                : budgetAmount * spec.takerFee / spec.feeScaleK;
+        return budgetAmount + fee;
+    }
 
-        return budgetInSteps * spec.quoteScaleK + size * spec.takerFee;
+    public static void logAmountBidTakerFeeForBudget(long result, long size, long budgetInSteps, CoreSymbolSpecification spec) {
+        if (spec.isFixedFee()) {
+            log.debug("hold amount budget buy {} = {} * {} + {} * {}",
+                    result, budgetInSteps, spec.quoteScaleK, size, spec.takerFee);
+        } else {
+            log.debug("hold amount budget buy {} = {} * {} + {} * {} * {}",
+                    result, budgetInSteps, spec.quoteScaleK, budgetInSteps, spec.quoteScaleK, spec.takerFee / spec.feeScaleK);
+        }
+    }
+
+    public static boolean isAskPriceTooLow(long price, CoreSymbolSpecification spec) {
+        if (spec.isFixedFee()) {
+            return price * spec.quoteScaleK < spec.takerFee;
+        } else {
+            // 只要price大于0，就能按比例收到费用
+            return price <= 0;
+        }
+    }
+
+    public static long calculateTakerFee(long size, long price, CoreSymbolSpecification spec) {
+        if (spec.isFixedFee()) {
+            return size * spec.takerFee;
+        } else {
+            long tradeAmount = size * price * spec.quoteScaleK;
+            return tradeAmount * spec.takerFee / spec.feeScaleK;
+        }
+    }
+
+    public static long calculateMakerFee(long size, long price, CoreSymbolSpecification spec) {
+        if (spec.isFixedFee()) {
+            return size * spec.makerFee;
+        } else {
+            long tradeAmount = size * price * spec.quoteScaleK;
+            return tradeAmount * spec.makerFee / spec.feeScaleK;
+        }
     }
 
     /**
-     * 计算基于数量的吃单手续费。
-     * 
-     * @param size 交易数量（基础货币单位）
-     * @param spec 交易对规格
-     * @return 报价货币的手续费金额
+     * 计算强平数量
+     * 找一个x，满足：x × price ≥ deficit + x × taker_fee
+     *              x ≥ deficit / (price - taker_fee)
      */
-    public static long calculateTakerFee(long size, CoreSymbolSpecification spec) {
-        if (size < 0 || spec.takerFee < 0) {
-            log.warn("Invalid input for taker fee calculation: size={}, takerFee={}", size, spec.takerFee);
-            throw new IllegalArgumentException("Size and takerFee must be non-negative");
-        }
-        if (size > Long.MAX_VALUE / spec.takerFee) {
-            log.warn("Potential overflow in taker fee calculation: size={}, takerFee={}", size, spec.takerFee);
-            throw new ArithmeticException("Taker fee calculation overflow");
-        }
-        return size * spec.takerFee;
+    public static long calculateSizeToLiquidate(long deficit, long price, CoreSymbolSpecification spec) {
+        long takerFeePerSize = spec.isFixedFee()
+                ? spec.takerFee
+                : price * spec.takerFee / spec.feeScaleK;
+        return (long) Math.ceil((double) deficit / (price - takerFeePerSize));
     }
 
-    /**
-     * 计算基于数量的挂单手续费。
-     * 
-     * @param size 交易数量（基础货币单位）
-     * @param spec 交易对规格
-     * @return 报价货币的手续费金额
-     */
-    public static long calculateMakerFee(long size, CoreSymbolSpecification spec) {
-        if (size < 0 || spec.makerFee < 0) {
-            log.warn("Invalid input for maker fee calculation: size={}, makerFee={}", size, spec.makerFee);
-            throw new IllegalArgumentException("Size and makerFee must be non-negative");
-        }
-        if (size > Long.MAX_VALUE / spec.makerFee) {
-            log.warn("Potential overflow in maker fee calculation: size={}, makerFee={}", size, spec.makerFee);
-            throw new ArithmeticException("Maker fee calculation overflow");
-        }
-        return size * spec.makerFee;
-    }
 }
