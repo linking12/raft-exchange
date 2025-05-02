@@ -30,7 +30,7 @@ public final class CoreArithmeticUtils {
         long tradeAmount = size * price * spec.quoteScaleK;
         long fee = spec.isFixedFee()
                 ? size * spec.takerFee
-                : tradeAmount * spec.takerFee / spec.feeScaleK;
+                : ceilDivide(tradeAmount * spec.takerFee, spec.feeScaleK);
         return tradeAmount + fee;
     }
 
@@ -40,7 +40,7 @@ public final class CoreArithmeticUtils {
                     result, size, price, spec.quoteScaleK, spec.takerFee);
         } else {
             log.debug("hold amount buy {} = {} * {} * {} * (1 + {})",
-                    result, size, price, spec.quoteScaleK, spec.takerFee / spec.feeScaleK);
+                    result, size, price, spec.quoteScaleK, ceilDivide(spec.takerFee, spec.feeScaleK));
         }
     }
 
@@ -68,7 +68,7 @@ public final class CoreArithmeticUtils {
         long tradeAmountDiff = size * (bidderHoldPrice - price) * spec.quoteScaleK;
         long feeDiff = spec.isFixedFee()
                 ? size * (spec.takerFee - spec.makerFee)
-                : (price * size * spec.takerFee - bidderHoldPrice * size * spec.makerFee) / spec.feeScaleK;
+                : ceilDivide(price * size * spec.takerFee - bidderHoldPrice * size * spec.makerFee, spec.feeScaleK);
         return tradeAmountDiff + feeDiff;
     }
 
@@ -76,7 +76,7 @@ public final class CoreArithmeticUtils {
         long budgetAmount = budgetInSteps * spec.quoteScaleK;
         long fee = spec.isFixedFee()
                 ? size * spec.takerFee
-                : budgetAmount * spec.takerFee / spec.feeScaleK;
+                : ceilDivide(budgetAmount * spec.takerFee, spec.feeScaleK);
         return budgetAmount + fee;
     }
 
@@ -104,7 +104,7 @@ public final class CoreArithmeticUtils {
             return size * spec.takerFee;
         } else {
             long tradeAmount = size * price * spec.quoteScaleK;
-            return tradeAmount * spec.takerFee / spec.feeScaleK;
+            return ceilDivide(tradeAmount * spec.takerFee, spec.feeScaleK);
         }
     }
 
@@ -113,7 +113,7 @@ public final class CoreArithmeticUtils {
             return size * spec.makerFee;
         } else {
             long tradeAmount = size * price * spec.quoteScaleK;
-            return tradeAmount * spec.makerFee / spec.feeScaleK;
+            return ceilDivide(tradeAmount * spec.makerFee, spec.feeScaleK);
         }
     }
 
@@ -125,8 +125,16 @@ public final class CoreArithmeticUtils {
     public static long calculateSizeToLiquidate(long deficit, long price, CoreSymbolSpecification spec) {
         long takerFeePerSize = spec.isFixedFee()
                 ? spec.takerFee
-                : price * spec.takerFee / spec.feeScaleK;
-        return (long) Math.ceil((double) deficit / (price - takerFeePerSize));
+                : ceilDivide(price * spec.takerFee, spec.feeScaleK);
+        return ceilDivide(deficit, price - takerFeePerSize);
     }
 
+    /**
+     * 向上取整计算整数除法，防止出现 x / y = 0
+     * ceil(x / y) = (x + y - 1) / y
+     * 性能比Math.ceil好，因为不引入浮点数计算
+     */
+    private static long ceilDivide(long dividend, long divisor) {
+        return (dividend + divisor -1 ) / divisor;
+    }
 }
