@@ -23,6 +23,7 @@ import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
@@ -56,7 +57,8 @@ public abstract class ITFeesMargin {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
 
-            final long jpyAmount1 = 240_000L;
+            final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
+            final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
             container.createUserWithMoney(UID_1, CURRENECY_JPY, jpyAmount1);
 
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
@@ -79,7 +81,8 @@ public abstract class ITFeesMargin {
             });
 
             // create second user
-            final long jpyAmount2 = 150_000L;
+            final long takerFeeForPlaceOrder102 = CoreArithmeticUtils.calculateTakerFee(30, 10770L, SYMBOLSPECFEE_USD_JPY);
+            final long jpyAmount2 = 150_000L + takerFeeForPlaceOrder102;
             container.createUserWithMoney(UID_2, CURRENECY_JPY, jpyAmount2);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -104,7 +107,7 @@ public abstract class ITFeesMargin {
 
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(240_000L - makerFee * 30));
+                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1 - makerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
                 assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.SHORT));
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
@@ -116,7 +119,7 @@ public abstract class ITFeesMargin {
 
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(150_000L - takerFee * 30));
+                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount2 - takerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
                 assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
@@ -145,7 +148,8 @@ public abstract class ITFeesMargin {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
 
-            final long jpyAmount1 = 250_000L;
+            final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(50, 10770L, SYMBOLSPECFEE_USD_JPY);
+            final long jpyAmount1 = 250_000L + takerFeeForPlaceOrder101;
             container.createUserWithMoney(UID_1, CURRENECY_JPY, jpyAmount1);
 
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
@@ -168,7 +172,8 @@ public abstract class ITFeesMargin {
             });
 
             // create second user
-            final long jpyAmount2 = 200_000L;
+            final long takerFeeForPlaceOrder102 = CoreArithmeticUtils.calculateTakerFee(30, 10770L, SYMBOLSPECFEE_USD_JPY);
+            final long jpyAmount2 = 200_000L + takerFeeForPlaceOrder102;
             container.createUserWithMoney(UID_2, CURRENECY_JPY, jpyAmount2);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -193,7 +198,7 @@ public abstract class ITFeesMargin {
 
             // verify buyer maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(250_000L - makerFee * 30));
+                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1 - makerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
                 assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
@@ -205,7 +210,7 @@ public abstract class ITFeesMargin {
 
             // verify seller taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(200_000L - takerFee * 30));
+                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount2 - takerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
                 assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.SHORT));
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
@@ -217,7 +222,11 @@ public abstract class ITFeesMargin {
 
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
-            final long jpyFees = (makerFee + takerFee) * 30;
+
+
+            final long jpyFees = SYMBOLSPECFEE_USD_JPY.isFixedFee()? (makerFee + takerFee) * 30 :
+                    CoreArithmeticUtils.calculateTakerFee(30, 10770L, SYMBOLSPECFEE_USD_JPY) +
+                            CoreArithmeticUtils.calculateMakerFee(30, 10770L, SYMBOLSPECFEE_USD_JPY);
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_JPY), is(jpyFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(0L));
@@ -235,7 +244,8 @@ public abstract class ITFeesMargin {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
 
-            final long jpyAmount1 = 240_000L;
+            final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
+            final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
             container.createUserWithMoney(UID_1, CURRENECY_JPY, jpyAmount1);
 
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
@@ -260,7 +270,7 @@ public abstract class ITFeesMargin {
 
             // verify balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(240_000L));
+                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
                 assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.EMPTY));
                 assertThat(profile.getPositions().get(symbolId).openVolume, is(0L));
@@ -277,7 +287,7 @@ public abstract class ITFeesMargin {
 
             // verify balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(240_000L));
+                assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
                 assertTrue(profile.getPositions().isEmpty());
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
@@ -287,7 +297,7 @@ public abstract class ITFeesMargin {
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(0L));
-            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_JPY), is(240_000L));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_JPY), is(jpyAmount1));
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_JPY), is(0L));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(0L));
