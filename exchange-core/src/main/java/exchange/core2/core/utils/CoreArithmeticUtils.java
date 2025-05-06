@@ -90,12 +90,12 @@ public final class CoreArithmeticUtils {
         }
     }
 
-    public static boolean isAskPriceTooLow(long price, CoreSymbolSpecification spec) {
+    public static boolean isAskPriceTooLow(long price, long size, CoreSymbolSpecification spec) {
         if (spec.isFixedFee()) {
             return price * spec.quoteScaleK < spec.takerFee;
         } else {
-            // 只要price大于0，就能按比例收到费用
-            return price <= 0;
+            // 至少要能收到1手续费，才能下单
+            return size * price * spec.quoteScaleK * spec.takerFee < spec.feeScaleK;
         }
     }
 
@@ -134,7 +134,7 @@ public final class CoreArithmeticUtils {
      * ceil(x / y) = (x + y - 1) / y
      * 性能比Math.ceil好，因为不引入浮点数计算
      */
-    private static long ceilDivide(long dividend, long divisor) {
+    public static long ceilDivide(long dividend, long divisor) {
         return (dividend + divisor -1 ) / divisor;
     }
 }
