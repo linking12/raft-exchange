@@ -222,11 +222,7 @@ public abstract class ITFeesMargin {
 
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
-
-
-            final long jpyFees = SYMBOLSPECFEE_USD_JPY.isFixedFee()? (makerFee + takerFee) * 30 :
-                    CoreArithmeticUtils.calculateTakerFee(30, 10770L, SYMBOLSPECFEE_USD_JPY) +
-                            CoreArithmeticUtils.calculateMakerFee(30, 10770L, SYMBOLSPECFEE_USD_JPY);
+            final long jpyFees = (makerFee + takerFee) * 30;
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_JPY), is(jpyFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(0L));
