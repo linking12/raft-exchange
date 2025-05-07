@@ -896,14 +896,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
         } else {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 free = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
+            } else if (cmd.orderType == OrderType.IOC_BUDGET && ev.nextEvent == null) {
+                // IOC_BUDGET 且没有后续事件，表示订单被完全拒绝，全额返还
+                free = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(cmd.size, cmd.price, spec));
             } else {
-                if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.IOC_BUDGET && ev.eventType == MatcherEventType.REJECT) {
-                    // 对于 IOC_BUDGET 的 REJECT，释放全部冻结资金
-                    free = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(cmd.size, cmd.reserveBidPrice, spec));
-                } else {
-                    // 其他情况（包括 REDUCE 或非 IOC_BUDGET），释放指定大小的冻结资金
-                    free = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
-                }
+                // 其他情况（包括 REDUCE 或非 IOC_BUDGET），释放指定大小的冻结资金
+                free = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFee(ev.size, ev.bidderHoldPrice, spec));
             }
         }
         /**
@@ -1047,8 +1045,20 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long leftover = 0;
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 // for FOK budget held sum calculated differently
-                takerSizePriceHeldSum = cmd.price; // FOK_BUDGET冻结的是总预算，即cmd.price，不是成交单价
-            } else if (takerSizeForThisHandler > 0) {
+                takerSizePriceHeldSum = cmd.price; // FOK_BUDGET冻结的是总预算，即cmd.price，不是实际成交价
+            } else if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.IOC_BUDGET) {
+                // IOC_BUDGET 部分成交
+                // 1. 原始冻结总额
+                long heldTotal = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(cmd.size, cmd.price, spec);
+                // 2. 实际成交金额
+                long actualMatchedAmount = takerSizePriceSum * spec.quoteScaleK;
+                // 3. 实际手续费，基于实际均价
+                long actualFee = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceSum / takerSizeForThisHandler, spec);
+                // 4. 差值 = 预扣 - 实际支出
+                leftover = heldTotal - (actualMatchedAmount + actualFee);
+                // 置为相等，这样 totalAdjustment 就只和 leftover 有关
+                takerSizePriceHeldSum = takerSizePriceSum;
+            } else {
                 // 其他单子，都能部分成交，bidPrice和price有可能不一样，都要重新算
                 long feeHeld = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceHeldSum / takerSizeForThisHandler, spec);
                 long feeUsed = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceSum / takerSizeForThisHandler, spec);
