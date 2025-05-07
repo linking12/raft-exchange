@@ -90,12 +90,12 @@ public final class CoreArithmeticUtils {
         }
     }
 
-    public static boolean isAskPriceTooLow(long price, long size, CoreSymbolSpecification spec) {
+    public static boolean isAskPriceTooLow(long price, CoreSymbolSpecification spec) {
         if (spec.isFixedFee()) {
             return price * spec.quoteScaleK < spec.takerFee;
         } else {
-            // 至少要能收到1手续费，才能下单
-            return size * price * spec.quoteScaleK * spec.takerFee < spec.feeScaleK;
+            // 假设只成交1手，也要保证收到手续费，才能下单
+            return price * spec.quoteScaleK * spec.takerFee < spec.feeScaleK;
         }
     }
 

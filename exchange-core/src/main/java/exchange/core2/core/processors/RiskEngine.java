@@ -549,7 +549,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         } else {
 
-            if (CoreArithmeticUtils.isAskPriceTooLow(cmd.price, cmd.size, spec)) {
+            if (CoreArithmeticUtils.isAskPriceTooLow(cmd.price, spec)) {
                 // log.debug("cmd.price {} * spec.quoteScaleK {} < {} spec.takerFee", cmd.price, spec.quoteScaleK, spec.takerFee);
                 // todo also check for move command
                 return CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE;
