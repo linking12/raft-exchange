@@ -38,7 +38,8 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
             exchange.core2.core.common.api.ApiPlaceOrder.builder().price(grpcApiPlaceOrder.getPrice()).size(grpcApiPlaceOrder.getSize())
                 .orderId(grpcApiPlaceOrder.getOrderId()).action(exchange.core2.core.common.OrderAction.of((byte)grpcApiPlaceOrder.getAction().getNumber()))
                 .orderType(exchange.core2.core.common.OrderType.of((byte)grpcApiPlaceOrder.getOrderType().getNumber())).uid(grpcApiPlaceOrder.getUid())
-                .symbol(grpcApiPlaceOrder.getSymbol()).userCookie(grpcApiPlaceOrder.getUserCookie()).reservePrice(grpcApiPlaceOrder.getReservePrice()).build();
+                .symbol(grpcApiPlaceOrder.getSymbol()).userCookie(grpcApiPlaceOrder.getUserCookie()).leverage(grpcApiPlaceOrder.getLeverage())
+                .reservePrice(grpcApiPlaceOrder.getReservePrice()).build();
 
         return callExchange(apiPlaceOrder);
     }

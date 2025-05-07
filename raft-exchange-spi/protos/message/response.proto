@@ -25,6 +25,8 @@ enum CommandResultCode {
     RISK_INVALID_RESERVE_BID_PRICE = 2002;
     RISK_ASK_PRICE_LOWER_THAN_FEE = 2003;
     RISK_MARGIN_TRADING_DISABLED = 2004;
+    RISK_INVALID_AMOUNT = 2005;
+    RISK_INVALID_LEVERAGE = 2006;
 
     MATCHING_UNKNOWN_ORDER_ID = 3002;
     MATCHING_UNSUPPORTED_COMMAND = 3004;
@@ -150,14 +152,15 @@ message OrderCommand {
     int64 uid = 9;
     int64 timestamp = 10;
     int32 user_cookie = 11;
-    int64 events_group = 12;
-    int32 service_flags = 13;
-    CommandResultCode result_code = 14;
+    int32 leverage = 12;
+    int64 events_group = 13;
+    int32 service_flags = 14;
+    CommandResultCode result_code = 15;
     oneof matcher_event_present {
-      MatcherTradeEvent matcher_event = 15;
+      MatcherTradeEvent matcher_event = 16;
     }
     oneof market_data_present {
-      L2MarketData market_data = 16;
+      L2MarketData market_data = 17;
     }
 }
 

@@ -69,6 +69,9 @@ public final class OrderCommand implements IOrder {
 
     public int userCookie;
 
+    // 新增字段：杠杆倍数（默认 1 表示无杠杆）
+    public int leverage = 1;
+
     // filled by grouping processor:
 
     public long eventsGroup;
@@ -191,6 +194,7 @@ public final class OrderCommand implements IOrder {
         cmd2.symbol = this.symbol;
         cmd2.uid = this.uid;
         cmd2.timestamp = this.timestamp;
+        cmd2.leverage = this.leverage;
 
         cmd2.reserveBidPrice = this.reserveBidPrice;
         cmd2.price = this.price;

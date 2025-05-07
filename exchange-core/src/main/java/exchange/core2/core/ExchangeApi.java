@@ -541,6 +541,7 @@ public final class ExchangeApi {
         cmd.action = api.action;
         cmd.orderType = api.orderType;
         cmd.symbol = api.symbol;
+        cmd.leverage = api.leverage;
         cmd.uid = api.uid;
         cmd.userCookie = api.userCookie;
         cmd.resultCode = CommandResultCode.NEW;
@@ -846,6 +847,7 @@ public final class ExchangeApi {
 
     public long placeNewOrder(
             int userCookie,
+            int leverage,
             long price,
             long reservedBidPrice,
             long size,
@@ -871,6 +873,7 @@ public final class ExchangeApi {
             cmd.symbol = symbol;
             cmd.uid = uid;
             cmd.userCookie = userCookie;
+            cmd.leverage = leverage;
             promises.put(seq, callback);
 
         } finally {
@@ -885,6 +888,7 @@ public final class ExchangeApi {
                               long timestampNs,
                               long orderId,
                               int userCookie,
+                              int leverage,
                               long price,
                               long reservedBidPrice,
                               long size,
@@ -910,6 +914,7 @@ public final class ExchangeApi {
             cmd.symbol = symbol;
             cmd.uid = uid;
             cmd.userCookie = userCookie;
+            cmd.leverage = leverage;
         });
     }
 

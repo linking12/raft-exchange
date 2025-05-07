@@ -17,6 +17,7 @@ package exchange.core2.core.common;
 
 
 import exchange.core2.core.processors.RiskEngine;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
@@ -46,7 +47,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long pendingSellSize = 0;
     public long pendingBuySize = 0;
 
-    public void initialize(long uid, int symbol, int currency) {
+    public int leverage = 1; // 用户自选杠杆，默认 1 倍
+
+    public void initialize(long uid, int symbol, int currency, int leverage) {
         this.uid = uid;
 
         this.symbol = symbol;
@@ -59,6 +62,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         this.pendingSellSize = 0;
         this.pendingBuySize = 0;
+
+        this.leverage = leverage;
     }
 
     public SymbolPositionRecord(long uid, BytesIn bytes) {
@@ -74,6 +79,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         this.pendingSellSize = bytes.readLong();
         this.pendingBuySize = bytes.readLong();
+
+        this.leverage = bytes.readInt();
     }
 
 
@@ -119,11 +126,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             case LONG:
                 return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0)
                         ? (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum)
-                        : spec.marginBuy * openVolume); // unknown price - no liquidity - require extra margin
+                        : CoreArithmeticUtils.ceilDivide(spec.marginBuy, leverage) * openVolume); // unknown price - no liquidity - require extra margin
             case SHORT:
                 return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE)
                         ? (openPriceSum - openVolume * lastPriceCacheRecord.askPrice)
-                        : spec.marginSell * openVolume); // unknown price - no liquidity - require extra margin
+                        : CoreArithmeticUtils.ceilDivide(spec.marginSell, leverage) * openVolume); // unknown price - no liquidity - require extra margin
             default:
                 throw new IllegalStateException();
         }
@@ -141,10 +148,12 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 return profit;
             case LONG:
                 return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0)
-                    ? (openVolume * lastPriceCacheRecord.markPrice - openPriceSum) : spec.marginBuy * openVolume);
+                    ? (openVolume * lastPriceCacheRecord.markPrice - openPriceSum)
+                    : CoreArithmeticUtils.ceilDivide(spec.marginBuy, leverage) * openVolume);
             case SHORT:
                 return profit + ((lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0)
-                    ? (openPriceSum - openVolume * lastPriceCacheRecord.markPrice) : spec.marginSell * openVolume);
+                    ? (openPriceSum - openVolume * lastPriceCacheRecord.markPrice)
+                    : CoreArithmeticUtils.ceilDivide(spec.marginSell, leverage) * openVolume);
             default:
                 throw new IllegalStateException();
         }
@@ -156,7 +165,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return
      */
     public long calculateMaintenanceMargin(CoreSymbolSpecification spec) {
-        return direction == PositionDirection.EMPTY ? 0 : openVolume * spec.maintenanceMargin;
+        return direction == PositionDirection.EMPTY ? 0 : openVolume * CoreArithmeticUtils.ceilDivide(spec.maintenanceMargin, leverage);
     }
     
     /**
@@ -169,8 +178,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return required margin
      */
     public long calculateRequiredMarginForFutures(CoreSymbolSpecification spec) {
-        final long specMarginBuy = spec.marginBuy;
-        final long specMarginSell = spec.marginSell;
+        final long specMarginBuy = CoreArithmeticUtils.ceilDivide(spec.marginBuy, leverage);
+        final long specMarginSell = CoreArithmeticUtils.ceilDivide(spec.marginSell, leverage);
 
         final long signedPosition = openVolume * direction.getMultiplier();
         final long currentRiskBuySize = pendingBuySize + signedPosition;
@@ -197,8 +206,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return -1 if order will reduce current exposure (no additional margin required), otherwise full margin for symbol position if order placed/executed
      */
     public long calculateRequiredMarginForOrder(final CoreSymbolSpecification spec, final OrderAction action, final long size) {
-        final long specMarginBuy = spec.marginBuy;
-        final long specMarginSell = spec.marginSell;
+        final long specMarginBuy = CoreArithmeticUtils.ceilDivide(spec.marginBuy, leverage);
+        final long specMarginSell = CoreArithmeticUtils.ceilDivide(spec.marginSell, leverage);
 
         final long signedPosition = openVolume * direction.getMultiplier();
         final long currentRiskBuySize = pendingBuySize + signedPosition;
@@ -293,6 +302,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         bytes.writeLong(profit);
         bytes.writeLong(pendingSellSize);
         bytes.writeLong(pendingBuySize);
+        bytes.writeInt(leverage);
     }
 
     public void reset() {
@@ -305,6 +315,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         openVolume = 0;
         openPriceSum = 0;
         direction = PositionDirection.EMPTY;
+
+        leverage = 1;
     }
 
     public void validateInternalState() {

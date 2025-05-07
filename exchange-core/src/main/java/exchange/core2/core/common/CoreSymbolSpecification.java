@@ -49,6 +49,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public final long marginBuy;   // buy margin (quote currency)
     public final long marginSell;  // sell margin (quote currency)
     public final long maintenanceMargin; // 维持保证金
+    public final int maxLeverage; // 最大杠杆倍数，默认0无限制
 
     public CoreSymbolSpecification(BytesIn bytes) {
         this.symbolId = bytes.readInt();
@@ -63,6 +64,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         this.marginBuy = bytes.readLong();
         this.marginSell = bytes.readLong();
         this.maintenanceMargin = bytes.readLong();
+        this.maxLeverage = bytes.readInt();
     }
 
 /* NOT SUPPORTED YET:
@@ -83,6 +85,10 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         return feeScaleK == 0;
     }
 
+    public boolean isValidLeverage(int leverage) {
+       return maxLeverage == 0 || (leverage >= 1 && leverage <= maxLeverage);
+    }
+
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeInt(symbolId);
@@ -97,6 +103,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         bytes.writeLong(marginBuy);
         bytes.writeLong(marginSell);
         bytes.writeLong(maintenanceMargin);
+        bytes.writeInt(maxLeverage);
     }
 
     @Override
@@ -113,7 +120,8 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
                 feeScaleK,
                 marginBuy,
                 marginSell,
-                maintenanceMargin);
+                maintenanceMargin,
+                maxLeverage);
     }
 
     @Override
@@ -131,7 +139,8 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
                 feeScaleK == that.feeScaleK &&
                 marginBuy == that.marginBuy &&
                 marginSell == that.marginSell &&
-                maintenanceMargin == that.maintenanceMargin && 
+                maintenanceMargin == that.maintenanceMargin &&
+                maxLeverage == that.maxLeverage &&
                 type == that.type;
     }
 }
