@@ -1047,8 +1047,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long leftover = 0;
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 // for FOK budget held sum calculated differently
-                takerSizePriceHeldSum = takerSizePriceSum;
-            } else {
+                takerSizePriceHeldSum = cmd.price; // FOK_BUDGET冻结的是总预算，即cmd.price，不是成交单价
+            } else if (takerSizeForThisHandler > 0) {
                 // 其他单子，都能部分成交，bidPrice和price有可能不一样，都要重新算
                 long feeHeld = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceHeldSum / takerSizeForThisHandler, spec);
                 long feeUsed = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceSum / takerSizeForThisHandler, spec);
