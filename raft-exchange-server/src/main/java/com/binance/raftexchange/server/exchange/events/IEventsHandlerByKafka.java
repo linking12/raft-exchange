@@ -90,7 +90,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             //reduce和cancel会从reduceEvent发出来，其他命令暂时不关注
             return;
         }
-
+        builder.setResultCodeValue(Math.abs(commandResult.getResultCode().getCode()));
         OrderCommand command = builder.build();
         sender.send(new ProducerRecord<>(orderEventTopic, command.getUid(), command.toByteArray()));
     }
