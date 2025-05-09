@@ -21,9 +21,14 @@ import com.binance.raftexchange.stubs.OrderBookRecordPB;
 import com.binance.raftexchange.stubs.ReduceEventPB;
 import com.binance.raftexchange.stubs.TradeEventPB;
 import com.binance.raftexchange.stubs.TradePB;
+import com.binance.raftexchange.stubs.response.OrderCommand;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.common.FundEvent.FundEventType;
+import exchange.core2.core.common.api.ApiCommand;
+import exchange.core2.core.common.api.ApiMoveOrder;
+import exchange.core2.core.common.api.ApiPlaceOrder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +40,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
 
     static {
         builderPool = new ProtoBuilderPool();
+        builderPool.register(OrderCommand.Builder.class, OrderCommand::newBuilder);
         builderPool.register(TradeEventPB.Builder.class, TradeEventPB::newBuilder);
         builderPool.register(ReduceEventPB.Builder.class, ReduceEventPB::newBuilder);
         builderPool.register(OrderBookPB.Builder.class, OrderBookPB::newBuilder);
@@ -42,17 +48,51 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
     }
 
     private final KafkaProducer<Long, byte[]> sender;
-    private final String topic;
     private final AtomicBoolean isLeader = new AtomicBoolean(false);
+    private final String orderEventTopic;
+    private final String tradeEventTopic;
+    private final String fundEventTopic;
+    private final String alertEventTopic;
+    private final String marketDataTopic;
 
-    public static void init(KafkaProducer<Long, byte[]> sender, String topic) {
-        INSTANCE = new IEventsHandlerByKafka(sender, topic);
+    public static void init(KafkaProducer<Long, byte[]> sender, String topicPrefix) {
+        INSTANCE = new IEventsHandlerByKafka(sender, topicPrefix);
     }
 
-    private IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topic) {
+    private IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topicPrefix) {
         this.sender = sender;
-        this.topic = topic;
+        this.orderEventTopic = topicPrefix + "-order-event";
+        this.tradeEventTopic = topicPrefix + "-trade-event";
+        this.fundEventTopic = topicPrefix + "-fund-event";
+        this.alertEventTopic = topicPrefix + "-alert-event";
+        this.marketDataTopic = topicPrefix + "-market-data";
         RoleChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
+    }
+
+    @Override
+    public void commandResult(ApiCommandResult commandResult) {
+        if (!isLeader.get()) {
+            return;
+        }
+
+        OrderCommand.Builder builder = builderPool.get(OrderCommand.Builder.class);
+        ApiCommand apiCommand = commandResult.getCommand();
+        if (apiCommand instanceof ApiPlaceOrder) {
+            builder.setPrice(((ApiPlaceOrder) apiCommand).price).setSize(((ApiPlaceOrder) apiCommand).size)
+                .setOrderId(((ApiPlaceOrder) apiCommand).orderId).setActionValue(((ApiPlaceOrder) apiCommand).action.getCode())
+                .setOrderTypeValue(((ApiPlaceOrder) apiCommand).orderType.getCode()).setUid(((ApiPlaceOrder) apiCommand).uid)
+                .setSymbol(((ApiPlaceOrder) apiCommand).symbol).setUserCookie(((ApiPlaceOrder) apiCommand).userCookie)
+                .setLeverage(((ApiPlaceOrder) apiCommand).leverage).setReserveBidPrice(((ApiPlaceOrder) apiCommand).reservePrice);
+        } else if (apiCommand instanceof ApiMoveOrder) {
+            builder.setOrderId(((ApiMoveOrder) apiCommand).orderId).setPrice(((ApiMoveOrder) apiCommand).newPrice)
+                .setUid(((ApiMoveOrder) apiCommand).uid).setSymbol(((ApiMoveOrder) apiCommand).symbol);
+        } else {
+            //reduce和cancel会从reduceEvent发出来，其他命令暂时不关注
+            return;
+        }
+
+        OrderCommand command = builder.build();
+        sender.send(new ProducerRecord<>(orderEventTopic, command.getUid(), command.toByteArray()));
     }
 
     @Override
@@ -75,7 +115,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             LOG.debug("tradeEvent: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        sender.send(new ProducerRecord<>(topic, tradeEvent.getTakerUid(), pbData));
+        sender.send(new ProducerRecord<>(tradeEventTopic, tradeEvent.getTakerUid(), pbData));
     }
 
     @Override
@@ -91,7 +131,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             LOG.debug("reduceEvent: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        sender.send(new ProducerRecord<>(topic, reduceEvent.uid, pbData));
+        sender.send(new ProducerRecord<>(orderEventTopic, reduceEvent.uid, pbData));
     }
 
     @Override
@@ -116,7 +156,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             LOG.debug("orderBook: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        sender.send(new ProducerRecord<>(topic, IGNORE_UID, pbData));
+        sender.send(new ProducerRecord<>(marketDataTopic, IGNORE_UID, pbData));
     }
 
     @Override
@@ -135,6 +175,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             LOG.debug("fundsEvent: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
+        String topic = fundsEvent.getEventType().getCode() >= FundEventType.MARGIN_ALERT.getCode() ? alertEventTopic : fundEventTopic;
         sender.send(new ProducerRecord<>(topic, fundsEvent.uid, pbData));
     }
 

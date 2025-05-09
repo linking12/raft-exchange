@@ -37,6 +37,13 @@ import lombok.Data;
 public interface ITradeEventsHandler {
 
     /**
+     * Method is called after each commands execution.
+     *
+     * @param commandResult - immutable object describing original command, result code, and assigned sequence number.
+     */
+    void commandResult(ApiCommandResult commandResult);
+
+    /**
      * Method is called if order execution was resulted to one or more trades.
      *
      * @param tradeEvent - immutable object describing event details

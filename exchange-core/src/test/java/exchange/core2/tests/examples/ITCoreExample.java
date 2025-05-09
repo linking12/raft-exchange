@@ -29,6 +29,11 @@ class ITCoreExample {
         // simple async events handler
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new ITradeEventsHandler() {
             @Override
+            public void commandResult(ApiCommandResult commandResult) {
+
+            }
+
+            @Override
             public void tradeEvent(TradeEvent tradeEvent) {
                 System.out.println("Trade event: " + tradeEvent);
             }

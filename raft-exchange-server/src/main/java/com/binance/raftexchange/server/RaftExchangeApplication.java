@@ -43,8 +43,8 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     @Value("${raftexchange.kafka.boostrap.servers}")
     public String kafkaServers;
 
-    @Value("${raftexchange.kafka.topic}")
-    public String topic;
+    @Value("${raftexchange.kafka.topicPrefix}")
+    public String topicPrefix;
 
     @Override
     public void run(String... arg0) throws Exception {
@@ -97,7 +97,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         properties.setProperty(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG, "false");
         properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, IEventsHandlerByKafka.CommandPartitioner.class.getName());
         KafkaProducer<Long, byte[]> producer = new KafkaProducer<Long, byte[]>(properties);
-        IEventsHandlerByKafka.init(producer, topic);
+        IEventsHandlerByKafka.init(producer, topicPrefix);
     }
 
     @Override
