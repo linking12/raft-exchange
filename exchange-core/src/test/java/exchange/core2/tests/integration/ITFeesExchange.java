@@ -27,7 +27,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import static exchange.core2.core.common.OrderType.GTC;
+import static exchange.core2.core.common.OrderType.*;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
@@ -439,5 +439,238 @@ public abstract class ITFeesExchange {
         }
     }
 
+    @Test
+    @Timeout(10)
+    public void shouldProcessFees_AskGtcMakerPartial_BidGtcTaker() throws Exception {
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.initFeeSymbols();
+
+            final long btcAmount = 2_000_000_000L;
+            container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
+
+            // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
+            final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(11_500L)
+                    .reservePrice(11_500L)
+                    .size(2000L)
+                    .action(OrderAction.ASK)
+                    .orderType(GTC)
+                    .symbol(SYMBOL_EXCHANGE_FEE)
+                    .build();
+
+            container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+            // verify order placed
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
+            });
+
+            // create second user
+            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
+
+            TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
+            assertThat(totalBal1.getFees().get(CURRENECY_LTC), is(0L));
+            assertTrue(totalBal1.isGlobalBalancesAllZero());
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount));
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            // submit an IoC order - ASK 1,997 lots, price 115,210K (11,521 x10,000 step) for each lot 1M satoshi
+            final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(102)
+                    .price(11_521L)
+                    .reservePrice(11_659L)
+                    .size(1997L)
+                    .action(OrderAction.BID)
+                    .orderType(GTC)
+                    .symbol(SYMBOL_EXCHANGE_FEE)
+                    .build();
+
+            container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+            // verify seller maker balance
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((11_500L * step - makerFee) * 1997L));
+                assertFalse(profile.fetchIndexedOrders().isEmpty());
+            });
+
+            // verify buyer taker balance
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPECFEE_XBT_LTC.baseScaleK * 1997L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 1997L));
+                assertTrue(profile.fetchIndexedOrders().isEmpty());
+            });
+
+            // total balance remains the same
+            final long ltcFees = (makerFee + takerFee) * 1997L;
+            final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
+            assertTrue(totalBal2.isGlobalBalancesAllZero());
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+        }
+    }
+
+    @Test
+    @Timeout(10)
+    public void shouldNotProcessFees_AskGtcMakerPartial_BidFokTaker() throws Exception {
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.initFeeSymbols();
+
+            final long btcAmount = 2_000_000_000L;
+            container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
+
+            // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
+            final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(11_500L)
+                    .reservePrice(11_500L)
+                    .size(2000L)
+                    .action(OrderAction.ASK)
+                    .orderType(GTC)
+                    .symbol(SYMBOL_EXCHANGE_FEE)
+                    .build();
+
+            container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+            // verify order placed
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
+            });
+
+            // create second user
+            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
+
+            TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
+            assertThat(totalBal1.getFees().get(CURRENECY_LTC), is(0L));
+            assertTrue(totalBal1.isGlobalBalancesAllZero());
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount));
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            // submit an IoC order - ASK 1,997 lots, price 115,210K (11,521 x10,000 step) for each lot 1M satoshi
+            final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(102)
+                    .price(11_500L)
+                    .reservePrice(11_500L)
+                    .size(1000L)
+                    .action(OrderAction.BID)
+                    .orderType(FOK_BUDGET)
+                    .symbol(SYMBOL_EXCHANGE_FEE)
+                    .build();
+
+            container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+            // verify seller maker balance
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(0L));
+                assertFalse(profile.fetchIndexedOrders().isEmpty());
+            });
+
+            // verify buyer taker balance
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount));
+                assertTrue(profile.fetchIndexedOrders().isEmpty());
+            });
+
+            // total balance remains the same
+            final long ltcFees = 0;
+            final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
+            assertTrue(totalBal2.isGlobalBalancesAllZero());
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+        }
+    }
+
+    @Test
+    @Timeout(10)
+    public void shouldProcessFees_AskGtcMakerPartial_BidFokTaker() throws Exception {
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.initFeeSymbols();
+
+            final long btcAmount = 2_000_000_000L;
+            container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
+
+            // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
+            final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(11_500L)
+                    .reservePrice(11_500L)
+                    .size(2000L)
+                    .action(OrderAction.ASK)
+                    .orderType(GTC)
+                    .symbol(SYMBOL_EXCHANGE_FEE)
+                    .build();
+
+            container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+            // verify order placed
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
+            });
+
+            // create second user
+            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
+
+            TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
+            assertThat(totalBal1.getFees().get(CURRENECY_LTC), is(0L));
+            assertTrue(totalBal1.isGlobalBalancesAllZero());
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount));
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            // submit an IoC order - ASK 1,997 lots, price 115,210K (11,521 x10,000 step) for each lot 1M satoshi
+            final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(102)
+                    .price(11_500L)
+                    .reservePrice(11_500L)
+                    .size(1L)
+                    .action(OrderAction.BID)
+                    .orderType(FOK_BUDGET)
+                    .symbol(SYMBOL_EXCHANGE_FEE)
+                    .build();
+
+            container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+            // verify seller maker balance
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((11_500L * step - makerFee) * 1L));
+                assertFalse(profile.fetchIndexedOrders().isEmpty());
+            });
+
+            // verify buyer taker balance
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPECFEE_XBT_LTC.baseScaleK * 1L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 1L));
+                assertTrue(profile.fetchIndexedOrders().isEmpty());
+            });
+
+            // total balance remains the same
+            final long ltcFees = (makerFee + takerFee) * 1L;
+            final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
+            assertTrue(totalBal2.isGlobalBalancesAllZero());
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+        }
+    }
 
 }
