@@ -86,7 +86,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     }
 
     public boolean isValidLeverage(int leverage) {
-       return maxLeverage == 0 || (leverage >= 1 && leverage <= maxLeverage);
+       return maxLeverage == 0 || (leverage >= 0 && leverage <= maxLeverage);
     }
 
     @Override
