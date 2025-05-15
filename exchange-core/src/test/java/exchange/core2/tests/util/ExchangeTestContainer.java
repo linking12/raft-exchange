@@ -52,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Slf4j
 public final class ExchangeTestContainer implements AutoCloseable {
 
+    @Getter
     private final ExchangeCore exchangeCore;
 
     @Getter
@@ -266,10 +267,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public void updateCurrentPriceTo(int price, int symbolId, int quoteId) {
         // 模拟两个用户分别下买卖单, 使得成交价为price
         long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
-        createBid(userId1, 10, price, symbolId);
-
         long userId2 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
-        createAsk(userId2, 10, price, symbolId);
+        // 做2次，确保record更新成功
+        for (int i = 0; i < 2; i++) {
+            createBid(userId1, 10, price, symbolId);
+            createAsk(userId2, 10, price, symbolId);
+        }
     }
 
     public long createRandomUserWithMoney(long amount, int quoteId) {
