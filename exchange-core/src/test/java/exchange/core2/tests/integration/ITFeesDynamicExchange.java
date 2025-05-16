@@ -191,7 +191,7 @@ public abstract class ITFeesDynamicExchange {
             long actualMakerFee = calculateFee(price, size, step, makerFee, scaleFee);
             long expectedLtcAmount = ltcAmount - price * size * step - actualMakerFee;
             container.validateUserState(UID_1, profile -> {
-//                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedLtcAmount));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedLtcAmount));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(size * SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseScaleK));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
