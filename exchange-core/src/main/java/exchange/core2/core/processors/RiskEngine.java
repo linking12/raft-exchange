@@ -923,6 +923,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         long makerSizeForThisHandler = 0L;
 
         long takerSizePriceForThisHandler = 0L;
+        long makerSizePriceForThisHandler = 0L;
 
         final int quoteCurrency = spec.quoteCurrency;
 
@@ -959,6 +960,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, quoteCurrencyBalance);
                 this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, spec.baseCurrency, baseCurrencyBalance);
 
+                makerSizePriceForThisHandler += ev.size * ev.price;
                 makerSizeForThisHandler += size;
             }
 
@@ -981,7 +983,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long avgTakerPrice = takerSizeForThisHandler > 0 ? takerSizePriceForThisHandler / takerSizeForThisHandler : 0;
             long takerFee = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, avgTakerPrice, spec);
 
-            long avgMakerPrice = makerSizeForThisHandler > 0 ? takerSizePriceForThisHandler / makerSizeForThisHandler : 0;
+            long avgMakerPrice = makerSizeForThisHandler > 0 ? makerSizePriceForThisHandler / makerSizeForThisHandler : 0;
             long makerFee = CoreArithmeticUtils.calculateMakerFee(makerSizeForThisHandler, avgMakerPrice, spec);
 
             fees.addToValue(quoteCurrency, takerFee + makerFee);
