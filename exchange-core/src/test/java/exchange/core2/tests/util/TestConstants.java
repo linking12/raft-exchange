@@ -162,6 +162,20 @@ public final class TestConstants {
             .makerFee(2)
             .build();
 
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_USD_JPY = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_MARGIN)
+            .type(SymbolType.FUTURES_CONTRACT)
+            .baseCurrency(CURRENECY_USD)
+            .quoteCurrency(CURRENECY_JPY)
+            .baseScaleK(1_000_00) // 1K USD "micro" lot
+            .quoteScaleK(10) // 10 JPY step
+            .marginBuy(5_000) // effective leverage ~21
+            .marginSell(6_000) // effective leverage ~18
+            .takerFee(3)
+            .makerFee(2)
+            .feeScaleK(100)
+            .build();
+
 
     public static final CoreSymbolSpecification SYMBOLSPEC_ETH_XBT = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_EXCHANGE)
@@ -184,6 +198,18 @@ public final class TestConstants {
             .quoteScaleK(10_000)            // 1 step = 10K litoshi
             .takerFee(1900)                 // taker fee 1900 litoshi per 1 lot
             .makerFee(700)                  // maker fee 700 litoshi per 1 lot
+            .build();
+
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_EXCHANGE_FEE)
+            .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(CURRENECY_XBT)    // base = satoshi
+            .quoteCurrency(CURRENECY_LTC)   // quote = litoshi
+            .baseScaleK(1)          // 1 lot = 1M satoshi (0.01 BTC)
+            .quoteScaleK(1)            // 1 step = 10K litoshi
+            .takerFee(2)
+            .makerFee(1)
+            .feeScaleK(100)               // taker 1%, maker 2% fee rate
             .build();
 
     public static int getCurrency(String currency) {

@@ -161,6 +161,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
         addSymbol(TestConstants.SYMBOLSPECFEE_USD_JPY);
     }
 
+    public void initDynamicFeeSymbols() {
+        addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC);
+        addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_USD_JPY);
+    }
+
     public void initBasicUsers() {
         initBasicUser(TestConstants.UID_1);
         initBasicUser(TestConstants.UID_2);
