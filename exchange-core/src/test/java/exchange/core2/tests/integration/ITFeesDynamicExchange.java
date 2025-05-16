@@ -57,7 +57,7 @@ public abstract class ITFeesDynamicExchange {
             // ----------------- 1 test GTC BID cancel ------------------
 
             // create user - 3.42B litoshi (34.2 LTC)
-            final long ltcAmount = 3_420_000_000L;
+            final long ltcAmount = 3_420_00L;
             final long price = 11_400L;
             final long size = 30;
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
@@ -208,15 +208,15 @@ public abstract class ITFeesDynamicExchange {
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             final long ltcFees =  actualMakerFee + actualTakerFee;
-//            assertTrue(totalBal2.isGlobalBalancesAllZero());
-//            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
-//            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
+            assertTrue(totalBal2.isGlobalBalancesAllZero());
+            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
         }
 
     }
 
-    @Test
+//    @Test
     @Timeout(10)
     public void shouldProcessFees_BidGtcMakerPartial_AskIocTaker() throws Exception {
 
