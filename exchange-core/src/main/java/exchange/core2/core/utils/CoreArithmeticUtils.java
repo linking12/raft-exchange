@@ -68,7 +68,7 @@ public final class CoreArithmeticUtils {
         long tradeAmountDiff = size * (bidderHoldPrice - price) * spec.quoteScaleK;
         long feeDiff = spec.isFixedFee()
                 ? size * (spec.takerFee - spec.makerFee)
-                : ceilDivide(price * size * spec.takerFee - bidderHoldPrice * size * spec.makerFee, spec.feeScaleK);
+                : ceilDivide(bidderHoldPrice * size * spec.takerFee - price * size * spec.makerFee, spec.feeScaleK);
         return tradeAmountDiff + feeDiff;
     }
 
