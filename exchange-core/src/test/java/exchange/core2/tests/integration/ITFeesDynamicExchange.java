@@ -300,8 +300,8 @@ public abstract class ITFeesDynamicExchange {
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             final long ltcFees = actualMakerFee + actualTakerFee;
             // below two lines failed which are not desired
-//            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
-//            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
+            assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
         }
     }
@@ -406,7 +406,7 @@ public abstract class ITFeesDynamicExchange {
 
             long price = 10000L;
             long reservePrice = 10005L;
-            long size = 500L;
+            long size = 100L;
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
@@ -436,7 +436,7 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal1.getFees().get(CURRENECY_LTC), is(0L));
 
-            long bidSize = 100;
+            long bidSize = 500;
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
@@ -450,26 +450,32 @@ public abstract class ITFeesDynamicExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-            // 挂单先按照takerFee收, 下单时也可能作为taker, 所以预先按照Taker Fee来收是为了确保资金充足
-            long fee = calculateFee(reservePrice, size, step, takerFee, scaleFee);
-            long tradeAmount = size * reservePrice * step;
-            long expectedFundsLtc = ltcAmount - tradeAmount - fee;
+            // uid1挂卖单不收fee, 后续作为maker需要按照makerFee来收
+            long actualMakerFee = calculateFee(price, size, step, makerFee, scaleFee);
+            long tradeAmount = size * price * step;
+            long expectedFundsLtc = tradeAmount - actualMakerFee;
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - bidSize));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((size * step - makerFee) * 2000L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - size));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedFundsLtc));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
+            // uid2挂买单, 只成交了部分. 因为是IOC订单, 不再继续收taker后续未成交部分
+            long takerPart1 = calculateFee(size, price, step, takerFee, scaleFee);
+            long takerPart2 = 0;
+            long actualTakerFee = takerPart1 + takerPart2;
+            long expected = ltcAmount - price * size * step - actualTakerFee;
+
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseScaleK * 2000L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 2000L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(size));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expected));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
-            final long ltcFees = (makerFee + takerFee) * 2000L;
+            final long ltcFees = actualMakerFee + actualTakerFee;
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
