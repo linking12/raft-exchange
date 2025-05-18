@@ -1004,6 +1004,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         long takerSizePriceSum = 0L;
         long takerSizePriceHeldSum = 0L;
+        long makerSizePriceSum = 0L;
         final int quoteCurrency = spec.quoteCurrency;
 
         /**
@@ -1036,6 +1037,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  * @modify 资金转移
                  */
                 this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, free);
+
+                makerSizePriceSum += ev.size * ev.price;
                 makerSizeForThisHandler += size;
             }
 
@@ -1083,7 +1086,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
             long avgTakerPrice = takerSizeForThisHandler > 0 ? takerSizePriceSum / takerSizeForThisHandler : 0;
-            long avgMakerPrice = makerSizeForThisHandler > 0 ? takerSizePriceSum / makerSizeForThisHandler : 0;
+            long avgMakerPrice = makerSizeForThisHandler > 0 ? makerSizePriceSum / makerSizeForThisHandler : 0;
 
             long takerFee = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, avgTakerPrice, spec);
             long makerFee = CoreArithmeticUtils.calculateMakerFee(makerSizeForThisHandler, avgMakerPrice, spec);
