@@ -43,6 +43,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     // fees per lot in quote? currency units
     public final long takerFee; // TODO check invariant: taker fee is not less than maker fee
     public final long makerFee;
+    public final long feeScaleK; // 0表示固定费用; >0表示按比例费用, rate=fee/feeScaleK
 
     // margin settings (for type=FUTURES_CONTRACT only)
     public final long marginBuy;   // buy margin (quote currency)
@@ -58,6 +59,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         this.quoteScaleK = bytes.readLong();
         this.takerFee = bytes.readLong();
         this.makerFee = bytes.readLong();
+        this.feeScaleK = bytes.readLong();
         this.marginBuy = bytes.readLong();
         this.marginSell = bytes.readLong();
         this.maintenanceMargin = bytes.readLong();
@@ -77,6 +79,10 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
 
   */
 
+    public boolean isFixedFee() {
+        return feeScaleK == 0;
+    }
+
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeInt(symbolId);
@@ -87,6 +93,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         bytes.writeLong(quoteScaleK);
         bytes.writeLong(takerFee);
         bytes.writeLong(makerFee);
+        bytes.writeLong(feeScaleK);
         bytes.writeLong(marginBuy);
         bytes.writeLong(marginSell);
         bytes.writeLong(maintenanceMargin);
@@ -103,6 +110,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
                 quoteScaleK,
                 takerFee,
                 makerFee,
+                feeScaleK,
                 marginBuy,
                 marginSell,
                 maintenanceMargin);
@@ -120,6 +128,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
                 quoteScaleK == that.quoteScaleK &&
                 takerFee == that.takerFee &&
                 makerFee == that.makerFee &&
+                feeScaleK == that.feeScaleK &&
                 marginBuy == that.marginBuy &&
                 marginSell == that.marginSell &&
                 maintenanceMargin == that.maintenanceMargin && 

@@ -131,8 +131,10 @@ message CoreSymbolSpecification {
   int64 quote_scale_k = 6;
   int64 taker_fee = 7;
   int64 maker_fee = 8;
-  int64 margin_buy = 9;
-  int64 margin_sell = 10;
+  int64 fee_scale_k = 9;
+  int64 margin_buy = 10;
+  int64 margin_sell = 11;
+  int64 maintenance_margin = 12;
 }
 
 message BinaryDataCommand {

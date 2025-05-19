@@ -28,6 +28,7 @@ import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -122,8 +123,8 @@ public final class LiquidationScanner {
             long profit = position.liquidateEstimateProfit(spec, priceRecord);
             // 当前持仓所需的初始保证金，实时计算，已通过 accounts 减少隐式冻结
             long locked = position.calculateRequiredMarginForFutures(spec);
-            // 账户总权益 = 可用余额(隐式冻结) + 未实现盈亏，表示账户的整体抗风险能力
-            long equity = balance + profit;
+            // 账户总权益 = 初始保证金 + 未实现盈亏，表示账户的整体抗风险能力
+            long equity = locked + profit;
             // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
             long maintenanceMargin = position.calculateMaintenanceMargin(spec);
             // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
@@ -141,10 +142,8 @@ public final class LiquidationScanner {
                         price = 1; // 防止除零，默认最小价格
                     log.debug("Fallback to average open price={} for symbol={}", price, position.symbol);
                 }
-                /**
-                 * 计算强平数量： 找一个x，满足：x × price ≥ deficit + x × taker_fee x ≥ deficit / (price - taker_fee)
-                 */
-                long x = (long)Math.ceil((double)deficit / (price - spec.takerFee));
+                // 计算强平数量
+                long x = CoreArithmeticUtils.calculateSizeToLiquidate(deficit, price, spec);
                 long sizeToLiquidate = Math.min(position.openVolume, x);
                 if (sizeToLiquidate > 0) {
                     // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算

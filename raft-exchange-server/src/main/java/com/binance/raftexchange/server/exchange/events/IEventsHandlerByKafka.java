@@ -85,7 +85,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         }
         ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol()).setReducedVolume(reduceEvent.getReducedVolume())
             .setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId())
-            .setUid(reduceEvent.getOrderId()).setTimestamp(reduceEvent.getTimestamp()).build();
+            .setUid(reduceEvent.getUid()).setTimestamp(reduceEvent.getTimestamp()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("reduceEvent: {}", formateString);

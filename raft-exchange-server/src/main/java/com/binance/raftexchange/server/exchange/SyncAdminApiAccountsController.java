@@ -19,7 +19,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
      */
     public static CompletableFuture<byte[]> createUser(ApiAddUser grpcApiAddUser) {
         exchange.core2.core.common.api.ApiAddUser apiAddUser = exchange.core2.core.common.api.ApiAddUser.builder().uid(grpcApiAddUser.getUid()).build();
-        LOG.info("ApiAddUser applied, msg: {}", apiAddUser);
+        LOG.debug("ApiAddUser applied, msg: {}", apiAddUser);
         return callExchange(apiAddUser);
     }
 
@@ -30,7 +30,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         exchange.core2.core.common.api.ApiAdjustUserBalance apiAdjustUserBalance = exchange.core2.core.common.api.ApiAdjustUserBalance.builder()
             .uid(grpcApiAdjustUserBalance.getUid()).currency(grpcApiAdjustUserBalance.getCurrency()).amount(grpcApiAdjustUserBalance.getAmount())
             .transactionId(grpcApiAdjustUserBalance.getTransactionId()).build();
-        LOG.info("ApiAdjustUserBalance applied, msg: {}", apiAdjustUserBalance);
+        LOG.debug("ApiAdjustUserBalance applied, msg: {}", apiAdjustUserBalance);
         return callExchange(apiAdjustUserBalance);
     }
 
@@ -40,7 +40,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     public static CompletableFuture<byte[]> suspendUser(ApiSuspendUser grpcApiSuspendUser) {
         exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser =
             exchange.core2.core.common.api.ApiSuspendUser.builder().uid(grpcApiSuspendUser.getUid()).build();
-        LOG.info("ApiSuspendUser applied, msg: {}", apiSuspendUser);
+        LOG.debug("ApiSuspendUser applied, msg: {}", apiSuspendUser);
         return callExchange(apiSuspendUser);
     }
 
@@ -50,7 +50,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     public static CompletableFuture<byte[]> resumeUser(ApiResumeUser grpcApiResumeUser) {
         exchange.core2.core.common.api.ApiResumeUser apiResumeUser =
             exchange.core2.core.common.api.ApiResumeUser.builder().uid(grpcApiResumeUser.getUid()).build();
-        LOG.info("ApiResumeUser applied, msg: {}", apiResumeUser);
+        LOG.debug("ApiResumeUser applied, msg: {}", apiResumeUser);
         return callExchange(apiResumeUser);
     }
 
@@ -71,7 +71,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         }
         exchange.core2.core.common.api.binary.BatchAddAccountsCommand batchAddAccountsCommand =
             new exchange.core2.core.common.api.binary.BatchAddAccountsCommand(users);
-        LOG.info("batchAddAccountsCommand applied, msg: {}", batchAddAccountsCommand);
+        LOG.debug("batchAddAccountsCommand applied, msg: {}", batchAddAccountsCommand);
 
         return callExchange(batchAddAccountsCommand);
     }
