@@ -27,6 +27,7 @@ public final class TestConstants {
     public static final int SYMBOL_MARGIN = 5991;
     public static final int SYMBOL_EXCHANGE = 9269;
     public static final int SYMBOL_EXCHANGE_FEE = 9340;
+    public static final int SYMBOL_MARGIN_FEE = 9341;
 
     public static final long UID_1 = 1440001;
     public static final long UID_2 = 1440002;
@@ -162,18 +163,19 @@ public final class TestConstants {
             .makerFee(2)
             .build();
 
-    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_USD_JPY = CoreSymbolSpecification.builder()
-            .symbolId(SYMBOL_MARGIN)
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_XBT_USD = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_MARGIN_FEE)
             .type(SymbolType.FUTURES_CONTRACT)
-            .baseCurrency(CURRENECY_USD)
-            .quoteCurrency(CURRENECY_JPY)
-            .baseScaleK(1_000_00) // 1K USD "micro" lot
-            .quoteScaleK(10) // 10 JPY step
-            .marginBuy(5_000) // effective leverage ~21
-            .marginSell(6_000) // effective leverage ~18
-            .takerFee(3)
-            .makerFee(2)
+            .baseCurrency(1)
+            .quoteCurrency(CURRENECY_USD)
+            .baseScaleK(1)
+            .quoteScaleK(1)
+            .marginBuy(100)
+            .marginSell(100)
+            .takerFee(2)
+            .makerFee(1)
             .feeScaleK(100)
+            .maintenanceMargin(1000L)
             .build();
 
 
