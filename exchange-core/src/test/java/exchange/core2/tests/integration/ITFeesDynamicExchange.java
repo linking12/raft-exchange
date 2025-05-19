@@ -276,11 +276,13 @@ public abstract class ITFeesDynamicExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-            // maker需要的手续费 = 成交部分手续费(maker) + 未成交部分手续费(taker)
-            long makerPart = calculateFee(price, askSize, step, makerFee, scaleFee);
-            long takerPart = calculateFee(reservePrice, size - askSize, step, takerFee, scaleFee);
-            long actualMakerFee = makerPart + takerPart;
-            long current = ltcAmount - price * askSize - reservePrice * (size - askSize) - actualMakerFee;
+            // 真实成交要作为maker被收的钱
+            long actualMakerPart = calculateFee(price, askSize, step, makerFee, scaleFee);
+            // 未成交部分暂时还按照taker身份扣除
+            long takerHoldPart = calculateFee(reservePrice, size - askSize, step, takerFee, scaleFee);
+            // 用户视角 真实锁定资金 = actualMakerPart + takerHoldPart
+            long totalOccupiedFee = actualMakerPart + takerHoldPart;
+            long current = ltcAmount - price * askSize - reservePrice * (size - askSize) - totalOccupiedFee;
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_LTC), is(current));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(askSize * SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseScaleK));
@@ -298,7 +300,8 @@ public abstract class ITFeesDynamicExchange {
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertTrue(totalBal2.isGlobalBalancesAllZero());
-            final long ltcFees = actualMakerFee + actualTakerFee;
+            // 作为交易所，只有100真实成交，针对它，收取2w taker费和1w maker费
+            final long ltcFees = actualMakerPart + actualTakerFee;
             // below two lines failed which are not desired
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
@@ -728,11 +731,13 @@ public abstract class ITFeesDynamicExchange {
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
-            // maker需要的手续费 = 成交部分手续费(taker) + 未成交部分手续费(taker)
-            long takerPart1 = calculateFee(price, size, step, takerFee, scaleFee); // 成交的部分按照成单价格收
-            long takerPart2 = calculateFee(reservePrice, bidSize - size, step, takerFee, scaleFee); // 未成交的部分需要按照reservePrice来收
-            long actualTakerFee = takerPart1 + takerPart2;
-            long expected = ltcAmount - price * size - reservePrice * (bidSize - size) - actualMakerFee;
+            // 真实成交要作为taker被收的钱
+            long actualTakerFee = calculateFee(price, size, step, takerFee, scaleFee); // 成交的部分按照成单价格收
+            // 未成交部分暂时还按照taker身份扣除
+            long takerHoldPart = calculateFee(reservePrice, bidSize - size, step, takerFee, scaleFee); // 未成交的部分需要按照reservePrice来收
+            // 用户视角 真实锁定资金 = actualTakerPart + takerHoldPart
+            long totalOccupiedFee = actualTakerFee + takerHoldPart;
+            long expected = ltcAmount - price * size - reservePrice * (bidSize - size) - totalOccupiedFee;
 
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(size));
