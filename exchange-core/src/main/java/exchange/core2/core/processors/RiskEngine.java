@@ -434,6 +434,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
 
+        // 检查用户杠杆是否超过symbol的杠杆限制
+        if (!spec.isValidLeverage(cmd.leverage)) {
+            return CommandResultCode.RISK_INVALID_LEVERAGE;
+        }
+
         // check if account has enough funds
         final CommandResultCode resultCode = placeOrder(cmd, userProfile, spec);
 
@@ -465,7 +470,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); // TODO getIfAbsentPut?
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
-                position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency);
+                position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage);
                 userProfile.positions.put(spec.symbolId, position);
             }
 

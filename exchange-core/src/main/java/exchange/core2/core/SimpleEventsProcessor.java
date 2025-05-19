@@ -169,7 +169,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         switch (cmd.command) {
             case PLACE_ORDER:
                 sendApiCommandResult(
-                    new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie, cmd.reserveBidPrice),
+                    new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie, cmd.leverage, cmd.reserveBidPrice),
                     cmd.resultCode, cmd.timestamp, seq);
                 break;
 
@@ -211,5 +211,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     public void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
         cmd.timestamp = timestamp;
+        final ITradeEventsHandler.ApiCommandResult commandResult = new ITradeEventsHandler.ApiCommandResult(cmd, resultCode, seq);
+        tradeEventsHandler.commandResult(commandResult);
     }
 }

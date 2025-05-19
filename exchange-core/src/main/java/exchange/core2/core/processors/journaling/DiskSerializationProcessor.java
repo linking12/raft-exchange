@@ -317,13 +317,14 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
             buffer.putLong(cmd.reserveBidPrice); // 8 bytes - can be compressed (diff to price or 0)
             buffer.putLong(cmd.size); // 8 bytes - can be compressed
             buffer.putInt(cmd.userCookie); // 4 bytes can be log-compressed
+            buffer.putInt(cmd.leverage);
 
             final int actionAndType = (cmd.orderType.getCode() << 1) | cmd.action.getCode();
             byte actionAndType1 = (byte) actionAndType;
             buffer.put(actionAndType1); // 1 byte
 
-            if (debug) log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} {}/{} actionAndType={}",
-                    baseSeq + dSeq, cmd.timestamp, cmd.orderId, cmd.symbol, cmd.uid, cmd.price, cmd.reserveBidPrice, cmd.size, cmd.userCookie, cmd.action, cmd.orderType, actionAndType1);
+            if (debug) log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} leverage={} {}/{} actionAndType={}",
+                    baseSeq + dSeq, cmd.timestamp, cmd.orderId, cmd.symbol, cmd.uid, cmd.price, cmd.reserveBidPrice, cmd.size, cmd.userCookie, cmd.leverage, cmd.action, cmd.orderType, actionAndType1);
 
         } else if (cmdType == OrderCommandType.BALANCE_ADJUSTMENT) {
 
@@ -549,15 +550,16 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
                     final long reservedBidPrice = jr.readLong(); // 8 bytes - can be compressed (diff to price or 0)
                     final long size = jr.readLong(); // 8 bytes - can be compressed
                     final int userCookie = jr.readInt(); // 4 bytes can be compressed as a optional low value
+                    final int leverage = jr.readInt();
 
                     final byte actionAndType = jr.readByte(); // 1 byte
                     final OrderAction orderAction = OrderAction.of((byte) (actionAndType & 0b1));
                     final OrderType orderType = OrderType.of((byte) ((actionAndType >> 1) & 0b1111));
 
                     if (debug)
-                        log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} {}/{} actionAndType={}", lastSeq, timestampNs, orderId, symbol, uid, price, reservedBidPrice, size, userCookie, orderAction, orderType, actionAndType);
+                        log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} leverage={} {}/{} actionAndType={}", lastSeq, timestampNs, orderId, symbol, uid, price, reservedBidPrice, size, userCookie, leverage, orderAction, orderType, actionAndType);
 
-                    api.placeNewOrder(serviceFlags, eventsGroup, timestampNs, orderId, userCookie, price, reservedBidPrice, size, orderAction, orderType, symbol, uid);
+                    api.placeNewOrder(serviceFlags, eventsGroup, timestampNs, orderId, userCookie, leverage, price, reservedBidPrice, size, orderAction, orderType, symbol, uid);
 
                 } else if (cmdType == OrderCommandType.BALANCE_ADJUSTMENT) {
 
