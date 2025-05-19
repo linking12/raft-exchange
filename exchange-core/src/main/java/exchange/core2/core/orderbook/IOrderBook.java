@@ -198,6 +198,10 @@ public interface IOrderBook extends WriteBytesMarshallable, StateHash {
                 return cmd.resultCode; // no change
             }
 
+        } else if (commandType == OrderCommandType.FORCE_LIQUIDATION) {
+            orderBook.newOrder(cmd);
+            return CommandResultCode.SUCCESS;
+
         } else if (commandType == OrderCommandType.ORDER_BOOK_REQUEST) {
             int size = (int) cmd.size;
             cmd.marketData = orderBook.getL2MarketDataSnapshot(size >= 0 ? size : Integer.MAX_VALUE);

@@ -63,7 +63,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingSellSize = 0;
         this.pendingBuySize = 0;
 
-        this.leverage = leverage;
+        this.leverage = leverage == 0 ? 1 : leverage; // 用户自选杠杆，默认 1 倍
     }
 
     public SymbolPositionRecord(long uid, BytesIn bytes) {
@@ -219,9 +219,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long currentMargin = Math.max(marginBuy, marginSell);
 
         if (action == OrderAction.BID) {
-            marginBuy += spec.marginBuy * size;
+            marginBuy += specMarginBuy * size;
         } else {
-            marginSell += spec.marginSell * size;
+            marginSell += specMarginSell * size;
         }
 
         // marginBuy or marginSell can be negative, but not both of them
