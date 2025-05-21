@@ -1,9 +1,7 @@
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.common.CoreSymbolSpecification;
-import exchange.core2.core.common.OrderAction;
-import exchange.core2.core.common.OrderType;
-import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.api.ApiPlaceOrder;
@@ -178,4 +176,266 @@ public final class ITExchangeCoreCustomLeverage {
         }
 
     }
+
+    // 用户提现时需要考虑leverage
+    @Test
+    public void testCustomLeverageWithdraw() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+
+            CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                    .symbolId(10001)
+                    .type(SymbolType.FUTURES_CONTRACT)
+                    .baseCurrency(11).quoteCurrency(12)
+                    .marginBuy(1000).marginSell(1000)
+                    .feeScaleK(100)
+                    .makerFee(1).takerFee(2)
+                    .maxLeverage(50)
+                    .build();
+
+            container.addSymbol(spec);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(100)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(10) // 不加杠杆他只能开10手，10倍杠杆才能开出100手
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(100L));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+            });
+
+            // do withdraw
+            ApiAdjustUserBalance withdrawCmd = ApiAdjustUserBalance.builder()
+                    .uid(UID_1)
+                    .transactionId(container.getRandomTransactionId())
+                    .amount(-1L)
+                    .currency(spec.quoteCurrency)
+                    .build();
+
+            container.submitCommandSync(withdrawCmd, CommandResultCode.RISK_NSF);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(10000L));
+            });
+        }
+    }
+
+    // 下不同leverage的订单
+    @Test
+    public void testTwoLeverageOrders() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
+
+            // 先下一手10倍的买单
+            long size1 = 1;
+            long orderId1 = 10001L;
+            ApiPlaceOrder order1 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId1)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(size1)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(10)
+                    .build();
+
+            container.submitCommandSync(order1, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+            });
+
+            // 再下一手20倍的买单
+            long size2 = 5L;
+            long orderId2 = 10002L;
+            ApiPlaceOrder order2 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId2)
+                    .price(1100)
+                    .reservePrice(1100)
+                    .size(size2)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(20)
+                    .build();
+            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1 + size2));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+
+                assertThat(profile.getOrders().getFirst().get(0).size, is(size1));
+                assertThat(profile.getOrders().getFirst().get(0).orderId, is(order1.orderId));
+                assertThat(profile.getOrders().getFirst().get(0).filled, is(0L));
+
+                assertThat(profile.getOrders().getFirst().get(1).size, is(size2));
+                assertThat(profile.getOrders().getFirst().get(1).orderId, is(order2.orderId));
+                assertThat(profile.getOrders().getFirst().get(1).filled, is(0L));
+            });
+        }
+    }
+
+    // 下不同leverage的订单, check不同订单的leverage符合预期
+    @Test
+    public void testTwoLeverageOrders2() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
+
+            // 先下一手10倍的买单
+            long size1 = 1;
+            long orderId1 = 10001L;
+            ApiPlaceOrder order1 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId1)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(size1)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(1)
+                    .build();
+
+            container.submitCommandSync(order1, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+            });
+
+            // 再下一手20倍的买单
+            long size2 = 5L;
+            long orderId2 = 10002L;
+            ApiPlaceOrder order2 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId2)
+                    .price(1100)
+                    .reservePrice(1100)
+                    .size(size2)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(50)
+                    .build();
+            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1 + size2));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+
+                assertThat(profile.getOrders().getFirst().get(0).size, is(size1));
+                assertThat(profile.getOrders().getFirst().get(0).orderId, is(order1.orderId));
+                assertThat(profile.getOrders().getFirst().get(0).filled, is(0L));
+
+                assertThat(profile.getOrders().getFirst().get(1).size, is(size2));
+                assertThat(profile.getOrders().getFirst().get(1).orderId, is(order2.orderId));
+                assertThat(profile.getOrders().getFirst().get(1).filled, is(0L));
+            });
+
+            long size3 = 1L;
+            long orderId3 = 10003L;
+            ApiPlaceOrder order3 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId3)
+                    .price(1200)
+                    .reservePrice(1100)
+                    .size(size3)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(30)
+                    .build();
+            container.submitCommandSync(order3, CommandResultCode.SUCCESS);
+
+        }
+    }
+
+    // 下不同leverage的订单, orderId相同应该报错, 此时之前下的订单不受影响
+    @Test
+    public void testTwoLeverageOrdersWithSameOrderId() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            long charge = 10000;
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, charge);
+
+            // 先下一手10倍的买单
+            long size1 = 1;
+            long orderId1 = 10001L;
+            ApiPlaceOrder order1 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId1)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(size1)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(10)
+                    .build();
+
+            container.submitCommandSync(order1, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+            });
+
+            // 再下一手20倍的买单, 在process order时会因为duplicate id报错
+            long size2 = 5L;
+            long orderId2 = orderId1;
+            ApiPlaceOrder order2 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId2)
+                    .price(1100)
+                    .reservePrice(1100)
+                    .size(size2)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(20)
+                    .build();
+            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(charge));
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+
+                assertThat(profile.getOrders().getFirst().size(), is(1));
+            });
+        }
+    }
+
+
 }

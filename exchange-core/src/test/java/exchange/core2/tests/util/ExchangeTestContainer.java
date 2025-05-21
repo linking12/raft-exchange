@@ -322,6 +322,25 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitCommandsSync(cmds);
     }
 
+    public CoreSymbolSpecification initSymbol() {
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(10001)
+                .type(SymbolType.FUTURES_CONTRACT)
+                .baseCurrency(11)
+                .quoteCurrency(12)
+                .marginBuy(1000)
+                .marginSell(1000)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .feeScaleK(100)
+                .makerFee(1).takerFee(2)
+                .maxLeverage(50)
+                .build();
+
+        addSymbol(spec);
+        return spec;
+    }
+
     public void addMoneyToUser(long uid, int currency, long amount) {
         final List<ApiCommand> cmds = new ArrayList<>();
         cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(currency).build());
@@ -352,7 +371,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return uniqueIdCounterInt.incrementAndGet();
     }
 
-    private long getRandomTransactionId() {
+    public long getRandomTransactionId() {
         return uniqueIdCounterLong.incrementAndGet();
     }
 
