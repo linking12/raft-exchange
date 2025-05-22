@@ -335,6 +335,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .feeScaleK(100)
                 .makerFee(1).takerFee(2)
                 .maxLeverage(50)
+                .maintenanceMargin(50)
                 .build();
 
         addSymbol(spec);

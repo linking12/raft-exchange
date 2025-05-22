@@ -437,5 +437,236 @@ public final class ITExchangeCoreCustomLeverage {
         }
     }
 
+    // liquidation时matainance margin值符合预期
+    @Test
+    public void testLiquidationOfMatainanceMargin() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.addSymbol(spec);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(50) // 50倍开50手
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(30002L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+
+            container.validateUserState(UID_1, profile -> {
+                // taker fee 500L, 1%
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(2000L - 500L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+            });
+
+            container.validateUserState(UID_2, profile -> {
+                // maker fee 1000L, 2%
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L - 1000L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+            });
+
+            // 准备980的买单，用来和强平成交
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(30003L)
+                    .price(980)
+                    .reservePrice(990)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
+            for (int i = 0; i < 100; i++) {
+                container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
+            }
+
+            container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            // 检查用户被强平1手
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
+                // 强平后用户资金错了, taker没有收手续费
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L));
+            });
+
+            // 检查用户被强平1手
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                // 强平后用户资金错了, maker没有收手续费
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L));
+            });
+        }
+    }
+
+    // liquidation时触发保证金不够告警
+    @Test
+    public void testLiquidationSendWarn() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.addSymbol(spec);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(50) // 50倍开50手
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(30002L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+
+            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
+            for (int i = 0; i < 100; i++) {
+                container.updateCurrentPriceTo(981, spec.symbolId, spec.quoteCurrency);
+            }
+
+            container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            // 用户没有被强平
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+            });
+        }
+    }
+
+    // liquidation时用最新的leverage
+    @Test
+    public void testLiquidationLeverage() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.addSymbol(spec);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30001L)
+                    .price(100)
+                    .reservePrice(1000)
+                    .size(1)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(50) // 50倍开50手
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(1)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(1) // 50倍开50手
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(30002L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+
+            container.validateUserState(UID_1, profile -> {
+                // taker fee 500L, 1%
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(2000L - 500L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+            });
+
+            container.validateUserState(UID_2, profile -> {
+                // maker fee 1000L, 2%
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L - 1000L));
+                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+            });
+
+            // 准备980的买单，用来和强平成交
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(30003L)
+                    .price(980)
+                    .reservePrice(990)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
+            for (int i = 0; i < 100; i++) {
+                container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
+            }
+
+            container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            // 检查用户被强平1手
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
+                // 强平后用户资金错了, taker没有收手续费
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L));
+            });
+
+            // 检查用户被强平1手
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                // 强平后用户资金错了, maker没有收手续费
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L));
+            });
+        }
+    }
+
+    // leverage值会影响liquidate触发的金额
+
+    // 模拟leverage在replay snapshort时还有效
 }
