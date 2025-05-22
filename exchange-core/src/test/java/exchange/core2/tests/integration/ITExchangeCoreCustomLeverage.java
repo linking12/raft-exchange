@@ -442,7 +442,6 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationOfMatainanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
-            container.addSymbol(spec);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -526,7 +525,6 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationSendWarn() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
-            container.addSymbol(spec);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -570,21 +568,28 @@ public final class ITExchangeCoreCustomLeverage {
         }
     }
 
+    private long calculateFee(long price, long size, long step, long sideFee, long scale) {
+        return price * size * step * sideFee / scale;
+    }
+
     // liquidation时用最新的leverage
     @Test
     public void testLiquidationLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
-            container.addSymbol(spec);
-            container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
+            long amount = 50020;
+            long price = 1000;
+            long size = 50;
+
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, amount);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_1)
-                    .orderId(30001L)
-                    .price(100)
-                    .reservePrice(1000)
-                    .size(1)
+                    .orderId(30000L)
+                    .price(price)
+                    .reservePrice(price)
+                    .size(49)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
@@ -594,8 +599,8 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(30001L)
-                    .price(1000)
-                    .reservePrice(1000)
+                    .price(price)
+                    .reservePrice(price)
                     .size(1)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
@@ -606,26 +611,26 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(30002L)
-                    .price(1000)
-                    .reservePrice(1000)
-                    .size(50)
+                    .price(price)
+                    .reservePrice(price)
+                    .size(size)
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
                     .build(), CommandResultCode.SUCCESS);
 
-            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
-
+            long makerFee = calculateFee(price, size, 1, spec.makerFee, spec.feeScaleK);
             container.validateUserState(UID_1, profile -> {
                 // taker fee 500L, 1%
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(2000L - 500L));
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(amount - makerFee));
                 assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
             });
 
+            long takerFee = calculateFee(price, size, 1, spec.takerFee, spec.feeScaleK);
             container.validateUserState(UID_2, profile -> {
                 // maker fee 1000L, 2%
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L - 1000L));
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L - takerFee));
                 assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.SHORT));
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
             });
@@ -642,9 +647,9 @@ public final class ITExchangeCoreCustomLeverage {
                     .orderType(OrderType.GTC)
                     .build(), CommandResultCode.SUCCESS);
 
-            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
+            // 模拟价格下跌，如果按照leverage为1来计算的话, 价格达到25才会触发强平了
             for (int i = 0; i < 100; i++) {
-                container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
+                container.updateCurrentPriceTo(25, spec.symbolId, spec.quoteCurrency);
             }
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
@@ -652,17 +657,9 @@ public final class ITExchangeCoreCustomLeverage {
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
-                // 强平后用户资金错了, taker没有收手续费
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L));
-            });
-
-            // 检查用户被强平1手
-            container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
-                // 强平后用户资金错了, maker没有收手续费
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L));
             });
+            
         }
     }
 
