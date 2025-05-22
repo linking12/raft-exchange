@@ -472,6 +472,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage);
                 userProfile.positions.put(spec.symbolId, position);
+            } else {
+                position.updateLeverage(cmd.leverage);
             }
 
             final boolean canPlaceOrder = canPlaceMarginOrder(cmd, userProfile, spec, position);
