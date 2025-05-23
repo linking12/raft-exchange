@@ -306,6 +306,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
+            case ADJUST_LEVERAGE:
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = updateLeverage(cmd);
+                }
+                return false;
+
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
                 binaryCommandsProcessor.acceptBinaryFrame(cmd); // ignore return result, because it should be set by MatchingEngineRouter
@@ -412,6 +418,58 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     public boolean uidForThisHandler(final long uid) {
         return (shardMask == 0) || ((uid & shardMask) == shardId);
+    }
+
+
+    private CommandResultCode updateLeverage(final OrderCommand cmd) {
+        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (userProfile == null) {
+            cmd.resultCode = CommandResultCode.AUTH_INVALID_USER;
+            log.warn("User profile {} not found", cmd.uid);
+            return CommandResultCode.AUTH_INVALID_USER;
+        }
+
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+        if (spec == null) {
+            log.warn("Symbol {} not found", cmd.symbol);
+            return CommandResultCode.INVALID_SYMBOL;
+        }
+
+        // 检查用户杠杆是否超过symbol的杠杆限制
+        if (!spec.isValidLeverage(cmd.leverage)) {
+            return CommandResultCode.RISK_INVALID_LEVERAGE;
+        }
+
+        SymbolPositionRecord position = userProfile.positions.get(spec.symbolId);
+        if (position == null) {
+            // 没有仓位不修改
+            return CommandResultCode.SUCCESS;
+        }
+
+        if (!isLeverageChangeSafe(userProfile, spec, position, cmd.leverage)) {
+            return CommandResultCode.RISK_NSF;
+        }
+
+        position.updateLeverage(cmd.leverage);
+        return CommandResultCode.SUCCESS;
+    }
+
+    /**
+     * 检查修改为 newLeverage 后，资金风险是否在用户可用余额的承受范围内。
+     */
+    private boolean isLeverageChangeSafe(UserProfile userProfile, CoreSymbolSpecification spec, SymbolPositionRecord position, int newLeverage) {
+        // 原来的冻结金额（旧杠杆）
+        long oldRequired = position.calculateRequiredMarginForFutures(spec);
+        // 新杠杆下的冻结金额
+        long newRequired = position.calculateRequiredMarginForFutures(spec, newLeverage);
+        // 不增加保证金占用，则直接允许
+        if (newRequired <= oldRequired) {
+            return true;
+        }
+        long balance = userProfile.accounts.get(spec.quoteCurrency);
+        long locked = calculateLockedMargin(userProfile, spec.quoteCurrency);
+        long free = balance - locked;
+        return (newRequired - oldRequired) <= free;
     }
 
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {

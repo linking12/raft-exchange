@@ -186,6 +186,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return required margin
      */
     public long calculateRequiredMarginForFutures(CoreSymbolSpecification spec) {
+        return calculateRequiredMarginForFutures(spec, leverage);
+    }
+
+    public long calculateRequiredMarginForFutures(CoreSymbolSpecification spec, int leverage) {
         final long specMarginBuy = CoreArithmeticUtils.ceilDivide(spec.marginBuy, leverage);
         final long specMarginSell = CoreArithmeticUtils.ceilDivide(spec.marginSell, leverage);
 

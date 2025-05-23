@@ -36,8 +36,9 @@ public enum OrderCommandType {
     RESUME_USER((byte) 13, true),
 
     FORCE_LIQUIDATION((byte) 20, true),
-    SYSTEM_LIQUIDATION_NOTIFY((byte) 21, true),
-    SYSTEM_SETTLE_PNL((byte) 22, true),
+    ADJUST_LEVERAGE((byte) 21, true),
+    SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
+    SYSTEM_SETTLE_PNL((byte) 32, true),
 
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),

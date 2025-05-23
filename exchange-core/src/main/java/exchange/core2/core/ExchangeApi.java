@@ -123,6 +123,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
         } else if (cmd instanceof ApiLiquidationOrder) {
             ringBuffer.publishEvent(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
+        } else if (cmd instanceof ApiAdjustLeverage) {
+            ringBuffer.publishEvent(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             publishBinaryData((ApiBinaryDataCommand) cmd, seq -> {
             });
@@ -166,6 +168,8 @@ public final class ExchangeApi {
             return submitCommandAsync(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
         } else if (cmd instanceof ApiLiquidationOrder) {
             return submitCommandAsync(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
+        } else if (cmd instanceof ApiAdjustLeverage) {
+            return submitCommandAsync(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiPersistState) {
@@ -205,6 +209,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(SUSPEND_USER_TRANSLATOR, (ApiSuspendUser) cmd);
         } else if (cmd instanceof ApiLiquidationOrder) {
             return submitCommandAsyncFullResponse(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
+        } else if (cmd instanceof ApiAdjustLeverage) {
+            return submitCommandAsyncFullResponse(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataCommandAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiReset) {
@@ -557,6 +563,15 @@ public final class ExchangeApi {
         cmd.orderType = api.orderType;
         cmd.symbol = api.symbol;
         cmd.uid = api.uid;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiAdjustLeverage> ADJUST_LEVERAGE_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.ADJUST_LEVERAGE;
+        cmd.timestamp = api.timestamp;
+        cmd.uid = api.uid;
+        cmd.symbol = api.symbol;
+        cmd.leverage = api.leverage;
         cmd.resultCode = CommandResultCode.NEW;
     };
 
