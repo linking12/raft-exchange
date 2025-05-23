@@ -143,7 +143,7 @@ public final class LiquidationScanner {
                     log.debug("Fallback to average open price={} for symbol={}", price, position.symbol);
                 }
                 // 计算强平数量
-                long x = CoreArithmeticUtils.calculateSizeToLiquidate(deficit, price, spec);
+                long x = CoreArithmeticUtils.calculateSizeToLiquidate(deficit, price);
                 long sizeToLiquidate = Math.min(position.openVolume, x);
                 if (sizeToLiquidate > 0) {
                     // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
