@@ -122,10 +122,8 @@ public final class CoreArithmeticUtils {
      * 找一个x，满足：x × price ≥ deficit + x × taker_fee
      *              x ≥ deficit / (price - taker_fee)
      */
-    public static long calculateSizeToLiquidate(long deficit, long price, CoreSymbolSpecification spec) {
-        long takerFeePerSize = spec.isFixedFee()
-                ? spec.takerFee
-                : ceilDivide(price * spec.takerFee, spec.feeScaleK);
+    public static long calculateSizeToLiquidate(long deficit, long price) {
+        long takerFeePerSize = 0; // 单边收费，减仓不收手续费
         return ceilDivide(deficit, price - takerFeePerSize);
     }
 
