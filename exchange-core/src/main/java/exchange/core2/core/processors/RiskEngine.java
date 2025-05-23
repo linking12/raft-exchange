@@ -474,7 +474,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 userProfile.positions.put(spec.symbolId, position);
             }
 
-            if (position.getLeverage() != cmd.leverage) {
+            if (!position.isSameLeverage(cmd.leverage)) {
                 return CommandResultCode.RISK_LEVERAGE_MISMATCH;
             }
 

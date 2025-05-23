@@ -136,6 +136,7 @@ message CoreSymbolSpecification {
   int64 margin_buy = 10;
   int64 margin_sell = 11;
   int64 maintenance_margin = 12;
+  int32 max_leverage = 13;
 }
 
 message BinaryDataCommand {
