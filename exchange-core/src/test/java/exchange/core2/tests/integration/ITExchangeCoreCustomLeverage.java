@@ -151,6 +151,9 @@ public final class ITExchangeCoreCustomLeverage {
 
             assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
 
+            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
+            container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
+
             // 准备980的买单，用来和强平成交
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
@@ -162,9 +165,6 @@ public final class ITExchangeCoreCustomLeverage {
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
                     .build(), CommandResultCode.SUCCESS);
-
-            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
-            container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -437,9 +437,9 @@ public final class ITExchangeCoreCustomLeverage {
         }
     }
 
-    // liquidation时matainance margin值符合预期
+    // liquidation时maintenance margin值符合预期
     @Test
-    public void testLiquidationOfMatainanceMargin() throws Exception {
+    public void testLiquidationOfMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
@@ -484,22 +484,20 @@ public final class ITExchangeCoreCustomLeverage {
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
             });
 
-            // 准备980的买单，用来和强平成交
+            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
+            container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
+
+            // 准备980的买单，用来和强平成交【注意顺序在价格更新之后，否则会和更新价格的单子们匹配上】
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(30003L)
                     .price(980)
                     .reservePrice(990)
-                    .size(50)
+                    .size(1)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
                     .build(), CommandResultCode.SUCCESS);
-
-            // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
-            for (int i = 0; i < 100; i++) {
-                container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
-            }
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -507,15 +505,15 @@ public final class ITExchangeCoreCustomLeverage {
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
-                // 强平后用户资金错了, taker没有收手续费
+                // 平1手多单，是减仓，不收费
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L));
             });
 
             // 检查用户被强平1手
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getPositions().size(), is(0));
-                // 强平后用户资金错了, maker没有收手续费
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L));
+                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
+                // 平1手空弹，是减仓，不收费
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(99000L));
             });
         }
     }
@@ -665,5 +663,5 @@ public final class ITExchangeCoreCustomLeverage {
 
     // leverage值会影响liquidate触发的金额
 
-    // 模拟leverage在replay snapshort时还有效
+    // 模拟leverage在replay snapshot时还有效
 }
