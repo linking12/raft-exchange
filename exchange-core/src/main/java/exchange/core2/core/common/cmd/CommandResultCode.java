@@ -40,6 +40,7 @@ public enum CommandResultCode {
     RISK_MARGIN_TRADING_DISABLED(-2004),
     RISK_INVALID_AMOUNT(-2005),
     RISK_INVALID_LEVERAGE(-2006), // 杠杆倍率非法，不在 symbol 支持的范围内
+    RISK_LEVERAGE_MISMATCH(-2007), // 新杠杆与当前仓位的杠杆不匹配
 
     MATCHING_UNKNOWN_ORDER_ID(-3002),
     // MATCHING_DUPLICATE_ORDER_ID(-3003),
