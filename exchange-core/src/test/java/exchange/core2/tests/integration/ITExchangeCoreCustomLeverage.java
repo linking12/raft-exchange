@@ -1,6 +1,7 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.ApiAdjustLeverage;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -15,6 +16,101 @@ import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertEquals;
 
 public final class ITExchangeCoreCustomLeverage {
+
+    // 测试下不同leverage报mismatch的错误
+    @Test
+    public void testLeverageMismatch() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+
+            CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                    .symbolId(10001)
+                    .type(SymbolType.FUTURES_CONTRACT)
+                    .baseCurrency(11).quoteCurrency(12)
+                    .marginBuy(1000).marginSell(1000)
+                    .feeScaleK(1_000_000)
+                    .makerFee(0).takerFee(0)
+                    .maxLeverage(50)
+                    .build();
+
+            container.addSymbol(spec);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 50_000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(10)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(10) // 不加杠杆他只能开10手，10倍杠杆才能开出100手
+                    .build(), CommandResultCode.SUCCESS);
+
+            // BID订单使用不同的leverage会报RISK_LEVERAGE_MISMATCH
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10002L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(1)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(20)
+                    .build(), CommandResultCode.RISK_NSF);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(10L));
+            });
+        }
+    }
+
+    // 测试下不同leverage报mismatch的错误
+    @Test
+    public void testAdjustLeverage() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 1_200);
+
+            long size = 10L;
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(size)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(10) // 金额只够开10倍, 9倍会失败
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size));
+            });
+
+            // BID订单使用不同的leverage会报RISK_LEVERAGE_MISMATCH
+            container.submitCommandSync(ApiAdjustLeverage.builder()
+                    .uid(UID_1)
+                    .symbol(spec.symbolId)
+                    .leverage(11)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size));
+            });
+
+            // BID订单使用不同的leverage会报RISK_LEVERAGE_MISMATCH
+            container.submitCommandSync(ApiAdjustLeverage.builder()
+                    .uid(UID_1)
+                    .symbol(spec.symbolId)
+                    .leverage(9)
+                    .build(), CommandResultCode.RISK_NSF);
+        }
+    }
 
 
     @Test
@@ -277,21 +373,17 @@ public final class ITExchangeCoreCustomLeverage {
                     .orderType(OrderType.GTC)
                     .leverage(20)
                     .build();
-            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+            container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
                 assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1 + size2));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
 
                 assertThat(profile.getOrders().getFirst().get(0).size, is(size1));
                 assertThat(profile.getOrders().getFirst().get(0).orderId, is(order1.orderId));
                 assertThat(profile.getOrders().getFirst().get(0).filled, is(0L));
-
-                assertThat(profile.getOrders().getFirst().get(1).size, is(size2));
-                assertThat(profile.getOrders().getFirst().get(1).orderId, is(order2.orderId));
-                assertThat(profile.getOrders().getFirst().get(1).filled, is(0L));
             });
         }
     }
@@ -342,21 +434,17 @@ public final class ITExchangeCoreCustomLeverage {
                     .orderType(OrderType.GTC)
                     .leverage(50)
                     .build();
-            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+            container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
                 assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1 + size2));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
 
                 assertThat(profile.getOrders().getFirst().get(0).size, is(size1));
                 assertThat(profile.getOrders().getFirst().get(0).orderId, is(order1.orderId));
                 assertThat(profile.getOrders().getFirst().get(0).filled, is(0L));
-
-                assertThat(profile.getOrders().getFirst().get(1).size, is(size2));
-                assertThat(profile.getOrders().getFirst().get(1).orderId, is(order2.orderId));
-                assertThat(profile.getOrders().getFirst().get(1).filled, is(0L));
             });
 
             long size3 = 1L;
@@ -370,7 +458,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
-                    .leverage(30)
+                    .leverage(1)
                     .build();
             container.submitCommandSync(order3, CommandResultCode.SUCCESS);
 
@@ -423,7 +511,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .orderType(OrderType.GTC)
                     .leverage(20)
                     .build();
-            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+            container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(charge));
@@ -587,7 +675,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .orderId(30000L)
                     .price(price)
                     .reservePrice(price)
-                    .size(49)
+                    .size(size)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
@@ -603,8 +691,8 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
-                    .leverage(1) // 50倍开50手
-                    .build(), CommandResultCode.SUCCESS);
+                    .leverage(1)
+                    .build(), CommandResultCode.RISK_NSF);
 
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
@@ -657,11 +745,8 @@ public final class ITExchangeCoreCustomLeverage {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
             });
-            
         }
     }
-
-    // leverage值会影响liquidate触发的金额
 
     // 模拟leverage在replay snapshot时还有效
 }
