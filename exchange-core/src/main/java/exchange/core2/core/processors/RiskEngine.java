@@ -306,9 +306,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
-            case ADJUST_LEVERAGE:
+            case LEVERAGE_ADJUSTMENT:
                 if (uidForThisHandler(cmd.uid)) {
-                    cmd.resultCode = adjustLeverageRiskCheck(cmd);
+                    cmd.resultCode = adjustLeverage(cmd);
                 }
                 return false;
 
@@ -421,7 +421,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
 
-    private CommandResultCode adjustLeverageRiskCheck(final OrderCommand cmd) {
+    private CommandResultCode adjustLeverage(final OrderCommand cmd) {
         final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
         if (userProfile == null) {
             cmd.resultCode = CommandResultCode.AUTH_INVALID_USER;
@@ -450,7 +450,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         long newRequired = position.calculateRequiredMarginForFutures(spec, cmd.leverage);
         if (newRequired > oldRequired) {
             long balance = userProfile.accounts.get(spec.quoteCurrency);
-            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency);
+            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency) - oldRequired + newRequired;
             // 修改杠杆后新增的保证金占用 > 可以余额，不让修改
             if ((newRequired - oldRequired) > (balance - locked)) {
                 return CommandResultCode.RISK_NSF;

@@ -567,7 +567,7 @@ public final class ExchangeApi {
     };
 
     private static final EventTranslatorOneArg<OrderCommand, ApiAdjustLeverage> ADJUST_LEVERAGE_TRANSLATOR = (cmd, seq, api) -> {
-        cmd.command = OrderCommandType.ADJUST_LEVERAGE;
+        cmd.command = OrderCommandType.LEVERAGE_ADJUSTMENT;
         cmd.timestamp = api.timestamp;
         cmd.uid = api.uid;
         cmd.symbol = api.symbol;
