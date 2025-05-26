@@ -23,7 +23,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
                 .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK()).quoteScaleK(grpcSymbol.getQuoteScaleK())
                 .takerFee(grpcSymbol.getTakerFee()).makerFee(grpcSymbol.getMakerFee()).feeScaleK(grpcSymbol.getFeeScaleK())
                 .marginBuy(grpcSymbol.getMarginBuy()).marginSell(grpcSymbol.getMarginSell()).maintenanceMargin(grpcSymbol.getMaintenanceMargin())
-                .build();
+                .maxLeverage(grpcSymbol.getMaxLeverage()).build();
             coreSymbols.add(coreSymbol);
         }
         exchange.core2.core.common.api.binary.BatchAddSymbolsCommand batchAddSymbolsCommand =

@@ -84,6 +84,12 @@ message ApiResumeUser {
   int64 uid = 1;
 }
 
+message ApiAdjustLeverage {
+  int64 uid = 1;
+  int32 symbol = 2;
+  int32 leverage = 3;
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -99,6 +105,7 @@ message ApiCommand {
     ApiReduceOrder reduce_order = 11;
     ApiSuspendUser suspend_user = 12;
     ApiResumeUser resume_user = 13;
+    ApiAdjustLeverage adjust_leverage = 14;
   }
 }
 
@@ -136,6 +143,7 @@ message CoreSymbolSpecification {
   int64 margin_buy = 10;
   int64 margin_sell = 11;
   int64 maintenance_margin = 12;
+  int32 max_leverage = 13;
 }
 
 message BinaryDataCommand {

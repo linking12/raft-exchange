@@ -47,7 +47,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long pendingSellSize = 0;
     public long pendingBuySize = 0;
 
-    public int leverage = 1; // 用户自选杠杆，默认 1 倍
+    private int leverage = 1; // 用户自选杠杆，默认 1 倍
 
     public void initialize(long uid, int symbol, int currency, int leverage) {
         this.uid = uid;
@@ -63,7 +63,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingSellSize = 0;
         this.pendingBuySize = 0;
 
+        updateLeverage(leverage);
+    }
+
+    public void updateLeverage(int leverage) {
         this.leverage = leverage == 0 ? 1 : leverage; // 用户自选杠杆，默认 1 倍
+    }
+
+    public boolean isSameLeverage(int leverage) {
+        return this.leverage == (leverage == 0 ? 1 : leverage);
     }
 
     public SymbolPositionRecord(long uid, BytesIn bytes) {
@@ -80,7 +88,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingSellSize = bytes.readLong();
         this.pendingBuySize = bytes.readLong();
 
-        this.leverage = bytes.readInt();
+        updateLeverage(bytes.readInt());
     }
 
 
@@ -178,6 +186,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return required margin
      */
     public long calculateRequiredMarginForFutures(CoreSymbolSpecification spec) {
+        return calculateRequiredMarginForFutures(spec, leverage);
+    }
+
+    public long calculateRequiredMarginForFutures(CoreSymbolSpecification spec, int leverage) {
         final long specMarginBuy = CoreArithmeticUtils.ceilDivide(spec.marginBuy, leverage);
         final long specMarginSell = CoreArithmeticUtils.ceilDivide(spec.marginSell, leverage);
 
@@ -316,7 +328,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         openPriceSum = 0;
         direction = PositionDirection.EMPTY;
 
-        leverage = 1;
+        updateLeverage(0);
     }
 
     public void validateInternalState() {

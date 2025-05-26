@@ -306,6 +306,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
+            case LEVERAGE_ADJUSTMENT:
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = adjustLeverage(cmd);
+                }
+                return false;
+
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
                 binaryCommandsProcessor.acceptBinaryFrame(cmd); // ignore return result, because it should be set by MatchingEngineRouter
@@ -414,6 +420,48 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return (shardMask == 0) || ((uid & shardMask) == shardId);
     }
 
+
+    private CommandResultCode adjustLeverage(final OrderCommand cmd) {
+        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (userProfile == null) {
+            cmd.resultCode = CommandResultCode.AUTH_INVALID_USER;
+            log.warn("User profile {} not found", cmd.uid);
+            return CommandResultCode.AUTH_INVALID_USER;
+        }
+
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+        if (spec == null) {
+            log.warn("Symbol {} not found", cmd.symbol);
+            return CommandResultCode.INVALID_SYMBOL;
+        }
+
+        // 检查用户杠杆是否超过symbol的杠杆限制
+        if (!spec.isValidLeverage(cmd.leverage)) {
+            return CommandResultCode.RISK_INVALID_LEVERAGE;
+        }
+
+        SymbolPositionRecord position = userProfile.positions.get(spec.symbolId);
+        // 没有仓位不修改
+        if (position == null) {
+            return CommandResultCode.SUCCESS;
+        }
+        // 有持仓，检查保证金变化是否在可承受范围内
+        long oldRequired = position.calculateRequiredMarginForFutures(spec);
+        long newRequired = position.calculateRequiredMarginForFutures(spec, cmd.leverage);
+        if (newRequired > oldRequired) {
+            long balance = userProfile.accounts.get(spec.quoteCurrency);
+            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency) - oldRequired + newRequired;
+            // 修改杠杆后新增的保证金占用 > 可以余额，不让修改
+            if ((newRequired - oldRequired) > (balance - locked)) {
+                return CommandResultCode.RISK_NSF;
+            }
+        }
+        // 修改杠杆
+        position.updateLeverage(cmd.leverage);
+        return CommandResultCode.SUCCESS;
+    }
+
+
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
 
         final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
@@ -472,6 +520,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage);
                 userProfile.positions.put(spec.symbolId, position);
+            }
+
+            if (!position.isSameLeverage(cmd.leverage)) {
+                return CommandResultCode.RISK_LEVERAGE_MISMATCH;
             }
 
             final boolean canPlaceOrder = canPlaceMarginOrder(cmd, userProfile, spec, position);

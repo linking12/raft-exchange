@@ -93,6 +93,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 case RESUME_USER:
                     result = SyncAdminApiAccountsController.resumeUser(((ApiCommand)grpcMessage).getResumeUser());
                     break;
+                case ADJUST_LEVERAGE:
+                    result = SyncTradeOrdersApiController.adjustLeverage(((ApiCommand)grpcMessage).getAdjustLeverage());
+                    break;
                 case NOP:
                     LOG.info("NOP Command received, no action taken.");
                     result = SyncNoOpApiController.handleNoOp();

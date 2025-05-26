@@ -37,7 +37,7 @@ public final class ApiLiquidationOrder extends ApiCommand {
 
     @Override
     public String toString() {
-        return "[ADD Liquidation o" + orderId + " s" + symbol + " u" + uid + " " + (action == OrderAction.ASK ? 'A' : 'B')
+        return "[ADD_LIQUIDATION o" + orderId + " s" + symbol + " u" + uid + " " + (action == OrderAction.ASK ? 'A' : 'B')
                 + ":" + (orderType == OrderType.IOC ? "IOC" : "GTC")
                 + ":" + price + ":" + size + "]";
         //(reservePrice != 0 ? ("(R" + reservePrice + ")") : "") +

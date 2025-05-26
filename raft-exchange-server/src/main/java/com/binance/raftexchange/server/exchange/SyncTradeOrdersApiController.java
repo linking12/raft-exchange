@@ -1,6 +1,7 @@
 package com.binance.raftexchange.server.exchange;
 
 import com.binance.raftexchange.server.util.SerializeHelper;
+import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
@@ -73,5 +74,13 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
                 .symbol(grpcApiReduceOrder.getSymbol()).reduceSize(grpcApiReduceOrder.getReduceSize()).build();
 
         return callExchange(apiReduceOrder);
+    }
+
+    public static CompletableFuture<byte[]> adjustLeverage(ApiAdjustLeverage grpcApiAdjustLeverage) {
+        exchange.core2.core.common.api.ApiAdjustLeverage apiAdjustLeverage =
+            exchange.core2.core.common.api.ApiAdjustLeverage.builder().uid(grpcApiAdjustLeverage.getUid())
+                .symbol(grpcApiAdjustLeverage.getSymbol()).leverage(grpcApiAdjustLeverage.getLeverage()).build();
+
+        return callExchange(apiAdjustLeverage);
     }
 }
