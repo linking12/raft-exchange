@@ -67,20 +67,23 @@ public final class ITExchangeCoreCustomLeverage {
         }
     }
 
-    // 测试下不同leverage报mismatch的错误
+    // test adjust leverage
     @Test
     public void testAdjustLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
 
+            long deposit = 1_200L;
             CoreSymbolSpecification spec = container.initSymbol();
-            container.createUserWithMoney(UID_1, spec.quoteCurrency, 1_200);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, deposit);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 12_000);
 
+            long price = 1000L;
             long size = 10L;
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(10001L)
-                    .price(1000)
-                    .reservePrice(1000)
+                    .price(price)
+                    .reservePrice(price)
                     .size(size)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
@@ -92,7 +95,7 @@ public final class ITExchangeCoreCustomLeverage {
                 assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size));
             });
 
-            // BID订单使用不同的leverage会报RISK_LEVERAGE_MISMATCH
+            // 11倍可以开出来, 因为保证金用到的更少了
             container.submitCommandSync(ApiAdjustLeverage.builder()
                     .uid(UID_1)
                     .symbol(spec.symbolId)
@@ -103,11 +106,90 @@ public final class ITExchangeCoreCustomLeverage {
                 assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size));
             });
 
-            // BID订单使用不同的leverage会报RISK_LEVERAGE_MISMATCH
+            // 手续费也应该要考虑
             container.submitCommandSync(ApiAdjustLeverage.builder()
                     .uid(UID_1)
                     .symbol(spec.symbolId)
                     .leverage(9)
+                    .build(), CommandResultCode.RISK_NSF);
+
+            // 吃掉调整后订单
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(10002L)
+                    .price(price)
+                    .reservePrice(price)
+                    .size(size)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            long fee = calculateFee(price, size, 1, spec.makerFee, spec.feeScaleK);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(deposit - fee));
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+            });
+
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(0L));
+            });
+
+        }
+    }
+
+    // test adjust leverage
+    @Test
+    public void testOpenPositionThenAdjustLeverage() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+
+            CoreSymbolSpecification spec = container.initSymbol();
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 3500);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(20)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(30002L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(50)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.SUCCESS);
+
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+
+            // 最高50倍杠杆, 高于这个值会报RISK_INVALID_LEVERAGE
+            container.submitCommandSync(ApiAdjustLeverage.builder()
+                    .uid(UID_1)
+                    .symbol(spec.symbolId)
+                    .leverage(51)
+                    .build(), CommandResultCode.RISK_INVALID_LEVERAGE);
+
+            container.submitCommandSync(ApiAdjustLeverage.builder()
+                    .uid(UID_1)
+                    .symbol(spec.symbolId)
+                    .leverage(50)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 杠杆新的保证金check pass后允许调整杠杆
+            container.submitCommandSync(ApiAdjustLeverage.builder()
+                    .uid(UID_1)
+                    .symbol(spec.symbolId)
+                    .leverage(15)
                     .build(), CommandResultCode.RISK_NSF);
         }
     }
@@ -744,6 +826,55 @@ public final class ITExchangeCoreCustomLeverage {
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
+            });
+        }
+    }
+
+    // 去下现货单时需要考虑杠杆持仓保证金
+    @Test
+    public void testPlaceExchangeWhileHasLeverage() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = container.initSymbol();
+            CoreSymbolSpecification specExchange = container.initSymbolExchange();
+
+            long amount = 2000;
+            long price = 1000;
+            long size = 50;
+
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, amount);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30000L)
+                    .price(price)
+                    .reservePrice(price)
+                    .size(size)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .leverage(50) // 50倍开50手
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+            });
+
+            // free + freeFuturesMargin > 0才允许下现货单
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(30001L)
+                    .price(price)
+                    .reservePrice(price)
+                    .size(1)
+                    .symbol(specExchange.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .build(), CommandResultCode.RISK_NSF);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(amount));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().size(), is(1));
             });
         }
     }

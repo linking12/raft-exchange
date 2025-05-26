@@ -342,6 +342,23 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return spec;
     }
 
+    public CoreSymbolSpecification initSymbolExchange() {
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(30001)
+                .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(21)
+                .quoteCurrency(12)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .feeScaleK(100)
+                .makerFee(1)
+                .takerFee(2)
+                .build();
+
+        addSymbol(spec);
+        return spec;
+    }
+
     public void addMoneyToUser(long uid, int currency, long amount) {
         final List<ApiCommand> cmds = new ArrayList<>();
         cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(currency).build());
