@@ -450,7 +450,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         long newRequired = position.calculateRequiredMarginForFutures(spec, cmd.leverage);
         if (newRequired > oldRequired) {
             long balance = userProfile.accounts.get(spec.quoteCurrency);
-            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency);
+            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency) - oldRequired + newRequired;
             // 修改杠杆后新增的保证金占用 > 可以余额，不让修改
             if ((newRequired - oldRequired) > (balance - locked)) {
                 return CommandResultCode.RISK_NSF;
