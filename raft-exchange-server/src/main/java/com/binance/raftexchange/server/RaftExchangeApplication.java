@@ -77,7 +77,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     private void startKafkaSender() {
         Properties properties = new Properties();
-        properties.put("retries", 5);
+        properties.put("retries", 3);
         properties.put("retry.backoff.ms", 200);
         properties.put("linger.ms", 5);
         properties.put("batch.size", 512 * 1024);
