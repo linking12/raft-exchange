@@ -23,6 +23,7 @@ import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 
@@ -38,6 +39,9 @@ public class ThroughputTestsModule {
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg)) {
+            //性能测试不开强平检查
+            //性能测试准备的order不会考虑强平单，如果强平导致仓位没有了，但是测试生成的订单不知道，还是会用到这个仓位，会报错仓位不存在。
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.SECONDS);
 
             final float avgMt = container.executeTestingThread(
                     () -> (float) IntStream.range(0, iterations)
