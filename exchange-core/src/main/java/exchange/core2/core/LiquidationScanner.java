@@ -41,6 +41,7 @@ public final class LiquidationScanner {
     private final Collection<RiskEngine> riskEngines;
     private final Map<Integer, FundEventsHelper> fundEventsHelpers;
     private final ScheduledExecutorService scheduler;
+    private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
 
     public LiquidationScanner(ExchangeApi api, Collection<RiskEngine> riskEngines, int riskEnginesNum) {
         this.api = api;
@@ -59,7 +60,7 @@ public final class LiquidationScanner {
                 } catch (Throwable e) {
                     log.error("Error during liquidation check for shard {}", riskEngine.getShardId(), e);
                 }
-            }, 2, 2, TimeUnit.SECONDS);
+            }, scanIntervalSec, scanIntervalSec, TimeUnit.SECONDS);
         }
     }
 
