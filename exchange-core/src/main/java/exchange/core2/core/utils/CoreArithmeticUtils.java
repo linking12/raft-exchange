@@ -128,6 +128,17 @@ public final class CoreArithmeticUtils {
     }
 
     /**
+     * 计算强平后，释放的金额
+     * 和 {@link #calculateSizeToLiquidate} 相反
+     */
+    public static long calculateDeficitToLiquidate(long size, long price, CoreSymbolSpecification spec) {
+        long takerFeePerSize = spec.isFixedFee()
+                ? spec.takerFee
+                : ceilDivide(price * spec.takerFee, spec.feeScaleK);
+        return size * (price - takerFeePerSize);
+    }
+
+    /**
      * 向上取整计算整数除法，防止出现 x / y = 0
      * ceil(x / y) = (x + y - 1) / y
      * 性能比Math.ceil好，因为不引入浮点数计算

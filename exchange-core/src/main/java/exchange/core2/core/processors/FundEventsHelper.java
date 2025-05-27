@@ -130,8 +130,8 @@ public class FundEventsHelper {
     }
 
     // 通知调整保证金
-    public FundEvent sendMarginAdjustmentEvent(SymbolPositionRecord position, long free, long locked) {
-        FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, free, locked);
+    public FundEvent sendMarginAdjustmentEvent(SymbolPositionRecord position) {
+        FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, 0, 0);
         event.positionChanged = 0; // 无清算
         event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0; // 平均开仓价格
         event.tradePrice = 0; // 无清算价格
@@ -141,8 +141,8 @@ public class FundEventsHelper {
     }
 
     // 通知强平
-    public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long free, long locked, long markPrice, long sizeToLiquidate) {
-        FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_ALERT, position, free, locked);
+    public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long markPrice, long sizeToLiquidate) {
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_ALERT, position, 0, 0);
         event.positionChanged = sizeToLiquidate; // 清算仓位
         event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
         event.tradePrice = markPrice; // 清算价格

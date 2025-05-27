@@ -16,6 +16,7 @@
 package exchange.core2.core.common.api;
 
 
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import lombok.Builder;
@@ -36,11 +37,13 @@ public final class ApiPlaceOrder extends ApiCommand {
     public final int symbol;
     public final int userCookie;
     public final int leverage;
+    public final MarginMode marginMode;
     public final long reservePrice;
 
     @Override
     public String toString() {
-        return "[ADD o" + orderId + " s" + symbol + " l" + leverage + " u" + uid + " " + (action == OrderAction.ASK ? 'A' : 'B')
+        return "[ADD o" + orderId + " s" + symbol + " l" + leverage + " m" + marginMode + " u" + uid
+                + " " + (action == OrderAction.ASK ? 'A' : 'B')
                 + ":" + (orderType == OrderType.IOC ? "IOC" : "GTC")
                 + ":" + price + ":" + size + "]";
         //(reservePrice != 0 ? ("(R" + reservePrice + ")") : "") +

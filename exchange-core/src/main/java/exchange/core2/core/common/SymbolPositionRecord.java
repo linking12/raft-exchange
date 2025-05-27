@@ -48,8 +48,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long pendingBuySize = 0;
 
     private int leverage = 1; // 用户自选杠杆，默认 1 倍
+    public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
 
-    public void initialize(long uid, int symbol, int currency, int leverage) {
+    public void initialize(long uid, int symbol, int currency, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
         this.symbol = symbol;
@@ -64,6 +65,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingBuySize = 0;
 
         updateLeverage(leverage);
+        this.marginMode = marginMode;
     }
 
     public void updateLeverage(int leverage) {
@@ -89,6 +91,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingBuySize = bytes.readLong();
 
         updateLeverage(bytes.readInt());
+        this.marginMode = MarginMode.values()[bytes.readInt()];
     }
 
 
@@ -315,6 +318,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         bytes.writeLong(pendingSellSize);
         bytes.writeLong(pendingBuySize);
         bytes.writeInt(leverage);
+        bytes.writeInt(marginMode.ordinal());
     }
 
     public void reset() {
@@ -329,6 +333,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         direction = PositionDirection.EMPTY;
 
         updateLeverage(0);
+        marginMode = MarginMode.ISOLATED;
     }
 
     public void validateInternalState() {
@@ -349,7 +354,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     @Override
     public int stateHash() {
-        return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openPriceSum, profit, pendingSellSize, pendingBuySize);
+        return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openPriceSum, profit, pendingSellSize, pendingBuySize, marginMode);
     }
 
     @Override
@@ -364,6 +369,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " pnl=" + profit +
                 " pendingS=" + pendingSellSize +
                 " pendingB=" + pendingBuySize +
+                " mode=" + marginMode +
                 '}';
     }
 }

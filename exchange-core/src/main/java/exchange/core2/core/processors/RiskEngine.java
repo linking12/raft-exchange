@@ -518,8 +518,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
             SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); // TODO getIfAbsentPut?
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
-                position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage);
+                position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage, cmd.marginMode);
                 userProfile.positions.put(spec.symbolId, position);
+            }
+
+            if (position.marginMode != cmd.marginMode) {
+                // 拒绝：不能混用 margin mode
+                return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
             }
 
             if (!position.isSameLeverage(cmd.leverage)) {
@@ -855,7 +860,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (closedSize > 0) {
                     long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : 0;
                     long closePnl = takerSpr.profit - preProfit;
-                    long locked = takerSpr.calculateRequiredMarginForFutures(spec);
+                    long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
                     long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
                     boolean isLiquidation = LiquidationScanner.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
                     eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, avgOpenPrice, ev.price, 0, closePnl);
@@ -870,7 +875,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     final long fee = CoreArithmeticUtils.calculateTakerFee(sizeToOpen, ev.price, spec);
                     long balance = takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
                     fees.addToValue(spec.quoteCurrency, fee);
-                    long locked = takerSpr.calculateRequiredMarginForFutures(spec);
+                    long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
                     long free = balance - locked;
                     eventsHelper.sendOpenPositionEvent(cmd, cmd.orderId, takerSpr, free, locked, sizeToOpen, ev.price, fee);
                 }
@@ -915,7 +920,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (sizeClosed > 0) {
                 long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : ev.price;
                 long closePnl = makerSpr.profit - preProfit;
-                long locked = makerSpr.calculateRequiredMarginForFutures(spec);
+                long locked = calculateLockedMargin(maker, spec.quoteCurrency);
                 long free = maker.accounts.get(spec.quoteCurrency) - locked;
                 // Maker是被动成交者，不属于liquidation
                 eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, avgOpenPrice, ev.price, 0, closePnl);
@@ -927,7 +932,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long fee = CoreArithmeticUtils.calculateMakerFee(sizeToOpen, ev.price, spec);
                 long balance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
                 fees.addToValue(spec.quoteCurrency, fee);
-                long locked = makerSpr.calculateRequiredMarginForFutures(spec);
+                long locked = calculateLockedMargin(maker, spec.quoteCurrency);
                 long free = balance - locked;
                 eventsHelper.sendOpenPositionEvent(cmd, ev.matchedOrderId, makerSpr, free, locked, sizeToOpen, ev.price, fee);
             }

@@ -98,7 +98,8 @@ public class SerializeHelper {
         com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = builderPool.get(com.binance.raftexchange.stubs.response.OrderCommand.Builder.class)
                 .setCommand(OrderCommandType.forNumber(result.command.getCode())).setOrderId(result.orderId).setSymbol(result.symbol).setPrice(result.price)
                 .setSize(result.size).setReserveBidPrice(result.reserveBidPrice).setUid(result.getUid()).setTimestamp(result.timestamp)
-                .setUserCookie(result.userCookie).setLeverage(result.leverage).setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
+                .setUserCookie(result.userCookie).setLeverage(result.leverage).setMarginModeValue(result.marginMode.ordinal())
+                .setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
         if (result.action != null) {
             builder.setActionValue(result.action.getCode());
         }
