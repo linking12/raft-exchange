@@ -636,7 +636,7 @@ class ITFutureBasic {
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
             assertThat(deposit - size * 100L, Is.is(takerEvent.free));
             assertThat(size * 100L, Is.is(takerEvent.locked));
-            assertThat(0L, Is.is(takerEvent.openPriceAvg));
+            assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
             assertThat(0L, Is.is(takerEvent.positionChanged));
@@ -706,7 +706,7 @@ class ITFutureBasic {
             // 10000 - 2 * 100 = 9800
             assertThat(deposit - (size - 2) * 100L, Is.is(makerUnlockEvent.free));
             assertThat((size - 2) * 100L, Is.is(makerUnlockEvent.locked));
-            assertThat(0L, Is.is(makerUnlockEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.position));
             assertThat(0L, Is.is(makerUnlockEvent.positionChanged));
@@ -724,7 +724,7 @@ class ITFutureBasic {
             // 10000(deposit) - 10 * 100(current position) - 2 * 10(fee) = 8980L
             assertThat(deposit - size * 100 - 2 * 10L, Is.is(makerOpenPositionEvent.free));
             assertThat(size * 100L, Is.is(makerOpenPositionEvent.locked));
-            assertThat(0L, Is.is(makerOpenPositionEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.position));
             assertThat(2L, Is.is(makerOpenPositionEvent.positionChanged));
@@ -793,7 +793,7 @@ class ITFutureBasic {
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
             assertThat(deposit - size * 100L, Is.is(takerEvent.free));
             assertThat(size * 100L, Is.is(takerEvent.locked));
-            assertThat(0L, Is.is(takerEvent.openPriceAvg));
+            assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
             assertThat(0L, Is.is(takerEvent.positionChanged));
@@ -862,7 +862,7 @@ class ITFutureBasic {
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
             assertThat(deposit - (size - 2) * 100L, Is.is(makerUnlockEvent.free));
             assertThat((size - 2) * 100L, Is.is(makerUnlockEvent.locked));
-            assertThat(0L, Is.is(makerUnlockEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.position));
             assertThat(0L, Is.is(makerUnlockEvent.positionChanged));
@@ -880,7 +880,7 @@ class ITFutureBasic {
             // 10000(deposit) - 10 * 100(maker order) - 2 * 10(fee) = 8980
             assertThat(deposit - size * 100L - 2 * 10L, Is.is(makerOpenPositionEvent.free));
             assertThat(size * 100L, Is.is(makerOpenPositionEvent.locked));
-            assertThat(0L, Is.is(makerOpenPositionEvent.openPriceAvg));
+            assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.position));
             assertThat(2L, Is.is(makerOpenPositionEvent.positionChanged));
