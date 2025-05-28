@@ -455,7 +455,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         long newRequired = position.calculateRequiredMarginForFutures(spec, cmd.leverage);
         if (newRequired > oldRequired) {
             long balance = userProfile.accounts.get(spec.quoteCurrency);
-            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency) - oldRequired + newRequired;
+            long locked = calculateLockedMargin(userProfile, spec.quoteCurrency);
             // 修改杠杆后新增的保证金占用 > 可以余额，不让修改
             if ((newRequired - oldRequired) > (balance - locked)) {
                 return CommandResultCode.RISK_NSF;
@@ -538,7 +538,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
             final boolean canPlaceOrder = canPlaceMarginOrder(cmd, userProfile, spec, position);
             if (canPlaceOrder) {
-                position.pendingHold(cmd.action, cmd.size);
+                position.pendingHold(cmd.action, cmd.size, cmd.price);
                 long totalBalance = userProfile.accounts.get(position.currency);
                 long lockedMargin = calculateLockedMargin(userProfile, position.currency);
                 long free = totalBalance - lockedMargin;
@@ -699,8 +699,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
         }
 
-        // 下单时候要确保有足够手续费，R2阶段真实扣除手续费是sizeToOpen <= cmd.size
-        final long estimatedFee = CoreArithmeticUtils.calculateTakerFee(cmd.size, cmd.price, spec);
+        // 下单时候要确保有足够手续费，R2阶段真实扣除手续费
+        final long estimatedFee = position.calculatePendingFeeForOrder(spec, cmd.action, cmd.size, cmd.price);
 
 //        log.debug("newMargin={} <= account({})={} + free {}",
 //                newRequiredMarginForSymbol, position.currency, userProfile.accounts.get(position.currency), freeMargin);
