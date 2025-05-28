@@ -186,7 +186,7 @@ class ITFutureBasic {
     // 未开单成功时可取消订单
     @Test
     public void testCancelSuccess() {
-        long deposit = 100L;
+        long deposit = 1000L;
         long userId1 = 1003L;
         long orderId = 1005L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
@@ -240,7 +240,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(placeEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(placeEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(placeEvent.eventType));
-            assertThat(0L, Is.is(placeEvent.free));
+            assertThat(900L, Is.is(placeEvent.free));
             assertThat(100L, Is.is(placeEvent.locked));
             assertThat(0L, Is.is(placeEvent.openPriceSum));
             assertThat(0L, Is.is(placeEvent.pnl));
@@ -256,7 +256,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(unLockEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(unLockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(unLockEvent.eventType));
-            assertThat(100L, Is.is(unLockEvent.free));
+            assertThat(1000L, Is.is(unLockEvent.free));
             assertThat(0L, Is.is(unLockEvent.locked));
             assertThat(0L, Is.is(unLockEvent.openPriceSum));
             assertThat(0L, Is.is(unLockEvent.pnl));
@@ -269,7 +269,7 @@ class ITFutureBasic {
     // 开仓事件, 完全成交, taker为Ask
     @Test
     public void testOpenPosition4Bid() throws InterruptedException {
-        int deposit = 100;
+        int deposit = 1000;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId = 1005L;
@@ -324,7 +324,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(0L, Is.is(takerEvent.free));
+            assertThat(900L, Is.is(takerEvent.free));
             assertThat(100L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
@@ -393,7 +393,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
-            assertThat(100L, Is.is(makerUnlockEvent.free));
+            assertThat(1000L, Is.is(makerUnlockEvent.free));
             assertThat(0L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
@@ -410,8 +410,8 @@ class ITFutureBasic {
             assertThat(10L, Is.is(makerOpenPositionEvent.fee));
             assertThat(PositionDirection.LONG, Is.is(makerOpenPositionEvent.direction));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
-            // this is not a desire
-            assertThat(-10L, Is.is(makerOpenPositionEvent.free));
+            // 1000(balance) - 100(open position) - 10(maker fee) = 890
+            assertThat(890L, Is.is(makerOpenPositionEvent.free));
             assertThat(100L, Is.is(makerOpenPositionEvent.locked));
             assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
@@ -423,7 +423,7 @@ class ITFutureBasic {
     // 开仓事件, 完全成交, taker为Bid
     @Test
     public void testOpenPosition4Ask() throws InterruptedException {
-        int deposit = 100;
+        int deposit = 1000;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId = 1005L;
@@ -478,7 +478,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(0L, Is.is(takerEvent.free));
+            assertThat(900L, Is.is(takerEvent.free));
             assertThat(100L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
@@ -547,7 +547,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
-            assertThat(100L, Is.is(makerUnlockEvent.free));
+            assertThat(1000L, Is.is(makerUnlockEvent.free));
             assertThat(0L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
@@ -564,8 +564,8 @@ class ITFutureBasic {
             assertThat(10L, Is.is(makerOpenPositionEvent.fee));
             assertThat(PositionDirection.SHORT, Is.is(makerOpenPositionEvent.direction));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
-            // this is not a desire
-            assertThat(-10L, Is.is(makerOpenPositionEvent.free));
+            // 1000 - 100 - 10(taker fee)
+            assertThat(890L, Is.is(makerOpenPositionEvent.free));
             assertThat(100L, Is.is(makerOpenPositionEvent.locked));
             assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
@@ -579,7 +579,7 @@ class ITFutureBasic {
     @Test
     public void testOpenMultiplePosition4Bid() throws InterruptedException {
         int size = 10;
-        int deposit = 100 * size;
+        int deposit = 1000 * size;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId = 1005L;
@@ -634,8 +634,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(0L, Is.is(takerEvent.free));
-            assertThat(Long.parseLong(String.valueOf(deposit)), Is.is(takerEvent.locked));
+            assertThat(deposit - size * 100L, Is.is(takerEvent.free));
+            assertThat(size * 100L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
@@ -703,8 +703,9 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
-            assertThat(200L, Is.is(makerUnlockEvent.free));
-            assertThat(deposit - 200L, Is.is(makerUnlockEvent.locked));
+            // 10000 - 2 * 100 = 9800
+            assertThat(deposit - (size - 2) * 100L, Is.is(makerUnlockEvent.free));
+            assertThat((size - 2) * 100L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.position));
@@ -720,9 +721,9 @@ class ITFutureBasic {
             assertThat(2 * 10L, Is.is(makerOpenPositionEvent.fee));
             assertThat(PositionDirection.LONG, Is.is(makerOpenPositionEvent.direction));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
-            // this is not a desire, will fix it in fee specific branch
-            assertThat(-10L * 2, Is.is(makerOpenPositionEvent.free));
-            assertThat(Long.parseLong(String.valueOf(deposit)), Is.is(makerOpenPositionEvent.locked));
+            // 10000(deposit) - 10 * 100(current position) - 2 * 10(fee) = 8980L
+            assertThat(deposit - size * 100 - 2 * 10L, Is.is(makerOpenPositionEvent.free));
+            assertThat(size * 100L, Is.is(makerOpenPositionEvent.locked));
             assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.position));
@@ -735,7 +736,7 @@ class ITFutureBasic {
     @Test
     public void testOpenMultiplePosition4Ask() throws InterruptedException {
         int size = 10;
-        int deposit = 100 * size;
+        int deposit = 1000 * size;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId = 1005L;
@@ -790,8 +791,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(0L, Is.is(takerEvent.free));
-            assertThat(Long.parseLong(String.valueOf(deposit)), Is.is(takerEvent.locked));
+            assertThat(deposit - size * 100L, Is.is(takerEvent.free));
+            assertThat(size * 100L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
@@ -859,8 +860,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
-            assertThat(200L, Is.is(makerUnlockEvent.free));
-            assertThat(deposit - 200L, Is.is(makerUnlockEvent.locked));
+            assertThat(deposit - (size - 2) * 100L, Is.is(makerUnlockEvent.free));
+            assertThat((size - 2) * 100L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.position));
@@ -876,9 +877,9 @@ class ITFutureBasic {
             assertThat(2 * 10L, Is.is(makerOpenPositionEvent.fee));
             assertThat(PositionDirection.SHORT, Is.is(makerOpenPositionEvent.direction));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
-            // this is not a desire, will fix it in fee specific branch
-            assertThat(-10L * 2, Is.is(makerOpenPositionEvent.free));
-            assertThat(Long.parseLong(String.valueOf(deposit)), Is.is(makerOpenPositionEvent.locked));
+            // 10000(deposit) - 10 * 100(maker order) - 2 * 10(fee) = 8980
+            assertThat(deposit - size * 100L - 2 * 10L, Is.is(makerOpenPositionEvent.free));
+            assertThat(size * 100L, Is.is(makerOpenPositionEvent.locked));
             assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.position));
@@ -890,7 +891,7 @@ class ITFutureBasic {
     // 平仓事件, 平仓所有position
     @Test
     public void testClosePosition() {
-        int deposit = 100;
+        int deposit = 1000;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId1 = 1005L;
@@ -958,7 +959,7 @@ class ITFutureBasic {
             assertThat(PositionDirection.EMPTY, Is.is(makerCloseEvent.direction));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(makerCloseEvent.eventType));
             // free = init money - fee
-            assertThat(90L, Is.is(makerCloseEvent.free));
+            assertThat(deposit - 10 * 1L, Is.is(makerCloseEvent.free));
             assertThat(0L, Is.is(makerCloseEvent.locked));
             assertThat(10000L, Is.is(makerCloseEvent.openPriceSum));
             assertThat(500L, Is.is(makerCloseEvent.pnl));
@@ -972,7 +973,7 @@ class ITFutureBasic {
     // 平仓事件, 平仓部分订单
     @Test
     public void testPartialClosePosition() {
-        int deposit = 1000;
+        int deposit = 10000;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId1 = 1005L;
@@ -1056,7 +1057,7 @@ class ITFutureBasic {
     // 强制平仓事件
     @Test
     public void testForceClosePosition() {
-        int deposit = 100;
+        int deposit = 1000;
         long userId1 = 1003L;
         long userId2 = 1004L;
         long makerOrderId1 = 1005L;
@@ -1079,7 +1080,7 @@ class ITFutureBasic {
             }
 
         } finally {
-            verify(handler, times(cnt * 8 + 8)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(cnt * 14 + 8)).fundsEvent(fundEventCapor.capture());
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
 
             IFundEventsHandler.FundsEvent takerCloseEvent = fundEvents.get(0);
