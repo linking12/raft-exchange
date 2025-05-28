@@ -229,7 +229,7 @@ public final class LiquidationScanner {
         long price = position.direction == PositionDirection.LONG ? priceRecord.bidPrice : priceRecord.askPrice;
         // 若市场无流动性（价格为 0 或 MAX_VALUE），回退到平均开仓价作为兜底
         if (price == 0 || price == Long.MAX_VALUE) {
-            price = position.openVolume > 0 ? position.openPriceSum / position.openVolume : priceRecord.markPrice;
+            price = position.openVolume > 0 ? CoreArithmeticUtils.ceilDivide(position.openPriceSum, position.openVolume) : priceRecord.markPrice;
             if (price == 0)
                 price = 1; // 防止除零，默认最小价格
             log.debug("Fallback to average open price={} for symbol={}", price, position.symbol);

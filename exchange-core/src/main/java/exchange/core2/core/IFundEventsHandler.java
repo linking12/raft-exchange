@@ -26,7 +26,8 @@ public interface IFundEventsHandler {
         public final PositionDirection direction; // 仓位方向
         public final long position; // 剩余持仓量
         public final long positionChanged; // 本次变动的仓位（如平仓/开仓数量）
-        public final long openPriceAvg; // 平均开仓价格（替代 openPriceSum / openVolume）
+        public final long openPriceSum; // 开仓总价
+        public final long openVolume; // 开仓数量
         public final long tradePrice; // 本次成交价格（开仓或平仓价）
         public final long fee; // 手续费
         public final long pnl; // 本次事件的盈亏金额

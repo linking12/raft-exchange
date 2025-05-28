@@ -69,7 +69,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingBuySize = 0;
 
         updateLeverage(leverage);
-        this.marginMode = marginMode;
+        this.marginMode = marginMode == null ? MarginMode.ISOLATED : marginMode; // 默认为逐仓
     }
 
     public void updateLeverage(int leverage) {
