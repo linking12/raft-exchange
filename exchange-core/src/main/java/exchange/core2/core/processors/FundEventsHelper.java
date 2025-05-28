@@ -108,10 +108,11 @@ public class FundEventsHelper {
     }
 
     public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
-        long sizeClosed, long avgOpenPrice, long price, long fee, long pnl) {
+        long sizeClosed, long openPriceSum, long openVolume, long price, long fee, long pnl) {
         FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
         event.positionChanged = sizeClosed;
-        event.openPriceAvg = avgOpenPrice;
+        event.openPriceSum = openPriceSum;
+        event.openVolume = openVolume;
         event.tradePrice = price;
         event.fee = fee;
         event.pnl = pnl;
@@ -133,7 +134,8 @@ public class FundEventsHelper {
     public FundEvent sendMarginAdjustmentEvent(SymbolPositionRecord position) {
         FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, 0, 0);
         event.positionChanged = 0; // 无清算
-        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0; // 平均开仓价格
+        event.openPriceSum = position.openPriceSum;
+        event.openVolume = position.openVolume;
         event.tradePrice = 0; // 无清算价格
         event.fee = 0; // 无交易费用
         event.pnl = 0; // 无盈亏变动
@@ -144,7 +146,8 @@ public class FundEventsHelper {
     public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long markPrice, long sizeToLiquidate) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_ALERT, position, 0, 0);
         event.positionChanged = sizeToLiquidate; // 清算仓位
-        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+        event.openPriceSum = position.openPriceSum;
+        event.openVolume = position.openVolume;
         event.tradePrice = markPrice; // 清算价格
         event.fee = 0; // 无交易费用
         event.pnl = 0; // 无盈亏变动
@@ -155,7 +158,8 @@ public class FundEventsHelper {
     public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPnl) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
         event.positionChanged = 0;
-        event.openPriceAvg = position.openVolume > 0 ? position.openPriceSum / position.openVolume : 0;
+        event.openPriceSum = position.openPriceSum;
+        event.openVolume = position.openVolume;
         event.tradePrice = 0;
         event.fee = 0;
         event.pnl = settledPnl; // 结算盈亏
@@ -211,7 +215,8 @@ public class FundEventsHelper {
             event.direction = PositionDirection.EMPTY;
             event.position = 0;
             event.positionChanged = 0;
-            event.openPriceAvg = 0;
+            event.openPriceSum = 0;
+            event.openVolume = 0;
             event.tradePrice = 0;
             event.fee = 0;
             event.pnl = 0;

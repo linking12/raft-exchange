@@ -863,12 +863,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 // 平仓事件
                 if (closedSize > 0) {
-                    long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : 0;
                     long closePnl = takerSpr.profit - preProfit;
                     long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
                     long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
                     boolean isLiquidation = LiquidationScanner.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
-                    eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, avgOpenPrice, ev.price, 0, closePnl);
+                    eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, prePriceSum, preVolume, ev.price, 0, closePnl);
                 }
 
                 // 开仓事件
@@ -923,12 +922,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
             // 计算平仓信息
             if (sizeClosed > 0) {
-                long avgOpenPrice = preVolume > 0 ? prePriceSum / preVolume : ev.price;
                 long closePnl = makerSpr.profit - preProfit;
                 long locked = calculateLockedMargin(maker, spec.quoteCurrency);
                 long free = maker.accounts.get(spec.quoteCurrency) - locked;
                 // Maker是被动成交者，不属于liquidation
-                eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, avgOpenPrice, ev.price, 0, closePnl);
+                eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, prePriceSum, preVolume, ev.price, 0, closePnl);
             }
 
             if (sizeToOpen > 0) {
