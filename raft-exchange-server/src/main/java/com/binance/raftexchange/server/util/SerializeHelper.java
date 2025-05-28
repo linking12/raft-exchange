@@ -205,7 +205,11 @@ public class SerializeHelper {
     private static final Function<SingleUserReportResult.Position, Position> positionMapping = p ->
             Position.newBuilder().setQuoteCurrency(p.getQuoteCurrency())
                     .setDirectionValue(p.getDirection().getMultiplier() & 0xFF)
-                    .build();
+                    .setOpenVolume(p.getOpenVolume()).setOpenPriceSum(p.getOpenPriceSum())
+                    .setProfit(p.getProfit()).setPendingSellSize(p.getPendingSellSize())
+                    .setPendingBuySize(p.getPendingBuySize()).setPendingSellAvgPrice(p.getPendingSellAvgPrice())
+                    .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())
+                    .setMarginModeValue(p.getMarginMode().ordinal()).build();
 
     private static final Function<List<exchange.core2.core.common.Order>, OrderList> ordersMapping = l ->
             OrderList.newBuilder().addAllOrders(l.stream().map(o -> Order.newBuilder()

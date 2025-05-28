@@ -18,6 +18,7 @@ package exchange.core2.core.common;
 
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.utils.CoreArithmeticUtils;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
@@ -49,6 +50,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long pendingSellAvgPrice = 0;
     public long pendingBuyAvgPrice = 0;
 
+    @Getter
     private int leverage = 1; // 用户自选杠杆，默认 1 倍
     public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
 

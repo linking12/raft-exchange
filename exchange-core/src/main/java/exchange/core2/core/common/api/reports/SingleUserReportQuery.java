@@ -93,7 +93,11 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                             pos.openPriceSum,
                             pos.profit,
                             pos.pendingSellSize,
-                            pos.pendingBuySize)));
+                            pos.pendingBuySize,
+                            pos.pendingSellAvgPrice,
+                            pos.pendingBuyAvgPrice,
+                            pos.getLeverage(),
+                            pos.marginMode)));
 
             return Optional.of(SingleUserReportResult.createFromRiskEngineFound(
                     uid,
