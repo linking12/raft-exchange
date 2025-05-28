@@ -16,6 +16,7 @@
 package exchange.core2.core.common.api.reports;
 
 
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.Order;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.UserStatus;
@@ -174,6 +175,11 @@ public final class SingleUserReportResult implements ReportResult {
         // pending orders total size
         public final long pendingSellSize;
         public final long pendingBuySize;
+        public final long pendingSellAvgPrice;
+        public final long pendingBuyAvgPrice;
+
+        public final int leverage;
+        public final MarginMode marginMode;
 
         private Position(BytesIn bytes) {
 
@@ -186,6 +192,11 @@ public final class SingleUserReportResult implements ReportResult {
 
             this.pendingSellSize = bytes.readLong();
             this.pendingBuySize = bytes.readLong();
+            this.pendingSellAvgPrice = bytes.readLong();
+            this.pendingBuyAvgPrice = bytes.readLong();
+
+            this.leverage = bytes.readInt();
+            this.marginMode = MarginMode.values()[bytes.readInt()];
         }
 
         @Override
@@ -197,6 +208,10 @@ public final class SingleUserReportResult implements ReportResult {
             bytes.writeLong(profit);
             bytes.writeLong(pendingSellSize);
             bytes.writeLong(pendingBuySize);
+            bytes.writeLong(pendingSellAvgPrice);
+            bytes.writeLong(pendingBuyAvgPrice);
+            bytes.writeInt(leverage);
+            bytes.writeInt(marginMode.ordinal());
         }
     }
 

@@ -24,7 +24,8 @@ message ApiPlaceOrder {
   int32 symbol = 7;
   int32 userCookie = 8;
   int32 leverage = 9;
-  int64 reservePrice = 10;
+  MarginMode marginMode = 10;
+  int64 reservePrice = 11;
 }
 
 // Adjust User Balance Command
