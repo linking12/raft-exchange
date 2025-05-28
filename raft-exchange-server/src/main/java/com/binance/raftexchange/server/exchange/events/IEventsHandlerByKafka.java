@@ -168,7 +168,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             .setCurrency(fundsEvent.getCurrency()).setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked())
             .setEventTypeValue(fundsEvent.getEventType().getCode()).setSymbol(fundsEvent.getSymbol())
             .setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setPosition(fundsEvent.getPosition())
-            .setPositionChanged(fundsEvent.getPositionChanged()).setOpenPriceAvg(fundsEvent.getOpenPriceAvg())
+            .setPositionChanged(fundsEvent.getPositionChanged()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setOpenVolume(fundsEvent.getOpenVolume())
             .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).setPnl(fundsEvent.getPnl()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
