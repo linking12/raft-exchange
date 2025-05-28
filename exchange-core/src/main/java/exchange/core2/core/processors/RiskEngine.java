@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.Objects;
 import java.util.Optional;
 
+import exchange.core2.core.common.MarginMode;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
@@ -270,11 +271,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     // 如果是提款操作，并且杠杆交易，需要校验下最小保证金
                     if (amountDiff < 0 && cfgMarginTradingEnabled ) { 
                         long withdrawalAmount = -amountDiff;
+                        long totalCrossProfit = 0;
+                        for (SymbolPositionRecord position : userProfile.positions) {
+                            if (position.marginMode == MarginMode.CROSS && position.currency == cmd.symbol) {
+                                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                                totalCrossProfit += position.estimateProfit(spec, lastPriceCache.get(position.symbol));
+                            }
+                        }
                         long lockedMargin = calculateLockedMargin(userProfile, cmd.symbol); // 检查冻结保证金
-                        /**
-                         *  用lockedMargin（基于开仓保证金）就行，不用考虑持仓保证金
-                         */
-                        if (currentBalance - withdrawalAmount < lockedMargin) {
+                        if (currentBalance + totalCrossProfit - withdrawalAmount < lockedMargin) {
                             cmd.resultCode = CommandResultCode.RISK_NSF;
                             return false;
                         }
