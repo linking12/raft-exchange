@@ -216,6 +216,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         try {
             api.submitCommandAsync(order).get();
@@ -260,6 +261,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         try {
             api.submitCommandAsync(order).get();

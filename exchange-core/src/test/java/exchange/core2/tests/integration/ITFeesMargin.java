@@ -15,6 +15,7 @@
  */
 package exchange.core2.tests.integration;
 
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
@@ -70,6 +71,7 @@ public abstract class ITFeesMargin {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(symbolId)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -101,6 +103,7 @@ public abstract class ITFeesMargin {
                     .action(OrderAction.BID)
                     .orderType(OrderType.IOC)
                     .symbol(symbolId)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -161,6 +164,7 @@ public abstract class ITFeesMargin {
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(symbolId)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -192,6 +196,7 @@ public abstract class ITFeesMargin {
                     .action(OrderAction.ASK)
                     .orderType(OrderType.IOC)
                     .symbol(symbolId)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -253,6 +258,7 @@ public abstract class ITFeesMargin {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(symbolId)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
