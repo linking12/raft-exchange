@@ -549,7 +549,7 @@ public final class ExchangeApi {
         cmd.orderType = api.orderType;
         cmd.symbol = api.symbol;
         cmd.leverage = api.leverage;
-        cmd.marginMode = api.marginMode;
+        cmd.marginMode = api.marginMode == null ? MarginMode.ISOLATED : api.marginMode;
         cmd.uid = api.uid;
         cmd.userCookie = api.userCookie;
         cmd.resultCode = CommandResultCode.NEW;
