@@ -534,6 +534,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_LEVERAGE_MISMATCH;
             }
 
+            // calculateLockedMargin 仅统计仓位实际冻结的开仓保证金；
+            // 而canPlaceMarginOrder还会考虑浮动盈亏(pnl)，只有在总余额减去浮亏后仍能覆盖新增保证金与手续费，才允许挂单。
             final boolean canPlaceOrder = canPlaceMarginOrder(cmd, userProfile, spec, position);
             if (canPlaceOrder) {
                 position.pendingHold(cmd.action, cmd.size, cmd.price);
