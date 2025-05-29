@@ -270,8 +270,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long calculatePendingFeeForOrder(final CoreSymbolSpecification spec, final OrderAction action, final long size, final long price) {
         long newPendingBuySize = action == OrderAction.BID ? pendingBuySize + size : pendingBuySize;
         long newPendingSellSize = action == OrderAction.ASK ? pendingSellSize + size : pendingSellSize;
-        long newPendingBuyAvgPrice = action == OrderAction.BID ? calcAvgPrice(pendingBuyAvgPrice, newPendingBuySize, price, size) : pendingBuyAvgPrice;
-        long newPendingSellAvgPrice = action == OrderAction.ASK ? calcAvgPrice(pendingSellAvgPrice, newPendingSellSize, price, size) : pendingSellAvgPrice;
+        long newPendingBuyAvgPrice = action == OrderAction.BID ? calcAvgPrice(pendingBuyAvgPrice, pendingBuySize, price, size) : pendingBuyAvgPrice;
+        long newPendingSellAvgPrice = action == OrderAction.ASK ? calcAvgPrice(pendingSellAvgPrice, pendingSellSize, price, size) : pendingSellAvgPrice;
 
         long feePendingBuy = CoreArithmeticUtils.calculateTakerFee(newPendingBuySize, newPendingBuyAvgPrice, spec);
         long feePendingSell = CoreArithmeticUtils.calculateTakerFee(newPendingSellSize, newPendingSellAvgPrice, spec);

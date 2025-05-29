@@ -77,17 +77,18 @@ public abstract class ITFeesDynamicMargin {
 
             // add fee-1 - NSF
             long fee = calculateFee(price, size, step, takerFee, scaleFee);
-            container.addMoneyToUser(UID_2, CURRENECY_USD, fee - usdtAmount - 1);
+            container.addMoneyToUser(UID_2, CURRENECY_USD, -usdtAmount);
+            container.addMoneyToUser(UID_2, CURRENECY_USD, fee - 1);
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
             // add 1 extra - NSF
             container.addMoneyToUser(UID_2, CURRENECY_USD, 1);
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
-            long marginRequiredFee = calculateMarginFee(size);
+            long initMargin = calculateMarginFee(size);
 
             // add margin required - SUCCESS
-            container.addMoneyToUser(UID_2, CURRENECY_USD, marginRequiredFee);
+            container.addMoneyToUser(UID_2, CURRENECY_USD, initMargin);
             container.submitCommandSync(order203, CommandResultCode.SUCCESS);
 
             // cancel bid
@@ -97,7 +98,7 @@ public abstract class ITFeesDynamicMargin {
 
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_USD), is(fee + marginRequiredFee));
+                assertThat(profile.getAccounts().get(CURRENECY_USD), is(fee + initMargin));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -118,7 +119,7 @@ public abstract class ITFeesDynamicMargin {
 
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_USD), is(fee + marginRequiredFee));
+                assertThat(profile.getAccounts().get(CURRENECY_USD), is(fee + initMargin));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
