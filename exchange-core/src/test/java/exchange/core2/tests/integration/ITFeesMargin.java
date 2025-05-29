@@ -315,7 +315,7 @@ public abstract class ITFeesMargin {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD);
-            long deposit = 15000L;
+            long deposit = 26155L; // 价格够单独开order100或order101, 但不够一起开
             container.createUserWithMoney(UID_1, CURRENECY_USD, deposit);
 
             // not opened order
