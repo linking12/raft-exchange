@@ -487,11 +487,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
 
-        // 检查用户杠杆是否超过symbol的杠杆限制
-        if (!spec.isValidLeverage(cmd.leverage)) {
-            return CommandResultCode.RISK_INVALID_LEVERAGE;
-        }
-
         // check if account has enough funds
         final CommandResultCode resultCode = placeOrder(cmd, userProfile, spec);
 
@@ -519,16 +514,19 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (!cfgMarginTradingEnabled) {
                 return CommandResultCode.RISK_MARGIN_TRADING_DISABLED;
             }
-
-            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); // TODO getIfAbsentPut?
+            // 检查用户杠杆是否超过symbol的杠杆限制
+            if (!spec.isValidLeverage(cmd.leverage)) {
+                return CommandResultCode.RISK_INVALID_LEVERAGE;
+            }
+            
+            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); 
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage, cmd.marginMode);
                 userProfile.positions.put(spec.symbolId, position);
             }
-
+            // 检查用户已有的仓位模式和现有的仓位模式是否匹配，在同一币种下只能开一种模式
             if (position.marginMode != cmd.marginMode) {
-                // 拒绝：不能混用 margin mode
                 return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
             }
 
