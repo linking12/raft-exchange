@@ -307,5 +307,52 @@ public abstract class ITFeesMargin {
         }
     }
 
+    // 混合开仓/未开仓手续费check
+    @Test
+    @Timeout(10)
+    public void shouldProcessFees_MixedBidGtcMakerPartial_AskIocTaker() throws Exception {
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
+            container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD);
+            long deposit = 15000L;
+            container.createUserWithMoney(UID_1, CURRENECY_USD, deposit);
+
+            // not opened order
+            ApiPlaceOrder order100 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(100L)
+                    .price(10000L)
+                    .reservePrice(10000L)
+                    .size(50L)
+                    .action(OrderAction.BID)
+                    .orderType(GTC)
+                    .symbol(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build();
+
+            container.submitCommandSync(order100, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+
+            final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(10770L)
+                    .reservePrice(0L)
+                    .size(50L)
+                    .action(OrderAction.BID)
+                    .orderType(GTC)
+                    .symbol(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.symbolId)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build();
+
+            container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.RISK_NSF)));
+
+            // verify order placed
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(CURRENECY_USD), is(deposit));
+            });
+        }
+    }
 
 }

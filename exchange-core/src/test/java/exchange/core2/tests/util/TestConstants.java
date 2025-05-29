@@ -28,6 +28,7 @@ public final class TestConstants {
     public static final int SYMBOL_EXCHANGE = 9269;
     public static final int SYMBOL_EXCHANGE_FEE = 9340;
     public static final int SYMBOL_MARGIN_FEE = 9341;
+    public static final int SYMBOL_ETH_MARGIN_FEE = 9341;
 
     public static final long UID_1 = 1440001;
     public static final long UID_2 = 1440002;
@@ -178,6 +179,21 @@ public final class TestConstants {
             .maintenanceMargin(1000L)
             .build();
 
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_ETH_USD = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_ETH_MARGIN_FEE)
+            .type(SymbolType.FUTURES_CONTRACT)
+            .baseCurrency(2)
+            .quoteCurrency(CURRENECY_USD)
+            .baseScaleK(1)
+            .quoteScaleK(1)
+            .marginBuy(200)
+            .marginSell(200)
+            .takerFee(3)
+            .makerFee(2)
+            .feeScaleK(100)
+            .maintenanceMargin(1000L)
+            .maxLeverage(50)
+            .build();
 
     public static final CoreSymbolSpecification SYMBOLSPEC_ETH_XBT = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_EXCHANGE)
