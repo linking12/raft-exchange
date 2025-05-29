@@ -1294,7 +1294,7 @@ class ITFutureBasic {
     // ------------------------------------------------------------------------------
 
     private ApiPlaceOrder.ApiPlaceOrderBuilder builderPlace(int symbolId, long uid, OrderAction action, OrderType type) {
-        return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId);
+        return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId).marginMode(MarginMode.ISOLATED);
     }
 
     // TODO count/verify number of commands and events
