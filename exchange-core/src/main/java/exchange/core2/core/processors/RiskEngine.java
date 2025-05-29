@@ -519,7 +519,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_INVALID_LEVERAGE;
             }
             
-            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); // TODO getIfAbsentPut?
+            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); 
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage, cmd.marginMode);
