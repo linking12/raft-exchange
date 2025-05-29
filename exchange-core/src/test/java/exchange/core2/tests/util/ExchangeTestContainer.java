@@ -181,7 +181,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         initFeeUser(TestConstants.UID_4);
     }
 
-    public void initFutureSymbol(int symbolId, int quoteId) {
+    public CoreSymbolSpecification initFutureSymbol(int symbolId, int quoteId) {
         CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
                 .type(SymbolType.FUTURES_CONTRACT)
@@ -196,6 +196,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
+        return futuresSymbol;
     }
 
     public void initOneUser(long uid) {

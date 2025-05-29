@@ -189,12 +189,13 @@ class ITFutureBasic {
         long deposit = 1000L;
         long userId1 = 1003L;
         long orderId = 1005L;
+        int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
 
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
-            container.createBidWithOrderId(orderId, userId1, 1, 10000, symbolId);
+            container.createBidWithOrderId(orderId, userId1, size, 10000, symbolId);
 
             // cancel order
             container.cancelOrder(userId1, orderId, symbolId);
@@ -240,8 +241,10 @@ class ITFutureBasic {
             assertThat(0L, Is.is(placeEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(placeEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(placeEvent.eventType));
-            assertThat(900L, Is.is(placeEvent.free));
-            assertThat(100L, Is.is(placeEvent.locked));
+            // free = 1000(deposit) - 100(margin) - 20 * size(maker fee) = 880;
+            assertThat(deposit - 100 - 20 * size, Is.is(placeEvent.free));
+            // locked = 100(margin) + 20 * size(maker fee)
+            assertThat(120L, Is.is(placeEvent.locked));
             assertThat(0L, Is.is(placeEvent.openPriceSum));
             assertThat(0L, Is.is(placeEvent.pnl));
             assertThat(0L, Is.is(placeEvent.position));
@@ -274,6 +277,7 @@ class ITFutureBasic {
         long userId2 = 1004L;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
+        int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
@@ -281,8 +285,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createBidWithOrderId(makerOrderId, userId1, 1, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId, userId2, 1, 10000, symbolId);
+            container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
+            container.createAskWithOrderId(takerOrderId, userId2, size, 10000, symbolId);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -324,8 +328,9 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(900L, Is.is(takerEvent.free));
-            assertThat(100L, Is.is(takerEvent.locked));
+            // 1000(balance) - 100(open position) - 20(maker fee) = 880
+            assertThat(deposit - 100L - size * 20L, Is.is(takerEvent.free));
+            assertThat(100L + size * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
@@ -341,8 +346,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-            assertThat(MAX_VALUE - 100, Is.is(makerEvent.free));
-            assertThat(100L, Is.is(makerEvent.locked));
+            assertThat(MAX_VALUE - 100L - size * 20L, Is.is(makerEvent.free));
+            assertThat(100L + size * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
             assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.position));
@@ -420,6 +425,7 @@ class ITFutureBasic {
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
         }
     }
+
     // 开仓事件, 完全成交, taker为Bid
     @Test
     public void testOpenPosition4Ask() throws InterruptedException {
@@ -428,6 +434,7 @@ class ITFutureBasic {
         long userId2 = 1004L;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
+        int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
@@ -435,8 +442,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createAskWithOrderId(makerOrderId, userId1, 1, 10000, symbolId);
-            container.createBidWithOrderId(takerOrderId, userId2, 1, 10000, symbolId);
+            container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
+            container.createBidWithOrderId(takerOrderId, userId2, size, 10000, symbolId);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -478,8 +485,9 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(900L, Is.is(takerEvent.free));
-            assertThat(100L, Is.is(takerEvent.locked));
+            // free = 1000(deposit) - 100(required margin) - 20 * size(taker fee) = 880
+            assertThat(deposit - 100L - size * 20L, Is.is(takerEvent.free));
+            assertThat(100L + size * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
@@ -495,8 +503,10 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-            assertThat(MAX_VALUE - 100, Is.is(makerEvent.free));
-            assertThat(100L, Is.is(makerEvent.locked));
+            // free = MAX_VALUE(deposit) - 100(required margin) - 20 * size(taker fee)
+            assertThat(MAX_VALUE - 100L - size * 20L, Is.is(makerEvent.free));
+            // 注意, 下单时是按照taker fee做lock
+            assertThat(100L + size * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
             assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.position));
@@ -584,6 +594,7 @@ class ITFutureBasic {
         long userId2 = 1004L;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
+        int txSize = 2;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
@@ -592,7 +603,7 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
             container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId, userId2, 2, 10000, symbolId);
+            container.createAskWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -624,40 +635,42 @@ class ITFutureBasic {
             verify(handler, times(8)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(2);
+            IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(2);
 
             // check lock_pending event for maker, orderId should be maker's
-            assertThat(userId1, Is.is(takerEvent.uid));
-            assertThat(quoteId, Is.is(takerEvent.currency));
-            assertThat(symbolId, Is.is(takerEvent.symbol));
-            assertThat(makerOrderId, Is.is(takerEvent.orderId));
-            assertThat(0L, Is.is(takerEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
-            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(deposit - size * 100L, Is.is(takerEvent.free));
-            assertThat(size * 100L, Is.is(takerEvent.locked));
-            assertThat(0L, Is.is(takerEvent.openPriceSum));
-            assertThat(0L, Is.is(takerEvent.pnl));
-            assertThat(0L, Is.is(takerEvent.position));
-            assertThat(0L, Is.is(takerEvent.positionChanged));
-            assertThat(0L, Is.is(takerEvent.tradePrice));
-
-            // check lock_pending event for taker, orderId should be maker's
-            IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
-            assertThat(userId2, Is.is(makerEvent.uid));
+            assertThat(userId1, Is.is(makerEvent.uid));
             assertThat(quoteId, Is.is(makerEvent.currency));
             assertThat(symbolId, Is.is(makerEvent.symbol));
-            assertThat(makerOrderId, Is.is(takerEvent.orderId));
+            assertThat(makerOrderId, Is.is(makerEvent.orderId));
             assertThat(0L, Is.is(makerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-            assertThat(MAX_VALUE - 2 * 100, Is.is(makerEvent.free));
-            assertThat(2 * 100L, Is.is(makerEvent.locked));
+            // free = 1000(deposit) - size * 100(required margin) - size * 20L(taker fee)
+            assertThat(deposit - size * 100L - size * 20L, Is.is(makerEvent.free));
+            assertThat(size * 100L + size * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
             assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.position));
             assertThat(0L, Is.is(makerEvent.positionChanged));
             assertThat(0L, Is.is(makerEvent.tradePrice));
+
+            // check lock_pending event for taker, orderId should be maker's
+            IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(3);
+            assertThat(userId2, Is.is(takerEvent.uid));
+            assertThat(quoteId, Is.is(takerEvent.currency));
+            assertThat(symbolId, Is.is(takerEvent.symbol));
+            assertThat(makerOrderId, Is.is(makerEvent.orderId));
+            assertThat(0L, Is.is(takerEvent.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
+            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
+            // free = MAX_VALUE(deposit) - size * 100(required margin) - size * 20L(taker fee)
+            assertThat(MAX_VALUE - txSize * 100 - txSize * 20L, Is.is(takerEvent.free));
+            assertThat(txSize * 100L + txSize * 20L, Is.is(takerEvent.locked));
+            assertThat(0L, Is.is(takerEvent.openPriceSum));
+            assertThat(0L, Is.is(takerEvent.pnl));
+            assertThat(0L, Is.is(takerEvent.position));
+            assertThat(0L, Is.is(takerEvent.positionChanged));
+            assertThat(0L, Is.is(takerEvent.tradePrice));
 
             // check unlock_pending event for taker
             IFundEventsHandler.FundsEvent takerUnlockEvent = fundEvents.get(4);
@@ -704,8 +717,8 @@ class ITFutureBasic {
             assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
             // 10000 - 2 * 100 = 9800
-            assertThat(deposit - (size - 2) * 100L, Is.is(makerUnlockEvent.free));
-            assertThat((size - 2) * 100L, Is.is(makerUnlockEvent.locked));
+            assertThat(deposit - (size - txSize) * 100L - (size - txSize) * 20L, Is.is(makerUnlockEvent.free));
+            assertThat((size - txSize) * 100L + (size - txSize) * 20L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.position));
@@ -721,9 +734,9 @@ class ITFutureBasic {
             assertThat(2 * 10L, Is.is(makerOpenPositionEvent.fee));
             assertThat(PositionDirection.LONG, Is.is(makerOpenPositionEvent.direction));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
-            // 10000(deposit) - 10 * 100(current position) - 2 * 10(fee) = 8980L
-            assertThat(deposit - size * 100 - 2 * 10L, Is.is(makerOpenPositionEvent.free));
-            assertThat(size * 100L, Is.is(makerOpenPositionEvent.locked));
+            // 10000(deposit) - 10 * 100(current position) - 8 * 20(taker fee in advance) - 2 * 10(maker fee)
+            assertThat(deposit - size * 100 - (size - txSize) * 20L - txSize * 10L, Is.is(makerOpenPositionEvent.free));
+            assertThat(size * 100L + (size - txSize) * 20L, Is.is(makerOpenPositionEvent.locked));
             assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.position));
@@ -741,6 +754,7 @@ class ITFutureBasic {
         long userId2 = 1004L;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
+        int txSize = 2;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
@@ -749,7 +763,7 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
             container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
-            container.createBidWithOrderId(takerOrderId, userId2, 2, 10000, symbolId);
+            container.createBidWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -791,8 +805,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(takerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.eventType));
-            assertThat(deposit - size * 100L, Is.is(takerEvent.free));
-            assertThat(size * 100L, Is.is(takerEvent.locked));
+            assertThat(deposit - size * 100L - size * 20L, Is.is(takerEvent.free));
+            assertThat(size * 100L + size * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
             assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.position));
@@ -808,8 +822,8 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.eventType));
-            assertThat(MAX_VALUE - 2 * 100, Is.is(makerEvent.free));
-            assertThat(2 * 100L, Is.is(makerEvent.locked));
+            assertThat(MAX_VALUE - txSize * 100L - txSize * 20L, Is.is(makerEvent.free));
+            assertThat(txSize * 100L + txSize * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
             assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.position));
@@ -860,8 +874,9 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.fee));
             assertThat(PositionDirection.EMPTY, Is.is(makerUnlockEvent.direction));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.eventType));
-            assertThat(deposit - (size - 2) * 100L, Is.is(makerUnlockEvent.free));
-            assertThat((size - 2) * 100L, Is.is(makerUnlockEvent.locked));
+            // 下了10单, 成交2单, 剩余8单需要预先在仓位上扣除手续费
+            assertThat(deposit - (size - txSize) * 100L - (size - txSize) * 20L, Is.is(makerUnlockEvent.free));
+            assertThat((size - txSize) * 100L + (size - txSize) * 20L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
             assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.position));
@@ -877,9 +892,9 @@ class ITFutureBasic {
             assertThat(2 * 10L, Is.is(makerOpenPositionEvent.fee));
             assertThat(PositionDirection.SHORT, Is.is(makerOpenPositionEvent.direction));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.eventType));
-            // 10000(deposit) - 10 * 100(maker order) - 2 * 10(fee) = 8980
-            assertThat(deposit - size * 100L - 2 * 10L, Is.is(makerOpenPositionEvent.free));
-            assertThat(size * 100L, Is.is(makerOpenPositionEvent.locked));
+            // 10000(deposit) - 10 * 100(maker order) - 2 * 10(maker fee) - 8 * 20(taker fee) = 8820
+            assertThat(deposit - size * 100L - 2 * 10L - 8 * 20L, Is.is(makerOpenPositionEvent.free));
+            assertThat(size * 100L + 8 * 20L, Is.is(makerOpenPositionEvent.locked));
             assertThat(0L, Is.is(makerOpenPositionEvent.openPriceSum));
             assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.position));
