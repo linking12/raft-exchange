@@ -203,12 +203,38 @@ public final class ExchangeTestContainer implements AutoCloseable {
         assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
     }
 
+    public ApiPlaceOrder genOrder(long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType) {
+        return genOrder(userId, size, price, symbolId, action, orderType, MarginMode.ISOLATED);
+    }
+
+    public ApiPlaceOrder genOrder(long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType, MarginMode marginMode) {
+        return ApiPlaceOrder.builder()
+                .uid(userId)
+                .orderId(getRandomTransactionId())
+                .action(action)
+                .size(size)
+                .price(price)
+                .symbol(symbolId)
+                .orderType(orderType)
+                .marginMode(marginMode)
+                .build();
+    }
+
     public long createBid(long userId, int size, long price, int symbolId) {
         long orderId = getRandomTransactionId();
-        return createBidWithOrderId(orderId, userId, size, price, symbolId);
+        return createBidWithOrderId(orderId, userId, size, price, symbolId, MarginMode.ISOLATED);
+    }
+
+    public long createBid(long userId, int size, long price, int symbolId, MarginMode marginMode) {
+        long orderId = getRandomTransactionId();
+        return createBidWithOrderId(orderId, userId, size, price, symbolId, marginMode);
     }
 
     public long createBidWithOrderId(long orderId, long userId, int size, long price, int symbolId) {
+        return createBidWithOrderId(orderId, userId, size, price, symbolId, MarginMode.ISOLATED);
+    }
+
+    public long createBidWithOrderId(long orderId, long userId, int size, long price, int symbolId, MarginMode marginMode) {
         ApiPlaceOrder order = ApiPlaceOrder.builder()
                 .uid(userId)
                 .orderId(orderId)
@@ -217,7 +243,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
-                .marginMode(MarginMode.ISOLATED)
+                .marginMode(marginMode)
                 .build();
         try {
             api.submitCommandAsync(order).get();
@@ -250,10 +276,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public long createAsk(long userId, int size, long price, int symbolId) {
         long orderId = getRandomTransactionId();
-        return createAskWithOrderId(orderId, userId, size, price, symbolId);
+        return createAskWithOrderId(orderId, userId, size, price, symbolId, MarginMode.ISOLATED);
     }
 
     public long createAskWithOrderId(long orderId, long userId, int size, long price, int symbolId) {
+        return createAskWithOrderId(orderId, userId, size, price, symbolId, MarginMode.ISOLATED);
+    }
+
+    public long createAskWithOrderId(long orderId, long userId, int size, long price, int symbolId, MarginMode mode) {
         ApiPlaceOrder order = ApiPlaceOrder.builder()
                 .uid(userId)
                 .orderId(orderId)
@@ -262,7 +292,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
-                .marginMode(MarginMode.ISOLATED)
+                .marginMode(mode)
                 .build();
         try {
             api.submitCommandAsync(order).get();
