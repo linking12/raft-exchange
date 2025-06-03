@@ -166,7 +166,6 @@ public final class LiquidationScanner {
 
     private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
-            long balance = userProfile.accounts.get(currency);
             // 计算总盈亏和维持保证金
             long totalProfit = 0;
             long totalMaintenanceMargin = 0;
@@ -179,12 +178,12 @@ public final class LiquidationScanner {
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
 
-                // 每个仓位的风险系数：risk = (equity - maintenance) / maintenance
-                long equity = balance + profit;
-                double risk = (equity - maintenance) * 1.0 / maintenance;
+                // 每个仓位的风险系数：risk = (profit - maintenance) / maintenance
+                double risk = (profit - maintenance) * 1.0 / maintenance;
                 riskPairs.add(PrimitiveTuples.pair(risk, position));
             }
 
+            long balance = userProfile.accounts.get(currency);
             long equity = balance + totalProfit;
             long warningThreshold = (long) (totalMaintenanceMargin * 1.2);
 
