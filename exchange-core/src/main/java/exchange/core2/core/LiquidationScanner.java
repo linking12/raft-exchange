@@ -99,7 +99,8 @@ public final class LiquidationScanner {
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
         FundEventsHelper eventsHelper = fundEventsHelpers.get(riskEngine.getShardId());
         userProfiles.forEachValue(userProfile -> {
-            if (userProfile == null) return;
+            if (userProfile == null)
+                return;
             // 遍历每个用户的所有持仓
             MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
             IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
@@ -129,7 +130,7 @@ public final class LiquidationScanner {
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
-                                          SymbolPositionRecord position, FundEventsHelper eventsHelper) {
+        SymbolPositionRecord position, FundEventsHelper eventsHelper) {
         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
         long profit = position.liquidateEstimateProfit(spec, priceRecord);
         // 当前持仓所需的初始保证金
@@ -164,7 +165,8 @@ public final class LiquidationScanner {
         log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
     }
 
-    private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
+    private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency,
+        SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
             // 计算总盈亏和维持保证金
             long totalProfit = 0;
@@ -185,9 +187,10 @@ public final class LiquidationScanner {
 
             long balance = userProfile.accounts.get(currency);
             long equity = balance + totalProfit;
-            long warningThreshold = (long) (totalMaintenanceMargin * 1.2);
+            long warningThreshold = (long)(totalMaintenanceMargin * 1.2);
 
-            if (equity >= warningThreshold) return;
+            if (equity >= warningThreshold)
+                return;
 
             riskPairs.sort(Comparator.comparingDouble(DoubleObjectPair::getOne));// 升序排序 risk值越小风险越大
             if (equity < totalMaintenanceMargin) {
@@ -199,12 +202,12 @@ public final class LiquidationScanner {
         });
     }
 
-    private void forceCrossLiquidation(UserProfile userProfile, List<DoubleObjectPair<SymbolPositionRecord>> positionPairs,
-                                       long deficit, FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider,
-                                       MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
+    private void forceCrossLiquidation(UserProfile userProfile, List<DoubleObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
+        FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
         long marginReleased = 0;
         for (DoubleObjectPair<SymbolPositionRecord> pair : positionPairs) {
-            if (marginReleased >= deficit) break;
+            if (marginReleased >= deficit)
+                break;
 
             SymbolPositionRecord position = pair.getTwo();
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
@@ -236,19 +239,12 @@ public final class LiquidationScanner {
         return price;
     }
 
-    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, long price, long size,
-                                         FundEventsHelper eventsHelper) {
+    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, long price, long size, FundEventsHelper eventsHelper) {
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
-        CompletableFuture<OrderCommand> liquidationFuture = api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder()
-                .orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
-                .orderId(orderId)
-                .uid(position.uid)
-                .symbol(position.symbol)
-                .price(price)
-                .size(size)
-                .action(action).build());
+        CompletableFuture<OrderCommand> liquidationFuture = api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
+            .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
         liquidationFuture.whenCompleteAsync((cmd, err) -> {
             /**
              * 如果第一个事件是reject，说明没有完全成交。
@@ -279,10 +275,11 @@ public final class LiquidationScanner {
 
     public static boolean isLiquidationOrderId(long orderId, int symbol, long uid) {
         long expectedSymbol = (orderId >>> 32); // 高 32 位
-        if (expectedSymbol != symbol) return false;
+        if (expectedSymbol != symbol)
+            return false;
 
         long expectedUidHash = (uid * 31 + 17) & 0xFFFFF; // 计算 uidHash
-        long actualUidHash = (orderId >>> 12) & 0xFFFFF;  // 中间 20 位
+        long actualUidHash = (orderId >>> 12) & 0xFFFFF; // 中间 20 位
         return expectedUidHash == actualUidHash;
     }
 }
