@@ -159,12 +159,6 @@ public final class LiquidationScanner {
         }
     }
 
-    private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, FundEventsHelper eventsHelper, long equity, long warningThreshold) {
-        FundEvent event = eventsHelper.sendMarginAdjustmentEvent(position);
-        api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
-        log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
-    }
-
     private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency,
         SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
@@ -202,17 +196,21 @@ public final class LiquidationScanner {
         });
     }
 
+    private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, FundEventsHelper eventsHelper, long equity, long warningThreshold) {
+        FundEvent event = eventsHelper.sendMarginAdjustmentEvent(position);
+        api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+        log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
+    }
+
     private void forceCrossLiquidation(UserProfile userProfile, List<DoubleObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
         FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
         long marginReleased = 0;
         for (DoubleObjectPair<SymbolPositionRecord> pair : positionPairs) {
             if (marginReleased >= deficit)
                 break;
-
             SymbolPositionRecord position = pair.getTwo();
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
             LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-
             long price = calculateLiquidationPrice(position, priceRecord);
             long sizeToLiquidate = CoreArithmeticUtils.calculateSizeToLiquidate(deficit - marginReleased, price);
             sizeToLiquidate = Math.min(sizeToLiquidate, position.openVolume);
