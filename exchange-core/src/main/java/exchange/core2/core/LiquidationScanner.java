@@ -119,12 +119,16 @@ public final class LiquidationScanner {
                     log.debug("No price record for symbol={}", symbol);
                     return;
                 }
+                // 逐仓模式下，直接检查强平状态
                 if (position.marginMode == MarginMode.ISOLATED) {
                     checkLiquidationIsolated(userProfile, spec, priceRecord, position, eventsHelper);
-                } else {
+                }
+                // 全仓模式下，聚合用户下所有的开仓币种
+                else {
                     crossPositionsByCurrency.getIfAbsentPut(spec.quoteCurrency, FastList.newList()).add(position);
                 }
             });
+            // 检查用户全仓模式下的强平状态
             checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, lastPriceCache, eventsHelper);
         });
     }
@@ -173,19 +177,15 @@ public final class LiquidationScanner {
                 long maintenance = position.calculateMaintenanceMargin(spec);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
-
                 // 每个仓位的风险系数：risk = (profit - maintenance) / maintenance
                 double risk = (profit - maintenance) * 1.0 / maintenance;
                 riskPairs.add(PrimitiveTuples.pair(risk, position));
             }
-
             long balance = userProfile.accounts.get(currency);
             long equity = balance + totalProfit;
             long warningThreshold = (long)(totalMaintenanceMargin * 1.2);
-
             if (equity >= warningThreshold)
                 return;
-
             riskPairs.sort(Comparator.comparingDouble(DoubleObjectPair::getOne));// 升序排序 risk值越小风险越大
             if (equity < totalMaintenanceMargin) {
                 long deficit = totalMaintenanceMargin - equity;
