@@ -45,6 +45,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
+import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -199,6 +200,122 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return futuresSymbol;
     }
 
+    public List<CoreSymbolSpecification> initFutureSymbols() {
+        List<CoreSymbolSpecification> ret = new ArrayList<>();
+        // BTC_USDT
+        CoreSymbolSpecification futuresSymbol1 = CoreSymbolSpecification.builder()
+                .symbolId(10000)
+                .type(SymbolType.FUTURES_CONTRACT)
+                .baseCurrency(CURRENECY_XBT)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(10)
+                .takerFee(20)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(10)
+                .maintenanceMargin(50)
+                .build();
+        // ETH_USDT
+        CoreSymbolSpecification futuresSymbol2 = CoreSymbolSpecification.builder()
+                .symbolId(10001)
+                .type(SymbolType.FUTURES_CONTRACT)
+                .baseCurrency(CURRENECY_ETH)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(1)
+                .takerFee(2)
+                .feeScaleK(100)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(20)
+                .maintenanceMargin(100)
+                .build();
+        // LTC_USDT
+        CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
+                .symbolId(10002)
+                .type(SymbolType.FUTURES_CONTRACT)
+                .baseCurrency(CURRENECY_LTC)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(20)
+                .takerFee(30)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(50)
+                .maintenanceMargin(200)
+                .build();
+
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
+        ret.add(futuresSymbol1);
+        ret.add(futuresSymbol2);
+        ret.add(futuresSymbol3);
+        return ret;
+    }
+
+    public List<CoreSymbolSpecification> initExchangeSymbols() {
+        List<CoreSymbolSpecification> ret = new ArrayList<>();
+        // BTC_USDT
+        CoreSymbolSpecification futuresSymbol1 = CoreSymbolSpecification.builder()
+                .symbolId(10003)
+                .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(CURRENECY_XBT)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(10)
+                .takerFee(20)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(10)
+                .maintenanceMargin(50)
+                .build();
+        // ETH_USDT
+        CoreSymbolSpecification futuresSymbol2 = CoreSymbolSpecification.builder()
+                .symbolId(10004)
+                .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(CURRENECY_ETH)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(1)
+                .takerFee(2)
+                .feeScaleK(100)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(20)
+                .maintenanceMargin(100)
+                .build();
+        // LTC_USDT
+        CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
+                .symbolId(10005)
+                .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(CURRENECY_LTC)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(20)
+                .takerFee(30)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(50)
+                .maintenanceMargin(200)
+                .build();
+
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
+        ret.add(futuresSymbol1);
+        ret.add(futuresSymbol2);
+        ret.add(futuresSymbol3);
+        return ret;
+    }
+
     public void initOneUser(long uid) {
         assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
     }
@@ -214,10 +331,15 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .action(action)
                 .size(size)
                 .price(price)
+                .reservePrice(price)
                 .symbol(symbolId)
                 .orderType(orderType)
                 .marginMode(marginMode)
                 .build();
+    }
+
+    public long calculateFee(long price, long size, long step, long sideFee, long scale) {
+        return price * size * step * sideFee / scale;
     }
 
     public long createBid(long userId, int size, long price, int symbolId) {
@@ -335,17 +457,17 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public void initBasicUser(long uid) {
         assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
-        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(1L).amount(10_000_00L).currency(TestConstants.CURRENECY_USD).build()).join(), Is.is(CommandResultCode.SUCCESS));
+        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(1L).amount(10_000_00L).currency(CURRENECY_USD).build()).join(), Is.is(CommandResultCode.SUCCESS));
         assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(2L).amount(1_0000_0000L).currency(TestConstants.CURRENECY_XBT).build()).join(), Is.is(CommandResultCode.SUCCESS));
-        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(3L).amount(1_0000_0000L).currency(TestConstants.CURRENECY_ETH).build()).join(), Is.is(CommandResultCode.SUCCESS));
+        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(3L).amount(1_0000_0000L).currency(CURRENECY_ETH).build()).join(), Is.is(CommandResultCode.SUCCESS));
     }
 
     public void initFeeUser(long uid) {
         assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
-        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(1L).amount(10_000_00L).currency(TestConstants.CURRENECY_USD).build()).join(), Is.is(CommandResultCode.SUCCESS));
+        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(1L).amount(10_000_00L).currency(CURRENECY_USD).build()).join(), Is.is(CommandResultCode.SUCCESS));
         assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(2L).amount(10_000_000L).currency(TestConstants.CURRENECY_JPY).build()).join(), Is.is(CommandResultCode.SUCCESS));
         assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(3L).amount(1_0000_0000L).currency(TestConstants.CURRENECY_XBT).build()).join(), Is.is(CommandResultCode.SUCCESS));
-        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(4L).amount(1000_0000_0000L).currency(TestConstants.CURRENECY_LTC).build()).join(), Is.is(CommandResultCode.SUCCESS));
+        assertThat(api.submitCommandAsync(ApiAdjustUserBalance.builder().uid(uid).transactionId(4L).amount(1000_0000_0000L).currency(CURRENECY_LTC).build()).join(), Is.is(CommandResultCode.SUCCESS));
     }
 
     public void createUserWithMoney(long uid, int currency, long amount) {
