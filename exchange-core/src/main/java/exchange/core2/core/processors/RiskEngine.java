@@ -638,6 +638,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // speculative change balance
         long free = userProfile.accounts.addToValue(currency, -orderHoldAmount);
 
+        // 通用业界做法 浮盈折扣+浮亏全计
+        if (freeFuturesMargin > 0) {
+            freeFuturesMargin = 0;// 浮盈我们这里按0算
+        }
         final boolean canPlace = free + freeFuturesMargin >= 0;
 
         if (!canPlace) {
