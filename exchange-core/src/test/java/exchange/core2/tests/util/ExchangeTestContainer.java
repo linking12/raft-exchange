@@ -430,8 +430,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         long userId2 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
         // 做2次，确保record更新成功
         for (int i = 0; i < 2; i++) {
-            createBid(userId1, 10, price, symbolId);
-            createAsk(userId2, 10, price, symbolId);
+            createBid(userId1, 1, price, symbolId);
+            createAsk(userId2, 1, price, symbolId);
         }
     }
 
