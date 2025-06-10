@@ -578,7 +578,7 @@ public final class TestOrdersGenerator {
                 switch (cmd.command) {
                     case PLACE_ORDER:
                         apiCommands.add(ApiPlaceOrder.builder().symbol(cmd.symbol).uid(cmd.uid).orderId(cmd.orderId).price(cmd.price)
-                                .size(cmd.size).action(cmd.action).orderType(cmd.orderType).reservePrice(cmd.reserveBidPrice).build());
+                                .size(cmd.size).action(cmd.action).orderType(cmd.orderType).reservePrice(cmd.reserveBidPrice).marginMode(MarginMode.ISOLATED).build());
                         break;
 
                     case MOVE_ORDER:

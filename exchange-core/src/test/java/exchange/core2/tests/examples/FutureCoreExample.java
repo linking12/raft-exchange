@@ -229,6 +229,7 @@ public class FutureCoreExample {
                 .price(10000L)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order1);
 
@@ -261,6 +262,7 @@ public class FutureCoreExample {
                 .price(10000L)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order1);
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
@@ -277,6 +279,7 @@ public class FutureCoreExample {
                 .price(10000L)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order2);
 
@@ -497,6 +500,7 @@ public class FutureCoreExample {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order1);
     }
@@ -510,6 +514,7 @@ public class FutureCoreExample {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order1);
     }
@@ -527,6 +532,7 @@ public class FutureCoreExample {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order1);
 
@@ -541,6 +547,7 @@ public class FutureCoreExample {
                 .price(price)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order2);
     }
@@ -735,6 +742,7 @@ public class FutureCoreExample {
                 .price(10000)
                 .symbol(symbolId)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         api.submitCommandAsync(order);
 
@@ -788,6 +796,7 @@ public class FutureCoreExample {
                         .price(price)
                         .symbol(symbolId)
                         .orderType(OrderType.GTC)
+                        .marginMode(MarginMode.ISOLATED)
                         .build();
             } else {
                 order = ApiPlaceOrder.builder()
@@ -798,6 +807,7 @@ public class FutureCoreExample {
                         .price(price)
                         .symbol(symbolId)
                         .orderType(OrderType.IOC)
+                        .marginMode(MarginMode.ISOLATED)
                         .build();
             }
             cmds.add(order);

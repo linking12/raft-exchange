@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.Order;
@@ -280,6 +281,7 @@ public class OrderStepdefs implements En {
         ApiPlaceOrder.ApiPlaceOrderBuilder builder = ApiPlaceOrder.builder().uid(clientId).orderId(orderId).price(price)
             .size(size)
             .action(OrderAction.valueOf(side)).orderType(OrderType.valueOf(orderType))
+            .marginMode(MarginMode.ISOLATED)
             .symbol(symbol.symbolId);
 
         if (reservePrice > 0) {

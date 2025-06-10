@@ -105,7 +105,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         final IFundEventsHandler.FundsEvent evt =
             new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
                     fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged,
-                    fundEvent.openPriceAvg, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl);
+                    fundEvent.openPriceSum, fundEvent.openVolume, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl);
         fundEventsHandler.fundsEvent(evt);
     }
 
@@ -169,7 +169,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         switch (cmd.command) {
             case PLACE_ORDER:
                 sendApiCommandResult(
-                    new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie, cmd.leverage, cmd.reserveBidPrice),
+                    new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie, cmd.leverage, cmd.marginMode, cmd.reserveBidPrice),
                     cmd.resultCode, cmd.timestamp, seq);
                 break;
 

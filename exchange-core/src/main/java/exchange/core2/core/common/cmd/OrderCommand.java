@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.IOrder;
 import exchange.core2.core.common.L2MarketData;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
@@ -71,6 +72,8 @@ public final class OrderCommand implements IOrder {
 
     // 新增字段：杠杆倍数（默认 1 表示无杠杆）
     public int leverage = 1;
+    // 新增字段：仓位类型（默认 逐仓）
+    public MarginMode marginMode = MarginMode.ISOLATED;
 
     // filled by grouping processor:
 
@@ -195,6 +198,7 @@ public final class OrderCommand implements IOrder {
         cmd2.uid = this.uid;
         cmd2.timestamp = this.timestamp;
         cmd2.leverage = this.leverage;
+        cmd2.marginMode = this.marginMode;
 
         cmd2.reserveBidPrice = this.reserveBidPrice;
         cmd2.price = this.price;

@@ -60,6 +60,10 @@ message Position {
   int64 profit = 5;
   int64 pending_sell_size = 6;
   int64 pending_buy_size = 7;
+  int64 pending_sell_avg_price = 8;
+  int64 pending_buy_avg_price = 9;
+  int32 leverage = 10;
+  MarginMode margin_mode = 11;
 }
 
 message Order {

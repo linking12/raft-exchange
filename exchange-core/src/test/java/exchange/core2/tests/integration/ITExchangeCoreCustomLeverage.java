@@ -45,6 +45,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10) // 不加杠杆他只能开10手，10倍杠杆才能开出100手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -58,6 +59,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(20)
                     .build(), CommandResultCode.RISK_NSF);
 
@@ -88,6 +90,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10) // 金额只够开10倍, 9倍会失败
                     .build(), CommandResultCode.SUCCESS);
 
@@ -123,6 +126,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             long fee = calculateFee(price, size, 1, spec.makerFee, spec.feeScaleK);
@@ -156,6 +160,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(20)
                     .build(), CommandResultCode.SUCCESS);
 
@@ -168,6 +173,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
@@ -222,6 +228,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10) // 不加杠杆他只能开10手，10倍杠杆才能开出100手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -234,6 +241,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             TotalCurrencyBalanceReportResult report = container.totalBalanceReport();
@@ -251,6 +259,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10)
                     .build(), CommandResultCode.RISK_NSF); // 用户1应该1手都开不出来了
         }
@@ -280,6 +289,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(100) // 超出最大杠杆20倍
                     .build();
 
@@ -313,6 +323,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(50) // 50倍开50手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -325,6 +336,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
@@ -342,6 +354,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
@@ -383,6 +396,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10) // 不加杠杆他只能开10手，10倍杠杆才能开出100手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -429,6 +443,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10)
                     .build();
 
@@ -453,6 +468,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(20)
                     .build();
             container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
@@ -490,6 +506,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(1)
                     .build();
 
@@ -514,6 +531,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(50)
                     .build();
             container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
@@ -540,6 +558,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(1)
                     .build();
             container.submitCommandSync(order3, CommandResultCode.SUCCESS);
@@ -567,6 +586,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(10)
                     .build();
 
@@ -591,6 +611,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(20)
                     .build();
             container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
@@ -624,6 +645,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(50) // 50倍开50手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -636,6 +658,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
@@ -667,6 +690,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
@@ -705,6 +729,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(50) // 50倍开50手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -717,6 +742,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
@@ -761,6 +787,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(50) // 50倍开50手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -773,6 +800,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(1)
                     .build(), CommandResultCode.RISK_NSF);
 
@@ -785,6 +813,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             long makerFee = calculateFee(price, size, 1, spec.makerFee, spec.feeScaleK);
@@ -813,6 +842,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
             // 模拟价格下跌，如果按照leverage为1来计算的话, 价格达到25才会触发强平了
@@ -852,6 +882,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .leverage(50) // 50倍开50手
                     .build(), CommandResultCode.SUCCESS);
 
@@ -869,6 +900,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbol(specExchange.symbolId)
                     .action(OrderAction.BID)
                     .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.RISK_NSF);
 
             container.validateUserState(UID_1, profile -> {

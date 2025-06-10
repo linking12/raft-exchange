@@ -31,7 +31,8 @@ public class FundEvent {
     public PositionDirection direction; // 仓位方向
     public long position; // 剩余持仓量
     public long positionChanged; // 本次变动的仓位（如平仓/开仓数量）
-    public long openPriceAvg; // 平均开仓价格（替代 openPriceSum / openVolume）
+    public long openPriceSum; // 开仓总价
+    public long openVolume; // 开仓数量
     public long tradePrice; // 本次成交价格（开仓或平仓价）
     public long fee; // 手续费
     public long pnl; // 本次事件的盈亏金额
@@ -92,7 +93,7 @@ public class FundEvent {
     @Override
     public int hashCode() {
         return Objects.hash(processed, eventType, section, orderId, uid, currency, free, locked, symbol, direction,
-            position, positionChanged, openPriceAvg, tradePrice, fee, pnl, nextEvent);
+            position, positionChanged, openPriceSum, openVolume, tradePrice, fee, pnl, nextEvent);
     }
 
     @Override
@@ -104,7 +105,7 @@ public class FundEvent {
         FundEvent other = (FundEvent)obj;
         return processed == other.processed && eventType == other.eventType && section == other.section && orderId == other.orderId && uid == other.uid && currency == other.currency
             && free == other.free && locked == other.locked && symbol == other.symbol && direction == other.direction && position == other.position
-            && positionChanged == other.positionChanged && openPriceAvg == other.openPriceAvg && tradePrice == other.tradePrice
+            && positionChanged == other.positionChanged && openPriceSum == other.openPriceSum && openVolume == other.openVolume && tradePrice == other.tradePrice
             && fee == other.fee && pnl == other.pnl
             && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
@@ -113,7 +114,7 @@ public class FundEvent {
     public String toString() {
         return "FundEvent [processed=" + processed + ", eventType=" + eventType + ", section=" + section + ", orderId=" + orderId + ", uid=" + uid + ", currency=" + currency + ", free="
             + free + ", locked=" + locked + ", symbol=" + symbol + ", direction=" + direction + ", position=" + position + ", positionChanged="
-            + positionChanged + ", openPriceAvg=" + openPriceAvg + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl + ", nextEvent=" + (nextEvent != null) + "]";
+            + positionChanged + ", openPriceSum=" + openPriceSum + ", openVolume=" + openVolume + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl + ", nextEvent=" + (nextEvent != null) + "]";
     }
 
 }

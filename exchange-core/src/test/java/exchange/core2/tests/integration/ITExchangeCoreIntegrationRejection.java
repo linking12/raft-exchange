@@ -17,6 +17,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiPlaceOrder;
@@ -254,7 +255,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
     // ------------------------------------------------------------------------------
 
     private ApiPlaceOrder.ApiPlaceOrderBuilder builderPlace(int symbolId, long uid, OrderAction action, OrderType type) {
-        return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId);
+        return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId).marginMode(MarginMode.ISOLATED);
     }
 
     // TODO count/verify number of commands and events

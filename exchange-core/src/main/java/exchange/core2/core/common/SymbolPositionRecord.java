@@ -18,6 +18,7 @@ package exchange.core2.core.common;
 
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.utils.CoreArithmeticUtils;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
@@ -46,10 +47,14 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     // decrement after receiving trade confirmation from matching engine
     public long pendingSellSize = 0;
     public long pendingBuySize = 0;
+    public long pendingSellAvgPrice = 0;
+    public long pendingBuyAvgPrice = 0;
 
+    @Getter
     private int leverage = 1; // 用户自选杠杆，默认 1 倍
+    public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
 
-    public void initialize(long uid, int symbol, int currency, int leverage) {
+    public void initialize(long uid, int symbol, int currency, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
         this.symbol = symbol;
@@ -64,6 +69,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingBuySize = 0;
 
         updateLeverage(leverage);
+        this.marginMode = marginMode == null ? MarginMode.ISOLATED : marginMode; // 默认为逐仓
     }
 
     public void updateLeverage(int leverage) {
@@ -87,8 +93,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         this.pendingSellSize = bytes.readLong();
         this.pendingBuySize = bytes.readLong();
+        this.pendingSellAvgPrice = bytes.readLong();
+        this.pendingBuyAvgPrice = bytes.readLong();
 
         updateLeverage(bytes.readInt());
+        this.marginMode = MarginMode.values()[bytes.readInt()];
     }
 
 
@@ -103,12 +112,20 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 && pendingBuySize == 0;
     }
 
-    public void pendingHold(OrderAction orderAction, long size) {
+    public void pendingHold(OrderAction orderAction, long size, long price) {
         if (orderAction == OrderAction.ASK) {
+            pendingSellAvgPrice = calcAvgPrice(pendingSellAvgPrice, pendingSellSize, price, size);
             pendingSellSize += size;
         } else {
+            pendingBuyAvgPrice = calcAvgPrice(pendingBuyAvgPrice, pendingBuySize, price, size);
             pendingBuySize += size;
         }
+    }
+
+    private long calcAvgPrice(long currentAvg, long currentSize, long newPrice, long newSize) {
+        long totalSize = currentSize + newSize;
+        if (totalSize <= 0) return 0;
+        return CoreArithmeticUtils.ceilDivide(currentAvg * currentSize + newPrice * newSize, totalSize);
     }
 
     public long pendingRelease(OrderAction orderAction, long size) {
@@ -116,9 +133,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (orderAction == OrderAction.ASK) {
             released = Math.min(pendingSellSize, size);
             pendingSellSize -= released;
+            if (pendingSellSize == 0) {
+                pendingSellAvgPrice = 0;
+            }
         } else {
             released = Math.min(pendingBuySize, size);
             pendingBuySize -= released;
+            if (pendingBuySize == 0) {
+                pendingBuyAvgPrice = 0;
+            }
         }
         return released;
     }
@@ -197,15 +220,17 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long currentRiskBuySize = pendingBuySize + signedPosition;
         final long currentRiskSellSize = pendingSellSize - signedPosition;
 
-        try {
-            final long marginBuy = currentRiskBuySize >= 0 ? Math.multiplyExact(specMarginBuy, currentRiskBuySize) : 0;
-            final long marginSell = currentRiskSellSize >= 0 ? Math.multiplyExact(specMarginSell, currentRiskSellSize) : 0;
-            return Math.max(marginBuy, marginSell);
-        } catch (ArithmeticException e) {
-            log.error("Overflow in calculateRequiredMarginForFutures: uid={} symbol={} openVolume={} direction={} pendingBuySize={} pendingSellSize={}",
-                    uid, symbol, openVolume, direction, pendingBuySize, pendingSellSize, e);
-            throw new IllegalStateException("Margin calculation overflow for symbol " + symbol, e);
-        }
+        final long marginBuy = specMarginBuy * currentRiskBuySize;
+        final long marginSell = specMarginSell * currentRiskSellSize;
+        // marginBuy or marginSell can be negative, but not both of them
+        long margin = Math.max(marginBuy, marginSell);
+
+        // 计算未成单的潜在手续费
+        final long feeBuy = CoreArithmeticUtils.calculateTakerFee(pendingBuySize, pendingBuyAvgPrice, spec);
+        final long feeSell = CoreArithmeticUtils.calculateTakerFee(pendingSellSize, pendingSellAvgPrice, spec);
+        long fee = Math.max(feeBuy, feeSell);
+
+        return margin + fee;
     }
 
     /**
@@ -240,6 +265,17 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long newMargin = Math.max(marginBuy, marginSell);
 
         return (newMargin <= currentMargin) ? -1 : newMargin;
+    }
+
+    public long calculatePendingFeeForOrder(final CoreSymbolSpecification spec, final OrderAction action, final long size, final long price) {
+        long newPendingBuySize = action == OrderAction.BID ? pendingBuySize + size : pendingBuySize;
+        long newPendingSellSize = action == OrderAction.ASK ? pendingSellSize + size : pendingSellSize;
+        long newPendingBuyAvgPrice = action == OrderAction.BID ? calcAvgPrice(pendingBuyAvgPrice, pendingBuySize, price, size) : pendingBuyAvgPrice;
+        long newPendingSellAvgPrice = action == OrderAction.ASK ? calcAvgPrice(pendingSellAvgPrice, pendingSellSize, price, size) : pendingSellAvgPrice;
+
+        long feePendingBuy = CoreArithmeticUtils.calculateTakerFee(newPendingBuySize, newPendingBuyAvgPrice, spec);
+        long feePendingSell = CoreArithmeticUtils.calculateTakerFee(newPendingSellSize, newPendingSellAvgPrice, spec);
+        return Math.max(feePendingBuy, feePendingSell);
     }
 
     /**
@@ -314,7 +350,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         bytes.writeLong(profit);
         bytes.writeLong(pendingSellSize);
         bytes.writeLong(pendingBuySize);
+        bytes.writeLong(pendingSellAvgPrice);
+        bytes.writeLong(pendingBuyAvgPrice);
         bytes.writeInt(leverage);
+        bytes.writeInt(marginMode.ordinal());
     }
 
     public void reset() {
@@ -323,12 +362,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         pendingBuySize = 0;
         pendingSellSize = 0;
+        pendingBuyAvgPrice = 0;
+        pendingSellAvgPrice = 0;
 
         openVolume = 0;
         openPriceSum = 0;
         direction = PositionDirection.EMPTY;
 
         updateLeverage(0);
+        marginMode = MarginMode.ISOLATED;
     }
 
     public void validateInternalState() {
@@ -349,7 +391,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     @Override
     public int stateHash() {
-        return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openPriceSum, profit, pendingSellSize, pendingBuySize);
+        return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openPriceSum, profit,
+            pendingSellSize, pendingBuySize, pendingSellAvgPrice, pendingBuyAvgPrice, marginMode);
     }
 
     @Override
@@ -364,6 +407,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " pnl=" + profit +
                 " pendingS=" + pendingSellSize +
                 " pendingB=" + pendingBuySize +
+                " pendingSP=" + pendingSellAvgPrice +
+                " pendingBP=" + pendingBuyAvgPrice +
+                " mode=" + marginMode +
                 '}';
     }
 }

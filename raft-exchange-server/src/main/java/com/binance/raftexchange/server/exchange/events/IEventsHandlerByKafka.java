@@ -74,20 +74,18 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         if (!isLeader.get()) {
             return;
         }
-
         OrderCommand.Builder builder = builderPool.get(OrderCommand.Builder.class);
         ApiCommand apiCommand = commandResult.getCommand();
         if (apiCommand instanceof ApiPlaceOrder) {
-            builder.setPrice(((ApiPlaceOrder) apiCommand).price).setSize(((ApiPlaceOrder) apiCommand).size)
-                .setOrderId(((ApiPlaceOrder) apiCommand).orderId).setActionValue(((ApiPlaceOrder) apiCommand).action.getCode())
-                .setOrderTypeValue(((ApiPlaceOrder) apiCommand).orderType.getCode()).setUid(((ApiPlaceOrder) apiCommand).uid)
-                .setSymbol(((ApiPlaceOrder) apiCommand).symbol).setUserCookie(((ApiPlaceOrder) apiCommand).userCookie)
-                .setLeverage(((ApiPlaceOrder) apiCommand).leverage).setReserveBidPrice(((ApiPlaceOrder) apiCommand).reservePrice);
+            builder.setPrice(((ApiPlaceOrder)apiCommand).price).setSize(((ApiPlaceOrder)apiCommand).size).setOrderId(((ApiPlaceOrder)apiCommand).orderId)
+                .setActionValue(((ApiPlaceOrder)apiCommand).action.getCode()).setOrderTypeValue(((ApiPlaceOrder)apiCommand).orderType.getCode())
+                .setUid(((ApiPlaceOrder)apiCommand).uid).setSymbol(((ApiPlaceOrder)apiCommand).symbol).setUserCookie(((ApiPlaceOrder)apiCommand).userCookie)
+                .setLeverage(((ApiPlaceOrder)apiCommand).leverage).setReserveBidPrice(((ApiPlaceOrder)apiCommand).reservePrice);
         } else if (apiCommand instanceof ApiMoveOrder) {
-            builder.setOrderId(((ApiMoveOrder) apiCommand).orderId).setPrice(((ApiMoveOrder) apiCommand).newPrice)
-                .setUid(((ApiMoveOrder) apiCommand).uid).setSymbol(((ApiMoveOrder) apiCommand).symbol);
+            builder.setOrderId(((ApiMoveOrder)apiCommand).orderId).setPrice(((ApiMoveOrder)apiCommand).newPrice).setUid(((ApiMoveOrder)apiCommand).uid)
+                .setSymbol(((ApiMoveOrder)apiCommand).symbol);
         } else {
-            //reduce和cancel会从reduceEvent发出来，其他命令暂时不关注
+            // reduce和cancel会从reduceEvent发出来，其他命令暂时不关注
             return;
         }
         builder.setResultCodeValue(Math.abs(commandResult.getResultCode().getCode()));
@@ -123,9 +121,9 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         if (!isLeader.get()) {
             return;
         }
-        ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol()).setReducedVolume(reduceEvent.getReducedVolume())
-            .setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice()).setOrderId(reduceEvent.getOrderId())
-            .setUid(reduceEvent.getUid()).setTimestamp(reduceEvent.getTimestamp()).build();
+        ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol())
+            .setReducedVolume(reduceEvent.getReducedVolume()).setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice())
+            .setOrderId(reduceEvent.getOrderId()).setUid(reduceEvent.getUid()).setTimestamp(reduceEvent.getTimestamp()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("reduceEvent: {}", formateString);
@@ -164,12 +162,12 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         if (!isLeader.get()) {
             return;
         }
-        FundsEventPB pbObject = builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid())
-            .setCurrency(fundsEvent.getCurrency()).setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked())
-            .setEventTypeValue(fundsEvent.getEventType().getCode()).setSymbol(fundsEvent.getSymbol())
-            .setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setPosition(fundsEvent.getPosition())
-            .setPositionChanged(fundsEvent.getPositionChanged()).setOpenPriceAvg(fundsEvent.getOpenPriceAvg())
-            .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).setPnl(fundsEvent.getPnl()).build();
+        FundsEventPB pbObject =
+            builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
+                .setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
+                .setSymbol(fundsEvent.getSymbol()).setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setPosition(fundsEvent.getPosition())
+                .setPositionChanged(fundsEvent.getPositionChanged()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setOpenVolume(fundsEvent.getOpenVolume())
+                .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).setPnl(fundsEvent.getPnl()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("fundsEvent: {}", formateString);

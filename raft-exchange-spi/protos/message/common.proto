@@ -39,3 +39,8 @@ enum PositionDirection {
   LONG = 1;
   SHORT = 255;  // -1 in byte becomes 255 in unsigned context
 }
+
+enum MarginMode {
+  ISOLATED = 0;
+  CROSS = 1;
+}

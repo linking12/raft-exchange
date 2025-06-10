@@ -19,6 +19,7 @@ import com.lmax.disruptor.EventTranslatorOneArg;
 import com.lmax.disruptor.RingBuffer;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.L2MarketData;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.*;
@@ -548,6 +549,7 @@ public final class ExchangeApi {
         cmd.orderType = api.orderType;
         cmd.symbol = api.symbol;
         cmd.leverage = api.leverage;
+        cmd.marginMode = api.marginMode;
         cmd.uid = api.uid;
         cmd.userCookie = api.userCookie;
         cmd.resultCode = CommandResultCode.NEW;
@@ -863,6 +865,7 @@ public final class ExchangeApi {
     public long placeNewOrder(
             int userCookie,
             int leverage,
+            MarginMode marginMode,
             long price,
             long reservedBidPrice,
             long size,
@@ -889,6 +892,7 @@ public final class ExchangeApi {
             cmd.uid = uid;
             cmd.userCookie = userCookie;
             cmd.leverage = leverage;
+            cmd.marginMode = marginMode;
             promises.put(seq, callback);
 
         } finally {
@@ -904,6 +908,7 @@ public final class ExchangeApi {
                               long orderId,
                               int userCookie,
                               int leverage,
+                              MarginMode marginMode,
                               long price,
                               long reservedBidPrice,
                               long size,
@@ -930,6 +935,7 @@ public final class ExchangeApi {
             cmd.uid = uid;
             cmd.userCookie = userCookie;
             cmd.leverage = leverage;
+            cmd.marginMode = marginMode;
         });
     }
 

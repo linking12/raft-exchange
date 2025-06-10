@@ -98,7 +98,8 @@ public class SerializeHelper {
         com.binance.raftexchange.stubs.response.OrderCommand.Builder builder = builderPool.get(com.binance.raftexchange.stubs.response.OrderCommand.Builder.class)
                 .setCommand(OrderCommandType.forNumber(result.command.getCode())).setOrderId(result.orderId).setSymbol(result.symbol).setPrice(result.price)
                 .setSize(result.size).setReserveBidPrice(result.reserveBidPrice).setUid(result.getUid()).setTimestamp(result.timestamp)
-                .setUserCookie(result.userCookie).setLeverage(result.leverage).setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
+                .setUserCookie(result.userCookie).setLeverage(result.leverage).setMarginModeValue(result.marginMode.ordinal())
+                .setEventsGroup(result.eventsGroup).setServiceFlags(result.serviceFlags).setResultCode(resultCode);
         if (result.action != null) {
             builder.setActionValue(result.action.getCode());
         }
@@ -204,7 +205,11 @@ public class SerializeHelper {
     private static final Function<SingleUserReportResult.Position, Position> positionMapping = p ->
             Position.newBuilder().setQuoteCurrency(p.getQuoteCurrency())
                     .setDirectionValue(p.getDirection().getMultiplier() & 0xFF)
-                    .build();
+                    .setOpenVolume(p.getOpenVolume()).setOpenPriceSum(p.getOpenPriceSum())
+                    .setProfit(p.getProfit()).setPendingSellSize(p.getPendingSellSize())
+                    .setPendingBuySize(p.getPendingBuySize()).setPendingSellAvgPrice(p.getPendingSellAvgPrice())
+                    .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())
+                    .setMarginModeValue(p.getMarginMode().ordinal()).build();
 
     private static final Function<List<exchange.core2.core.common.Order>, OrderList> ordersMapping = l ->
             OrderList.newBuilder().addAllOrders(l.stream().map(o -> Order.newBuilder()

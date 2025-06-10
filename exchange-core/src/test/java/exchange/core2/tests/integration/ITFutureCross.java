@@ -15,9 +15,10 @@
  */
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -35,24 +36,25 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-
-import org.mockito.junit.jupiter.MockitoExtension;
+import java.util.concurrent.TimeUnit;
 
 import static exchange.core2.core.common.OrderAction.ASK;
 import static exchange.core2.core.common.OrderAction.BID;
 import static exchange.core2.core.common.OrderType.*;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @Slf4j
 @ExtendWith(MockitoExtension.class)
-class ITFutureBasic {
+class ITFutureCross {
 
     private int symbolId = 2;
     private int quoteId = 840;
@@ -88,184 +90,710 @@ class ITFutureBasic {
 
     }
 
-    // -------------------------- fund tests ----------------------------------------
-    // 用户资产增加时需要生产deposit fundEvent
-    @Test
-    public void testBalanceIncrease() {
-        long delta = 100L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.setConsumer(processor);
-            container.initOneUser(UID_1);
-            container.initFutureSymbol(symbolId, quoteId);
-            container.addMoneyToUser(UID_1, SYMBOL_MARGIN, delta);
-
-            verify(handler, times(4)).commandResult(commandResultCaptor.capture());
-            verify(handler, never()).reduceEvent(any());
-            verify(handler, never()).tradeEvent(any());
-
-        } finally {
-            verify(handler, times(1)).fundsEvent(fundEventCapor.capture());
-
-            IFundEventsHandler.FundsEvent fundEvent = fundEventCapor.getValue();
-            assertThat(UID_1, Is.is(fundEvent.uid));
-            assertThat(SYMBOL_MARGIN, Is.is(fundEvent.currency));
-            assertThat(delta, Is.is(fundEvent.free));
-            assertThat(0, Is.is(fundEvent.symbol));
-            assertThat(0L, Is.is(fundEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(fundEvent.direction));
-            assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(fundEvent.eventType));
-            assertThat(0L, Is.is(fundEvent.locked));
-            assertThat(0L, Is.is(fundEvent.openPriceSum));
-            assertThat(0L, Is.is(fundEvent.pnl));
-            assertThat(0L, Is.is(fundEvent.position));
-            assertThat(0L, Is.is(fundEvent.positionChanged));
-            assertThat(0L, Is.is(fundEvent.tradePrice));
-        }
-    }
-
-    // 用户资产减少时需要生产withdraw fundEvent
-    @Test
-    public void testBalanceDecrease() {
-        long deposit = 100L;
-        long withdraw = -40L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
-            container.initOneUser(UID_1);
-            container.initFutureSymbol(symbolId, quoteId);
-            container.addMoneyToUser(UID_1, SYMBOL_MARGIN, deposit);
-            container.addMoneyToUser(UID_1, SYMBOL_MARGIN, withdraw);
-
-            verify(handler, times(5)).commandResult(commandResultCaptor.capture());
-            verify(handler, never()).reduceEvent(any());
-            verify(handler, never()).tradeEvent(any());
-
-            // check balance
-            SingleUserReportResult user1Report = container.getUserProfile(UID_1);
-            assertThat(user1Report.getAccounts().get(SYMBOL_MARGIN), Is.is((deposit + withdraw)));
-
-        } catch (ExecutionException e) {
-            throw new RuntimeException(e);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        } finally {
-            verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
-
-            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
-            assertThat(UID_1, Is.is(depositEvent.uid));
-            assertThat(SYMBOL_MARGIN, Is.is(depositEvent.currency));
-            assertThat(deposit, Is.is(depositEvent.free));
-            assertThat(0, Is.is(depositEvent.symbol));
-            assertThat(0L, Is.is(depositEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(depositEvent.direction));
-            assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.eventType));
-            assertThat(0L, Is.is(depositEvent.locked));
-            assertThat(0L, Is.is(depositEvent.openPriceSum));
-            assertThat(0L, Is.is(depositEvent.pnl));
-            assertThat(0L, Is.is(depositEvent.position));
-            assertThat(0L, Is.is(depositEvent.positionChanged));
-            assertThat(0L, Is.is(depositEvent.tradePrice));
-
-            IFundEventsHandler.FundsEvent withdrawEvent = fundEvents.get(1);
-            assertThat(UID_1, Is.is(withdrawEvent.uid));
-            assertThat(SYMBOL_MARGIN, Is.is(withdrawEvent.currency));
-            assertThat(deposit + withdraw, Is.is(withdrawEvent.free));
-            assertThat(0, Is.is(withdrawEvent.symbol));
-            assertThat(0L, Is.is(withdrawEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(withdrawEvent.direction));
-            assertThat(FundEvent.FundEventType.WITHDRAW, Is.is(withdrawEvent.eventType));
-            assertThat(0L, Is.is(withdrawEvent.locked));
-            assertThat(0L, Is.is(withdrawEvent.openPriceSum));
-            assertThat(0L, Is.is(withdrawEvent.pnl));
-            assertThat(0L, Is.is(withdrawEvent.position));
-            assertThat(0L, Is.is(withdrawEvent.positionChanged));
-            assertThat(0L, Is.is(withdrawEvent.tradePrice));
-        }
-    }
-
-    // 未开单成功时可取消订单
+    // -------------------------- order tests ----------------------------------------
+    // 1. isolated和cross margin不能混着下
+    // 2. 取消订单后可以下新的订单(cross/isolated均可)
     @Test
     public void testCancelSuccess() {
-        long deposit = 1000L;
+        long deposit = 2000L;
         long userId1 = 1003L;
-        long orderId = 1005L;
         int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
 
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
-            container.createBidWithOrderId(orderId, userId1, size, 10000, symbolId);
 
-            // cancel order
-            container.cancelOrder(userId1, orderId, symbolId);
-            container.sleepSeconds(1);
+            ApiPlaceOrder order1 = container.genOrder(userId1, size, 10000, symbolId, BID, GTC, MarginMode.ISOLATED);
+            container.submitCommandSync(order1, CommandResultCode.SUCCESS);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).getPendingBuySize(), is(1L));
+                assertThat(profile.getPositions().get(symbolId).getMarginMode(), is(MarginMode.ISOLATED));
+            });
+            ApiPlaceOrder order2 = container.genOrder(userId1, size, 10000, symbolId, BID, GTC, MarginMode.CROSS);
+            // 用户已有isolated 持仓，cross下单失败
+            container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
 
-            verify(handler, times(5)).commandResult(commandResultCaptor.capture());
-            verify(handler, times(1)).reduceEvent(reduceEventCaptor.capture());
-            verify(handler, never()).rejectEvent(any());
+            // cancel isolated order
+            container.cancelOrder(userId1, order1.orderId, symbolId);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            // 取消订单后再下cross可以成功
+            container.submitCommandSync(order2, CommandResultCode.SUCCESS);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).getPendingBuySize(), is(1L));
+                assertThat(profile.getPositions().get(symbolId).getMarginMode(), is(MarginMode.CROSS));
+            });
+            // 用户已有cross 持仓，再下isolated下单失败
+            container.submitCommandSync(order1, CommandResultCode.RISK_NSF);
+            // cancel cross margin
+            container.cancelOrder(userId1, order2.orderId, symbolId);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            container.submitCommandSync(order1, CommandResultCode.SUCCESS);
 
-            // check balance
-            SingleUserReportResult user1Report = container.getUserProfile(userId1);
-            assertThat(user1Report.getAccounts().get(quoteId), Is.is((deposit)));
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).getPendingBuySize(), is(1L));
+                assertThat(profile.getPositions().get(symbolId).getMarginMode(), is(MarginMode.ISOLATED));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 默认为margin为isolated
+    @Test
+    public void testDefaultMargin() {
+        long deposit = 20000L;
+        long userId1 = 1003L;
+        int size = 1;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initFutureSymbol(symbolId, quoteId);
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+
+            ApiPlaceOrder order1 = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(container.getRandomTransactionId())
+                    .action(OrderAction.BID)
+                    .size(size)
+                    .price(10000L)
+                    .symbol(symbolId)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build();
+            container.submitCommandSync(order1, CommandResultCode.SUCCESS);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).getMarginMode(), is(MarginMode.ISOLATED));
+            });
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 平仓后可以改margin mode
+    @Test
+    public void tesCloseMarginThenChangeMode() {
+        int deposit = 1000;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initFutureSymbol(symbolId, quoteId);
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+
+            // 开仓成功
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId, MarginMode.CROSS);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(symbolId).getMarginMode(), is(MarginMode.CROSS));
+            });
+
+            // 平仓成功
+            container.createAskWithOrderId(makerOrderId3, userId1, 1, 10500, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+
+            // 开ISOLATION仓成功
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 11000, symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 11000, symbolId, MarginMode.ISOLATED);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(symbolId).getMarginMode(), is(MarginMode.ISOLATED));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // pendingSellAvgPrice和pendingBuyAvgPrice计算准确
+    @Test
+    public void testPendingAvgPrice() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long userId3 = 1005L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.initFutureSymbol(symbolId, quoteId);
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(makerOrderId3, userId1, size, price2, symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).pendingBuyAvgPrice, is((price1 + price2) / 2));
+            });
+
+            container.createAskWithOrderId(takerOrderId4, userId2, size, price2, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId2, userId2, size, price1, symbolId, MarginMode.CROSS);
+            // 完全成交后avgPrice为0
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).pendingBuyAvgPrice, is(0L));
+            });
+            // 完全成交后avgPrice为0
+            container.validateUserState(userId2, profile -> {
+                assertThat(profile.getPositions().get(symbolId).pendingSellAvgPrice, is(0L));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // withdraw要考虑全仓该币种所有当前期货持仓 -- 空仓
+    @Test
+    public void testCrossMarginWithdraw() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId3, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+            });
+
+            ApiAdjustUserBalance cmd = ApiAdjustUserBalance.builder().uid(userId1).transactionId(container.getRandomTransactionId() + 100).amount(-deposit).currency(quoteId).build();
+
+            container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
+
+            // locked margin is 520
+            container.addMoneyToUser(userId1, quoteId, 519);
+            container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
+
+            container.addMoneyToUser(userId1, quoteId, 1);
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // withdraw要考虑全仓该币种所有当前期货持仓 -- 持仓
+    @Test
+    public void testCrossMarginWithdraw2() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long userId3 = 1005L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
+        long makerOrderId5 = 1009L;
+        long takerOrderId6 = 1010L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId3, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.createAskWithOrderId(takerOrderId2, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId4, userId2, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            // symbol0 10 fixed maker fee
+            long fee1 = symbols.get(0).makerFee;
+            // symbol1 1% maker fee
+            long fee2 = container.calculateFee(price2, 1, 1, symbols.get(1).makerFee, symbols.get(1).feeScaleK);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee1 - fee2));
+            });
+
+            container.updateCurrentPriceTo(15000, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(5000, symbols.get(1).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            ApiAdjustUserBalance cmd = ApiAdjustUserBalance.builder().uid(userId1).transactionId(container.getRandomTransactionId() + 500).amount(-deposit).currency(quoteId).build();
+            // 用户profit比较高, 但是提现额度高于了account存的钱, 此时不应该允许用户提现
+            container.submitCommandSync(cmd, CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF);
+
+            // 用户平仓symbol0
+            container.createAskWithOrderId(makerOrderId5, userId1, size, 15000, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId6, userId3, size, 15000, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            // 平仓不收手续费, 因为降低了整体风险
+            long fee3 = 0;
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee1 - fee2 - fee3 + 5000L));
+            });
+
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 下现货单时要考虑该币种所有当前期货持仓 -- 空仓
+    @Test
+    public void testPlaceExchange() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long makerOrderId2 = 1007L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            ApiPlaceOrder order = container.genOrder(userId1, 1, 10000, symbolsExchange.get(0).symbolId, BID, GTC);
+
+            container.submitCommandSync(order, CommandResultCode.RISK_NSF);
+
+            // fee is 20, margin required is 120, total = 140
+            container.addMoneyToUser(userId1, quoteId, 140 - 1);
+            container.submitCommandSync(order, CommandResultCode.RISK_NSF);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getOrders().size(), is(1));
+            });
+
+            container.addMoneyToUser(userId1, quoteId, 1);
+            container.submitCommandSync(order, CommandResultCode.SUCCESS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                // exchange dedect balance and fee first
+                assertThat(profile.getAccounts().get(quoteId), is(120L));
+                assertThat(profile.getOrders().size(), is(2));
+            });
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 下现货单时要考虑该币种所有当前期货持仓 -- 开仓成功且有profit
+    @Test
+    public void testPlaceExchange2() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId2, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            container.updateCurrentPriceTo(15000, symbols.get(0).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+            });
+
+            ApiPlaceOrder order = container.genOrder(userId1, 1, 10000, symbolsExchange.get(0).symbolId, BID, GTC);
+            // 1. free必须 > 0
+            // 2. margin亏的时候也要考虑
+            container.submitCommandSync(order, CommandResultCode.RISK_NSF);
+
+            container.addMoneyToUser(userId1, quoteId, 29);
+            container.submitCommandSync(order, CommandResultCode.RISK_NSF);
+
+            container.addMoneyToUser(userId1, quoteId, 1);
+            container.submitCommandSync(order, CommandResultCode.SUCCESS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+            });
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // cross liquidation - MA-4925 [Improvement] cross强平时最好能检查强平结果
+    @Test
+    public void testCrossMarginLiquidation() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long userId3 = 1005L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
+        long makerOrderId5 = 1009L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId3, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.createAskWithOrderId(takerOrderId2, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId4, userId2, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            container.updateCurrentPriceTo(2000, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(35000, symbols.get(1).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            // userId3先设置一个单子用于强制平仓, 此时
+            container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            // 期待结果makerOrderId5可以被吃掉, position数量为1
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // cross liquidation - check剩余订单的仓位信息
+    @Test
+    public void testCrossMarginLiquidation2() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        long userId2 = 1004L;
+        long userId3 = 1005L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId2 = 1006L;
+        long makerOrderId3 = 1007L;
+        long takerOrderId4 = 1008L;
+        long makerOrderId5 = 1009L;
+        long makerOrderId6 = 1010L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
+
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId3, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.createAskWithOrderId(takerOrderId2, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId4, userId2, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            container.updateCurrentPriceTo(2000, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(35000, symbols.get(1).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            // userId3先设置一个单子用于强制平仓, 此时
+            container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId6, userId3, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            // 期待结果makerOrderId6可以被挂出的强平吃掉
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(9840L));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().getFirst().quoteCurrency, is(quoteId));
+                assertThat(profile.getPositions().getFirst().openVolume, is(1L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // cross liquidation - 混合isolated和cross强平, isolated先被强平
+    @Test
+    public void testCrossMarginLiquidation3() {
+        long deposit = 10000L;
+        long userId1 = 11003L;
+        long userId2 = 11004L;
+        long userId3 = 11005L;
+        long userId4 = 11006L;
+        long userId5 = 11007L;
+        long userId6 = 11008L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId1 = 1006L;
+        long makerOrderId2 = 1007L;
+        long takerOrderId2 = 1008L;
+        long makerOrderId3 = 1009L;
+        long takerOrderId3 = 1010L;
+        long makerOrderId4 = 1011L;
+        long takerOrderId4 = 1012L;
+        long makerOrderId5 = 1013L;
+        long takerOrderId5 = 1014L;
+        long makerOrderId6 = 1015L;
+        long takerOrderId6 = 1016L;
+        long makerOrderId7 = 1017L;
+        long takerOrderId7 = 1018L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId4, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId5, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId6, MAX_VALUE, quoteId);
+
+            // userId1 and userId2 match
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId2, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.createAskWithOrderId(takerOrderId1, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId2, userId2, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            // userId3 and userId4 match
+            container.createBidWithOrderId(makerOrderId3, userId3, size, price1, symbols.get(0).symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(makerOrderId4, userId3, size, price2, symbols.get(1).symbolId, MarginMode.ISOLATED);
+
+            container.createAskWithOrderId(takerOrderId3, userId4, size, price1, symbols.get(0).symbolId, MarginMode.ISOLATED);
+            container.createBidWithOrderId(takerOrderId4, userId4, size, price2, symbols.get(1).symbolId, MarginMode.ISOLATED);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            container.validateUserState(userId3, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
+            // userId1 symbol0: 10000 - 100 = -9900
+            //         symbol1: 15000 - 1000 = 5000
+            //         total profit = -4900
+            //         balance = 9840
+            //         profit + balance > 50(symbol0 maintenance margin) + 100(symbol1 maintenance margin)
+            // userId3 symbol0: 10000 - 100 = -9900
+            //         profit: -9900
+            //         init margin: 100
+            //         profit + init margin < 50 所以会被强平
+            container.updateCurrentPriceTo(100, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(10000, symbols.get(1).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            container.validateUserState(userId3, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            // userId5先设置一个单子(两手)用于强制平仓, 此时userId3会被强平, userId1不会强平
+            container.createBidWithOrderId(makerOrderId5, userId5, 2, 100, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(9840L));
+                assertThat(profile.getPositions().size(), is(2));
+            });
+            // 期待结果makerOrderId5可以被挂出的强平吃掉
+            container.validateUserState(userId3, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+            });
+            // userId5挂上去的订单2手被吃掉1手
+            container.validateUserState(userId5, profile -> {
+                assertThat(profile.getOrders().size(), is(1));
+                assertThat(profile.getOrders().getFirst().get(0).filled, is(1L));
+                assertThat(profile.getOrders().getFirst().get(0).size, is(2L));
+                assertThat(profile.getOrders().getFirst().get(0).price, is(100L));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // cross liquidation - profit + balance < 1.2 * maintenance margin时需要触发报警
+    @Test
+    public void testCrossMarginLiquidationWarning() {
+        long deposit = 10000L;
+        long userId1 = 11003L;
+        long userId2 = 11004L;
+        long userId3 = 11005L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId1 = 1006L;
+        long makerOrderId2 = 1007L;
+        long takerOrderId2 = 1008L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, deposit, quoteId);
+
+            // userId1 and userId2 match
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId2, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.createAskWithOrderId(takerOrderId1, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId2, userId2, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
+            // userId1 symbol0: 10000 - 5339 = 4661
+            //         symbol1: 15000 - 2000 = 5000
+            //         total profit = -9661
+            //         balance = 9840
+            //         profit + balance = -9661 + 9840 = 179 < 180(150 * 1.2)此时会触发alert
+
+            container.updateCurrentPriceTo(5339, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(20000, symbols.get(1).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(9840L));
+                assertThat(profile.getPositions().size(), is(2));
+            });
 
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(3)).fundsEvent(fundEventCapor.capture());
-            // deposit first
+            verify(handler, times(46)).fundsEvent(fundEventCapor.capture());
+            // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent depositEvent = fundEvents.get(0);
-
-            assertThat(userId1, Is.is(depositEvent.uid));
-            assertThat(quoteId, Is.is(depositEvent.currency));
-            assertThat(0, Is.is(depositEvent.symbol));
-            assertThat(0L, Is.is(depositEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(depositEvent.direction));
-            assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.eventType));
-            assertThat(deposit, Is.is(depositEvent.free));
-            assertThat(0L, Is.is(depositEvent.locked));
-            assertThat(0L, Is.is(depositEvent.openPriceSum));
-            assertThat(0L, Is.is(depositEvent.pnl));
-            assertThat(0L, Is.is(depositEvent.position));
-            assertThat(0L, Is.is(depositEvent.positionChanged));
-            assertThat(0L, Is.is(depositEvent.tradePrice));
-
-            // lock pending second, should lock money
-            IFundEventsHandler.FundsEvent placeEvent = fundEvents.get(1);
-            assertThat(userId1, Is.is(placeEvent.uid));
-            assertThat(quoteId, Is.is(placeEvent.currency));
-            assertThat(symbolId, Is.is(placeEvent.symbol));
-            assertThat(0L, Is.is(placeEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(placeEvent.direction));
-            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(placeEvent.eventType));
-            // free = 1000(deposit) - 100(margin) - 20 * size(maker fee) = 880;
-            assertThat(deposit - 100 - 20 * size, Is.is(placeEvent.free));
-            // locked = 100(margin) + 20 * size(maker fee)
-            assertThat(120L, Is.is(placeEvent.locked));
-            assertThat(0L, Is.is(placeEvent.openPriceSum));
-            assertThat(0L, Is.is(placeEvent.pnl));
-            assertThat(0L, Is.is(placeEvent.position));
-            assertThat(0L, Is.is(placeEvent.positionChanged));
-            assertThat(0L, Is.is(placeEvent.tradePrice));
-
-            // unlock pending event, free should be returned back
-            IFundEventsHandler.FundsEvent unLockEvent = fundEvents.get(2);
-            assertThat(userId1, Is.is(unLockEvent.uid));
-            assertThat(quoteId, Is.is(unLockEvent.currency));
-            assertThat(symbolId, Is.is(unLockEvent.symbol));
-            assertThat(0L, Is.is(unLockEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(unLockEvent.direction));
-            assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(unLockEvent.eventType));
-            assertThat(1000L, Is.is(unLockEvent.free));
-            assertThat(0L, Is.is(unLockEvent.locked));
-            assertThat(0L, Is.is(unLockEvent.openPriceSum));
-            assertThat(0L, Is.is(unLockEvent.pnl));
-            assertThat(0L, Is.is(unLockEvent.position));
-            assertThat(0L, Is.is(unLockEvent.positionChanged));
-            assertThat(0L, Is.is(unLockEvent.tradePrice));
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(43);
+            assertThat(userId1, Is.is(event1.uid));
+            assertThat(quoteId, Is.is(event1.currency));
+            assertThat(10000, Is.is(event1.symbol));
+            assertThat(0L, Is.is(event1.orderId));
+            assertThat(0L, Is.is(event1.fee));
+            assertThat(PositionDirection.LONG, Is.is(event1.direction));
+            assertThat(FundEvent.FundEventType.MARGIN_ALERT, Is.is(event1.eventType));
+            assertThat(0L, Is.is(event1.free));
+            assertThat(0L, Is.is(event1.locked));
+            assertThat(10000L, Is.is(event1.openPriceSum));
+            assertThat(0L, Is.is(event1.pnl));
+            assertThat(1L, Is.is(event1.position));
+            assertThat(0L, Is.is(event1.positionChanged));
+            assertThat(0L, Is.is(event1.tradePrice));
         }
     }
 
@@ -285,8 +813,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId, userId2, size, 10000, symbolId);
+            container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId, userId2, size, 10000, symbolId, MarginMode.CROSS);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -442,8 +970,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
-            container.createBidWithOrderId(takerOrderId, userId2, size, 10000, symbolId);
+            container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId, userId2, size, 10000, symbolId, MarginMode.CROSS);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -602,8 +1130,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId);
+            container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId, MarginMode.CROSS);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -745,7 +1273,7 @@ class ITFutureBasic {
         }
     }
 
-    // 开仓事件, 测试部分成交, taker为Bid
+    // 开多个仓位, 测试部分成交, taker为Bid
     @Test
     public void testOpenMultiplePosition4Ask() throws InterruptedException {
         int size = 10;
@@ -762,8 +1290,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
-            container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
-            container.createBidWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId);
+            container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId, MarginMode.CROSS);
 
             verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -921,12 +1449,12 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
             // 开仓成功
-            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId, MarginMode.CROSS);
 
             // 平仓成功
-            container.createAskWithOrderId(makerOrderId3, userId1, 1, 10500, symbolId);
-            container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId);
+            container.createAskWithOrderId(makerOrderId3, userId1, 1, 10500, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId, MarginMode.CROSS);
 
             verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -1003,12 +1531,12 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
             // 开仓成功
-            container.createBidWithOrderId(makerOrderId1, userId1, 10, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId2, userId2, 10, 10000, symbolId);
+            container.createBidWithOrderId(makerOrderId1, userId1, 10, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId2, userId2, 10, 10000, symbolId, MarginMode.CROSS);
 
             // 平仓一手成功
-            container.createAskWithOrderId(makerOrderId3, userId1, 2, 10500, symbolId);
-            container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId);
+            container.createAskWithOrderId(makerOrderId3, userId1, 2, 10500, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId, MarginMode.CROSS);
 
             verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
@@ -1018,9 +1546,9 @@ class ITFutureBasic {
             // check balance
             SingleUserReportResult user1Report = container.getUserProfile(userId1);
             SingleUserReportResult user2Report = container.getUserProfile(userId2);
-            // check平仓后利润, taker/maker fee分别为10/20
-//            assertThat(user1Report.getAccounts().get(quoteId), Is.is((deposit - 10L + 500L)));
-//            assertThat(user2Report.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L - 500L)));
+            // 只有全平掉时才在account balance加钱, taker/maker fee分别为10/20
+            assertThat(user1Report.getAccounts().get(quoteId), Is.is((deposit - 10L * 10)));
+            assertThat(user2Report.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L * 10)));
 
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
@@ -1038,34 +1566,6 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerCloseEvent.fee));
             assertThat(PositionDirection.SHORT, Is.is(takerCloseEvent.direction));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.eventType));
-            // free is not correct
-            /*
-            assertThat(3999980L - 1000L, Is.is(takerCloseEvent.free));
-            assertThat(0L, Is.is(takerCloseEvent.locked));
-            assertThat(10000L, Is.is(takerCloseEvent.openPriceSum));
-            assertThat(-500L, Is.is(takerCloseEvent.pnl));
-            assertThat(0L, Is.is(takerCloseEvent.position));
-            assertThat(1L, Is.is(takerCloseEvent.positionChanged));
-            // trade price?
-            assertThat(10500L, Is.is(takerCloseEvent.tradePrice));
-
-            IFundEventsHandler.FundsEvent makerCloseEvent = fundEvents.get(13);
-            assertThat(userId1, Is.is(makerCloseEvent.uid));
-            assertThat(quoteId, Is.is(makerCloseEvent.currency));
-            assertThat(symbolId, Is.is(makerCloseEvent.symbol));
-            assertThat(0L, Is.is(makerCloseEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(makerCloseEvent.direction));
-            assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(makerCloseEvent.eventType));
-            // free = init money - fee
-            assertThat(90L, Is.is(makerCloseEvent.free));
-            assertThat(0L, Is.is(makerCloseEvent.locked));
-            assertThat(10000L, Is.is(makerCloseEvent.openPriceSum));
-            assertThat(500L, Is.is(makerCloseEvent.pnl));
-            assertThat(0L, Is.is(makerCloseEvent.position));
-            assertThat(1L, Is.is(makerCloseEvent.positionChanged));
-            // trade price?
-            assertThat(10500L, Is.is(makerCloseEvent.tradePrice));
-            */
         }
     }
 
@@ -1086,8 +1586,8 @@ class ITFutureBasic {
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
             // 开仓成功
-            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
+            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId, MarginMode.CROSS);
 
             // 模拟行情变动
             for (int i = 0; i < cnt; i++) {
@@ -1103,7 +1603,7 @@ class ITFutureBasic {
     }
 
     @Test
-    public void testAdjustment() {
+    public void testGlobalBalance() {
         final int symbolId = SYMBOL_MARGIN;
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
@@ -1112,16 +1612,15 @@ class ITFutureBasic {
 
             container.setConsumer(processor);
 
-            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(303L).price(160000L).size(3L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(304L).price(160500L).size(20L).build(), CommandResultCode.SUCCESS);
-
+            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(303L).price(160000L).size(3L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(304L).price(160500L).size(20L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 
             long price = 160500L;
             int size = 20;
 
-            container.submitCommandSync(builderPlace(symbolId, UID_4, BID, IOC).orderId(405L).price(price).reservePrice(price).size(size).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_4, BID, IOC).orderId(405L).price(price).reservePrice(price).size(size).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
@@ -1312,6 +1811,10 @@ class ITFutureBasic {
         return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId).marginMode(MarginMode.ISOLATED);
     }
 
+    private ApiPlaceOrder.ApiPlaceOrderBuilder builderPlace(int symbolId, long uid, OrderAction action, OrderType type, MarginMode mode) {
+        return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId).marginMode(mode);
+    }
+
     // TODO count/verify number of commands and events
     private void testMultiBuy(final CoreSymbolSpecification symbolSpec, final OrderType orderType, final RejectionCause rejectionCause) {
 
@@ -1325,18 +1828,17 @@ class ITFutureBasic {
 
             container.setConsumer(processor);
 
-            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(303L).price(160000L).size(3L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(304L).price(160500L).size(20L).build(), CommandResultCode.SUCCESS);
-
+            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(303L).price(160000L).size(3L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(304L).price(160500L).size(20L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 
             long price = 160500L;
             if (orderType == FOK_BUDGET) {
                 price = 160000L * 7L + 159900L * 10L + 160000L * 3L + 160500L * 20L + (rejectionCause == RejectionCause.REJECTION_BY_BUDGET ? -1 : 0);
             }
 
-            container.submitCommandSync(builderPlace(symbolId, UID_4, BID, orderType).orderId(405L).price(price).reservePrice(price).size(size).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_4, BID, orderType).orderId(405L).price(price).reservePrice(price).size(size).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
@@ -1418,10 +1920,10 @@ class ITFutureBasic {
                 price = 160_500L + 160_000L * 20L + 159_900L + (rejectionCause == RejectionCause.REJECTION_BY_BUDGET ? 1 : 0);
             }
 
-            container.submitCommandSync(builderPlace(symbolId, UID_1, BID, GTC).orderId(101L).price(160_000L).reservePrice(166_000L).size(12L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_2, BID, GTC).orderId(202L).price(159_900L).reservePrice(166_000L).size(1L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_3, BID, GTC).orderId(303L).price(160_000L).reservePrice(166_000L).size(8L).build(), CommandResultCode.SUCCESS);
-            container.submitCommandSync(builderPlace(symbolId, UID_3, BID, GTC).orderId(304L).price(160_500L).reservePrice(166_000L).size(1L).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_1, BID, GTC).orderId(101L).price(160_000L).reservePrice(166_000L).size(12L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_2, BID, GTC).orderId(202L).price(159_900L).reservePrice(166_000L).size(1L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_3, BID, GTC).orderId(303L).price(160_000L).reservePrice(166_000L).size(8L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(builderPlace(symbolId, UID_3, BID, GTC).orderId(304L).price(160_500L).reservePrice(166_000L).size(1L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 
             container.submitCommandSync(builderPlace(symbolId, UID_4, ASK, orderType).orderId(405L).price(price).size(size).build(), CommandResultCode.SUCCESS);
 

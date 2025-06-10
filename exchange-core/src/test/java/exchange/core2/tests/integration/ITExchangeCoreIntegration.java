@@ -84,7 +84,7 @@ public abstract class ITExchangeCoreIntegration {
             container.initBasicUsers();
 
             // ### 1. first user places limit orders
-            final ApiPlaceOrder order101 = ApiPlaceOrder.builder().uid(UID_1).orderId(101).price(1600).size(7).action(ASK).orderType(GTC).symbol(symbolSpec.symbolId).build();
+            final ApiPlaceOrder order101 = ApiPlaceOrder.builder().uid(UID_1).orderId(101).price(1600).size(7).action(ASK).orderType(GTC).symbol(symbolSpec.symbolId).marginMode(MarginMode.ISOLATED).build();
 
             log.debug("PLACE 101: {}", order101);
             container.submitCommandSync(order101, cmd -> {
@@ -101,7 +101,7 @@ public abstract class ITExchangeCoreIntegration {
 
             final int reserve102 = symbolSpec.type == SymbolType.CURRENCY_EXCHANGE_PAIR ? 1561 : 0;
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder().uid(UID_1).orderId(102).price(1550).reservePrice(reserve102).size(4)
-                    .action(OrderAction.BID).orderType(GTC).symbol(symbolSpec.symbolId).build();
+                    .action(OrderAction.BID).orderType(GTC).symbol(symbolSpec.symbolId).marginMode(MarginMode.ISOLATED).build();
             log.debug("PLACE 102: {}", order102);
             container.submitCommandSync(order102, cmd -> {
                 assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
@@ -113,7 +113,7 @@ public abstract class ITExchangeCoreIntegration {
 
             // ### 2. second user sends market order, first order partially matched
             final int reserve201 = symbolSpec.type == SymbolType.CURRENCY_EXCHANGE_PAIR ? 1800 : 0;
-            final ApiPlaceOrder order201 = ApiPlaceOrder.builder().uid(UID_2).orderId(201).price(1700).reservePrice(reserve201).size(2).action(OrderAction.BID).orderType(OrderType.IOC).symbol(symbolSpec.symbolId).build();
+            final ApiPlaceOrder order201 = ApiPlaceOrder.builder().uid(UID_2).orderId(201).price(1700).reservePrice(reserve201).size(2).action(OrderAction.BID).orderType(OrderType.IOC).symbol(symbolSpec.symbolId).marginMode(MarginMode.ISOLATED).build();
             log.debug("PLACE 201: {}", order201);
             container.submitCommandSync(order201, cmd -> {
                 assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
@@ -143,7 +143,7 @@ public abstract class ITExchangeCoreIntegration {
             // ### 3. second user places limit order
             final int reserve202 = symbolSpec.type == SymbolType.CURRENCY_EXCHANGE_PAIR ? 1583 : 0;
             final ApiPlaceOrder order202 = ApiPlaceOrder.builder().uid(UID_2).orderId(202).price(1583).reservePrice(reserve202)
-                    .size(4).action(OrderAction.BID).orderType(GTC).symbol(symbolSpec.symbolId).build();
+                    .size(4).action(OrderAction.BID).orderType(GTC).symbol(symbolSpec.symbolId).marginMode(MarginMode.ISOLATED).build();
             log.debug("PLACE 202: {}", order202);
             container.submitCommandSync(order202, cmd -> {
                 assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
