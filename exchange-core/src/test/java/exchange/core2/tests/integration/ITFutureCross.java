@@ -715,6 +715,88 @@ class ITFutureCross {
         }
     }
 
+    // cross liquidation - profit + balance < 1.2 * maintenance margin时需要触发报警
+    @Test
+    public void testCrossMarginLiquidationWarning() {
+        long deposit = 10000L;
+        long userId1 = 11003L;
+        long userId2 = 11004L;
+        long userId3 = 11005L;
+        int size = 1;
+        long price1 = 10000;
+        long price2 = 15000;
+        long makerOrderId1 = 1005L;
+        long takerOrderId1 = 1006L;
+        long makerOrderId2 = 1007L;
+        long takerOrderId2 = 1008L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(userId3, deposit, quoteId);
+
+            // userId1 and userId2 match
+            container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(makerOrderId2, userId1, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.createAskWithOrderId(takerOrderId1, userId2, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(takerOrderId2, userId2, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
+            // userId1 symbol0: 10000 - 5339 = 4661
+            //         symbol1: 15000 - 2000 = 5000
+            //         total profit = -9661
+            //         balance = 9840
+            //         profit + balance = -9661 + 9840 = 179 < 180(150 * 1.2)此时会触发alert
+
+            container.updateCurrentPriceTo(5339, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(20000, symbols.get(1).symbolId, quoteId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(9840L));
+                assertThat(profile.getPositions().size(), is(2));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            verify(handler, times(46)).fundsEvent(fundEventCapor.capture());
+            // check fund event
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(43);
+            assertThat(userId1, Is.is(event1.uid));
+            assertThat(quoteId, Is.is(event1.currency));
+            assertThat(10000, Is.is(event1.symbol));
+            assertThat(0L, Is.is(event1.orderId));
+            assertThat(0L, Is.is(event1.fee));
+            assertThat(PositionDirection.LONG, Is.is(event1.direction));
+            assertThat(FundEvent.FundEventType.MARGIN_ALERT, Is.is(event1.eventType));
+            assertThat(0L, Is.is(event1.free));
+            assertThat(0L, Is.is(event1.locked));
+            assertThat(10000L, Is.is(event1.openPriceSum));
+            assertThat(0L, Is.is(event1.pnl));
+            assertThat(1L, Is.is(event1.position));
+            assertThat(0L, Is.is(event1.positionChanged));
+            assertThat(0L, Is.is(event1.tradePrice));
+        }
+    }
+
     // 开仓事件, 完全成交, taker为Ask
     @Test
     public void testOpenPosition4Bid() throws InterruptedException {
