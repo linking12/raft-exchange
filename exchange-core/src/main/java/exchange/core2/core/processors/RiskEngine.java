@@ -257,6 +257,43 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
+            case MARGIN_ADJUSTMENT:
+                if (uidForThisHandler(cmd.uid)) {
+                    if (cmd.price <= 0) {
+                        cmd.resultCode = CommandResultCode.RISK_INVALID_AMOUNT;
+                        return false;
+                    }
+                    final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+                    if (userProfile == null) {
+                        cmd.resultCode = CommandResultCode.AUTH_INVALID_USER;
+                        return false;
+                    }
+                    if (cmd.marginMode == MarginMode.CROSS) {
+                        cmd.resultCode = adjustBalance(cmd.uid, cmd.symbol, cmd.price, cmd.orderId, BalanceAdjustmentType.ADJUSTMENT);
+                        if (cmd.resultCode == CommandResultCode.SUCCESS) {
+                            long free = userProfile.accounts.get(cmd.symbol);
+                            eventsHelper.sendDepositEvent(cmd, cmd.symbol, free);
+                        }
+                    } else {
+                        SymbolPositionRecord pos = userProfile.positions.get(cmd.symbol);
+                        if (pos == null) {
+                            cmd.resultCode = CommandResultCode.RISK_MARGIN_POSITION_NOT_EXISTS;
+                            return false;
+                        }
+                        if (pos.marginMode != cmd.marginMode) {
+                            cmd.resultCode = CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
+                            return false;
+                        }
+                        pos.extraMargin += cmd.price;
+                        cmd.resultCode = CommandResultCode.SUCCESS;
+                        // send event
+                        long locked = calculateLockedMargin(userProfile, pos.currency);
+                        long free = userProfile.accounts.get(cmd.symbol) - locked;
+                        eventsHelper.sendMarginAdjustmentEvent(cmd, cmd.orderId, pos, free, locked);
+                    }
+                }
+                return false;
+
             case BALANCE_ADJUSTMENT:
                 if (uidForThisHandler(cmd.uid)) {
                     final long uid = cmd.uid;
@@ -571,13 +608,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     final int recSymbol = position.symbol;
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
-                    try {
-                        long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
-                        freeFuturesMargin += (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - requiredMarginForFutures);
-                    } catch (IllegalStateException e) {
-                        log.error("Margin overflow for uid={} symbol={}", userProfile.uid, position.symbol, e);
-                        return CommandResultCode.RISK_INVALID_AMOUNT;
-                    }
+                    long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
+                    freeFuturesMargin += (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - requiredMarginForFutures);
                 }
             }
         }
@@ -594,10 +626,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
 
                 orderHoldAmount = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(size, cmd.price, spec);
-                if (orderHoldAmount < 0) { // 检查溢出
-                    log.warn("Order hold amount overflow: size={} price={}", size, cmd.price);
-                    return CommandResultCode.RISK_INVALID_AMOUNT;
-                }
                 if (logDebug) CoreArithmeticUtils.logAmountBidTakerFeeForBudget(orderHoldAmount, size, cmd.price, spec);
 
             } else {
@@ -607,10 +635,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     return CommandResultCode.RISK_INVALID_RESERVE_BID_PRICE;
                 }
                 orderHoldAmount = CoreArithmeticUtils.calculateAmountBidTakerFee(size, cmd.reserveBidPrice, spec);
-                if (orderHoldAmount < 0) { // 检查溢出
-                    log.warn("Order hold amount overflow: size={} reserveBidPrice={}", size, cmd.reserveBidPrice);
-                    return CommandResultCode.RISK_INVALID_AMOUNT;
-                }
                 if (logDebug) CoreArithmeticUtils.logAmountBidTakerFee(orderHoldAmount, size, cmd.reserveBidPrice, spec);
             }
 
@@ -623,10 +647,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
 
             orderHoldAmount = CoreArithmeticUtils.calculateAmountAsk(size, spec);
-            if (orderHoldAmount < 0) { // 检查溢出
-                log.warn("Order hold amount overflow: size={}", size);
-                return CommandResultCode.RISK_INVALID_AMOUNT;
-            }
             if (logDebug) log.debug("hold sell {} = {} * {} ", orderHoldAmount, size, spec.baseScaleK);
         }
 
@@ -900,6 +920,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerSpr, free, lockedMargin);
             }
             if (takerSpr.isEmpty()) {
+                refundExtraMargin(cmd, cmd.orderId, takerSpr, takerUp);
                 removePositionRecord(takerSpr, takerUp);
             }
         }
@@ -944,6 +965,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendOpenPositionEvent(cmd, ev.matchedOrderId, makerSpr, free, locked, sizeToOpen, ev.price, fee);
             }
             if (makerSpr.isEmpty()) {
+                refundExtraMargin(cmd, ev.matchedOrderId, makerSpr, maker);
                 removePositionRecord(makerSpr, maker);
             }
         }
@@ -1176,6 +1198,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
              * @TODO 把手续费加到Trade上面去？
              */
             
+        }
+    }
+
+    private void refundExtraMargin(OrderCommand cmd, long orderId, SymbolPositionRecord record, UserProfile userProfile) {
+        if (record.extraMargin > 0) {
+            long balance = userProfile.accounts.addToValue(record.currency, record.extraMargin);
+            long locked = calculateLockedMargin(userProfile, record.currency);
+            long free = balance - locked;
+            eventsHelper.sendMarginRefundEvent(cmd, orderId, record, free, locked);
         }
     }
 

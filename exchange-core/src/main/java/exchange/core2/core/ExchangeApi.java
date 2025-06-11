@@ -126,6 +126,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             ringBuffer.publishEvent(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
+        } else if (cmd instanceof ApiAdjustMargin) {
+            ringBuffer.publishEvent(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             publishBinaryData((ApiBinaryDataCommand) cmd, seq -> {
             });
@@ -171,6 +173,8 @@ public final class ExchangeApi {
             return submitCommandAsync(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             return submitCommandAsync(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
+        } else if (cmd instanceof ApiAdjustMargin) {
+            return submitCommandAsync(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiPersistState) {
@@ -212,6 +216,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder) cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             return submitCommandAsyncFullResponse(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
+        } else if (cmd instanceof ApiAdjustMargin) {
+            return submitCommandAsyncFullResponse(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataCommandAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiReset) {
@@ -574,6 +580,17 @@ public final class ExchangeApi {
         cmd.uid = api.uid;
         cmd.symbol = api.symbol;
         cmd.leverage = api.leverage;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiAdjustMargin> ADJUST_MARGIN_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.MARGIN_ADJUSTMENT;
+        cmd.timestamp = api.timestamp;
+        cmd.orderId = api.transactionId;
+        cmd.uid = api.uid;
+        cmd.marginMode = api.marginMode;
+        cmd.symbol = api.marginMode == MarginMode.ISOLATED ? api.symbol : api.currency;
+        cmd.price = api.amount;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

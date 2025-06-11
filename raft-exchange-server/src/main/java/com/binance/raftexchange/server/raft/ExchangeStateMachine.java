@@ -96,6 +96,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 case ADJUST_LEVERAGE:
                     result = SyncTradeOrdersApiController.adjustLeverage(((ApiCommand)grpcMessage).getAdjustLeverage());
                     break;
+                case ADJUST_MARGIN:
+                    result = SyncAdminApiAccountsController.adjustMargin(((ApiCommand)grpcMessage).getAdjustMargin());
+                    break;
                 case NOP:
                     LOG.info("NOP Command received, no action taken.");
                     result = SyncNoOpApiController.handleNoOp();

@@ -91,6 +91,15 @@ message ApiAdjustLeverage {
   int32 leverage = 3;
 }
 
+message ApiAdjustMargin {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+  int32 currency = 4;
+  int64 amount = 5;
+  MarginMode marginMode = 6;
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -107,6 +116,7 @@ message ApiCommand {
     ApiSuspendUser suspend_user = 12;
     ApiResumeUser resume_user = 13;
     ApiAdjustLeverage adjust_leverage = 14;
+    ApiAdjustMargin adjust_margin = 15;
   }
 }
 

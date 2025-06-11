@@ -2,6 +2,7 @@ package com.binance.raftexchange.server.exchange;
 
 import com.binance.raftexchange.stubs.request.AccountBalanceMap;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiResumeUser;
 import com.binance.raftexchange.stubs.request.ApiSuspendUser;
@@ -74,5 +75,13 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         LOG.debug("batchAddAccountsCommand applied, msg: {}", batchAddAccountsCommand);
 
         return callExchange(batchAddAccountsCommand);
+    }
+
+    public static CompletableFuture<byte[]> adjustMargin(ApiAdjustMargin grpcApiAdjustMargin) {
+        exchange.core2.core.common.api.ApiAdjustMargin apiAdjustMargin = exchange.core2.core.common.api.ApiAdjustMargin.builder()
+            .transactionId(grpcApiAdjustMargin.getTransactionId()).uid(grpcApiAdjustMargin.getUid()).symbol(grpcApiAdjustMargin.getSymbol())
+            .currency(grpcApiAdjustMargin.getCurrency()).amount(grpcApiAdjustMargin.getAmount()).marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiAdjustMargin.getMarginMode().getNumber()]).build();
+        LOG.debug("ApiAdjustMargin applied, msg: {}", apiAdjustMargin);
+        return callExchange(apiAdjustMargin);
     }
 }

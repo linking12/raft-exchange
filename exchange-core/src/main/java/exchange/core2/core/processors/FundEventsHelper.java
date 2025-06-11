@@ -131,7 +131,7 @@ public class FundEventsHelper {
     }
 
     // 通知调整保证金
-    public FundEvent sendMarginAdjustmentEvent(SymbolPositionRecord position) {
+    public FundEvent sendMarginAlertEvent(SymbolPositionRecord position) {
         FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, 0, 0);
         event.positionChanged = 0; // 无清算
         event.openPriceSum = position.openPriceSum;
@@ -151,6 +151,20 @@ public class FundEventsHelper {
         event.tradePrice = markPrice; // 清算价格
         event.fee = 0; // 无交易费用
         event.pnl = 0; // 无盈亏变动
+        return event;
+    }
+
+    public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_ADJUST, position, free, locked);
+        event.extra = position.extraMargin;
+        addFundEvent(cmd, orderId, event);
+        return event;
+    }
+
+    public FundEvent sendMarginRefundEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_REFUND, position, free, locked);
+        event.extra = position.extraMargin;
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
