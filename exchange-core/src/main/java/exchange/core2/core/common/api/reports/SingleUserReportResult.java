@@ -180,6 +180,7 @@ public final class SingleUserReportResult implements ReportResult {
 
         public final int leverage;
         public final MarginMode marginMode;
+        public final long extraMargin;
 
         private Position(BytesIn bytes) {
 
@@ -197,6 +198,7 @@ public final class SingleUserReportResult implements ReportResult {
 
             this.leverage = bytes.readInt();
             this.marginMode = MarginMode.values()[bytes.readInt()];
+            this.extraMargin = bytes.readLong();
         }
 
         @Override
@@ -212,6 +214,7 @@ public final class SingleUserReportResult implements ReportResult {
             bytes.writeLong(pendingBuyAvgPrice);
             bytes.writeInt(leverage);
             bytes.writeInt(marginMode.ordinal());
+            bytes.writeLong(extraMargin);
         }
     }
 
