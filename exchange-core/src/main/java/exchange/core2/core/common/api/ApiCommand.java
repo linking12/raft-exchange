@@ -16,5 +16,11 @@
 package exchange.core2.core.common.api;
 
 public abstract class ApiCommand {
-    public long timestamp;
+    public long timestamp = System.currentTimeMillis();
+
+    public void updateTimestamp(long timestamp) {
+        if (timestamp != 0) {
+            this.timestamp = timestamp;
+        }
+    }
 }
