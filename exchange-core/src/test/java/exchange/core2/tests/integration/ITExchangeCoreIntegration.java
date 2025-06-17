@@ -29,6 +29,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+
 import org.junit.jupiter.api.Timeout;
 
 import static exchange.core2.core.common.OrderAction.ASK;
@@ -198,7 +199,7 @@ public abstract class ITExchangeCoreIntegration {
             // try submit an order - limit BUY 7 lots, price 300K satoshi (30K x10 step) for each lot 100K szabo
             // should be rejected
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder().uid(UID_1).orderId(101).price(30_000).reservePrice(30_000)
-                    .size(7).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).build();
+                    .size(7).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build();
 
             container.submitCommandSync(order101, cmd -> {
                 assertThat(cmd.resultCode, is(CommandResultCode.RISK_NSF));
@@ -236,7 +237,7 @@ public abstract class ITExchangeCoreIntegration {
             container.createUserWithMoney(UID_2, CURRENECY_ETH, 699_999); // 699'999 szabo (<~0.7 ETH)
             // try submit an order - sell 7 lots, price 300K satoshi (30K x10 step) for each lot 100K szabo
             // should be rejected
-            final ApiPlaceOrder order102 = ApiPlaceOrder.builder().uid(UID_2).orderId(102).price(30_000).size(7).action(ASK).orderType(OrderType.IOC).symbol(SYMBOL_EXCHANGE).build();
+            final ApiPlaceOrder order102 = ApiPlaceOrder.builder().uid(UID_2).orderId(102).price(30_000).size(7).action(ASK).orderType(OrderType.IOC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build();
             container.submitCommandSync(order102, cmd -> {
                 assertThat(cmd.resultCode, is(CommandResultCode.RISK_NSF));
             });
@@ -289,7 +290,7 @@ public abstract class ITExchangeCoreIntegration {
 
             // try submit an order - sell 1001 lots, price 300K satoshi (30K x10 step) for each lot 100K szabo
             // should be rejected
-            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_1).orderId(202).price(30_000).size(1001).action(ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE).build(),
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_1).orderId(202).price(30_000).size(1001).action(ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build(),
                     cmd -> {
                         assertThat(cmd.resultCode, is(CommandResultCode.RISK_NSF));
                     });
@@ -301,7 +302,7 @@ public abstract class ITExchangeCoreIntegration {
 
             // submit order again - should be placed
             container.submitCommandSync(
-                    ApiPlaceOrder.builder().uid(UID_1).orderId(202).price(30_000).size(1000).action(ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE).build(),
+                    ApiPlaceOrder.builder().uid(UID_1).orderId(202).price(30_000).size(1000).action(ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build(),
                     cmd -> {
                         assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
                         assertThat(cmd.command, is(OrderCommandType.PLACE_ORDER));
@@ -361,7 +362,7 @@ public abstract class ITExchangeCoreIntegration {
 
             // try submit order with reservePrice above funds limit - rejected
             container.submitCommandSync(
-                    ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(18_000).reservePrice(19_000).size(500).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).build(),
+                    ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(18_000).reservePrice(19_000).size(500).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build(),
                     cmd -> {
                         assertThat(cmd.resultCode, is(CommandResultCode.RISK_NSF));
                     });
@@ -373,7 +374,7 @@ public abstract class ITExchangeCoreIntegration {
 
             // submit order with reservePrice below funds limit - should be placed
             container.submitCommandSync(
-                    ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(18_000).reservePrice(18_500).size(500).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).build(),
+                    ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(18_000).reservePrice(18_500).size(500).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build(),
                     cmd -> {
                         assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
                         assertThat(cmd.command, is(OrderCommandType.PLACE_ORDER));
@@ -537,7 +538,7 @@ public abstract class ITExchangeCoreIntegration {
 
             // submit order with reservePrice below funds limit - should be placed
             container.submitCommandSync(
-                    ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(18_000).reservePrice(18_500).size(500).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).build(),
+                    ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(18_000).reservePrice(18_500).size(500).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE).marginMode(MarginMode.ISOLATED).build(),
                     cmd -> {
                         assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
                     });

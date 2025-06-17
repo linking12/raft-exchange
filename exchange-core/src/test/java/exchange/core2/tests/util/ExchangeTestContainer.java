@@ -424,6 +424,16 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return orderId;
     }
 
+    public long placeExtraMargin(long userId, int quoteId, int symbolId, long amount, MarginMode mode) {
+        long txId = getRandomTransactionId();
+        ApiAdjustMargin cmd = ApiAdjustMargin.builder().transactionId(txId).symbol(symbolId).uid(userId).amount(amount).currency(quoteId).marginMode(mode).build();
+        try {
+            api.submitCommandAsync(cmd).get();
+        } catch (Exception e) {
+        }
+        return txId;
+    }
+
     public void updateCurrentPriceTo(int price, int symbolId, int quoteId) {
         // 模拟两个用户分别下买卖单, 使得成交价为price
         long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
