@@ -288,7 +288,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         cmd.resultCode = CommandResultCode.SUCCESS;
                         // send event
                         long locked = calculateLockedMargin(userProfile, pos.currency);
-                        long free = userProfile.accounts.get(cmd.symbol) - locked;
+                        long free = userProfile.accounts.get(pos.currency) - locked;
                         eventsHelper.sendMarginAdjustmentEvent(cmd, cmd.orderId, pos, free, locked);
                     }
                 }
