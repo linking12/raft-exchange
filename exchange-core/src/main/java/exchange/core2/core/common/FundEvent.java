@@ -58,11 +58,11 @@ public class FundEvent {
         LIQUIDATION(10),     // 强平（与 CLOSE_POSITION 类似，但来源特殊）
         PNL_SETTLEMENT(11),
         // 补充保证金事件
-        MARGIN_ADJUST(12),      // 逐仓追加补充保证金
+        MARGIN_ADJUST(13),      // 逐仓追加补充保证金
         MARGIN_REFUND(14),      // 逐仓平仓返还补充保证金
         // 通知类事件
-        MARGIN_ALERT(14),       // 通知追加保证金
-        LIQUIDATION_ALERT(15);  // 通知强平单创建
+        MARGIN_ALERT(15),       // 通知追加保证金
+        LIQUIDATION_ALERT(16);  // 通知强平单创建
 
         private final int code;
 
