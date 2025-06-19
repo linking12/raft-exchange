@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertEquals;
@@ -576,7 +577,7 @@ public class FutureCoreExample {
         createAsk(userId1, 1, 9000L);
 
         SingleUserReportResult userStatus3 = getUserStatus(userId1);
-        // 成交后postion会被清空
+        // 成交后position会被清空
         checkPosition(userStatus3, 0);
         // 成交后用户资产需要更新
         assertEquals(userStatus3.getAccounts().get(quoteId), MAX_VALUE - 1000);
@@ -584,7 +585,7 @@ public class FutureCoreExample {
 
     // 持仓到警戒线, 发预警通知 - 做多
     @Test
-    public void testLongPostionWarning() throws ExecutionException, InterruptedException {
+    public void testLongPositionWarning() throws ExecutionException, InterruptedException {
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
 
@@ -609,7 +610,7 @@ public class FutureCoreExample {
 
     // 持仓到警戒线, 发预警通知 - 做空
     @Test
-    public void testShortPostionWarning() throws ExecutionException, InterruptedException {
+    public void testShortPositionWarning() throws ExecutionException, InterruptedException {
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
 
@@ -635,6 +636,7 @@ public class FutureCoreExample {
     // 做多被强制平仓
     @Test
     public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
+        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
 
@@ -696,7 +698,8 @@ public class FutureCoreExample {
 
     // 做空被强制平仓
     @Test
-    public void testShortPostionForcedLiquadate() throws ExecutionException, InterruptedException {
+    public void testShortPositionForcedLiquidate() throws ExecutionException, InterruptedException {
+        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
 
@@ -747,7 +750,7 @@ public class FutureCoreExample {
         api.submitCommandAsync(order);
 
         SingleUserReportResult userStatus = getUserStatus(userId);
-        // 成交后postion会被清空
+        // 成交后position会被清空
         checkPosition(userStatus, 0);
         checkOrder(userStatus, 0);
     }
@@ -891,7 +894,7 @@ public class FutureCoreExample {
         createBid(userId1, 1, 10000L);
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
-        // 成交后postion会被清空
+        // 成交后position会被清空
         checkPosition(userStatus, 1);
         checkOrder(userStatus, 1);
         // 账面资金和初始资金一致
@@ -915,6 +918,7 @@ public class FutureCoreExample {
                 .symbol(symbolId+1)
                 .reservePrice(1L)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         CompletableFuture<CommandResultCode> result = api.submitCommandAsync(order2);
         CommandResultCode code = result.get();
