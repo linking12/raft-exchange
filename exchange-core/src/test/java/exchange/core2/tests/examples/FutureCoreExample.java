@@ -915,6 +915,7 @@ public class FutureCoreExample {
                 .symbol(symbolId+1)
                 .reservePrice(1L)
                 .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
         CompletableFuture<CommandResultCode> result = api.submitCommandAsync(order2);
         CommandResultCode code = result.get();
