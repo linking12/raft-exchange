@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertEquals;
@@ -635,6 +636,7 @@ public class FutureCoreExample {
     // 做多被强制平仓
     @Test
     public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
+        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
 
@@ -697,6 +699,7 @@ public class FutureCoreExample {
     // 做空被强制平仓
     @Test
     public void testShortPositionForcedLiquidate() throws ExecutionException, InterruptedException {
+        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
 

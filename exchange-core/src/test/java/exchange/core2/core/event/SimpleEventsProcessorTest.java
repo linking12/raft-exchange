@@ -138,6 +138,7 @@ public final class SimpleEventsProcessorTest {
                         .orderType(OrderType.IOC)
                         .uid(29851)
                         .userCookie(44188)
+                        .marginMode(MarginMode.ISOLATED)
                         .build()));
 
         IEventsHandler4Test.TradeEvent tradeEvent = tradeEventCaptor.getValue();
@@ -209,6 +210,7 @@ public final class SimpleEventsProcessorTest {
                         .orderType(OrderType.IOC)
                         .uid(29851)
                         .userCookie(44188)
+                        .marginMode(MarginMode.ISOLATED)
                         .build()));
 
         // validating first event
@@ -296,6 +298,7 @@ public final class SimpleEventsProcessorTest {
                         .orderType(OrderType.IOC)
                         .uid(29851)
                         .userCookie(44188)
+                        .marginMode(MarginMode.ISOLATED)
                         .build()));
 
         // validating first event
@@ -358,6 +361,7 @@ public final class SimpleEventsProcessorTest {
                         .orderType(OrderType.IOC)
                         .uid(29851L)
                         .userCookie(44188)
+                        .marginMode(MarginMode.ISOLATED)
                         .build()));
 
         IEventsHandler4Test.RejectEvent rejectEvent = rejectEventCaptor.getValue();
@@ -427,6 +431,7 @@ public final class SimpleEventsProcessorTest {
                 .resultCode(CommandResultCode.SUCCESS)
                 .matcherEvent(null)
                 .marketData(null)
+                .marginMode(MarginMode.ISOLATED)
                 .build();
     }
 

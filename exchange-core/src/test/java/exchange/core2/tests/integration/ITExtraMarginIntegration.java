@@ -152,7 +152,7 @@ class ITExtraMarginIntegration {
             assertThat(10001L, is(event1.orderId));
             assertThat(0L, is(event1.fee));
             assertThat(PositionDirection.EMPTY, is(event1.direction));
-            assertThat(FundEvent.FundEventType.DEPOSIT, is(event1.eventType));
+            assertThat(FundEvent.FundEventType.MARGIN_ADJUST, is(event1.eventType));
             assertThat(3000L, is(event1.free));
             assertThat(0L, is(event1.locked));
             assertThat(0L, is(event1.openPriceSum));
