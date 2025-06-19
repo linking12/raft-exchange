@@ -82,6 +82,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         riskEngine.getLastPriceCache().forEachKeyValue((s, r) -> dummyLastPriceCache.put(s, r.averagingRecord()));
 
         final IntLongHashMap currencyBalance = new IntLongHashMap();
+        final IntLongHashMap extraMargin = new IntLongHashMap();
 
         final IntLongHashMap symbolOpenInterestLong = new IntLongHashMap();
         final IntLongHashMap symbolOpenInterestShort = new IntLongHashMap();
@@ -94,7 +95,10 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbolId);
                 final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(symbolId, RiskEngine.LastPriceCacheRecord.dummy);
                 currencyBalance.addToValue(positionRecord.currency, positionRecord.estimateProfit(spec, avgPrice));
-
+                // 新增：统计extraMargin
+                if (positionRecord.extraMargin > 0) {
+                    extraMargin.addToValue(positionRecord.currency, positionRecord.extraMargin);
+                }
                 if (positionRecord.direction == PositionDirection.LONG) {
                     symbolOpenInterestLong.addToValue(symbolId, positionRecord.openVolume);
                 } else if (positionRecord.direction == PositionDirection.SHORT) {
@@ -106,6 +110,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         return Optional.of(
                 new TotalCurrencyBalanceReportResult(
                         currencyBalance,
+                        extraMargin,
                         new IntLongHashMap(riskEngine.getFees()),
                         new IntLongHashMap(riskEngine.getAdjustments()),
                         new IntLongHashMap(riskEngine.getSuspends()),
