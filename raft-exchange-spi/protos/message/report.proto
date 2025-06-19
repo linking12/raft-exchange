@@ -64,6 +64,7 @@ message Position {
   int64 pending_buy_avg_price = 9;
   int32 leverage = 10;
   MarginMode margin_mode = 11;
+  int64 extra_margin = 12;
 }
 
 message Order {
