@@ -15,9 +15,7 @@
  */
 package exchange.core2.core.processors;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -526,12 +524,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     public void settleFundingFees(OrderCommand cmd, long markPrice) {
         final int symbol = cmd.symbol;
-        final double fundingRate = cmd.price * 1.0 / cmd.size;
-        long[] totalVolume = new long[2]; // [0] for long, [1] for short
-        List<SymbolPositionRecord> longPositions = FastList.newList();
-        List<SymbolPositionRecord> shortPositions = FastList.newList();
-        long[] maxShortVolume = new long[1];
-        SymbolPositionRecord[] maxShortPos = new SymbolPositionRecord[1];
+        FastList<SymbolPositionRecord> longPositions = FastList.newList();
+        FastList<SymbolPositionRecord> shortPositions = FastList.newList();
         // 分类仓位
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             SymbolPositionRecord position = userProfile.positions.get(symbol);
@@ -540,41 +534,39 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
             if (position.direction == PositionDirection.LONG) {
                 longPositions.add(position);
-                totalVolume[0] += position.openVolume;
             } else {
                 shortPositions.add(position);
-                totalVolume[1] += position.openVolume;
-                if (position.openVolume > maxShortVolume[0]) {
-                    maxShortVolume[0] = position.openVolume;
-                    maxShortPos[0] = position;
-                }
             }
         });
         // 若任一侧为空，则不进行资金费处理
-        if (totalVolume[0] == 0 || totalVolume[1] == 0) {
+        if (longPositions.isEmpty() || shortPositions.isEmpty()) {
             return;
         }
         long totalFundingFee = 0;
         // 多头：直接扣除资金费(费率*名义价值)
+        long unitFee = cmd.price / cmd.size * markPrice;
         for (SymbolPositionRecord pos : longPositions) {
-            long fundingFee = (long) (fundingRate * pos.openVolume * markPrice);
+            long fundingFee = unitFee * pos.openVolume;
             totalFundingFee += fundingFee;
             pos.profit -= fundingFee;
             eventsHelper.sendFundingFeeEvent(cmd, pos, -fundingFee);
         }
         // 空头：按比例获得资金费
         long settledFundingFee = 0;
+        long totalVolumeShort = shortPositions.sumOfLong(s -> s.openVolume);
+        SymbolPositionRecord maxShortPos = shortPositions.maxBy(s -> s.openVolume);
+        long unitReward = totalFundingFee / totalVolumeShort;
         for (SymbolPositionRecord pos : shortPositions) {
-            if (pos == maxShortPos[0]) continue;
-            long reward = totalFundingFee * pos.openVolume / totalVolume[1];
+            if (pos == maxShortPos) continue;
+            long reward = unitReward * pos.openVolume;
             settledFundingFee += reward;
             pos.profit += reward;
             eventsHelper.sendFundingFeeEvent(cmd, pos, reward);
         }
         // 最后给最大空头分发
         long remaining = totalFundingFee - settledFundingFee;
-        maxShortPos[0].profit += remaining;
-        eventsHelper.sendFundingFeeEvent(cmd, maxShortPos[0], remaining);
+        maxShortPos.profit += remaining;
+        eventsHelper.sendFundingFeeEvent(cmd, maxShortPos, remaining);
     }
 
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
