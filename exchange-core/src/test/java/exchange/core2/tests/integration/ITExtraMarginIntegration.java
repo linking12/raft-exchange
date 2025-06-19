@@ -3,9 +3,7 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.*;
-import exchange.core2.core.common.api.ApiAdjustMargin;
-import exchange.core2.core.common.api.ApiAdjustUserBalance;
-import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
@@ -67,11 +65,50 @@ class ITExtraMarginIntegration {
 
     @AfterEach()
     public void after() {
-
     }
 
     private PerformanceConfiguration getPerformanceConfiguration() {
         return PerformanceConfiguration.baseBuilder().build();
+    }
+
+    // inactive用户不允许增加extraMargin
+    @Test
+    public void testInactiveUser() {
+        long deposit = 10000L;
+        long userId1 = 1003L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.setConsumer(processor);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+
+            container.createUserWithSpecificMoney(userId1, 0, quoteId);
+
+            // suspend user
+            ApiSuspendUser suspend = ApiSuspendUser.builder().uid(userId1).build();
+            container.submitCommandSync(suspend, CommandResultCode.SUCCESS);
+
+            ApiAdjustMargin adjustMargin = ApiAdjustMargin.builder().transactionId(1345L).symbol(symbolId).uid(userId1).amount(deposit).currency(quoteId).marginMode(MarginMode.CROSS).build();
+            container.submitCommandSync(adjustMargin, CommandResultCode.AUTH_INVALID_USER);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat("inactive user account should be null", profile.getAccounts() == null);
+            });
+
+            // resume user
+            ApiResumeUser resume = ApiResumeUser.builder().uid(userId1).build();
+            container.submitCommandSync(resume, CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(adjustMargin, CommandResultCode.SUCCESS);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat("active user profile should not be null", profile.getAccounts() != null);
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // 1. 用户增加保证金后extraMargin应相应增加, 包括事件发送正确 -- cross margin
