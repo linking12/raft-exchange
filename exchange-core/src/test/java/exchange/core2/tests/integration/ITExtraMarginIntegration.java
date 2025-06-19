@@ -28,6 +28,7 @@ import static exchange.core2.core.common.OrderType.*;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 @Slf4j
@@ -132,6 +133,7 @@ class ITExtraMarginIntegration {
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit1 + deposit2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -196,6 +198,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
             // order1类型为cross, 此时增加isolated保证金会报mismatch的错误
             container.submitCommandSync(cmd, CommandResultCode.RISK_MARGIN_MODE_MISMATCH);
@@ -204,6 +207,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             ApiPlaceOrder order2 = ApiPlaceOrder.builder()
@@ -227,6 +231,7 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().getFirst().extraMargin, is(deposit2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -286,6 +291,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().getFirst().extraMargin, is(0L));
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             ApiAdjustMargin cmd = ApiAdjustMargin.builder().transactionId(10001L).symbol(symbolId)
@@ -298,6 +304,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().getFirst().extraMargin, is(deposit2));
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             // 平仓成功
@@ -307,6 +314,7 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
                 assertThat(profile.getAccounts().get(quoteId), is(deposit + deposit2 + price2 - price1 - fee));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -387,6 +395,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).direction, is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(0L));
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).direction, is(PositionDirection.SHORT));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.placeExtraMargin(userId1, symbols.get(0).quoteCurrency, symbols.get(0).symbolId, 200L, MarginMode.ISOLATED);
@@ -396,6 +405,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().size(), is(2));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(200L));
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(300L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.placeExtraMargin(userId1, symbols.get(0).quoteCurrency, symbols.get(0).symbolId, 300L, MarginMode.ISOLATED);
@@ -405,6 +415,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().size(), is(2));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(500L));
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(500L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -446,6 +457,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
@@ -456,6 +468,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -464,6 +477,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(0L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             adjustMarginOrderId = container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, 10, MarginMode.ISOLATED);
@@ -472,6 +486,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(10L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -480,6 +495,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(10L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -555,6 +571,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
@@ -565,6 +582,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -573,6 +591,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(0L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, 9, MarginMode.ISOLATED);
@@ -581,6 +600,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(9L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -589,6 +609,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(9L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -654,6 +675,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.updateCurrentPriceTo(9000, symbols.get(0).symbolId, quoteId);
@@ -661,6 +683,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             // userId3先设置一个单子用于强制平仓, 此时
@@ -672,6 +695,7 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, 20L, MarginMode.CROSS);
@@ -679,12 +703,14 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9860L));
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9860L));
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -751,6 +777,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.updateCurrentPriceTo(9000, symbols.get(0).symbolId, quoteId);
@@ -758,6 +785,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             // userId3先设置一个单子用于强制平仓, 此时
@@ -769,6 +797,7 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, 19L, MarginMode.CROSS);
@@ -776,12 +805,14 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9859L));
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9859L));
                 assertThat(profile.getPositions().size(), is(2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -888,6 +919,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().size(), is(2));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).getExtraMargin(), is(900L));
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).getExtraMargin(), is(2900L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -902,6 +934,7 @@ class ITExtraMarginIntegration {
                 // 做多做空delta = delta1 + delta2
                 // balance = deposit - fee - delta1 - delta2 + adjustMargin1 + adjustMargin2
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee1 - fee2 - delta1 - delta2 + adjustMargin1 + adjustMargin2));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
         } catch (ExecutionException e) {
@@ -973,6 +1006,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(deposit));
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(0L));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             ApiAdjustUserBalance cmd = ApiAdjustUserBalance.builder().uid(userId1).transactionId(container.getRandomTransactionId() + 100).amount(-deposit).currency(quoteId).build();
@@ -985,7 +1019,7 @@ class ITExtraMarginIntegration {
 
             container.addMoneyToUser(userId1, quoteId, 1);
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
-
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
