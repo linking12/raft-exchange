@@ -34,6 +34,11 @@ enum SymbolType {
   OPTION = 2;
 }
 
+enum ContractType {
+  PERPETUAL = 0;
+  DELIVERY = 1;
+}
+
 enum PositionDirection {
   EMPTY = 0;
   LONG = 1;

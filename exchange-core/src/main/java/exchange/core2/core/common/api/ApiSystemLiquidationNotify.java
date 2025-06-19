@@ -8,7 +8,7 @@ import lombok.RequiredArgsConstructor;
 @Builder
 @EqualsAndHashCode(callSuper = false)
 @RequiredArgsConstructor
-public class ApiSystemLiquidationNotify extends ApiCommand {
+public final class ApiSystemLiquidationNotify extends ApiCommand {
 
     public final FundEvent fundEvent;
 

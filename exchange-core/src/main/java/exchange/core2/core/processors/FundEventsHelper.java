@@ -168,6 +168,13 @@ public class FundEventsHelper {
         return event;
     }
 
+    public FundEvent sendFundingFeeEvent(OrderCommand cmd, SymbolPositionRecord position, long fee) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.FUNDINGFEE_SETTLEMENT, position, 0, 0);
+        event.fee = fee; // 资金费用
+        addFundEvent(cmd, cmd.orderId, event);
+        return event;
+    }
+
     // 生成盈亏结算事件 (PNL_SETTLEMENT)。
     public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPnl) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);

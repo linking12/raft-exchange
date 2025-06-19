@@ -15,11 +15,16 @@
  */
 package exchange.core2.core.processors;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import exchange.core2.core.common.ContractType;
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.PositionDirection;
+import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
@@ -353,6 +358,22 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     cmd.resultCode = adjustLeverage(cmd);
                 }
                 return false;
+            case SETTLE_FUNDINGFEES:
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+                if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT || spec.contract != ContractType.PERPETUAL) {
+                    cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
+                    return false;
+                }
+                LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
+                if (priceRecord == null) {
+                    cmd.resultCode = CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
+                    return false;
+                }
+                settleFundingFees(cmd, priceRecord.markPrice);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
 
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
@@ -503,6 +524,58 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return CommandResultCode.SUCCESS;
     }
 
+    public void settleFundingFees(OrderCommand cmd, long markPrice) {
+        final int symbol = cmd.symbol;
+        final double fundingRate = cmd.price * 1.0 / cmd.size;
+        long[] totalVolume = new long[2]; // [0] for long, [1] for short
+        List<SymbolPositionRecord> longPositions = FastList.newList();
+        List<SymbolPositionRecord> shortPositions = FastList.newList();
+        long[] maxShortVolume = new long[1];
+        SymbolPositionRecord[] maxShortPos = new SymbolPositionRecord[1];
+        // 分类仓位
+        userProfileService.getUserProfiles().forEachValue(userProfile -> {
+            SymbolPositionRecord position = userProfile.positions.get(symbol);
+            if (position == null || position.direction == PositionDirection.EMPTY) {
+                return; // 跳过空仓位
+            }
+            if (position.direction == PositionDirection.LONG) {
+                longPositions.add(position);
+                totalVolume[0] += position.openVolume;
+            } else {
+                shortPositions.add(position);
+                totalVolume[1] += position.openVolume;
+                if (position.openVolume > maxShortVolume[0]) {
+                    maxShortVolume[0] = position.openVolume;
+                    maxShortPos[0] = position;
+                }
+            }
+        });
+        // 若任一侧为空，则不进行资金费处理
+        if (totalVolume[0] == 0 || totalVolume[1] == 0) {
+            return;
+        }
+        long totalFundingFee = 0;
+        // 多头：直接扣除资金费(费率*名义价值)
+        for (SymbolPositionRecord pos : longPositions) {
+            long fundingFee = (long) (fundingRate * pos.openVolume * markPrice);
+            totalFundingFee += fundingFee;
+            pos.profit -= fundingFee;
+            eventsHelper.sendFundingFeeEvent(cmd, pos, -fundingFee);
+        }
+        // 空头：按比例获得资金费
+        long settledFundingFee = 0;
+        for (SymbolPositionRecord pos : shortPositions) {
+            if (pos == maxShortPos[0]) continue;
+            long reward = totalFundingFee * pos.openVolume / totalVolume[1];
+            settledFundingFee += reward;
+            pos.profit += reward;
+            eventsHelper.sendFundingFeeEvent(cmd, pos, reward);
+        }
+        // 最后给最大空头分发
+        long remaining = totalFundingFee - settledFundingFee;
+        maxShortPos[0].profit += remaining;
+        eventsHelper.sendFundingFeeEvent(cmd, maxShortPos[0], remaining);
+    }
 
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
 

@@ -5,7 +5,7 @@ import lombok.EqualsAndHashCode;
 
 @Builder
 @EqualsAndHashCode(callSuper = false)
-public class ApiRecoverState extends ApiCommand {
+public final class ApiRecoverState extends ApiCommand {
 
     public long snapshotId;
 

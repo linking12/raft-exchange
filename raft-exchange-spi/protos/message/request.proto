@@ -100,6 +100,13 @@ message ApiAdjustMargin {
   MarginMode marginMode = 6;
 }
 
+message ApiSettleFundingFees {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 fundingRate = 3;
+  int64 rateScaleK = 4;
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -117,6 +124,7 @@ message ApiCommand {
     ApiResumeUser resume_user = 13;
     ApiAdjustLeverage adjust_leverage = 14;
     ApiAdjustMargin adjust_margin = 15;
+    ApiSettleFundingFees settle_funding_fees = 16;
   }
 }
 
@@ -144,17 +152,18 @@ message BatchAddSymbolsCommand {
 message CoreSymbolSpecification {
   int32 symbol_id = 1;
   SymbolType type = 2;
-  int32 base_currency = 3;
-  int32 quote_currency = 4;
-  int64 base_scale_k = 5;
-  int64 quote_scale_k = 6;
-  int64 taker_fee = 7;
-  int64 maker_fee = 8;
-  int64 fee_scale_k = 9;
-  int64 margin_buy = 10;
-  int64 margin_sell = 11;
-  int64 maintenance_margin = 12;
-  int32 max_leverage = 13;
+  ContractType contract = 3;
+  int32 base_currency = 4;
+  int32 quote_currency = 5;
+  int64 base_scale_k = 6;
+  int64 quote_scale_k = 7;
+  int64 taker_fee = 8;
+  int64 maker_fee = 9;
+  int64 fee_scale_k = 10;
+  int64 margin_buy = 11;
+  int64 margin_sell = 12;
+  int64 maintenance_margin = 13;
+  int32 max_leverage = 14;
 }
 
 message BinaryDataCommand {

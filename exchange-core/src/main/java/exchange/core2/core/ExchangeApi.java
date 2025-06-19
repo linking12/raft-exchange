@@ -128,6 +128,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             ringBuffer.publishEvent(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
+        } else if (cmd instanceof ApiSettleFundingFees) {
+            ringBuffer.publishEvent(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             publishBinaryData((ApiBinaryDataCommand) cmd, seq -> {
             });
@@ -175,6 +177,8 @@ public final class ExchangeApi {
             return submitCommandAsync(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsync(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
+        } else if (cmd instanceof ApiSettleFundingFees) {
+            return submitCommandAsync(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiPersistState) {
@@ -218,6 +222,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsyncFullResponse(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
+        } else if (cmd instanceof ApiSettleFundingFees) {
+            return submitCommandAsyncFullResponse(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataCommandAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiReset) {
@@ -591,6 +597,15 @@ public final class ExchangeApi {
         cmd.marginMode = api.marginMode;
         cmd.symbol = api.marginMode == MarginMode.ISOLATED ? api.symbol : api.currency;
         cmd.price = api.amount;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiSettleFundingFees> SETTLE_FUNDINGFEES_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.SETTLE_FUNDINGFEES;
+        cmd.timestamp = api.timestamp;
+        cmd.orderId = api.transactionId;
+        cmd.price = api.fundingRate;
+        cmd.size = api.rateScaleK;
         cmd.resultCode = CommandResultCode.NEW;
     };
 
