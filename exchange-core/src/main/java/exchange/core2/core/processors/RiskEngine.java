@@ -723,7 +723,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     freeMargin -= positionRecord.calculateRequiredMarginForFutures(spec2);
                 }
             } else {
-                freeMargin = position.estimateProfit(spec, lastPriceCache.get(spec.symbolId));
+                freeMargin += position.estimateProfit(spec, lastPriceCache.get(spec.symbolId));
             }
         }
 
