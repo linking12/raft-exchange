@@ -320,14 +320,23 @@ public final class ExchangeTestContainer implements AutoCloseable {
         assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
     }
 
+    public ApiPlaceOrder genOrderWithId(long orderId, long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType) {
+        return genOrder(orderId, userId, size, price, symbolId, action, orderType, MarginMode.ISOLATED);
+    }
+
     public ApiPlaceOrder genOrder(long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType) {
         return genOrder(userId, size, price, symbolId, action, orderType, MarginMode.ISOLATED);
     }
 
     public ApiPlaceOrder genOrder(long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType, MarginMode marginMode) {
+        long orderId = getRandomTransactionId();
+        return genOrder(orderId, userId, size, price, symbolId, action, orderType, marginMode);
+    }
+
+    public ApiPlaceOrder genOrder(long orderId, long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType, MarginMode marginMode) {
         return ApiPlaceOrder.builder()
                 .uid(userId)
-                .orderId(getRandomTransactionId())
+                .orderId(orderId)
                 .action(action)
                 .size(size)
                 .price(price)
