@@ -80,8 +80,9 @@ public class FundEventsHelper {
     }
 
     // 转移
-    public FundEvent sendTransferEvent(OrderCommand cmd, long orderId, long uid, int currency, long free, long locked) {
+    public FundEvent sendTransferEvent(OrderCommand cmd, long orderId, long uid, int symbol, int currency, long free, long locked) {
         FundEvent event = buildSpotEvent(orderId, uid, FundEventType.TRANSFER, currency, free, locked);
+        event.symbol = symbol;
         addFundEvent(cmd, orderId, event);
         return event;
     }

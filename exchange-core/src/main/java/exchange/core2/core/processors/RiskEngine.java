@@ -1066,8 +1066,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  */
                 long lockedMarginQuote = calculateLockedMargin(maker, quoteCurrency);
                 long lockedMarginBase = calculateLockedMargin(maker, spec.baseCurrency);
-                this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
-                this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, spec.baseCurrency, baseCurrencyBalance - lockedMarginBase, lockedMarginBase);
+                this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, spec.symbolId, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
+                this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, spec.baseCurrency, spec.symbolId, baseCurrencyBalance - lockedMarginBase, lockedMarginBase);
 
                 makerSizePriceForThisHandler += ev.size * ev.price;
                 makerSizeForThisHandler += size;
@@ -1086,7 +1086,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
              * @modify 资金转移
              */
             long lockedMarginQuote = calculateLockedMargin(taker, quoteCurrency);
-            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
+            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, quoteCurrency, spec.symbolId, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
@@ -1147,7 +1147,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  * @modify 资金转移
                  */
                 long lockedMarginQuote = calculateLockedMargin(maker, quoteCurrency);
-                this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, balance - lockedMarginQuote, lockedMarginQuote);
+                this.eventsHelper.sendTransferEvent(cmd, ev.matchedOrderId, maker.uid, quoteCurrency, spec.symbolId, balance - lockedMarginQuote, lockedMarginQuote);
 
                 makerSizePriceSum += ev.size * ev.price;
                 makerSizeForThisHandler += size;
@@ -1193,8 +1193,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
              * @modify 资金转移
              */
             long lockedMarginBase = calculateLockedMargin(taker, spec.baseCurrency);
-            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
-            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, spec.baseCurrency, baseCurrencyBalance - lockedMarginBase, lockedMarginBase);
+            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, quoteCurrency, spec.symbolId, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
+            this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, taker.uid, spec.baseCurrency, spec.symbolId, baseCurrencyBalance - lockedMarginBase, lockedMarginBase);
         }
 
         if (takerSizeForThisHandler != 0 || makerSizeForThisHandler != 0) {
