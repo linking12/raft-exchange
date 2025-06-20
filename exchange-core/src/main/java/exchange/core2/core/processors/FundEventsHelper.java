@@ -64,15 +64,17 @@ public class FundEventsHelper {
     }
 
     // 冻结
-    public FundEvent sendLockEvent(OrderCommand cmd, int currency, long free, long locked) {
+    public FundEvent sendLockEvent(OrderCommand cmd, int symbol, int currency, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.LOCKED, currency, free, locked);
+        event.symbol = symbol;
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 解冻
-    public FundEvent sendUnLockEvent(OrderCommand cmd, int currency, long free, long locked) {
+    public FundEvent sendUnLockEvent(OrderCommand cmd, int symbol, int currency, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.UNLOCKED, currency, free, locked);
+        event.symbol = symbol;
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }

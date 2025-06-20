@@ -677,7 +677,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
              * @modify 冻结资金
              */
             long locked = calculateLockedMargin(userProfile, currency);
-            this.eventsHelper.sendLockEvent(cmd, currency, balance - locked, locked);
+            this.eventsHelper.sendLockEvent(cmd, spec.symbolId, currency, balance - locked, locked);
             return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
         }
     }
@@ -1014,7 +1014,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
          * @modify 恢复资金 买单解冻 quoteCurrency,卖单解冻 baseCurrency
          */
         long locked = calculateLockedMargin(taker, takerSell ? spec.baseCurrency : spec.quoteCurrency);
-        this.eventsHelper.sendUnLockEvent(cmd, takerSell ? spec.baseCurrency : spec.quoteCurrency, balance - locked, locked);
+        this.eventsHelper.sendUnLockEvent(cmd, spec.symbolId, takerSell ? spec.baseCurrency : spec.quoteCurrency, balance - locked, locked);
 
     }
 
@@ -1185,7 +1185,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             // 支付 quoteCurrency
             long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, totalAdjustment);
             if (leftover > 0) {
-                this.eventsHelper.sendUnLockEvent(cmd, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
+                this.eventsHelper.sendUnLockEvent(cmd, spec.symbolId, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
             }
             // 接收 baseCurrency
             long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
