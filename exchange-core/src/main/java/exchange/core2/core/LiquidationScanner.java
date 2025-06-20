@@ -110,7 +110,7 @@ public final class LiquidationScanner {
                 }
                 int symbol = position.symbol;
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
-                if (spec.type != SymbolType.FUTURES_CONTRACT) {
+                if (!SymbolType.isFuturesContract(spec.type)) {
                     return; // 跳过非期货持仓
                 }
                 // 获取最新价格记录

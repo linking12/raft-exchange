@@ -4,7 +4,6 @@ import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
-import exchange.core2.core.common.ContractType;
 import exchange.core2.core.common.SymbolType;
 
 import java.util.ArrayList;
@@ -22,8 +21,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         Collection<exchange.core2.core.common.CoreSymbolSpecification> coreSymbols = new ArrayList<>(symbolsMap.size());
         for (CoreSymbolSpecification grpcSymbol : symbolsMap.values()) {
             exchange.core2.core.common.CoreSymbolSpecification coreSymbol = exchange.core2.core.common.CoreSymbolSpecification.builder()
-                .symbolId(grpcSymbol.getSymbolId()).type(SymbolType.of(grpcSymbol.getType().getNumber()))
-                .contract(ContractType.of(grpcSymbol.getContract().getNumber())).baseCurrency(grpcSymbol.getBaseCurrency())
+                .symbolId(grpcSymbol.getSymbolId()).type(SymbolType.of(grpcSymbol.getType().getNumber())).baseCurrency(grpcSymbol.getBaseCurrency())
                 .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK()).quoteScaleK(grpcSymbol.getQuoteScaleK())
                 .takerFee(grpcSymbol.getTakerFee()).makerFee(grpcSymbol.getMakerFee()).feeScaleK(grpcSymbol.getFeeScaleK())
                 .marginBuy(grpcSymbol.getMarginBuy()).marginSell(grpcSymbol.getMarginSell()).maintenanceMargin(grpcSymbol.getMaintenanceMargin())

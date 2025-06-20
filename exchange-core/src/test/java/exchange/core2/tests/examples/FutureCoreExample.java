@@ -181,7 +181,7 @@ public class FutureCoreExample {
         // 添加期货符号
         CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
-                .type(SymbolType.FUTURES_CONTRACT)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(0)
                 .quoteCurrency(quoteId)
                 .makerFee(0)

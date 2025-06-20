@@ -361,7 +361,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return false;
             case SETTLE_FUNDINGFEES:
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
-                if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT || spec.contract != ContractType.PERPETUAL) {
+                if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT_PERPETUAL) {
                     cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
                     return false;
                 }
@@ -614,7 +614,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
             return placeExchangeOrder(cmd, userProfile, spec);
 
-        } else if (spec.type == SymbolType.FUTURES_CONTRACT) {
+        } else if (SymbolType.isFuturesContract(spec.type)) {
 
             if (!cfgMarginTradingEnabled) {
                 return CommandResultCode.RISK_MARGIN_TRADING_DISABLED;
@@ -905,7 +905,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             // 遍历每个用户的所有持仓
             userProfile.positions.asUnmodifiable().forEach(position -> {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                if (spec.type != SymbolType.FUTURES_CONTRACT) {
+                if (spec.type != SymbolType.FUTURES_CONTRACT_DELIVERY) {
                     return;
                 }
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);

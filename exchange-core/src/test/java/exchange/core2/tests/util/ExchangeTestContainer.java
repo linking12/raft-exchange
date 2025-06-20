@@ -185,7 +185,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public CoreSymbolSpecification initFutureSymbol(int symbolId, int quoteId) {
         CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
-                .type(SymbolType.FUTURES_CONTRACT)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(1)
                 .quoteCurrency(quoteId)
                 .baseScaleK(1)
@@ -205,7 +205,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         // BTC_USDT
         CoreSymbolSpecification futuresSymbol1 = CoreSymbolSpecification.builder()
                 .symbolId(10000)
-                .type(SymbolType.FUTURES_CONTRACT)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(CURRENECY_XBT)
                 .quoteCurrency(CURRENECY_USD)
                 .baseScaleK(1)
@@ -220,7 +220,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         // ETH_USDT
         CoreSymbolSpecification futuresSymbol2 = CoreSymbolSpecification.builder()
                 .symbolId(10001)
-                .type(SymbolType.FUTURES_CONTRACT)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(CURRENECY_ETH)
                 .quoteCurrency(CURRENECY_USD)
                 .baseScaleK(1)
@@ -236,7 +236,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         // LTC_USDT
         CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
                 .symbolId(10002)
-                .type(SymbolType.FUTURES_CONTRACT)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(CURRENECY_LTC)
                 .quoteCurrency(CURRENECY_USD)
                 .baseScaleK(1)
@@ -490,7 +490,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public CoreSymbolSpecification initSymbol() {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(10001)
-                .type(SymbolType.FUTURES_CONTRACT)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(11)
                 .quoteCurrency(12)
                 .marginBuy(1000)
@@ -658,7 +658,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         switch (allowedSymbolTypes) {
             case FUTURES_CONTRACT:
-                symbolTypeSupplier = () -> SymbolType.FUTURES_CONTRACT;
+                symbolTypeSupplier = () -> SymbolType.FUTURES_CONTRACT_PERPETUAL;
                 break;
 
             case CURRENCY_EXCHANGE_PAIR:
@@ -667,7 +667,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
             case BOTH:
             default:
-                symbolTypeSupplier = () -> random.nextBoolean() ? SymbolType.FUTURES_CONTRACT : SymbolType.CURRENCY_EXCHANGE_PAIR;
+                symbolTypeSupplier = () -> random.nextBoolean() ? SymbolType.FUTURES_CONTRACT_PERPETUAL : SymbolType.CURRENCY_EXCHANGE_PAIR;
                 break;
         }
 

@@ -140,7 +140,7 @@ public final class TestConstants {
 
     public static final CoreSymbolSpecification SYMBOLSPEC_EUR_USD = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_MARGIN)
-            .type(SymbolType.FUTURES_CONTRACT)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
             .baseCurrency(CURRENECY_EUR)
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
@@ -153,7 +153,7 @@ public final class TestConstants {
 
     public static final CoreSymbolSpecification SYMBOLSPECFEE_USD_JPY = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_MARGIN)
-            .type(SymbolType.FUTURES_CONTRACT)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
             .baseCurrency(CURRENECY_USD)
             .quoteCurrency(CURRENECY_JPY)
             .baseScaleK(1_000_00) // 1K USD "micro" lot
@@ -166,7 +166,7 @@ public final class TestConstants {
 
     public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_XBT_USD = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_MARGIN_FEE)
-            .type(SymbolType.FUTURES_CONTRACT)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
             .baseCurrency(1)
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
@@ -181,7 +181,7 @@ public final class TestConstants {
 
     public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_ETH_USD = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_ETH_MARGIN_FEE)
-            .type(SymbolType.FUTURES_CONTRACT)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
             .baseCurrency(2)
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)

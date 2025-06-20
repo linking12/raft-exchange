@@ -33,8 +33,6 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
 
     @NonNull
     public final SymbolType type;
-    @NonNull
-    public final ContractType contract;
 
     // currency pair specification
     public final int baseCurrency;  // base currency
@@ -56,7 +54,6 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public CoreSymbolSpecification(BytesIn bytes) {
         this.symbolId = bytes.readInt();
         this.type = SymbolType.of(bytes.readByte());
-        this.contract = ContractType.of(bytes.readByte());
         this.baseCurrency = bytes.readInt();
         this.quoteCurrency = bytes.readInt();
         this.baseScaleK = bytes.readLong();
@@ -96,7 +93,6 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeInt(symbolId);
         bytes.writeByte(type.getCode());
-        bytes.writeByte(contract.getCode());
         bytes.writeInt(baseCurrency);
         bytes.writeInt(quoteCurrency);
         bytes.writeLong(baseScaleK);
@@ -115,7 +111,6 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         return Objects.hash(
                 symbolId,
                 type.getCode(),
-                contract.getCode(),
                 baseCurrency,
                 quoteCurrency,
                 baseScaleK,
@@ -146,7 +141,6 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
                 marginSell == that.marginSell &&
                 maintenanceMargin == that.maintenanceMargin &&
                 maxLeverage == that.maxLeverage &&
-                type == that.type &&
-                contract == that.contract;
+                type == that.type;
     }
 }

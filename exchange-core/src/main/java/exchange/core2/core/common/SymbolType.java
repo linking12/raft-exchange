@@ -22,13 +22,18 @@ import java.util.Arrays;
 @Getter
 public enum SymbolType {
     CURRENCY_EXCHANGE_PAIR(0),
-    FUTURES_CONTRACT(1),
-    OPTION(2);
+    FUTURES_CONTRACT_PERPETUAL(1),
+    FUTURES_CONTRACT_DELIVERY(2),
+    OPTION(3);
 
     private byte code;
 
     SymbolType(int code) {
         this.code = (byte) code;
+    }
+
+    public static boolean isFuturesContract(SymbolType type) {
+        return type == FUTURES_CONTRACT_PERPETUAL || type == FUTURES_CONTRACT_DELIVERY;
     }
 
     public static SymbolType of(int code) {

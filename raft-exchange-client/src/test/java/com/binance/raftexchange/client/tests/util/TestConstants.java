@@ -120,7 +120,7 @@ public final class TestConstants {
 
     public static final CoreSymbolSpecification SYMBOLSPEC_EUR_USD = CoreSymbolSpecification.builder()
             .symbolId(SYMBOL_MARGIN)
-            .type(SymbolType.FUTURES_CONTRACT)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
             .baseCurrency(CURRENECY_EUR)
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
