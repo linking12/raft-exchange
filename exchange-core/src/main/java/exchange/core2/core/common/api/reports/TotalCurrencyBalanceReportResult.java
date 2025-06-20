@@ -35,6 +35,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
 
     // currency -> balance
     final private IntLongHashMap accountBalances;
+    final private IntLongHashMap extraMargin;
     final private IntLongHashMap fees;
     final private IntLongHashMap adjustments;
     final private IntLongHashMap suspends;
@@ -48,16 +49,17 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
 
     public static TotalCurrencyBalanceReportResult createEmpty() {
         return new TotalCurrencyBalanceReportResult(
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     public static TotalCurrencyBalanceReportResult ofOrderBalances(final IntLongHashMap currencyBalance) {
         return new TotalCurrencyBalanceReportResult(
-                null, null, null, null, currencyBalance, null, null);
+                null, null, null, null, null, currencyBalance, null, null);
     }
 
     private TotalCurrencyBalanceReportResult(final BytesIn bytesIn) {
         this.accountBalances = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
+        this.extraMargin = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.fees = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.adjustments = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.suspends = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
@@ -69,6 +71,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
     @Override
     public void writeMarshallable(final BytesOut bytes) {
         SerializationUtils.marshallNullable(accountBalances, bytes, SerializationUtils::marshallIntLongHashMap);
+        SerializationUtils.marshallNullable(extraMargin, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(fees, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(adjustments, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(suspends, bytes, SerializationUtils::marshallIntLongHashMap);
@@ -78,11 +81,11 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
     }
 
     public IntLongHashMap getGlobalBalancesSum() {
-        return SerializationUtils.mergeSum(accountBalances, ordersBalances, fees, adjustments, suspends);
+        return SerializationUtils.mergeSum(accountBalances, extraMargin, ordersBalances, fees, adjustments, suspends);
     }
 
     public IntLongHashMap getClientsBalancesSum() {
-        return SerializationUtils.mergeSum(accountBalances, ordersBalances, suspends);
+        return SerializationUtils.mergeSum(accountBalances, extraMargin, ordersBalances, suspends);
     }
 
     public boolean isGlobalBalancesAllZero() {
@@ -96,6 +99,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
                         TotalCurrencyBalanceReportResult.createEmpty(),
                         (a, b) -> new TotalCurrencyBalanceReportResult(
                                 SerializationUtils.mergeSum(a.accountBalances, b.accountBalances),
+                                SerializationUtils.mergeSum(a.extraMargin, b.extraMargin),
                                 SerializationUtils.mergeSum(a.fees, b.fees),
                                 SerializationUtils.mergeSum(a.adjustments, b.adjustments),
                                 SerializationUtils.mergeSum(a.suspends, b.suspends),

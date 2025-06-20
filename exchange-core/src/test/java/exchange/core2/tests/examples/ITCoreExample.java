@@ -143,6 +143,7 @@ class ITCoreExample {
                 .action(OrderAction.BID)
                 .orderType(OrderType.GTC) // Good-till-Cancel
                 .symbol(symbolXbtLtc)
+                .marginMode(MarginMode.ISOLATED)
                 .build());
 
         System.out.println("ApiPlaceOrder 1 result: " + future.get());
@@ -158,6 +159,7 @@ class ITCoreExample {
                 .action(OrderAction.ASK)
                 .orderType(OrderType.IOC) // Immediate-or-Cancel
                 .symbol(symbolXbtLtc)
+                .marginMode(MarginMode.ISOLATED)
                 .build());
 
         System.out.println("ApiPlaceOrder 2 result: " + future.get());

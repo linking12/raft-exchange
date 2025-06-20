@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.exchange;
 import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
+import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
@@ -16,10 +17,11 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 获取OrderBook
      */
-    public static CompletableFuture<byte[]> getOrderBook(ApiOrderBookRequest grpcApiOrderBookRequest) {
+    public static CompletableFuture<byte[]> getOrderBook(ApiCommand apiCommand) {
+        ApiOrderBookRequest grpcApiOrderBookRequest = apiCommand.getOrderBookRequest();
         exchange.core2.core.common.api.ApiOrderBookRequest apiOrderBookRequest = exchange.core2.core.common.api.ApiOrderBookRequest.builder()
             .symbol(grpcApiOrderBookRequest.getSymbol()).size(grpcApiOrderBookRequest.getSize()).build();
-
+        apiOrderBookRequest.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiOrderBookRequest);
     }
 
@@ -34,7 +36,8 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 下单
      */
-    public static CompletableFuture<byte[]> placeOrder(ApiPlaceOrder grpcApiPlaceOrder) {
+    public static CompletableFuture<byte[]> placeOrder(ApiCommand apiCommand) {
+        ApiPlaceOrder grpcApiPlaceOrder = apiCommand.getPlaceOrder();
         exchange.core2.core.common.api.ApiPlaceOrder apiPlaceOrder =
             exchange.core2.core.common.api.ApiPlaceOrder.builder().price(grpcApiPlaceOrder.getPrice()).size(grpcApiPlaceOrder.getSize())
                 .orderId(grpcApiPlaceOrder.getOrderId()).action(exchange.core2.core.common.OrderAction.of((byte)grpcApiPlaceOrder.getAction().getNumber()))
@@ -42,46 +45,53 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
                 .symbol(grpcApiPlaceOrder.getSymbol()).userCookie(grpcApiPlaceOrder.getUserCookie()).leverage(grpcApiPlaceOrder.getLeverage())
                 .marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiPlaceOrder.getMarginMode().getNumber()]) // grpc enum 默认是0 就是isolated
                 .reservePrice(grpcApiPlaceOrder.getReservePrice()).build();
-
+        apiPlaceOrder.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiPlaceOrder);
     }
 
     /**
      * 修改订单
      */
-    public static CompletableFuture<byte[]> moveOrder(ApiMoveOrder grpcApiMoveOrder) {
+    public static CompletableFuture<byte[]> moveOrder(ApiCommand apiCommand) {
+        ApiMoveOrder grpcApiMoveOrder = apiCommand.getMoveOrder();
         exchange.core2.core.common.api.ApiMoveOrder apiMoveOrder = exchange.core2.core.common.api.ApiMoveOrder.builder().orderId(grpcApiMoveOrder.getOrderId())
             .newPrice(grpcApiMoveOrder.getNewPrice()).uid(grpcApiMoveOrder.getUid()).symbol(grpcApiMoveOrder.getSymbol()).build();
-
+        apiMoveOrder.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiMoveOrder);
     }
 
     /**
      * 撤单
      */
-    public static CompletableFuture<byte[]> cancelOrder(ApiCancelOrder grpcApiCancelOrder) {
+    public static CompletableFuture<byte[]> cancelOrder(ApiCommand apiCommand) {
+        ApiCancelOrder grpcApiCancelOrder = apiCommand.getCancelOrder();
         exchange.core2.core.common.api.ApiCancelOrder apiCancelOrder = exchange.core2.core.common.api.ApiCancelOrder.builder()
             .orderId(grpcApiCancelOrder.getOrderId()).uid(grpcApiCancelOrder.getUid()).symbol(grpcApiCancelOrder.getSymbol()).build();
-
+        apiCancelOrder.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiCancelOrder);
     }
 
     /**
      * 改单
      */
-    public static CompletableFuture<byte[]> reduceOrder(ApiReduceOrder grpcApiReduceOrder) {
+    public static CompletableFuture<byte[]> reduceOrder(ApiCommand apiCommand) {
+        ApiReduceOrder grpcApiReduceOrder = apiCommand.getReduceOrder();
         exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder =
             exchange.core2.core.common.api.ApiReduceOrder.builder().orderId(grpcApiReduceOrder.getOrderId()).uid(grpcApiReduceOrder.getUid())
                 .symbol(grpcApiReduceOrder.getSymbol()).reduceSize(grpcApiReduceOrder.getReduceSize()).build();
-
+        apiReduceOrder.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiReduceOrder);
     }
 
-    public static CompletableFuture<byte[]> adjustLeverage(ApiAdjustLeverage grpcApiAdjustLeverage) {
+    /**
+     * 调整杠杆
+     */
+    public static CompletableFuture<byte[]> adjustLeverage(ApiCommand apiCommand) {
+        ApiAdjustLeverage grpcApiAdjustLeverage = apiCommand.getAdjustLeverage();
         exchange.core2.core.common.api.ApiAdjustLeverage apiAdjustLeverage =
             exchange.core2.core.common.api.ApiAdjustLeverage.builder().uid(grpcApiAdjustLeverage.getUid())
                 .symbol(grpcApiAdjustLeverage.getSymbol()).leverage(grpcApiAdjustLeverage.getLeverage()).build();
-
+        apiAdjustLeverage.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiAdjustLeverage);
     }
 }

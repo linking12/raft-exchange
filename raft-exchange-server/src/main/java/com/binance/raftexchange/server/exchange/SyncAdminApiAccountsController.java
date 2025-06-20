@@ -2,7 +2,9 @@ package com.binance.raftexchange.server.exchange;
 
 import com.binance.raftexchange.stubs.request.AccountBalanceMap;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
+import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiResumeUser;
 import com.binance.raftexchange.stubs.request.ApiSuspendUser;
 import com.binance.raftexchange.stubs.request.BatchAddAccountsCommand;
@@ -17,8 +19,10 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 创建用户
      */
-    public static CompletableFuture<byte[]> createUser(ApiAddUser grpcApiAddUser) {
+    public static CompletableFuture<byte[]> createUser(ApiCommand apiCommand) {
+        ApiAddUser grpcApiAddUser = apiCommand.getAddUser();
         exchange.core2.core.common.api.ApiAddUser apiAddUser = exchange.core2.core.common.api.ApiAddUser.builder().uid(grpcApiAddUser.getUid()).build();
+        apiAddUser.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("ApiAddUser applied, msg: {}", apiAddUser);
         return callExchange(apiAddUser);
     }
@@ -26,10 +30,12 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 增加资金
      */
-    public static CompletableFuture<byte[]> adjustBalance(ApiAdjustUserBalance grpcApiAdjustUserBalance) {
+    public static CompletableFuture<byte[]> adjustBalance(ApiCommand apiCommand) {
+        ApiAdjustUserBalance grpcApiAdjustUserBalance = apiCommand.getAdjustBalance();
         exchange.core2.core.common.api.ApiAdjustUserBalance apiAdjustUserBalance = exchange.core2.core.common.api.ApiAdjustUserBalance.builder()
             .uid(grpcApiAdjustUserBalance.getUid()).currency(grpcApiAdjustUserBalance.getCurrency()).amount(grpcApiAdjustUserBalance.getAmount())
             .transactionId(grpcApiAdjustUserBalance.getTransactionId()).build();
+        apiAdjustUserBalance.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("ApiAdjustUserBalance applied, msg: {}", apiAdjustUserBalance);
         return callExchange(apiAdjustUserBalance);
     }
@@ -37,9 +43,11 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 禁用用户
      */
-    public static CompletableFuture<byte[]> suspendUser(ApiSuspendUser grpcApiSuspendUser) {
+    public static CompletableFuture<byte[]> suspendUser(ApiCommand apiCommand) {
+        ApiSuspendUser grpcApiSuspendUser = apiCommand.getSuspendUser();
         exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser =
             exchange.core2.core.common.api.ApiSuspendUser.builder().uid(grpcApiSuspendUser.getUid()).build();
+        apiSuspendUser.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("ApiSuspendUser applied, msg: {}", apiSuspendUser);
         return callExchange(apiSuspendUser);
     }
@@ -47,9 +55,11 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 解禁用户
      */
-    public static CompletableFuture<byte[]> resumeUser(ApiResumeUser grpcApiResumeUser) {
+    public static CompletableFuture<byte[]> resumeUser(ApiCommand apiCommand) {
+        ApiResumeUser grpcApiResumeUser = apiCommand.getResumeUser();
         exchange.core2.core.common.api.ApiResumeUser apiResumeUser =
             exchange.core2.core.common.api.ApiResumeUser.builder().uid(grpcApiResumeUser.getUid()).build();
+        apiResumeUser.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("ApiResumeUser applied, msg: {}", apiResumeUser);
         return callExchange(apiResumeUser);
     }
@@ -74,5 +84,18 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         LOG.debug("batchAddAccountsCommand applied, msg: {}", batchAddAccountsCommand);
 
         return callExchange(batchAddAccountsCommand);
+    }
+
+    /**
+     * 增加补充保证金
+     */
+    public static CompletableFuture<byte[]> adjustMargin(ApiCommand apiCommand) {
+        ApiAdjustMargin grpcApiAdjustMargin = apiCommand.getAdjustMargin();
+        exchange.core2.core.common.api.ApiAdjustMargin apiAdjustMargin = exchange.core2.core.common.api.ApiAdjustMargin.builder()
+            .transactionId(grpcApiAdjustMargin.getTransactionId()).uid(grpcApiAdjustMargin.getUid()).symbol(grpcApiAdjustMargin.getSymbol())
+            .currency(grpcApiAdjustMargin.getCurrency()).amount(grpcApiAdjustMargin.getAmount()).marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiAdjustMargin.getMarginMode().getNumber()]).build();
+        apiAdjustMargin.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("ApiAdjustMargin applied, msg: {}", apiAdjustMargin);
+        return callExchange(apiAdjustMargin);
     }
 }

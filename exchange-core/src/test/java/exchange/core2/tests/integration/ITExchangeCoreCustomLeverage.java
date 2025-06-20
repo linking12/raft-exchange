@@ -293,7 +293,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .leverage(100) // 超出最大杠杆20倍
                     .build();
 
-            container.submitCommandSync(badOrder, CommandResultCode.RISK_INVALID_LEVERAGE);
+            container.submitCommandSync(badOrder, CommandResultCode.RISK_NSF);
         }
     }
 

@@ -60,41 +60,45 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data);
         CompletableFuture<byte[]> result = null;
         if (grpcMessage instanceof ApiCommand) {
-            ApiCommand.CommandCase commandCase = ((ApiCommand)grpcMessage).getCommandCase();
+            ApiCommand apiCommand = (ApiCommand) grpcMessage;
+            ApiCommand.CommandCase commandCase = apiCommand.getCommandCase();
             switch (commandCase) {
                 case BINARY_DATA:
-                    ApiBinaryDataCommand apiBinaryDataCommand = ((ApiCommand)grpcMessage).getBinaryData();
+                    ApiBinaryDataCommand apiBinaryDataCommand = apiCommand.getBinaryData();
                     result = processBinaryDataCommand(apiBinaryDataCommand.getData());
                     break;
                 case PLACE_ORDER:
-                    result = SyncTradeOrdersApiController.placeOrder(((ApiCommand)grpcMessage).getPlaceOrder());
+                    result = SyncTradeOrdersApiController.placeOrder(apiCommand);
                     break;
                 case ADJUST_BALANCE:
-                    result = SyncAdminApiAccountsController.adjustBalance(((ApiCommand)grpcMessage).getAdjustBalance());
+                    result = SyncAdminApiAccountsController.adjustBalance(apiCommand);
                     break;
                 case ORDER_BOOK_REQUEST:
-                    result = SyncTradeOrdersApiController.getOrderBook(((ApiCommand)grpcMessage).getOrderBookRequest());
+                    result = SyncTradeOrdersApiController.getOrderBook(apiCommand);
                     break;
                 case MOVE_ORDER:
-                    result = SyncTradeOrdersApiController.moveOrder(((ApiCommand)grpcMessage).getMoveOrder());
+                    result = SyncTradeOrdersApiController.moveOrder(apiCommand);
                     break;
                 case CANCEL_ORDER:
-                    result = SyncTradeOrdersApiController.cancelOrder(((ApiCommand)grpcMessage).getCancelOrder());
+                    result = SyncTradeOrdersApiController.cancelOrder(apiCommand);
                     break;
                 case ADD_USER:
-                    result = SyncAdminApiAccountsController.createUser(((ApiCommand)grpcMessage).getAddUser());
+                    result = SyncAdminApiAccountsController.createUser(apiCommand);
                     break;
                 case REDUCE_ORDER:
-                    result = SyncTradeOrdersApiController.reduceOrder(((ApiCommand)grpcMessage).getReduceOrder());
+                    result = SyncTradeOrdersApiController.reduceOrder(apiCommand);
                     break;
                 case SUSPEND_USER:
-                    result = SyncAdminApiAccountsController.suspendUser(((ApiCommand)grpcMessage).getSuspendUser());
+                    result = SyncAdminApiAccountsController.suspendUser(apiCommand);
                     break;
                 case RESUME_USER:
-                    result = SyncAdminApiAccountsController.resumeUser(((ApiCommand)grpcMessage).getResumeUser());
+                    result = SyncAdminApiAccountsController.resumeUser(apiCommand);
                     break;
                 case ADJUST_LEVERAGE:
-                    result = SyncTradeOrdersApiController.adjustLeverage(((ApiCommand)grpcMessage).getAdjustLeverage());
+                    result = SyncTradeOrdersApiController.adjustLeverage(apiCommand);
+                    break;
+                case ADJUST_MARGIN:
+                    result = SyncAdminApiAccountsController.adjustMargin(apiCommand);
                     break;
                 case NOP:
                     LOG.info("NOP Command received, no action taken.");

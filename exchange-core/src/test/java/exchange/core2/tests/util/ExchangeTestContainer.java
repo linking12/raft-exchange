@@ -320,14 +320,23 @@ public final class ExchangeTestContainer implements AutoCloseable {
         assertThat(api.submitCommandAsync(ApiAddUser.builder().uid(uid).build()).join(), Is.is(CommandResultCode.SUCCESS));
     }
 
+    public ApiPlaceOrder genOrderWithId(long orderId, long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType) {
+        return genOrder(orderId, userId, size, price, symbolId, action, orderType, MarginMode.ISOLATED);
+    }
+
     public ApiPlaceOrder genOrder(long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType) {
         return genOrder(userId, size, price, symbolId, action, orderType, MarginMode.ISOLATED);
     }
 
     public ApiPlaceOrder genOrder(long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType, MarginMode marginMode) {
+        long orderId = getRandomTransactionId();
+        return genOrder(orderId, userId, size, price, symbolId, action, orderType, marginMode);
+    }
+
+    public ApiPlaceOrder genOrder(long orderId, long userId, int size, long price, int symbolId, OrderAction action, OrderType orderType, MarginMode marginMode) {
         return ApiPlaceOrder.builder()
                 .uid(userId)
-                .orderId(getRandomTransactionId())
+                .orderId(orderId)
                 .action(action)
                 .size(size)
                 .price(price)
@@ -422,6 +431,16 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         }
         return orderId;
+    }
+
+    public long placeExtraMargin(long userId, int quoteId, int symbolId, long amount, MarginMode mode) {
+        long txId = getRandomTransactionId();
+        ApiAdjustMargin cmd = ApiAdjustMargin.builder().transactionId(txId).symbol(symbolId).uid(userId).amount(amount).currency(quoteId).marginMode(mode).build();
+        try {
+            api.submitCommandAsync(cmd).get();
+        } catch (Exception e) {
+        }
+        return txId;
     }
 
     public void updateCurrentPriceTo(int price, int symbolId, int quoteId) {

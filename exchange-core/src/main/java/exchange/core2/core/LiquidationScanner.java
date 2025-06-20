@@ -139,8 +139,8 @@ public final class LiquidationScanner {
         long profit = position.liquidateEstimateProfit(spec, priceRecord);
         // 当前持仓所需的初始保证金
         long initMargin = position.calculateRequiredMarginForFutures(spec);
-        // 账户总权益 = 初始保证金 + 未实现盈亏，表示账户的整体抗风险能力
-        long equity = initMargin + profit;
+        // 账户总权益 = 初始保证金 + 未实现盈亏 + 补充保证金
+        long equity = initMargin + profit + position.extraMargin;
         // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
         long maintenanceMargin = position.calculateMaintenanceMargin(spec);
         // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
@@ -197,7 +197,7 @@ public final class LiquidationScanner {
     }
 
     private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, FundEventsHelper eventsHelper, long equity, long warningThreshold) {
-        FundEvent event = eventsHelper.sendMarginAdjustmentEvent(position);
+        FundEvent event = eventsHelper.sendMarginAlertEvent(position);
         api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
         log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
     }

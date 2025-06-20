@@ -70,7 +70,7 @@ public final class ITMultiOperation {
                 2);
     }
 
-//    @Test
+    @Test
     @Timeout(60)
     public void shouldPerformSharded() {
         ThroughputTestsModule.throughputTestImpl(

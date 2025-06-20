@@ -97,7 +97,8 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                             pos.pendingSellAvgPrice,
                             pos.pendingBuyAvgPrice,
                             pos.getLeverage(),
-                            pos.marginMode)));
+                            pos.marginMode,
+                            pos.extraMargin)));
 
             return Optional.of(SingleUserReportResult.createFromRiskEngineFound(
                     uid,

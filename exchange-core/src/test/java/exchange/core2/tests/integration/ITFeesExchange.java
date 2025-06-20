@@ -15,6 +15,7 @@
  */
 package exchange.core2.tests.integration;
 
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiCancelOrder;
@@ -65,7 +66,7 @@ public abstract class ITFeesExchange {
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             // submit BID order for 1000 lots - should be rejected because of the fee
-            final ApiPlaceOrder order203 = ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(11_400).reservePrice(11_400).size(30).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).build();
+            final ApiPlaceOrder order203 = ApiPlaceOrder.builder().uid(UID_2).orderId(203).price(11_400).reservePrice(11_400).size(30).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build();
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
             // add fee-1 - NSF
@@ -98,7 +99,7 @@ public abstract class ITFeesExchange {
             container.addMoneyToUser(UID_2, CURRENECY_XBT, btcAmount);
 
             // can place ASK order, no extra is fee required for lock hold
-            final ApiPlaceOrder order204 = ApiPlaceOrder.builder().uid(UID_2).orderId(204).price(11_400).reservePrice(11_400).size(100).action(OrderAction.ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).build();
+            final ApiPlaceOrder order204 = ApiPlaceOrder.builder().uid(UID_2).orderId(204).price(11_400).reservePrice(11_400).size(100).action(OrderAction.ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build();
             container.submitCommandSync(order204, CommandResultCode.SUCCESS);
 
             // cancel ask
@@ -141,6 +142,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -172,6 +174,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -221,6 +224,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -252,6 +256,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -302,6 +307,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -332,6 +338,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -381,6 +388,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -411,6 +419,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -459,6 +468,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -489,6 +499,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -537,6 +548,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -567,6 +579,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(FOK_BUDGET)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -615,6 +628,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
@@ -645,6 +659,7 @@ public abstract class ITFeesExchange {
                     .action(OrderAction.BID)
                     .orderType(FOK_BUDGET)
                     .symbol(SYMBOL_EXCHANGE_FEE)
+                    .marginMode(MarginMode.ISOLATED)
                     .build();
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));

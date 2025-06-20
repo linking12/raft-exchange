@@ -31,6 +31,7 @@ public interface IFundEventsHandler {
         public final long tradePrice; // 本次成交价格（开仓或平仓价）
         public final long fee; // 手续费
         public final long pnl; // 本次事件的盈亏金额
+        public final long extra; // 补充保证金
     }
 
 }

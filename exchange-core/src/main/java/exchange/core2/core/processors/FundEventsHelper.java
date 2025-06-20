@@ -50,42 +50,39 @@ public class FundEventsHelper {
      * ***********现货************
      */
     // 存款
-    public FundEvent sendDepositEvent(OrderCommand cmd, int currency, long free) {
-        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.DEPOSIT, currency, free, 0);
+    public FundEvent sendDepositEvent(OrderCommand cmd, int currency, long free, long locked) {
+        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.DEPOSIT, currency, free, locked);
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 提现
-    public FundEvent sendWithdrawEvent(OrderCommand cmd, int currency, long free) {
-        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.WITHDRAW, currency, free, 0);
+    public FundEvent sendWithdrawEvent(OrderCommand cmd, int currency, long free, long locked) {
+        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.WITHDRAW, currency, free, locked);
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 冻结
-    public FundEvent sendLockEvent(OrderCommand cmd, int currency, long free, long locked) {
+    public FundEvent sendLockEvent(OrderCommand cmd, int symbol, int currency, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.LOCKED, currency, free, locked);
+        event.symbol = symbol;
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 解冻
-    public FundEvent sendUnLockEvent(OrderCommand cmd, int currency, long free) {
-        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.UNLOCKED, currency, free, 0);
+    public FundEvent sendUnLockEvent(OrderCommand cmd, int symbol, int currency, long free, long locked) {
+        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.UNLOCKED, currency, free, locked);
+        event.symbol = symbol;
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 转移
-    public FundEvent sendTransferEvent(OrderCommand cmd, long orderId, long uid, int currency, long free) {
-        FundEvent event = newFundEvent();
-        event.eventType = FundEventType.TRANSFER;
-        event.orderId = orderId;
-        event.uid = uid;
-        event.currency = currency;
-        event.free = free;
-        event.locked = 0;
+    public FundEvent sendTransferEvent(OrderCommand cmd, long orderId, long uid, int symbol, int currency, long free, long locked) {
+        FundEvent event = buildSpotEvent(orderId, uid, FundEventType.TRANSFER, currency, free, locked);
+        event.symbol = symbol;
         addFundEvent(cmd, orderId, event);
         return event;
     }
@@ -131,7 +128,7 @@ public class FundEventsHelper {
     }
 
     // 通知调整保证金
-    public FundEvent sendMarginAdjustmentEvent(SymbolPositionRecord position) {
+    public FundEvent sendMarginAlertEvent(SymbolPositionRecord position) {
         FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, 0, 0);
         event.positionChanged = 0; // 无清算
         event.openPriceSum = position.openPriceSum;
@@ -151,6 +148,27 @@ public class FundEventsHelper {
         event.tradePrice = markPrice; // 清算价格
         event.fee = 0; // 无交易费用
         event.pnl = 0; // 无盈亏变动
+        return event;
+    }
+
+    public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, int currency, long amount, long free, long locked) {
+        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.MARGIN_ADJUST, currency, free, locked);
+        event.extra = amount;
+        addFundEvent(cmd, cmd.orderId, event);
+        return event;
+    }
+
+    public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_ADJUST, position, free, locked);
+        event.extra = position.extraMargin;
+        addFundEvent(cmd, cmd.orderId, event);
+        return event;
+    }
+
+    public FundEvent sendMarginRefundEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_REFUND, position, free, locked);
+        event.extra = position.extraMargin;
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
