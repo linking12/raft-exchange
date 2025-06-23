@@ -855,6 +855,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return locked;
     }
 
+    /**
+     * 永续合约计算fundFee
+     * 多头给空头或者空头给多头
+     */
     private void settleFundingFees(OrderCommand cmd, long markPrice) {
         final int symbol = cmd.symbol;
         FastList<SymbolPositionRecord> longPositions = FastList.newList();
