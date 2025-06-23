@@ -180,12 +180,12 @@ public class FundEventsHelper {
     }
 
     // 生成盈亏结算事件 (PNL_SETTLEMENT)。
-    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPnl) {
+    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPrice, long settledPnl) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
         event.positionChanged = 0;
         event.openPriceSum = position.openPriceSum;
         event.openVolume = position.openVolume;
-        event.tradePrice = 0;
+        event.tradePrice = settledPrice; // 结算价格
         event.fee = 0;
         event.pnl = settledPnl; // 结算盈亏
         addFundEvent(cmd, cmd.orderId, event);

@@ -130,6 +130,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
         } else if (cmd instanceof ApiSettleFundingFees) {
             ringBuffer.publishEvent(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
+        } else if (cmd instanceof ApiSettlePNL) {
+            ringBuffer.publishEvent(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             publishBinaryData((ApiBinaryDataCommand) cmd, seq -> {
             });
@@ -179,6 +181,8 @@ public final class ExchangeApi {
             return submitCommandAsync(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
         } else if (cmd instanceof ApiSettleFundingFees) {
             return submitCommandAsync(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
+        } else if (cmd instanceof ApiSettlePNL) {
+            return submitCommandAsync(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiPersistState) {
@@ -224,6 +228,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
         } else if (cmd instanceof ApiSettleFundingFees) {
             return submitCommandAsyncFullResponse(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
+        } else if (cmd instanceof ApiSettlePNL) {
+            return submitCommandAsyncFullResponse(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL) cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataCommandAsync(((ApiBinaryDataCommand) cmd).data);
         } else if (cmd instanceof ApiReset) {
@@ -235,10 +241,6 @@ public final class ExchangeApi {
         } else {
             throw new IllegalArgumentException("Unsupported command type: " + cmd.getClass().getSimpleName());
         }
-    }
-
-    public void submitSystemSettlePNL() {
-        ringBuffer.publishEvent(SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR, ApiSystemSettlePNLCommand.INSTANCE);
     }
 
     public void submitCommandsSync(List<? extends ApiCommand> cmd) {
@@ -604,8 +606,18 @@ public final class ExchangeApi {
         cmd.command = OrderCommandType.SETTLE_FUNDINGFEES;
         cmd.timestamp = api.timestamp;
         cmd.orderId = api.transactionId;
+        cmd.symbol = api.symbol;
         cmd.price = api.fundingRate;
         cmd.size = api.rateScaleK;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiSettlePNL> SETTLE_PNL_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.SETTLE_PNL;
+        cmd.timestamp = api.timestamp;
+        cmd.orderId = api.transactionId;
+        cmd.symbol = api.symbol;
+        cmd.price = api.settlePrice;
         cmd.resultCode = CommandResultCode.NEW;
     };
 
@@ -694,13 +706,6 @@ public final class ExchangeApi {
         cmd.command = OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY;
         cmd.timestamp = api.timestamp;
         cmd.takerFundEvents = api.fundEvent;
-        cmd.resultCode = CommandResultCode.NEW;
-    };
-
-    private static final EventTranslatorOneArg<OrderCommand, ApiSystemSettlePNLCommand> SYSTEM_SETTLE_PNL_ORDER_EVENT_TRANSLATOR = (cmd, seq, api) -> {
-        cmd.command = OrderCommandType.SYSTEM_SETTLE_PNL;
-        cmd.timestamp = api.timestamp;
-        cmd.orderId = -1;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

@@ -39,9 +39,9 @@ public enum OrderCommandType {
     LEVERAGE_ADJUSTMENT((byte) 21, true),
     MARGIN_ADJUSTMENT((byte) 22, true),
     SETTLE_FUNDINGFEES((byte) 23, true),
+    SETTLE_PNL((byte) 24, true),
 
     SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
-    SYSTEM_SETTLE_PNL((byte) 32, true),
 
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
