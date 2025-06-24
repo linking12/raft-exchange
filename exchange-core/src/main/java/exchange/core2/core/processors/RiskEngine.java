@@ -904,6 +904,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         maxShortPos.profit += remaining;
         eventsHelper.sendFundingFeeEvent(cmd, maxShortPos, remaining);
     }
+
     /**
      * 实现合约交割
      * 将未实现盈亏转为已实现盈亏并更新账户余额。
