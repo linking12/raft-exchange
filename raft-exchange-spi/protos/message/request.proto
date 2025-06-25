@@ -100,6 +100,12 @@ message ApiAdjustMargin {
   MarginMode marginMode = 6;
 }
 
+message ApiAdjustPrice {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 markPrice = 3;
+}
+
 message ApiSettleFundingFees {
   int64 transactionId = 1;
   int32 symbol = 2;
@@ -130,8 +136,9 @@ message ApiCommand {
     ApiResumeUser resume_user = 13;
     ApiAdjustLeverage adjust_leverage = 14;
     ApiAdjustMargin adjust_margin = 15;
-    ApiSettleFundingFees settle_funding_fees = 16;
-    ApiSettlePNL settle_pnl = 17;
+    ApiAdjustPrice adjust_price = 16;
+    ApiSettleFundingFees settle_funding_fees = 17;
+    ApiSettlePNL settle_pnl = 18;
   }
 }
 

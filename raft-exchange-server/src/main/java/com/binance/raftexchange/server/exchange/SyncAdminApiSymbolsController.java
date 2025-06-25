@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.exchange;
 
+import com.binance.raftexchange.stubs.request.ApiAdjustPrice;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.ApiSettlePNL;
@@ -34,6 +35,16 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         LOG.debug("batchAddSymbolsCommand applied, msg: {}", batchAddSymbolsCommand);
 
         return callExchange(batchAddSymbolsCommand);
+    }
+
+    public static CompletableFuture<byte[]> adjustPrice(ApiCommand apiCommand) {
+        ApiAdjustPrice grpcAdjustPrice = apiCommand.getAdjustPrice();
+        exchange.core2.core.common.api.ApiAdjustPrice apiAdjustPrice = exchange.core2.core.common.api.ApiAdjustPrice.builder()
+            .transactionId(grpcAdjustPrice.getTransactionId()).symbol(grpcAdjustPrice.getSymbol())
+            .markPrice(grpcAdjustPrice.getMarkPrice()).build();
+        apiAdjustPrice.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustPrice);
+        return callExchange(apiAdjustPrice);
     }
 
     public static CompletableFuture<byte[]> settleFundingFees(ApiCommand apiCommand) {

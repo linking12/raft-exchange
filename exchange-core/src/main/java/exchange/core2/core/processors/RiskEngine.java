@@ -342,6 +342,20 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
+            case PRICE_ADJUSTMENT: {
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+                if (spec == null) {
+                    cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
+                    return false;
+                }
+                LastPriceCacheRecord priceRecord = lastPriceCache.getIfAbsentPut(cmd.symbol, LastPriceCacheRecord::new);
+                priceRecord.markPrice = cmd.price;
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
+            }
+
             case SUSPEND_USER:
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = userProfileService.suspendUserProfile(cmd.uid);
@@ -821,8 +835,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (marketData != null) {
                 record.askPrice = (marketData.askSize != 0) ? marketData.askPrices[0] : record.askPrice;
                 record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : record.bidPrice;
-                // 计算标记价格，简单取买卖价中值，提供平滑性（可扩展为更复杂算法）
-                record.markPrice = (record.askPrice != Long.MAX_VALUE && record.bidPrice != 0) ? (record.askPrice + record.bidPrice) >> 1 : record.markPrice;
             } else {
                 // 如果本次交易没有市场价信息，用第一笔交易价更新record
                 MatcherTradeEvent firstTrade = cmd.matcherEvent;
@@ -832,7 +844,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (firstTrade != null) {
                     record.askPrice = firstTrade.price;
                     record.bidPrice = firstTrade.price;
-                    record.markPrice = firstTrade.price;
                 }
             }
         }
