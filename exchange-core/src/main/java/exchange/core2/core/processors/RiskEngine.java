@@ -383,7 +383,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     cmd.resultCode = CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
                     return false;
                 }
-                settleFundingFees(cmd, priceRecord.markPrice);
+                settleFundingFees(cmd);
                 if (shardId == 0) {
                     cmd.resultCode = CommandResultCode.SUCCESS;
                 }
@@ -868,8 +868,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 永续合约计算fundFee
      * 多头给空头或者空头给多头
      */
-    private void settleFundingFees(OrderCommand cmd, long markPrice) {
+    private void settleFundingFees(OrderCommand cmd) {
         final int symbol = cmd.symbol;
+        final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
         FastList<SymbolPositionRecord> longPositions = FastList.newList();
         FastList<SymbolPositionRecord> shortPositions = FastList.newList();
         // 分类仓位
