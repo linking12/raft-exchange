@@ -316,7 +316,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         for (SymbolPositionRecord position : userProfile.positions) {
                             if (position.marginMode == MarginMode.CROSS && position.currency == cmd.symbol) {
                                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                                totalCrossProfit += position.estimateProfit(spec, lastPriceCache.get(position.symbol));
+                                totalCrossProfit += position.estimateProfit(lastPriceCache.get(position.symbol));
                             }
                         }
                         long lockedMargin = calculateLockedMargin(userProfile, cmd.symbol); // 检查冻结保证金
@@ -594,8 +594,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (!spec.isValidLeverage(cmd.leverage)) {
                 return CommandResultCode.RISK_INVALID_LEVERAGE;
             }
-            
-            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId); 
+            // 没有markPrice拒绝下单
+            LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
+            if (priceRecord == null || priceRecord.markPrice == 0) {
+                return CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
+            }
+
+            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId);
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage, cmd.marginMode);
@@ -648,7 +653,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
                     long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
-                    freeFuturesMargin += (position.estimateProfit(spec2, lastPriceCache.get(recSymbol)) - requiredMarginForFutures);
+                    freeFuturesMargin += (position.estimateProfit(lastPriceCache.get(recSymbol)) - requiredMarginForFutures);
                 }
             }
         }
@@ -738,7 +743,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                         final CoreSymbolSpecification spec,
                                         final SymbolPositionRecord position) {
 
-        final long newRequiredMarginForSymbol = position.calculateRequiredMarginForOrder(spec, cmd.action, cmd.size);
+        final long newRequiredMarginForSymbol = position.calculateRequiredMarginForOrder(spec, cmd.action, cmd.size, cmd.price);
         if (newRequiredMarginForSymbol == -1) {
             // always allow placing a new order if it would not increase exposure
             return true;
@@ -755,11 +760,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (positionRecord.currency == spec.quoteCurrency) {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
-                    freeMargin += positionRecord.estimateProfit(spec2, lastPriceCache.get(recSymbol));
+                    freeMargin += positionRecord.estimateProfit(lastPriceCache.get(recSymbol));
                     freeMargin -= positionRecord.calculateRequiredMarginForFutures(spec2);
                 }
             } else {
-                freeMargin += position.estimateProfit(spec, lastPriceCache.get(spec.symbolId));
+                freeMargin += position.estimateProfit(lastPriceCache.get(spec.symbolId));
             }
         }
 
@@ -979,7 +984,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // 开仓事件
                 if (sizeToOpen > 0) {
                     // 再开新方向仓位
-                    takerSpr.openPositionMargin(takerAction, sizeToOpen, ev.price);
+                    takerSpr.openPositionMargin(takerAction, sizeToOpen, ev.price, spec, lastPriceCache.get(spec.symbolId));
 
                     // 计算开仓手续费
                     final long fee = CoreArithmeticUtils.calculateTakerFee(sizeToOpen, ev.price, spec);
@@ -1037,7 +1042,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
 
             if (sizeToOpen > 0) {
-                makerSpr.openPositionMargin(takerAction.opposite(), sizeToOpen, ev.price);
+                makerSpr.openPositionMargin(takerAction.opposite(), sizeToOpen, ev.price, spec, lastPriceCache.get(spec.symbolId));
 
                 final long fee = CoreArithmeticUtils.calculateMakerFee(sizeToOpen, ev.price, spec);
                 long balance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
