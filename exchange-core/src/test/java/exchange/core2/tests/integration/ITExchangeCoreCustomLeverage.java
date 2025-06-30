@@ -24,7 +24,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10001)
-                    .type(SymbolType.FUTURES_CONTRACT)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
                     .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
@@ -207,7 +207,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10001)
-                    .type(SymbolType.FUTURES_CONTRACT)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
                     .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
@@ -271,7 +271,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10002)
-                    .type(SymbolType.FUTURES_CONTRACT)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
                     .marginBuy(1000).marginSell(1000)
                     .maxLeverage(20)
@@ -304,7 +304,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10003)
-                    .type(SymbolType.FUTURES_CONTRACT)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
                     .marginBuy(1000).marginSell(1000).maintenanceMargin(50)
                     .feeScaleK(1_000_000)
@@ -375,7 +375,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10001)
-                    .type(SymbolType.FUTURES_CONTRACT)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
                     .marginBuy(1000).marginSell(1000)
                     .feeScaleK(100)

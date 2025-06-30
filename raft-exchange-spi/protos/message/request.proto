@@ -100,6 +100,19 @@ message ApiAdjustMargin {
   MarginMode marginMode = 6;
 }
 
+message ApiSettleFundingFees {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 fundingRate = 3;
+  int64 rateScaleK = 4;
+}
+
+message ApiSettlePNL {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 settlePrice = 3;
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -117,6 +130,8 @@ message ApiCommand {
     ApiResumeUser resume_user = 13;
     ApiAdjustLeverage adjust_leverage = 14;
     ApiAdjustMargin adjust_margin = 15;
+    ApiSettleFundingFees settle_funding_fees = 16;
+    ApiSettlePNL settle_pnl = 17;
   }
 }
 

@@ -1,5 +1,8 @@
 package com.binance.raftexchange.server.exchange;
 
+import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
+import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
@@ -31,5 +34,25 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         LOG.debug("batchAddSymbolsCommand applied, msg: {}", batchAddSymbolsCommand);
 
         return callExchange(batchAddSymbolsCommand);
+    }
+
+    public static CompletableFuture<byte[]> settleFundingFees(ApiCommand apiCommand) {
+        ApiSettleFundingFees grpcSettleFundingFees = apiCommand.getSettleFundingFees();
+        exchange.core2.core.common.api.ApiSettleFundingFees apiSettleFundingFees = exchange.core2.core.common.api.ApiSettleFundingFees.builder()
+            .transactionId(grpcSettleFundingFees.getTransactionId()).symbol(grpcSettleFundingFees.getSymbol())
+            .fundingRate(grpcSettleFundingFees.getFundingRate()).rateScaleK(grpcSettleFundingFees.getRateScaleK()).build();
+        apiSettleFundingFees.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("apiSettleFundingFees applied, msg: {}", apiSettleFundingFees);
+        return callExchange(apiSettleFundingFees);
+    }
+
+    public static CompletableFuture<byte[]> settlePNL(ApiCommand apiCommand) {
+        ApiSettlePNL grpcSettlePnl = apiCommand.getSettlePnl();
+        exchange.core2.core.common.api.ApiSettlePNL apiSettlePNL = exchange.core2.core.common.api.ApiSettlePNL.builder()
+            .transactionId(grpcSettlePnl.getTransactionId()).symbol(grpcSettlePnl.getSymbol())
+            .settlePrice(grpcSettlePnl.getSettlePrice()).build();
+        apiSettlePNL.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("apiSettlePNL applied, msg: {}", apiSettlePNL);
+        return callExchange(apiSettlePNL);
     }
 }

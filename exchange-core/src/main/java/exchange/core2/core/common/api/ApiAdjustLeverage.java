@@ -7,7 +7,7 @@ import lombok.EqualsAndHashCode;
 @Builder
 @EqualsAndHashCode(callSuper = false)
 @AllArgsConstructor
-public class ApiAdjustLeverage extends ApiCommand {
+public final class ApiAdjustLeverage extends ApiCommand {
 
     public final long uid;
     public final int symbol;

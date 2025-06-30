@@ -20,6 +20,8 @@ import java.util.Objects;
 import java.util.Optional;
 
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.PositionDirection;
+import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
@@ -356,7 +358,35 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     cmd.resultCode = adjustLeverage(cmd);
                 }
                 return false;
-
+            case SETTLE_FUNDINGFEES: {
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+                if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT_PERPETUAL) {
+                    cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
+                    return false;
+                }
+                LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
+                if (priceRecord == null) {
+                    cmd.resultCode = CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
+                    return false;
+                }
+                settleFundingFees(cmd);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
+            }
+            case SETTLE_PNL: {
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+                if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT_DELIVERY) {
+                    cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
+                    return false;
+                }
+                settlePnl(cmd);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
+            }
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
                 binaryCommandsProcessor.acceptBinaryFrame(cmd); // ignore return result, because it should be set by MatchingEngineRouter
@@ -399,13 +429,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return true;
             }
             case SYSTEM_LIQUIDATION_NOTIFY: {
-                if (shardId == 0) {
-                    cmd.resultCode = CommandResultCode.SUCCESS;
-                }
-                return false;
-            }
-            case SYSTEM_SETTLE_PNL: {
-                settlePnl(cmd);
                 if (shardId == 0) {
                     cmd.resultCode = CommandResultCode.SUCCESS;
                 }
@@ -506,7 +529,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return CommandResultCode.SUCCESS;
     }
 
-
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
 
         final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
@@ -549,7 +571,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
             return placeExchangeOrder(cmd, userProfile, spec);
 
-        } else if (spec.type == SymbolType.FUTURES_CONTRACT) {
+        } else if (SymbolType.isFuturesContract(spec.type)) {
 
             if (!cfgMarginTradingEnabled) {
                 return CommandResultCode.RISK_MARGIN_TRADING_DISABLED;
@@ -832,34 +854,79 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     /**
-     * 周期性结算期货仓位的未实现盈亏。
+     * 永续合约计算fundFee
+     * 多头给空头或者空头给多头
+     */
+    private void settleFundingFees(OrderCommand cmd) {
+        final int symbol = cmd.symbol;
+        final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
+        FastList<SymbolPositionRecord> longPositions = FastList.newList();
+        FastList<SymbolPositionRecord> shortPositions = FastList.newList();
+        // 分类仓位
+        userProfileService.getUserProfiles().forEachValue(userProfile -> {
+            SymbolPositionRecord position = userProfile.positions.get(symbol);
+            if (position == null || position.direction == PositionDirection.EMPTY) {
+                return; // 跳过空仓位
+            }
+            if (position.direction == PositionDirection.LONG) {
+                longPositions.add(position);
+            } else {
+                shortPositions.add(position);
+            }
+        });
+        // 若任一侧为空，则不进行资金费处理
+        if (longPositions.isEmpty() || shortPositions.isEmpty()) {
+            return;
+        }
+        long totalFundingFee = 0;
+        // 多头：直接扣除资金费(费率*名义价值)
+        long unitFee = cmd.price / cmd.size * markPrice;
+        for (SymbolPositionRecord pos : longPositions) {
+            long fundingFee = unitFee * pos.openVolume;
+            totalFundingFee += fundingFee;
+            pos.profit -= fundingFee;
+            eventsHelper.sendFundingFeeEvent(cmd, pos, -fundingFee);
+        }
+        // 空头：按比例获得资金费
+        long settledFundingFee = 0;
+        long totalVolumeShort = shortPositions.sumOfLong(s -> s.openVolume);
+        SymbolPositionRecord maxShortPos = shortPositions.maxBy(s -> s.openVolume);
+        long unitReward = totalFundingFee / totalVolumeShort;
+        for (SymbolPositionRecord pos : shortPositions) {
+            if (pos == maxShortPos)
+                continue;
+            long reward = unitReward * pos.openVolume;
+            settledFundingFee += reward;
+            pos.profit += reward;
+            eventsHelper.sendFundingFeeEvent(cmd, pos, reward);
+        }
+        // 最后给最大空头分发
+        long remaining = totalFundingFee - settledFundingFee;
+        maxShortPos.profit += remaining;
+        eventsHelper.sendFundingFeeEvent(cmd, maxShortPos, remaining);
+    }
+
+    /**
+     * 实现合约交割
      * 将未实现盈亏转为已实现盈亏并更新账户余额。
      */
     private void settlePnl(OrderCommand cmd) {
-        userProfileService.getUserProfiles().asUnmodifiable().forEachValue(userProfile -> {
-            // 遍历每个用户的所有持仓
-            userProfile.positions.asUnmodifiable().forEach(position -> {
-                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                if (spec.type != SymbolType.FUTURES_CONTRACT) {
-                    return;
-                }
-                LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                if (priceRecord == null) {
-                    log.warn("No price record for symbol={}", position.symbol);
-                    return;
-                }
-                long unrealizedPnl = position.liquidateEstimateProfit(spec, priceRecord);
-                if (unrealizedPnl != 0) {
-                    // 相当于按现价帮用户平仓，再重新开仓相同的仓位
-                    long balance = userProfile.accounts.addToValue(spec.quoteCurrency, unrealizedPnl);
-                    position.profit += unrealizedPnl;
-                    // 重新设置开仓成本为 markPrice（变相“重开仓”）
-                    position.openPriceSum = position.openVolume * priceRecord.markPrice; // 重置
-                    long locked = position.calculateRequiredMarginForFutures(spec);
-                    long free = balance - locked;
-                    eventsHelper.sendPnlSettlementEvent(cmd, position, free, locked, unrealizedPnl);
-                }
-            });
+        final int symbol = cmd.symbol;
+        userProfileService.getUserProfiles().forEachValue(userProfile -> {
+            SymbolPositionRecord position = userProfile.positions.get(symbol);
+            if (position == null || position.direction == PositionDirection.EMPTY) {
+                return; // 跳过空仓位
+            }
+            // 1.关闭仓位
+            OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+            position.closeCurrentPositionFutures(action, position.openVolume, cmd.price);
+            // 2.清算盈亏到账户余额
+            refundExtraMargin(cmd, userProfile.uid, position, userProfile);
+            removePositionRecord(position, userProfile);
+            // 3.发送结算事件
+            long balance = userProfile.accounts.get(position.currency);
+            long locked = calculateLockedMargin(userProfile, position.currency);
+            eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked, cmd.price, position.profit);
         });
     }
 

@@ -16,12 +16,16 @@
 package exchange.core2.core.common;
 
 
-import lombok.*;
+import java.util.Objects;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.ToString;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-
-import java.util.Objects;
 
 @Builder
 @AllArgsConstructor

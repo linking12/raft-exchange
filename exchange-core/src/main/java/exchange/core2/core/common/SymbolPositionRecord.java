@@ -39,8 +39,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     // open positions state (for margin trades only)
     public PositionDirection direction = PositionDirection.EMPTY;
     public long openVolume = 0;
-    public long openPriceSum = 0; //
-    public long profit = 0;
+    public long openPriceSum = 0; //持仓成本
+    public long profit = 0; //已实现盈亏
 
     // pending orders total size
     // increment before sending order to matching engine

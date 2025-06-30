@@ -356,7 +356,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         switch (allowedSymbolTypes) {
             case FUTURES_CONTRACT:
-                symbolTypeSupplier = () -> SymbolType.FUTURES_CONTRACT;
+                symbolTypeSupplier = () -> SymbolType.FUTURES_CONTRACT_PERPETUAL;
                 break;
 
             case CURRENCY_EXCHANGE_PAIR:
@@ -365,7 +365,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
             case BOTH:
             default:
-                symbolTypeSupplier = () -> random.nextBoolean() ? SymbolType.FUTURES_CONTRACT : SymbolType.CURRENCY_EXCHANGE_PAIR;
+                symbolTypeSupplier = () -> random.nextBoolean() ? SymbolType.FUTURES_CONTRACT_PERPETUAL : SymbolType.CURRENCY_EXCHANGE_PAIR;
                 break;
         }
 

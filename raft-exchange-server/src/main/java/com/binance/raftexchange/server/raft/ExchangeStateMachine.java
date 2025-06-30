@@ -100,6 +100,12 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 case ADJUST_MARGIN:
                     result = SyncAdminApiAccountsController.adjustMargin(apiCommand);
                     break;
+                case SETTLE_FUNDING_FEES:
+                    result = SyncAdminApiSymbolsController.settleFundingFees(apiCommand);
+                    break;
+                case SETTLE_PNL:
+                    result = SyncAdminApiSymbolsController.settlePNL(apiCommand);
+                    break;
                 case NOP:
                     LOG.info("NOP Command received, no action taken.");
                     result = SyncNoOpApiController.handleNoOp();

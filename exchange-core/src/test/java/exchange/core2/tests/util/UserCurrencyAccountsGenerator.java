@@ -81,7 +81,7 @@ public final class UserCurrencyAccountsGenerator {
         int c = 0;
         do {
             BitSet accounts = users2currencies.get(uid);
-            if (accounts.get(spec.quoteCurrency) && (spec.type == SymbolType.FUTURES_CONTRACT || accounts.get(spec.baseCurrency))) {
+            if (accounts.get(spec.quoteCurrency) && (SymbolType.isFuturesContract(spec.type) || accounts.get(spec.baseCurrency))) {
                 uids.add(uid);
             }
             if (++uid == users2currencies.size()) {

@@ -1,6 +1,5 @@
 package exchange.core2.core.common.api;
 
-import exchange.core2.core.common.FundEvent;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.RequiredArgsConstructor;
@@ -8,13 +7,15 @@ import lombok.RequiredArgsConstructor;
 @Builder
 @EqualsAndHashCode(callSuper = false)
 @RequiredArgsConstructor
-public final class ApiSystemLiquidationNotify extends ApiCommand {
+public final class ApiSettlePNL extends ApiCommand {
 
-    public final FundEvent fundEvent;
+    public final long transactionId;
+    public final int symbol;
+    public final long settlePrice;
 
     @Override
     public String toString() {
-        return "[SYSTEM_LIQUIDATION_NOTIFY]";
+        return "[SETTLE_PNL s" + symbol + " id:" + transactionId + " price:" + settlePrice + "]";
     }
 
 }
