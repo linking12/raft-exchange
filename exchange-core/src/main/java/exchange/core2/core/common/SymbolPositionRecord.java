@@ -345,8 +345,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         if (openVolume > tradeSize) {
             // current position is bigger than trade size - just reduce position accordingly, don't fix profit
-            openVolume -= tradeSize;
             openInitMarginSum -= openInitMarginSum * tradeSize / openVolume; // 按比例释放
+            openVolume -= tradeSize;
             openPriceSum -= tradeSize * tradePrice;
             return 0;
         }
