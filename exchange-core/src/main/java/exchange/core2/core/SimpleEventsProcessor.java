@@ -26,7 +26,6 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.collections.api.list.MutableList;
 
 @RequiredArgsConstructor
 @Getter
@@ -102,10 +101,9 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             return;
         }
         fundEvent.processed = true;
-        final IFundEventsHandler.FundsEvent evt =
-            new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency, fundEvent.free,
-                    fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged,
-                    fundEvent.openPriceSum, fundEvent.openVolume, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl, fundEvent.extra);
+        final IFundEventsHandler.FundsEvent evt = new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId, fundEvent.uid, fundEvent.currency,
+            fundEvent.free, fundEvent.locked, fundEvent.symbol, fundEvent.direction, fundEvent.position, fundEvent.positionChanged, fundEvent.openPriceSum,
+            fundEvent.openVolume, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl, fundEvent.extra);
         fundEventsHandler.fundsEvent(evt);
     }
 
@@ -168,37 +166,29 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
         switch (cmd.command) {
             case PLACE_ORDER:
-                sendApiCommandResult(
-                    new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie, cmd.leverage, cmd.marginMode, cmd.reserveBidPrice),
-                    cmd.resultCode, cmd.timestamp, seq);
+                sendApiCommandResult(new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie,
+                    cmd.leverage, cmd.marginMode, cmd.reserveBidPrice), cmd.resultCode, cmd.timestamp, seq);
                 break;
-
             case MOVE_ORDER:
                 sendApiCommandResult(new ApiMoveOrder(cmd.orderId, cmd.price, cmd.uid, cmd.symbol), cmd.resultCode, cmd.timestamp, seq);
                 break;
-
             case CANCEL_ORDER:
                 sendApiCommandResult(new ApiCancelOrder(cmd.orderId, cmd.uid, cmd.symbol), cmd.resultCode, cmd.timestamp, seq);
                 break;
-
             case REDUCE_ORDER:
                 sendApiCommandResult(new ApiReduceOrder(cmd.orderId, cmd.uid, cmd.symbol, cmd.size), cmd.resultCode, cmd.timestamp, seq);
                 break;
-
             case ADD_USER:
                 sendApiCommandResult(new ApiAddUser(cmd.uid), cmd.resultCode, cmd.timestamp, seq);
                 break;
-
             case BALANCE_ADJUSTMENT:
                 sendApiCommandResult(new ApiAdjustUserBalance(cmd.uid, cmd.symbol, cmd.price, cmd.orderId), cmd.resultCode, cmd.timestamp, seq);
                 break;
-
             case BINARY_DATA_COMMAND:
                 if (cmd.resultCode != CommandResultCode.ACCEPTED) {
                     sendApiCommandResult(new ApiBinaryDataCommand(cmd.userCookie, null), cmd.resultCode, cmd.timestamp, seq);
                 }
                 break;
-
             case ORDER_BOOK_REQUEST:
                 sendApiCommandResult(new ApiOrderBookRequest(cmd.symbol, (int)cmd.size), cmd.resultCode, cmd.timestamp, seq);
                 break;
