@@ -517,17 +517,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.INVALID_SYMBOL;
         }
 
-        // 检查用户杠杆是否超过symbol的杠杆限制
-        if (!spec.isValidLeverage(cmd.leverage)) {
-            return CommandResultCode.RISK_INVALID_LEVERAGE;
-        }
-
         SymbolPositionRecord position = userProfile.positions.get(spec.symbolId);
         // 没有仓位不修改
         if (position == null) {
             return CommandResultCode.SUCCESS;
         }
-        // 有持仓，检查保证金变化是否在可承受范围内
+        // 检查用户杠杆是否超过限制
+        LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
+        if (!spec.isValidLeverage(position.openVolume * priceRecord.markPrice, cmd.leverage)) {
+            return CommandResultCode.RISK_INVALID_LEVERAGE;
+        }
+        // 检查保证金变化是否在可承受范围内
         long oldRequired = position.calculateRequiredMarginForFutures(spec);
         long newRequired = position.calculateRequiredMarginForFutures(spec, cmd.leverage);
         if (newRequired > oldRequired) {
@@ -590,10 +590,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (!cfgMarginTradingEnabled) {
                 return CommandResultCode.RISK_MARGIN_TRADING_DISABLED;
             }
-            // 检查用户杠杆是否超过symbol的杠杆限制
-            if (!spec.isValidLeverage(cmd.leverage)) {
-                return CommandResultCode.RISK_INVALID_LEVERAGE;
-            }
             // 没有markPrice拒绝下单
             LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
             if (priceRecord == null || priceRecord.markPrice == 0) {
@@ -610,7 +606,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (position.marginMode != cmd.marginMode) {
                 return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
             }
-
+            // 检查用户杠杆是否超过symbol的杠杆限制
+            long notional = (position.openVolume + cmd.size) * priceRecord.markPrice;
+            if (!spec.isValidLeverage(notional, cmd.leverage)) {
+                return CommandResultCode.RISK_INVALID_LEVERAGE;
+            }
             if (!position.isSameLeverage(cmd.leverage)) {
                 return CommandResultCode.RISK_LEVERAGE_MISMATCH;
             }

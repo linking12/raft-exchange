@@ -173,10 +173,11 @@ message CoreSymbolSpecification {
   int64 taker_fee = 7;
   int64 maker_fee = 8;
   int64 fee_scale_k = 9;
-  int64 margin_buy = 10;
-  int64 margin_sell = 11;
-  int64 maintenance_margin = 12;
-  int32 max_leverage = 13;
+  int64 init_margin = 10;
+  int64 init_margin_scale_k = 11;
+  map<int64, int64> maintenance_margin = 12;
+  int64 maintenance_margin_scale_k = 13;
+  map<int64, int64> max_leverage = 14;
 }
 
 message BinaryDataCommand {

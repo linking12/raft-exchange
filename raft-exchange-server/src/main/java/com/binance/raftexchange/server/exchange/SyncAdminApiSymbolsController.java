@@ -7,9 +7,11 @@ import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -26,8 +28,9 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
                 .symbolId(grpcSymbol.getSymbolId()).type(SymbolType.of(grpcSymbol.getType().getNumber())).baseCurrency(grpcSymbol.getBaseCurrency())
                 .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK()).quoteScaleK(grpcSymbol.getQuoteScaleK())
                 .takerFee(grpcSymbol.getTakerFee()).makerFee(grpcSymbol.getMakerFee()).feeScaleK(grpcSymbol.getFeeScaleK())
-                .marginBuy(grpcSymbol.getMarginBuy()).marginSell(grpcSymbol.getMarginSell()).maintenanceMargin(grpcSymbol.getMaintenanceMargin())
-                .maxLeverage(grpcSymbol.getMaxLeverage()).build();
+                .initMargin(grpcSymbol.getInitMargin()).initMarginScaleK(grpcSymbol.getInitMarginScaleK())
+                .maintenanceMargin(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaintenanceMarginMap())).maintenanceMarginScaleK(grpcSymbol.getMaintenanceMarginScaleK())
+                .maxLeverage(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaxLeverageMap())).build();
             coreSymbols.add(coreSymbol);
         }
         exchange.core2.core.common.api.binary.BatchAddSymbolsCommand batchAddSymbolsCommand =
