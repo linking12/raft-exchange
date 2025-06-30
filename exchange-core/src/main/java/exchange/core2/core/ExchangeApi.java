@@ -128,8 +128,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             ringBuffer.publishEvent(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
-        } else if (cmd instanceof ApiAdjustPrice) {
-            ringBuffer.publishEvent(ADJUST_PRICE_TRANSLATOR, (ApiAdjustPrice) cmd);
+        } else if (cmd instanceof ApiAdjustMarkPrice) {
+            ringBuffer.publishEvent(ADJUST_PRICE_TRANSLATOR, (ApiAdjustMarkPrice) cmd);
         } else if (cmd instanceof ApiSettleFundingFees) {
             ringBuffer.publishEvent(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
         } else if (cmd instanceof ApiSettlePNL) {
@@ -181,8 +181,8 @@ public final class ExchangeApi {
             return submitCommandAsync(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsync(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
-        } else if (cmd instanceof ApiAdjustPrice) {
-            return submitCommandAsync(ADJUST_PRICE_TRANSLATOR, (ApiAdjustPrice) cmd);
+        } else if (cmd instanceof ApiAdjustMarkPrice) {
+            return submitCommandAsync(ADJUST_PRICE_TRANSLATOR, (ApiAdjustMarkPrice) cmd);
         } else if (cmd instanceof ApiSettleFundingFees) {
             return submitCommandAsync(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
         } else if (cmd instanceof ApiSettlePNL) {
@@ -230,8 +230,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage) cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsyncFullResponse(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin) cmd);
-        } else if (cmd instanceof ApiAdjustPrice) {
-            return submitCommandAsyncFullResponse(ADJUST_PRICE_TRANSLATOR, (ApiAdjustPrice) cmd);
+        } else if (cmd instanceof ApiAdjustMarkPrice) {
+            return submitCommandAsyncFullResponse(ADJUST_PRICE_TRANSLATOR, (ApiAdjustMarkPrice) cmd);
         } else if (cmd instanceof ApiSettleFundingFees) {
             return submitCommandAsyncFullResponse(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees) cmd);
         } else if (cmd instanceof ApiSettlePNL) {
@@ -608,7 +608,7 @@ public final class ExchangeApi {
         cmd.resultCode = CommandResultCode.NEW;
     };
 
-    private static final EventTranslatorOneArg<OrderCommand, ApiAdjustPrice> ADJUST_PRICE_TRANSLATOR = (cmd, seq, api) -> {
+    private static final EventTranslatorOneArg<OrderCommand, ApiAdjustMarkPrice> ADJUST_PRICE_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.PRICE_ADJUSTMENT;
         cmd.timestamp = api.timestamp;
         cmd.orderId = api.transactionId;

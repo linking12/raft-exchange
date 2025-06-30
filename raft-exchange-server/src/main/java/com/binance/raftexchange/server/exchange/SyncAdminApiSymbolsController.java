@@ -7,6 +7,7 @@ import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import java.util.ArrayList;
@@ -42,12 +43,12 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
 
     public static CompletableFuture<byte[]> adjustPrice(ApiCommand apiCommand) {
         ApiAdjustPrice grpcAdjustPrice = apiCommand.getAdjustPrice();
-        exchange.core2.core.common.api.ApiAdjustPrice apiAdjustPrice = exchange.core2.core.common.api.ApiAdjustPrice.builder()
+        ApiAdjustMarkPrice apiAdjustMarkPrice = ApiAdjustMarkPrice.builder()
             .transactionId(grpcAdjustPrice.getTransactionId()).symbol(grpcAdjustPrice.getSymbol())
             .markPrice(grpcAdjustPrice.getMarkPrice()).build();
-        apiAdjustPrice.updateTimestamp(apiCommand.getTimestamp());
-        LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustPrice);
-        return callExchange(apiAdjustPrice);
+        apiAdjustMarkPrice.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustMarkPrice);
+        return callExchange(apiAdjustMarkPrice);
     }
 
     public static CompletableFuture<byte[]> settleFundingFees(ApiCommand apiCommand) {

@@ -7,7 +7,7 @@ import lombok.RequiredArgsConstructor;
 @Builder
 @EqualsAndHashCode(callSuper = false)
 @RequiredArgsConstructor
-public final class ApiAdjustPrice extends ApiCommand {
+public final class ApiAdjustMarkPrice extends ApiCommand {
 
     public final long transactionId;
     public final int symbol;
@@ -16,6 +16,6 @@ public final class ApiAdjustPrice extends ApiCommand {
     @Override
     public String toString() {
 
-        return "[ADJUST_PRICE s" + symbol + " id:" + transactionId + " price:" + markPrice + "]";
+        return "[ADJUST_MARKPRICE s" + symbol + " id:" + transactionId + " price:" + markPrice + "]";
     }
 }
