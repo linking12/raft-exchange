@@ -56,7 +56,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public final MutableSortedMap<Long, Long> maintenanceMargin;
     public final long maintenanceMarginScaleK;
     // <notional, maxLeverage>
-    public final MutableSortedMap<Long, Long> maxLeverage; // 最大杠杆倍数，默认0无限制
+    public final MutableSortedMap<Long, Long> maxLeverage;
 
     public CoreSymbolSpecification(BytesIn bytes) {
         this.symbolId = bytes.readInt();
