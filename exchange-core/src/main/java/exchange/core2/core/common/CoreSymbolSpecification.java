@@ -1,25 +1,22 @@
 /*
  * Copyright 2019 Maksim Zheravin
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 package exchange.core2.core.common;
 
-
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Objects;
+
+import org.eclipse.collections.api.map.sorted.MutableSortedMap;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -29,8 +26,6 @@ import lombok.ToString;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-import org.eclipse.collections.api.map.sorted.MutableSortedMap;
-import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 @Builder
 @AllArgsConstructor
@@ -44,10 +39,10 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public final SymbolType type;
 
     // currency pair specification
-    public final int baseCurrency;  // base currency
+    public final int baseCurrency; // base currency
     public final int quoteCurrency; // quote/counter currency (OR futures contract currency)
-    public final long baseScaleK;   // base currency amount multiplier (lot size in base currency units)
-    public final long quoteScaleK;  // quote currency amount multiplier (step size in quote currency units)
+    public final long baseScaleK; // base currency amount multiplier (lot size in base currency units)
+    public final long quoteScaleK; // quote currency amount multiplier (step size in quote currency units)
 
     // fees per lot in quote? currency units
     public final long takerFee; // TODO check invariant: taker fee is not less than maker fee
@@ -80,19 +75,19 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         this.maxLeverage = readTreeMapFromBytes(bytes);
     }
 
-/* NOT SUPPORTED YET:
-
-//    order book limits -- for FUTURES only
-//    public final long highLimit;
-//    public final long lowLimit;
-
-//    swaps -- not by
-//    public final long longSwap;
-//    public final long shortSwap;
-
-// activity (inactive, active, expired)
-
-  */
+    /* NOT SUPPORTED YET:
+    
+    //    order book limits -- for FUTURES only
+    //    public final long highLimit;
+    //    public final long lowLimit;
+    
+    //    swaps -- not by
+    //    public final long longSwap;
+    //    public final long shortSwap;
+    
+    // activity (inactive, active, expired)
+    
+      */
 
     public boolean isFixedFee() {
         return feeScaleK == 0;
@@ -127,6 +122,34 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         return marginValue / maintenanceMarginScaleK;
     }
 
+    private static Long floorValue(MutableSortedMap<Long, Long> map, long key) {
+        MutableSortedMap<Long, Long> headMap = map.headMap(key);
+        if (!headMap.isEmpty()) {
+            return map.get(headMap.lastKey());
+        } else {
+            return map.get(map.keySet().min());
+        }
+    }
+
+    private static MutableSortedMap<Long, Long> readTreeMapFromBytes(BytesIn bytes) {
+        MutableSortedMap<Long, Long> map = TreeSortedMap.newMap(Comparator.naturalOrder());
+        long size = bytes.readStopBit();
+        for (long i = 0; i < size; i++) {
+            long key = bytes.readLong();
+            long value = bytes.readLong();
+            map.put(key, value);
+        }
+        return map;
+    }
+
+    private static void writeTreeMapToBytes(MutableSortedMap<Long, Long> map, BytesOut bytes) {
+        bytes.writeStopBit(map.size());
+        map.forEachKeyValue((key, value) -> {
+            bytes.writeLong(key);
+            bytes.writeLong(value);
+        });
+    }
+
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeInt(symbolId);
@@ -145,85 +168,21 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
 
     @Override
     public int stateHash() {
-        return Objects.hash(
-                symbolId,
-                type.getCode(),
-                baseCurrency,
-                quoteCurrency,
-                baseScaleK,
-                quoteScaleK,
-                takerFee,
-                makerFee,
-                feeScaleK,
-                maintenanceMargin,
-                maintenanceMarginScaleK,
-                maxLeverage);
+        return Objects.hash(symbolId, type.getCode(), baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, maintenanceMargin,
+            maintenanceMarginScaleK, maxLeverage);
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        CoreSymbolSpecification that = (CoreSymbolSpecification) o;
-        return symbolId == that.symbolId &&
-                baseCurrency == that.baseCurrency &&
-                quoteCurrency == that.quoteCurrency &&
-                baseScaleK == that.baseScaleK &&
-                quoteScaleK == that.quoteScaleK &&
-                takerFee == that.takerFee &&
-                makerFee == that.makerFee &&
-                feeScaleK == that.feeScaleK &&
-                maintenanceMargin == that.maintenanceMargin &&
-                maintenanceMarginScaleK == that.maintenanceMarginScaleK &&
-                maxLeverage == that.maxLeverage &&
-                type == that.type;
-    }
-
-    public static MutableSortedMap<Long, Long> ofEntries(Long... kvPairs) {
-        if (kvPairs == null || kvPairs.length == 0) {
-            return TreeSortedMap.newMap(Comparator.naturalOrder());
-        }
-        if ((kvPairs.length & 1) != 0) {
-            throw new IllegalArgumentException("Key-value pairs must be in even number.");
-        }
-        Map<Long, Long> tmp = new HashMap<>(kvPairs.length / 2, 1.0f);
-        for (int i = 0; i < kvPairs.length; i += 2) {
-            Long key = kvPairs[i];
-            Long value = kvPairs[i + 1];
-            if (key == null || value == null) {
-                throw new NullPointerException("Key and value must not be null.");
-            }
-            tmp.put(key, value);
-        }
-        return TreeSortedMap.newMap(Comparator.naturalOrder(), tmp);
-    }
-
-    public Long floorValue(MutableSortedMap<Long, Long> map, long key) {
-        MutableSortedMap<Long, Long> headMap = map.headMap(key);
-        if (!headMap.isEmpty()) {
-            return map.get(headMap.lastKey());
-        } else {
-            return map.get(map.keySet().min());
-        }
-    }
-
-    public MutableSortedMap<Long, Long> readTreeMapFromBytes(BytesIn bytes) {
-        MutableSortedMap<Long, Long> map = TreeSortedMap.newMap(Comparator.naturalOrder());
-        long size = bytes.readStopBit();
-        for (long i = 0; i < size; i++) {
-            long key = bytes.readLong();
-            long value = bytes.readLong();
-            map.put(key, value);
-        }
-        return map;
-    }
-
-    public void writeTreeMapToBytes(MutableSortedMap<Long, Long> map, BytesOut bytes) {
-        bytes.writeStopBit(map.size());
-        map.forEachKeyValue((key, value) -> {
-            bytes.writeLong(key);
-            bytes.writeLong(value);
-        });
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
+        CoreSymbolSpecification that = (CoreSymbolSpecification)o;
+        return symbolId == that.symbolId && baseCurrency == that.baseCurrency && quoteCurrency == that.quoteCurrency && baseScaleK == that.baseScaleK
+            && quoteScaleK == that.quoteScaleK && takerFee == that.takerFee && makerFee == that.makerFee && feeScaleK == that.feeScaleK
+            && maintenanceMargin == that.maintenanceMargin && maintenanceMarginScaleK == that.maintenanceMarginScaleK && maxLeverage == that.maxLeverage
+            && type == that.type;
     }
 
 }
