@@ -91,8 +91,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.currency = bytes.readInt();
 
         this.direction = PositionDirection.of(bytes.readByte());
-        this.openInitMarginSum = bytes.readLong();
         this.openVolume = bytes.readLong();
+        this.openInitMarginSum = bytes.readLong();
         this.openPriceSum = bytes.readLong();
         this.profit = bytes.readLong();
 

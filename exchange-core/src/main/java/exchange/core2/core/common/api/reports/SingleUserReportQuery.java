@@ -90,6 +90,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                             pos.currency,
                             pos.direction,
                             pos.openVolume,
+                            pos.openInitMarginSum,
                             pos.openPriceSum,
                             pos.profit,
                             pos.pendingSellSize,

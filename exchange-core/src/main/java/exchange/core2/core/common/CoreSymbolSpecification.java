@@ -161,6 +161,8 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         bytes.writeLong(takerFee);
         bytes.writeLong(makerFee);
         bytes.writeLong(feeScaleK);
+        bytes.writeLong(initMargin);
+        bytes.writeLong(initMarginScaleK);
         writeTreeMapToBytes(maintenanceMargin, bytes);
         bytes.writeLong(maintenanceMarginScaleK);
         writeTreeMapToBytes(maxLeverage, bytes);

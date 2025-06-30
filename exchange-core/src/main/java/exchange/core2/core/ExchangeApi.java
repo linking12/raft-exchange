@@ -612,6 +612,7 @@ public final class ExchangeApi {
         cmd.command = OrderCommandType.PRICE_ADJUSTMENT;
         cmd.timestamp = api.timestamp;
         cmd.orderId = api.transactionId;
+        cmd.symbol = api.symbol;
         cmd.price = api.markPrice;
         cmd.resultCode = CommandResultCode.NEW;
     };
