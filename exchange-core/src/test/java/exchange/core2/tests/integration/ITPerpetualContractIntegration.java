@@ -10,6 +10,7 @@ import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,12 +88,14 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-                    .marginBuy(100)
-                    .marginSell(100)
+//                    .marginBuy(100)
+//                    .marginSell(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec0);
 
@@ -102,12 +105,14 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-                    .marginBuy(100)
-                    .marginSell(100)
+//                    .marginBuy(100)
+//                    .marginSell(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec1);
 
@@ -144,12 +149,14 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-                    .marginBuy(100)
-                    .marginSell(100)
+//                    .marginBuy(100)
+//                    .marginSell(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec0);
 
@@ -159,12 +166,14 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-                    .marginBuy(100)
-                    .marginSell(100)
+//                    .marginBuy(100)
+//                    .marginSell(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec1);
 
