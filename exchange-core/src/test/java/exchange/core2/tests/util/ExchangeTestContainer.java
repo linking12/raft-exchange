@@ -115,6 +115,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
     }
 
+    public void doDeposit(List<Long> userIds, Set<Integer> symbolIds, long depost) {
+        symbolIds.forEach(symbolId -> userIds.forEach(userId -> createUserWithMoney(userId, symbolId, depost)));
+    }
+
     @Data
     @Builder
     public static class TestDataFutures {
@@ -237,6 +241,68 @@ public final class ExchangeTestContainer implements AutoCloseable {
         CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
                 .symbolId(10002)
                 .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                .baseCurrency(CURRENECY_LTC)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(20)
+                .takerFee(30)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(50)
+                .maintenanceMargin(200)
+                .build();
+
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
+        api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
+        ret.add(futuresSymbol1);
+        ret.add(futuresSymbol2);
+        ret.add(futuresSymbol3);
+        return ret;
+    }
+
+    public List<CoreSymbolSpecification> initPerpetualSymbols() {
+        return this.initFutureSymbols();
+    }
+
+    public List<CoreSymbolSpecification> initDeliverySymbols() {
+        List<CoreSymbolSpecification> ret = new ArrayList<>();
+        // BTC_USDT
+        CoreSymbolSpecification futuresSymbol1 = CoreSymbolSpecification.builder()
+                .symbolId(10100)
+                .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
+                .baseCurrency(CURRENECY_XBT)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(10)
+                .takerFee(20)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(10)
+                .maintenanceMargin(50)
+                .build();
+        // ETH_USDT
+        CoreSymbolSpecification futuresSymbol2 = CoreSymbolSpecification.builder()
+                .symbolId(10101)
+                .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
+                .baseCurrency(CURRENECY_ETH)
+                .quoteCurrency(CURRENECY_USD)
+                .baseScaleK(1)
+                .quoteScaleK(1)
+                .makerFee(1)
+                .takerFee(2)
+                .feeScaleK(100)
+                .marginBuy(100)
+                .marginSell(100)
+                .maxLeverage(20)
+                .maintenanceMargin(100)
+                .build();
+        // LTC_USDT
+        CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
+                .symbolId(10102)
+                .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                 .baseCurrency(CURRENECY_LTC)
                 .quoteCurrency(CURRENECY_USD)
                 .baseScaleK(1)
