@@ -143,6 +143,10 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     }
 
     private static void writeTreeMapToBytes(MutableSortedMap<Long, Long> map, BytesOut bytes) {
+        if (map == null || map.isEmpty()) {
+            bytes.writeStopBit(0); // 写入大小为 0
+            return;
+        }
         bytes.writeStopBit(map.size());
         map.forEachKeyValue((key, value) -> {
             bytes.writeLong(key);
