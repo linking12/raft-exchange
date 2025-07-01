@@ -197,8 +197,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
-                .marginBuy(100)
-                .marginSell(100)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+//                .marginBuy(100)
+//                .marginSell(100)
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
@@ -349,10 +351,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
-                .marginBuy(100)
-                .marginSell(100)
-                .maxLeverage(10)
-                .maintenanceMargin(50)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 10L, 100000L, 5L))
+//                .marginBuy(100)
+//                .marginSell(100)
+//                .maxLeverage(10)
+//                .maintenanceMargin(50)
                 .build();
         // ETH_USDT
         CoreSymbolSpecification futuresSymbol2 = CoreSymbolSpecification.builder()
@@ -365,10 +369,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .makerFee(1)
                 .takerFee(2)
                 .feeScaleK(100)
-                .marginBuy(100)
-                .marginSell(100)
-                .maxLeverage(20)
-                .maintenanceMargin(100)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+//                .marginBuy(100)
+//                .marginSell(100)
+//                .maxLeverage(20)
+//                .maintenanceMargin(100)
                 .build();
         // LTC_USDT
         CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
@@ -380,10 +386,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .quoteScaleK(1)
                 .makerFee(20)
                 .takerFee(30)
-                .marginBuy(100)
-                .marginSell(100)
-                .maxLeverage(50)
-                .maintenanceMargin(200)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+//                .marginBuy(100)
+//                .marginSell(100)
+//                .maxLeverage(50)
+//                .maintenanceMargin(200)
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));
@@ -570,14 +578,16 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                 .baseCurrency(11)
                 .quoteCurrency(12)
-                .marginBuy(1000)
-                .marginSell(1000)
+//                .marginBuy(1000)
+//                .marginSell(1000)
                 .baseScaleK(1)
                 .quoteScaleK(1)
                 .feeScaleK(100)
                 .makerFee(1).takerFee(2)
-                .maxLeverage(50)
-                .maintenanceMargin(50)
+//                .maxLeverage(50)
+//                .maintenanceMargin(50)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
 
         addSymbol(spec);

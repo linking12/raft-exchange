@@ -18,6 +18,7 @@ package exchange.core2.tests.util;
 import com.google.common.collect.Sets;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import java.util.Set;
 
@@ -185,8 +186,10 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
             .quoteScaleK(1)
-            .marginBuy(2200)
-            .marginSell(3210)
+//            .marginBuy(2200)
+//            .marginSell(3210)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
             .takerFee(0)
             .makerFee(0)
             .build();
@@ -198,8 +201,10 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_JPY)
             .baseScaleK(1_000_00) // 1K USD "micro" lot
             .quoteScaleK(10) // 10 JPY step
-            .marginBuy(5_000) // effective leverage ~21
-            .marginSell(6_000) // effective leverage ~18
+//            .marginBuy(5_000) // effective leverage ~21
+//            .marginSell(6_000) // effective leverage ~18
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
             .takerFee(3)
             .makerFee(2)
             .build();
@@ -211,12 +216,14 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
             .quoteScaleK(1)
-            .marginBuy(100)
-            .marginSell(100)
+//            .marginBuy(100)
+//            .marginSell(100)
             .takerFee(2)
             .makerFee(1)
             .feeScaleK(100)
-            .maintenanceMargin(1000L)
+//            .maintenanceMargin(1000L)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
             .build();
 
     public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_ETH_USD = CoreSymbolSpecification.builder()
@@ -226,13 +233,15 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
             .quoteScaleK(1)
-            .marginBuy(200)
-            .marginSell(200)
+//            .marginBuy(200)
+//            .marginSell(200)
             .takerFee(3)
             .makerFee(2)
             .feeScaleK(100)
-            .maintenanceMargin(1000L)
-            .maxLeverage(50)
+//            .maintenanceMargin(1000L)
+//            .maxLeverage(50)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
             .build();
 
     public static final CoreSymbolSpecification SYMBOLSPEC_ETH_XBT = CoreSymbolSpecification.builder()

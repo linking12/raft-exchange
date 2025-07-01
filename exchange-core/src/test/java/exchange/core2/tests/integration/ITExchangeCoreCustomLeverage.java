@@ -8,6 +8,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.Test;
 
 import static exchange.core2.tests.util.TestConstants.*;
@@ -26,10 +27,12 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
+//                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
                     .makerFee(0).takerFee(0)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
 
             container.addSymbol(spec);
@@ -209,10 +212,12 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
+//                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
                     .makerFee(0).takerFee(0)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
 
             container.addSymbol(spec);
@@ -273,8 +278,10 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10002)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
-                    .maxLeverage(20)
+//                    .marginBuy(1000).marginSell(1000)
+//                    .maxLeverage(20)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .feeScaleK(1_000_000)
                     .build();
 
@@ -306,9 +313,11 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10003)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000).maintenanceMargin(50)
+//                    .marginBuy(1000).marginSell(1000).maintenanceMargin(50)
                     .feeScaleK(1_000_000)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 1000);
@@ -377,10 +386,12 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
+//                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(100)
                     .makerFee(1).takerFee(2)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
 
             container.addSymbol(spec);

@@ -12,6 +12,7 @@ import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -154,8 +155,10 @@ public class FutureCoreExample {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
-                .marginSell(100)
-                .marginBuy(100)
+//                .marginSell(100)
+//                .marginBuy(100)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
@@ -186,9 +189,11 @@ public class FutureCoreExample {
                 .quoteCurrency(quoteId)
                 .makerFee(0)
                 .takerFee(0)
-                .marginBuy(100L)
-                .marginSell(100L)
-                .maintenanceMargin(1000L) // 维持保证金
+//                .marginBuy(100L)
+//                .marginSell(100L)
+//                .maintenanceMargin(1000L) // 维持保证金
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
 
         future = api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
