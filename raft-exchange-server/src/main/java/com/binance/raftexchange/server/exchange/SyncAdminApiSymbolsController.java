@@ -30,7 +30,8 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
                 .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK()).quoteScaleK(grpcSymbol.getQuoteScaleK())
                 .takerFee(grpcSymbol.getTakerFee()).makerFee(grpcSymbol.getMakerFee()).feeScaleK(grpcSymbol.getFeeScaleK())
                 .initMargin(grpcSymbol.getInitMargin()).initMarginScaleK(grpcSymbol.getInitMarginScaleK())
-                .maintenanceMargin(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaintenanceMarginMap())).maintenanceMarginScaleK(grpcSymbol.getMaintenanceMarginScaleK())
+                .maintenanceMargin(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaintenanceMarginMap()))
+                .maintenanceMarginScaleK(grpcSymbol.getMaintenanceMarginScaleK())
                 .maxLeverage(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaxLeverageMap())).build();
             coreSymbols.add(coreSymbol);
         }
@@ -41,11 +42,10 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         return callExchange(batchAddSymbolsCommand);
     }
 
-    public static CompletableFuture<byte[]> adjustPrice(ApiCommand apiCommand) {
+    public static CompletableFuture<byte[]> adjustMarkPrice(ApiCommand apiCommand) {
         ApiAdjustPrice grpcAdjustPrice = apiCommand.getAdjustPrice();
-        ApiAdjustMarkPrice apiAdjustMarkPrice = ApiAdjustMarkPrice.builder()
-            .transactionId(grpcAdjustPrice.getTransactionId()).symbol(grpcAdjustPrice.getSymbol())
-            .markPrice(grpcAdjustPrice.getMarkPrice()).build();
+        ApiAdjustMarkPrice apiAdjustMarkPrice = ApiAdjustMarkPrice.builder().transactionId(grpcAdjustPrice.getTransactionId())
+            .symbol(grpcAdjustPrice.getSymbol()).markPrice(grpcAdjustPrice.getMarkPrice()).build();
         apiAdjustMarkPrice.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustMarkPrice);
         return callExchange(apiAdjustMarkPrice);
@@ -64,8 +64,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
     public static CompletableFuture<byte[]> settlePNL(ApiCommand apiCommand) {
         ApiSettlePNL grpcSettlePnl = apiCommand.getSettlePnl();
         exchange.core2.core.common.api.ApiSettlePNL apiSettlePNL = exchange.core2.core.common.api.ApiSettlePNL.builder()
-            .transactionId(grpcSettlePnl.getTransactionId()).symbol(grpcSettlePnl.getSymbol())
-            .settlePrice(grpcSettlePnl.getSettlePrice()).build();
+            .transactionId(grpcSettlePnl.getTransactionId()).symbol(grpcSettlePnl.getSymbol()).settlePrice(grpcSettlePnl.getSettlePrice()).build();
         apiSettlePNL.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("apiSettlePNL applied, msg: {}", apiSettlePNL);
         return callExchange(apiSettlePNL);

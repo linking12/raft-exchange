@@ -101,7 +101,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                     result = SyncAdminApiAccountsController.adjustMargin(apiCommand);
                     break;
                 case ADJUST_PRICE:
-                    result = SyncAdminApiSymbolsController.adjustPrice(apiCommand);
+                    result = SyncAdminApiSymbolsController.adjustMarkPrice(apiCommand);
                     break;
                 case SETTLE_FUNDING_FEES:
                     result = SyncAdminApiSymbolsController.settleFundingFees(apiCommand);
