@@ -15,6 +15,7 @@ package exchange.core2.core.common;
 import java.util.Comparator;
 import java.util.Objects;
 
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import org.eclipse.collections.api.map.sorted.MutableSortedMap;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
@@ -111,15 +112,29 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         return initMargin / initMarginScaleK;
     }
 
-    public long getMaintenanceMarginRate(long notional) {
-        if (maintenanceMarginScaleK == 0 || maintenanceMargin.isEmpty()) {
-            return 1;
+    /**
+     * 初始保证金 = 名义价值 × 初始保证金率 / 杠杆
+     */
+    public long calcInitMargin(long notional, long leverage) {
+        if (initMarginScaleK == 0 || initMargin == 0) {
+            return notional / leverage; // 默认按100%初始保证金率处理
+        }
+        //notional × initMargin / (initMarginScaleK × leverage)
+        return CoreArithmeticUtils.ceilDivide(notional * initMargin, initMarginScaleK * leverage);
+    }
+
+    /**
+     * 维持保证金 = 名义价值 × 维持保证金率
+     */
+    public long calcMaintenanceMargin(long notional) {
+        if (maintenanceMarginScaleK == 0 || maintenanceMargin == null || maintenanceMargin.isEmpty()) {
+            return notional;
         }
         Long marginValue = getFloorValueInSortedMap(maintenanceMargin, notional);
         if (marginValue == null) {
-            return 1;
+            return notional;
         }
-        return marginValue / maintenanceMarginScaleK;
+        return notional * marginValue / maintenanceMarginScaleK;
     }
 
     private static Long getFloorValueInSortedMap(MutableSortedMap<Long, Long> map, long key) {

@@ -209,7 +209,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
 
     /**
-     * 【强平风险评估用】只计算 当前持仓*标记价格*维持保证金率/杠杆，不看pending部分。
+     * 【强平风险评估用】只计算 当前持仓*标记价格*维持保证金率，不看pending部分。
      *
      * @param spec
      * @param priceRecord
@@ -220,8 +220,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             return 0;
         }
         long notional = openVolume * priceRecord.markPrice;
-        long maintenanceMarginRate = spec.getMaintenanceMarginRate(notional);
-        return CoreArithmeticUtils.ceilDivide(notional * maintenanceMarginRate, leverage);
+        return spec.calcMaintenanceMargin(notional);
     }
     
     /**
@@ -255,7 +254,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long pendingSell = pendingSellSize * pendingSellAvgPrice;
         // marginBuy or marginSell can be negative, but not both of them
         long pending = Math.max(pendingBuy, pendingSell);
-        long pendingMargin = CoreArithmeticUtils.ceilDivide(pending * spec.getInitMarginRate(), leverage);
+        long pendingMargin = spec.calcInitMargin(pending, leverage);
 
         // 计算未成单的潜在手续费
         final long feeBuy = CoreArithmeticUtils.calculateTakerFee(pendingBuySize, pendingBuyAvgPrice, spec);
@@ -279,7 +278,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long pendingBuy = pendingBuySize * pendingBuyAvgPrice;
         final long pendingSell = pendingSellSize * pendingSellAvgPrice;
         long pending = Math.max(pendingBuy, pendingSell);
-        long pendingMargin = CoreArithmeticUtils.ceilDivide(pending * spec.getInitMarginRate(), leverage);
+        long pendingMargin = spec.calcInitMargin(pending, leverage);
 
         long currentMargin = openInitMarginSum + pendingMargin;
 
@@ -288,7 +287,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         long newPendingBuy = pendingBuy + (action == OrderAction.BID ? extraNotional : 0);
         long newPendingSell = pendingSell + (action == OrderAction.ASK ? extraNotional : 0);
         long newPending = Math.max(newPendingBuy, newPendingSell);
-        long newPendingMargin = CoreArithmeticUtils.ceilDivide(newPending * spec.getInitMarginRate(), leverage);
+        long newPendingMargin = spec.calcInitMargin(newPending, leverage);
 
         long newMargin = openInitMarginSum + newPendingMargin;
 
@@ -338,7 +337,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     public void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice, CoreSymbolSpecification spec, LastPriceCacheRecord record) {
         openVolume += sizeToOpen;
-        openInitMarginSum += record.markPrice * sizeToOpen * spec.getInitMarginRate() / leverage;
+        openInitMarginSum += spec.calcInitMargin(record.markPrice * sizeToOpen, leverage);
         openPriceSum += tradePrice * sizeToOpen;
         direction = PositionDirection.of(action);
 
