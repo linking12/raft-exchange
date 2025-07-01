@@ -22,20 +22,18 @@ public final class ITExchangeCoreCustomLeverage {
     @Test
     public void testLeverageMismatch() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-//                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
                     .makerFee(0).takerFee(0)
-//                    .maxLeverage(50)
                     .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
-                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 20L))
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(10001, 10000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 50_000);
 
@@ -79,6 +77,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             long deposit = 1_200L;
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 10000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, deposit);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 12_000);
 
@@ -151,6 +150,7 @@ public final class ITExchangeCoreCustomLeverage {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
 
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 3500);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -221,6 +221,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -286,6 +287,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 100_000);
             ApiPlaceOrder badOrder = ApiPlaceOrder.builder()
                     .uid(UID_1)
@@ -320,6 +322,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 1000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100_000);
 
@@ -395,6 +398,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -439,6 +443,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testTwoLeverageOrders() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -502,6 +507,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testTwoLeverageOrders2() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -582,6 +588,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testTwoLeverageOrdersWithSameOrderId() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             long charge = 10000;
             container.createUserWithMoney(UID_1, spec.quoteCurrency, charge);
 
@@ -644,6 +651,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationOfMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -728,6 +736,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationSendWarn() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -782,6 +791,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             long amount = 50020;
             long price = 1000;
             long size = 50;
@@ -876,6 +886,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testPlaceExchangeWhileHasLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             CoreSymbolSpecification specExchange = container.initSymbolExchange();
 
             long amount = 2000;

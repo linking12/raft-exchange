@@ -268,6 +268,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
             container.initFeeUsers();
+            container.initMarkPrice(symbolId, 1000);
 
             container.setConsumer(processor);
 
@@ -356,6 +357,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
             container.initFeeUsers();
+            container.initMarkPrice(symbolId, 1000);
 
             container.setConsumer(processor);
 

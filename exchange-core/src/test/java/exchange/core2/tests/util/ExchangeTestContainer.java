@@ -120,6 +120,15 @@ public final class ExchangeTestContainer implements AutoCloseable {
         symbolIds.forEach(symbolId -> userIds.forEach(userId -> createUserWithMoney(userId, symbolId, deposit)));
     }
 
+    public void initMarkPrice(int symbol, int price) {
+        ApiAdjustMarkPrice cmd = ApiAdjustMarkPrice.builder()
+                .transactionId(getRandomTransactionId())
+                .markPrice(price)
+                .symbol(symbol)
+                .build();
+        api.submitCommandAsync(cmd);
+    }
+
     @Data
     @Builder
     public static class TestDataFutures {
@@ -161,6 +170,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         addSymbol(TestConstants.SYMBOLSPEC_EUR_USD);
         addSymbol(TestConstants.SYMBOLSPEC_ETH_XBT);
+    }
+
+    public void initMarkPrices() {
+        initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 1000);
+        initMarkPrice(SYMBOLSPEC_ETH_XBT.symbolId, 1000);
     }
 
     public void initFeeSymbols() {
@@ -587,7 +601,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 //                .maxLeverage(50)
 //                .maintenanceMargin(50)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
-                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 10L, 10000L, 50L))
                 .build();
 
         addSymbol(spec);

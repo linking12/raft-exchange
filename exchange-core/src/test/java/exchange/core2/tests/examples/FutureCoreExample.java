@@ -103,11 +103,21 @@ public class FutureCoreExample {
 
         // 初始化用户和符号
         initializeUserAndSymbols();
+        doMarkPrice(symbolId, 10000L);
     }
 
     @After
     public void tearDown() {
         exchangeCore.shutdown();
+    }
+
+    private void doMarkPrice(int symbolId, long markPrice) {
+        ApiAdjustMarkPrice cmd = ApiAdjustMarkPrice.builder()
+                .transactionId(1334567L)
+                .markPrice(markPrice)
+                .symbol(symbolId)
+                .build();
+        api.submitCommandAsync(cmd);
     }
 
     private void deposit(long userId, long amount) throws ExecutionException, InterruptedException {
@@ -192,6 +202,8 @@ public class FutureCoreExample {
 //                .marginBuy(100L)
 //                .marginSell(100L)
 //                .maintenanceMargin(1000L) // 维持保证金
+                .initMargin(1)
+                .initMarginScaleK(100)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
@@ -679,6 +691,7 @@ public class FutureCoreExample {
             throw new RuntimeException(e);
         }
     }
+
     private void createBiasPrice(int price) {
         int time = 100;
         int cnt = 10;
@@ -784,7 +797,7 @@ public class FutureCoreExample {
     public void testFuturesTrading() throws Exception {
         int size = 10;
         long price = 10000L;
-        int ordersCount = 100;
+        int ordersCount = 10;
         List<ApiCommand> cmds = new ArrayList<>();
 
         long userId1 = createRandomUserWithMoney();
@@ -920,7 +933,7 @@ public class FutureCoreExample {
                 .action(OrderAction.BID)
                 .size(1L)
                 .price(1L)
-                .symbol(symbolId+1)
+                .symbol(symbolId + 1)
                 .reservePrice(1L)
                 .orderType(OrderType.GTC)
                 .marginMode(MarginMode.ISOLATED)

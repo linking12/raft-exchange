@@ -82,6 +82,7 @@ public abstract class ITExchangeCoreIntegration {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initBasicSymbols();
+            container.initMarkPrices();
             container.initBasicUsers();
 
             // ### 1. first user places limit orders
