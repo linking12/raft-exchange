@@ -1,13 +1,12 @@
 package com.binance.raftexchange.server.exchange;
 
-import com.binance.raftexchange.stubs.request.ApiAdjustPrice;
+import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
-import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import java.util.ArrayList;
@@ -43,9 +42,9 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
     }
 
     public static CompletableFuture<byte[]> adjustMarkPrice(ApiCommand apiCommand) {
-        ApiAdjustPrice grpcAdjustPrice = apiCommand.getAdjustPrice();
-        ApiAdjustMarkPrice apiAdjustMarkPrice = ApiAdjustMarkPrice.builder().transactionId(grpcAdjustPrice.getTransactionId())
-            .symbol(grpcAdjustPrice.getSymbol()).markPrice(grpcAdjustPrice.getMarkPrice()).build();
+        ApiAdjustMarkPrice grpcAdjustPrice = apiCommand.getAdjustMarkprice();
+        exchange.core2.core.common.api.ApiAdjustMarkPrice apiAdjustMarkPrice = exchange.core2.core.common.api.ApiAdjustMarkPrice.builder()
+            .transactionId(grpcAdjustPrice.getTransactionId()).symbol(grpcAdjustPrice.getSymbol()).markPrice(grpcAdjustPrice.getMarkPrice()).build();
         apiAdjustMarkPrice.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustMarkPrice);
         return callExchange(apiAdjustMarkPrice);

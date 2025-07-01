@@ -870,56 +870,28 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     /**
-     * 永续合约计算fundFee
-     * 多头给空头或者空头给多头
+     * 永续合约计算fundingFee，多头给空头或者空头给多头
+     * 无需跨分片协调：因为多空仓位总是对等，每个分片按自己视角加减同一金额，整体上是对称操作，系统资金不失衡。
+     * 无精度尾差：资金费率都是整数，不存在浮点精度误差；long的向下取整，对称场景下（多空相等）是彼此抵消的。
      */
     private void settleFundingFees(OrderCommand cmd) {
         final int symbol = cmd.symbol;
         final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
-        FastList<SymbolPositionRecord> longPositions = FastList.newList();
-        FastList<SymbolPositionRecord> shortPositions = FastList.newList();
-        // 分类仓位
+        final long fundingFeeRate = (long) (cmd.price * 1.0 / cmd.size);
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             SymbolPositionRecord position = userProfile.positions.get(symbol);
             if (position == null || position.direction == PositionDirection.EMPTY) {
                 return; // 跳过空仓位
             }
+            long fundingFee = position.openVolume * markPrice * fundingFeeRate;
             if (position.direction == PositionDirection.LONG) {
-                longPositions.add(position);
+                position.profit -= fundingFee;
+                eventsHelper.sendFundingFeeEvent(cmd, position, -fundingFee);
             } else {
-                shortPositions.add(position);
+                position.profit += fundingFee;
+                eventsHelper.sendFundingFeeEvent(cmd, position, fundingFee);
             }
         });
-        // 若任一侧为空，则不进行资金费处理
-        if (longPositions.isEmpty() || shortPositions.isEmpty()) {
-            return;
-        }
-        long totalFundingFee = 0;
-        // 多头：直接扣除资金费(费率*名义价值)
-        long unitFee = cmd.price / cmd.size * markPrice;
-        for (SymbolPositionRecord pos : longPositions) {
-            long fundingFee = unitFee * pos.openVolume;
-            totalFundingFee += fundingFee;
-            pos.profit -= fundingFee;
-            eventsHelper.sendFundingFeeEvent(cmd, pos, -fundingFee);
-        }
-        // 空头：按比例获得资金费
-        long settledFundingFee = 0;
-        long totalVolumeShort = shortPositions.sumOfLong(s -> s.openVolume);
-        SymbolPositionRecord maxShortPos = shortPositions.maxBy(s -> s.openVolume);
-        long unitReward = totalFundingFee / totalVolumeShort;
-        for (SymbolPositionRecord pos : shortPositions) {
-            if (pos == maxShortPos)
-                continue;
-            long reward = unitReward * pos.openVolume;
-            settledFundingFee += reward;
-            pos.profit += reward;
-            eventsHelper.sendFundingFeeEvent(cmd, pos, reward);
-        }
-        // 最后给最大空头分发
-        long remaining = totalFundingFee - settledFundingFee;
-        maxShortPos.profit += remaining;
-        eventsHelper.sendFundingFeeEvent(cmd, maxShortPos, remaining);
     }
 
     /**
