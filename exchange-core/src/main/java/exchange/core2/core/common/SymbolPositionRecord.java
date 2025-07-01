@@ -306,34 +306,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return Math.max(feePendingBuy, feePendingSell);
     }
 
-    /**
-     * Update position for one user
-     * 1. Un-hold pending size
-     * 2. Reduce opposite position accordingly (if exists)
-     * 3. Increase forward position accordingly (if size left in the trading event)
-     *
-     * @param action order action
-     * @param size   order size
-     * @param price  order price
-     * @param spec   symbol specification
-     * @param record last price cache record
-     * @return opened size
-     */
-    public long updatePositionForMarginTrade(OrderAction action, long size, long price, CoreSymbolSpecification spec, LastPriceCacheRecord record) {
-
-        // 1. Un-hold pending size
-        pendingRelease(action, size);
-
-        // 2. Reduce opposite position accordingly (if exists)
-        final long sizeToOpen = closeCurrentPositionFutures(action, size, price);
-
-        // 3. Increase forward position accordingly (if size left in the trading event)
-        if (sizeToOpen > 0) {
-            openPositionMargin(action, sizeToOpen, price, spec, record);
-        }
-        return sizeToOpen;
-    }
-
     public long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
 
         // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize, profit);
