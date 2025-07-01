@@ -21,21 +21,17 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
-import static exchange.core2.core.common.OrderAction.BID;
-import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
-import static exchange.core2.tests.util.TestConstants.UID_5;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 @Slf4j
 @ExtendWith(MockitoExtension.class)
@@ -56,7 +52,7 @@ class ITPerpetualContractIntegration {
     private ArgumentCaptor<ITradeEventsHandler.TradeEvent> tradeEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCapor;
+    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCaptor;
 
     @Captor
     private ArgumentCaptor<ITradeEventsHandler.ReduceEvent> reduceEventCaptor;
@@ -194,17 +190,14 @@ class ITPerpetualContractIntegration {
     // 没开出来单子交割后不需要结算 -- 交割
     @Test
     public void testDeliveryScenario0() throws Exception {
-        long deposit = 10000L;
+        long deposit = 20000L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
             // 0. 充钱
-            List<Long> userIds = Arrays.asList(UID_1);
-            Set<Integer> symbolIds = new HashSet<>();
-            deliverySymbols.forEach(spec -> {
-                symbolIds.add(spec.quoteCurrency);
-            });
+            List<Long> userIds = Collections.singletonList(UID_1);
+            Set<Integer> symbolIds = deliverySymbols.stream().map(CoreSymbolSpecification::getQuoteCurrency).collect(Collectors.toSet());
             container.doDeposit(userIds, symbolIds, deposit);
 
             container.validateUserState(UID_1, profile -> {
@@ -212,6 +205,8 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getPositions().size(), is(0));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
+
+            container.updateCurrentPriceTo(1000, deliverySymbols.get(0).symbolId, deliverySymbols.get(0).quoteCurrency);
 
             // 下期货单但是没有成交, 所有没有开仓成功
             container.createBidWithOrderId(MAKER_1, UID_1, 10, 1000, deliverySymbols.get(0).symbolId, MarginMode.CROSS);
@@ -248,7 +243,7 @@ class ITPerpetualContractIntegration {
     // 开出来单子后需要做交割结算 -- 交割
     @Test
     public void testDeliveryScenario1() throws Exception {
-        long deposit = 10000L;
+        long deposit = 20000L;
         int makerFee = 100;
         int takerFee = 200;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
@@ -257,10 +252,7 @@ class ITPerpetualContractIntegration {
 
             // 0. 充钱
             List<Long> userIds = Arrays.asList(UID_1, UID_2);
-            Set<Integer> symbolIds = new HashSet<>();
-            deliverySymbols.forEach(spec -> {
-                symbolIds.add(spec.quoteCurrency);
-            });
+            Set<Integer> symbolIds = deliverySymbols.stream().map(CoreSymbolSpecification::getQuoteCurrency).collect(Collectors.toSet());
             container.doDeposit(userIds, symbolIds, deposit);
 
             container.validateUserState(UID_1, profile -> {
@@ -268,6 +260,8 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getPositions().size(), is(0));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            container.updateCurrentPriceTo(1000, deliverySymbols.get(0).symbolId, deliverySymbols.get(0).quoteCurrency);
 
             // 下期货单但是没有成交, 所有没有开仓成功
             container.createBidWithOrderId(MAKER_1, UID_1, 10, 1000, deliverySymbols.get(0).symbolId, MarginMode.CROSS);
@@ -313,18 +307,15 @@ class ITPerpetualContractIntegration {
 
     // 没开出来单子交割后不需要结算 -- 永续
     @Test
-    public void testPerPetualScenario0() throws Exception {
-        long deposit = 10000L;
+    public void testPerpetualScenario0() throws Exception {
+        long deposit = 20000L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
-            List<Long> userIds = Arrays.asList(UID_1);
-            Set<Integer> symbolIds = new HashSet<>();
-            perpetualSymbols.forEach(spec -> {
-                symbolIds.add(spec.quoteCurrency);
-            });
+            List<Long> userIds = Collections.singletonList(UID_1);
+            Set<Integer> symbolIds = perpetualSymbols.stream().map(CoreSymbolSpecification::getQuoteCurrency).collect(Collectors.toSet());
             container.doDeposit(userIds, symbolIds, deposit);
 
             container.validateUserState(UID_1, profile -> {
@@ -334,9 +325,7 @@ class ITPerpetualContractIntegration {
             });
 
             // update market price
-            for (int i = 0; i < 10; i++) {
-                container.updateCurrentPriceTo(10000, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
-            }
+            container.updateCurrentPriceTo(10000, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
 
             // 下期货单但是没有成交, 所有没有开仓成功
             container.createBidWithOrderId(MAKER_1, UID_1, 10, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
@@ -374,7 +363,7 @@ class ITPerpetualContractIntegration {
 
     // 开出来单子后需要做结算 -- 永续, 正向
     @Test
-    public void testPerPetualScenario1() throws Exception {
+    public void testPerpetualScenario1() throws Exception {
         long deposit = 20000L;
         int makerFee = 100;
         int takerFee = 200;

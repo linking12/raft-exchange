@@ -116,8 +116,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
     }
 
-    public void doDeposit(List<Long> userIds, Set<Integer> symbolIds, long depost) {
-        symbolIds.forEach(symbolId -> userIds.forEach(userId -> createUserWithMoney(userId, symbolId, depost)));
+    public void doDeposit(List<Long> userIds, Set<Integer> symbolIds, long deposit) {
+        symbolIds.forEach(symbolId -> userIds.forEach(userId -> createUserWithMoney(userId, symbolId, deposit)));
     }
 
     @Data
