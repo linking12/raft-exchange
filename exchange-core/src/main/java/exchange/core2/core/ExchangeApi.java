@@ -609,7 +609,7 @@ public final class ExchangeApi {
     };
 
     private static final EventTranslatorOneArg<OrderCommand, ApiAdjustMarkPrice> ADJUST_PRICE_TRANSLATOR = (cmd, seq, api) -> {
-        cmd.command = OrderCommandType.PRICE_ADJUSTMENT;
+        cmd.command = OrderCommandType.MARKPRICE_ADJUSTMENT;
         cmd.timestamp = api.timestamp;
         cmd.orderId = api.transactionId;
         cmd.symbol = api.symbol;

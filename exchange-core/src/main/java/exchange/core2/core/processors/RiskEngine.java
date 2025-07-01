@@ -342,7 +342,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
-            case PRICE_ADJUSTMENT: {
+            case MARKPRICE_ADJUSTMENT: {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
                 if (spec == null) {
                     cmd.resultCode = CommandResultCode.INVALID_SYMBOL;

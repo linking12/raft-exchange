@@ -38,7 +38,7 @@ public enum OrderCommandType {
     FORCE_LIQUIDATION((byte) 20, true),
     LEVERAGE_ADJUSTMENT((byte) 21, true),
     MARGIN_ADJUSTMENT((byte) 22, true),
-    PRICE_ADJUSTMENT((byte) 23, true),
+    MARKPRICE_ADJUSTMENT((byte) 23, true),
     SETTLE_FUNDINGFEES((byte) 24, true),
     SETTLE_PNL((byte) 25, true),
 

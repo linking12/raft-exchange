@@ -97,7 +97,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         if (maxLeverage == null || maxLeverage.isEmpty()) {
             return true;
         }
-        Long maxLeverageValue = floorValue(maxLeverage, notional);
+        Long maxLeverageValue = getFloorValueInSortedMap(maxLeverage, notional);
         if (maxLeverageValue == null) {
             return true;
         }
@@ -115,14 +115,14 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         if (maintenanceMarginScaleK == 0 || maintenanceMargin.isEmpty()) {
             return 1;
         }
-        Long marginValue = floorValue(maintenanceMargin, notional);
+        Long marginValue = getFloorValueInSortedMap(maintenanceMargin, notional);
         if (marginValue == null) {
             return 1;
         }
         return marginValue / maintenanceMarginScaleK;
     }
 
-    private static Long floorValue(MutableSortedMap<Long, Long> map, long key) {
+    private static Long getFloorValueInSortedMap(MutableSortedMap<Long, Long> map, long key) {
         MutableSortedMap<Long, Long> headMap = map.headMap(key);
         if (!headMap.isEmpty()) {
             return map.get(headMap.lastKey());
