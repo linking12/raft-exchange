@@ -366,7 +366,7 @@ class ITPerpetualContractIntegration {
     // 开出来单子后需要做结算 -- 永续, 正向
     @Test
     public void testPerPetualScenario1() throws Exception {
-        long deposit = 10000L;
+        long deposit = 20000L;
         int makerFee = 100;
         int takerFee = 200;
         int size = 10;
@@ -391,14 +391,14 @@ class ITPerpetualContractIntegration {
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(1001).symbol(perpetualSymbols.get(0).symbolId).markPrice(updatedPrice).build(), CommandResultCode.SUCCESS);
+
             // 下期货单但是没有成交, 所有没有开仓成功
             container.createBidWithOrderId(MAKER_1, UID_1, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.createAskWithOrderId(TAKER_1, UID_2, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
 
             // update market price
-            for (int i = 0; i < 10; i++) {
-                container.updateCurrentPriceTo(updatedPrice, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
-            }
+            container.updateCurrentPriceTo(updatedPrice, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
