@@ -3,6 +3,7 @@ package com.binance.raftexchange.client.tests.util;
 import com.google.common.collect.Sets;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import java.util.Set;
 
@@ -125,8 +126,10 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
             .quoteScaleK(1)
-            .marginBuy(2200)
-            .marginSell(3210)
+//            .marginBuy(2200)
+//            .marginSell(3210)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
             .takerFee(0)
             .makerFee(0)
             .build();
