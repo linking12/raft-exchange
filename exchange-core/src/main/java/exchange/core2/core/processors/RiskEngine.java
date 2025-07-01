@@ -21,7 +21,6 @@ import java.util.Optional;
 
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.PositionDirection;
-import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
