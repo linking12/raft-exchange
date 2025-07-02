@@ -187,6 +187,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
     }
 
+    public void initDynamicFeeSymbolsMarkPrice() {
+        initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId, 1000);
+    }
+
     public void initBasicUsers() {
         initBasicUser(TestConstants.UID_1);
         initBasicUser(TestConstants.UID_2);
@@ -213,8 +217,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .takerFee(20)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
-//                .marginBuy(100)
-//                .marginSell(100)
+                .initMargin(1)
+                .initMarginScaleK(100)
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
@@ -235,6 +239,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .takerFee(20)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                .initMargin(1)
+                .initMarginScaleK(100)
 //                .marginBuy(100)
 //                .marginSell(100)
 //                .maxLeverage(10)
@@ -253,6 +259,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .feeScaleK(100)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                .initMargin(1)
+                .initMarginScaleK(100)
 //                .marginBuy(100)
 //                .marginSell(100)
 //                .maxLeverage(20)
@@ -270,6 +278,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .takerFee(30)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                .initMargin(1)
+                .initMarginScaleK(100)
 //                .marginBuy(100)
 //                .marginSell(100)
 //                .maxLeverage(50)

@@ -92,6 +92,7 @@ class ITMixedIntegration {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
 
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -193,6 +194,7 @@ class ITMixedIntegration {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
 
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -226,10 +228,10 @@ class ITMixedIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(25)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(19)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event1 = fundEvents.get(24);
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(18);
             assertThat(userId1, Is.is(event1.uid));
             assertThat(quoteId, Is.is(event1.currency));
 //            assertThat(10000, Is.is(event1.symbol));
@@ -237,8 +239,8 @@ class ITMixedIntegration {
             assertThat(0L, Is.is(event1.fee));
             assertThat(PositionDirection.EMPTY, Is.is(event1.direction));
             assertThat(FundEvent.FundEventType.LOCKED, Is.is(event1.eventType));
-            assertThat(-100L, Is.is(event1.free));
-            assertThat(100L, Is.is(event1.locked));
+            assertThat(-150L, Is.is(event1.free));
+            assertThat(150L, Is.is(event1.locked));
             assertThat(0L, Is.is(event1.openPriceSum));
             assertThat(0L, Is.is(event1.pnl));
             assertThat(0L, Is.is(event1.position));

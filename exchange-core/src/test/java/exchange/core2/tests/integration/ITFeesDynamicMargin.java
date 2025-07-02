@@ -64,7 +64,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
-
+            container.initDynamicFeeSymbolsMarkPrice();
             // ----------------- 1 test GTC BID cancel ------------------
             long usdtAmount = 100L;
             long price = 10000L;
@@ -139,6 +139,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -239,6 +240,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -338,6 +340,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -434,6 +437,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -535,6 +539,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -635,6 +640,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -735,6 +741,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -834,6 +841,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -933,6 +941,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 

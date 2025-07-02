@@ -201,6 +201,8 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_JPY)
             .baseScaleK(1_000_00) // 1K USD "micro" lot
             .quoteScaleK(10) // 10 JPY step
+            .initMargin(1)
+            .initMarginScaleK(21)
 //            .marginBuy(5_000) // effective leverage ~21
 //            .marginSell(6_000) // effective leverage ~18
             .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
@@ -216,8 +218,8 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
             .quoteScaleK(1)
-//            .marginBuy(100)
-//            .marginSell(100)
+            .initMargin(1)
+            .initMarginScaleK(100)
             .takerFee(2)
             .makerFee(1)
             .feeScaleK(100)
@@ -233,6 +235,8 @@ public final class TestConstants {
             .quoteCurrency(CURRENECY_USD)
             .baseScaleK(1)
             .quoteScaleK(1)
+            .initMargin(1)
+            .initMarginScaleK(200)
 //            .marginBuy(200)
 //            .marginSell(200)
             .takerFee(3)

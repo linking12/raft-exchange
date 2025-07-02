@@ -57,7 +57,7 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
-
+            container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
             container.createUserWithMoney(UID_1, CURRENECY_JPY, jpyAmount1);
@@ -150,7 +150,7 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
-
+            container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(50, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 250_000L + takerFeeForPlaceOrder101;
             container.createUserWithMoney(UID_1, CURRENECY_JPY, jpyAmount1);
@@ -244,7 +244,7 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
-
+            container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
             container.createUserWithMoney(UID_1, CURRENECY_JPY, jpyAmount1);
@@ -315,6 +315,8 @@ public abstract class ITFeesMargin {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD);
+            container.initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId, 10000);
+            container.initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.symbolId, 10000);
             long deposit = 26155L; // 价格够单独开order100或order101, 但不够一起开
             container.createUserWithMoney(UID_1, CURRENECY_USD, deposit);
 
