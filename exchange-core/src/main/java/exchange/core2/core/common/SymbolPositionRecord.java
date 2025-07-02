@@ -298,7 +298,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * 假设pending部分以及新下单的size都能开出来，估算仓位名义价值。
      */
     public long estimateNotionalForOrder(final OrderAction action, final long size, final long price) {
-        long estimatedSize = openVolume + Math.max(pendingBuySize, pendingSellSize) + (direction.isSameAsAction(action) ? size : -size);
+        long newPendingBuySize = action == OrderAction.BID ? pendingBuySize + size : pendingBuySize;
+        long newPendingSellSize = action == OrderAction.ASK ? pendingSellSize + size : pendingSellSize;
+        long estimatedSize = openVolume + Math.max(newPendingBuySize, newPendingSellSize);
         return estimatedSize * price;
     }
 
