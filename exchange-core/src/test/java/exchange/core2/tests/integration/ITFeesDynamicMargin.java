@@ -44,8 +44,6 @@ public abstract class ITFeesDynamicMargin {
     private final long makerFee = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.makerFee;
     private final long takerFee = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.takerFee;
     private final long scaleFee = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.feeScaleK;
-    private final long marginBuy = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMargin;
-    private final long marginSell = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMargin;
 
     // configuration provided by child class
     public abstract PerformanceConfiguration getPerformanceConfiguration();
@@ -55,7 +53,8 @@ public abstract class ITFeesDynamicMargin {
     }
 
     private long calculateMarginFee(long size) {
-        return size * marginBuy;
+        // todo 参考类似 spec.calcInitMargin() 的逻辑，自己实现
+        return 0;
     }
 
     @Test
