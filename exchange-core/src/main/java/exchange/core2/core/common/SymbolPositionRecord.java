@@ -270,10 +270,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      *
      * @param spec   symbols specification
      * @param action order action
-     * @param size   order size
+     * @param extraNotional extra notional to be added
      * @return -1 if order will reduce current exposure (no additional margin required), otherwise full margin for symbol position if order placed/executed
      */
-    public long calculateRequiredMarginForOrder(final CoreSymbolSpecification spec, final OrderAction action, final long size, final long price) {
+    public long calculateRequiredMarginForOrder(final CoreSymbolSpecification spec, final OrderAction action, final long extraNotional) {
         // 未成交挂单部分：用挂单均价
         final long pendingBuy = pendingBuySize * pendingBuyAvgPrice;
         final long pendingSell = pendingSellSize * pendingSellAvgPrice;
@@ -283,7 +283,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         long currentMargin = openInitMarginSum + pendingMargin;
 
         // 使用挂单价格作为新增风险敞口的基础
-        long extraNotional = size * price;
         long newPendingBuy = pendingBuy + (action == OrderAction.BID ? extraNotional : 0);
         long newPendingSell = pendingSell + (action == OrderAction.ASK ? extraNotional : 0);
         long newPending = Math.max(newPendingBuy, newPendingSell);

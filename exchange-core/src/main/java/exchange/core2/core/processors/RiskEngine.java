@@ -314,7 +314,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         long totalCrossProfit = 0;
                         for (SymbolPositionRecord position : userProfile.positions) {
                             if (position.marginMode == MarginMode.CROSS && position.currency == cmd.symbol) {
-                                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                                 totalCrossProfit += position.estimateProfit(lastPriceCache.get(position.symbol));
                             }
                         }
@@ -742,8 +741,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                         final UserProfile userProfile,
                                         final CoreSymbolSpecification spec,
                                         final SymbolPositionRecord position) {
-
-        final long newRequiredMarginForSymbol = position.calculateRequiredMarginForOrder(spec, cmd.action, cmd.size, cmd.price);
+        final long extraNotional = (cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET) ? cmd.price : cmd.size * cmd.price;
+        final long newRequiredMarginForSymbol = position.calculateRequiredMarginForOrder(spec, cmd.action, extraNotional);
         if (newRequiredMarginForSymbol == -1) {
             // always allow placing a new order if it would not increase exposure
             return true;
