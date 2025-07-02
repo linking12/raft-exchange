@@ -545,8 +545,23 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void updateCurrentPriceTo(int price, int symbolId, int quoteId) {
+        // update mark price
         long uid = 100000 + getRandomTransactionId();
         api.submitCommand(ApiAdjustMarkPrice.builder().transactionId(uid).symbol(symbolId).markPrice(price).build());
+        // update bid/ask price
+        long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
+        createBid(userId1, 10, price, symbolId);
+        long userId2 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
+        createAsk(userId2, 10, price, symbolId);
+    }
+
+    public long createRandomUserWithMoney(long amount, int quoteId) {
+        long uid = 100000 + getRandomTransactionId();
+        final List<ApiCommand> cmds = new ArrayList<>();
+        cmds.add(ApiAddUser.builder().uid(uid).build());
+        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(quoteId).build());
+        api.submitCommandsSync(cmds);
+        return uid;
     }
 
     public long createUserWithSpecificMoney(long userId, long amount, int quoteId) {
@@ -601,7 +616,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 //                .maxLeverage(50)
 //                .maintenanceMargin(50)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
-                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 10L, 10000L, 50L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 10L, 5000L, 20L, 10000L, 50L))
                 .build();
 
         addSymbol(spec);
