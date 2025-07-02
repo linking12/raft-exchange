@@ -18,14 +18,11 @@ package exchange.core2.tests.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.List;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
@@ -50,15 +47,6 @@ public class ThroughputTestsModule {
                     () -> (float) IntStream.range(0, iterations)
                             .mapToObj(j -> {
                                 container.loadSymbolsUsersAndPrefillOrdersNoLog(testDataFutures);
-                                List<CoreSymbolSpecification> coreSymbolSpecifications = null;
-                                try {
-                                    coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.get();
-                                } catch (InterruptedException e) {
-                                    throw new RuntimeException(e);
-                                } catch (ExecutionException e) {
-                                    throw new RuntimeException(e);
-                                }
-                                coreSymbolSpecifications.forEach(s -> container.initMarkPrice(s.symbolId, 1000));
                                 final float perfMt = container.benchmarkMtps(testDataFutures.getGenResult().join().apiCommandsBenchmark.join());
                                 log.info("{}. {} MT/s", j, String.format("%.3f", perfMt));
 

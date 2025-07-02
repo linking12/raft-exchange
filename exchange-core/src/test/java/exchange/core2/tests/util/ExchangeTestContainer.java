@@ -126,7 +126,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .markPrice(price)
                 .symbol(symbol)
                 .build();
-        api.submitCommandAsync(cmd);
+        api.submitCommand(cmd);
     }
 
     @Data
@@ -855,6 +855,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         // load symbols
         addSymbols(testDataFutures.coreSymbolSpecifications.join());
+
+        // init markPrice
+        testDataFutures.coreSymbolSpecifications.join().forEach(symbol -> {
+            if (symbol.getType() == SymbolType.FUTURES_CONTRACT_PERPETUAL) {
+                initMarkPrice(symbol.getSymbolId(), 100);
+            }
+        });
 
         // create accounts and deposit initial funds
         userAccountsInit(testDataFutures.usersAccounts.join());
