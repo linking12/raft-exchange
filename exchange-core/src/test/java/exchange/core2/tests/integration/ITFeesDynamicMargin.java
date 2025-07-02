@@ -52,9 +52,8 @@ public abstract class ITFeesDynamicMargin {
         return price * size * step * sideFee / scale;
     }
 
-    private long calculateMarginFee(long size) {
-        // todo 参考类似 spec.calcInitMargin() 的逻辑，自己实现
-        return 0;
+    private long calculateMarginFee(long price, long size) {
+        return price * size * SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMargin / SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMarginScaleK;
     }
 
     @Test
@@ -84,8 +83,7 @@ public abstract class ITFeesDynamicMargin {
             container.addMoneyToUser(UID_2, CURRENECY_USD, 1);
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
-            long initMargin = calculateMarginFee(size);
-
+            long initMargin = calculateMarginFee(price, size);
             // add margin required - SUCCESS
             container.addMoneyToUser(UID_2, CURRENECY_USD, initMargin);
             container.submitCommandSync(order203, CommandResultCode.SUCCESS);

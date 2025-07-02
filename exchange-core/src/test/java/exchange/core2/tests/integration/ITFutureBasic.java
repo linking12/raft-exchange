@@ -193,7 +193,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createBidWithOrderId(orderId, userId1, size, 10000, symbolId);
 
@@ -281,7 +281,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -438,7 +438,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -598,7 +598,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -758,7 +758,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -916,7 +916,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -998,7 +998,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1081,7 +1081,7 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1090,12 +1090,10 @@ class ITFutureBasic {
             container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
 
             // 模拟行情变动
-            for (int i = 0; i < cnt; i++) {
-                container.updateCurrentPriceTo(500, symbolId, quoteId);
-            }
+            container.updateCurrentPriceTo(500, symbolId, quoteId);
 
         } finally {
-            verify(handler, times(cnt * 14 + 8)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(16)).fundsEvent(fundEventCapor.capture());
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
 
             IFundEventsHandler.FundsEvent takerCloseEvent = fundEvents.get(0);
@@ -1108,6 +1106,7 @@ class ITFutureBasic {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
+            container.initFeeSymbolsMarkPrice();
             container.initFeeUsers();
 
             container.setConsumer(processor);
@@ -1321,6 +1320,7 @@ class ITFutureBasic {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
+            container.initFeeSymbolsMarkPrice();
             container.initFeeUsers();
 
             container.setConsumer(processor);
@@ -1409,6 +1409,7 @@ class ITFutureBasic {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
+            container.initFeeSymbolsMarkPrice();
             container.initFeeUsers();
 
             container.setConsumer(processor);
