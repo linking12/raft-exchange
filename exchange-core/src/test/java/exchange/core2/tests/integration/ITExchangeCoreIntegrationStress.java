@@ -92,11 +92,12 @@ public abstract class ITExchangeCoreIntegrationStress {
             final Set<Integer> allowedCurrencies = Stream.of(symbolSpec.quoteCurrency, symbolSpec.baseCurrency).collect(Collectors.toSet());
 
             log.debug("Users init ...");
-            container.usersInit(numUsers, allowedCurrencies);
+            long amountPerUser = 1000_0000_0000L;
+            container.usersInit(numUsers, allowedCurrencies, amountPerUser);
 
             // validate total balance as a sum of loaded funds
             final Consumer<IntLongHashMap> balancesValidator = balances -> allowedCurrencies.forEach(
-                    cur -> assertThat(balances.get(cur), is(10_0000_0000L * numUsers)));
+                    cur -> assertThat(balances.get(cur), is(amountPerUser * numUsers)));
 
 
             log.debug("Verifying balances...");

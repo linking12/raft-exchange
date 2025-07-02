@@ -714,7 +714,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitCommandAsync(ApiNop.builder().build()).join();
     }
 
-    public void usersInit(int numUsers, Set<Integer> currencies) {
+    public void usersInit(int numUsers, Set<Integer> currencies, long amount) {
 
         LongStream.rangeClosed(1, numUsers)
                 .forEach(uid -> {
@@ -724,7 +724,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                         api.submitCommand(ApiAdjustUserBalance.builder()
                                 .uid(uid)
                                 .transactionId(transactionId++)
-                                .amount(10_0000_0000L)
+                                .amount(amount)
                                 .currency(currency).build());
                     }
                 });
