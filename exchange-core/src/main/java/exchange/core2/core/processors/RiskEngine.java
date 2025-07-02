@@ -523,7 +523,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         // 检查用户杠杆是否超过限制
         LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
-        if (!spec.isValidLeverage(position.openVolume * priceRecord.markPrice, cmd.leverage)) {
+        long notional = position.estimateNotionalForOrder(null, 0, priceRecord.markPrice);
+        if (!spec.isValidLeverage(notional, cmd.leverage)) {
             return CommandResultCode.RISK_INVALID_LEVERAGE;
         }
         // 检查保证金变化是否在可承受范围内
@@ -606,7 +607,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
             }
             // 检查用户杠杆是否超过symbol的杠杆限制
-            long notional = (position.openVolume + cmd.size) * priceRecord.markPrice;
+            long notional = position.estimateNotionalForOrder(cmd.action, cmd.size, priceRecord.markPrice);
             if (!spec.isValidLeverage(notional, cmd.leverage)) {
                 return CommandResultCode.RISK_INVALID_LEVERAGE;
             }
