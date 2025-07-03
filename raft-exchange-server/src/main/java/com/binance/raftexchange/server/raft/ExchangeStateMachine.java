@@ -50,7 +50,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
             @Override
             public Pair<ByteBuffer, Closure> next() {
-                ByteBuffer data = iter.getData();
+                ByteBuffer data = iter.next();
                 Closure closure = iter.done();
                 return Pair.of(data, closure);
             }
