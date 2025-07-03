@@ -2,13 +2,9 @@ package com.binance.raftexchange.server.raft;
 
 import java.nio.ByteBuffer;
 import java.util.Set;
-import java.util.Spliterator;
-import java.util.Spliterators;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.StreamSupport;
 
-import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,37 +38,22 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
     @Override
     public void onApply(Iterator iter) {
-        java.util.Iterator<Pair<ByteBuffer, Closure>> raftLogIter = new java.util.Iterator<Pair<ByteBuffer, Closure>>() {
-            @Override
-            public boolean hasNext() {
-                return iter.hasNext();
+        while (iter.hasNext()) {
+            ByteBuffer data = iter.getData();
+            Closure closure = iter.done();
+            CompletableFuture<byte[]> result = null;
+            try {
+                result = apply(data);
+            } catch (Exception e) {
+                LOG.error("Fail to apply", e);
             }
-
-            @Override
-            public Pair<ByteBuffer, Closure> next() {
-                ByteBuffer data = iter.next();
-                Closure closure = iter.done();
-                return Pair.of(data, closure);
+            if (closure != null) {
+                if (closure instanceof ReturnableClosure) {
+                    ((ReturnableClosure)closure).setResult(result);
+                }
+                closure.run(Status.OK());
             }
-        };
-        Spliterator<Pair<ByteBuffer, Closure>> jraftLogsSpliterator = Spliterators.spliteratorUnknownSize(raftLogIter, Spliterator.ORDERED);
-        StreamSupport.stream(jraftLogsSpliterator, true).forEach(this::handleSingleLog);
-    }
-
-    private void handleSingleLog(Pair<ByteBuffer, Closure> log) {
-        ByteBuffer data = log.getKey();
-        Closure closure = log.getValue();
-        CompletableFuture<byte[]> result = null;
-        try {
-            result = apply(data);
-        } catch (Throwable e) {
-            LOG.error("Fail to apply", e);
-        }
-        if (closure != null) {
-            if (closure instanceof ReturnableClosure) {
-                ((ReturnableClosure)closure).setResult(result);
-            }
-            closure.run(Status.OK());
+            iter.next();
         }
     }
 
