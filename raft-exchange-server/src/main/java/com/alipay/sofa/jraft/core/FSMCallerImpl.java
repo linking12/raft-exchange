@@ -41,7 +41,6 @@ import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
 import com.alipay.sofa.jraft.util.DisruptorBuilder;
 import com.alipay.sofa.jraft.util.DisruptorMetricSet;
 import com.alipay.sofa.jraft.util.LogExceptionHandler;
-import com.alipay.sofa.jraft.util.NamedThreadFactory;
 import com.alipay.sofa.jraft.util.OnlyForTest;
 import com.alipay.sofa.jraft.util.Requires;
 import com.alipay.sofa.jraft.util.ThreadPoolsFactory;
@@ -405,7 +404,6 @@ public class FSMCallerImpl implements FSMCaller {
         }
     }
 
-    @SuppressWarnings("ConstantConditions")
     private long runApplyTask(final ApplyTask task, long maxCommittedIndex, final boolean endOfBatch) {
         CountDownLatch shutdown = null;
         if (task.type == TaskType.COMMITTED) {
