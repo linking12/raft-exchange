@@ -13,6 +13,7 @@ import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosu
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiRecoverState;
+import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,20 +27,55 @@ import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
     private final SnapshotHelper snapshotHelper = new SnapshotHelper();
+    private final static int BATCH_SIZE = 64 * 1024; // 复杂的command大概需要100ms一个批次，轻量command大概50ms 这样才值得切换
+    private final Executor applyTaskExecutor = initParallelApplyTaskPool();
 
     @Override
     public void onApply(Iterator iter) {
+        ArrayList<CompletableFuture<Void>> applyTasks = new ArrayList<>();
+        ArrayList<Pair<ByteBuffer, Closure>> subList = null;
         while (iter.hasNext()) {
             ByteBuffer data = iter.getData();
             Closure closure = iter.done();
+            if (subList == null) {
+                subList = new ArrayList<>(BATCH_SIZE);
+            }
+            subList.add(Pair.of(data, closure));
+
+            if (subList.size() == BATCH_SIZE) {
+                List<Pair<ByteBuffer, Closure>> logs = subList;
+                applyTasks.add(CompletableFuture.runAsync(() -> handleSingleBatch(logs), applyTaskExecutor));
+                subList = null;
+            }
+            iter.next();
+        }
+        // 不足一批 那么直接在当前线程执行 防止切换成本大于异步计算的收益
+        if (subList != null) {
+            handleSingleBatch(subList);
+        }
+
+        //等待全部任务完成 满足jraft的onApply结束后即认为apply完毕的语义
+        for (CompletableFuture<Void> task : applyTasks) {
+            task.join();
+        }
+    }
+
+    private void handleSingleBatch(List<Pair<ByteBuffer, Closure>> logs) {
+        for (Pair<ByteBuffer, Closure> log : logs) {
+            ByteBuffer data = log.getKey();
+            Closure closure = log.getValue();
             CompletableFuture<byte[]> result = null;
             try {
                 result = apply(data);
@@ -52,8 +88,17 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 }
                 closure.run(Status.OK());
             }
-            iter.next();
         }
+    }
+
+    private Executor initParallelApplyTaskPool() {
+        ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        int threadNum = api.getMaxParallel();
+        AtomicLong count = new AtomicLong();
+        return Executors.newFixedThreadPool(threadNum, (r) -> {
+            Thread thread = new Thread(r, "Raft-exchange-parallel-apply-task-" + count.getAndIncrement());
+            return thread;
+        });
     }
 
     private CompletableFuture<byte[]> apply(ByteBuffer data) throws Exception {

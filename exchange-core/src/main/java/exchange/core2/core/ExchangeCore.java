@@ -108,6 +108,7 @@ public final class ExchangeCore {
 
         final int matchingEnginesNum = perfCfg.getMatchingEnginesNum();
         final int riskEnginesNum = perfCfg.getRiskEnginesNum();
+        final int maxParallel = matchingEnginesNum + riskEnginesNum;
 
         this.disruptor = new Disruptor<>(
                 OrderCommand::new,
@@ -118,7 +119,7 @@ public final class ExchangeCore {
 
         this.ringBuffer = disruptor.getRingBuffer();
 
-        this.api = new ExchangeApi(ringBuffer, perfCfg.getBinaryCommandsLz4CompressorFactory().get());
+        this.api = new ExchangeApi(maxParallel, ringBuffer, perfCfg.getBinaryCommandsLz4CompressorFactory().get());
 
         final IOrderBook.OrderBookFactory orderBookFactory = perfCfg.getOrderBookFactory();
 
