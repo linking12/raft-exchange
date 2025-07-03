@@ -1,5 +1,13 @@
 package com.binance.raftexchange.server.raft;
 
+import java.nio.ByteBuffer;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.alipay.sofa.jraft.Closure;
 import com.alipay.sofa.jraft.Iterator;
 import com.alipay.sofa.jraft.Status;
@@ -8,27 +16,20 @@ import com.alipay.sofa.jraft.error.RaftError;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
 import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
-import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
-import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
-import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.common.api.ApiPersistState;
-import exchange.core2.core.common.api.ApiRecoverState;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
+import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
+import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
 import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
 
-import java.nio.ByteBuffer;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
+import exchange.core2.core.ExchangeApi;
+import exchange.core2.core.common.api.ApiPersistState;
+import exchange.core2.core.common.api.ApiRecoverState;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
@@ -43,7 +44,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             CompletableFuture<byte[]> result = null;
             try {
                 result = apply(data);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 LOG.error("Fail to apply", e);
             }
             if (closure != null) {
@@ -60,7 +61,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data);
         CompletableFuture<byte[]> result = null;
         if (grpcMessage instanceof ApiCommand) {
-            ApiCommand apiCommand = (ApiCommand) grpcMessage;
+            ApiCommand apiCommand = (ApiCommand)grpcMessage;
             ApiCommand.CommandCase commandCase = apiCommand.getCommandCase();
             switch (commandCase) {
                 case BINARY_DATA:

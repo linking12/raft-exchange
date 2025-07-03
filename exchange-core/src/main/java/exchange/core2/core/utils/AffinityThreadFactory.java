@@ -13,7 +13,6 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
-@RequiredArgsConstructor
 public final class AffinityThreadFactory implements ThreadFactory {
 
     // There is a bug it LMAX Disruptor, when configuring dependency graph as processors, not handlers.
@@ -23,6 +22,17 @@ public final class AffinityThreadFactory implements ThreadFactory {
     private final ThreadAffinityMode threadAffinityMode;
 
     private static AtomicInteger threadsCounter = new AtomicInteger();
+
+    private final String prefix;
+
+    public AffinityThreadFactory(ThreadAffinityMode threadAffinityMode) {
+        this(threadAffinityMode, "");
+    }
+
+    public AffinityThreadFactory(ThreadAffinityMode threadAffinityMode, String prefix) {
+        this.threadAffinityMode = threadAffinityMode;
+        this.prefix = prefix;
+    }
 
     @Override
     public synchronized Thread newThread(@NotNull Runnable runnable) {
@@ -54,7 +64,7 @@ public final class AffinityThreadFactory implements ThreadFactory {
         try (final AffinityLock lock = getAffinityLockSync()) {
 
             final int threadId = threadsCounter.incrementAndGet();
-            Thread.currentThread().setName(String.format("Thread-AF-%d-cpu%d", threadId, lock.cpuId()));
+            Thread.currentThread().setName(String.format(prefix + "Thread-AF-%d-cpu%d", threadId, lock.cpuId()));
 
             log.debug("{} will be running on thread={} pinned to cpu {}",
                     runnable, Thread.currentThread().getName(), lock.cpuId());
