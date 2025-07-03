@@ -303,8 +303,8 @@ class ITFutureCross {
 
             container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
 
-            // locked margin is 520
-            container.addMoneyToUser(userId1, quoteId, 519);
+            // locked margin is 570
+            container.addMoneyToUser(userId1, quoteId, 569);
             container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
 
             container.addMoneyToUser(userId1, quoteId, 1);
@@ -531,7 +531,7 @@ class ITFutureCross {
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
             // 期待结果makerOrderId5可以被吃掉, position数量为1
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getPositions().size(), is(2));
+                assertThat(profile.getPositions().size(), is(1));
             });
 
         } catch (ExecutionException e) {
@@ -576,8 +576,8 @@ class ITFutureCross {
                 assertThat(profile.getPositions().size(), is(2));
             });
 
-            container.updateCurrentPriceTo(2000, symbols.get(0).symbolId, quoteId);
-            container.updateCurrentPriceTo(35000, symbols.get(1).symbolId, quoteId);
+            container.updateCurrentPriceTo(8000, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(25000, symbols.get(1).symbolId, quoteId);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
@@ -751,13 +751,13 @@ class ITFutureCross {
             });
 
             // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
-            // userId1 symbol0: 10000 - 5339 = 4661
+            // userId1 symbol0: 10000 - 5300 = 4700
             //         symbol1: 15000 - 2000 = 5000
-            //         total profit = -9661
+            //         total profit = -9700
             //         balance = 9840
-            //         profit + balance = -9661 + 9840 = 179 < 180(150 * 1.2)此时会触发alert
+            //         profit + balance = -9700 + 9840 = 140 < 151(126 * 1.2)此时会触发alert
 
-            container.updateCurrentPriceTo(5339, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(5300, symbols.get(0).symbolId, quoteId);
             container.updateCurrentPriceTo(20000, symbols.get(1).symbolId, quoteId);
 
             container.validateUserState(userId1, profile -> {
@@ -776,10 +776,10 @@ class ITFutureCross {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(46)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(34)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event1 = fundEvents.get(43);
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(31);
             assertThat(userId1, Is.is(event1.uid));
             assertThat(quoteId, Is.is(event1.currency));
             assertThat(10000, Is.is(event1.symbol));
