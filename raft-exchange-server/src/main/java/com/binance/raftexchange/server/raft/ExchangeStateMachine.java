@@ -1,31 +1,5 @@
 package com.binance.raftexchange.server.raft;
 
-import com.alipay.sofa.jraft.Closure;
-import com.alipay.sofa.jraft.Iterator;
-import com.alipay.sofa.jraft.Status;
-import com.alipay.sofa.jraft.core.StateMachineAdapter;
-import com.alipay.sofa.jraft.error.RaftError;
-import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
-import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
-import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
-import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
-import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
-import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.common.api.ApiPersistState;
-import exchange.core2.core.common.api.ApiRecoverState;
-import org.apache.commons.lang3.tuple.Pair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
-import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
-import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
-import com.binance.raftexchange.server.util.SerializeHelper;
-import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
-import com.binance.raftexchange.stubs.request.ApiCommand;
-import com.binance.raftexchange.stubs.request.BinaryDataCommand;
-import com.google.protobuf.GeneratedMessageV3;
-
 import java.nio.ByteBuffer;
 import java.util.Set;
 import java.util.Spliterator;
@@ -34,6 +8,33 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.StreamSupport;
 
+import org.apache.commons.lang3.tuple.Pair;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.alipay.sofa.jraft.Closure;
+import com.alipay.sofa.jraft.Iterator;
+import com.alipay.sofa.jraft.Status;
+import com.alipay.sofa.jraft.core.StateMachineAdapter;
+import com.alipay.sofa.jraft.error.RaftError;
+import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
+import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
+import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
+import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
+import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
+import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
+import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
+import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
+import com.binance.raftexchange.server.util.SerializeHelper;
+import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
+import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.BinaryDataCommand;
+import com.google.protobuf.GeneratedMessageV3;
+
+import exchange.core2.core.ExchangeApi;
+import exchange.core2.core.common.api.ApiPersistState;
+import exchange.core2.core.common.api.ApiRecoverState;
+
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
@@ -41,15 +42,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
     @Override
     public void onApply(Iterator iter) {
-        // 需要同时获取data和closure所以包装一下
-        // jraft的Iterator只是Iterator<ByteBuffer>
-        Spliterator<Pair<ByteBuffer, Closure>> jraftLogsSpliterator = Spliterators.spliteratorUnknownSize(toJDKIterator(iter), Spliterator.ORDERED);
-        StreamSupport.stream(jraftLogsSpliterator, true)
-                .forEach(this::handleSingleLog);
-    }
-
-    private java.util.Iterator<Pair<ByteBuffer, Closure>> toJDKIterator(Iterator iter) {
-        return new java.util.Iterator<Pair<ByteBuffer, Closure>>() {
+        java.util.Iterator<Pair<ByteBuffer, Closure>> raftLogIter = new java.util.Iterator<Pair<ByteBuffer, Closure>>() {
             @Override
             public boolean hasNext() {
                 return iter.hasNext();
@@ -62,6 +55,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 return Pair.of(data, closure);
             }
         };
+        Spliterator<Pair<ByteBuffer, Closure>> jraftLogsSpliterator = Spliterators.spliteratorUnknownSize(raftLogIter, Spliterator.ORDERED);
+        StreamSupport.stream(jraftLogsSpliterator, true).forEach(this::handleSingleLog);
     }
 
     private void handleSingleLog(Pair<ByteBuffer, Closure> log) {
@@ -70,7 +65,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         CompletableFuture<byte[]> result = null;
         try {
             result = apply(data);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             LOG.error("Fail to apply", e);
         }
         if (closure != null) {
@@ -85,7 +80,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data);
         CompletableFuture<byte[]> result = null;
         if (grpcMessage instanceof ApiCommand) {
-            ApiCommand apiCommand = (ApiCommand) grpcMessage;
+            ApiCommand apiCommand = (ApiCommand)grpcMessage;
             ApiCommand.CommandCase commandCase = apiCommand.getCommandCase();
             switch (commandCase) {
                 case BINARY_DATA:
