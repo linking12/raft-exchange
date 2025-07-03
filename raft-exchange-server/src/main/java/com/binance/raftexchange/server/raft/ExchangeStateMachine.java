@@ -43,8 +43,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     public void onApply(Iterator iter) {
         // 需要同时获取data和closure所以包装一下
         // jraft的Iterator只是Iterator<ByteBuffer>
-        final var input = Spliterators.spliteratorUnknownSize(toJDKIterator(iter), Spliterator.ORDERED);
-        StreamSupport.stream(input, true)
+        Spliterator<Pair<ByteBuffer, Closure>> jraftLogsSpliterator = Spliterators.spliteratorUnknownSize(toJDKIterator(iter), Spliterator.ORDERED);
+        StreamSupport.stream(jraftLogsSpliterator, true)
                 .forEach(this::handleSingleLog);
     }
 
