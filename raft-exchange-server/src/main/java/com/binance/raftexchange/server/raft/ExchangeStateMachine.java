@@ -92,8 +92,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     }
 
     private Executor initParallelApplyTaskPool() {
-        ExchangeApi api = ExchangeApiInstance.exchangeApi();
-        int threadNum = api.getMaxParallel();
+        int threadNum = ExchangeApiInstance.getMaxParallel();
         AtomicLong count = new AtomicLong();
         return Executors.newFixedThreadPool(threadNum, (r) -> {
             Thread thread = new Thread(r, "Raft-exchange-parallel-apply-task-" + count.getAndIncrement());

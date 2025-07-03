@@ -84,12 +84,9 @@ public final class ExchangeApi {
     // promises cache
     private final PromiseBuffer promises;
 
-    private final int maxParallel;
-
     public static final int LONGS_PER_MESSAGE = 5;
 
-    public ExchangeApi(int maxParallel, RingBuffer<OrderCommand> ringBuffer, LZ4Compressor lz4Compressor) {
-        this.maxParallel = maxParallel;
+    public ExchangeApi(RingBuffer<OrderCommand> ringBuffer, LZ4Compressor lz4Compressor) {
         this.ringBuffer = ringBuffer;
         this.lz4Compressor = lz4Compressor;
         this.promises = new PromiseBuffer(ringBuffer.getBufferSize());
@@ -102,10 +99,6 @@ public final class ExchangeApi {
         if (consumer != null) {
             consumer.accept(cmd);
         }
-    }
-
-    public int getMaxParallel() {
-        return maxParallel;
     }
 
     public void submitCommand(ApiCommand cmd) {
