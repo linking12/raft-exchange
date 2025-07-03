@@ -1,7 +1,6 @@
 package exchange.core2.core.utils;
 
 import exchange.core2.core.processors.TwoStepSlaveProcessor;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.AffinityLock;
 import org.jetbrains.annotations.NotNull;
@@ -25,9 +24,6 @@ public final class AffinityThreadFactory implements ThreadFactory {
 
     private final String prefix;
 
-    public AffinityThreadFactory(ThreadAffinityMode threadAffinityMode) {
-        this(threadAffinityMode, "");
-    }
 
     public AffinityThreadFactory(ThreadAffinityMode threadAffinityMode, String prefix) {
         this.threadAffinityMode = threadAffinityMode;
@@ -65,12 +61,9 @@ public final class AffinityThreadFactory implements ThreadFactory {
 
             final int threadId = threadsCounter.incrementAndGet();
             Thread.currentThread().setName(String.format(prefix + "Thread-AF-%d-cpu%d", threadId, lock.cpuId()));
-
             log.debug("{} will be running on thread={} pinned to cpu {}",
                     runnable, Thread.currentThread().getName(), lock.cpuId());
-
             runnable.run();
-
         } finally {
             log.debug("Removing cpu lock/reservation from {}", runnable);
             synchronized (this) {
