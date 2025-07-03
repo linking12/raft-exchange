@@ -101,7 +101,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
 
             ApiPlaceOrder order1 = container.genOrder(userId1, size, 10000, symbolId, BID, GTC, MarginMode.ISOLATED);
@@ -155,7 +155,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
 
             ApiPlaceOrder order1 = ApiPlaceOrder.builder()
@@ -192,7 +192,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -244,7 +244,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
             container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
@@ -289,7 +289,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
 
             container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
@@ -303,8 +303,8 @@ class ITFutureCross {
 
             container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
 
-            // locked margin is 520
-            container.addMoneyToUser(userId1, quoteId, 519);
+            // locked margin is 570
+            container.addMoneyToUser(userId1, quoteId, 569);
             container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
 
             container.addMoneyToUser(userId1, quoteId, 1);
@@ -336,7 +336,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
             container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
@@ -401,7 +401,7 @@ class ITFutureCross {
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
 
             container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
@@ -450,7 +450,7 @@ class ITFutureCross {
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -503,7 +503,7 @@ class ITFutureCross {
             container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
             container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
@@ -531,7 +531,7 @@ class ITFutureCross {
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
             // 期待结果makerOrderId5可以被吃掉, position数量为1
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getPositions().size(), is(2));
+                assertThat(profile.getPositions().size(), is(1));
             });
 
         } catch (ExecutionException e) {
@@ -561,7 +561,7 @@ class ITFutureCross {
             container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
             container.createUserWithSpecificMoney(userId3, MAX_VALUE, quoteId);
@@ -576,8 +576,8 @@ class ITFutureCross {
                 assertThat(profile.getPositions().size(), is(2));
             });
 
-            container.updateCurrentPriceTo(2000, symbols.get(0).symbolId, quoteId);
-            container.updateCurrentPriceTo(35000, symbols.get(1).symbolId, quoteId);
+            container.updateCurrentPriceTo(8000, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(25000, symbols.get(1).symbolId, quoteId);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
@@ -636,7 +636,7 @@ class ITFutureCross {
             container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
             container.createUserWithSpecificMoney(userId3, deposit, quoteId);
@@ -734,7 +734,7 @@ class ITFutureCross {
             container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
             container.createUserWithSpecificMoney(userId3, deposit, quoteId);
@@ -751,13 +751,13 @@ class ITFutureCross {
             });
 
             // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
-            // userId1 symbol0: 10000 - 5339 = 4661
+            // userId1 symbol0: 10000 - 5300 = 4700
             //         symbol1: 15000 - 2000 = 5000
-            //         total profit = -9661
+            //         total profit = -9700
             //         balance = 9840
-            //         profit + balance = -9661 + 9840 = 179 < 180(150 * 1.2)此时会触发alert
+            //         profit + balance = -9700 + 9840 = 140 < 151(126 * 1.2)此时会触发alert
 
-            container.updateCurrentPriceTo(5339, symbols.get(0).symbolId, quoteId);
+            container.updateCurrentPriceTo(5300, symbols.get(0).symbolId, quoteId);
             container.updateCurrentPriceTo(20000, symbols.get(1).symbolId, quoteId);
 
             container.validateUserState(userId1, profile -> {
@@ -776,10 +776,10 @@ class ITFutureCross {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(46)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(34)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event1 = fundEvents.get(43);
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(31);
             assertThat(userId1, Is.is(event1.uid));
             assertThat(quoteId, Is.is(event1.currency));
             assertThat(10000, Is.is(event1.symbol));
@@ -809,7 +809,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -966,7 +966,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1126,7 +1126,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1286,7 +1286,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1444,7 +1444,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1526,7 +1526,7 @@ class ITFutureCross {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1577,11 +1577,10 @@ class ITFutureCross {
         long userId2 = 1004L;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
-        int cnt = 500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-
+            container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
 
@@ -1590,12 +1589,11 @@ class ITFutureCross {
             container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId, MarginMode.CROSS);
 
             // 模拟行情变动
-            for (int i = 0; i < cnt; i++) {
-                container.updateCurrentPriceTo(500, symbolId, quoteId);
-            }
+            container.updateCurrentPriceTo(500, symbolId, quoteId);
+
 
         } finally {
-            verify(handler, times(cnt * 14 + 8)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(16)).fundsEvent(fundEventCapor.capture());
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
 
             IFundEventsHandler.FundsEvent takerCloseEvent = fundEvents.get(0);
@@ -1608,6 +1606,7 @@ class ITFutureCross {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
+            container.initFeeSymbolsMarkPrice();
             container.initFeeUsers();
 
             container.setConsumer(processor);
@@ -1824,6 +1823,7 @@ class ITFutureCross {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
+            container.initFeeSymbolsMarkPrice();
             container.initFeeUsers();
 
             container.setConsumer(processor);
@@ -1911,6 +1911,7 @@ class ITFutureCross {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initFeeSymbols();
+            container.initFeeSymbolsMarkPrice();
             container.initFeeUsers();
 
             container.setConsumer(processor);

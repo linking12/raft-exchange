@@ -1,14 +1,17 @@
 package com.binance.raftexchange.server.exchange;
 
+import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -25,8 +28,10 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
                 .symbolId(grpcSymbol.getSymbolId()).type(SymbolType.of(grpcSymbol.getType().getNumber())).baseCurrency(grpcSymbol.getBaseCurrency())
                 .quoteCurrency(grpcSymbol.getQuoteCurrency()).baseScaleK(grpcSymbol.getBaseScaleK()).quoteScaleK(grpcSymbol.getQuoteScaleK())
                 .takerFee(grpcSymbol.getTakerFee()).makerFee(grpcSymbol.getMakerFee()).feeScaleK(grpcSymbol.getFeeScaleK())
-                .marginBuy(grpcSymbol.getMarginBuy()).marginSell(grpcSymbol.getMarginSell()).maintenanceMargin(grpcSymbol.getMaintenanceMargin())
-                .maxLeverage(grpcSymbol.getMaxLeverage()).build();
+                .initMargin(grpcSymbol.getInitMargin()).initMarginScaleK(grpcSymbol.getInitMarginScaleK())
+                .maintenanceMargin(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaintenanceMarginMap()))
+                .maintenanceMarginScaleK(grpcSymbol.getMaintenanceMarginScaleK())
+                .maxLeverage(TreeSortedMap.newMap(Comparator.naturalOrder(), grpcSymbol.getMaxLeverageMap())).build();
             coreSymbols.add(coreSymbol);
         }
         exchange.core2.core.common.api.binary.BatchAddSymbolsCommand batchAddSymbolsCommand =
@@ -34,6 +39,15 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         LOG.debug("batchAddSymbolsCommand applied, msg: {}", batchAddSymbolsCommand);
 
         return callExchange(batchAddSymbolsCommand);
+    }
+
+    public static CompletableFuture<byte[]> adjustMarkPrice(ApiCommand apiCommand) {
+        ApiAdjustMarkPrice grpcAdjustPrice = apiCommand.getAdjustMarkprice();
+        exchange.core2.core.common.api.ApiAdjustMarkPrice apiAdjustMarkPrice = exchange.core2.core.common.api.ApiAdjustMarkPrice.builder()
+            .transactionId(grpcAdjustPrice.getTransactionId()).symbol(grpcAdjustPrice.getSymbol()).markPrice(grpcAdjustPrice.getMarkPrice()).build();
+        apiAdjustMarkPrice.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustMarkPrice);
+        return callExchange(apiAdjustMarkPrice);
     }
 
     public static CompletableFuture<byte[]> settleFundingFees(ApiCommand apiCommand) {
@@ -49,8 +63,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
     public static CompletableFuture<byte[]> settlePNL(ApiCommand apiCommand) {
         ApiSettlePNL grpcSettlePnl = apiCommand.getSettlePnl();
         exchange.core2.core.common.api.ApiSettlePNL apiSettlePNL = exchange.core2.core.common.api.ApiSettlePNL.builder()
-            .transactionId(grpcSettlePnl.getTransactionId()).symbol(grpcSettlePnl.getSymbol())
-            .settlePrice(grpcSettlePnl.getSettlePrice()).build();
+            .transactionId(grpcSettlePnl.getTransactionId()).symbol(grpcSettlePnl.getSymbol()).settlePrice(grpcSettlePnl.getSettlePrice()).build();
         apiSettlePNL.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("apiSettlePNL applied, msg: {}", apiSettlePNL);
         return callExchange(apiSettlePNL);

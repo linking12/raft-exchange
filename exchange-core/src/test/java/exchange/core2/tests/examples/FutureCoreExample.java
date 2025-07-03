@@ -12,6 +12,7 @@ import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -102,11 +103,21 @@ public class FutureCoreExample {
 
         // 初始化用户和符号
         initializeUserAndSymbols();
+        doMarkPrice(symbolId, 10000L);
     }
 
     @After
     public void tearDown() {
         exchangeCore.shutdown();
+    }
+
+    private void doMarkPrice(int symbolId, long markPrice) {
+        ApiAdjustMarkPrice cmd = ApiAdjustMarkPrice.builder()
+                .transactionId(1334567L)
+                .markPrice(markPrice)
+                .symbol(symbolId)
+                .build();
+        api.submitCommandAsync(cmd);
     }
 
     private void deposit(long userId, long amount) throws ExecutionException, InterruptedException {
@@ -154,8 +165,10 @@ public class FutureCoreExample {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
-                .marginSell(100)
-                .marginBuy(100)
+//                .marginSell(100)
+//                .marginBuy(100)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
@@ -186,9 +199,13 @@ public class FutureCoreExample {
                 .quoteCurrency(quoteId)
                 .makerFee(0)
                 .takerFee(0)
-                .marginBuy(100L)
-                .marginSell(100L)
-                .maintenanceMargin(1000L) // 维持保证金
+//                .marginBuy(100L)
+//                .marginSell(100L)
+//                .maintenanceMargin(1000L) // 维持保证金
+                .initMargin(1)
+                .initMarginScaleK(100)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
 
         future = api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
@@ -674,6 +691,7 @@ public class FutureCoreExample {
             throw new RuntimeException(e);
         }
     }
+
     private void createBiasPrice(int price) {
         int time = 100;
         int cnt = 10;
@@ -779,7 +797,7 @@ public class FutureCoreExample {
     public void testFuturesTrading() throws Exception {
         int size = 10;
         long price = 10000L;
-        int ordersCount = 100;
+        int ordersCount = 10;
         List<ApiCommand> cmds = new ArrayList<>();
 
         long userId1 = createRandomUserWithMoney();
@@ -915,7 +933,7 @@ public class FutureCoreExample {
                 .action(OrderAction.BID)
                 .size(1L)
                 .price(1L)
-                .symbol(symbolId+1)
+                .symbol(symbolId + 1)
                 .reservePrice(1L)
                 .orderType(OrderType.GTC)
                 .marginMode(MarginMode.ISOLATED)

@@ -8,7 +8,10 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.Test;
+
+import java.util.concurrent.TimeUnit;
 
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -21,18 +24,18 @@ public final class ITExchangeCoreCustomLeverage {
     @Test
     public void testLeverageMismatch() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
                     .makerFee(0).takerFee(0)
-                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 20L))
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(10001, 10000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 50_000);
 
@@ -76,6 +79,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             long deposit = 1_200L;
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 10000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, deposit);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 12_000);
 
@@ -148,6 +152,7 @@ public final class ITExchangeCoreCustomLeverage {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
 
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 3500);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -196,7 +201,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .uid(UID_1)
                     .symbol(spec.symbolId)
                     .leverage(15)
-                    .build(), CommandResultCode.RISK_NSF);
+                    .build(), CommandResultCode.SUCCESS);
         }
     }
 
@@ -209,13 +214,16 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
+//                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(1_000_000)
                     .makerFee(0).takerFee(0)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 10L))
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -273,12 +281,15 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10002)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
-                    .maxLeverage(20)
+//                    .marginBuy(1000).marginSell(1000)
+//                    .maxLeverage(20)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .feeScaleK(1_000_000)
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 100_000);
             ApiPlaceOrder badOrder = ApiPlaceOrder.builder()
                     .uid(UID_1)
@@ -301,16 +312,19 @@ public final class ITExchangeCoreCustomLeverage {
     @Test
     public void testLiquidationTriggeredByHighLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-
+            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10003)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000).maintenanceMargin(50)
+//                    .marginBuy(1000).marginSell(1000).maintenanceMargin(50)
                     .feeScaleK(1_000_000)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 10L, 10000L, 50L))
                     .build();
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 1000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100_000);
 
@@ -362,7 +376,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
+                assertThat(profile.getPositions().size(), is(0));
             });
         }
 
@@ -377,13 +391,16 @@ public final class ITExchangeCoreCustomLeverage {
                     .symbolId(10001)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11).quoteCurrency(12)
-                    .marginBuy(1000).marginSell(1000)
+//                    .marginBuy(1000).marginSell(1000)
                     .feeScaleK(100)
                     .makerFee(1).takerFee(2)
-                    .maxLeverage(50)
+//                    .maxLeverage(50)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 10000L, 10L, 50000L, 50L))
                     .build();
 
             container.addSymbol(spec);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -428,6 +445,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testTwoLeverageOrders() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -491,6 +509,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testTwoLeverageOrders2() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 10_000);
 
@@ -571,6 +590,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testTwoLeverageOrdersWithSameOrderId() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             long charge = 10000;
             container.createUserWithMoney(UID_1, spec.quoteCurrency, charge);
 
@@ -632,7 +652,9 @@ public final class ITExchangeCoreCustomLeverage {
     @Test
     public void testLiquidationOfMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -717,6 +739,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationSendWarn() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, 2000);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
 
@@ -771,12 +794,13 @@ public final class ITExchangeCoreCustomLeverage {
     public void testLiquidationLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             long amount = 50020;
             long price = 1000;
             long size = 50;
 
             container.createUserWithMoney(UID_1, spec.quoteCurrency, amount);
-            container.createUserWithMoney(UID_2, spec.quoteCurrency, 100000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, MAX_VALUE);
 
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_1)
@@ -827,10 +851,13 @@ public final class ITExchangeCoreCustomLeverage {
             long takerFee = calculateFee(price, size, 1, spec.takerFee, spec.feeScaleK);
             container.validateUserState(UID_2, profile -> {
                 // maker fee 1000L, 2%
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L - takerFee));
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(MAX_VALUE - takerFee));
                 assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.SHORT));
                 assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
             });
+
+            // 模拟价格下跌，如果按照leverage为1来计算的话, 价格达到25才会触发强平了
+            container.updateCurrentPriceTo(25, spec.symbolId, spec.quoteCurrency);
 
             // 准备980的买单，用来和强平成交
             container.submitCommandSync(ApiPlaceOrder.builder()
@@ -845,12 +872,9 @@ public final class ITExchangeCoreCustomLeverage {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
-            // 模拟价格下跌，如果按照leverage为1来计算的话, 价格达到25才会触发强平了
-            for (int i = 0; i < 100; i++) {
-                container.updateCurrentPriceTo(25, spec.symbolId, spec.quoteCurrency);
-            }
-
-            container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getPositions().getFirst().openVolume, is(50L));
+            });
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             // 检查用户被强平1手
@@ -865,6 +889,7 @@ public final class ITExchangeCoreCustomLeverage {
     public void testPlaceExchangeWhileHasLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             CoreSymbolSpecification spec = container.initSymbol();
+            container.initMarkPrice(spec.symbolId, 1000);
             CoreSymbolSpecification specExchange = container.initSymbolExchange();
 
             long amount = 2000;

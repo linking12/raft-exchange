@@ -44,8 +44,6 @@ public abstract class ITFeesDynamicMargin {
     private final long makerFee = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.makerFee;
     private final long takerFee = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.takerFee;
     private final long scaleFee = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.feeScaleK;
-    private final long marginBuy = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.marginBuy;
-    private final long marginSell = SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.marginSell;
 
     // configuration provided by child class
     public abstract PerformanceConfiguration getPerformanceConfiguration();
@@ -54,8 +52,8 @@ public abstract class ITFeesDynamicMargin {
         return price * size * step * sideFee / scale;
     }
 
-    private long calculateMarginFee(long size) {
-        return size * marginBuy;
+    private long calculateMarginFee(long price, long size) {
+        return price * size * SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMargin / SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMarginScaleK;
     }
 
     @Test
@@ -64,7 +62,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
-
+            container.initDynamicFeeSymbolsMarkPrice();
             // ----------------- 1 test GTC BID cancel ------------------
             long usdtAmount = 100L;
             long price = 10000L;
@@ -85,8 +83,7 @@ public abstract class ITFeesDynamicMargin {
             container.addMoneyToUser(UID_2, CURRENECY_USD, 1);
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
-            long initMargin = calculateMarginFee(size);
-
+            long initMargin = calculateMarginFee(price, size);
             // add margin required - SUCCESS
             container.addMoneyToUser(UID_2, CURRENECY_USD, initMargin);
             container.submitCommandSync(order203, CommandResultCode.SUCCESS);
@@ -139,6 +136,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -239,6 +237,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -338,6 +337,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -434,6 +434,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -535,6 +536,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -635,6 +637,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -735,6 +738,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -834,6 +838,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 
@@ -933,6 +938,7 @@ public abstract class ITFeesDynamicMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initDynamicFeeSymbols();
+            container.initDynamicFeeSymbolsMarkPrice();
             final long usdtAmount = 10000000L;
             container.createUserWithMoney(UID_1, CURRENECY_USD, usdtAmount);
 

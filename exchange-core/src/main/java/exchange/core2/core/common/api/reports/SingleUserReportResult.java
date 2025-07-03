@@ -169,6 +169,7 @@ public final class SingleUserReportResult implements ReportResult {
         // open positions state (for margin trades only)
         public final PositionDirection direction;
         public final long openVolume;
+        public final long openInitMarginSum;
         public final long openPriceSum;
         public final long profit;
 
@@ -188,6 +189,7 @@ public final class SingleUserReportResult implements ReportResult {
 
             this.direction = PositionDirection.of(bytes.readByte());
             this.openVolume = bytes.readLong();
+            this.openInitMarginSum = bytes.readLong();
             this.openPriceSum = bytes.readLong();
             this.profit = bytes.readLong();
 
@@ -206,6 +208,7 @@ public final class SingleUserReportResult implements ReportResult {
             bytes.writeInt(quoteCurrency);
             bytes.writeByte((byte) direction.getMultiplier());
             bytes.writeLong(openVolume);
+            bytes.writeLong(openInitMarginSum);
             bytes.writeLong(openPriceSum);
             bytes.writeLong(profit);
             bytes.writeLong(pendingSellSize);

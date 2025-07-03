@@ -47,7 +47,6 @@ public class ThroughputTestsModule {
                     () -> (float) IntStream.range(0, iterations)
                             .mapToObj(j -> {
                                 container.loadSymbolsUsersAndPrefillOrdersNoLog(testDataFutures);
-
                                 final float perfMt = container.benchmarkMtps(testDataFutures.getGenResult().join().apiCommandsBenchmark.join());
                                 log.info("{}. {} MT/s", j, String.format("%.3f", perfMt));
 

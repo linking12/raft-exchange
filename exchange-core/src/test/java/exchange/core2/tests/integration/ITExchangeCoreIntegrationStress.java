@@ -21,6 +21,7 @@ import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.TestConstants;
 import exchange.core2.tests.util.TestOrdersGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -63,7 +65,9 @@ public abstract class ITExchangeCoreIntegrationStress {
 
     public void manyOperations(final CoreSymbolSpecification symbolSpec) throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             container.initBasicSymbols();
+            container.initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 100);
             //container.initBasicUsers();
             final ExchangeApi api = container.getApi();
 
@@ -88,11 +92,12 @@ public abstract class ITExchangeCoreIntegrationStress {
             final Set<Integer> allowedCurrencies = Stream.of(symbolSpec.quoteCurrency, symbolSpec.baseCurrency).collect(Collectors.toSet());
 
             log.debug("Users init ...");
-            container.usersInit(numUsers, allowedCurrencies);
+            long amountPerUser = 1000_0000_0000L;
+            container.usersInit(numUsers, allowedCurrencies, amountPerUser);
 
             // validate total balance as a sum of loaded funds
             final Consumer<IntLongHashMap> balancesValidator = balances -> allowedCurrencies.forEach(
-                    cur -> assertThat(balances.get(cur), is(10_0000_0000L * numUsers)));
+                    cur -> assertThat(balances.get(cur), is(amountPerUser * numUsers)));
 
 
             log.debug("Verifying balances...");

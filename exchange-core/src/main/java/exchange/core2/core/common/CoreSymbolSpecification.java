@@ -1,22 +1,23 @@
 /*
  * Copyright 2019 Maksim Zheravin
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 package exchange.core2.core.common;
 
-
+import java.util.Comparator;
 import java.util.Objects;
+
+import exchange.core2.core.utils.CoreArithmeticUtils;
+import org.eclipse.collections.api.map.sorted.MutableSortedMap;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -39,10 +40,10 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public final SymbolType type;
 
     // currency pair specification
-    public final int baseCurrency;  // base currency
+    public final int baseCurrency; // base currency
     public final int quoteCurrency; // quote/counter currency (OR futures contract currency)
-    public final long baseScaleK;   // base currency amount multiplier (lot size in base currency units)
-    public final long quoteScaleK;  // quote currency amount multiplier (step size in quote currency units)
+    public final long baseScaleK; // base currency amount multiplier (lot size in base currency units)
+    public final long quoteScaleK; // quote currency amount multiplier (step size in quote currency units)
 
     // fees per lot in quote? currency units
     public final long takerFee; // TODO check invariant: taker fee is not less than maker fee
@@ -50,10 +51,13 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public final long feeScaleK; // 0表示固定费用; >0表示按比例费用, rate=fee/feeScaleK
 
     // margin settings (for type=FUTURES_CONTRACT only)
-    public final long marginBuy;   // buy margin (quote currency)
-    public final long marginSell;  // sell margin (quote currency)
-    public final long maintenanceMargin; // 维持保证金
-    public final int maxLeverage; // 最大杠杆倍数，默认0无限制
+    public final long initMargin;
+    public final long initMarginScaleK;
+    // <notional, maintenanceMargin>
+    public final MutableSortedMap<Long, Long> maintenanceMargin;
+    public final long maintenanceMarginScaleK;
+    // <notional, maxLeverage>
+    public final MutableSortedMap<Long, Long> maxLeverage;
 
     public CoreSymbolSpecification(BytesIn bytes) {
         this.symbolId = bytes.readInt();
@@ -65,32 +69,104 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         this.takerFee = bytes.readLong();
         this.makerFee = bytes.readLong();
         this.feeScaleK = bytes.readLong();
-        this.marginBuy = bytes.readLong();
-        this.marginSell = bytes.readLong();
-        this.maintenanceMargin = bytes.readLong();
-        this.maxLeverage = bytes.readInt();
+        this.initMargin = bytes.readLong();
+        this.initMarginScaleK = bytes.readLong();
+        this.maintenanceMargin = readTreeMapFromBytes(bytes);
+        this.maintenanceMarginScaleK = bytes.readLong();
+        this.maxLeverage = readTreeMapFromBytes(bytes);
     }
 
-/* NOT SUPPORTED YET:
-
-//    order book limits -- for FUTURES only
-//    public final long highLimit;
-//    public final long lowLimit;
-
-//    swaps -- not by
-//    public final long longSwap;
-//    public final long shortSwap;
-
-// activity (inactive, active, expired)
-
-  */
+    /* NOT SUPPORTED YET:
+    
+    //    order book limits -- for FUTURES only
+    //    public final long highLimit;
+    //    public final long lowLimit;
+    
+    //    swaps -- not by
+    //    public final long longSwap;
+    //    public final long shortSwap;
+    
+    // activity (inactive, active, expired)
+    
+      */
 
     public boolean isFixedFee() {
         return feeScaleK == 0;
     }
 
-    public boolean isValidLeverage(int leverage) {
-       return maxLeverage == 0 || (leverage >= 0 && leverage <= maxLeverage);
+    public boolean isValidLeverage(long notional, int leverage) {
+        if (maxLeverage == null || maxLeverage.isEmpty()) {
+            return true;
+        }
+        Long maxLeverageValue = getFloorValueInSortedMap(maxLeverage, notional);
+        if (maxLeverageValue == null) {
+            return true;
+        }
+        return leverage >= 0 && leverage <= maxLeverageValue;
+    }
+
+    public long getInitMarginRate() {
+        if (initMarginScaleK == 0 || initMargin == 0) {
+            return 1;
+        }
+        return initMargin / initMarginScaleK;
+    }
+
+    /**
+     * 初始保证金 = 名义价值 × 初始保证金率 / 杠杆
+     */
+    public long calcInitMargin(long notional, long leverage) {
+        if (initMarginScaleK == 0 || initMargin == 0) {
+            return notional / leverage; // 默认按100%初始保证金率处理
+        }
+        //notional × initMargin / (initMarginScaleK × leverage)
+        return CoreArithmeticUtils.ceilDivide(notional * initMargin, initMarginScaleK * leverage);
+    }
+
+    /**
+     * 维持保证金 = 名义价值 × 维持保证金率
+     */
+    public long calcMaintenanceMargin(long notional) {
+        if (maintenanceMarginScaleK == 0 || maintenanceMargin == null || maintenanceMargin.isEmpty()) {
+            return notional;
+        }
+        Long marginValue = getFloorValueInSortedMap(maintenanceMargin, notional);
+        if (marginValue == null) {
+            return notional;
+        }
+        return notional * marginValue / maintenanceMarginScaleK;
+    }
+
+    private static Long getFloorValueInSortedMap(MutableSortedMap<Long, Long> map, long key) {
+        MutableSortedMap<Long, Long> headMap = map.headMap(key);
+        if (!headMap.isEmpty()) {
+            return map.get(headMap.lastKey());
+        } else {
+            return map.get(map.keySet().min());
+        }
+    }
+
+    private static MutableSortedMap<Long, Long> readTreeMapFromBytes(BytesIn bytes) {
+        MutableSortedMap<Long, Long> map = TreeSortedMap.newMap(Comparator.naturalOrder());
+        long size = bytes.readStopBit();
+        for (long i = 0; i < size; i++) {
+            long key = bytes.readLong();
+            long value = bytes.readLong();
+            map.put(key, value);
+        }
+        return map;
+    }
+
+    private static void writeTreeMapToBytes(MutableSortedMap<Long, Long> map, BytesOut bytes) {
+        if (map == null || map.isEmpty()) {
+            bytes.writeStopBit(0); // 写入大小为 0
+            return;
+        }
+        bytes.writeStopBit(map.size());
+        map.forEachKeyValue((key, value) -> {
+            bytes.writeLong(key);
+            bytes.writeLong(value);
+        });
     }
 
     @Override
@@ -104,47 +180,30 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         bytes.writeLong(takerFee);
         bytes.writeLong(makerFee);
         bytes.writeLong(feeScaleK);
-        bytes.writeLong(marginBuy);
-        bytes.writeLong(marginSell);
-        bytes.writeLong(maintenanceMargin);
-        bytes.writeInt(maxLeverage);
+        bytes.writeLong(initMargin);
+        bytes.writeLong(initMarginScaleK);
+        writeTreeMapToBytes(maintenanceMargin, bytes);
+        bytes.writeLong(maintenanceMarginScaleK);
+        writeTreeMapToBytes(maxLeverage, bytes);
     }
 
     @Override
     public int stateHash() {
-        return Objects.hash(
-                symbolId,
-                type.getCode(),
-                baseCurrency,
-                quoteCurrency,
-                baseScaleK,
-                quoteScaleK,
-                takerFee,
-                makerFee,
-                feeScaleK,
-                marginBuy,
-                marginSell,
-                maintenanceMargin,
-                maxLeverage);
+        return Objects.hash(symbolId, type.getCode(), baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, maintenanceMargin,
+            maintenanceMarginScaleK, maxLeverage);
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        CoreSymbolSpecification that = (CoreSymbolSpecification) o;
-        return symbolId == that.symbolId &&
-                baseCurrency == that.baseCurrency &&
-                quoteCurrency == that.quoteCurrency &&
-                baseScaleK == that.baseScaleK &&
-                quoteScaleK == that.quoteScaleK &&
-                takerFee == that.takerFee &&
-                makerFee == that.makerFee &&
-                feeScaleK == that.feeScaleK &&
-                marginBuy == that.marginBuy &&
-                marginSell == that.marginSell &&
-                maintenanceMargin == that.maintenanceMargin &&
-                maxLeverage == that.maxLeverage &&
-                type == that.type;
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
+        CoreSymbolSpecification that = (CoreSymbolSpecification)o;
+        return symbolId == that.symbolId && baseCurrency == that.baseCurrency && quoteCurrency == that.quoteCurrency && baseScaleK == that.baseScaleK
+            && quoteScaleK == that.quoteScaleK && takerFee == that.takerFee && makerFee == that.makerFee && feeScaleK == that.feeScaleK
+            && maintenanceMargin == that.maintenanceMargin && maintenanceMarginScaleK == that.maintenanceMarginScaleK && maxLeverage == that.maxLeverage
+            && type == that.type;
     }
+
 }

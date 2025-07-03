@@ -136,13 +136,13 @@ public final class LiquidationScanner {
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
         SymbolPositionRecord position, FundEventsHelper eventsHelper) {
         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
-        long profit = position.liquidateEstimateProfit(spec, priceRecord);
+        long profit = position.liquidateEstimateProfit(priceRecord);
         // 当前持仓所需的初始保证金
         long initMargin = position.calculateRequiredMarginForFutures(spec);
         // 账户总权益 = 初始保证金 + 未实现盈亏 + 补充保证金
         long equity = initMargin + profit + position.extraMargin;
         // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
-        long maintenanceMargin = position.calculateMaintenanceMargin(spec);
+        long maintenanceMargin = position.calculateMaintenanceMargin(spec, priceRecord);
         // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
         long warningThreshold = (long)(maintenanceMargin * 1.2);
         // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
@@ -173,8 +173,8 @@ public final class LiquidationScanner {
             for (SymbolPositionRecord position : records) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                long profit = position.liquidateEstimateProfit(spec, priceRecord);
-                long maintenance = position.calculateMaintenanceMargin(spec);
+                long profit = position.liquidateEstimateProfit(priceRecord);
+                long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
                 // 每个仓位的风险系数：risk = (profit - maintenance) / maintenance
