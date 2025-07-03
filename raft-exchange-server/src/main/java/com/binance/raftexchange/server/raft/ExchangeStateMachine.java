@@ -44,7 +44,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             CompletableFuture<byte[]> result = null;
             try {
                 result = apply(data);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 LOG.error("Fail to apply", e);
             }
             if (closure != null) {
