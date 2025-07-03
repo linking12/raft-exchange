@@ -84,13 +84,13 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-//                    .marginBuy(100)
-//                    .marginSell(100)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-//                    .maxLeverage(50)
                     .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec0);
@@ -101,13 +101,13 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-//                    .marginBuy(100)
-//                    .marginSell(100)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-//                    .maxLeverage(50)
                     .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec1);
@@ -128,9 +128,7 @@ class ITPerpetualContractIntegration {
                     .build();
             container.submitCommandSync(cmd0, CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE);
 
-            for (int i = 0; i < 100; i++) {
-                container.updateCurrentPriceTo(10000, spec0.symbolId, spec0.quoteCurrency);
-            }
+            container.updateCurrentPriceTo(10000, spec0.symbolId, spec0.quoteCurrency);
             container.submitCommandSync(cmd0, CommandResultCode.SUCCESS);
         }
     }
@@ -145,13 +143,13 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-//                    .marginBuy(100)
-//                    .marginSell(100)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-//                    .maxLeverage(50)
                     .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec0);
@@ -162,13 +160,13 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
-//                    .marginBuy(100)
-//                    .marginSell(100)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
                     .feeScaleK(100)
                     .makerFee(1)
                     .takerFee(2)
-//                    .maxLeverage(50)
                     .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec1);
@@ -368,7 +366,121 @@ class ITPerpetualContractIntegration {
         int makerFee = 100;
         int takerFee = 200;
         int size = 10;
-        int fundingRate = 100;
+        int fundingRate = 1;
+        int rateScale = 100;
+        int updatedPrice = 1500;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
+
+            // 0. 充钱
+            List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
+            Set<Integer> symbolIds = new HashSet<>();
+            perpetualSymbols.forEach(spec -> {
+                symbolIds.add(spec.quoteCurrency);
+            });
+            container.doDeposit(userIds, symbolIds, deposit);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            // 初始标记价格1000
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(1001).symbol(perpetualSymbols.get(0).symbolId).markPrice(1000).build(), CommandResultCode.SUCCESS);
+
+            // 开仓成功, 1000@10
+            container.createBidWithOrderId(MAKER_1, UID_1, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(TAKER_1, UID_2, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+
+            // update market price to 1500
+            container.updateCurrentPriceTo(updatedPrice, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
+
+            // openInitMargin用标记价格计算, 1500(标记价格) * 10(size) / 100(scale) = 150
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).profit, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).profit, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
+            });
+            // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
+            ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
+                    .transactionId(1345L)
+                    .symbol(perpetualSymbols.get(0).symbolId)
+                    .rateScaleK(rateScale)
+                    .fundingRate(fundingRate)
+                    .build();
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openVolume, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().profit < 0, is(true));
+                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openVolume, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().profit > 0, is(true));
+                assertThat(profile.getPositions().getFirst().profit, is(1L * size * fundingRate * updatedPrice / rateScale));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            // 平仓一手
+            container.createAskWithOrderId(MAKER_2, UID_1, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(TAKER_2, UID_3, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            // init margin = 150 - 150/10 = 135
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().getFirst().openVolume, is(size - 1L));
+                assertThat(profile.getPositions().getFirst().profit, is(-150L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(1000L * size - updatedPrice));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(135L));
+            });
+
+            // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit
+            container.createAskWithOrderId(MAKER_3, UID_1, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(TAKER_3, UID_3, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 - 150));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+        }
+    }
+
+    // 开出来单子后需要做结算 -- 永续, 反向
+    @Test
+    public void testPerpetualScenario2() throws Exception {
+        long deposit = 20000L;
+        int makerFee = 100;
+        int takerFee = 200;
+        int size = 10;
+        int fundingRate = -1;
         int rateScale = 100;
         int updatedPrice = 1500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
@@ -419,6 +531,7 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
             });
 
+            // 永续cmd请求发起后, 合约价格低于现货价格时设置资金费率 < 0(fundingRate/rateScale=-1%), 此时做空用户按比例减钱给做多用户, 鼓励做多
             ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
                     .transactionId(1345L)
                     .symbol(perpetualSymbols.get(0).symbolId)
@@ -430,12 +543,14 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate / rateScale * updatedPrice));
+                assertThat(profile.getPositions().getFirst().profit > 0, is(true));
+                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().profit, is(1L * size * fundingRate / rateScale * updatedPrice));
+                assertThat(profile.getPositions().getFirst().profit < 0, is(true));
+                assertThat(profile.getPositions().getFirst().profit, is(1L * size * fundingRate * updatedPrice / rateScale));
 
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
