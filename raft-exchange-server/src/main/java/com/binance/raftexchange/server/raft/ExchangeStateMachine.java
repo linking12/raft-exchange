@@ -27,77 +27,58 @@ import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.google.protobuf.GeneratedMessageV3;
 
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Set;
+import java.util.Spliterator;
+import java.util.Spliterators;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.StreamSupport;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
     private final SnapshotHelper snapshotHelper = new SnapshotHelper();
-    private final static int BATCH_SIZE = 64 * 1024; // 复杂的command大概需要100ms一个批次，轻量command大概50ms 这样才值得切换
-    private final Executor applyTaskExecutor = initParallelApplyTaskPool();
 
     @Override
     public void onApply(Iterator iter) {
-        ArrayList<CompletableFuture<Void>> applyTasks = new ArrayList<>();
-        ArrayList<Pair<ByteBuffer, Closure>> subList = null;
-        while (iter.hasNext()) {
-            ByteBuffer data = iter.getData();
-            Closure closure = iter.done();
-            if (subList == null) {
-                subList = new ArrayList<>(BATCH_SIZE);
-            }
-            subList.add(Pair.of(data, closure));
-
-            if (subList.size() == BATCH_SIZE) {
-                List<Pair<ByteBuffer, Closure>> logs = subList;
-                applyTasks.add(CompletableFuture.runAsync(() -> handleSingleBatch(logs), applyTaskExecutor));
-                subList = null;
-            }
-            iter.next();
-        }
-        // 不足一批 那么直接在当前线程执行 防止切换成本大于异步计算的收益
-        if (subList != null) {
-            handleSingleBatch(subList);
-        }
-
-        //等待全部任务完成 满足jraft的onApply结束后即认为apply完毕的语义
-        for (CompletableFuture<Void> task : applyTasks) {
-            task.join();
-        }
+        // 需要同时获取data和closure所以包装一下
+        // jraft的Iterator只是Iterator<ByteBuffer>
+        final var input = Spliterators.spliteratorUnknownSize(toJDKIterator(iter), Spliterator.ORDERED);
+        StreamSupport.stream(input, true)
+                .forEach(this::handleSingleLog);
     }
 
-    private void handleSingleBatch(List<Pair<ByteBuffer, Closure>> logs) {
-        for (Pair<ByteBuffer, Closure> log : logs) {
-            ByteBuffer data = log.getKey();
-            Closure closure = log.getValue();
-            CompletableFuture<byte[]> result = null;
-            try {
-                result = apply(data);
-            } catch (Exception e) {
-                LOG.error("Fail to apply", e);
+    private java.util.Iterator<Pair<ByteBuffer, Closure>> toJDKIterator(Iterator iter) {
+        return new java.util.Iterator<Pair<ByteBuffer, Closure>>() {
+            @Override
+            public boolean hasNext() {
+                return iter.hasNext();
             }
-            if (closure != null) {
-                if (closure instanceof ReturnableClosure) {
-                    ((ReturnableClosure)closure).setResult(result);
-                }
-                closure.run(Status.OK());
+
+            @Override
+            public Pair<ByteBuffer, Closure> next() {
+                ByteBuffer data = iter.getData();
+                Closure closure = iter.done();
+                return Pair.of(data, closure);
             }
-        }
+        };
     }
 
-    private Executor initParallelApplyTaskPool() {
-        int threadNum = ExchangeApiInstance.getMaxParallel();
-        AtomicLong count = new AtomicLong();
-        return Executors.newFixedThreadPool(threadNum, (r) -> {
-            Thread thread = new Thread(r, "Raft-exchange-parallel-apply-task-" + count.getAndIncrement());
-            return thread;
-        });
+    private void handleSingleLog(Pair<ByteBuffer, Closure> log) {
+        ByteBuffer data = log.getKey();
+        Closure closure = log.getValue();
+        CompletableFuture<byte[]> result = null;
+        try {
+            result = apply(data);
+        } catch (Exception e) {
+            LOG.error("Fail to apply", e);
+        }
+        if (closure != null) {
+            if (closure instanceof ReturnableClosure) {
+                ((ReturnableClosure)closure).setResult(result);
+            }
+            closure.run(Status.OK());
+        }
     }
 
     private CompletableFuture<byte[]> apply(ByteBuffer data) throws Exception {
