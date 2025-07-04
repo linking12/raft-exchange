@@ -568,7 +568,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (resultCode != CommandResultCode.VALID_FOR_MATCHING_ENGINE) {
             log.warn("{} risk result={} uid={}: Can not place {}", cmd.orderId, resultCode, userProfile.uid, cmd);
             log.warn("{} accounts:{}", cmd.orderId, userProfile.accounts);
-            return CommandResultCode.RISK_NSF;
+            return resultCode;
         }
 
         return resultCode;

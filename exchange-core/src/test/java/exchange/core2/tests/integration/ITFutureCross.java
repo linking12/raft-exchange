@@ -112,7 +112,7 @@ class ITFutureCross {
             });
             ApiPlaceOrder order2 = container.genOrder(userId1, size, 10000, symbolId, BID, GTC, MarginMode.CROSS);
             // 用户已有isolated 持仓，cross下单失败
-            container.submitCommandSync(order2, CommandResultCode.RISK_NSF);
+            container.submitCommandSync(order2, CommandResultCode.RISK_MARGIN_MODE_MISMATCH);
 
             // cancel isolated order
             container.cancelOrder(userId1, order1.orderId, symbolId);
