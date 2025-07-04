@@ -239,8 +239,8 @@ class ITMixedIntegration {
             assertThat(0L, Is.is(event1.fee));
             assertThat(PositionDirection.EMPTY, Is.is(event1.direction));
             assertThat(FundEvent.FundEventType.LOCKED, Is.is(event1.eventType));
-            assertThat(-150L, Is.is(event1.free));
-            assertThat(150L, Is.is(event1.locked));
+            assertThat(-100L, Is.is(event1.free));
+            assertThat(100L, Is.is(event1.locked));
             assertThat(0L, Is.is(event1.openPriceSum));
             assertThat(0L, Is.is(event1.pnl));
             assertThat(0L, Is.is(event1.position));

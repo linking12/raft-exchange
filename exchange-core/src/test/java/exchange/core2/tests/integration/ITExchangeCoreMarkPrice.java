@@ -5,6 +5,7 @@ import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.api.ApiAdjustLeverage;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -240,6 +241,95 @@ public final class ITExchangeCoreMarkPrice {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(symbol.symbolId).getOpenVolume(), is(999L));
             });
+        }
+    }
+
+
+    @Test
+    public void testTieredLeverage() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+
+            container.addSymbol(symbol);
+            container.createUserWithMoney(UID_1, symbol.quoteCurrency, 500_000);
+            container.createUserWithMoney(UID_2, symbol.quoteCurrency, 500_000);
+            int txId = 1000;
+            int orderId = 10000;
+            // markPrice 1000
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(txId++).symbol(symbol.symbolId).markPrice(1000).build(), CommandResultCode.SUCCESS);
+
+            // 挂单1000，开10w，最大75x
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId++)
+                    .price(1000)
+                    .size(100)
+                    .symbol(symbol.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(75)
+                    .build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(orderId++)
+                    .price(1000)
+                    .size(100)
+                    .symbol(symbol.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+//            container.getUserProfile(UID_1); // 触发R2，更新仓位
+
+            // 再挂1单，超过10w，只能开40x，开75x会失败
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId++)
+                    .price(1000)
+                    .size(1)
+                    .symbol(symbol.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(75)
+                    .build(), CommandResultCode.RISK_INVALID_LEVERAGE);
+
+            // 调整杠杆到40x，开1手
+            container.submitCommandSync(ApiAdjustLeverage.builder().uid(UID_1).symbol(symbol.symbolId).leverage(40).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(orderId++)
+                    .price(1000)
+                    .size(1)
+                    .symbol(symbol.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(40)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(orderId++)
+                    .price(1000)
+                    .size(1)
+                    .symbol(symbol.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 全部成交，openInitMarginSum 1000 * 100 / 75 + 1000 * 1 / 40 = 1358.33
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(1358L));
+                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(0L));
+            });
+
         }
     }
 }

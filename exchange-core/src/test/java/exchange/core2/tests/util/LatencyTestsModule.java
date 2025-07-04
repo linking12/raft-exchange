@@ -43,6 +43,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -323,7 +324,7 @@ public class LatencyTestsModule {
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, initialStateConfiguration, SerializationConfiguration.DEFAULT)) {
-
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
             final ExchangeApi api = container.getApi();
 
             final IntFunction<TreeMap<ZonedDateTime, Long>> testIteration = tps -> {
