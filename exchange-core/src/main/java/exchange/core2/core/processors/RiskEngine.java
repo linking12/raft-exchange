@@ -210,7 +210,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             LastPriceCacheRecord average = new LastPriceCacheRecord();
             average.askPrice = (this.askPrice + this.bidPrice) >> 1;
             average.bidPrice = average.askPrice;
-            average.markPrice = average.askPrice;
+            average.markPrice = this.markPrice;
             return average;
         }
 

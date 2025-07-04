@@ -136,7 +136,7 @@ public final class LiquidationScanner {
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
         SymbolPositionRecord position, FundEventsHelper eventsHelper) {
         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
-        long profit = position.liquidateEstimateProfit(priceRecord);
+        long profit = position.estimateUnrealizedProfit(priceRecord);
         // 当前持仓所需的初始保证金
         long initMargin = position.calculateRequiredMarginForFutures(spec);
         // 账户总权益 = 初始保证金 + 未实现盈亏 + 补充保证金
@@ -173,7 +173,7 @@ public final class LiquidationScanner {
             for (SymbolPositionRecord position : records) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                long profit = position.liquidateEstimateProfit(priceRecord);
+                long profit = position.estimateUnrealizedProfit(priceRecord);
                 long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;

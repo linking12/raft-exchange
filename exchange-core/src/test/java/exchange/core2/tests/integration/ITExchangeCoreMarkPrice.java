@@ -282,8 +282,6 @@ public final class ITExchangeCoreMarkPrice {
                     .leverage(10)
                     .build(), CommandResultCode.SUCCESS);
 
-//            container.getUserProfile(UID_1); // 触发R2，更新仓位
-
             // 再挂1单，超过10w，只能开40x，开75x会失败
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_1)
@@ -324,8 +322,10 @@ public final class ITExchangeCoreMarkPrice {
                     .build(), CommandResultCode.SUCCESS);
 
             // 全部成交，openInitMarginSum 1000 * 100 / 75 + 1000 * 1 / 40 = 1358.33
+            // 保证金比率 1000 * 101 * 1% / 1358 = 0.07437， scaleK = 743
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(1358L));
+                assertThat(profile.getPositions().get(symbol.symbolId).getMarginRatioScaleK(), is(743L));
                 assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(0L));
                 assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(0L));
             });

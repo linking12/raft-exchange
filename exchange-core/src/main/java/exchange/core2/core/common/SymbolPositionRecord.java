@@ -180,32 +180,31 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
     
     /**
-     * 计算未实现盈亏，基于标记价格。
-     * - 多头：(markPrice - 开仓价格) * 数量 + 已实现盈亏。
-     * - 空头：(开仓价格 - markPrice) * 数量 + 已实现盈亏。
-     * - 若 markPrice 无效（0），使用初始保证金作为保守估计。
+     * 【强平风险评估用】计算未实现盈亏，基于标记价格。
+     * - 多头：(markPrice - 开仓价格) * 数量
+     * - 空头：(开仓价格 - markPrice) * 数量
      */
-    public long liquidateEstimateProfit(final LastPriceCacheRecord lastPriceCacheRecord) {
-        switch (direction) {
-            case EMPTY:
-                return profit;
-            case LONG:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    return profit + (openVolume * lastPriceCacheRecord.markPrice - openPriceSum);
-                } else {
-                    // fallback: 从初始保证金角度去估算 liquidate 时是否还有收益空间
-                    return profit + openInitMarginSum - openPriceSum;
-                }
-            case SHORT:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.markPrice);
-                } else {
-                    // fallback: 从初始保证金角度去估算 liquidate 时是否还有收益空间
-                    return profit + openInitMarginSum - openPriceSum;
-                }
-            default:
-                throw new IllegalStateException();
+    public long estimateUnrealizedProfit(final LastPriceCacheRecord priceRecord) {
+        return direction.getMultiplier() * (openVolume * priceRecord.markPrice - openPriceSum);
+    }
+
+    /**
+     * 计算强平价格，基于标记价格。
+     * 强平触发条件为：账户权益 <= 维持保证金
+     * - 多仓（LONG）：equity = 总保证金 + (markPrice - entryPrice) * 仓位数量
+     * - 空仓（SHORT）：equity = 总保证金 + (entryPrice - markPrice) * 仓位数量
+     * 目标是求出触发强平时的 markPrice，即 P_liq。
+     * 推导后统一公式为：
+     * P_liq = (sign * (MM - totalMargin) + entryValue) / positionSize
+     */
+    public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
+        if (openVolume == 0) {
+            return 0; // 无持仓，不存在强平价
         }
+        long notional = openVolume * priceRecord.markPrice;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+        long totalMargin = openInitMarginSum + extraMargin;
+        return (direction.getMultiplier() * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume;
     }
 
     /**
