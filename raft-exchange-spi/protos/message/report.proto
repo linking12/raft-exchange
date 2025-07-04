@@ -65,6 +65,9 @@ message Position {
   int32 leverage = 10;
   MarginMode margin_mode = 11;
   int64 extra_margin = 12;
+  int64 unrealized_profit = 13;
+  int64 liquidation_price = 14;
+  int64 margin_ratio_scale_k = 15;
 }
 
 message Order {
