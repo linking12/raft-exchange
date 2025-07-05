@@ -107,7 +107,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
-        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards, this);
         // initialize object pools
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);
@@ -927,7 +927,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (ev.eventType == MatcherEventType.TRADE) {
                 // update taker's position
                 long preVolume = takerSpr.openVolume;
-                long prePriceSum = takerSpr.openPriceSum;
 
                 // un-hold pending
                 long pendingReleasedSize = takerSpr.pendingRelease(takerAction, ev.size);
@@ -949,7 +948,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
                     long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
                     boolean isLiquidation = LiquidationScanner.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
-                    eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, prePriceSum, preVolume, ev.price, 0, closePnl);
+                    eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, ev.price, 0, closePnl);
                 }
 
                 // 开仓事件
@@ -988,7 +987,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
             SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(spec.symbolId);
             long preVolume = makerSpr.openVolume;
-            long prePriceSum = makerSpr.openPriceSum;
 
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);
             if (pendingReleasedSize > 0) {
@@ -1009,7 +1007,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 long locked = calculateLockedMargin(maker, spec.quoteCurrency);
                 long free = maker.accounts.get(spec.quoteCurrency) - locked;
                 // Maker是被动成交者，不属于liquidation
-                eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, prePriceSum, preVolume, ev.price, 0, closePnl);
+                eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, ev.price, 0, closePnl);
             }
 
             if (sizeToOpen > 0) {

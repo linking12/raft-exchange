@@ -165,8 +165,13 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         FundsEventPB pbObject =
             builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
                 .setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
-                .setSymbol(fundsEvent.getSymbol()).setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setPosition(fundsEvent.getPosition())
-                .setPositionChanged(fundsEvent.getPositionChanged()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setOpenVolume(fundsEvent.getOpenVolume())
+                .setSymbol(fundsEvent.getSymbol()).setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setOpenVolume(fundsEvent.getOpenVolume())
+                .setOpenInitMarginSum(fundsEvent.getOpenInitMarginSum()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setProfit(fundsEvent.getProfit())
+                .setPendingSellSize(fundsEvent.getPendingSellSize()).setPendingBuySize(fundsEvent.getPendingBuySize())
+                .setPendingSellAvgPrice(fundsEvent.getPendingSellAvgPrice()).setPendingBuyAvgPrice(fundsEvent.getPendingBuyAvgPrice())
+                .setLeverage(fundsEvent.getLeverage()).setMarginModeValue(fundsEvent.getMarginMode().ordinal()).setExtraMargin(fundsEvent.getExtraMargin())
+                .setUnrealizedProfit(fundsEvent.getUnrealizedProfit()).setLiquidationPrice(fundsEvent.getLiquidationPrice())
+                .setMarginRatioScaleK(fundsEvent.getMarginRatioScaleK()).setTradeSize(fundsEvent.getTradeSize())
                 .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).setPnl(fundsEvent.getPnl()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();

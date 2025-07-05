@@ -4,11 +4,15 @@ import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 
 import java.util.function.Supplier;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -18,6 +22,7 @@ public class FundEventsHelper {
     private final Supplier<FundEvent> eventSupplier;
     private final int riskEngineShardId;
     private final int numShards;
+    private final RiskEngine riskEngine;
 
     private FundEvent eventsChainHead;
 
@@ -40,10 +45,42 @@ public class FundEventsHelper {
         event.currency = position.currency;
         event.symbol = position.symbol;
         event.direction = position.direction;
-        event.position = position.openVolume;
+        event.openVolume = position.openVolume;
+        event.openInitMarginSum = position.openInitMarginSum;
+        event.openPriceSum = position.openPriceSum;
+        event.profit = position.profit;
+        event.pendingSellSize = position.pendingSellSize;
+        event.pendingBuySize = position.pendingBuySize;
+        event.pendingSellAvgPrice = position.pendingSellAvgPrice;
+        event.pendingBuyAvgPrice = position.pendingBuyAvgPrice;
+        event.leverage = position.getLeverage();
+        event.marginMode = position.marginMode;
+        event.extraMargin = position.extraMargin;
+        LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(position.symbol);
+        CoreSymbolSpecification spec = riskEngine.getSymbolSpecificationProvider().getSymbolSpecification(position.symbol);
+        event.unrealizedProfit = position.estimateUnrealizedProfit(priceRecord);
+        event.liquidationPrice = position.estimateLiquidationPrice(spec, priceRecord);
+        event.marginRatioScaleK = marginRatioScaleK(position, spec, priceRecord);
         event.free = free;
         event.locked = locked;
         return event;
+    }
+
+    private long marginRatioScaleK(SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
+        long notional = position.openVolume * priceRecord.markPrice;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+        long totalMargin;
+        if (position.marginMode == MarginMode.CROSS) {
+            UserProfile userProfile = riskEngine.getUserProfileService().getUserProfile(position.uid);
+            long totalUnrealizedPnl = userProfile.positions
+                    .select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
+                    .sumOfLong(pos -> pos.estimateUnrealizedProfit(riskEngine.getLastPriceCache().get(pos.symbol)));
+            long balance = userProfile.accounts.get(position.currency);
+            totalMargin = balance + totalUnrealizedPnl;
+        } else {
+            totalMargin = position.openInitMarginSum + position.extraMargin;
+        }
+        return (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
     }
 
     /**
@@ -104,12 +141,10 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
-        long sizeClosed, long openPriceSum, long openVolume, long price, long fee, long pnl) {
+    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position,
+                                            long free, long locked, long sizeClosed, long price, long fee, long pnl) {
         FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
-        event.positionChanged = sizeClosed;
-        event.openPriceSum = openPriceSum;
-        event.openVolume = openVolume;
+        event.tradeSize = sizeClosed;
         event.tradePrice = price;
         event.fee = fee;
         event.pnl = pnl;
@@ -117,10 +152,10 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked, long sizeOpened, long price,
-        long fee) {
+    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free,
+                                           long locked, long sizeOpened, long price, long fee) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
-        event.positionChanged = sizeOpened;
+        event.tradeSize = sizeOpened;
         event.tradePrice = price;
         event.fee = fee;
         addFundEvent(cmd, orderId, event);
@@ -129,45 +164,31 @@ public class FundEventsHelper {
 
     // 通知调整保证金
     public FundEvent sendMarginAlertEvent(SymbolPositionRecord position) {
-        FundEvent event = buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, 0, 0);
-        event.positionChanged = 0; // 无清算
-        event.openPriceSum = position.openPriceSum;
-        event.openVolume = position.openVolume;
-        event.tradePrice = 0; // 无清算价格
-        event.fee = 0; // 无交易费用
-        event.pnl = 0; // 无盈亏变动
-        return event;
+        return buildFuturesEvent(0, FundEventType.MARGIN_ALERT, position, 0, 0);
     }
 
     // 通知强平
     public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long markPrice, long sizeToLiquidate) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_ALERT, position, 0, 0);
-        event.positionChanged = sizeToLiquidate; // 清算仓位
-        event.openPriceSum = position.openPriceSum;
-        event.openVolume = position.openVolume;
-        event.tradePrice = markPrice; // 清算价格
-        event.fee = 0; // 无交易费用
-        event.pnl = 0; // 无盈亏变动
+        event.tradeSize = sizeToLiquidate;
+        event.tradePrice = markPrice;
         return event;
     }
 
     public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, int currency, long amount, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.MARGIN_ADJUST, currency, free, locked);
-        event.extra = amount;
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_ADJUST, position, free, locked);
-        event.extra = position.extraMargin;
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     public FundEvent sendMarginRefundEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_REFUND, position, free, locked);
-        event.extra = position.extraMargin;
         addFundEvent(cmd, orderId, event);
         return event;
     }
@@ -182,11 +203,7 @@ public class FundEventsHelper {
     // 生成盈亏结算事件 (PNL_SETTLEMENT)。
     public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPrice, long settledPnl) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
-        event.positionChanged = 0;
-        event.openPriceSum = position.openPriceSum;
-        event.openVolume = position.openVolume;
         event.tradePrice = settledPrice; // 结算价格
-        event.fee = 0;
         event.pnl = settledPnl; // 结算盈亏
         addFundEvent(cmd, cmd.orderId, event);
         return event;
@@ -230,7 +247,6 @@ public class FundEventsHelper {
             event.nextEvent = null; // 断掉链表，借出的对象应该和下面new的对象等价
             event.processed = false;
             event.eventType = null;
-            event.section = 0;
             event.orderId = 0;
             event.uid = 0;
             event.currency = 0;
@@ -238,10 +254,21 @@ public class FundEventsHelper {
             event.locked = 0;
             event.symbol = 0;
             event.direction = PositionDirection.EMPTY;
-            event.position = 0;
-            event.positionChanged = 0;
-            event.openPriceSum = 0;
             event.openVolume = 0;
+            event.openInitMarginSum = 0;
+            event.openPriceSum = 0;
+            event.profit = 0;
+            event.pendingSellSize = 0;
+            event.pendingBuySize = 0;
+            event.pendingSellAvgPrice = 0;
+            event.pendingBuyAvgPrice = 0;
+            event.leverage = 0;
+            event.marginMode = null;
+            event.extraMargin = 0;
+            event.unrealizedProfit = 0;
+            event.liquidationPrice = 0;
+            event.marginRatioScaleK = 0;
+            event.tradeSize = 0;
             event.tradePrice = 0;
             event.fee = 0;
             event.pnl = 0;

@@ -51,13 +51,24 @@ message FundsEventPB {
   FundEventType eventType = 6;
   int32 symbol = 7;
   PositionDirection direction = 8;
-  int64 position = 9;
-  int64 positionChanged = 10;
+  int64 openVolume = 9;
+  int64 openInitMarginSum = 10;
   int64 openPriceSum = 11;
-  int64 openVolume = 12;
-  int64 tradePrice = 13;
-  int64 fee = 14;
-  int64 pnl = 15;
+  int64 profit = 12;
+  int64 pendingSellSize = 13;
+  int64 pendingBuySize = 14;
+  int64 pendingSellAvgPrice = 15;
+  int64 pendingBuyAvgPrice = 16;
+  int32 leverage = 17;
+  MarginMode marginMode = 18;
+  int64 extraMargin = 19;
+  int64 unrealizedProfit = 20;
+  int64 liquidationPrice = 21;
+  int64 marginRatioScaleK = 22;
+  int64 tradeSize = 23;
+  int64 tradePrice = 24;
+  int64 fee = 25;
+  int64 pnl = 26;
 }
 
 enum FundEventType {
