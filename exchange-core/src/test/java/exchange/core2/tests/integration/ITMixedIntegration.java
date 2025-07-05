@@ -145,8 +145,8 @@ class ITMixedIntegration {
             assertThat(fee, Is.is(marginEvent.locked));
             assertThat(0L, Is.is(marginEvent.openPriceSum));
             assertThat(0L, Is.is(marginEvent.pnl));
-            assertThat(0L, Is.is(marginEvent.position));
-            assertThat(0L, Is.is(marginEvent.positionChanged));
+            assertThat(0L, Is.is(marginEvent.openVolume));
+            assertThat(0L, Is.is(marginEvent.tradeSize));
             assertThat(0L, Is.is(marginEvent.tradePrice));
             // symbol is not set in placeExchange event
             assertThat(10000, Is.is(marginEvent.symbol));
@@ -171,8 +171,8 @@ class ITMixedIntegration {
             assertThat(120L, Is.is(exchangeLockEvent.locked));
             assertThat(0L, Is.is(exchangeLockEvent.openPriceSum));
             assertThat(0L, Is.is(exchangeLockEvent.pnl));
-            assertThat(0L, Is.is(exchangeLockEvent.position));
-            assertThat(0L, Is.is(exchangeLockEvent.positionChanged));
+            assertThat(0L, Is.is(exchangeLockEvent.openVolume));
+            assertThat(0L, Is.is(exchangeLockEvent.tradeSize));
             assertThat(0L, Is.is(exchangeLockEvent.tradePrice));
             // symbol is not set in placeExchange event
             assertThat(10003, Is.is(exchangeLockEvent.symbol));
@@ -243,8 +243,8 @@ class ITMixedIntegration {
             assertThat(100L, Is.is(event1.locked));
             assertThat(0L, Is.is(event1.openPriceSum));
             assertThat(0L, Is.is(event1.pnl));
-            assertThat(0L, Is.is(event1.position));
-            assertThat(0L, Is.is(event1.positionChanged));
+            assertThat(0L, Is.is(event1.openVolume));
+            assertThat(0L, Is.is(event1.tradeSize));
             assertThat(0L, Is.is(event1.tradePrice));
         }
     }

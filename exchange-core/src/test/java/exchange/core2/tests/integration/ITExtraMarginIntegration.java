@@ -157,8 +157,8 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(event1.locked));
             assertThat(0L, is(event1.openPriceSum));
             assertThat(0L, is(event1.pnl));
-            assertThat(0L, is(event1.position));
-            assertThat(0L, is(event1.positionChanged));
+            assertThat(0L, is(event1.openVolume));
+            assertThat(0L, is(event1.tradeSize));
             assertThat(0L, is(event1.tradePrice));
         }
     }
@@ -255,10 +255,10 @@ class ITExtraMarginIntegration {
             assertThat(120L, is(event1.locked));
             assertThat(0L, is(event1.openPriceSum));
             assertThat(0L, is(event1.pnl));
-            assertThat(0L, is(event1.position));
-            assertThat(0L, is(event1.positionChanged));
+            assertThat(0L, is(event1.openVolume));
+            assertThat(0L, is(event1.tradeSize));
             assertThat(0L, is(event1.tradePrice));
-            assertThat(1000L, is(event1.extra));
+            assertThat(1000L, is(event1.extraMargin));
         }
     }
 
@@ -334,11 +334,11 @@ class ITExtraMarginIntegration {
             assertThat(FundEvent.FundEventType.MARGIN_ADJUST, is(marginAdjust.eventType));
             assertThat(890L, is(marginAdjust.free));
             assertThat(100L, is(marginAdjust.locked));
-            assertThat(0L, is(marginAdjust.openPriceSum));
+            assertThat(10000L, is(marginAdjust.openPriceSum));
             assertThat(0L, is(marginAdjust.pnl));
-            assertThat(1L, is(marginAdjust.position));
-            assertThat(0L, is(marginAdjust.positionChanged));
-            assertThat(500L, is(marginAdjust.extra));
+            assertThat(1L, is(marginAdjust.openVolume));
+            assertThat(0L, is(marginAdjust.tradeSize));
+            assertThat(500L, is(marginAdjust.extraMargin));
 
             IFundEventsHandler.FundsEvent marginRefund = fundEvents.get(15);
             assertThat(userId1, is(marginRefund.uid));
@@ -351,10 +351,10 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(marginRefund.locked));
             assertThat(0L, is(marginRefund.openPriceSum));
             assertThat(0L, is(marginRefund.pnl));
-            assertThat(0L, is(marginRefund.position));
-            assertThat(0L, is(marginRefund.positionChanged));
+            assertThat(0L, is(marginRefund.openVolume));
+            assertThat(0L, is(marginRefund.tradeSize));
             assertThat(0L, is(marginRefund.tradePrice));
-            assertThat(500L, is(marginRefund.extra));
+            assertThat(500L, is(marginRefund.extraMargin));
         }
     }
 
@@ -634,8 +634,8 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(alertEvent.locked));
             assertThat(10000L, is(alertEvent.openPriceSum));
             assertThat(0L, is(alertEvent.pnl));
-            assertThat(1L, is(alertEvent.position));
-            assertThat(0L, is(alertEvent.positionChanged));
+            assertThat(1L, is(alertEvent.openVolume));
+            assertThat(0L, is(alertEvent.tradeSize));
             assertThat(0L, is(alertEvent.tradePrice));
         }
     }
@@ -735,10 +735,10 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(alertEvent.locked));
             assertThat(15000L, is(alertEvent.openPriceSum));
             assertThat(0L, is(alertEvent.pnl));
-            assertThat(1L, is(alertEvent.position));
-            assertThat(0L, is(alertEvent.positionChanged));
+            assertThat(1L, is(alertEvent.openVolume));
+            assertThat(0L, is(alertEvent.tradeSize));
             assertThat(0L, is(alertEvent.tradePrice));
-            assertThat(0L, is(alertEvent.extra));
+            assertThat(0L, is(alertEvent.extraMargin));
         }
     }
 
@@ -839,10 +839,10 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(alertEvent.locked));
             assertThat(15000L, is(alertEvent.openPriceSum));
             assertThat(0L, is(alertEvent.pnl));
-            assertThat(1L, is(alertEvent.position));
-            assertThat(0L, is(alertEvent.positionChanged));
+            assertThat(1L, is(alertEvent.openVolume));
+            assertThat(0L, is(alertEvent.tradeSize));
             assertThat(0L, is(alertEvent.tradePrice));
-            assertThat(0L, is(alertEvent.extra));
+            assertThat(0L, is(alertEvent.extraMargin));
 
             IFundEventsHandler.FundsEvent alertEvent2 = fundEvents.get(37);
             assertThat(userId1, is(alertEvent2.uid));
@@ -856,10 +856,10 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(alertEvent2.locked));
             assertThat(15000L, is(alertEvent2.openPriceSum));
             assertThat(0L, is(alertEvent2.pnl));
-            assertThat(1L, is(alertEvent2.position));
-            assertThat(0L, is(alertEvent2.positionChanged));
+            assertThat(1L, is(alertEvent2.openVolume));
+            assertThat(0L, is(alertEvent2.tradeSize));
             assertThat(0L, is(alertEvent2.tradePrice));
-            assertThat(0L, is(alertEvent.extra));
+            assertThat(0L, is(alertEvent.extraMargin));
         }
     }
 
@@ -960,10 +960,10 @@ class ITExtraMarginIntegration {
             assertThat(100L, is(refund1.locked));
             assertThat(0L, is(refund1.openPriceSum));
             assertThat(0L, is(refund1.pnl));
-            assertThat(0L, is(refund1.position));
-            assertThat(0L, is(refund1.positionChanged));
+            assertThat(0L, is(refund1.openVolume));
+            assertThat(0L, is(refund1.tradeSize));
             assertThat(0L, is(refund1.tradePrice));
-            assertThat(900L, is(refund1.extra));
+            assertThat(900L, is(refund1.extraMargin));
 
             IFundEventsHandler.FundsEvent refund2 = fundEvents.get(44);
             assertThat(userId1, is(refund2.uid));
@@ -976,10 +976,10 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(refund2.locked));
             assertThat(0L, is(refund2.openPriceSum));
             assertThat(0L, is(refund2.pnl));
-            assertThat(0L, is(refund2.position));
-            assertThat(0L, is(refund2.positionChanged));
+            assertThat(0L, is(refund2.openVolume));
+            assertThat(0L, is(refund2.tradeSize));
             assertThat(0L, is(refund2.tradePrice));
-            assertThat(2900L, is(refund2.extra));
+            assertThat(2900L, is(refund2.extraMargin));
         }
     }
 
