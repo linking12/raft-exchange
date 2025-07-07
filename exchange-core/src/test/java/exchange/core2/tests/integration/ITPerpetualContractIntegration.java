@@ -604,7 +604,7 @@ class ITPerpetualContractIntegration {
      */
     @Test
     public void testPerpetualScenario3() throws Exception {
-        long deposit = 10000L;
+        long deposit = 5000L;
         int makerFee = 100;
         int takerFee = 200;
         int size = 10;
@@ -633,7 +633,7 @@ class ITPerpetualContractIntegration {
 
             // 0. 充钱
             List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
-            userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, 10000));
+            userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, deposit));
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
@@ -696,8 +696,6 @@ class ITPerpetualContractIntegration {
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
-            // UID_3先下一单准备吃掉UID_1强平单
-            container.createBidWithOrderId(MAKER_3, UID_3, size, 1100, spec.symbolId, MarginMode.CROSS);
             // 第二次触发强平因为资金费率UID_1仓位亏损触发强平
             // 此时profit = -11110 + 11000 - 10000 = -10110
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 11000 * 5 / 10 = 5500
@@ -706,14 +704,31 @@ class ITPerpetualContractIntegration {
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             // openPriceSum = 10 * 1000 - 6 * 1100 = 3400
-            // openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 6 /10 = 44
+            // openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(44L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(3400L));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(4L));
+                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
+                assertThat(profile.getPositions().getFirst().profit, is(-11110L));
+            });
+
+            container.updateCurrentPriceTo(600, spec.symbolId, spec.quoteCurrency);
+
+            // UID_3先下一单准备吃掉UID_1强平单
+            container.createBidWithOrderId(MAKER_3, UID_3, size, 600, spec.symbolId, MarginMode.CROSS);
+            container.getUserProfile(UID_1);
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(66L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(7600L));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().openVolume, is(6L));
                 assertThat(profile.getPositions().getFirst().profit, is(-11110L));
             });
         }
