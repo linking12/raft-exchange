@@ -15,6 +15,7 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -22,7 +23,9 @@ public class FundEventsHelper {
     private final Supplier<FundEvent> eventSupplier;
     private final int riskEngineShardId;
     private final int numShards;
-    private final RiskEngine riskEngine;
+    private final UserProfileService userProfileService;
+    private final SymbolSpecificationProvider symbolSpecificationProvider;
+    private final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
 
     private FundEvent eventsChainHead;
 
@@ -56,8 +59,8 @@ public class FundEventsHelper {
         event.leverage = position.getLeverage();
         event.marginMode = position.marginMode;
         event.extraMargin = position.extraMargin;
-        LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(position.symbol);
-        CoreSymbolSpecification spec = riskEngine.getSymbolSpecificationProvider().getSymbolSpecification(position.symbol);
+        LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
+        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
         event.unrealizedProfit = position.estimateUnrealizedProfit(priceRecord);
         event.liquidationPrice = position.estimateLiquidationPrice(spec, priceRecord);
         event.marginRatioScaleK = marginRatioScaleK(position, spec, priceRecord);
@@ -71,10 +74,10 @@ public class FundEventsHelper {
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         long totalMargin;
         if (position.marginMode == MarginMode.CROSS) {
-            UserProfile userProfile = riskEngine.getUserProfileService().getUserProfile(position.uid);
+            UserProfile userProfile = userProfileService.getUserProfile(position.uid);
             long totalUnrealizedPnl = userProfile.positions
                     .select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
-                    .sumOfLong(pos -> pos.estimateUnrealizedProfit(riskEngine.getLastPriceCache().get(pos.symbol)));
+                    .sumOfLong(pos -> pos.estimateUnrealizedProfit(lastPriceCache.get(pos.symbol)));
             long balance = userProfile.accounts.get(position.currency);
             totalMargin = balance + totalUnrealizedPnl;
         } else {
@@ -176,6 +179,7 @@ public class FundEventsHelper {
 
     public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, int currency, long amount, long free, long locked) {
         FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.MARGIN_ADJUST, currency, free, locked);
+        event.extraMargin = 0; // 全仓充值已经体现在余额上了
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }

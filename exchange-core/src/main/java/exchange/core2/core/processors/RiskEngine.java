@@ -77,12 +77,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private IntLongHashMap fees;
     private IntLongHashMap adjustments;
     private IntLongHashMap suspends;
-    
-    
+    private FundEventsHelper eventsHelper;
+
     // 无状态的配置字段
     private final SharedPool sharedPool;
     private final ObjectsPool objectsPool;
-    private final FundEventsHelper eventsHelper;
     // sharding by symbolId
     private final int shardId;
     private final long shardMask;
@@ -107,7 +106,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
-        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards, this);
         // initialize object pools
         final HashMap<Integer, Integer> objectsPoolConfig = new HashMap<>();
         objectsPoolConfig.put(ObjectsPool.SYMBOL_POSITION_RECORD, 1024 * 256);
@@ -117,10 +115,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgIgnoreRiskProcessing = ordersProcCfg.getRiskProcessingMode() == OrdersProcessingConfiguration.RiskProcessingMode.NO_RISK_PROCESSING;
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
-        this.initState();
+        this.initState(numShards);
     }
     
-    private void initState() {
+    private void initState(int numShards) {
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
         this.userProfileService = new UserProfileService();
         this.binaryCommandsProcessor = new BinaryCommandsProcessor(
@@ -133,6 +131,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.fees = new IntLongHashMap();
         this.adjustments = new IntLongHashMap();
         this.suspends = new IntLongHashMap();
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards, this.userProfileService, this.symbolSpecificationProvider, this.lastPriceCache);
     }
 
     
