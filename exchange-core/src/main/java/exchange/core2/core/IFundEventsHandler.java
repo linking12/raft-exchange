@@ -44,7 +44,6 @@ public interface IFundEventsHandler {
         public final long tradeSize; // 本次交易数量
         public final long tradePrice; // 本次交易价格
         public final long fee; // 手续费
-        public final long pnl; // 本次事件的盈亏金额
     }
 
 }

@@ -144,7 +144,6 @@ class ITMixedIntegration {
             assertThat(deposit - fee, Is.is(marginEvent.free));
             assertThat(fee, Is.is(marginEvent.locked));
             assertThat(0L, Is.is(marginEvent.openPriceSum));
-            assertThat(0L, Is.is(marginEvent.pnl));
             assertThat(0L, Is.is(marginEvent.openVolume));
             assertThat(0L, Is.is(marginEvent.tradeSize));
             assertThat(0L, Is.is(marginEvent.tradePrice));
@@ -170,7 +169,6 @@ class ITMixedIntegration {
             assertThat(0L, Is.is(exchangeLockEvent.free));
             assertThat(120L, Is.is(exchangeLockEvent.locked));
             assertThat(0L, Is.is(exchangeLockEvent.openPriceSum));
-            assertThat(0L, Is.is(exchangeLockEvent.pnl));
             assertThat(0L, Is.is(exchangeLockEvent.openVolume));
             assertThat(0L, Is.is(exchangeLockEvent.tradeSize));
             assertThat(0L, Is.is(exchangeLockEvent.tradePrice));
@@ -242,7 +240,6 @@ class ITMixedIntegration {
             assertThat(-100L, Is.is(event1.free));
             assertThat(100L, Is.is(event1.locked));
             assertThat(0L, Is.is(event1.openPriceSum));
-            assertThat(0L, Is.is(event1.pnl));
             assertThat(0L, Is.is(event1.openVolume));
             assertThat(0L, Is.is(event1.tradeSize));
             assertThat(0L, Is.is(event1.tradePrice));

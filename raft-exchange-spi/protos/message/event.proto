@@ -68,7 +68,6 @@ message FundsEventPB {
   int64 tradeSize = 23;
   int64 tradePrice = 24;
   int64 fee = 25;
-  int64 pnl = 26;
 }
 
 enum FundEventType {

@@ -913,7 +913,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             // 3.发送结算事件
             long balance = userProfile.accounts.get(position.currency);
             long locked = calculateLockedMargin(userProfile, position.currency);
-            eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked, cmd.price, position.profit);
+            eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked, cmd.price);
         });
     }
 
@@ -938,17 +938,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
 
                 // 先平反方向仓位，返回剩余未成交数量
-                long preProfit = takerSpr.profit;
                 final long sizeToOpen = takerSpr.closeCurrentPositionFutures(takerAction, ev.size, ev.price);
                 long closedSize = Math.max(0, preVolume - takerSpr.openVolume);
 
                 // 平仓事件
                 if (closedSize > 0) {
-                    long closePnl = takerSpr.profit - preProfit;
                     long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
                     long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
                     boolean isLiquidation = LiquidationScanner.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
-                    eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, ev.price, 0, closePnl);
+                    eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, ev.price, 0);
                 }
 
                 // 开仓事件
@@ -997,17 +995,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
 
             // 先平仓
-            long preProfit = makerSpr.profit;
             final long sizeToOpen = makerSpr.closeCurrentPositionFutures(takerAction.opposite(), ev.size, ev.price);
             long sizeClosed = Math.max(0, preVolume - makerSpr.openVolume);
 
             // 计算平仓信息
             if (sizeClosed > 0) {
-                long closePnl = makerSpr.profit - preProfit;
                 long locked = calculateLockedMargin(maker, spec.quoteCurrency);
                 long free = maker.accounts.get(spec.quoteCurrency) - locked;
                 // Maker是被动成交者，不属于liquidation
-                eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, ev.price, 0, closePnl);
+                eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked, sizeClosed, ev.price, 0);
             }
 
             if (sizeToOpen > 0) {

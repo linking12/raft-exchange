@@ -142,12 +142,11 @@ public class FundEventsHelper {
     }
 
     public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position,
-                                            long free, long locked, long sizeClosed, long price, long fee, long pnl) {
+                                            long free, long locked, long sizeClosed, long price, long fee) {
         FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
         event.tradeSize = sizeClosed;
         event.tradePrice = price;
         event.fee = fee;
-        event.pnl = pnl;
         addFundEvent(cmd, orderId, event);
         return event;
     }
@@ -201,10 +200,9 @@ public class FundEventsHelper {
     }
 
     // 生成盈亏结算事件 (PNL_SETTLEMENT)。
-    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPrice, long settledPnl) {
+    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPrice) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
         event.tradePrice = settledPrice; // 结算价格
-        event.pnl = settledPnl; // 结算盈亏
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
@@ -271,7 +269,6 @@ public class FundEventsHelper {
             event.tradeSize = 0;
             event.tradePrice = 0;
             event.fee = 0;
-            event.pnl = 0;
             return event;
         } else {
             return new FundEvent();

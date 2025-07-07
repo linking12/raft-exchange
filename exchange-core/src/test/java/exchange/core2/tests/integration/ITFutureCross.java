@@ -790,7 +790,6 @@ class ITFutureCross {
             assertThat(0L, Is.is(event1.free));
             assertThat(0L, Is.is(event1.locked));
             assertThat(10000L, Is.is(event1.openPriceSum));
-            assertThat(0L, Is.is(event1.pnl));
             assertThat(1L, Is.is(event1.openVolume));
             assertThat(0L, Is.is(event1.tradeSize));
             assertThat(0L, Is.is(event1.tradePrice));
@@ -860,7 +859,6 @@ class ITFutureCross {
             assertThat(deposit - 100L - size * 20L, Is.is(takerEvent.free));
             assertThat(100L + size * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
-            assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
@@ -877,7 +875,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - 100L - size * 20L, Is.is(makerEvent.free));
             assertThat(100L + size * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
-            assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
@@ -894,7 +891,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.free));
             assertThat(0L, Is.is(takerUnlockEvent.locked));
             assertThat(0L, Is.is(takerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(takerUnlockEvent.pnl));
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
@@ -912,7 +908,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - 100 - 20, Is.is(takerOpenPositionEvent.free));
             assertThat(100L, Is.is(takerOpenPositionEvent.locked));
             assertThat(10000L, Is.is(takerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(takerOpenPositionEvent.pnl));
             assertThat(1L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
@@ -929,7 +924,6 @@ class ITFutureCross {
             assertThat(1000L, Is.is(makerUnlockEvent.free));
             assertThat(0L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
@@ -947,7 +941,6 @@ class ITFutureCross {
             assertThat(890L, Is.is(makerOpenPositionEvent.free));
             assertThat(100L, Is.is(makerOpenPositionEvent.locked));
             assertThat(10000L, Is.is(makerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(1L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
@@ -1017,7 +1010,6 @@ class ITFutureCross {
             assertThat(deposit - 100L - size * 20L, Is.is(takerEvent.free));
             assertThat(100L + size * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
-            assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
@@ -1036,7 +1028,6 @@ class ITFutureCross {
             // 注意, 下单时是按照taker fee做lock
             assertThat(100L + size * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
-            assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
@@ -1053,7 +1044,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.free));
             assertThat(0L, Is.is(takerUnlockEvent.locked));
             assertThat(0L, Is.is(takerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(takerUnlockEvent.pnl));
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
@@ -1071,7 +1061,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - 100 - 20, Is.is(takerOpenPositionEvent.free));
             assertThat(100L, Is.is(takerOpenPositionEvent.locked));
             assertThat(10000L, Is.is(takerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(takerOpenPositionEvent.pnl));
             assertThat(1L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
@@ -1088,7 +1077,6 @@ class ITFutureCross {
             assertThat(1000L, Is.is(makerUnlockEvent.free));
             assertThat(0L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
@@ -1106,7 +1094,6 @@ class ITFutureCross {
             assertThat(890L, Is.is(makerOpenPositionEvent.free));
             assertThat(100L, Is.is(makerOpenPositionEvent.locked));
             assertThat(10000L, Is.is(makerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(1L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
@@ -1177,7 +1164,6 @@ class ITFutureCross {
             assertThat(deposit - size * 100L - size * 20L, Is.is(makerEvent.free));
             assertThat(size * 100L + size * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
-            assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
@@ -1195,7 +1181,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - txSize * 100 - txSize * 20L, Is.is(takerEvent.free));
             assertThat(txSize * 100L + txSize * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
-            assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
@@ -1212,7 +1197,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.free));
             assertThat(0L, Is.is(takerUnlockEvent.locked));
             assertThat(0L, Is.is(takerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(takerUnlockEvent.pnl));
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
@@ -1230,7 +1214,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - 200 - 20 * 2, Is.is(takerOpenPositionEvent.free));
             assertThat(200L, Is.is(takerOpenPositionEvent.locked));
             assertThat(20000L, Is.is(takerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(takerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
@@ -1248,7 +1231,6 @@ class ITFutureCross {
             assertThat(deposit - (size - txSize) * 100L - (size - txSize) * 20L, Is.is(makerUnlockEvent.free));
             assertThat((size - txSize) * 100L + (size - txSize) * 20L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
@@ -1266,7 +1248,6 @@ class ITFutureCross {
             assertThat(deposit - size * 100 - (size - txSize) * 20L - txSize * 10L, Is.is(makerOpenPositionEvent.free));
             assertThat(size * 100L + (size - txSize) * 20L, Is.is(makerOpenPositionEvent.locked));
             assertThat(20000L, Is.is(makerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
@@ -1336,7 +1317,6 @@ class ITFutureCross {
             assertThat(deposit - size * 100L - size * 20L, Is.is(takerEvent.free));
             assertThat(size * 100L + size * 20L, Is.is(takerEvent.locked));
             assertThat(0L, Is.is(takerEvent.openPriceSum));
-            assertThat(0L, Is.is(takerEvent.pnl));
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
@@ -1353,7 +1333,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - txSize * 100L - txSize * 20L, Is.is(makerEvent.free));
             assertThat(txSize * 100L + txSize * 20L, Is.is(makerEvent.locked));
             assertThat(0L, Is.is(makerEvent.openPriceSum));
-            assertThat(0L, Is.is(makerEvent.pnl));
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
@@ -1370,7 +1349,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.free));
             assertThat(0L, Is.is(takerUnlockEvent.locked));
             assertThat(0L, Is.is(takerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(takerUnlockEvent.pnl));
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
@@ -1388,7 +1366,6 @@ class ITFutureCross {
             assertThat(MAX_VALUE - 200 - 20 * 2, Is.is(takerOpenPositionEvent.free));
             assertThat(200L, Is.is(takerOpenPositionEvent.locked));
             assertThat(20000L, Is.is(takerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(takerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
@@ -1406,7 +1383,6 @@ class ITFutureCross {
             assertThat(deposit - (size - txSize) * 100L - (size - txSize) * 20L, Is.is(makerUnlockEvent.free));
             assertThat((size - txSize) * 100L + (size - txSize) * 20L, Is.is(makerUnlockEvent.locked));
             assertThat(0L, Is.is(makerUnlockEvent.openPriceSum));
-            assertThat(0L, Is.is(makerUnlockEvent.pnl));
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
@@ -1424,7 +1400,6 @@ class ITFutureCross {
             assertThat(deposit - size * 100L - 2 * 10L - 8 * 20L, Is.is(makerOpenPositionEvent.free));
             assertThat(size * 100L + 8 * 20L, Is.is(makerOpenPositionEvent.locked));
             assertThat(20000L, Is.is(makerOpenPositionEvent.openPriceSum));
-            assertThat(0L, Is.is(makerOpenPositionEvent.pnl));
             assertThat(2L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
@@ -1488,7 +1463,6 @@ class ITFutureCross {
             assertThat(3999980L, Is.is(takerCloseEvent.free));
             assertThat(0L, Is.is(takerCloseEvent.locked));
             assertThat(0L, Is.is(takerCloseEvent.openPriceSum));
-            assertThat(-500L, Is.is(takerCloseEvent.pnl));
             assertThat(0L, Is.is(takerCloseEvent.openVolume));
             assertThat(1L, Is.is(takerCloseEvent.tradeSize));
             // trade price?
@@ -1505,7 +1479,6 @@ class ITFutureCross {
             assertThat(deposit - 10 * 1L, Is.is(makerCloseEvent.free));
             assertThat(0L, Is.is(makerCloseEvent.locked));
             assertThat(0L, Is.is(makerCloseEvent.openPriceSum));
-            assertThat(500L, Is.is(makerCloseEvent.pnl));
             assertThat(0L, Is.is(makerCloseEvent.openVolume));
             assertThat(1L, Is.is(makerCloseEvent.tradeSize));
             // trade price?

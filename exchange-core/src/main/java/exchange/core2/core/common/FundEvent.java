@@ -22,33 +22,32 @@ public class FundEvent {
     public long orderId; // 订单 ID
     public long uid; // 用户 ID
     public int currency; // 变动货币
-    public long free; // 当前可用余额
-    public long locked; // 当前冻结金额（隐式保证金+挂单预扣）
+    public long free; // 该currency可用余额
+    public long locked; // 该currency所有期货仓位的冻结金额（初始保证金+pending部分+pending部分产生的fee）
 
     // 期货使用字段（仓位字段同）
     public int symbol; // 交易对 ID
     public PositionDirection direction; // 仓位方向
-    public long openVolume;
-    public long openInitMarginSum; //初始保证金总额
-    public long openPriceSum; //持仓总成本，openPriceSum/openVolume=平均持仓成本
-    public long profit; //已实现盈亏
-    public long pendingSellSize;
-    public long pendingBuySize;
-    public long pendingSellAvgPrice;
-    public long pendingBuyAvgPrice;
-    public int leverage;
-    public MarginMode marginMode;
-    public long extraMargin;
+    public long openVolume; // 持仓数量
+    public long openInitMarginSum; // 初始保证金总额
+    public long openPriceSum; // 持仓总成本，openPriceSum/openVolume=平均持仓成本
+    public long profit; // 已实现盈亏
+    public long pendingSellSize; // 挂单卖出数量（未成交的卖单）
+    public long pendingBuySize; // 挂单买入数量（未成交的买单）
+    public long pendingSellAvgPrice; // 挂单卖出平均价格（未成交的卖单）
+    public long pendingBuyAvgPrice; // 挂单买入平均价格（未成交的买单）
+    public int leverage; // 杠杆倍数
+    public MarginMode marginMode; // 模式：逐仓或全仓
+    public long extraMargin; // 额外保证金（逐仓模式下的追加保证金）
     // 仓位计算字段
-    public long unrealizedProfit;
-    public long liquidationPrice;
-    public long marginRatioScaleK;
+    public long unrealizedProfit; // 未实现盈亏
+    public long liquidationPrice; // 强平价格
+    public long marginRatioScaleK; // 保证金率，维持保证金/资金占用*缩放系数。全仓下资金占用=当前币种余额+该币种总体未实现盈亏；逐仓下资金占用=开仓保证金+extraMargin
 
     // 变化字段
     public long tradeSize; // 本次交易数量
     public long tradePrice; // 本次交易价格
-    public long fee; // 手续费
-    public long pnl; // 本次事件的盈亏金额
+    public long fee; // 本次手续费
 
     public FundEvent nextEvent;
 
@@ -112,7 +111,7 @@ public class FundEvent {
         return Objects.hash(processed, eventType, orderId, uid, currency, free, locked, symbol, direction,
                 openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize, pendingSellAvgPrice,
                 pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice, marginRatioScaleK,
-                tradeSize, tradePrice, fee, pnl, nextEvent);
+                tradeSize, tradePrice, fee, nextEvent);
     }
 
     @Override
@@ -129,7 +128,7 @@ public class FundEvent {
             && pendingBuySize == other.pendingBuySize && pendingSellAvgPrice == other.pendingSellAvgPrice && pendingBuyAvgPrice == other.pendingBuyAvgPrice
             && leverage == other.leverage && marginMode == other.marginMode && extraMargin == other.extraMargin && unrealizedProfit == other.unrealizedProfit
             && liquidationPrice == other.liquidationPrice && marginRatioScaleK == other.marginRatioScaleK && tradeSize == other.tradeSize
-            && tradePrice == other.tradePrice && fee == other.fee && pnl == other.pnl
+            && tradePrice == other.tradePrice && fee == other.fee
             && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
 
@@ -142,7 +141,7 @@ public class FundEvent {
             + ", pendingBuySize=" + pendingBuySize + ", pendingSellAvgPrice=" + pendingSellAvgPrice + ", pendingBuyAvgPrice=" + pendingBuyAvgPrice
             + ", leverage=" + leverage + ", marginMode=" + marginMode + ", extraMargin=" + extraMargin + ", unrealizedProfit=" + unrealizedProfit
             + ", liquidationPrice=" + liquidationPrice + ", marginRatioScaleK=" + marginRatioScaleK + ", tradeSize=" + tradeSize
-            + ", tradePrice=" + tradePrice + ", fee=" + fee + ", pnl=" + pnl
+            + ", tradePrice=" + tradePrice + ", fee=" + fee
             + ", nextEvent=" + (nextEvent != null) + "]";
     }
 

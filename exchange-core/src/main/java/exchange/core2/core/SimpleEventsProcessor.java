@@ -106,7 +106,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             fundEvent.openVolume, fundEvent.openInitMarginSum, fundEvent.openPriceSum, fundEvent.profit, fundEvent.pendingSellSize,
             fundEvent.pendingBuySize, fundEvent.pendingSellAvgPrice, fundEvent.pendingBuyAvgPrice, fundEvent.leverage,
             fundEvent.marginMode, fundEvent.extraMargin, fundEvent.unrealizedProfit, fundEvent.liquidationPrice,
-            fundEvent.marginRatioScaleK, fundEvent.tradeSize, fundEvent.tradePrice, fundEvent.fee, fundEvent.pnl);
+            fundEvent.marginRatioScaleK, fundEvent.tradeSize, fundEvent.tradePrice, fundEvent.fee);
         fundEventsHandler.fundsEvent(evt);
     }
 
