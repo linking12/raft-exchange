@@ -190,6 +190,7 @@ class ITMixedIntegration {
         long takerOrderId2 = 1006L;
         long exchangeOrderId = 112233L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
             container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -203,16 +204,18 @@ class ITMixedIntegration {
 
             container.updateCurrentPriceTo(15000, symbols.get(0).symbolId, quoteId);
 
+            // 开仓成功，uid1作为maker，余额-10元
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(1L));
             });
 
             ApiPlaceOrder order = container.genOrderWithId(exchangeOrderId, userId1, 1, 10000, symbolsExchange.get(0).symbolId, BID, GTC);
-            // 1. free必须 > 0
-            // 2. margin亏的时候也要考虑
+            // 现货下单10000*1，余额9990，期货占用75，资金不足
             container.submitCommandSync(order, CommandResultCode.RISK_NSF);
 
-            container.addMoneyToUser(userId1, quoteId, 29);
+            // 需要补充 10 + 75 + 这次下单按taker预收手续费20 = 105
+            container.addMoneyToUser(userId1, quoteId, 104);
             container.submitCommandSync(order, CommandResultCode.RISK_NSF);
 
             container.addMoneyToUser(userId1, quoteId, 1);
@@ -237,8 +240,8 @@ class ITMixedIntegration {
             assertThat(0L, Is.is(event1.fee));
             assertThat(PositionDirection.EMPTY, Is.is(event1.direction));
             assertThat(FundEvent.FundEventType.LOCKED, Is.is(event1.eventType));
-            assertThat(-100L, Is.is(event1.free));
-            assertThat(100L, Is.is(event1.locked));
+            assertThat(100L, Is.is(event1.locked)); // 100不变，还是仓位的初始保证金
+            assertThat(-25L, Is.is(event1.free)); // 下完单后balance应该是75, 75-100 = -25
             assertThat(0L, Is.is(event1.openPriceSum));
             assertThat(0L, Is.is(event1.openVolume));
             assertThat(0L, Is.is(event1.tradeSize));
