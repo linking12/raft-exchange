@@ -204,7 +204,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         long totalMargin = openInitMarginSum + extraMargin;
-        return (direction.getMultiplier() * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume;
+        return (long) ((direction.getMultiplier() * (maintenanceMargin - totalMargin) + openPriceSum) * 1.0 / openVolume);
     }
 
     /**
