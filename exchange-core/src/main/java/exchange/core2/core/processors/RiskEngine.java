@@ -310,14 +310,33 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     // 如果是提款操作，并且杠杆交易，需要校验下最小保证金
                     if (amountDiff < 0 && cfgMarginTradingEnabled ) { 
                         long withdrawalAmount = -amountDiff;
-                        long totalCrossProfit = 0;
-                        for (SymbolPositionRecord position : userProfile.positions) {
-                            if (position.marginMode == MarginMode.CROSS && position.currency == cmd.symbol) {
-                                totalCrossProfit += position.estimateProfit(lastPriceCache.get(position.symbol));
+                        long totalRealizedPnl = 0L;
+                        long totalUnrealizedPnl = 0L;
+                        long totalIsolateRequire = 0L;
+                        long totalCrossRequireByInitMargin = 0L;
+                        long totalCrossRequireByMaintainceMargin = 0L;
+                        for (final SymbolPositionRecord position : userProfile.positions) {
+                            if (position.currency == cmd.symbol) {
+                                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                                if (position.marginMode == MarginMode.CROSS) {
+                                    LastPriceCacheRecord lastPrice = lastPriceCache.get(position.symbol);
+                                    totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);
+                                    long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec);
+                                    totalCrossRequireByInitMargin += requiredMarginForFutures;
+                                    totalCrossRequireByMaintainceMargin += (requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec, lastPrice));
+                                } else {
+                                    totalIsolateRequire += position.calculateRequiredMarginForFutures(spec);
+                                }
+                                totalRealizedPnl += position.profit;
                             }
                         }
-                        long lockedMargin = calculateLockedMargin(userProfile, cmd.symbol); // 检查冻结保证金
-                        if (currentBalance + totalCrossProfit - withdrawalAmount < lockedMargin) {
+                        long freeFuturesMargin = Math.min(
+                                // 如果算上了未实现盈亏，则全仓按初始初始保证金扣除
+                                totalRealizedPnl + totalUnrealizedPnl - totalCrossRequireByInitMargin - totalIsolateRequire,
+                                // 如果完全不算未实现盈亏，则全仓按维持保证金扣除
+                                totalRealizedPnl - totalCrossRequireByMaintainceMargin - totalIsolateRequire
+                        );
+                        if (currentBalance + freeFuturesMargin - withdrawalAmount < 0) {
                             cmd.resultCode = CommandResultCode.RISK_NSF;
                             return false;
                         }
@@ -645,15 +664,37 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // futures positions check for this currency
         long freeFuturesMargin = 0L;
         if (cfgMarginTradingEnabled) {
+            long totalRealizedPnl = 0L;
+            long totalUnrealizedPnl = 0L;
+            long totalIsolateRequire = 0L;
+            long totalCrossRequireByInitMargin = 0L;
+            long totalCrossRequireByMaintainceMargin = 0L;
             for (final SymbolPositionRecord position : userProfile.positions) {
                 if (position.currency == currency) {
                     final int recSymbol = position.symbol;
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
-                    // add P&L subtract margin
-                    long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
-                    freeFuturesMargin += (position.estimateProfit(lastPriceCache.get(recSymbol)) - requiredMarginForFutures);
+                    if (position.marginMode == MarginMode.CROSS) {
+                        LastPriceCacheRecord lastPrice = lastPriceCache.get(recSymbol);
+                        totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);// 全仓的未实现盈亏永远参与分摊
+                        long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
+                        totalCrossRequireByInitMargin += requiredMarginForFutures;
+                        totalCrossRequireByMaintainceMargin += (requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec2, lastPrice));
+                    } else {
+                        if (spec.symbolId == recSymbol) {
+                            // 逐仓的未实现盈亏只能参与当前symbol的分摊
+                            totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPriceCache.get(recSymbol));
+                        }
+                        totalIsolateRequire += position.calculateRequiredMarginForFutures(spec2);
+                    }
+                    totalRealizedPnl += position.profit;
                 }
             }
+            freeFuturesMargin = Math.min(
+                    // 如果算上了未实现盈亏，则全仓按初始初始保证金扣除
+                    totalRealizedPnl + totalUnrealizedPnl - totalCrossRequireByInitMargin - totalIsolateRequire,
+                    // 如果完全不算未实现盈亏，则全仓按维持保证金扣除
+                    totalRealizedPnl - totalCrossRequireByMaintainceMargin - totalIsolateRequire
+            );
         }
 
         final long size = cmd.size;
@@ -700,10 +741,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // speculative change balance
         long balance = userProfile.accounts.addToValue(currency, -orderHoldAmount);
 
-        // 通用业界做法 浮盈折扣+浮亏全计
-        if (freeFuturesMargin > 0) {
-            freeFuturesMargin = 0;// 浮盈我们这里按0算
-        }
         final boolean canPlace = balance + freeFuturesMargin >= 0;
 
         if (!canPlace) {
