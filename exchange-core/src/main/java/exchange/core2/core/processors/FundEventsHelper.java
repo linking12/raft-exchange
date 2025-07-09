@@ -78,15 +78,14 @@ public class FundEventsHelper {
         long totalMargin;
         if (position.marginMode == MarginMode.CROSS) {
             UserProfile userProfile = userProfileService.getUserProfile(position.uid);
-            long totalUnrealizedPnl = userProfile.positions
-                    .select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
-                    .sumOfLong(pos -> pos.estimateUnrealizedProfit(lastPriceCache.get(pos.symbol)));
+            long totalUnrealizedPnl = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
+                .sumOfLong(pos -> pos.estimateUnrealizedProfit(lastPriceCache.get(pos.symbol)));
             long balance = userProfile.accounts.get(position.currency);
             totalMargin = balance + totalUnrealizedPnl;
         } else {
             totalMargin = position.openInitMarginSum + position.extraMargin;
         }
-        return (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
+        return (long)(spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
     }
 
     /**
@@ -147,8 +146,8 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position,
-                                            long free, long locked, long sizeClosed, long price, long fee) {
+    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
+        long sizeClosed, long price, long fee) {
         FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
         event.tradeSize = sizeClosed;
         event.tradePrice = price;
@@ -157,8 +156,8 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free,
-                                           long locked, long sizeOpened, long price, long fee) {
+    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked, long sizeOpened, long price,
+        long fee) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
         event.tradeSize = sizeOpened;
         event.tradePrice = price;
