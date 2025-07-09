@@ -793,7 +793,17 @@ class ITFutureCross {
             assertThat(1L, Is.is(event1.openVolume));
             assertThat(0L, Is.is(event1.tradeSize));
             assertThat(0L, Is.is(event1.tradePrice));
+            assertThat(-4700L, Is.is(event1.unrealizedProfit));
+            assertThat(9926L, Is.is(event1.liquidationPrice));
+            assertThat(185L, Is.is(event1.marginRatioScaleK));
         }
+    }
+
+    // check unrealizedProfit/liquidationPrice/marginRatioScaleK should be zero
+    private void checkEvent(IFundEventsHandler.FundsEvent evt) {
+        assertThat(0L, Is.is(evt.unrealizedProfit));
+        assertThat(0L, Is.is(evt.liquidationPrice));
+        assertThat(0L, Is.is(evt.marginRatioScaleK));
     }
 
     // 开仓事件, 完全成交, taker为Ask
@@ -862,6 +872,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check lock_pending event for taker, orderId should be maker's
             IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
@@ -878,6 +889,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check unlock_pending event for taker
             IFundEventsHandler.FundsEvent takerUnlockEvent = fundEvents.get(4);
@@ -894,6 +906,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check open position event for taker
             IFundEventsHandler.FundsEvent takerOpenPositionEvent = fundEvents.get(5);
@@ -911,6 +924,9 @@ class ITFutureCross {
             assertThat(1L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
+            assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
+            assertThat(100L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            assertThat(0L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
             // check unlock_pending event for maker
             IFundEventsHandler.FundsEvent makerUnlockEvent = fundEvents.get(6);
@@ -927,6 +943,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check open position event
             IFundEventsHandler.FundsEvent makerOpenPositionEvent = fundEvents.get(7);
@@ -944,6 +961,9 @@ class ITFutureCross {
             assertThat(1L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
+            assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
+            assertThat(19900L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            assertThat(0L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
     }
 

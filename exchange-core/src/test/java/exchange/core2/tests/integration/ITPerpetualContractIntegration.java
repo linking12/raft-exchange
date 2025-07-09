@@ -696,11 +696,10 @@ class ITPerpetualContractIntegration {
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
-            // 第二次触发强平因为资金费率UID_1仓位亏损触发强平
-            // 此时profit = -11110 + 11000 - 10000 = -10110
+            // 此时profit = 11000 - 10000 = 1000
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 11000 * 5 / 10 = 5500
-            // equity = balance + profit = 9900 - 10110 = -210 < maintenance 触发强平
-            // 强平6手即可保证deficit > 0
+            // equity = balance + profit = 4900 + 1000 = 5900 > maintenance
+            // 此时不会触发强平
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             // openPriceSum = 10 * 1000 - 6 * 1100 = 3400
@@ -717,11 +716,17 @@ class ITPerpetualContractIntegration {
 
             container.updateCurrentPriceTo(600, spec.symbolId, spec.quoteCurrency);
 
-            // UID_3先下一单准备吃掉UID_1强平单
+            // UID_3先下一单准备吃掉UID_1强平单, 开10手预计会被吃掉4手
             container.createBidWithOrderId(MAKER_3, UID_3, size, 600, spec.symbolId, MarginMode.CROSS);
             container.getUserProfile(UID_1);
+            // 此时profit = 6000 - 10000 = -4000
+            // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
+            // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
+            // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
+            //  openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 4/10 = 66L
+            // openPriceSum = 10 * 1000 - 4 * 600 = 7600L
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
@@ -731,6 +736,9 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getPositions().getFirst().openVolume, is(6L));
                 assertThat(profile.getPositions().getFirst().profit, is(-11110L));
             });
+
+            // 再次触发强平, 此时期待当前持仓不再被强平
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
         }
     }
 

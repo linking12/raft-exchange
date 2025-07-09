@@ -14,10 +14,12 @@ import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.Test;
 
+import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import static exchange.core2.tests.util.TestConstants.UID_1;
-import static exchange.core2.tests.util.TestConstants.UID_2;
+import static exchange.core2.core.common.OrderType.GTC;
+import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 
@@ -32,6 +34,140 @@ public final class ITExchangeCoreMarkPrice {
             .maintenanceMarginScaleK(1000)
             .maxLeverage(TreeSortedMap.newMapWith(10_000L, 75L, 100_000L, 40L))
             .build();
+
+    // 没有标记价格时不允许下期货单
+    @Test
+    public void testSubmitFailWhenNoMarkPrice() {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.addSymbol(symbol);
+
+            container.createUserWithMoney(UID_1, symbol.quoteCurrency, 10000);
+
+            ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(1)
+                    .action(OrderAction.BID)
+                    .orderType(GTC)
+                    .symbol(symbol.symbolId)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build();
+
+            container.submitCommandSync(order101, CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE);
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(150L).symbol(symbol.symbolId).markPrice(650).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(order101, CommandResultCode.SUCCESS);
+        }
+    }
+
+    // 没有标记价格时允许下现货单
+    @Test
+    public void testSubmitPassWhenNoMarkPrice() {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            List<CoreSymbolSpecification> exchangeSymbols = container.initExchangeSymbols();
+
+            container.createUserWithMoney(UID_1, exchangeSymbols.get(0).quoteCurrency, 10000);
+
+            ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(1)
+                    .action(OrderAction.BID)
+                    .orderType(GTC)
+                    .symbol(exchangeSymbols.get(0).symbolId)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build();
+
+            container.submitCommandSync(order101, CommandResultCode.SUCCESS);
+        }
+    }
+
+    // 用户初始保证金计算准确, 需要按照标记价格计算
+    @Test
+    public void testMarkPrice() {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.addSymbol(symbol);
+
+            long price = 680L;
+            long size = 10L;
+            container.createUserWithMoney(UID_1, symbol.quoteCurrency, 10000);
+            container.createUserWithMoney(UID_2, symbol.quoteCurrency, MAX_VALUE);
+            container.createUserWithMoney(UID_3, symbol.quoteCurrency, MAX_VALUE);
+
+            ApiPlaceOrder order101 = ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(101L)
+                    .price(price)
+                    .reservePrice(1000)
+                    .size(size)
+                    .action(OrderAction.BID)
+                    .orderType(GTC)
+                    .symbol(symbol.symbolId)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build();
+
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(150L).symbol(symbol.symbolId).markPrice(price).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(order101, CommandResultCode.SUCCESS);
+
+            // 未成单的时候，按照挂单价估算，名义价值 680 * 10
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(size));
+                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuyAvgPrice, is(price));
+                assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(0L));
+            });
+
+            // UID_2匹配上, 成交两手
+            container.createAskWithOrderId(TAKER_1, UID_2, 2, price, symbol.symbolId, MarginMode.CROSS);
+
+            // openInitMarginSum = size * markPrice / leverage = 680 * 2 = 1360L
+            // unrealizedProfit = direction.getMultiplier() * (openVolume * priceRecord.markPrice - openPriceSum) = 1 * (2 * 680 - 1360) = 0
+            // maintenanceMargin = 6
+            // liquidationPrice = maintenanceMargin - totalMargin + openPriceSum / openVolume = 6 / 2 = 3
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = 1000 * 6 / 1360 = (long) 4.4 = 4
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuyAvgPrice, is(680L));
+                assertThat(profile.getPositions().get(symbol.symbolId).openVolume, is(2L));
+                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(8L));
+                assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(3L));
+                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(4L));
+                assertThat(profile.getPositions().get(symbol.symbolId).openPriceSum, is(1360L));
+                assertThat(profile.getPositions().get(symbol.symbolId).openInitMarginSum, is(1360L));
+            });
+
+            container.updateCurrentPriceTo(2, symbol.symbolId, symbol.quoteCurrency);
+            container.getExchangeCore().liquidationScanner.triggerOnce();
+
+            // 还剩8手被对手方吃掉
+            // openPriceSum = 680 * 10 = 6800 开仓价格
+            // openInitMarginSum += size * markPrice / leverage = 680 * 2 = 1360L + 2 * 8 / 1 = 1360L + 16 = 1376L
+            // unrealizedProfit = direction.getMultiplier() * (openVolume * priceRecord.markPrice - openPriceSum) = 1 * (10 * 2 - 6800) = -6780
+            // maintenanceMargin = 0
+            // liquidationPrice = maintenanceMargin - totalMargin + openPriceSum / openVolume = (0 - 1376L + 6800) / 10 = 542L
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = 1000 * 0 / 1360 = 0
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(symbol.symbolId).openPriceSum, is(6800L));
+                assertThat(profile.getPositions().get(symbol.symbolId).openInitMarginSum, is(1376L));
+                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).openVolume, is(10L));
+                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(-6780L));
+                assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(542L));
+                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(0L));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     @Test
     public void testInitMarginAndMaintenanceMargin() throws Exception {
