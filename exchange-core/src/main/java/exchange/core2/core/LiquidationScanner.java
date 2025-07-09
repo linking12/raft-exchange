@@ -139,7 +139,7 @@ public final class LiquidationScanner {
         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
         long profit = position.estimateUnrealizedProfit(priceRecord);
         // 当前持仓所需的初始保证金
-        long initMargin = position.calculateRequiredMarginForFutures(spec);
+        long initMargin = position.openInitMarginSum;
         // 账户总权益 = 初始保证金 + 未实现盈亏 + 补充保证金
         long equity = initMargin + profit + position.extraMargin;
         // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
