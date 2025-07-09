@@ -70,8 +70,8 @@ public class FundEventsHelper {
     }
 
     private long marginRatioScaleK(SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
-        if (position.isEmpty()) {
-            return 0;
+        if (position.openVolume == 0) {
+            return 0; // 无持仓，不计算保证金比率
         }
         long notional = position.openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
