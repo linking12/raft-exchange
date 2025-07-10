@@ -78,12 +78,12 @@ public class FundEventsHelper {
         long totalMargin;
         if (position.marginMode == MarginMode.CROSS) {
             UserProfile userProfile = userProfileService.getUserProfile(position.uid);
-            long totalUnrealizedPnl = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
-                .sumOfLong(pos -> pos.estimateUnrealizedProfit(lastPriceCache.get(pos.symbol)));
+            long totalPnl = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
+                .sumOfLong(pos -> pos.estimateProfit(lastPriceCache.get(pos.symbol)));
             long balance = userProfile.accounts.get(position.currency);
-            totalMargin = balance + totalUnrealizedPnl;
+            totalMargin = balance + totalPnl;
         } else {
-            totalMargin = position.openInitMarginSum + position.extraMargin;
+            totalMargin = position.openInitMarginSum + position.estimateProfit(priceRecord) + position.extraMargin;
         }
         return (long)(spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
     }

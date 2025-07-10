@@ -99,18 +99,18 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 } else {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(symbol);
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(symbol);
-                    long totalMargin = pos.openInitMarginSum + pos.estimateUnrealizedProfit(priceRecord) + pos.extraMargin;
+                    long totalMargin = pos.openInitMarginSum + pos.estimateProfit(priceRecord) + pos.extraMargin;
                     positions.put(symbol, buildPositionReport(pos, spec, priceRecord, totalMargin));
                 }
             });
 
             crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
-                long totalUnrealizedPnl = records.stream().mapToLong(pos -> {
+                long totalPnl = records.stream().mapToLong(pos -> {
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
-                    return pos.estimateUnrealizedProfit(priceRecord);
+                    return pos.estimateProfit(priceRecord);
                 }).sum();
                 long balance = userProfile.accounts.get(currency);
-                long totalMargin = balance + totalUnrealizedPnl;
+                long totalMargin = balance + totalPnl;
 
                 for (SymbolPositionRecord pos : records) {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);

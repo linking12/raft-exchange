@@ -353,9 +353,13 @@ public final class ITExchangeCoreMarkPrice {
             // 用户的开仓成本 680 * 1000 = 68w； 68w - 5.85w = 62.15w，62.15w / 1k = 621.5，即当 markPrice <621.5 时触发强平。
 
             // markPrice 更新到 622，仓位不变
+            // 保证金率  MM/权益 = 6220 / 65000 - 58*1000 = 6220 / 7000 = 0.888
             container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(txId++).symbol(symbol.symbolId).markPrice(622).build(), CommandResultCode.SUCCESS);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(symbol.symbolId).getOpenVolume(), is(1000L));
+                assertThat(profile.getPositions().get(symbol.symbolId).getLiquidationPrice(), is(621L));
+                // 这里保证金比率已经是88.8%，后续基本上就是要全仓强平
+                assertThat(profile.getPositions().get(symbol.symbolId).getMarginRatioScaleK() * 1.0 / symbol.getMaintenanceMarginScaleK(), is(0.888));
             });
 
             // markPrice 更新到 621，会触发强平，减1手仓位

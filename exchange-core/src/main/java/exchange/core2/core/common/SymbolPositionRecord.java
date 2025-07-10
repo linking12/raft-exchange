@@ -163,6 +163,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             case LONG:
                 if (lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0) {
                     return profit + (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum);
+                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
+                    // fallback: 使用标记价格
+                    return profit + (openVolume * lastPriceCacheRecord.markPrice - openPriceSum);
                 } else {
                     // fallback: 用开仓均价作为当前价，即浮盈为0
                     return profit;
@@ -170,6 +173,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             case SHORT:
                 if (lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE) {
                     return profit + (openPriceSum - openVolume * lastPriceCacheRecord.askPrice);
+                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
+                    // fallback: 使用标记价格
+                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.markPrice);
                 } else {
                     // fallback: 用开仓均价作为当前价，即浮盈为0
                     return profit;
