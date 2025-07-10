@@ -220,6 +220,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .makerFee(10)
                 .takerFee(20)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maintenanceMarginScaleK(1000)
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .initMargin(1)
                 .initMarginScaleK(100)
