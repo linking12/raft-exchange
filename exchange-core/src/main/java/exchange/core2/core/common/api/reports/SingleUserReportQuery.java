@@ -99,7 +99,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 } else {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(symbol);
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(symbol);
-                    long totalMargin = pos.openInitMarginSum + pos.extraMargin;
+                    long totalMargin = pos.openInitMarginSum + pos.estimateUnrealizedProfit(priceRecord) + pos.extraMargin;
                     positions.put(symbol, buildPositionReport(pos, spec, priceRecord, totalMargin));
                 }
             });
