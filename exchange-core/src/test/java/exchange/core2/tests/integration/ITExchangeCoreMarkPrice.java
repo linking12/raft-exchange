@@ -362,7 +362,7 @@ public final class ITExchangeCoreMarkPrice {
                 assertThat(profile.getPositions().get(symbol.symbolId).getMarginRatioScaleK() * 1.0 / symbol.getMaintenanceMarginScaleK(), is(0.888));
             });
 
-            // markPrice 更新到 621，会触发强平，减1手仓位
+            // markPrice 更新到 621，会触发强平
             // 注意 bidPrice也要更新
             container.updateCurrentPriceTo(621, symbol.symbolId, symbol.quoteCurrency);
             container.submitCommandSync(ApiPlaceOrder.builder()
@@ -379,7 +379,7 @@ public final class ITExchangeCoreMarkPrice {
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenVolume(), is(999L));
+                assertThat(profile.getPositions().isEmpty(), is(true));
             });
         }
     }

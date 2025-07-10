@@ -148,11 +148,9 @@ public final class LiquidationScanner {
         long warningThreshold = (long)(maintenanceMargin * 1.2);
         // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
         if (equity < maintenanceMargin) {
-            // 计算资金缺口：需要多少权益恢复到维持保证金水平
-            long deficit = maintenanceMargin - equity;
             long price = calculateLiquidationPrice(position, priceRecord);
             // 计算强平数量
-            long x = CoreArithmeticUtils.calculateSizeToLiquidate(deficit, price);
+            long x = CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord);
             long sizeToLiquidate = Math.min(position.openVolume, x);
             if (sizeToLiquidate > 0) {
                 executeLiquidationOrder(userProfile, position, spec, price, sizeToLiquidate, eventsHelper);
@@ -213,11 +211,11 @@ public final class LiquidationScanner {
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
             LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
             long price = calculateLiquidationPrice(position, priceRecord);
-            long sizeToLiquidate = CoreArithmeticUtils.calculateSizeToLiquidate(deficit - marginReleased, price);
+            long sizeToLiquidate = CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord);
             sizeToLiquidate = Math.min(sizeToLiquidate, position.openVolume);
             if (sizeToLiquidate > 0) {
                 // 假设能成交，先行更新释放量
-                long estimatedReleasedMargin = CoreArithmeticUtils.calculateDeficitToLiquidate(sizeToLiquidate, price, spec);
+                long estimatedReleasedMargin = CoreArithmeticUtils.calculateDeficitToLiquidate(sizeToLiquidate, position, priceRecord);
                 marginReleased += estimatedReleasedMargin;
                 // 提交强平单
                 executeLiquidationOrder(userProfile, position, spec, price, sizeToLiquidate, eventsHelper);
@@ -268,13 +266,13 @@ public final class LiquidationScanner {
                     });
                 FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position, bankruptcyPrice, remainSize);
                 api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
-                log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, bankruptcyPrice);
+                log.debug("Liquidated(p2): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, bankruptcyPrice);
             }
         });
         // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
         FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position, price, size);
         api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
-        log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
+        log.debug("Liquidated(p1): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }
 
     /**
@@ -298,7 +296,7 @@ public final class LiquidationScanner {
              * 动态手续费的情况下：
              * 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerRate × bankruptcyPrice × openVolume
              * bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee) / (openVolume * (1 - takerFee / feeScaleK))
-             *                 = (openPriceSum - sign * maxLoss) * feeScaleK / openVolume * feeScaleK - openVolume * takerFee
+             *                 = (openPriceSum - sign * maxLoss) * feeScaleK / (openVolume * feeScaleK - openVolume * takerFee)
              */
             return CoreArithmeticUtils.ceilDivide((position.openPriceSum - sign * maxLoss) * spec.feeScaleK, position.openVolume * (spec.feeScaleK - spec.takerFee));
         }
