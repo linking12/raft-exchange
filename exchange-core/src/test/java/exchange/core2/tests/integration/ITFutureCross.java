@@ -365,7 +365,7 @@ class ITFutureCross {
 
             ApiAdjustUserBalance cmd = ApiAdjustUserBalance.builder().uid(userId1).transactionId(container.getRandomTransactionId() + 500).amount(-deposit).currency(quoteId).build();
             // 用户profit比较高, 但是提现额度高于了account存的钱, 此时不应该允许用户提现
-            container.submitCommandSync(cmd, CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF);
+            container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
 
             // 用户平仓symbol0
             container.createAskWithOrderId(makerOrderId5, userId1, size, 15000, symbols.get(0).symbolId, MarginMode.CROSS);
@@ -469,6 +469,13 @@ class ITFutureCross {
             container.submitCommandSync(order, CommandResultCode.RISK_NSF);
 
             container.addMoneyToUser(userId1, quoteId, 29);
+            container.submitCommandSync(order, CommandResultCode.RISK_NSF);
+
+            container.addMoneyToUser(userId1, quoteId, 1);
+            container.submitCommandSync(order, CommandResultCode.RISK_NSF);
+
+            // maintainance margin还少75块钱
+            container.addMoneyToUser(userId1, quoteId, 74);
             container.submitCommandSync(order, CommandResultCode.RISK_NSF);
 
             container.addMoneyToUser(userId1, quoteId, 1);
