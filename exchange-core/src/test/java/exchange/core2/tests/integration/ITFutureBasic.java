@@ -437,7 +437,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = 1 * (50 - 100) + 10000 * 1 = 9050
             assertThat(9950L, Is.is(makerOpenPositionEvent.liquidationPrice));
-            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 990) = long (50.5) = 50
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 100) = 50
             assertThat(500L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
     }
@@ -508,6 +508,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check lock_pending event for taker, orderId should be maker's
             IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
@@ -526,6 +527,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
+            checkEvent(makerEvent);
 
             // check unlock_pending event for taker
             IFundEventsHandler.FundsEvent takerUnlockEvent = fundEvents.get(4);
@@ -542,6 +544,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
+            checkEvent(takerUnlockEvent);
 
             // check open position event for taker
             IFundEventsHandler.FundsEvent takerOpenPositionEvent = fundEvents.get(5);
@@ -559,6 +562,13 @@ class ITFutureBasic {
             assertThat(1L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
+            // 标记价格和开仓价格相同, 所以算出来的unrealizedProfit=0
+            assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
+            // maintenanceMargin = 50
+            // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = 1 * (50 - 100) + 10000 * 1 = 9950
+            assertThat(9950L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 100) = 500
+            assertThat(500L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
             // check unlock_pending event for maker
             IFundEventsHandler.FundsEvent makerUnlockEvent = fundEvents.get(6);
@@ -575,6 +585,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
+            checkEvent(makerUnlockEvent);
 
             // check open position event
             IFundEventsHandler.FundsEvent makerOpenPositionEvent = fundEvents.get(7);
@@ -592,6 +603,12 @@ class ITFutureBasic {
             assertThat(1L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(1L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
+            // openVolume * markPrice - openPriceSum = 10000 - 10000 = 0
+            assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
+            // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = -1 * (50 - 100) + 10000 * 1 = 10050
+            assertThat(10050L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 100) = 500
+            assertThat(500L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
     }
 
@@ -662,6 +679,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
+            checkEvent(makerEvent);
 
             // check lock_pending event for taker, orderId should be maker's
             IFundEventsHandler.FundsEvent takerEvent = fundEvents.get(3);
@@ -679,6 +697,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check unlock_pending event for taker
             IFundEventsHandler.FundsEvent takerUnlockEvent = fundEvents.get(4);
@@ -695,6 +714,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
+            checkEvent(takerUnlockEvent);
 
             // check open position event for taker
             IFundEventsHandler.FundsEvent takerOpenPositionEvent = fundEvents.get(5);
@@ -712,6 +732,13 @@ class ITFutureBasic {
             assertThat(2L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
+            // openVolume * markPrice - openPriceSum = 2 * 10000 - 20000 = 0
+            assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
+            // maintenanceMargin = 100
+            // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (-1 * (100 - 200) + 20000 * 1)/2 = 10050
+            assertThat(10050L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 500 / 100) = 500
+            assertThat(500L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
             // check unlock_pending event for maker
             IFundEventsHandler.FundsEvent makerUnlockEvent = fundEvents.get(6);
@@ -729,6 +756,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
+            checkEvent(makerUnlockEvent);
 
             // check open position event
             IFundEventsHandler.FundsEvent makerOpenPositionEvent = fundEvents.get(7);
@@ -746,6 +774,12 @@ class ITFutureBasic {
             assertThat(2L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
+            // openVolume * markPrice - openPriceSum = 20000 - 20000 = 0
+            assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
+            // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (1 * (100 - 200) + 20000 )/2 = 9950L
+            assertThat(9950L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 100) = 500
+            assertThat(500L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
     }
 
@@ -815,6 +849,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerEvent.openVolume));
             assertThat(0L, Is.is(takerEvent.tradeSize));
             assertThat(0L, Is.is(takerEvent.tradePrice));
+            checkEvent(takerEvent);
 
             // check lock_pending event for taker, orderId should be maker's
             IFundEventsHandler.FundsEvent makerEvent = fundEvents.get(3);
@@ -831,6 +866,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerEvent.openVolume));
             assertThat(0L, Is.is(makerEvent.tradeSize));
             assertThat(0L, Is.is(makerEvent.tradePrice));
+            checkEvent(makerEvent);
 
             // check unlock_pending event for taker
             IFundEventsHandler.FundsEvent takerUnlockEvent = fundEvents.get(4);
@@ -847,6 +883,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerUnlockEvent.openVolume));
             assertThat(0L, Is.is(takerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(takerUnlockEvent.tradePrice));
+            checkEvent(takerUnlockEvent);
 
             // check open position event for taker
             IFundEventsHandler.FundsEvent takerOpenPositionEvent = fundEvents.get(5);
@@ -864,6 +901,12 @@ class ITFutureBasic {
             assertThat(2L, Is.is(takerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(takerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(takerOpenPositionEvent.tradePrice));
+            // openVolume * markPrice - openPriceSum = 20000 - 20000 = 0
+            assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
+            // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (1 * (100 - 200) + 20000 )/2 = 9950L
+            assertThat(9950L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 100) = 500
+            assertThat(500L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
             // check unlock_pending event for maker
             IFundEventsHandler.FundsEvent makerUnlockEvent = fundEvents.get(6);
@@ -881,6 +924,7 @@ class ITFutureBasic {
             assertThat(0L, Is.is(makerUnlockEvent.openVolume));
             assertThat(0L, Is.is(makerUnlockEvent.tradeSize));
             assertThat(0L, Is.is(makerUnlockEvent.tradePrice));
+            checkEvent(makerUnlockEvent);
 
             // check open position event
             IFundEventsHandler.FundsEvent makerOpenPositionEvent = fundEvents.get(7);
@@ -898,6 +942,13 @@ class ITFutureBasic {
             assertThat(2L, Is.is(makerOpenPositionEvent.openVolume));
             assertThat(2L, Is.is(makerOpenPositionEvent.tradeSize));
             assertThat(10000L, Is.is(makerOpenPositionEvent.tradePrice));
+            // openVolume * markPrice - openPriceSum = 2 * 10000 - 20000 = 0
+            assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
+            // maintenanceMargin = 100
+            // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (-1 * (100 - 200) + 20000 * 1)/2 = 10050
+            assertThat(10050L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 100) = 500
+            assertThat(500L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
     }
 
@@ -962,6 +1013,7 @@ class ITFutureBasic {
             assertThat(1L, Is.is(takerCloseEvent.tradeSize));
             // trade price?
             assertThat(10500L, Is.is(takerCloseEvent.tradePrice));
+            checkEvent(takerCloseEvent);
 
             IFundEventsHandler.FundsEvent makerCloseEvent = fundEvents.get(13);
             assertThat(userId1, Is.is(makerCloseEvent.uid));
@@ -978,6 +1030,7 @@ class ITFutureBasic {
             assertThat(1L, Is.is(makerCloseEvent.tradeSize));
             // trade price?
             assertThat(10500L, Is.is(makerCloseEvent.tradePrice));
+            checkEvent(makerCloseEvent);
         }
     }
 
@@ -1034,6 +1087,14 @@ class ITFutureBasic {
             assertThat(0L, Is.is(takerCloseEvent.fee));
             assertThat(PositionDirection.SHORT, Is.is(takerCloseEvent.direction));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.eventType));
+            // openVolume * markPrice - openPriceSum = -1 * (9 * 10000 - 89500) = 500
+            assertThat(-500L, Is.is(takerCloseEvent.unrealizedProfit));
+            // maintenanceMargin = 0.5% * 9 * 10000 = 450
+            // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (-1 * (450 - 900) + 89500)/9 = long(9994.4) = 9994L
+            assertThat(9994L, Is.is(takerCloseEvent.liquidationPrice));
+            // totalMargin = openInitMarginSum + profit + extraMagin = 900 - 500 + 0 = 400
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 450 / 400) = 1125L
+            assertThat(1125L, Is.is(takerCloseEvent.marginRatioScaleK));
             // free is not correct
             /*
             assertThat(3999980L - 1000L, Is.is(takerCloseEvent.free));
