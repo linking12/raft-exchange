@@ -719,6 +719,48 @@ class ITFutureCross {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
+        } finally {
+            verify(handler, times(55)).fundsEvent(fundEventCapor.capture());
+            // check fund event
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent liquidationAlertEvt = fundEvents.get(47);
+            assertThat(userId3, Is.is(liquidationAlertEvt.uid));
+            assertThat(quoteId, Is.is(liquidationAlertEvt.currency));
+            assertThat(10000, Is.is(liquidationAlertEvt.symbol));
+//            assertThat(takerOrderId, Is.is(liquidationAlertEvt.orderId));
+            assertThat(0L, Is.is(liquidationAlertEvt.fee));
+            assertThat(PositionDirection.LONG, Is.is(liquidationAlertEvt.direction));
+            assertThat(FundEvent.FundEventType.LIQUIDATION_ALERT, Is.is(liquidationAlertEvt.eventType));
+            assertThat(0L, Is.is(liquidationAlertEvt.free));
+            assertThat(0L, Is.is(liquidationAlertEvt.profit));
+            assertThat(0L, Is.is(liquidationAlertEvt.locked));
+            assertThat(10000L, Is.is(liquidationAlertEvt.openPriceSum));
+            assertThat(1L, Is.is(liquidationAlertEvt.openVolume));
+            assertThat(1L, Is.is(liquidationAlertEvt.tradeSize));
+            assertThat(100L, Is.is(liquidationAlertEvt.tradePrice));
+            // 10000价格跌到100, unrealizedProfit = 100 - 10000 = -9900
+            assertThat(-9900L, Is.is(liquidationAlertEvt.unrealizedProfit));
+            // 逐仓强平价格计算
+            assertThat(9900L, Is.is(liquidationAlertEvt.liquidationPrice));
+            assertThat(0L, Is.is(liquidationAlertEvt.marginRatioScaleK));
+
+            IFundEventsHandler.FundsEvent liquidationEvt = fundEvents.get(49);
+            assertThat(userId3, Is.is(liquidationEvt.uid));
+            assertThat(quoteId, Is.is(liquidationEvt.currency));
+            assertThat(10000, Is.is(liquidationEvt.symbol));
+//            assertThat(takerOrderId, Is.is(liquidationEvt.orderId));
+            assertThat(0L, Is.is(liquidationEvt.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(liquidationEvt.direction));
+            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(liquidationEvt.eventType));
+            assertThat(9740L, Is.is(liquidationEvt.free));
+            assertThat(100L, Is.is(liquidationEvt.locked));
+            assertThat(0L, Is.is(liquidationEvt.openPriceSum));
+            assertThat(-9900L, Is.is(liquidationEvt.profit));
+            assertThat(0L, Is.is(liquidationEvt.openVolume));
+            assertThat(1L, Is.is(liquidationEvt.tradeSize));
+            assertThat(100L, Is.is(liquidationEvt.tradePrice));
+            // 平仓后openVolume为0, 故unrealizedProfit/liquidationPrice/marginRatioScaleK均为0
+            checkEvent(liquidationEvt);
         }
     }
 

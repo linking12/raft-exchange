@@ -68,6 +68,11 @@ class ITExtraMarginIntegration {
     public void after() {
     }
 
+    private void checkEvent(IFundEventsHandler.FundsEvent evt) {
+        assertThat(0L, is(evt.unrealizedProfit));
+        assertThat(0L, is(evt.liquidationPrice));
+        assertThat(0L, is(evt.marginRatioScaleK));
+    }
     private PerformanceConfiguration getPerformanceConfiguration() {
         return PerformanceConfiguration.baseBuilder().build();
     }
@@ -257,6 +262,9 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(event1.tradeSize));
             assertThat(0L, is(event1.tradePrice));
             assertThat(1000L, is(event1.extraMargin));
+            // 没开仓时unrealizedProfit, liquidationPrice, marginRatioScaleK均为0
+            checkEvent(event1);
+
         }
     }
 
@@ -336,6 +344,14 @@ class ITExtraMarginIntegration {
             assertThat(1L, is(marginAdjust.openVolume));
             assertThat(0L, is(marginAdjust.tradeSize));
             assertThat(500L, is(marginAdjust.extraMargin));
+            // 标记价格没变, openVolume * markPrice - openPriceSum = 10000 - 10000 = 0
+            assertThat(0L, is(marginAdjust.unrealizedProfit));
+            // maintenanceMargin = 50
+            // totalMargin = openInitMarginSum + extraMargin = 100 + 500 = 600
+            // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = 1 * (50 - 600) + 10000 * 1 = 9450L
+            assertThat(9450L, is(marginAdjust.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 600) = long(83.3) = 83
+            assertThat(83L, is(marginAdjust.marginRatioScaleK));
 
             IFundEventsHandler.FundsEvent marginRefund = fundEvents.get(15);
             assertThat(userId1, is(marginRefund.uid));
@@ -351,6 +367,8 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(marginRefund.tradeSize));
             assertThat(0L, is(marginRefund.tradePrice));
             assertThat(500L, is(marginRefund.extraMargin));
+            // 仓位平完后, openVolume为0, 所以estimateUnrealizedProfit, estimateLiquidationPrice, marginRatioScaleK均为0
+            checkEvent(marginRefund);
         }
     }
 
