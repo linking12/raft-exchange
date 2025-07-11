@@ -77,8 +77,6 @@ public class FundEventsHelper {
         if (position.openVolume == 0) {
             return 0; // 无持仓，不计算保证金比率
         }
-        long notional = position.openVolume * priceRecord.markPrice;
-        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         long totalMargin;
         if (position.marginMode == MarginMode.CROSS) {
             UserProfile userProfile = userProfileService.getUserProfile(position.uid);
@@ -87,9 +85,9 @@ public class FundEventsHelper {
             long balance = userProfile.accounts.get(position.currency);
             totalMargin = balance + totalPnl;
         } else {
-            totalMargin = position.openInitMarginSum + position.estimateProfit(priceRecord) + position.extraMargin;
+            totalMargin = position.openInitMarginSum + position.estimateUnrealizedProfit(priceRecord) + position.extraMargin;
         }
-        return (long)(spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
+        return position.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
     }
 
     /**

@@ -214,6 +214,16 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
 
     /**
+     * 计算保证金比率 = 维持保证金 / 仓位权益
+     * 注意结果乘以了maintenanceMarginScaleK进行缩放
+     */
+    public long estimateMarginRatioScaleK(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord, long totalMargin) {
+        long notional = openVolume * priceRecord.markPrice;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+        return (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
+    }
+
+    /**
      * 【强平风险评估用】只计算 当前持仓*标记价格*维持保证金率，不看pending部分。
      *
      * @param spec

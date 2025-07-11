@@ -177,7 +177,7 @@ public final class LiquidationScanner {
             for (SymbolPositionRecord position : records) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                long profit = position.estimateUnrealizedProfit(priceRecord);
+                long profit = position.estimateProfit(priceRecord);
                 long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;

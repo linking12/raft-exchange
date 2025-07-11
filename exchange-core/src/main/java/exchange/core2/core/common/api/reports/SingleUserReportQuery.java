@@ -99,7 +99,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 } else {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(symbol);
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(symbol);
-                    long totalMargin = pos.openInitMarginSum + pos.estimateProfit(priceRecord) + pos.extraMargin;
+                    long totalMargin = pos.openInitMarginSum + pos.estimateUnrealizedProfit(priceRecord) + pos.extraMargin;
                     positions.put(symbol, buildPositionReport(pos, spec, priceRecord, totalMargin));
                 }
             });
@@ -132,11 +132,9 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
 
     private SingleUserReportResult.Position buildPositionReport(SymbolPositionRecord pos, CoreSymbolSpecification spec,
                                                                 LastPriceCacheRecord priceRecord, long totalMargin) {
-        long notional = pos.openVolume * priceRecord.markPrice;
-        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
         long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord);
-        long marginRatioScaleK = (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
+        long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
 
         return new SingleUserReportResult.Position(
                 pos.currency,
