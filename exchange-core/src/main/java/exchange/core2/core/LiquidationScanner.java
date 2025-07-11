@@ -236,7 +236,8 @@ public final class LiquidationScanner {
         return price;
     }
 
-    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, CoreSymbolSpecification spec, long price, long size, FundEventsHelper eventsHelper) {
+    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, CoreSymbolSpecification spec, long price, long size,
+        FundEventsHelper eventsHelper) {
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
@@ -245,6 +246,7 @@ public final class LiquidationScanner {
         liquidationFuture.whenCompleteAsync((cmd, err) -> {
             /**
              * 如果第一个事件是reject，说明没有完全成交。
+             * 
              * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
              */
             MatcherTradeEvent firstEvent = cmd.matcherEvent;
@@ -259,6 +261,7 @@ public final class LiquidationScanner {
                         if (cmd2.matcherEvent.eventType == MatcherEventType.REJECT) {
                             /**
                              * FOK的reject，是全额reject
+                             * 
                              * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchFokBudget
                              */
                             handleLiquidationFailure(position, cmd2.matcherEvent.size);
@@ -285,20 +288,20 @@ public final class LiquidationScanner {
         int sign = position.direction.getMultiplier();
         if (spec.isFixedFee()) {
             /**
-             * 固定手续费的情况下：
-             * 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerFee
+             * 固定手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerFee
              * bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee - takerFee) / openVolume
              */
             maxLoss -= spec.takerFee * position.openVolume;
             return CoreArithmeticUtils.ceilDivide(position.openPriceSum - sign * maxLoss, position.openVolume);
         } else {
             /**
-             * 动态手续费的情况下：
-             * 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerRate × bankruptcyPrice × openVolume
-             * bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee) / (openVolume * (1 - takerFee / feeScaleK))
-             *                 = (openPriceSum - sign * maxLoss) * feeScaleK / (openVolume * feeScaleK - openVolume * takerFee)
+             * 动态手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerRate ×
+             * bankruptcyPrice × openVolume bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee) /
+             * (openVolume * (1 - takerFee / feeScaleK)) = (openPriceSum - sign * maxLoss) * feeScaleK / (openVolume *
+             * feeScaleK - openVolume * takerFee)
              */
-            return CoreArithmeticUtils.ceilDivide((position.openPriceSum - sign * maxLoss) * spec.feeScaleK, position.openVolume * (spec.feeScaleK - spec.takerFee));
+            return CoreArithmeticUtils.ceilDivide((position.openPriceSum - sign * maxLoss) * spec.feeScaleK,
+                position.openVolume * (spec.feeScaleK - spec.takerFee));
         }
     }
 
