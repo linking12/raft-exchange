@@ -65,29 +65,34 @@ public class FundEventsHelper {
         event.extraMargin = position.extraMargin;
         LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
         CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-        event.unrealizedProfit = position.estimateUnrealizedProfit(priceRecord);
-        event.liquidationPrice = position.estimateLiquidationPrice(spec, priceRecord);
-        event.marginRatioScaleK = marginRatioScaleK(position, spec, priceRecord);
+        calc(event, position, spec, priceRecord);
         event.free = free;
         event.locked = locked;
         return event;
     }
 
-    private long marginRatioScaleK(SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
+    private void calc(FundEvent event, SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
         if (position.openVolume == 0) {
-            return 0; // 无持仓，不计算保证金比率
+            return; // 无持仓，不计算
         }
-        long totalMargin;
+        long balance = 0;
+        long totalPnl = 0;
+        long totalMM = 0;
+        long totalMargin = 0;
         if (position.marginMode == MarginMode.CROSS) {
             UserProfile userProfile = userProfileService.getUserProfile(position.uid);
-            long totalPnl = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
-                .sumOfLong(pos -> pos.estimateProfit(lastPriceCache.get(pos.symbol)));
-            long balance = userProfile.accounts.get(position.currency);
+            totalPnl = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
+                .sumOfLong(pos -> pos.estimateProfit(priceRecord));
+            totalMM = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
+                .sumOfLong(pos -> pos.calculateMaintenanceMargin(spec, priceRecord));
+            balance = userProfile.accounts.get(position.currency);
             totalMargin = balance + totalPnl;
         } else {
             totalMargin = position.openInitMarginSum + position.estimateUnrealizedProfit(priceRecord) + position.extraMargin;
         }
-        return position.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
+        event.unrealizedProfit = position.estimateUnrealizedProfit(priceRecord);
+        event.liquidationPrice = position.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
+        event.marginRatioScaleK = position.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
     }
 
     /**

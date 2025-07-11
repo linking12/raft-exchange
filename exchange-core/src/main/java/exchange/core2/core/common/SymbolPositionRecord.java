@@ -196,21 +196,36 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     /**
      * 计算强平价格，基于标记价格。
-     * 强平触发条件为：账户权益 <= 维持保证金
-     * - 多仓（LONG）：equity = 总保证金 + (markPrice - entryPrice) * 仓位数量
-     * - 空仓（SHORT）：equity = 总保证金 + (entryPrice - markPrice) * 仓位数量
-     * 目标是求出触发强平时的 markPrice，即 P_liq。
-     * 推导后统一公式为：
-     * P_liq = (sign * (MM - totalMargin) + entryValue) / positionSize
+     * 强平触发条件为：账户权益 == 维持保证金
+     * 逐仓：
+     * IMS + extraM + sign * (Pm - Pe) * Q = MM
+     * Pm = (sign * (MM - IMS - extraM) + openPriceSum) / Q
+     * 全仓：
+     *
+     *
+     * Balance + sign * (Pm - Pe) * Q + PNL(other) = MM + MM(other) , MM = Rmm * Pm * Q, Pe = openPriceSum / Q
+     * Pm = (Pe * Q - B - PNL(other) + MM(other)) / Q * (1 - Rmm)
+     *    = (openPriceSum - B - PNL(other) + MM(other)) / Q * (1 - Rmm)
+     *
      */
-    public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
+    public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
+                                         long totalBalance, long totalPnl, long totalMM) {
         if (openVolume == 0) {
             return 0; // 无持仓，不存在强平价
         }
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
-        long totalMargin = openInitMarginSum + extraMargin;
-        return (long) ((direction.getMultiplier() * (maintenanceMargin - totalMargin) + openPriceSum) * 1.0 / openVolume);
+        if (marginMode == MarginMode.ISOLATED) {
+            return (long) ((direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) * 1.0 / openVolume);
+        } else {
+            long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
+            long mmOther = totalMM - maintenanceMargin;
+            long numerator = openPriceSum - totalBalance - pnlOther + mmOther;
+            if (numerator < 0) {
+                return 0;
+            }
+            return (long) (numerator / (openVolume * (1 - maintenanceMargin * 1.0 / notional)));
+        }
     }
 
     /**
