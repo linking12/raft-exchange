@@ -565,7 +565,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public void updateCurrentPriceTo(int price, int symbolId, int quoteId) {
         // update mark price
         long uid = 100000 + getRandomTransactionId();
-        api.submitCommand(ApiAdjustMarkPrice.builder().transactionId(uid).symbol(symbolId).markPrice(price).build());
+        submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(uid).symbol(symbolId).markPrice(price).build(), CommandResultCode.SUCCESS);
         // update bid/ask price
         long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
         createBid(userId1, 10, price, symbolId);
@@ -842,6 +842,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
         try (ExecutionTime ignore = new ExecutionTime(t -> log.debug("Loaded all symbols in {}", t))) {
             addSymbols(coreSymbolSpecifications);
         }
+
+        // init markPrice
+        testDataFutures.coreSymbolSpecifications.join().forEach(symbol -> {
+            if (symbol.getType() == SymbolType.FUTURES_CONTRACT_PERPETUAL) {
+                initMarkPrice(symbol.getSymbolId(), 100);
+            }
+        });
 
         // create accounts and deposit initial funds
         final List<BitSet> userAccounts = testDataFutures.usersAccounts.join();

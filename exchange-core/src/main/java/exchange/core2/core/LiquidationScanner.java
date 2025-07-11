@@ -54,8 +54,13 @@ public final class LiquidationScanner {
         this.api = api;
         this.riskEngines = riskEngines;
         this.fundEventsHelpers =
-            riskEngines.stream().collect(Collectors.toMap(RiskEngine::getShardId, r -> new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(),
-                r.getShardId(), riskEnginesNum, r.getUserProfileService(), r.getSymbolSpecificationProvider(), r.getLastPriceCache())));
+            riskEngines.stream().collect(Collectors.toMap(RiskEngine::getShardId, r -> {
+                FundEventsHelper eventsHelper = new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(), r.getShardId(), riskEnginesNum);
+                eventsHelper.setSymbolSpecificationProvider(r.getSymbolSpecificationProvider());
+                eventsHelper.setUserProfileService(r.getUserProfileService());
+                eventsHelper.setLastPriceCache(r.getLastPriceCache());
+                return eventsHelper;
+            }));
         this.scheduler = Executors.newScheduledThreadPool(riskEngines.size(), r -> new Thread(r, "LiquidationScanner"));
     }
 

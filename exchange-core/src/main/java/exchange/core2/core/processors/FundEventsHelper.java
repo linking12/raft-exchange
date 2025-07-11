@@ -14,6 +14,7 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
@@ -23,9 +24,12 @@ public class FundEventsHelper {
     private final Supplier<FundEvent> eventSupplier;
     private final int riskEngineShardId;
     private final int numShards;
-    private final UserProfileService userProfileService;
-    private final SymbolSpecificationProvider symbolSpecificationProvider;
-    private final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
+    @Setter
+    private SymbolSpecificationProvider symbolSpecificationProvider;
+    @Setter
+    private UserProfileService userProfileService;
+    @Setter
+    private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
 
     private FundEvent eventsChainHead;
 
