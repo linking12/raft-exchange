@@ -220,7 +220,7 @@ public final class LiquidationScanner {
             sizeToLiquidate = Math.min(sizeToLiquidate, position.openVolume);
             if (sizeToLiquidate > 0) {
                 // 假设能成交，先行更新释放量
-                long estimatedReleasedMargin = CoreArithmeticUtils.calculateDeficitToLiquidate(sizeToLiquidate, position, priceRecord);
+                long estimatedReleasedMargin = CoreArithmeticUtils.calculateDeficitAfterLiquidate(sizeToLiquidate, position, spec, priceRecord);
                 marginReleased += estimatedReleasedMargin;
                 // 提交强平单
                 executeLiquidationOrder(userProfile, position, spec, price, sizeToLiquidate, eventsHelper);

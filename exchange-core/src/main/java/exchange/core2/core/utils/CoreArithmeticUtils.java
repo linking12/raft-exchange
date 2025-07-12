@@ -122,7 +122,7 @@ public final class CoreArithmeticUtils {
     /**
      * 计算强平数量x
      * 原权益：E = openInitMarginSum + unrealizedPnl
-     * 强平后减少的初始保证金 ΔIM = openInitMarginSum * x / Q；
+     * 强平后减少的初始保证金 ΔIM = openInitMarginSum * x / Q
      * 强平后减少的未实现盈亏 ΔPnl = sign * (Pm - Pe) * x
      * 新权益：E’ = E - ΔIM - ΔPnl
      * 新权益同时要大于等于维持保证金：E’ ≥ Pm * (Q - x) * Rmm
@@ -146,17 +146,19 @@ public final class CoreArithmeticUtils {
     }
 
     /**
-     * 计算强平x手后，释放的金额
-     * 和 {@link #calculateSizeToLiquidate} 相反
-     * 强平释放的金额 ΔE = ΔIM + ΔPnl
-     * = openInitMarginSum * x / Q + sign * (Pm - Pe) * size,     Pe = openPriceSum / Q
-     * = openInitMarginSum * x / Q + sign * (Pm - openPriceSum / Q) * x
-     * = (openInitMarginSum + sign * (Pm * Q - openPriceSum) * x) / Q
+     * 估算强平x手后，对缺口的改善
+     * 定义 deficit = totalMM - totalEquity
+     *    Δdeficit = ΔMM - ΔE, 其中 ΔE = ΔIM + ΔPnl
+     * ΔD = ΔMM - ΔIM - ΔPnl
+     *    = ΔMM - openInitMarginSum * x / Q - sign * (Pm - Pe) * x,     Pe = openPriceSum / Q
+     *    = ΔMM - openInitMarginSum * x / Q - sign * (Pm - openPriceSum / Q) * x
+     *    = ΔMM - (openInitMarginSum + sign * (Pm * Q - openPriceSum) * x) / Q
      */
-    public static long calculateDeficitToLiquidate(long size, SymbolPositionRecord position, RiskEngine.LastPriceCacheRecord priceRecord) {
+    public static long calculateDeficitAfterLiquidate(long size, SymbolPositionRecord position, CoreSymbolSpecification spec, RiskEngine.LastPriceCacheRecord priceRecord) {
         int sign = position.direction.getMultiplier();
-        long delta = position.openInitMarginSum + sign * (priceRecord.markPrice * position.openVolume - position.openPriceSum);
-        return ceilDivide(delta * size, position.openVolume);
+        long deltaMM = spec.calcMaintenanceMargin(position.openVolume * priceRecord.markPrice) - spec.calcMaintenanceMargin((position.openVolume - size) * priceRecord.markPrice);
+        long numerator = position.openInitMarginSum + sign * (priceRecord.markPrice * position.openVolume - position.openPriceSum);
+        return deltaMM - ceilDivide(numerator * size, position.openVolume);
     }
 
     /**
