@@ -186,13 +186,6 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, int currency, long amount, long free, long locked) {
-        FundEvent event = buildSpotEvent(cmd.orderId, cmd.uid, FundEventType.MARGIN_ADJUST, currency, free, locked);
-        event.extraMargin = 0; // 全仓充值已经体现在余额上了
-        addFundEvent(cmd, cmd.orderId, event);
-        return event;
-    }
-
     public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.MARGIN_ADJUST, position, free, locked);
         addFundEvent(cmd, cmd.orderId, event);

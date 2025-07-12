@@ -279,7 +279,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         if (cmd.resultCode == CommandResultCode.SUCCESS) {
                             long locked = calculateLockedMargin(userProfile, cmd.symbol);
                             long free = userProfile.accounts.get(cmd.symbol) - locked;
-                            eventsHelper.sendMarginAdjustmentEvent(cmd, cmd.symbol, cmd.price, free, locked);
+                            // 所有同currency的全仓仓位都通知
+                            userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == cmd.symbol)
+                                .forEach(pos -> eventsHelper.sendMarginAdjustmentEvent(cmd, pos, free, locked));
                         }
                     } else {
                         SymbolPositionRecord pos = userProfile.positions.get(cmd.symbol);
