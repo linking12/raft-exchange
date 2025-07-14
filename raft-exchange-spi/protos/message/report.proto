@@ -68,6 +68,7 @@ message Position {
   int64 unrealized_profit = 13;
   int64 liquidation_price = 14;
   int64 margin_ratio_scale_k = 15;
+  int64 mark_price = 16;
 }
 
 message Order {

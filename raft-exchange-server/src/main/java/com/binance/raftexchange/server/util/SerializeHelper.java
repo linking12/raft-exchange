@@ -211,7 +211,7 @@ public class SerializeHelper {
                     .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())
                     .setMarginModeValue(p.getMarginMode().ordinal()).setExtraMargin(p.getExtraMargin())
                     .setUnrealizedProfit(p.getUnrealizedProfit()).setLiquidationPrice(p.getLiquidationPrice())
-                    .setMarginRatioScaleK(p.getMarginRatioScaleK()).build();
+                    .setMarginRatioScaleK(p.getMarginRatioScaleK()).setMarkPrice(p.getMarkPrice()).build();
 
     private static final Function<List<exchange.core2.core.common.Order>, OrderList> ordersMapping = l ->
             OrderList.newBuilder().addAllOrders(l.stream().map(o -> Order.newBuilder()

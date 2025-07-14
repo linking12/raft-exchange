@@ -65,9 +65,10 @@ message FundsEventPB {
   int64 unrealizedProfit = 20;
   int64 liquidationPrice = 21;
   int64 marginRatioScaleK = 22;
-  int64 tradeSize = 23;
-  int64 tradePrice = 24;
-  int64 fee = 25;
+  int64 markPrice = 23;
+  int64 tradeSize = 24;
+  int64 tradePrice = 25;
+  int64 fee = 26;
 }
 
 enum FundEventType {

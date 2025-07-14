@@ -40,6 +40,8 @@ public interface IFundEventsHandler {
         public final long unrealizedProfit;
         public final long liquidationPrice;
         public final long marginRatioScaleK;
+        // 额外字段
+        public final long markPrice; // 标记价格
         // 变化字段
         public final long tradeSize; // 本次交易数量
         public final long tradePrice; // 本次交易价格

@@ -66,6 +66,7 @@ public class FundEventsHelper {
         LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
         CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
         calc(event, position, spec, priceRecord);
+        event.markPrice = priceRecord.markPrice;
         event.free = free;
         event.locked = locked;
         return event;
@@ -275,6 +276,7 @@ public class FundEventsHelper {
             event.tradeSize = 0;
             event.tradePrice = 0;
             event.fee = 0;
+            event.markPrice = 0;
             return event;
         } else {
             return new FundEvent();

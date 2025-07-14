@@ -103,7 +103,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, 0, 0, 0);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
-                    positions.put(symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK));
+                    positions.put(symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 
@@ -125,7 +125,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balance + totalPnl);
-                    positions.put(pos.symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK));
+                    positions.put(pos.symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 
@@ -141,7 +141,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
     }
 
     private SingleUserReportResult.Position buildPositionReport(SymbolPositionRecord pos, long unrealizedPnl,
-                                                                long liquidationPrice, long marginRatioScaleK) {
+                                                                long liquidationPrice, long marginRatioScaleK, long markPrice) {
 
         return new SingleUserReportResult.Position(
                 pos.currency,
@@ -159,7 +159,8 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 pos.extraMargin,
                 unrealizedPnl,
                 liquidationPrice,
-                marginRatioScaleK);
+                marginRatioScaleK,
+                markPrice);
     }
 
     @Override

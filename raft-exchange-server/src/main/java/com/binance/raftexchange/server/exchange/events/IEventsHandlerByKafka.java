@@ -171,7 +171,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setPendingSellAvgPrice(fundsEvent.getPendingSellAvgPrice()).setPendingBuyAvgPrice(fundsEvent.getPendingBuyAvgPrice())
                 .setLeverage(fundsEvent.getLeverage()).setMarginModeValue(fundsEvent.getMarginMode().ordinal()).setExtraMargin(fundsEvent.getExtraMargin())
                 .setUnrealizedProfit(fundsEvent.getUnrealizedProfit()).setLiquidationPrice(fundsEvent.getLiquidationPrice())
-                .setMarginRatioScaleK(fundsEvent.getMarginRatioScaleK()).setTradeSize(fundsEvent.getTradeSize())
+                .setMarginRatioScaleK(fundsEvent.getMarginRatioScaleK()).setMarkPrice(fundsEvent.getMarkPrice()).setTradeSize(fundsEvent.getTradeSize())
                 .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
