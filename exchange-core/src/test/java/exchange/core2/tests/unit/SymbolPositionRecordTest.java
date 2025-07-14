@@ -150,18 +150,22 @@ class SymbolPositionRecordTest {
         // 开仓总成本 BTC 50000@10
         position.openPriceSum = 500000L;
 
+        priceRecord.bidPrice = 50000L;
+        priceRecord.askPrice = 50000L;
         priceRecord.markPrice = 50000L; // $50,000
         long notional = 10 * 50000L;
-        long maintenanceMargin = (long) (notional * 0.05); // 5%维持保证金率
+        long maintenanceMargin = (long) (notional * 0.08); // 8%维持保证金率
+
+        long pnl = position.estimateUnrealizedProfit(priceRecord);
 
         long result = position.estimateLiquidationPrice(
                 spec, priceRecord,
                 60000L, // 账户余额
-                0L,  // 总未实现盈亏
+                pnl + 0L,  // 总未实现盈亏
                 maintenanceMargin + 40000L // 总维持保证金
         );
 
-        assertEquals(50543, result, "normal case");
+        assertEquals(-1, result, "normal case");
     }
 
     // =============== 辅助方法 ===============

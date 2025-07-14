@@ -472,4 +472,41 @@ public final class ITExchangeCoreMarkPrice {
 
         }
     }
+
+    @Test
+    public void testCrossMarginLiquidation() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+
+            int symbolId = 2;
+            int quoteCurrency = 840;
+            container.initFutureSymbol(symbolId, quoteCurrency);
+            container.initMarkPrice(symbolId, 10000);
+
+            container.createUserWithMoney(UID_1, quoteCurrency, 1000);
+            container.createUserWithMoney(UID_2, quoteCurrency, MAX_VALUE);
+            int orderId = 10000;
+
+            // 开仓成功
+            container.createBidWithOrderId(orderId++, UID_1, 1, 10000, symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(orderId++, UID_2, 1, 10000, symbolId, MarginMode.CROSS);
+
+            // 全仓强平价9055
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getPositions().get(symbolId).getLiquidationPrice(), is(9055L));
+            });
+
+            // 更新价格到9054，触发强平
+            container.updateCurrentPriceTo(9054, symbolId, quoteCurrency);
+
+            container.createBidWithOrderId(orderId++, UID_2, 1, 9054, symbolId, MarginMode.CROSS);
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getPositions().isEmpty(), is(true));
+            });
+
+        }
+    }
 }

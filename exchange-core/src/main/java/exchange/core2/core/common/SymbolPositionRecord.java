@@ -201,12 +201,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * IMS + extraM + sign * (Pm - Pe) * Q = MM
      * Pm = (sign * (MM - IMS - extraM) + openPriceSum) / Q
      * 全仓：
-     *
-     *
      * Balance + sign * (Pm - Pe) * Q + PNL(other) = MM + MM(other) , MM = Rmm * Pm * Q, Pe = openPriceSum / Q
-     * Pm = (Pe * Q - B - PNL(other) + MM(other)) / Q * (1 - Rmm)
-     *    = (openPriceSum - B - PNL(other) + MM(other)) / Q * (1 - Rmm)
+     * Pm = (sign * Pe * Q - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
+     *    = (sign * openPriceSum - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *
+     * @return 返回强平价，-1表示无强平风险
      */
     public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
                                          long totalBalance, long totalPnl, long totalMM) {
@@ -218,13 +217,15 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (marginMode == MarginMode.ISOLATED) {
             return (long) ((direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) * 1.0 / openVolume);
         } else {
+            int sign = direction.getMultiplier();
             long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
             long mmOther = totalMM - maintenanceMargin;
-            long numerator = openPriceSum - totalBalance - pnlOther + mmOther;
-            if (numerator < 0) {
-                return 0;
+            long numerator = sign * openPriceSum - totalBalance - pnlOther + mmOther;
+            long result = (long) (numerator / (openVolume * (sign * 1 - maintenanceMargin * 1.0 / notional)));
+            if (result < 0 || (direction == PositionDirection.LONG && result > priceRecord.markPrice) || (direction == PositionDirection.SHORT && result < priceRecord.markPrice)) {
+                return -1;
             }
-            return (long) (numerator / (openVolume * (1 - maintenanceMargin * 1.0 / notional)));
+            return result;
         }
     }
 
