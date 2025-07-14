@@ -52,10 +52,6 @@
 			<artifactId>jraft-core</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>org.rocksdb</groupId>
-			<artifactId>rocksdbjni</artifactId>
-		</dependency>
-		<dependency>
 			<groupId>com.binance.raft-exchange</groupId>
 			<artifactId>exchange-core</artifactId>
 		</dependency>
