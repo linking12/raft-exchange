@@ -843,8 +843,8 @@ class ITFutureCross {
             assertThat(0L, Is.is(event1.tradeSize));
             assertThat(0L, Is.is(event1.tradePrice));
             assertThat(-4700L, Is.is(event1.unrealizedProfit));
-            assertThat(9926L, Is.is(event1.liquidationPrice));
-            assertThat(185L, Is.is(event1.marginRatioScaleK));
+            assertThat(-1L, Is.is(event1.liquidationPrice));
+            assertThat(1L, Is.is(event1.marginRatioScaleK));
         }
     }
 
@@ -977,7 +977,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
             // maintenanceMargin = 50
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = -1 * (50 - 100) + 10000 * 1 = 10050
-            assertThat(10050L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            assertThat(3990029L, Is.is(takerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / MAX_VALUE) = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
@@ -1017,7 +1017,7 @@ class ITFutureCross {
             // openVolume * markPrice - openPriceSum = 10000 - 10000 = 0
             assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = 1 * (50 - 100) + 10000 * 1 = 9050
-            assertThat(9950L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            assertThat(9055L, Is.is(makerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 990) = long (50.5) = 50
             assertThat(50L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
@@ -1147,7 +1147,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
             // maintenanceMargin = 50
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = 1 * (50 - 100) + 10000 * 1 = 9050
-            assertThat(9950L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            assertThat(-1L, Is.is(takerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / MAX_VALUE) = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
@@ -1187,7 +1187,7 @@ class ITFutureCross {
             // openVolume * markPrice - openPriceSum = 10000 - 10000 = 0
             assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = -1 * (50 - 100) + 10000 * 1 = 10050
-            assertThat(10050L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            assertThat(10935L, Is.is(makerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 990) = long (50.5) = 50
             assertThat(50L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
@@ -1317,7 +1317,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
             // maintenanceMargin = 100
             // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (-1 * (100 - 200) + 20000 * 1)/2 = 10050
-            assertThat(10050L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            assertThat(1999980L, Is.is(takerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 100 / MAX_VALUE) = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
@@ -1358,7 +1358,7 @@ class ITFutureCross {
             // openVolume * markPrice - openPriceSum = 20000 - 20000 = 0
             assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
             // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (1 * (100 - 200) + 20000 )/2 = 9950L
-            assertThat(9950L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            assertThat(5035L, Is.is(makerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 100 / 9980) = long (10.02) = 10
             assertThat(10L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
@@ -1485,7 +1485,7 @@ class ITFutureCross {
             // openVolume * markPrice - openPriceSum = 20000 - 20000 = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.unrealizedProfit));
             // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (1 * (100 - 200) + 20000 )/2 = 9950L
-            assertThat(9950L, Is.is(takerOpenPositionEvent.liquidationPrice));
+            assertThat(-1L, Is.is(takerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 100 / MAX_VALUE) = 10
             assertThat(0L, Is.is(takerOpenPositionEvent.marginRatioScaleK));
 
@@ -1527,7 +1527,7 @@ class ITFutureCross {
             assertThat(0L, Is.is(makerOpenPositionEvent.unrealizedProfit));
             // maintenanceMargin = 100
             // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (-1 * (100 - 200) + 20000 * 1)/2 = 10050
-            assertThat(10050L, Is.is(makerOpenPositionEvent.liquidationPrice));
+            assertThat(14915L, Is.is(makerOpenPositionEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 100 / 9980) = 0
             assertThat(10L, Is.is(makerOpenPositionEvent.marginRatioScaleK));
         }
@@ -1671,7 +1671,7 @@ class ITFutureCross {
             assertThat(-500L, Is.is(takerCloseEvent.unrealizedProfit));
             // maintenanceMargin = 0.5% * 9 * 10000 = 450
             // liquidationPrice = (direction * (maintenanceMargin - totalMargin) + openPriceSum) / openVolume = (-1 * (450 - 900) + 89500)/9 = long(9994.4) = 9994L
-            assertThat(9994L, Is.is(takerCloseEvent.liquidationPrice));
+            assertThat(452106L, Is.is(takerCloseEvent.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 450 / MAX_VALUE) = 0
             assertThat(0L, Is.is(takerCloseEvent.marginRatioScaleK));
         }

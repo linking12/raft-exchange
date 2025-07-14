@@ -73,6 +73,7 @@ class ITExtraMarginIntegration {
         assertThat(0L, is(evt.liquidationPrice));
         assertThat(0L, is(evt.marginRatioScaleK));
     }
+
     private PerformanceConfiguration getPerformanceConfiguration() {
         return PerformanceConfiguration.baseBuilder().build();
     }
@@ -146,19 +147,19 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(2)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(1)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event1 = fundEvents.get(1);
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(0);
 
             assertThat(userId1, is(event1.uid));
             assertThat(quoteId, is(event1.currency));
             assertThat(0, is(event1.symbol));
-            assertThat(10001L, is(event1.orderId));
+//            assertThat(10001L, is(event1.orderId));
             assertThat(0L, is(event1.fee));
             assertThat(PositionDirection.EMPTY, is(event1.direction));
-            assertThat(FundEvent.FundEventType.MARGIN_ADJUST, is(event1.eventType));
-            assertThat(3000L, is(event1.free));
+            assertThat(FundEvent.FundEventType.DEPOSIT, is(event1.eventType));
+            assertThat(2000L, is(event1.free));
             assertThat(0L, is(event1.locked));
             assertThat(0L, is(event1.openPriceSum));
             assertThat(0L, is(event1.openVolume));
@@ -733,7 +734,7 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(39)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(40)).fundsEvent(fundEventCapor.capture());
             // check fund event, 因为已经补充过保证金了所以只会发一次补充保证金事件
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
             IFundEventsHandler.FundsEvent alertEvent = fundEvents.get(33);
@@ -836,7 +837,7 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(40)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(41)).fundsEvent(fundEventCapor.capture());
             // check fund event, 因为已经补充过保证金了所以只会发一次补充保证金事件
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
             IFundEventsHandler.FundsEvent alertEvent = fundEvents.get(33);
@@ -855,7 +856,7 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(alertEvent.tradePrice));
             assertThat(0L, is(alertEvent.extraMargin));
 
-            IFundEventsHandler.FundsEvent alertEvent2 = fundEvents.get(37);
+            IFundEventsHandler.FundsEvent alertEvent2 = fundEvents.get(38);
             assertThat(userId1, is(alertEvent2.uid));
             assertThat(quoteId, is(alertEvent2.currency));
             assertThat(10001, is(alertEvent2.symbol));

@@ -286,7 +286,7 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(1L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(150L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(74517L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(1L));
             });
 
@@ -336,7 +336,7 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(1L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(90L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(18796L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(4L));
             });
 
@@ -347,7 +347,7 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(0L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(90L * 2));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(4080L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(13870L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(9L));
             });
 

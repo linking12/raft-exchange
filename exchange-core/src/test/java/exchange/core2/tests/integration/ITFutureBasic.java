@@ -1129,26 +1129,32 @@ class ITFutureBasic {
     // 强制平仓事件
     @Test
     public void testForceClosePosition() {
-        int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
-        long makerOrderId1 = 1005L;
-        long takerOrderId2 = 1006L;
-        int cnt = 500;
+        int deposit = 100000;
+        int size = 10;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
             container.initMarkPrice(symbolId, 10000);
-            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
-            container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(UID_1, deposit, quoteId);
+            container.createUserWithSpecificMoney(UID_2, MAX_VALUE, quoteId);
 
             // 开仓成功
-            container.createBidWithOrderId(makerOrderId1, userId1, 1, 10000, symbolId);
-            container.createAskWithOrderId(takerOrderId2, userId2, 1, 10000, symbolId);
+            container.createBidWithOrderId(MAKER_1, UID_1, size, 10000, symbolId);
+            container.createAskWithOrderId(TAKER_1, UID_2, size, 10000, symbolId);
 
             // 模拟行情变动
             container.updateCurrentPriceTo(500, symbolId, quoteId);
 
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).profit, Is.is((0L)));
+                assertThat(profile.getPositions().get(symbolId).unrealizedProfit, Is.is((-95000L)));
+                assertThat(profile.getPositions().get(symbolId).marginRatioScaleK, Is.is((0L)));
+            });
+
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         } finally {
             verify(handler, times(16)).fundsEvent(fundEventCapor.capture());
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
