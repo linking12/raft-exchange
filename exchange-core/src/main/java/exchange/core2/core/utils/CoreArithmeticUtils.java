@@ -13,6 +13,8 @@
 package exchange.core2.core.utils;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.processors.RiskEngine;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -118,32 +120,52 @@ public final class CoreArithmeticUtils {
     }
 
     /**
-     * 计算强平数量
-     * 找一个x，满足：x × price ≥ deficit + x × taker_fee
-     *              x ≥ deficit / (price - taker_fee)
+     * 计算强平数量x
+     * 原权益：E = openInitMarginSum + unrealizedPnl
+     * 强平后减少的初始保证金 ΔIM = openInitMarginSum * x / Q
+     * 强平后减少的未实现盈亏 ΔPnl = sign * (Pm - Pe) * x
+     * 新权益：E’ = E - ΔIM - ΔPnl
+     * 新权益同时要大于等于维持保证金：E’ ≥ Pm * (Q - x) * Rmm
+     * 则：E - ΔIM - ΔPnl ≥ Pm * (Q - x) * Rmm
+     * 即：E - IMS * x / Q - sign * (Pm - Pe) * x ≥ Pm * (Q - x) * Rmm
+     *    x ≥ (E - Pm * Q * Rmm) / (IMS / Q + Pm * (sign * 1 - Rmm) - sign * Pe),     Rmm = MM / (Pm * Q), Pe = openPriceSum / Q
+     *    x ≥ (E - MM) / (IMS / Q + sign * Pm - MM / Q - sign * openPriceSum / Q)
+     *    x ≥ (E - MM) * Q / (IMS + sign * Pm * Q - MM - sign * openPriceSum )
      */
-    public static long calculateSizeToLiquidate(long deficit, long price) {
-        long takerFeePerSize = 0; // 单边收费，减仓不收手续费
-        return ceilDivide(deficit, price - takerFeePerSize);
+    public static long calculateSizeToLiquidate(SymbolPositionRecord position, CoreSymbolSpecification spec, RiskEngine.LastPriceCacheRecord priceRecord) {
+        long E = position.openInitMarginSum + position.estimateUnrealizedProfit(priceRecord);
+        long MM = position.calculateMaintenanceMargin(spec, priceRecord);
+        long Q = position.openVolume;
+        long Pm = priceRecord.markPrice;
+        int sign = position.direction.getMultiplier();
+        // 分子
+        long numerator = (E - MM) * Q;
+        // 分母
+        long denominator = position.openInitMarginSum + sign * Pm * Q - MM - sign * position.openPriceSum;
+        return ceilDivide(numerator, denominator);
     }
 
     /**
-     * 计算强平后，释放的金额
-     * 和 {@link #calculateSizeToLiquidate} 相反
+     * 估算强平x手后，对缺口的改善
+     * 定义 deficit = totalMM - totalEquity
+     *    Δdeficit = ΔMM - ΔE, 其中 ΔE = ΔIM + ΔPnl
+     * ΔD = ΔMM - ΔIM - ΔPnl
+     *    = ΔMM - openInitMarginSum * x / Q - sign * (Pm - Pe) * x,     Pe = openPriceSum / Q
+     *    = ΔMM - openInitMarginSum * x / Q - sign * (Pm - openPriceSum / Q) * x
+     *    = ΔMM - (openInitMarginSum + sign * (Pm * Q - openPriceSum) * x) / Q
      */
-    public static long calculateDeficitToLiquidate(long size, long price, CoreSymbolSpecification spec) {
-        long takerFeePerSize = spec.isFixedFee()
-                ? spec.takerFee
-                : ceilDivide(price * spec.takerFee, spec.feeScaleK);
-        return size * (price - takerFeePerSize);
+    public static long calculateDeficitAfterLiquidate(long size, SymbolPositionRecord position, CoreSymbolSpecification spec, RiskEngine.LastPriceCacheRecord priceRecord) {
+        int sign = position.direction.getMultiplier();
+        long deltaMM = spec.calcMaintenanceMargin(position.openVolume * priceRecord.markPrice) - spec.calcMaintenanceMargin((position.openVolume - size) * priceRecord.markPrice);
+        long numerator = position.openInitMarginSum + sign * (priceRecord.markPrice * position.openVolume - position.openPriceSum);
+        return deltaMM - ceilDivide(numerator * size, position.openVolume);
     }
 
     /**
      * 向上取整计算整数除法，防止出现 x / y = 0
-     * ceil(x / y) = (x + y - 1) / y
      * 性能比Math.ceil好，因为不引入浮点数计算
      */
     public static long ceilDivide(long dividend, long divisor) {
-        return (dividend + divisor -1 ) / divisor;
+        return dividend / divisor + (dividend % divisor == 0 ? 0 : 1);
     }
 }

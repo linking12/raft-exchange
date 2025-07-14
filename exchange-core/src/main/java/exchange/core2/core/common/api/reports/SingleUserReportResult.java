@@ -183,6 +183,11 @@ public final class SingleUserReportResult implements ReportResult {
         public final MarginMode marginMode;
         public final long extraMargin;
 
+        // 计算值
+        public final long unrealizedProfit;
+        public final long liquidationPrice;
+        public final long marginRatioScaleK;
+
         private Position(BytesIn bytes) {
 
             this.quoteCurrency = bytes.readInt();
@@ -201,6 +206,10 @@ public final class SingleUserReportResult implements ReportResult {
             this.leverage = bytes.readInt();
             this.marginMode = MarginMode.values()[bytes.readInt()];
             this.extraMargin = bytes.readLong();
+
+            this.unrealizedProfit = bytes.readLong();
+            this.liquidationPrice = bytes.readLong();
+            this.marginRatioScaleK = bytes.readLong();
         }
 
         @Override
@@ -218,6 +227,9 @@ public final class SingleUserReportResult implements ReportResult {
             bytes.writeInt(leverage);
             bytes.writeInt(marginMode.ordinal());
             bytes.writeLong(extraMargin);
+            bytes.writeLong(unrealizedProfit);
+            bytes.writeLong(liquidationPrice);
+            bytes.writeLong(marginRatioScaleK);
         }
     }
 

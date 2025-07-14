@@ -32,6 +32,7 @@ import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
 
 @Slf4j
 @ExtendWith(MockitoExtension.class)
@@ -60,6 +61,8 @@ class ITPerpetualContractIntegration {
     @Captor
     private ArgumentCaptor<ITradeEventsHandler.RejectEvent> rejectEventCaptor;
 
+    @Captor
+    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCapor;
 
     @BeforeEach
     public void before() {
@@ -378,7 +381,8 @@ class ITPerpetualContractIntegration {
         int fundingRate = 1;
         int rateScale = 100;
         int updatedPrice = 1500;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.setConsumer(processor);
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
@@ -479,6 +483,59 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 - 150));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+        } finally {
+            verify(handler, times(33)).fundsEvent(fundEventCapor.capture());
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+
+            IFundEventsHandler.FundsEvent event1 = fundEvents.get(17);
+            assertThat(UID_1, is(event1.uid));
+            assertThat(quoteId, is(event1.currency));
+            assertThat(10000, is(event1.symbol));
+            // fee = funding fee
+            assertThat(-150L, is(event1.fee));
+            assertThat(-150L, is(event1.profit));
+            assertThat(PositionDirection.LONG, is(event1.direction));
+            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event1.eventType));
+            assertThat(0L, is(event1.free));
+            assertThat(0L, is(event1.locked));
+            assertThat(10000L, is(event1.openPriceSum));
+            assertThat(10L, is(event1.openVolume));
+            assertThat(0L, is(event1.tradeSize));
+            assertThat(0L, is(event1.tradePrice));
+            // 标记价格从10000变为1500, openVolume * priceRecord.markPrice - openPriceSum = 10 * 1500 - 10000 = 5000
+            assertThat(5000L, is(event1.unrealizedProfit));
+            // maintenanceMargin = 75
+            // totalPnl = 4850
+            // totalMargin = balance + pnl = 24750
+            // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum
+            // numerator = openPriceSum - totalBalance - pnlOther + mmOther
+            // numerator < 0时liquidationPrice=0
+            assertThat(0L, is(event1.liquidationPrice));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 24750) = 3
+            assertThat(3L, is(event1.marginRatioScaleK));
+
+            IFundEventsHandler.FundsEvent event2 = fundEvents.get(18);
+            assertThat(UID_2, is(event2.uid));
+            assertThat(quoteId, is(event2.currency));
+            assertThat(10000, is(event2.symbol));
+            assertThat(150L, is(event2.fee));
+            assertThat(150L, is(event2.profit));
+            assertThat(PositionDirection.SHORT, is(event2.direction));
+            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event2.eventType));
+            assertThat(0L, is(event2.free));
+            assertThat(0L, is(event2.locked));
+            assertThat(10000L, is(event2.openPriceSum));
+            assertThat(10L, is(event2.openVolume));
+            assertThat(0L, is(event2.tradeSize));
+            assertThat(0L, is(event2.tradePrice));
+            // 标记价格和开仓价格相同, 所以算出来的unrealizedProfit=10000-10*1500=-5000
+            assertThat(-5000L, is(event2.unrealizedProfit));
+            // numerator = openPriceSum - totalBalance - pnlOther + mmOther
+            // numerator < 0时liquidationPrice=0
+            assertThat(0L, is(event2.liquidationPrice));
+            // totalMargin = balance + totalPnl = 19800 - 4850 = 14950
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 14950) = 5
+            assertThat(5L, is(event2.marginRatioScaleK));
         }
     }
 
@@ -604,7 +661,7 @@ class ITPerpetualContractIntegration {
      */
     @Test
     public void testPerpetualScenario3() throws Exception {
-        long deposit = 10000L;
+        long deposit = 5000L;
         int makerFee = 100;
         int takerFee = 200;
         int size = 10;
@@ -633,7 +690,7 @@ class ITPerpetualContractIntegration {
 
             // 0. 充钱
             List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
-            userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, 10000));
+            userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, deposit));
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
@@ -696,26 +753,49 @@ class ITPerpetualContractIntegration {
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
-            // UID_3先下一单准备吃掉UID_1强平单
-            container.createBidWithOrderId(MAKER_3, UID_3, size, 1100, spec.symbolId, MarginMode.CROSS);
-            // 第二次触发强平因为资金费率UID_1仓位亏损触发强平
-            // 此时profit = -11110 + 11000 - 10000 = -10110
+            // 此时profit = 11000 - 10000 = 1000
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 11000 * 5 / 10 = 5500
-            // equity = balance + profit = 9900 - 10110 = -210 < maintenance 触发强平
-            // 强平6手即可保证deficit > 0
+            // equity = balance + profit = 4900 + 1000 = 5900 > maintenance
+            // 此时不会触发强平
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             // openPriceSum = 10 * 1000 - 6 * 1100 = 3400
-            // openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 6 /10 = 44
+            // openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(44L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(3400L));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(4L));
+                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
                 assertThat(profile.getPositions().getFirst().profit, is(-11110L));
             });
+
+            container.updateCurrentPriceTo(600, spec.symbolId, spec.quoteCurrency);
+
+            // UID_3先下一单准备吃掉UID_1强平单, 开10手预计会被吃掉4手
+            container.createBidWithOrderId(MAKER_3, UID_3, size, 600, spec.symbolId, MarginMode.CROSS);
+            container.getUserProfile(UID_1);
+            // 此时profit = 6000 - 10000 = -4000
+            // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
+            // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
+            // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            //  openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 4/10 = 66L
+            // openPriceSum = 10 * 1000 - 4 * 600 = 7600L
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(66L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(7600L));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().openVolume, is(6L));
+                assertThat(profile.getPositions().getFirst().profit, is(-11110L));
+            });
+
+            // 再次触发强平, 此时期待当前持仓不再被强平
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
         }
     }
 

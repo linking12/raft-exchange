@@ -15,15 +15,21 @@
  */
 package exchange.core2.core.common.api.reports;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.Order;
+import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.RiskEngine;
+import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
+import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import java.util.List;
@@ -82,24 +88,46 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
             return Optional.empty();
         }
         final UserProfile userProfile = riskEngine.getUserProfileService().getUserProfile(this.uid);
+        SymbolSpecificationProvider symbolSpecProvider = riskEngine.getSymbolSpecificationProvider();
 
         if (userProfile != null) {
             final IntObjectHashMap<SingleUserReportResult.Position> positions = new IntObjectHashMap<>(userProfile.positions.size());
-            userProfile.positions.forEachKeyValue((symbol, pos) ->
-                    positions.put(symbol, new SingleUserReportResult.Position(
-                            pos.currency,
-                            pos.direction,
-                            pos.openVolume,
-                            pos.openInitMarginSum,
-                            pos.openPriceSum,
-                            pos.profit,
-                            pos.pendingSellSize,
-                            pos.pendingBuySize,
-                            pos.pendingSellAvgPrice,
-                            pos.pendingBuyAvgPrice,
-                            pos.getLeverage(),
-                            pos.marginMode,
-                            pos.extraMargin)));
+            IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
+            userProfile.positions.forEachKeyValue((symbol, pos) -> {
+                if (pos.marginMode == MarginMode.CROSS) {
+                    crossPositionsByCurrency.getIfAbsentPut(pos.currency, FastList.newList()).add(pos);
+                } else {
+                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(symbol);
+                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(symbol);
+                    long totalMargin = pos.openInitMarginSum + pos.estimateUnrealizedProfit(priceRecord) + pos.extraMargin;
+                    long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
+                    long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, 0, 0, 0);
+                    long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
+                    positions.put(symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK));
+                }
+            });
+
+            crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
+                long totalPnl = records.stream().mapToLong(pos -> {
+                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
+                    return pos.estimateProfit(priceRecord);
+                }).sum();
+                long totalMM = records.stream().mapToLong(pos -> {
+                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
+                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
+                    return pos.calculateMaintenanceMargin(spec, priceRecord);
+                }).sum();
+                long balance = userProfile.accounts.get(currency);
+
+                for (SymbolPositionRecord pos : records) {
+                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
+                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
+                    long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
+                    long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
+                    long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balance + totalPnl);
+                    positions.put(pos.symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK));
+                }
+            });
 
             return Optional.of(SingleUserReportResult.createFromRiskEngineFound(
                     uid,
@@ -110,6 +138,28 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
             // not found
             return Optional.of(SingleUserReportResult.createFromRiskEngineNotFound(uid));
         }
+    }
+
+    private SingleUserReportResult.Position buildPositionReport(SymbolPositionRecord pos, long unrealizedPnl,
+                                                                long liquidationPrice, long marginRatioScaleK) {
+
+        return new SingleUserReportResult.Position(
+                pos.currency,
+                pos.direction,
+                pos.openVolume,
+                pos.openInitMarginSum,
+                pos.openPriceSum,
+                pos.profit,
+                pos.pendingSellSize,
+                pos.pendingBuySize,
+                pos.pendingSellAvgPrice,
+                pos.pendingBuyAvgPrice,
+                pos.getLeverage(),
+                pos.marginMode,
+                pos.extraMargin,
+                unrealizedPnl,
+                liquidationPrice,
+                marginRatioScaleK);
     }
 
     @Override

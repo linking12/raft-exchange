@@ -1,6 +1,7 @@
 package exchange.core2.core;
 
 import exchange.core2.core.common.FundEvent;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.PositionDirection;
 import lombok.Data;
 
@@ -24,14 +25,25 @@ public interface IFundEventsHandler {
 
         public final int symbol; // 交易对 ID
         public final PositionDirection direction; // 仓位方向
-        public final long position; // 剩余持仓量
-        public final long positionChanged; // 本次变动的仓位（如平仓/开仓数量）
-        public final long openPriceSum; // 开仓总价
-        public final long openVolume; // 开仓数量
-        public final long tradePrice; // 本次成交价格（开仓或平仓价）
+        public final long openVolume;
+        public final long openInitMarginSum; //初始保证金总额
+        public final long openPriceSum; //持仓总成本，openPriceSum/openVolume=平均持仓成本
+        public final long profit; //已实现盈亏
+        public final long pendingSellSize;
+        public final long pendingBuySize;
+        public final long pendingSellAvgPrice;
+        public final long pendingBuyAvgPrice;
+        public final int leverage;
+        public final MarginMode marginMode;
+        public final long extraMargin;
+        // 仓位计算字段
+        public final long unrealizedProfit;
+        public final long liquidationPrice;
+        public final long marginRatioScaleK;
+        // 变化字段
+        public final long tradeSize; // 本次交易数量
+        public final long tradePrice; // 本次交易价格
         public final long fee; // 手续费
-        public final long pnl; // 本次事件的盈亏金额
-        public final long extra; // 补充保证金
     }
 
 }

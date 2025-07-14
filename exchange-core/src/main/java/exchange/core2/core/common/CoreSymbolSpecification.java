@@ -105,13 +105,6 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         return leverage >= 0 && leverage <= maxLeverageValue;
     }
 
-    public long getInitMarginRate() {
-        if (initMarginScaleK == 0 || initMargin == 0) {
-            return 1;
-        }
-        return initMargin / initMarginScaleK;
-    }
-
     /**
      * 初始保证金 = 名义价值 × 初始保证金率 / 杠杆
      */
@@ -134,7 +127,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         if (marginValue == null) {
             return notional;
         }
-        return notional * marginValue / maintenanceMarginScaleK;
+        return (long) (notional * marginValue * 1.0 / maintenanceMarginScaleK);
     }
 
     private static Long getFloorValueInSortedMap(MutableSortedMap<Long, Long> map, long key) {

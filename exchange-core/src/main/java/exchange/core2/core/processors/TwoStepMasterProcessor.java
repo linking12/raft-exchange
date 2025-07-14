@@ -125,6 +125,13 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                             currentSequenceGroup = cmd.eventsGroup;
                         }
 
+                        /**
+                         * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在调整杠杆率和标记价格前，需要让R2先执行完
+                         */
+                        if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT) {
+                            publishProgressAndTriggerSlaveProcessor(nextSequence);
+                        }
+
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
                         nextSequence++;
 

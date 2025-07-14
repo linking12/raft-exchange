@@ -17,6 +17,7 @@ package exchange.core2.tests.util;
 
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiPersistState;
+import exchange.core2.core.common.api.ApiRecoverState;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -26,6 +27,7 @@ import org.hamcrest.core.Is;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -59,6 +61,7 @@ public class PersistenceTestsModule {
 
             try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, firstStartConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
+                container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
                 container.loadSymbolsUsersAndPrefillOrders(testDataFutures);
 
                 log.info("Creating snapshot...");
@@ -94,6 +97,10 @@ public class PersistenceTestsModule {
             log.debug("Creating new exchange from persisted state...");
             final long tLoad = System.currentTimeMillis();
             try (final ExchangeTestContainer recreatedContainer = ExchangeTestContainer.create(performanceConfiguration, fromSnapshotConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
+
+                recreatedContainer.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+
+                recreatedContainer.getApi().submitRecoverCommandAsync(ApiRecoverState.builder().snapshotId(fromSnapshotConfig.getSnapshotId()).build()).get();
 
                 // simple sync query in order to wait until core is started to respond
                 recreatedContainer.totalBalanceReport();

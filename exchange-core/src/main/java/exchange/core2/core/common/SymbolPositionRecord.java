@@ -163,6 +163,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             case LONG:
                 if (lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0) {
                     return profit + (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum);
+                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
+                    // fallback: 使用标记价格
+                    return profit + (openVolume * lastPriceCacheRecord.markPrice - openPriceSum);
                 } else {
                     // fallback: 用开仓均价作为当前价，即浮盈为0
                     return profit;
@@ -170,6 +173,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             case SHORT:
                 if (lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE) {
                     return profit + (openPriceSum - openVolume * lastPriceCacheRecord.askPrice);
+                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
+                    // fallback: 使用标记价格
+                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.markPrice);
                 } else {
                     // fallback: 用开仓均价作为当前价，即浮盈为0
                     return profit;
@@ -180,32 +186,57 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
     
     /**
-     * 计算未实现盈亏，基于标记价格。
-     * - 多头：(markPrice - 开仓价格) * 数量 + 已实现盈亏。
-     * - 空头：(开仓价格 - markPrice) * 数量 + 已实现盈亏。
-     * - 若 markPrice 无效（0），使用初始保证金作为保守估计。
+     * 【强平风险评估用】计算未实现盈亏，基于标记价格。
+     * - 多头：(markPrice - 开仓价格) * 数量
+     * - 空头：(开仓价格 - markPrice) * 数量
      */
-    public long liquidateEstimateProfit(final LastPriceCacheRecord lastPriceCacheRecord) {
-        switch (direction) {
-            case EMPTY:
-                return profit;
-            case LONG:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    return profit + (openVolume * lastPriceCacheRecord.markPrice - openPriceSum);
-                } else {
-                    // fallback: 从初始保证金角度去估算 liquidate 时是否还有收益空间
-                    return profit + openInitMarginSum - openPriceSum;
-                }
-            case SHORT:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.markPrice);
-                } else {
-                    // fallback: 从初始保证金角度去估算 liquidate 时是否还有收益空间
-                    return profit + openInitMarginSum - openPriceSum;
-                }
-            default:
-                throw new IllegalStateException();
+    public long estimateUnrealizedProfit(final LastPriceCacheRecord priceRecord) {
+        return direction.getMultiplier() * (openVolume * priceRecord.markPrice - openPriceSum);
+    }
+
+    /**
+     * 计算强平价格，基于标记价格。
+     * 强平触发条件为：账户权益 == 维持保证金
+     * 逐仓：
+     * IMS + extraM + sign * (Pm - Pe) * Q = MM
+     * Pm = (sign * (MM - IMS - extraM) + openPriceSum) / Q
+     * 全仓：
+     * Balance + sign * (Pm - Pe) * Q + PNL(other) = MM + MM(other) , MM = Rmm * Pm * Q, Pe = openPriceSum / Q
+     * Pm = (sign * Pe * Q - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
+     *    = (sign * openPriceSum - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
+     *
+     * @return 返回强平价，-1表示无强平风险
+     */
+    public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
+                                         long totalBalance, long totalPnl, long totalMM) {
+        if (openVolume == 0) {
+            return 0; // 无持仓，不存在强平价
         }
+        long notional = openVolume * priceRecord.markPrice;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+        if (marginMode == MarginMode.ISOLATED) {
+            return (long) ((direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) * 1.0 / openVolume);
+        } else {
+            int sign = direction.getMultiplier();
+            long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
+            long mmOther = totalMM - maintenanceMargin;
+            long numerator = sign * openPriceSum - totalBalance - pnlOther + mmOther;
+            long result = (long) (numerator / (openVolume * (sign * 1 - maintenanceMargin * 1.0 / notional)));
+            if (result < 0 || (direction == PositionDirection.LONG && result > priceRecord.markPrice) || (direction == PositionDirection.SHORT && result < priceRecord.markPrice)) {
+                return -1;
+            }
+            return result;
+        }
+    }
+
+    /**
+     * 计算保证金比率 = 维持保证金 / 仓位权益
+     * 注意结果乘以了maintenanceMarginScaleK进行缩放
+     */
+    public long estimateMarginRatioScaleK(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord, long totalMargin) {
+        long notional = openVolume * priceRecord.markPrice;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+        return (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
     }
 
     /**
