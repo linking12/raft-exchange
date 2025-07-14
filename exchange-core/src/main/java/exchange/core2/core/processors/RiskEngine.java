@@ -880,11 +880,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // update LastPriceRecord
         if (cfgMarginTradingEnabled) {
             final LastPriceCacheRecord record = lastPriceCache.getIfAbsentPut(symbol, LastPriceCacheRecord::new);
-            if (marketData != null) {
-                record.askPrice = (marketData.askSize != 0) ? marketData.askPrices[0] : record.askPrice;
-                record.bidPrice = (marketData.bidSize != 0) ? marketData.bidPrices[0] : record.bidPrice;
+            // 优先使用市场数据，要求买一卖一都有深度
+            if (marketData != null && marketData.askSize > 0 && marketData.bidSize > 0) {
+                record.askPrice = marketData.askPrices[0];
+                record.bidPrice = marketData.bidPrices[0];
             } else {
-                // 如果本次交易没有市场价信息，用第一笔交易价更新record
+                // fallback：寻找第一笔有效成交事件
                 MatcherTradeEvent firstTrade = cmd.matcherEvent;
                 while (firstTrade != null && firstTrade.eventType != MatcherEventType.TRADE) {
                     firstTrade = firstTrade.nextEvent;

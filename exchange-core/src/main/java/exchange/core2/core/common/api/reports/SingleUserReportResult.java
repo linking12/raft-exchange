@@ -187,7 +187,7 @@ public final class SingleUserReportResult implements ReportResult {
         public final long unrealizedProfit;
         public final long liquidationPrice;
         public final long marginRatioScaleK;
-        // 额外返回
+        // 额外字段
         public final long markPrice;
 
 
