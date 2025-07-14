@@ -385,24 +385,31 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(10L));
             });
 
+            container.validateUserState(UID_3, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+
             container.updateCurrentPriceTo(9930, symbols.get(0).symbolId, quoteId);
             // 强平价格为9930, 破产价为9920, 挂一个9920单子准备成交
-            container.createBidWithOrderId(MAKER_2, UID_3, size, 9930, symbols.get(0).symbolId, MarginMode.ISOLATED);
+            container.createBidWithOrderId(MAKER_2, UID_3, size, 9920, symbols.get(0).symbolId, MarginMode.ISOLATED);
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
-                assertThat(profile.getAccounts().get(quoteId), Is.is(9200L));
+                assertThat(profile.getAccounts().get(quoteId), Is.is(9100L));
+            });
+            container.validateUserState(UID_3, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
             });
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(34)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(36)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event = fundEvents.get(28);
+            IFundEventsHandler.FundsEvent event = fundEvents.get(31);
             assertThat(UID_1, Is.is(event.uid));
             assertThat(quoteId, Is.is(event.currency));
             assertThat(10000, Is.is(event.symbol));
@@ -414,7 +421,8 @@ class ITMixedIntegration {
             assertThat(0L, Is.is(event.openPriceSum));
             assertThat(0L, Is.is(event.openVolume));
             assertThat(10L, Is.is(event.tradeSize));
-            assertThat(9930L, Is.is(event.tradePrice));
+            assertThat(-800L, Is.is(event.profit));
+            assertThat(9920L, Is.is(event.tradePrice));
             assertThat(0L, Is.is(event.unrealizedProfit));
             assertThat(0L, Is.is(event.liquidationPrice));
             assertThat(0L, Is.is(event.marginRatioScaleK));
