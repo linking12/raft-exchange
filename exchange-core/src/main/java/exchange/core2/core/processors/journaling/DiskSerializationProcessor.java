@@ -133,15 +133,7 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
 
         final Path path = resolveSnapshotPath(snapshotId, type, instanceId);
 
-        Path parentDir = path.getParent();
-        if (parentDir != null) {
-            try {
-                Files.createDirectories(parentDir);
-            } catch (IOException e) {
-                log.error("Failed to create directory: {}", parentDir, e);
-            }
-        }
-        log.info("Writing state into file {} ...", path);
+        log.debug("Writing state into file {} ...", path);
 
         try (final OutputStream os = Files.newOutputStream(path, StandardOpenOption.CREATE_NEW);
              final OutputStream bos = new BufferedOutputStream(os);
