@@ -106,6 +106,7 @@ public class PersistenceTests {
 
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
             container.loadSymbolsUsersAndPrefillOrders(testDataFutures);
+            doExtra(container);
 
             log.info("Creating snapshot...");
             stateId = System.currentTimeMillis() * 1000;
@@ -114,8 +115,6 @@ public class PersistenceTests {
                 final CommandResultCode resultCode = container.getApi().submitCommandAsync(apiPersistState).get();
                 assertThat(resultCode, Is.is(CommandResultCode.SUCCESS));
             }
-
-            doExtra(container);
 
             log.info("Requesting state hash...");
             originalPrefillStateHash = container.requestStateHash();
@@ -144,18 +143,38 @@ public class PersistenceTests {
                 assertThat(restoredPrefillStateHash, is(originalPrefillStateHash));
 
                 assertTrue(recreatedContainer.totalBalanceReport().isGlobalBalancesAllZero());
+                doCheckExtra(container);
             }
-
             System.gc();
             Thread.sleep(200);
         }
+    }
 
+    private static void doCheckExtra(ExchangeTestContainer container) throws ExecutionException, InterruptedException {
+        container.validateUserState(UID_1, profile -> {
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            assertNotNull(pos);
+            assertEquals(50L, pos.openVolume); // 仓位保持不变
+            assertEquals(50, pos.leverage);
+            assertEquals(50000000L, pos.extraMargin);
+            assertEquals(50000L, pos.unrealizedProfit);
+            assertEquals(-989947L, pos.liquidationPrice);
+            assertEquals(54, pos.marginRatioScaleK);
+        });
+        container.validateUserState(UID_2, profile -> {
+            // 仓位应被部分或全部平仓
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            assertTrue(pos == null || pos.openVolume < 50L);
+            // 账户余额应为负或接近零
+            long balance = profile.getAccounts().get(CURRENCY_FUT);
+            assertTrue(balance == 25000L, "Balance should be negative after liquidation");
+        });
     }
 
     private static void doExtra(ExchangeTestContainer container) throws ExecutionException, InterruptedException {
 
         container.initFeeSymbols();
-/*
+
         // 2. 添加期货合约
         container.addSymbol(createFuturesSpec());
 
@@ -262,11 +281,15 @@ public class PersistenceTests {
             SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
             assertNotNull(pos);
             assertEquals(50L, pos.openVolume); // 仓位保持不变
+            assertEquals(50, pos.leverage);
+            assertEquals(50000000L, pos.extraMargin);
+            assertEquals(50000L, pos.unrealizedProfit);
+            assertEquals(-989947L, pos.liquidationPrice);
+            assertEquals(54, pos.marginRatioScaleK);
         });
 
         // 14. 验证系统总余额
         TotalCurrencyBalanceReportResult totalBal = container.totalBalanceReport();
         assertTrue(totalBal.isGlobalBalancesAllZero());
-         */
     }
 }
