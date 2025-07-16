@@ -286,7 +286,7 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(1L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(150L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(74517L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(1L));
             });
 
@@ -336,7 +336,7 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(1L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(90L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(18796L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(4L));
             });
 
@@ -347,7 +347,7 @@ class ITMixedIntegration {
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(0L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(90L * 2));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(4080L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(13870L));
                 assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(9L));
             });
 
@@ -355,6 +355,77 @@ class ITMixedIntegration {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    // 反向开单, 测试profit加减是否准确
+    @Test
+    public void testBankruptcyPrice() {
+        long deposit = 10000L;
+        int size = 10;
+        long price1 = 10000;
+        int price2 = 15000;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.setConsumer(processor);
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
+
+            container.createUserWithSpecificMoney(UID_1, deposit, quoteId);
+            container.createUserWithSpecificMoney(UID_2, MAX_VALUE, quoteId);
+            container.createUserWithSpecificMoney(UID_3, MAX_VALUE, quoteId);
+
+            container.createBidWithOrderId(MAKER_1, UID_1, size, price1, symbols.get(0).symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(TAKER_1, UID_2, size, price1, symbols.get(0).symbolId, MarginMode.ISOLATED);
+
+            container.updateCurrentPriceTo(price2, symbols.get(0).symbolId, quoteId);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee * size));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(10L));
+            });
+
+            container.validateUserState(UID_3, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+
+            container.updateCurrentPriceTo(9930, symbols.get(0).symbolId, quoteId);
+            // 强平价格为9930, 破产价为9920, 挂一个9920单子准备成交
+            container.createBidWithOrderId(MAKER_2, UID_3, size, 9920, symbols.get(0).symbolId, MarginMode.ISOLATED);
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                assertThat(profile.getAccounts().get(quoteId), Is.is(9100L));
+            });
+            container.validateUserState(UID_3, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+            });
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            verify(handler, times(36)).fundsEvent(fundEventCapor.capture());
+            // check fund event
+            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            IFundEventsHandler.FundsEvent event = fundEvents.get(31);
+            assertThat(UID_1, Is.is(event.uid));
+            assertThat(quoteId, Is.is(event.currency));
+            assertThat(10000, Is.is(event.symbol));
+            assertThat(0L, Is.is(event.fee));
+            assertThat(PositionDirection.EMPTY, Is.is(event.direction));
+            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(event.eventType));
+            assertThat(9900L, Is.is(event.free));
+            assertThat(0L, Is.is(event.locked));
+            assertThat(0L, Is.is(event.openPriceSum));
+            assertThat(0L, Is.is(event.openVolume));
+            assertThat(10L, Is.is(event.tradeSize));
+            assertThat(-800L, Is.is(event.profit));
+            assertThat(9920L, Is.is(event.tradePrice));
+            assertThat(0L, Is.is(event.unrealizedProfit));
+            assertThat(0L, Is.is(event.liquidationPrice));
+            assertThat(0L, Is.is(event.marginRatioScaleK));
         }
     }
 }

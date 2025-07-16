@@ -1,15 +1,11 @@
 package exchange.core2.tests.unit;
 
 import exchange.core2.core.common.*;
-import exchange.core2.core.common.api.*;
 import exchange.core2.core.processors.RiskEngine;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.stream.Stream;
 
@@ -112,7 +108,7 @@ class SymbolPositionRecordTest {
 
         priceRecord.markPrice = 50000L; // $50,000
         long notional = 10 * 50000L;
-        long maintenanceMargin = (long) (notional * 0.05); // 5%维持保证金率
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional); // 5%维持保证金率
 
         long result = position.estimateLiquidationPrice(
                 spec, priceRecord,
@@ -121,7 +117,47 @@ class SymbolPositionRecordTest {
                 maintenanceMargin + 40000L // 总维持保证金
         );
 
-        assertEquals(46739, result, "normal case");
+        assertEquals(48369, result, "normal case");
+    }
+
+    @Test
+    void testShortCase() {
+        SymbolPositionRecord position = createPosition(MarginMode.CROSS, PositionDirection.SHORT, 10);
+        // 开仓总成本 BTC 50000@10
+        position.openPriceSum = 500000L;
+        position.openInitMarginSum = 50000L;
+        priceRecord.markPrice = 50000L;
+        long notional = 10 * 50000L;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+
+        long result = position.estimateLiquidationPrice(
+                spec, priceRecord,
+                100000L, // 账户余额
+                0,  // 总未实现盈亏
+                maintenanceMargin // 总维持保证金
+        );
+
+        assertEquals(55555, result, "normal case");
+    }
+
+    @Test
+    void testShortCase2() {
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.SHORT, 10);
+        // 开仓总成本 BTC 50000@10
+        position.openPriceSum = 500000L;
+        position.openInitMarginSum = 50000L;
+        priceRecord.markPrice = 50000L;
+        long notional = 10 * 50000L;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional);
+
+        long result = position.estimateLiquidationPrice(
+                spec, priceRecord,
+                100000L, // 账户余额
+                0L,  // 总未实现盈亏
+                maintenanceMargin // 总维持保证金
+        );
+
+        assertEquals(51000, result, "normal case");
     }
 
     @Test
@@ -132,7 +168,7 @@ class SymbolPositionRecordTest {
 
         priceRecord.markPrice = 50000L; // $50,000
         long notional = 10 * 50000L;
-        long maintenanceMargin = (long) (notional * 0.05); // 5%维持保证金率
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional); // 5%维持保证金率
 
         long result = position.estimateLiquidationPrice(
                 spec, priceRecord,
@@ -141,7 +177,7 @@ class SymbolPositionRecordTest {
                 maintenanceMargin + 40000L // 总维持保证金
         );
 
-        assertEquals(45652, result, "normal case");
+        assertEquals(47282, result, "normal case");
     }
 
     @Test
@@ -154,9 +190,8 @@ class SymbolPositionRecordTest {
         priceRecord.askPrice = 50000L;
         priceRecord.markPrice = 50000L; // $50,000
         long notional = 10 * 50000L;
-        long maintenanceMargin = (long) (notional * 0.08); // 8%维持保证金率
-
         long pnl = position.estimateUnrealizedProfit(priceRecord);
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional); // 5%维持保证金率
 
         long result = position.estimateLiquidationPrice(
                 spec, priceRecord,
@@ -166,6 +201,26 @@ class SymbolPositionRecordTest {
         );
 
         assertEquals(-1, result, "normal case");
+    }
+
+    @Test
+    void testIsolatedNormalCase() {
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.LONG, 10);
+        // 开仓总成本 BTC 50000@10
+        position.openPriceSum = 500000L;
+        position.openInitMarginSum = 50000L;
+        priceRecord.markPrice = 50000L; // $50,000
+        long notional = 10 * 50000L;
+        long maintenanceMargin = spec.calcMaintenanceMargin(notional); // 5%维持保证金率
+
+        long result = position.estimateLiquidationPrice(
+                spec, priceRecord,
+                60000L, // 账户余额
+                0L,  // 总未实现盈亏
+                maintenanceMargin + 0L // 总维持保证金
+        );
+
+        assertEquals(49000, result, "normal case");
     }
 
     // =============== 辅助方法 ===============

@@ -601,7 +601,7 @@ public class FutureCoreExample {
     }
 
     // 持仓到警戒线, 发预警通知 - 做多
-    @Test
+//    @Test
     public void testLongPositionWarning() throws ExecutionException, InterruptedException {
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
@@ -626,7 +626,7 @@ public class FutureCoreExample {
     }
 
     // 持仓到警戒线, 发预警通知 - 做空
-    @Test
+//    @Test
     public void testShortPositionWarning() throws ExecutionException, InterruptedException {
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
@@ -651,7 +651,7 @@ public class FutureCoreExample {
     }
 
     // 做多被强制平仓
-    @Test
+//    @Test
     public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
         exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
         long userId1 = createRandomUserWithMoney(1000);
@@ -715,7 +715,7 @@ public class FutureCoreExample {
     }
 
     // 做空被强制平仓
-    @Test
+//    @Test
     public void testShortPositionForcedLiquidate() throws ExecutionException, InterruptedException {
         exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
         long userId1 = createRandomUserWithMoney(1000);

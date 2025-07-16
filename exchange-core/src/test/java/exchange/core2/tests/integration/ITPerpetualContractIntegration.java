@@ -510,7 +510,7 @@ class ITPerpetualContractIntegration {
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum
             // numerator = openPriceSum - totalBalance - pnlOther + mmOther
             // numerator < 0时liquidationPrice=0
-            assertThat(0L, is(event1.liquidationPrice));
+            assertThat(-1L, is(event1.liquidationPrice));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 24750) = 3
             assertThat(3L, is(event1.marginRatioScaleK));
 
@@ -532,7 +532,7 @@ class ITPerpetualContractIntegration {
             assertThat(-5000L, is(event2.unrealizedProfit));
             // numerator = openPriceSum - totalBalance - pnlOther + mmOther
             // numerator < 0时liquidationPrice=0
-            assertThat(0L, is(event2.liquidationPrice));
+            assertThat(2980L, is(event2.liquidationPrice));
             // totalMargin = balance + totalPnl = 19800 - 4850 = 14950
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 14950) = 5
             assertThat(5L, is(event2.marginRatioScaleK));
@@ -787,15 +787,24 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(66L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(7600L));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(6L));
+                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
                 assertThat(profile.getPositions().getFirst().profit, is(-11110L));
             });
 
             // 再次触发强平, 此时期待当前持仓不再被强平
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
+                assertThat(profile.getPositions().getFirst().profit, is(-11110L));
+            });
         }
     }
 
