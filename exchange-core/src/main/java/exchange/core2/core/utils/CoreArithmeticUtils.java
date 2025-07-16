@@ -20,16 +20,16 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class CoreArithmeticUtils {
 
-    public static long calculateAmountAsk(long size, CoreSymbolSpecification spec) {
-        return size * spec.baseScaleK;
+    public static long calculateAmountAsk(long size) {
+        return size;
     }
 
-    public static long calculateAmountBid(long size, long price, CoreSymbolSpecification spec) {
-        return size * (price * spec.quoteScaleK);
+    public static long calculateAmountBid(long size, long price) {
+        return size * price;
     }
 
     public static long calculateAmountBidTakerFee(long size, long price, CoreSymbolSpecification spec) {
-        long tradeAmount = size * price * spec.quoteScaleK;
+        long tradeAmount = size * price;
         long fee = spec.isFixedFee()
                 ? size * spec.takerFee
                 : ceilDivide(tradeAmount * spec.takerFee, spec.feeScaleK);
@@ -38,11 +38,9 @@ public final class CoreArithmeticUtils {
 
     public static void logAmountBidTakerFee(long result, long size, long price, CoreSymbolSpecification spec) {
         if (spec.isFixedFee()) {
-            log.debug("hold amount buy {} = {} * ({} * {} + {})",
-                    result, size, price, spec.quoteScaleK, spec.takerFee);
+            log.debug("hold amount buy {} = {} * ({} + {})", result, size, price, spec.takerFee);
         } else {
-            log.debug("hold amount buy {} = {} * {} * {} * (1 + {})",
-                    result, size, price, spec.quoteScaleK, ceilDivide(spec.takerFee, spec.feeScaleK));
+            log.debug("hold amount buy {} = {} * {} * (1 + {})", result, size, price, ceilDivide(spec.takerFee, spec.feeScaleK));
         }
     }
 
@@ -67,7 +65,7 @@ public final class CoreArithmeticUtils {
      * @return 应返还的资金（本金差额 + 手续费差额）
      */
     public static long calculateAmountBidReleaseCorrMaker(long size, long bidderHoldPrice, long price, CoreSymbolSpecification spec) {
-        long tradeAmountDiff = size * (bidderHoldPrice - price) * spec.quoteScaleK;
+        long tradeAmountDiff = size * (bidderHoldPrice - price);
         long feeDiff = spec.isFixedFee()
                 ? size * (spec.takerFee - spec.makerFee)
                 : ceilDivide(bidderHoldPrice * size * spec.takerFee - price * size * spec.makerFee, spec.feeScaleK);
@@ -75,7 +73,7 @@ public final class CoreArithmeticUtils {
     }
 
     public static long calculateAmountBidTakerFeeForBudget(long size, long budgetInSteps, CoreSymbolSpecification spec) {
-        long budgetAmount = budgetInSteps * spec.quoteScaleK;
+        long budgetAmount = budgetInSteps;
         long fee = spec.isFixedFee()
                 ? size * spec.takerFee
                 : ceilDivide(budgetAmount * spec.takerFee, spec.feeScaleK);
@@ -83,21 +81,16 @@ public final class CoreArithmeticUtils {
     }
 
     public static void logAmountBidTakerFeeForBudget(long result, long size, long budgetInSteps, CoreSymbolSpecification spec) {
-        if (spec.isFixedFee()) {
-            log.debug("hold amount budget buy {} = {} * {} + {} * {}",
-                    result, budgetInSteps, spec.quoteScaleK, size, spec.takerFee);
-        } else {
-            log.debug("hold amount budget buy {} = {} * {} + {} * {} * {}",
-                    result, budgetInSteps, spec.quoteScaleK, budgetInSteps, spec.quoteScaleK, spec.takerFee / spec.feeScaleK);
-        }
+        log.debug("hold amount budget buy {} = {} + {} * {}",
+            result, budgetInSteps, size, spec.isFixedFee() ? spec.takerFee : ceilDivide(spec.takerFee, spec.feeScaleK));
     }
 
     public static boolean isAskPriceTooLow(long price, CoreSymbolSpecification spec) {
         if (spec.isFixedFee()) {
-            return price * spec.quoteScaleK < spec.takerFee;
+            return price < spec.takerFee;
         } else {
             // 假设只成交1手，也要保证收到手续费，才能下单
-            return price * spec.quoteScaleK * spec.takerFee < spec.feeScaleK;
+            return price * spec.takerFee < spec.feeScaleK;
         }
     }
 
@@ -105,7 +98,7 @@ public final class CoreArithmeticUtils {
         if (spec.isFixedFee()) {
             return size * spec.takerFee;
         } else {
-            long tradeAmount = size * price * spec.quoteScaleK;
+            long tradeAmount = size * price;
             return ceilDivide(tradeAmount * spec.takerFee, spec.feeScaleK);
         }
     }
@@ -114,7 +107,7 @@ public final class CoreArithmeticUtils {
         if (spec.isFixedFee()) {
             return size * spec.makerFee;
         } else {
-            long tradeAmount = size * price * spec.quoteScaleK;
+            long tradeAmount = size * price;
             return ceilDivide(tradeAmount * spec.makerFee, spec.feeScaleK);
         }
     }

@@ -64,7 +64,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
 
                     currencyBalance.addToValue(
                             spec.getBaseCurrency(),
-                            ob.askOrdersStream(false).mapToLong(ord -> CoreArithmeticUtils.calculateAmountAsk(ord.getSize() - ord.getFilled(), spec)).sum());
+                            ob.askOrdersStream(false).mapToLong(ord -> CoreArithmeticUtils.calculateAmountAsk(ord.getSize() - ord.getFilled())).sum());
 
                     currencyBalance.addToValue(
                             spec.getQuoteCurrency(),

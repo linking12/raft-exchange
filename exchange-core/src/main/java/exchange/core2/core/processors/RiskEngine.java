@@ -737,8 +737,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE;
             }
 
-            orderHoldAmount = CoreArithmeticUtils.calculateAmountAsk(size, spec);
-            if (logDebug) log.debug("hold sell {} = {} * {} ", orderHoldAmount, size, spec.baseScaleK);
+            orderHoldAmount = CoreArithmeticUtils.calculateAmountAsk(size);
+            if (logDebug) log.debug("hold sell {}", orderHoldAmount);
         }
 
         if (logDebug) {
@@ -1091,7 +1091,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
          */
         long balance;
         if (takerSell) {
-            balance = taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size, spec));
+            balance = taker.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils.calculateAmountAsk(ev.size));
         } else {
             if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.orderType == OrderType.FOK_BUDGET) {
                 balance = taker.accounts.addToValue(spec.quoteCurrency, CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(ev.size, ev.price, spec));
@@ -1151,7 +1151,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long amountDiffToReleaseInQuoteCurrency = CoreArithmeticUtils.calculateAmountBidReleaseCorrMaker(size, ev.bidderHoldPrice, ev.price, spec);
                 // 支付 quoteCurrency
                 long quoteCurrencyBalance = maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
-                final long gainedAmountInBaseCurrency = CoreArithmeticUtils.calculateAmountAsk(size, spec);
+                final long gainedAmountInBaseCurrency = CoreArithmeticUtils.calculateAmountAsk(size);
                 // 接收 baseCurrency
                 long baseCurrencyBalance = maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
                 /**
@@ -1172,7 +1172,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (taker != null) {
             // 支付 baseCurrency（已在冻结阶段处理）
             // 接收 quoteCurrency
-            long tradeAmount = takerSizePriceForThisHandler * spec.quoteScaleK;
+            long tradeAmount = takerSizePriceForThisHandler;
             long fee = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceForThisHandler / takerSizeForThisHandler, spec);
             long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, tradeAmount - fee);
             /**
@@ -1231,7 +1231,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (uidForThisHandler(ev.matchedOrderUid)) {
                 final long size = ev.size;
                 final UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
-                final long gainedAmountInQuoteCurrency = CoreArithmeticUtils.calculateAmountBid(size, ev.price, spec);
+                final long gainedAmountInQuoteCurrency = CoreArithmeticUtils.calculateAmountBid(size, ev.price);
                 // 支付 baseCurrency（已在冻结阶段处理）
                 // 接收 quoteCurrency
                 long fee = CoreArithmeticUtils.calculateMakerFee(size, ev.price, spec);
@@ -1260,7 +1260,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // 1. 原始冻结总额
                 long heldTotal = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(cmd.size, cmd.price, spec);
                 // 2. 实际成交金额
-                long actualMatchedAmount = takerSizePriceSum * spec.quoteScaleK;
+                long actualMatchedAmount = takerSizePriceSum;
                 // 3. 实际手续费，基于实际均价
                 long actualFee = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceSum / takerSizeForThisHandler, spec);
                 // 4. 差值 = 预扣 - 实际支出
@@ -1273,7 +1273,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 long feeUsed = CoreArithmeticUtils.calculateTakerFee(takerSizeForThisHandler, takerSizePriceSum / takerSizeForThisHandler, spec);
                 leftover = feeHeld - feeUsed;
             }
-            long totalAdjustment = (takerSizePriceHeldSum - takerSizePriceSum) * spec.quoteScaleK + leftover;
+            long totalAdjustment = (takerSizePriceHeldSum - takerSizePriceSum) + leftover;
             long lockedMarginQuote = calculateLockedMargin(taker, quoteCurrency);
             // 支付 quoteCurrency
             long quoteCurrencyBalance = taker.accounts.addToValue(quoteCurrency, totalAdjustment);
@@ -1281,7 +1281,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 this.eventsHelper.sendUnLockEvent(cmd, spec.symbolId, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
             }
             // 接收 baseCurrency
-            long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler * spec.baseScaleK);
+            long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, takerSizeForThisHandler);
             /**
              * @modify 资金转移
              */
