@@ -268,7 +268,7 @@ public class FundEventsHelper {
             event.pendingSellAvgPrice = 0;
             event.pendingBuyAvgPrice = 0;
             event.leverage = 0;
-            event.marginMode = null;
+            event.marginMode = MarginMode.ISOLATED;
             event.extraMargin = 0;
             event.unrealizedProfit = 0;
             event.liquidationPrice = 0;
