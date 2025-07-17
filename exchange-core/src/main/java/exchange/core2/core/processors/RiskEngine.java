@@ -71,6 +71,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     // 这些都是有状态的字段 state
     private SymbolSpecificationProvider symbolSpecificationProvider;
+    private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private BinaryCommandsProcessor binaryCommandsProcessor;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
@@ -120,6 +121,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     
     private void initState(int numShards) {
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
+        this.currencySpecificationProvider = new CurrencySpecificationProvider();
         this.userProfileService = new UserProfileService();
         this.binaryCommandsProcessor = new BinaryCommandsProcessor(
             this::handleBinaryMessage,
@@ -149,6 +151,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 final SymbolSpecificationProvider symbolSpecificationProvider =
                     new SymbolSpecificationProvider(bytesIn);
+                final CurrencySpecificationProvider currencySpecificationProvider =
+                    new CurrencySpecificationProvider(bytesIn);
                 final UserProfileService userProfileService = new UserProfileService(bytesIn);
                 final BinaryCommandsProcessor binaryCommandsProcessor =
                     new BinaryCommandsProcessor(
@@ -163,14 +167,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final IntLongHashMap fees = SerializationUtils.readIntLongHashMap(bytesIn);
                 final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
                 final IntLongHashMap suspends = SerializationUtils.readIntLongHashMap(bytesIn);
-                return new State(symbolSpecificationProvider, userProfileService, binaryCommandsProcessor,
-                    lastPriceCache, fees, adjustments, suspends);
+                return new State(symbolSpecificationProvider, currencySpecificationProvider, userProfileService,
+                    binaryCommandsProcessor, lastPriceCache, fees, adjustments, suspends);
             });
         if (state.lastPriceCache == null || state.fees == null) {
             throw new IllegalStateException("Invalid recovered state: missing critical fields");
         }
         synchronized (this) {
             this.symbolSpecificationProvider = state.symbolSpecificationProvider;
+            this.currencySpecificationProvider = state.currencySpecificationProvider;
             this.userProfileService = state.userProfileService;
             this.binaryCommandsProcessor = state.binaryCommandsProcessor;
             this.lastPriceCache = state.lastPriceCache;
@@ -1326,6 +1331,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         bytes.writeInt(shardId).writeLong(shardMask);
 
         symbolSpecificationProvider.writeMarshallable(bytes);
+        currencySpecificationProvider.writeMarshallable(bytes);
         userProfileService.writeMarshallable(bytes);
         binaryCommandsProcessor.writeMarshallable(bytes);
         SerializationUtils.marshallIntHashMap(lastPriceCache, bytes);
@@ -1337,6 +1343,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     public void reset() {
         userProfileService.reset();
         symbolSpecificationProvider.reset();
+        currencySpecificationProvider.reset();
         binaryCommandsProcessor.reset();
         lastPriceCache.clear();
         fees.clear();
@@ -1348,6 +1355,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     @Getter
     private static class State {
         private final SymbolSpecificationProvider symbolSpecificationProvider;
+        private final CurrencySpecificationProvider currencySpecificationProvider;
         private final UserProfileService userProfileService;
         private final BinaryCommandsProcessor binaryCommandsProcessor;
         private final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;

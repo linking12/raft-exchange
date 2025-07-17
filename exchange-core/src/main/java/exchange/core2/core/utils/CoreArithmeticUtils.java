@@ -12,6 +12,7 @@
  */
 package exchange.core2.core.utils;
 
+import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.processors.RiskEngine;
@@ -161,4 +162,25 @@ public final class CoreArithmeticUtils {
     public static long ceilDivide(long dividend, long divisor) {
         return dividend / divisor + (dividend % divisor == 0 ? 0 : 1);
     }
+
+    /**
+     * 按交易对缩放后的base值 转换到 资产记账精度
+     */
+    public static long baseScaleBackToCurrencyScale(long base, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        if (spec.baseCurrency != currency.id) {
+            throw new IllegalArgumentException("currency mismatch: " + spec.baseCurrency + " != " + currency.id);
+        }
+        return base * currency.getCurrencyScaleK() / spec.baseScaleK;
+    }
+
+    /**
+     * 按交易对缩放后的quote值 转换到 资产记账精度
+     */
+    public static long quoteScaleBackToCurrencyScale(long quote, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        if (spec.quoteCurrency != currency.id) {
+            throw new IllegalArgumentException("currency mismatch: " + spec.quoteCurrency + " != " + currency.id);
+        }
+        return quote * currency.getCurrencyScaleK() / spec.quoteScaleK;
+    }
+
 }
