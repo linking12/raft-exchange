@@ -164,23 +164,31 @@ public final class CoreArithmeticUtils {
     }
 
     /**
-     * 按交易对缩放后的base值 转换到 资产记账精度
+     * 币对交易单位(symbol.base或quote) → 币种记账单位(currency)
      */
-    public static long baseScaleBackToCurrencyScale(long base, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
-        if (spec.baseCurrency != currency.id) {
-            throw new IllegalArgumentException("currency mismatch: " + spec.baseCurrency + " != " + currency.id);
+    public static long symbolToCurrencyScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        if (currency.id == spec.baseCurrency) {
+            return convertScale(amount, spec.baseScaleK, currency.getCurrencyScaleK());
+        } else if (currency.id == spec.quoteCurrency) {
+            return convertScale(amount, spec.quoteScaleK, currency.getCurrencyScaleK());
         }
-        return base * currency.getCurrencyScaleK() / spec.baseScaleK;
+        throw new IllegalArgumentException("currency id: " + currency.id + " not part of symbol: " + spec.symbolId);
     }
 
     /**
-     * 按交易对缩放后的quote值 转换到 资产记账精度
+     * 币种记账单位(currency) → 币对交易单位(symbol.base或quote)
      */
-    public static long quoteScaleBackToCurrencyScale(long quote, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
-        if (spec.quoteCurrency != currency.id) {
-            throw new IllegalArgumentException("currency mismatch: " + spec.quoteCurrency + " != " + currency.id);
+    public static long currencyToSymbolScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        if (currency.id == spec.baseCurrency) {
+            return convertScale(amount, currency.getCurrencyScaleK(), spec.baseScaleK);
+        } else if (currency.id == spec.quoteCurrency) {
+            return convertScale(amount, currency.getCurrencyScaleK(), spec.quoteScaleK);
         }
-        return quote * currency.getCurrencyScaleK() / spec.quoteScaleK;
+        throw new IllegalArgumentException("currency id: " + currency.id + " not part of symbol: " + spec.symbolId);
+    }
+
+    private static long convertScale(long amount, long fromScale, long toScale) {
+        return amount * toScale / fromScale;
     }
 
 }
