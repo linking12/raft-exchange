@@ -833,8 +833,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         // check if current balance and margin can cover new required margin for symbol position
         long balance = userProfile.accounts.get(position.currency);
-        balance = CoreArithmeticUtils.currencyToSymbolScale(balance, spec, currencySpec);
-        return newRequiredMarginForSymbol + estimatedFee <= balance + freeMargin;
+        long newRequired = newRequiredMarginForSymbol + estimatedFee - freeMargin;
+        newRequired = CoreArithmeticUtils.symbolToCurrencyScale(newRequired, spec, currencySpec);
+        return newRequired <= balance;
     }
 
     public boolean handlerRiskRelease(final long seq, final OrderCommand cmd) {

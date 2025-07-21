@@ -177,6 +177,7 @@ public final class CoreArithmeticUtils {
 
     /**
      * 币种记账单位(currency) → 币对交易单位(symbol.base或quote)
+     * 除了逐仓追加补充保证金，其他场景都用 {@link #symbolToCurrencyScale} 方法
      */
     public static long currencyToSymbolScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
         if (currency.id == spec.baseCurrency) {
