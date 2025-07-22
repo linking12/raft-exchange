@@ -17,6 +17,7 @@ import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.tuple.primitive.PrimitiveTuples;
 
+import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MarginMode;
@@ -31,6 +32,7 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
@@ -101,6 +103,7 @@ public final class LiquidationScanner {
 
     private void checkLiquidations(RiskEngine riskEngine) {
         SymbolSpecificationProvider symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
+        CurrencySpecificationProvider currencySpecificationProvider = riskEngine.getCurrencySpecificationProvider();
         MutableLongObjectMap<UserProfile> userProfiles = riskEngine.getUserProfileService().getUserProfiles().asUnmodifiable();
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
         FundEventsHelper eventsHelper = fundEventsHelpers.get(riskEngine.getShardId());
@@ -135,7 +138,7 @@ public final class LiquidationScanner {
                 }
             });
             // 检查用户全仓模式下的强平状态
-            checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, lastPriceCache, eventsHelper);
+            checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, currencySpecificationProvider, lastPriceCache, eventsHelper);
         });
     }
 
@@ -150,7 +153,7 @@ public final class LiquidationScanner {
         // 维持保证金，基于持仓量和规格定义的最低资金要求，若低于此值需强平
         long maintenanceMargin = position.calculateMaintenanceMargin(spec, priceRecord);
         // 预警阈值，设为维持保证金的 1.2 倍，用于提前提醒用户追加资金
-        long warningThreshold = (long)(maintenanceMargin * 1.2);
+        long warningThreshold = maintenanceMargin * 6 / 5;
         // 权益低于维持保证金，触发强平以保护系统免受进一步亏损
         if (equity < maintenanceMargin) {
             long price = calculateLiquidationPrice(position, priceRecord);
@@ -168,7 +171,8 @@ public final class LiquidationScanner {
     }
 
     private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency,
-        SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
+                                       SymbolSpecificationProvider symbolSpecificationProvider, CurrencySpecificationProvider currencySpecificationProvider,
+                                       MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
             // 计算总盈亏和维持保证金
             long totalProfit = 0;
@@ -176,9 +180,12 @@ public final class LiquidationScanner {
             List<DoubleObjectPair<SymbolPositionRecord>> riskPairs = FastList.newList(records.size());
             for (SymbolPositionRecord position : records) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
                 long profit = position.estimateProfit(priceRecord);
                 long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
+                profit = CoreArithmeticUtils.symbolToCurrencyScale(profit, spec, currencySpec);
+                maintenance = CoreArithmeticUtils.symbolToCurrencyScale(maintenance, spec, currencySpec);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
                 // 每个仓位的风险系数：risk = (profit - maintenance) / maintenance
@@ -187,7 +194,7 @@ public final class LiquidationScanner {
             }
             long balance = userProfile.accounts.get(currency);
             long equity = balance + totalProfit;
-            long warningThreshold = (long)(totalMaintenanceMargin * 1.2);
+            long warningThreshold = totalMaintenanceMargin * 6 / 5;
             if (equity >= warningThreshold)
                 return;
             riskPairs.sort(Comparator.comparingDouble(DoubleObjectPair::getOne));// 升序排序 risk值越小风险越大

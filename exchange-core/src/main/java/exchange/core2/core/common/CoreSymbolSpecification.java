@@ -127,7 +127,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         if (marginValue == null) {
             return notional;
         }
-        return (long) (notional * marginValue * 1.0 / maintenanceMarginScaleK);
+        return notional * marginValue / maintenanceMarginScaleK;
     }
 
     private static Long getFloorValueInSortedMap(MutableSortedMap<Long, Long> map, long key) {

@@ -215,13 +215,13 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         if (marginMode == MarginMode.ISOLATED) {
-            return (long) ((direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) * 1.0 / openVolume);
+            return (direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) / openVolume;
         } else {
             int sign = direction.getMultiplier();
             long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
             long mmOther = totalMM - maintenanceMargin;
             long numerator = sign * openPriceSum - totalBalance - pnlOther + mmOther;
-            long result = (long) (numerator / (openVolume * (sign * 1 - maintenanceMargin * 1.0 / notional)));
+            long result = numerator / (openVolume * (sign * notional - maintenanceMargin) / notional);
             if (result < 0 || (direction == PositionDirection.LONG && result > priceRecord.markPrice) || (direction == PositionDirection.SHORT && result < priceRecord.markPrice)) {
                 return -1;
             }
@@ -236,7 +236,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long estimateMarginRatioScaleK(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord, long totalMargin) {
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
-        return (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
+        return spec.maintenanceMarginScaleK * maintenanceMargin / totalMargin;
     }
 
     /**

@@ -943,13 +943,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private void settleFundingFees(OrderCommand cmd) {
         final int symbol = cmd.symbol;
         final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
-        final long unitFee = (long) (cmd.price * markPrice * 1.0 / cmd.size);
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             SymbolPositionRecord position = userProfile.positions.get(symbol);
             if (position == null || position.direction == PositionDirection.EMPTY) {
                 return; // 跳过空仓位
             }
-            long fundingFee = position.openVolume * unitFee;
+            long fundingFee = position.openVolume * markPrice * cmd.price / cmd.size;
             if (position.direction == PositionDirection.LONG) {
                 position.profit -= fundingFee;
                 eventsHelper.sendFundingFeeEvent(cmd, position, -fundingFee);
