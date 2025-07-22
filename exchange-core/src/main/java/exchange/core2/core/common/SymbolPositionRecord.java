@@ -234,6 +234,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * 注意结果乘以了maintenanceMarginScaleK进行缩放
      */
     public long estimateMarginRatioScaleK(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord, long totalMargin) {
+        if (openVolume == 0) {
+            return 0; // 无资金，不算保证金比率
+        }
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         return spec.maintenanceMarginScaleK * maintenanceMargin / totalMargin;

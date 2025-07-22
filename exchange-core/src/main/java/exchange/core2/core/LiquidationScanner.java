@@ -184,8 +184,8 @@ public final class LiquidationScanner {
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
                 long profit = position.estimateProfit(priceRecord);
                 long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
-                profit = CoreArithmeticUtils.symbolToCurrencyScale(profit, spec, currencySpec);
-                maintenance = CoreArithmeticUtils.symbolToCurrencyScale(maintenance, spec, currencySpec);
+                profit = CoreArithmeticUtils.sizePriceToCurrencyScale(profit, spec, currencySpec);
+                maintenance = CoreArithmeticUtils.sizePriceToCurrencyScale(maintenance, spec, currencySpec);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
                 // 每个仓位的风险系数：risk = (profit - maintenance) / maintenance

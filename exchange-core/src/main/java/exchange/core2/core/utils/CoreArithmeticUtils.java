@@ -164,7 +164,16 @@ public final class CoreArithmeticUtils {
     }
 
     /**
+     * 撮合内部乘积单位(baseScale * quoteScale) → 币种记账单位(currency)
+     * 只要计算涉及了price * size都是内部乘积单位
+     */
+    public static long sizePriceToCurrencyScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        return convertScale(amount, spec.baseScaleK * spec.quoteScaleK, currency.getCurrencyScaleK());
+    }
+
+    /**
      * 币对交易单位(symbol.base或quote) → 币种记账单位(currency)
+     * 返还补充保证金用到
      */
     public static long symbolToCurrencyScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
         if (currency.id == spec.baseCurrency) {
@@ -177,7 +186,7 @@ public final class CoreArithmeticUtils {
 
     /**
      * 币种记账单位(currency) → 币对交易单位(symbol.base或quote)
-     * 除了逐仓追加补充保证金，其他场景都用 {@link #symbolToCurrencyScale} 方法
+     * 逐仓追加补充保证金用到
      */
     public static long currencyToSymbolScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
         if (currency.id == spec.baseCurrency) {

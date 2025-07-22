@@ -20,6 +20,7 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
+import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.*;
@@ -666,9 +667,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitCommandsSync(cmds);
     }
 
-
     public void addSymbol(final CoreSymbolSpecification symbol) {
         sendBinaryDataCommandSync(new BatchAddSymbolsCommand(symbol), 5000);
+    }
+
+    public void addCurrency(final CoreCurrencySpecification currency) {
+        sendBinaryDataCommandSync(new BatchAddCurrenciesCommand(currency), 5000);
     }
 
     public void addSymbols(final List<CoreSymbolSpecification> symbols) {
