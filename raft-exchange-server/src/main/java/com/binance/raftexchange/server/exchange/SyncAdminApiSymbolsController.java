@@ -4,7 +4,9 @@ import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.ApiSettlePNL;
+import com.binance.raftexchange.stubs.request.BatchAddCurrenciesCommand;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
+import com.binance.raftexchange.stubs.request.CoreCurrencySpecification;
 import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
@@ -39,6 +41,21 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         LOG.debug("batchAddSymbolsCommand applied, msg: {}", batchAddSymbolsCommand);
 
         return callExchange(batchAddSymbolsCommand);
+    }
+
+    public static CompletableFuture<byte[]> batchAddCurrencies(BatchAddCurrenciesCommand grpcBatchAddCurrenciesCommand) {
+        Map<Integer, CoreCurrencySpecification> currenciesMap = grpcBatchAddCurrenciesCommand.getCurrenciesMap();
+        Collection<exchange.core2.core.common.CoreCurrencySpecification> currencies = new ArrayList<>(currenciesMap.size());
+        for (CoreCurrencySpecification grpcCurrency : currenciesMap.values()) {
+            exchange.core2.core.common.CoreCurrencySpecification currency = exchange.core2.core.common.CoreCurrencySpecification.builder()
+                .id(grpcCurrency.getId()).name(grpcCurrency.getName()).digit(grpcCurrency.getDigit()).build();
+            currencies.add(currency);
+        }
+        exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand batchAddCurrenciesCommand =
+            new exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand(currencies);
+        LOG.debug("batchAddCurrenciesCommand applied, msg: {}", batchAddCurrenciesCommand);
+
+        return callExchange(batchAddCurrenciesCommand);
     }
 
     public static CompletableFuture<byte[]> adjustMarkPrice(ApiCommand apiCommand) {

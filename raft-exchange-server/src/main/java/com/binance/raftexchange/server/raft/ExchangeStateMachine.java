@@ -131,6 +131,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             case ADD_SYMBOLS:
                 result = SyncAdminApiSymbolsController.batchAddSymbols(binaryDataCommand.getAddSymbols());
                 break;
+            case ADD_CURRENCIES:
+                result = SyncAdminApiSymbolsController.batchAddCurrencies(binaryDataCommand.getAddCurrencies());
+                break;
             default:
                 LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
         }

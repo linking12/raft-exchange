@@ -148,6 +148,7 @@ enum BinaryCommandType {
   BINARY_COMMAND_TYPE_UNSPECIFIED = 0; // proto3 enum必须从0开始
   ADD_ACCOUNTS = 1002;
   ADD_SYMBOLS = 1003;
+  ADD_CURRENCIES = 1004;
 }
 
 message BatchAddAccountsCommand {
@@ -180,10 +181,21 @@ message CoreSymbolSpecification {
   map<int64, int64> max_leverage = 14;
 }
 
+message BatchAddCurrenciesCommand {
+  map<int32, CoreCurrencySpecification> currencies = 1;
+}
+
+message CoreCurrencySpecification {
+  int32 id = 1;
+  string name = 2;
+  int32 digit = 3;
+}
+
 message BinaryDataCommand {
   oneof command {
     BatchAddAccountsCommand add_accounts = 1;
     BatchAddSymbolsCommand add_symbols = 2;
+    BatchAddCurrenciesCommand add_currencies = 3;
   }
 }
 
