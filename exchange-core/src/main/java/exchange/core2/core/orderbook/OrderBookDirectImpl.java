@@ -116,7 +116,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             // TODO IOC_BUDGET and FOK support
             default:
                 log.warn("Unsupported order type: {}", cmd);
-                eventsHelper.attachRejectEvent(cmd, cmd.size);
+                eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
         }
     }
 
@@ -135,7 +135,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
         // TODO eliminate double hashtable lookup?
         if (orderIdIndex.get(orderId) != null) { // containsKey for hashtable
             // duplicate order id - can match, but can not place
-            eventsHelper.attachRejectEvent(cmd, size - filledSize);
+            eventsHelper.attachRejectEvent(cmd, size - filledSize, symbolSpec);
             log.warn("duplicate order id: {}", cmd);
             return;
         }
@@ -166,7 +166,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         if (rejectedSize != 0) {
             // was not matched completely - send reject for not-completed IoC order
-            eventsHelper.attachRejectEvent(cmd, rejectedSize);
+            eventsHelper.attachRejectEvent(cmd, rejectedSize, symbolSpec);
         }
     }
 
@@ -179,7 +179,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
         if (isBudgetLimitSatisfied(cmd.action, budget, cmd.price)) {
             tryMatchInstantly(cmd, cmd);
         } else {
-            eventsHelper.attachRejectEvent(cmd, cmd.size);
+            eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
         }
     }
 
@@ -276,7 +276,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             }
 
             final MatcherTradeEvent tradeEvent = eventsHelper.sendTradeEvent(makerOrder, makerCompleted, remainingSize == 0, tradeSize,
-                    isBidAction ? takerReserveBidPrice : makerOrder.reserveBidPrice);
+                    isBidAction ? takerReserveBidPrice : makerOrder.reserveBidPrice, symbolSpec);
 
             if (eventsTail == null) {
                 triggerCmd.matcherEvent = tradeEvent;
@@ -354,7 +354,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
         // fill action fields (for events handling)
         cmd.action = order.getAction();
 
-        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, order.getSize() - order.getFilled(), true);
+        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, order.getSize() - order.getFilled(), true, symbolSpec);
 
         return CommandResultCode.SUCCESS;
     }
@@ -392,7 +392,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             order.parent.volume -= reduceBy;
         }
 
-        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, reduceBy, canRemove);
+        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, reduceBy, canRemove, symbolSpec);
 
         // fill action fields (for events handling)
         cmd.action = order.getAction();

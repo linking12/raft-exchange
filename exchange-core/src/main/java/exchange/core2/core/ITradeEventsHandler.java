@@ -75,6 +75,8 @@ public interface ITradeEventsHandler {
     @Data
     class TradeEvent {
         public final int symbol;
+        public final long baseScaleK;
+        public final long quoteScaleK;
         public final long totalVolume;
         public final long takerOrderId;
         public final long takerUid;
@@ -96,6 +98,8 @@ public interface ITradeEventsHandler {
     @Data
     class ReduceEvent {
         public final int symbol;
+        public final long baseScaleK;
+        public final long quoteScaleK;
         public final long reducedVolume;
         public final boolean orderCompleted;
         public final long price;
@@ -107,6 +111,8 @@ public interface ITradeEventsHandler {
     @Data
     class RejectEvent {
         public final int symbol;
+        public final long baseScaleK;
+        public final long quoteScaleK;
         public final long rejectedVolume;
         public final long price;
         public final long orderId;

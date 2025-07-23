@@ -15,6 +15,7 @@
  */
 package exchange.core2.core.orderbook;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.IOrder;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.Order;
@@ -36,6 +37,9 @@ import java.util.stream.Collectors;
 @ToString
 public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, WriteBytesMarshallable {
 
+    // symbol specification
+    private final CoreSymbolSpecification symbolSpec;
+
     @Getter
     private final long price;
 
@@ -44,13 +48,15 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
     @Getter
     private long totalVolume;
 
-    public OrdersBucketNaive(final long price) {
+    public OrdersBucketNaive(final CoreSymbolSpecification symbolSpec, final long price) {
+        this.symbolSpec = symbolSpec;
         this.price = price;
         this.entries = new LinkedHashMap<>();
         this.totalVolume = 0;
     }
 
     public OrdersBucketNaive(BytesIn bytes) {
+        this.symbolSpec = new CoreSymbolSpecification(bytes);
         this.price = bytes.readLong();
         this.entries = SerializationUtils.readLongMap(bytes, LinkedHashMap::new, Order::new);
         this.totalVolume = bytes.readLong();
@@ -127,7 +133,7 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
             final boolean fullMatch = order.size == order.filled;
 
             final long bidderHoldPrice = order.action == OrderAction.ASK ? activeOrder.getReserveBidPrice() : order.reserveBidPrice;
-            final MatcherTradeEvent tradeEvent = helper.sendTradeEvent(order, fullMatch, volumeToCollect == 0, v, bidderHoldPrice);
+            final MatcherTradeEvent tradeEvent = helper.sendTradeEvent(order, fullMatch, volumeToCollect == 0, v, bidderHoldPrice, symbolSpec);
 
             if (eventsTail == null) {
                 eventsHead = tradeEvent;
@@ -205,6 +211,7 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
 
     @Override
     public void writeMarshallable(BytesOut bytes) {
+        symbolSpec.writeMarshallable(bytes);
         bytes.writeLong(price);
         SerializationUtils.marshallLongMap(entries, bytes);
         bytes.writeLong(totalVolume);

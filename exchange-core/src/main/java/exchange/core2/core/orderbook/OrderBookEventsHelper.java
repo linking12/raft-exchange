@@ -15,6 +15,7 @@
  */
 package exchange.core2.core.orderbook;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.IOrder;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
@@ -52,7 +53,8 @@ public final class OrderBookEventsHelper {
                                             final boolean makerCompleted,
                                             final boolean takerCompleted,
                                             final long size,
-                                            final long bidderHoldPrice) {
+                                            final long bidderHoldPrice,
+                                            final CoreSymbolSpecification spec) {
         //final long takerOrderTimestamp
 
 //        log.debug("** sendTradeEvent: active id:{} matched id:{}", activeOrder.orderId, matchingOrder.orderId);
@@ -75,11 +77,13 @@ public final class OrderBookEventsHelper {
         // set order reserved price for correct released EBids
         event.bidderHoldPrice = bidderHoldPrice;
 
+        event.baseScaleK = spec.baseScaleK;
+        event.quoteScaleK = spec.quoteScaleK;
         return event;
 
     }
 
-    public MatcherTradeEvent sendReduceEvent(final IOrder order, final long reduceSize, final boolean completed) {
+    public MatcherTradeEvent sendReduceEvent(final IOrder order, final long reduceSize, final boolean completed, final CoreSymbolSpecification spec) {
 //        log.debug("Cancel ");
         final MatcherTradeEvent event = newMatcherEvent();
         event.eventType = MatcherEventType.REDUCE;
@@ -94,11 +98,13 @@ public final class OrderBookEventsHelper {
 
         event.bidderHoldPrice = order.getReserveBidPrice(); // set order reserved price for correct released EBids
 
+        event.baseScaleK = spec.baseScaleK;
+        event.quoteScaleK = spec.quoteScaleK;
         return event;
     }
 
 
-    public void attachRejectEvent(final OrderCommand cmd, final long rejectedSize) {
+    public void attachRejectEvent(final OrderCommand cmd, final long rejectedSize, final CoreSymbolSpecification spec) {
 
 //        log.debug("Rejected {}", cmd.orderId);
 //        log.debug("\n{}", getL2MarketDataSnapshot(10).dumpOrderBook());
@@ -120,6 +126,9 @@ public final class OrderBookEventsHelper {
 
         event.bidderHoldPrice = cmd.reserveBidPrice; // set command reserved price for correct released EBids
 
+        event.baseScaleK = spec.baseScaleK;
+        event.quoteScaleK = spec.quoteScaleK;
+
         // insert event
         event.nextEvent = cmd.matcherEvent;
         cmd.matcherEvent = event;
@@ -129,11 +138,11 @@ public final class OrderBookEventsHelper {
                                                      final int section,
                                                      final NativeBytes<Void> bytes) {
 
-        long[] dataArray = SerializationUtils.bytesToLongArray(bytes, 5);
+        long[] dataArray = SerializationUtils.bytesToLongArray(bytes, 7);
 
         MatcherTradeEvent firstEvent = null;
         MatcherTradeEvent lastEvent = null;
-        for (int i = 0; i < dataArray.length; i += 5) {
+        for (int i = 0; i < dataArray.length; i += 7) {
 
             final MatcherTradeEvent event = newMatcherEvent();
 
@@ -145,6 +154,8 @@ public final class OrderBookEventsHelper {
             event.price = dataArray[i + 2];
             event.size = dataArray[i + 3];
             event.bidderHoldPrice = dataArray[i + 4];
+            event.baseScaleK = dataArray[i + 5];
+            event.quoteScaleK = dataArray[i + 6];
 
             event.nextEvent = null;
 
@@ -177,7 +188,9 @@ public final class OrderBookEventsHelper {
                             evt.matchedOrderUid,
                             evt.price,
                             evt.size,
-                            evt.bidderHoldPrice))
+                            evt.bidderHoldPrice,
+                            evt.baseScaleK,
+                            evt.quoteScaleK))
                     .mapToLong(s -> s)
                     .toArray();
 

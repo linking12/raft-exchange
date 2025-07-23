@@ -60,8 +60,9 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
         if (firstEvent.eventType == MatcherEventType.REDUCE) {
 
-            final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted,
-                firstEvent.price, cmd.orderId, cmd.uid, cmd.timestamp);
+            final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.baseScaleK,
+                firstEvent.quoteScaleK, firstEvent.size, firstEvent.activeOrderCompleted, firstEvent.price, cmd.orderId,
+                cmd.uid, cmd.timestamp);
 
             tradeEventsHandler.reduceEvent(evt);
 
@@ -116,6 +117,8 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
         final MutableLong mutableLong = new MutableLong(0L);
         final List<ITradeEventsHandler.Trade> trades = new ArrayList<>();
+        long baseScaleK = cmd.matcherEvent != null ? cmd.matcherEvent.baseScaleK : 0;
+        long quoteScaleK = cmd.matcherEvent != null ? cmd.matcherEvent.quoteScaleK : 0;
 
         final MutableReference<ITradeEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
 
@@ -135,14 +138,14 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
             } else if (evt.eventType == MatcherEventType.REJECT) {
 
-                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
+                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, baseScaleK, quoteScaleK, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
         });
 
         if (!trades.isEmpty()) {
 
-            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, mutableLong.value, cmd.orderId, cmd.uid, cmd.action,
-                takerOrderCompleted.value, cmd.timestamp, trades);
+            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, baseScaleK, quoteScaleK,
+                mutableLong.value, cmd.orderId, cmd.uid, cmd.action, takerOrderCompleted.value, cmd.timestamp, trades);
 
             tradeEventsHandler.tradeEvent(evt);
         }

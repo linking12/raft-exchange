@@ -98,7 +98,8 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         if (!isLeader.get()) {
             return;
         }
-        TradeEventPB.Builder builder = builderPool.get(TradeEventPB.Builder.class).setSymbol(tradeEvent.getSymbol()).setTotalVolume(tradeEvent.getTotalVolume())
+        TradeEventPB.Builder builder = builderPool.get(TradeEventPB.Builder.class).setSymbol(tradeEvent.getSymbol())
+            .setBaseScaleK(tradeEvent.getBaseScaleK()).setQuoteScaleK(tradeEvent.getQuoteScaleK()).setTotalVolume(tradeEvent.getTotalVolume())
             .setTakerOrderId(tradeEvent.getTakerOrderId()).setTakerUid(tradeEvent.getTakerUid())
             .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode())).setTimestamp(tradeEvent.getTimestamp());
         if (tradeEvent.getTrades() != null) {
@@ -122,6 +123,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             return;
         }
         ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol())
+            .setBaseScaleK(reduceEvent.getBaseScaleK()).setQuoteScaleK(reduceEvent.getQuoteScaleK())
             .setReducedVolume(reduceEvent.getReducedVolume()).setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice())
             .setOrderId(reduceEvent.getOrderId()).setUid(reduceEvent.getUid()).setTimestamp(reduceEvent.getTimestamp()).build();
         if (LOG.isDebugEnabled()) {
