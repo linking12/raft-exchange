@@ -8,13 +8,13 @@ option java_multiple_files = true;
 import "message/common.proto";
 
 message TradeEventPB {
-  int32  symbol = 1;
-  int64 totalVolume = 2 ;
-  int64 takerOrderId = 3 ;
+  int32 symbol = 1;
+  int64 totalVolume = 2;
+  int64 takerOrderId = 3;
   int64 takerUid = 4;
   OrderAction takerAction = 5;
-  bool  takeOrderCompleted = 6;
-  int64  timestamp = 7;
+  bool takeOrderCompleted = 6;
+  int64 timestamp = 7;
   repeated TradePB trades = 8;
 }
 
@@ -46,29 +46,32 @@ message FundsEventPB {
   int64 orderId = 1;
   int64 uid = 2;
   int32 currency = 3;
-  int64 free = 4;
-  int64 locked = 5;
-  FundEventType eventType = 6;
-  int32 symbol = 7;
-  PositionDirection direction = 8;
-  int64 openVolume = 9;
-  int64 openInitMarginSum = 10;
-  int64 openPriceSum = 11;
-  int64 profit = 12;
-  int64 pendingSellSize = 13;
-  int64 pendingBuySize = 14;
-  int64 pendingSellAvgPrice = 15;
-  int64 pendingBuyAvgPrice = 16;
-  int32 leverage = 17;
-  MarginMode marginMode = 18;
-  int64 extraMargin = 19;
-  int64 unrealizedProfit = 20;
-  int64 liquidationPrice = 21;
-  int64 marginRatioScaleK = 22;
-  int64 markPrice = 23;
-  int64 tradeSize = 24;
-  int64 tradePrice = 25;
-  int64 fee = 26;
+  int64 currencyScakeK = 4;
+  int64 free = 5;
+  int64 locked = 6;
+  FundEventType eventType = 7;
+  int32 symbol = 8;
+  int64 baseScaleK = 9;
+  int64 quoteScaleK = 10;
+  PositionDirection direction = 11;
+  int64 openVolume = 12;
+  int64 openInitMarginSum = 13;
+  int64 openPriceSum = 14;
+  int64 profit = 15;
+  int64 pendingSellSize = 16;
+  int64 pendingBuySize = 17;
+  int64 pendingSellAvgPrice = 18;
+  int64 pendingBuyAvgPrice = 19;
+  int32 leverage = 20;
+  MarginMode marginMode = 21;
+  int64 extraMargin = 22;
+  int64 unrealizedProfit = 23;
+  int64 liquidationPrice = 24;
+  int64 marginRatioScaleK = 25;
+  int64 markPrice = 26;
+  int64 tradeSize = 27;
+  int64 tradePrice = 28;
+  int64 fee = 29;
 }
 
 enum FundEventType {

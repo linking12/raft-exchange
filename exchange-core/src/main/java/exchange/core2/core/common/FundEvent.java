@@ -22,11 +22,14 @@ public class FundEvent {
     public long orderId; // 订单 ID
     public long uid; // 用户 ID
     public int currency; // 变动货币
+    public long currencyScakeK; // currency缩放系数（用于还原金额）
     public long free; // 该currency可用余额
     public long locked; // 该currency所有期货仓位的冻结金额（初始保证金+pending部分+pending部分产生的fee）
 
     // 期货使用字段（仓位字段同）
     public int symbol; // 交易对 ID
+    public long baseScaleK; // 基础货币的缩放系数（用于还原size）
+    public long quoteScaleK; // 计价货币的缩放系数（用于还原price）
     public PositionDirection direction; // 仓位方向
     public long openVolume; // 持仓数量
     public long openInitMarginSum; // 初始保证金总额
@@ -109,10 +112,10 @@ public class FundEvent {
 
     @Override
     public int hashCode() {
-        return Objects.hash(processed, eventType, orderId, uid, currency, free, locked, symbol, direction,
-                openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize, pendingSellAvgPrice,
-                pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice, marginRatioScaleK,
-                markPrice, tradeSize, tradePrice, fee, nextEvent);
+        return Objects.hash(processed, eventType, orderId, uid, currency, currencyScakeK, free, locked, symbol, baseScaleK,
+                quoteScaleK, direction, openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize,
+                pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice,
+                marginRatioScaleK, markPrice, tradeSize, tradePrice, fee, nextEvent);
     }
 
     @Override
@@ -123,7 +126,8 @@ public class FundEvent {
             return false;
         FundEvent other = (FundEvent)obj;
         return processed == other.processed && eventType == other.eventType && orderId == other.orderId
-            && uid == other.uid && currency == other.currency && free == other.free && locked == other.locked && symbol == other.symbol
+            && uid == other.uid && currency == other.currency && currencyScakeK == other.currencyScakeK && free == other.free
+            && locked == other.locked && symbol == other.symbol && baseScaleK == other.baseScaleK && quoteScaleK == other.quoteScaleK
             && direction == other.direction && openVolume == other.openVolume && openInitMarginSum == other.openInitMarginSum
             && openPriceSum == other.openPriceSum && profit == other.profit && pendingSellSize == other.pendingSellSize
             && pendingBuySize == other.pendingBuySize && pendingSellAvgPrice == other.pendingSellAvgPrice && pendingBuyAvgPrice == other.pendingBuyAvgPrice
@@ -135,8 +139,9 @@ public class FundEvent {
 
     @Override
     public String toString() {
-        return "FundEvent [processed=" + processed + ", eventType=" + eventType + ", orderId=" + orderId
-            + ", uid=" + uid + ", currency=" + currency + ", free=" + free + ", locked=" + locked + ", symbol=" + symbol
+        return "FundEvent [processed=" + processed + ", eventType=" + eventType + ", orderId=" + orderId + ", uid=" + uid
+            + ", currency=" + currency + ", currencyScakeK=" + currencyScakeK + ", free=" + free + ", locked=" + locked
+            + ", symbol=" + symbol + ", baseScaleK=" + baseScaleK + ", quoteScaleK=" + quoteScaleK
             + ", direction=" + direction + ", openVolume=" + openVolume + ", openInitMarginSum=" + openInitMarginSum
             + ", openPriceSum=" + openPriceSum + ", profit=" + profit + ", pendingSellSize=" + pendingSellSize
             + ", pendingBuySize=" + pendingBuySize + ", pendingSellAvgPrice=" + pendingSellAvgPrice + ", pendingBuyAvgPrice=" + pendingBuyAvgPrice

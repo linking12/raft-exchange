@@ -102,11 +102,12 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
         fundEvent.processed = true;
         final IFundEventsHandler.FundsEvent evt = new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId,
-            fundEvent.uid, fundEvent.currency, fundEvent.free, fundEvent.locked, fundEvent.symbol, fundEvent.direction,
-            fundEvent.openVolume, fundEvent.openInitMarginSum, fundEvent.openPriceSum, fundEvent.profit, fundEvent.pendingSellSize,
-            fundEvent.pendingBuySize, fundEvent.pendingSellAvgPrice, fundEvent.pendingBuyAvgPrice, fundEvent.leverage,
-            fundEvent.marginMode, fundEvent.extraMargin, fundEvent.unrealizedProfit, fundEvent.liquidationPrice,
-            fundEvent.marginRatioScaleK, fundEvent.markPrice, fundEvent.tradeSize, fundEvent.tradePrice, fundEvent.fee);
+            fundEvent.uid, fundEvent.currency, fundEvent.currencyScakeK, fundEvent.free, fundEvent.locked, fundEvent.symbol,
+            fundEvent.baseScaleK, fundEvent.quoteScaleK, fundEvent.direction, fundEvent.openVolume, fundEvent.openInitMarginSum,
+            fundEvent.openPriceSum, fundEvent.profit, fundEvent.pendingSellSize, fundEvent.pendingBuySize,
+            fundEvent.pendingSellAvgPrice, fundEvent.pendingBuyAvgPrice, fundEvent.leverage, fundEvent.marginMode,
+            fundEvent.extraMargin, fundEvent.unrealizedProfit, fundEvent.liquidationPrice, fundEvent.marginRatioScaleK,
+            fundEvent.markPrice, fundEvent.tradeSize, fundEvent.tradePrice, fundEvent.fee);
         fundEventsHandler.fundsEvent(evt);
     }
 

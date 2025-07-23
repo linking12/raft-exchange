@@ -137,6 +137,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.suspends = new IntLongHashMap();
         this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
         this.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
+        this.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
         this.eventsHelper.setUserProfileService(this.userProfileService);
         this.eventsHelper.setLastPriceCache(this.lastPriceCache);
     }
@@ -182,6 +183,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             this.binaryCommandsProcessor = state.binaryCommandsProcessor;
             this.lastPriceCache = state.lastPriceCache;
             this.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
+            this.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
             this.eventsHelper.setUserProfileService(this.userProfileService);
             this.eventsHelper.setLastPriceCache(this.lastPriceCache);
             this.fees = state.fees;

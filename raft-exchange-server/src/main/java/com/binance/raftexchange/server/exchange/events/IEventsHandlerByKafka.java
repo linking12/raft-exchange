@@ -164,8 +164,9 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         }
         FundsEventPB pbObject =
             builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
-                .setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
-                .setSymbol(fundsEvent.getSymbol()).setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setOpenVolume(fundsEvent.getOpenVolume())
+                .setCurrencyScakeK(fundsEvent.getCurrencyScaleK()).setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
+                .setSymbol(fundsEvent.getSymbol()).setBaseScaleK(fundsEvent.getBaseScaleK()).setQuoteScaleK(fundsEvent.getQuoteScaleK())
+                .setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setOpenVolume(fundsEvent.getOpenVolume())
                 .setOpenInitMarginSum(fundsEvent.getOpenInitMarginSum()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setProfit(fundsEvent.getProfit())
                 .setPendingSellSize(fundsEvent.getPendingSellSize()).setPendingBuySize(fundsEvent.getPendingBuySize())
                 .setPendingSellAvgPrice(fundsEvent.getPendingSellAvgPrice()).setPendingBuyAvgPrice(fundsEvent.getPendingBuyAvgPrice())

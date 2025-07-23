@@ -20,10 +20,13 @@ public interface IFundEventsHandler {
         public final long orderId; // 订单 ID
         public final long uid; // 用户 ID
         public final int currency; // 变动货币
+        public final long currencyScaleK; // currency缩放系数（用于还原金额）
         public final long free; // 用户可用余额
         public final long locked; // 用户冻结余额
 
         public final int symbol; // 交易对 ID
+        public final long baseScaleK; // 基础货币的缩放系数（用于还原size）
+        public final long quoteScaleK; // 计价货币的缩放系数（用于还原price）
         public final PositionDirection direction; // 仓位方向
         public final long openVolume;
         public final long openInitMarginSum; //初始保证金总额

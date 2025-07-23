@@ -4,6 +4,7 @@ import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 
 import java.util.function.Supplier;
 
+import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
@@ -27,6 +28,8 @@ public class FundEventsHelper {
     @Setter
     private SymbolSpecificationProvider symbolSpecificationProvider;
     @Setter
+    private CurrencySpecificationProvider currencySpecificationProvider;
+    @Setter
     private UserProfileService userProfileService;
     @Setter
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
@@ -34,23 +37,31 @@ public class FundEventsHelper {
     private FundEvent eventsChainHead;
 
     private FundEvent buildSpotEvent(long orderId, long uid, FundEventType type, int currency, long free, long locked) {
+        CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
         FundEvent event = newFundEvent();
         event.orderId = orderId;
         event.uid = uid;
         event.eventType = type;
         event.currency = currency;
+        event.currencyScakeK = currencySpec.getCurrencyScaleK();
         event.free = free;
         event.locked = locked;
         return event;
     }
 
     private FundEvent buildFuturesEvent(long orderId, FundEventType type, SymbolPositionRecord position, long free, long locked) {
+        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+        CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(position.currency);
+        LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
         FundEvent event = newFundEvent();
         event.orderId = orderId;
         event.eventType = type;
         event.uid = position.uid;
         event.currency = position.currency;
+        event.currencyScakeK = currencySpec.getCurrencyScaleK();
         event.symbol = position.symbol;
+        event.baseScaleK = spec.baseScaleK;
+        event.quoteScaleK = spec.quoteScaleK;
         event.direction = position.direction;
         event.openVolume = position.openVolume;
         event.openInitMarginSum = position.openInitMarginSum;
@@ -63,8 +74,6 @@ public class FundEventsHelper {
         event.leverage = position.getLeverage();
         event.marginMode = position.marginMode;
         event.extraMargin = position.extraMargin;
-        LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
         calc(event, position, spec, priceRecord);
         event.markPrice = priceRecord.markPrice;
         event.free = free;
@@ -255,9 +264,12 @@ public class FundEventsHelper {
             event.orderId = 0;
             event.uid = 0;
             event.currency = 0;
+            event.currencyScakeK = 0;
             event.free = 0;
             event.locked = 0;
             event.symbol = 0;
+            event.baseScaleK = 0;
+            event.quoteScaleK = 0;
             event.direction = PositionDirection.EMPTY;
             event.openVolume = 0;
             event.openInitMarginSum = 0;

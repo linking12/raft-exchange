@@ -27,7 +27,6 @@ public final class BatchAddCurrenciesCommand implements BinaryDataCommand {
         collection.forEach(c -> currencies.put(c.id, c));
     }
 
-
     public BatchAddCurrenciesCommand(final BytesIn bytes) {
         currencies = SerializationUtils.readIntHashMap(bytes, CoreCurrencySpecification::new);
     }
