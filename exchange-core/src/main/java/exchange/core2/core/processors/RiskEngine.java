@@ -302,15 +302,22 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             cmd.resultCode = CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
                             return false;
                         }
-                        adjustments.addToValue(pos.currency, -cmd.price); // 计入充值记录
+                        // 复用提款的校验
+                        final long currentBalance = userProfile.accounts.get(cmd.symbol);
+                        long freeFuturesMargin = calcFreeFuturesMargin(userProfile, cmd.symbol);
+                        if (currentBalance + freeFuturesMargin - cmd.price < 0) {
+                            cmd.resultCode = CommandResultCode.RISK_NSF;
+                            return false;
+                        }
+                        // 划转
+                        long balance = userProfile.accounts.addToValue(cmd.symbol, -cmd.price);
                         CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(pos.currency);
                         CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
                         pos.extraMargin += CoreArithmeticUtils.currencyToSymbolScale(cmd.price, spec, currencySpec);
                         cmd.resultCode = CommandResultCode.SUCCESS;
                         // send event
                         long locked = calculateLockedMargin(userProfile, pos.currency);
-                        long free = userProfile.accounts.get(pos.currency) - locked;
-                        eventsHelper.sendMarginAdjustmentEvent(cmd, pos, free, locked);
+                        eventsHelper.sendMarginAdjustmentEvent(cmd, pos, balance - locked, locked);
                     }
                 }
                 return false;
@@ -327,34 +334,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     }
                     final long currentBalance = userProfile.accounts.get(cmd.symbol);
                     // 如果是提款操作，并且杠杆交易，需要校验下最小保证金
-                    if (amountDiff < 0 && cfgMarginTradingEnabled ) { 
+                    if (amountDiff < 0 && cfgMarginTradingEnabled) {
                         long withdrawalAmount = -amountDiff;
-                        long totalRealizedPnl = 0L;
-                        long totalUnrealizedPnl = 0L;
-                        long totalIsolateRequire = 0L;
-                        long totalCrossRequireByInitMargin = 0L;
-                        long totalCrossRequireByMaintainceMargin = 0L;
-                        for (final SymbolPositionRecord position : userProfile.positions) {
-                            if (position.currency == cmd.symbol) {
-                                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                                if (position.marginMode == MarginMode.CROSS) {
-                                    LastPriceCacheRecord lastPrice = lastPriceCache.get(position.symbol);
-                                    totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);
-                                    long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec);
-                                    totalCrossRequireByInitMargin += requiredMarginForFutures;
-                                    totalCrossRequireByMaintainceMargin += (requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec, lastPrice));
-                                } else {
-                                    totalIsolateRequire += position.calculateRequiredMarginForFutures(spec);
-                                }
-                                totalRealizedPnl += position.profit;
-                            }
-                        }
-                        long freeFuturesMargin = Math.min(
-                                // 如果算上了未实现盈亏，则全仓按初始初始保证金扣除
-                                totalRealizedPnl + totalUnrealizedPnl - totalCrossRequireByInitMargin - totalIsolateRequire,
-                                // 如果完全不算未实现盈亏，则全仓按维持保证金扣除
-                                totalRealizedPnl - totalCrossRequireByMaintainceMargin - totalIsolateRequire
-                        );
+                        long freeFuturesMargin = calcFreeFuturesMargin(userProfile, currency);
                         if (currentBalance + freeFuturesMargin - withdrawalAmount < 0) {
                             cmd.resultCode = CommandResultCode.RISK_NSF;
                             return false;
@@ -485,6 +467,38 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
         }
         return false;
+    }
+
+    /**
+     * 用于提现/划转判断，在 {@link #calculateLockedMargin} 基础上还考虑了pnl
+     */
+    private long calcFreeFuturesMargin(final UserProfile userProfile, final int currency) {
+        long totalRealizedPnl = 0L;
+        long totalUnrealizedPnl = 0L;
+        long totalIsolateRequire = 0L;
+        long totalCrossRequireByInitMargin = 0L;
+        long totalCrossRequireByMaintainceMargin = 0L;
+        for (final SymbolPositionRecord position : userProfile.positions) {
+            if (position.currency == currency) {
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                if (position.marginMode == MarginMode.CROSS) {
+                    LastPriceCacheRecord lastPrice = lastPriceCache.get(position.symbol);
+                    totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);
+                    long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec);
+                    totalCrossRequireByInitMargin += requiredMarginForFutures;
+                    totalCrossRequireByMaintainceMargin += (requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec, lastPrice));
+                } else {
+                    totalIsolateRequire += position.calculateRequiredMarginForFutures(spec);
+                }
+                totalRealizedPnl += position.profit;
+            }
+        }
+        return Math.min(
+            // 如果算上了未实现盈亏，则全仓按初始初始保证金扣除
+            totalRealizedPnl + totalUnrealizedPnl - totalCrossRequireByInitMargin - totalIsolateRequire,
+            // 如果完全不算未实现盈亏，则全仓按维持保证金扣除
+            totalRealizedPnl - totalCrossRequireByMaintainceMargin - totalIsolateRequire
+        );
     }
 
     private CommandResultCode adjustBalance(long uid, int currency, long amountDiff, long fundingTransactionId, BalanceAdjustmentType adjustmentType) {
