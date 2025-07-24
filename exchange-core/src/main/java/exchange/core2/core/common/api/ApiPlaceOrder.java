@@ -21,7 +21,6 @@ import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
-import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
 @Builder
@@ -38,7 +37,6 @@ public final class ApiPlaceOrder extends ApiCommand {
     public final int symbol;
     public final int userCookie;
     public final int leverage;
-    @NonNull
     public final MarginMode marginMode;
     public final long reservePrice;
 

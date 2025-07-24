@@ -45,8 +45,17 @@ public final class ITExchangeCorePriceScale {
             .maxLeverage(TreeSortedMap.newMapWith(10_000 * TenPowers.pow10(3 + 5), 75L))
             .build();
 
+    private final CoreSymbolSpecification BNB_USDT_SPOT = CoreSymbolSpecification.builder()
+            .symbolId(20001)
+            .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(BNB_ID).baseScaleK(TenPowers.pow10(3))
+            .quoteCurrency(USDT_ID).quoteScaleK(TenPowers.pow10(5))
+            .makerFee(0).takerFee(0)
+            .build();
+
+
     @Test
-    public void testSubmitFailWhenNoMarkPrice() throws Exception {
+    public void testMarginTradePriceScale() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.addCurrency(BNB);
             container.addCurrency(USDT);
@@ -111,4 +120,71 @@ public final class ITExchangeCorePriceScale {
         }
     }
 
+    @Test
+    public void testSpotTradePriceScale() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.addCurrency(BNB);
+            container.addCurrency(USDT);
+            container.addSymbol(BNB_USDT_SPOT);
+
+            // 用户1 存入 1000 USDT，用户2 存入 2 BNB
+            long usdtDeposit = 1_000 * USDT.getCurrencyScaleK();
+            long bnbDeposit = 2 * BNB.getCurrencyScaleK();
+            container.createUserWithMoney(UID_1, USDT_ID, usdtDeposit);
+            container.createUserWithMoney(UID_2, BNB_ID,  bnbDeposit);
+
+            // 检验初始余额
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getAccounts().get(USDT_ID), is(usdtDeposit));
+                assertThat(report.getAccounts().get(BNB_ID),  is(0L));
+            });
+            container.validateUserState(UID_2, report -> {
+                assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit));
+                assertThat(report.getAccounts().get(USDT_ID), is(0L));
+            });
+
+            // 用户1 挂买单 0.05 BNB  @ 745.123 USDT
+            long size = (long) (0.05 * BNB_USDT_SPOT.getBaseScaleK());
+            long price = (long) (745.123 * BNB_USDT_SPOT.getQuoteScaleK());
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                            .uid(UID_1)
+                            .orderId(10001L)
+                            .symbol(BNB_USDT_SPOT.symbolId)
+                            .action(OrderAction.BID)
+                            .orderType(OrderType.GTC)
+                            .price(price)
+                            .reservePrice(price)
+                            .size(size)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // 用户2 挂卖单 0.05 BNB @ 745.123 USDT
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                            .uid(UID_2)
+                            .orderId(10002L)
+                            .symbol(BNB_USDT_SPOT.symbolId)
+                            .action(OrderAction.ASK)
+                            .orderType(OrderType.GTC)
+                            .price(price)
+                            .size(size)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // 交易额 = 0.05 * 745.123 = 37.25615
+            long tradeAmountCurrency = CoreArithmeticUtils.sizePriceToCurrencyScale(price * size, BNB_USDT_SPOT, USDT);
+            // 再还原成浮点校验：
+            double tradeAmountFloat = tradeAmountCurrency * 1.0 / USDT.getCurrencyScaleK();
+            assertThat(tradeAmountFloat, is(37.25615));
+
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getAccounts().get(USDT_ID), is(usdtDeposit - tradeAmountCurrency));
+                assertThat(report.getAccounts().get(BNB_ID),  is(size));
+            });
+            container.validateUserState(UID_2, report -> {
+                assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit - size));
+                assertThat(report.getAccounts().get(USDT_ID), is(tradeAmountCurrency));
+            });
+        }
+    }
 }
