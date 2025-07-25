@@ -1,8 +1,10 @@
 package com.binance.raftexchange.server.exchange;
 
 import com.binance.raftexchange.stubs.report.StateHashReportQuery;
+import com.binance.raftexchange.stubs.report.SymbolCurrencyReportQuery;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
 import exchange.core2.core.common.api.reports.StateHashReportResult;
+import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 
 import java.util.concurrent.CompletableFuture;
@@ -29,5 +31,13 @@ public class SyncTradeMiscApiController extends AbstractApiController {
         LOG.debug("totalCurrencyBalanceReportQuery applied");
 
         return callExchange(totalCurrencyBalanceReportQuery, transferId);
+    }
+
+    public static CompletableFuture<SymbolCurrencyReportResult> getSymbolCurrencyReport(SymbolCurrencyReportQuery grpcSymbolCurrencyReportQuery, int transferId) {
+        exchange.core2.core.common.api.reports.SymbolCurrencyReportQuery symbolCurrencyReportQuery =
+                new exchange.core2.core.common.api.reports.SymbolCurrencyReportQuery();
+        LOG.debug("symbolCurrencyReportQuery applied");
+
+        return callExchange(symbolCurrencyReportQuery, transferId);
     }
 }

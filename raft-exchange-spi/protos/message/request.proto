@@ -164,31 +164,8 @@ message BatchAddSymbolsCommand {
   map<int32, CoreSymbolSpecification> symbols = 1;
 }
 
-message CoreSymbolSpecification {
-  int32 symbol_id = 1;
-  SymbolType type = 2;
-  int32 base_currency = 3;
-  int32 quote_currency = 4;
-  int64 base_scale_k = 5;
-  int64 quote_scale_k = 6;
-  int64 taker_fee = 7;
-  int64 maker_fee = 8;
-  int64 fee_scale_k = 9;
-  int64 init_margin = 10;
-  int64 init_margin_scale_k = 11;
-  map<int64, int64> maintenance_margin = 12;
-  int64 maintenance_margin_scale_k = 13;
-  map<int64, int64> max_leverage = 14;
-}
-
 message BatchAddCurrenciesCommand {
   map<int32, CoreCurrencySpecification> currencies = 1;
-}
-
-message CoreCurrencySpecification {
-  int32 id = 1;
-  string name = 2;
-  int32 digit = 3;
 }
 
 message BinaryDataCommand {

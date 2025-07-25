@@ -772,6 +772,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return api.processReport(new SingleUserReportQuery(clientId), getRandomTransferId()).get();
     }
 
+    public SymbolCurrencyReportResult getSymbolCurrencyReport() throws InterruptedException, ExecutionException {
+        return api.processReport(new SymbolCurrencyReportQuery(), getRandomTransferId()).get();
+    }
+
     public TotalCurrencyBalanceReportResult totalBalanceReport() {
         final TotalCurrencyBalanceReportResult res = api.processReport(new TotalCurrencyBalanceReportQuery(), getRandomTransferId()).join();
         final IntLongHashMap openInterestLong = res.getOpenInterestLong();

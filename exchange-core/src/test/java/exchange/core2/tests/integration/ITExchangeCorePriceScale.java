@@ -9,6 +9,7 @@ import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.utils.CoreArithmeticUtils;
@@ -185,6 +186,9 @@ public final class ITExchangeCorePriceScale {
                 assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit - size));
                 assertThat(report.getAccounts().get(USDT_ID), is(tradeAmountCurrency));
             });
+
+            SymbolCurrencyReportResult symbolCurrencyReport = container.getSymbolCurrencyReport();
+            assertThat(symbolCurrencyReport.getSymbolSpecs().get(BNB_USDT_SPOT.symbolId).getSymbolId(), is(BNB_USDT_SPOT.symbolId));
         }
     }
 }

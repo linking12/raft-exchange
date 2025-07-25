@@ -13,6 +13,7 @@ enum ReportType {
   STATE_HASH = 10001;
   SINGLE_USER_REPORT = 10002;
   TOTAL_CURRENCY_BALANCE = 10003;
+  SYMBOL_CURRENCY_REPORT = 10004;
 }
 
 // Base Report Query Message
@@ -22,6 +23,7 @@ message ReportQuery {
     SingleUserReportQuery single_user_report = 2;
     StateHashReportQuery state_hash = 3;
     TotalCurrencyBalanceReportQuery total_currency_balance = 4;
+    SymbolCurrencyReportQuery symbol_currency_report = 5;
   }
 }
 
@@ -38,12 +40,17 @@ message StateHashReportQuery {
 message TotalCurrencyBalanceReportQuery {
 }
 
+// Symbol Currency Report Query
+message SymbolCurrencyReportQuery {
+}
+
 // Base Report Result Message
 message ReportResult {
   oneof result {
     SingleUserReportResult single_user_report = 1;
     StateHashReportResult state_hash = 2;
     TotalCurrencyBalanceReportResult total_currency_balance = 3;
+    SymbolCurrencyReportResult symbol_currency_report = 4;
   }
 }
 
@@ -139,4 +146,9 @@ message TotalCurrencyBalanceReportResult {
   map<int32, int64> orders_balances = 5;
   map<int32, int64> open_interest_long = 6;
   map<int32, int64> open_interest_short = 7;
+}
+
+message SymbolCurrencyReportResult {
+  map<int32, CoreSymbolSpecification> symbolSpecs = 1;
+  map<int32, CoreCurrencySpecification> currencySpecs = 2;
 }

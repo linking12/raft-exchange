@@ -18,6 +18,7 @@ package exchange.core2.core.processors;
 
 import java.util.Objects;
 
+import lombok.Getter;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -33,6 +34,7 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 public final class SymbolSpecificationProvider implements WriteBytesMarshallable, StateHash {
 
     // symbol->specs
+    @Getter
     private final IntObjectHashMap<CoreSymbolSpecification> symbolSpecs;
 
     public SymbolSpecificationProvider() {

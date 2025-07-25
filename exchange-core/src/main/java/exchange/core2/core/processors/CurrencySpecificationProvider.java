@@ -20,6 +20,7 @@ import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
@@ -32,6 +33,7 @@ import java.util.Objects;
 public final class CurrencySpecificationProvider implements WriteBytesMarshallable, StateHash {
 
     // currency->specs
+    @Getter
     private final IntObjectHashMap<CoreCurrencySpecification> currencySpecs;
 
     public CurrencySpecificationProvider() {
