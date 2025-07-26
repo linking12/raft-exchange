@@ -1,13 +1,13 @@
 package com.binance.raftexchange.server.exchange;
 
+import com.binance.raftexchange.stubs.CoreCurrencySpecification;
+import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.BatchAddCurrenciesCommand;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
-import com.binance.raftexchange.stubs.request.CoreCurrencySpecification;
-import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
