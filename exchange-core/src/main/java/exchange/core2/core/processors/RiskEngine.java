@@ -303,14 +303,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             return false;
                         }
                         // 复用提款的校验
-                        final long currentBalance = userProfile.accounts.get(cmd.symbol);
-                        long freeFuturesMargin = calcFreeFuturesMargin(userProfile, cmd.symbol);
+                        final long currentBalance = userProfile.accounts.get(pos.currency);
+                        long freeFuturesMargin = calcFreeFuturesMargin(userProfile, pos.currency);
                         if (currentBalance + freeFuturesMargin - cmd.price < 0) {
                             cmd.resultCode = CommandResultCode.RISK_NSF;
                             return false;
                         }
                         // 划转
-                        long balance = userProfile.accounts.addToValue(cmd.symbol, -cmd.price);
+                        long balance = userProfile.accounts.addToValue(pos.currency, -cmd.price);
                         CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(pos.currency);
                         CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
                         pos.extraMargin += CoreArithmeticUtils.currencyToSymbolScale(cmd.price, spec, currencySpec);
