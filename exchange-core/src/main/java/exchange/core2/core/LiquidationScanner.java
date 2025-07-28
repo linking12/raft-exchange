@@ -59,6 +59,7 @@ public final class LiquidationScanner {
             riskEngines.stream().collect(Collectors.toMap(RiskEngine::getShardId, r -> {
                 FundEventsHelper eventsHelper = new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(), r.getShardId(), riskEnginesNum);
                 eventsHelper.setSymbolSpecificationProvider(r.getSymbolSpecificationProvider());
+                eventsHelper.setCurrencySpecificationProvider(r.getCurrencySpecificationProvider());
                 eventsHelper.setUserProfileService(r.getUserProfileService());
                 eventsHelper.setLastPriceCache(r.getLastPriceCache());
                 return eventsHelper;
