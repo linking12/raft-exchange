@@ -237,6 +237,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (openVolume == 0) {
             return 0; // 无资金，不算保证金比率
         }
+        if (totalMargin <= 0) {
+            // 只要totalMargin <= maintenanceMargin就应该被强平了，如果还没有强平，保证金比率会大于100%；
+            // 如果依然没有强平，totalMargin <=0 则返回-1，表示强平风险极大。
+            return spec.maintenanceMarginScaleK * -1;
+        }
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         return spec.maintenanceMarginScaleK * maintenanceMargin / totalMargin;
