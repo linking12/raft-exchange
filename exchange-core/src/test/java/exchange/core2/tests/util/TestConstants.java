@@ -253,8 +253,8 @@ public final class TestConstants {
             .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
             .baseCurrency(CURRENECY_ETH)    // base = szabo
             .quoteCurrency(CURRENECY_XBT)   // quote = satoshi
-            .baseScaleK(100_000)            // 1 lot = 100K szabo (0.1 ETH)
-            .quoteScaleK(10)                // 1 step = 10 satoshi
+            .baseScaleK(1)            // 1 lot = 100K szabo (0.1 ETH)
+            .quoteScaleK(1)                // 1 step = 10 satoshi
             .takerFee(0)
             .makerFee(0)
             .build();
