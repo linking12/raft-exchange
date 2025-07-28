@@ -127,6 +127,8 @@ class ITExtraMarginIntegration {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(1);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit1, quoteId);
 
@@ -178,6 +180,8 @@ class ITExtraMarginIntegration {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(1);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit1, quoteId);
 

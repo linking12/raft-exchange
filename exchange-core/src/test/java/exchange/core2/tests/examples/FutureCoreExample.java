@@ -3,7 +3,9 @@ package exchange.core2.tests.examples;
 import exchange.core2.core.*;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
+import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
+import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportQuery;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -13,18 +15,17 @@ import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
+import org.hamcrest.core.Is;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
@@ -102,6 +103,7 @@ public class FutureCoreExample {
         api = exchangeCore.getApi();
 
         // 初始化用户和符号
+        initCurrencies();
         initializeUserAndSymbols();
         doMarkPrice(symbolId, 10000L);
     }
@@ -155,6 +157,17 @@ public class FutureCoreExample {
         return uid;
     }
 
+    private void initCurrencies() {
+        CoreCurrencySpecification BNB = CoreCurrencySpecification.builder()
+                .id(1).name("BNB").digit(8).build();
+
+        CoreCurrencySpecification USDT = CoreCurrencySpecification.builder()
+                .id(quoteId).name("USDT").digit(6).build();
+
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(BNB));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(USDT));
+    }
+
     private void initSpotSymbol() {
         CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
                 .symbolId(symbolId + 1)
@@ -165,9 +178,8 @@ public class FutureCoreExample {
                 .quoteScaleK(1)
                 .makerFee(10)
                 .takerFee(20)
-//                .marginSell(100)
-//                .marginBuy(100)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maintenanceMarginScaleK(100)
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .build();
 
@@ -199,9 +211,8 @@ public class FutureCoreExample {
                 .quoteCurrency(quoteId)
                 .makerFee(0)
                 .takerFee(0)
-//                .marginBuy(100L)
-//                .marginSell(100L)
-//                .maintenanceMargin(1000L) // 维持保证金
+                .baseScaleK(1_000)
+                .quoteScaleK(100)
                 .initMargin(1)
                 .initMarginScaleK(100)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
@@ -467,7 +478,7 @@ public class FutureCoreExample {
         // check profit, 平仓后应该按照市场价给定收益
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 0);
-        assertEquals(userStatus2.getAccounts().get(quoteId), MAX_VALUE + 500);
+        assertEquals(userStatus2.getAccounts().get(quoteId), MAX_VALUE + 5000);
     }
 
     // 做空后市场升值, 平仓检查收益是否符合预期
@@ -506,7 +517,7 @@ public class FutureCoreExample {
         // check profit, 平仓后应该按照市场价给定收益
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 0);
-        assertEquals(userStatus2.getAccounts().get(quoteId), MAX_VALUE - 500);
+        assertEquals(userStatus2.getAccounts().get(quoteId), MAX_VALUE - 5000);
     }
 
     private void createBid(long userId, int size, long price) {
@@ -597,7 +608,7 @@ public class FutureCoreExample {
         // 成交后position会被清空
         checkPosition(userStatus3, 0);
         // 成交后用户资产需要更新
-        assertEquals(userStatus3.getAccounts().get(quoteId), MAX_VALUE - 1000);
+        assertEquals(userStatus3.getAccounts().get(quoteId), MAX_VALUE - 10000);
     }
 
     // 持仓到警戒线, 发预警通知 - 做多
@@ -871,8 +882,8 @@ public class FutureCoreExample {
     public void testWithdrawConstrain() throws Exception {
         // suppose current price is 10000
         // userId1下2个期货买单, 价格为10000
-        int balance = 100;
-        int delta = -10;
+        int balance = 1000;
+        int delta = -1000;
         long userId1 = createRandomUserWithMoney(balance);
         createBid(userId1, 1, 10000L);
 
@@ -907,7 +918,7 @@ public class FutureCoreExample {
     public void testFutureThenSpot() throws Exception {
         // suppose current price is 10000
         // userId1下2个期货买单, 价格为10000
-        int balance = 100;
+        int balance = 1000;
         long userId1 = createRandomUserWithMoney(balance);
         createBid(userId1, 1, 10000L);
 
@@ -924,6 +935,7 @@ public class FutureCoreExample {
 
         // 下现货单
         // 1. 生产现货交易对
+        initCurrencies();
         initSpotSymbol();
 
         // 2. 下单

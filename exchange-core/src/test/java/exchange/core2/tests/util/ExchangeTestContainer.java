@@ -168,8 +168,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initBasicSymbols() {
-
+        addCurrency(SYMBOLSPEC_EUR_USD.baseCurrency);
+        addCurrency(SYMBOLSPEC_EUR_USD.quoteCurrency);
         addSymbol(TestConstants.SYMBOLSPEC_EUR_USD);
+
+        addCurrency(SYMBOLSPEC_ETH_XBT.baseCurrency);
+        addCurrency(SYMBOLSPEC_ETH_XBT.quoteCurrency);
         addSymbol(TestConstants.SYMBOLSPEC_ETH_XBT);
     }
 
@@ -179,7 +183,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initFeeSymbols() {
+        addCurrency(SYMBOLSPECFEE_XBT_LTC.baseCurrency);
+        addCurrency(SYMBOLSPECFEE_XBT_LTC.quoteCurrency);
         addSymbol(TestConstants.SYMBOLSPECFEE_XBT_LTC);
+
+        addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency);
+        addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency);
         addSymbol(TestConstants.SYMBOLSPECFEE_USD_JPY);
     }
 
@@ -188,7 +197,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initDynamicFeeSymbols() {
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseCurrency);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.quoteCurrency);
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC);
+
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.baseCurrency);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.quoteCurrency, 6);
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
     }
 
@@ -298,6 +312,17 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
+
+        CoreCurrencySpecification btc = CoreCurrencySpecification.builder().id(CURRENECY_XBT).digit(8).build();
+        CoreCurrencySpecification usdt = CoreCurrencySpecification.builder().id(CURRENECY_USD).digit(8).build();
+        CoreCurrencySpecification eth = CoreCurrencySpecification.builder().id(CURRENECY_ETH).digit(8).build();
+        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(CURRENECY_LTC).digit(8).build();
+
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(btc));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(usdt));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(eth));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(ltc));
+
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
@@ -671,6 +696,15 @@ public final class ExchangeTestContainer implements AutoCloseable {
         sendBinaryDataCommandSync(new BatchAddSymbolsCommand(symbol), 5000);
     }
 
+    public void addCurrency(int id) {
+        addCurrency(id, 8);
+    }
+
+    public void addCurrency(int id, int digit) {
+        CoreCurrencySpecification coreCurrencySpecification = CoreCurrencySpecification.builder().id(id).digit(digit).build();
+        sendBinaryDataCommandSync(new BatchAddCurrenciesCommand(coreCurrencySpecification), 5000);
+    }
+
     public void addCurrency(final CoreCurrencySpecification currency) {
         sendBinaryDataCommandSync(new BatchAddCurrenciesCommand(currency), 5000);
     }
@@ -845,9 +879,16 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void loadSymbolsUsersAndPrefillOrders(TestDataFutures testDataFutures) {
+        // load currencies
+        Set<Integer> currencies = new HashSet<>();
 
         // load symbols
         final List<CoreSymbolSpecification> coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.join();
+        coreSymbolSpecifications.forEach(symbol -> {
+            currencies.add(symbol.baseCurrency);
+            currencies.add(symbol.quoteCurrency);
+        });
+        currencies.forEach(id -> addCurrency(id));
         log.info("Loading {} symbols...", coreSymbolSpecifications.size());
         try (ExecutionTime ignore = new ExecutionTime(t -> log.debug("Loaded all symbols in {}", t))) {
             addSymbols(coreSymbolSpecifications);
