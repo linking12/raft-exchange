@@ -16,7 +16,7 @@
 package com.binance.raftexchange.client.tests.util;
 
 import com.binance.raftexchange.stubs.SymbolType;
-import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
+import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.math3.distribution.ParetoDistribution;
 import org.apache.commons.math3.distribution.RealDistribution;

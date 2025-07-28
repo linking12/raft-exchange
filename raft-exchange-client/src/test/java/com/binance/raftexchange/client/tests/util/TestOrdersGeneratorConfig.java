@@ -15,7 +15,7 @@
  */
 package com.binance.raftexchange.client.tests.util;
 
-import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
+import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;

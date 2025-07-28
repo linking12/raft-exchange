@@ -21,7 +21,7 @@ import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
 import com.binance.raftexchange.stubs.request.ApiReduceOrder;
-import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
+import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import com.google.common.collect.Iterables;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherEventType;

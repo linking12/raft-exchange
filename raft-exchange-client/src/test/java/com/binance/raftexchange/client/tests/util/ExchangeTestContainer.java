@@ -12,7 +12,7 @@ import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiNop;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
-import com.binance.raftexchange.stubs.request.CoreSymbolSpecification;
+import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.L2MarketData;
