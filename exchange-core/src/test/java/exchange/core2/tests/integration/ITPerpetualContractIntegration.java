@@ -87,6 +87,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -104,6 +106,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -115,6 +119,8 @@ class ITPerpetualContractIntegration {
                     .build();
             container.addSymbol(spec1);
 
+            container.addCurrency(spec0.baseCurrency, 0);
+            container.addCurrency(spec0.quoteCurrency, 0);
             ApiSettleFundingFees cmd1 = ApiSettleFundingFees.builder()
                     .transactionId(1004L)
                     .symbol(symbolId1)
@@ -146,6 +152,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -163,6 +171,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -173,6 +183,9 @@ class ITPerpetualContractIntegration {
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec1);
+
+            container.addCurrency(spec0.baseCurrency, 0);
+            container.addCurrency(spec0.quoteCurrency, 0);
 
             ApiSettlePNL cmd0 = ApiSettlePNL.builder()
                     .settlePrice(10000L)
@@ -687,7 +700,8 @@ class ITPerpetualContractIntegration {
                     .initMarginScaleK(100)
                     .build();
             container.addSymbol(spec);
-
+            container.addCurrency(spec.baseCurrency, 0);
+            container.addCurrency(spec.quoteCurrency, 0);
             // 0. 充钱
             List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
             userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, deposit));

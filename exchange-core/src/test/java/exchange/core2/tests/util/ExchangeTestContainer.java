@@ -207,12 +207,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initDynamicFeeSymbols() {
-        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseCurrency);
-        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.quoteCurrency);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseCurrency, 0);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.quoteCurrency, 0);
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC);
 
-        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.baseCurrency);
-        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.quoteCurrency, 6);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.baseCurrency, 0);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.quoteCurrency, 0);
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
     }
 
@@ -253,6 +253,18 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
         return futuresSymbol;
+    }
+
+    private void initCurrencies() {
+        CoreCurrencySpecification btc = CoreCurrencySpecification.builder().id(CURRENECY_XBT).digit(0).build();
+        CoreCurrencySpecification usdt = CoreCurrencySpecification.builder().id(CURRENECY_USD).digit(0).build();
+        CoreCurrencySpecification eth = CoreCurrencySpecification.builder().id(CURRENECY_ETH).digit(0).build();
+        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(CURRENECY_LTC).digit(0).build();
+
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(btc));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(usdt));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(eth));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(ltc));
     }
 
     public List<CoreSymbolSpecification> initFutureSymbols() {
@@ -323,19 +335,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
 
-        CoreCurrencySpecification btc = CoreCurrencySpecification.builder().id(CURRENECY_XBT).digit(0).build();
-        CoreCurrencySpecification usdt = CoreCurrencySpecification.builder().id(CURRENECY_USD).digit(0).build();
-        CoreCurrencySpecification eth = CoreCurrencySpecification.builder().id(CURRENECY_ETH).digit(0).build();
-        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(CURRENECY_LTC).digit(0).build();
-
-        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(btc));
-        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(usdt));
-        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(eth));
-        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(ltc));
-
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
+
+        initCurrencies();
         return ret;
     }
 
@@ -404,6 +408,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
+
+        initCurrencies();
         return ret;
     }
 
@@ -468,6 +474,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
+
+        initCurrencies();
         return ret;
     }
 
