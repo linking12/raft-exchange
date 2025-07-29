@@ -84,7 +84,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                             spec.getQuoteCurrency(),
                             ob.bidOrdersStream(false).mapToLong(ord -> {
                                 long amount = CoreArithmeticUtils.calculateAmountBidTakerFee(ord.getSize() - ord.getFilled(), ord.getReserveBidPrice(), spec);
-                                amount = CoreArithmeticUtils.symbolToCurrencyScale(amount, spec, quoteCurrencySpec);
+                                amount = CoreArithmeticUtils.sizePriceToCurrencyScale(amount, spec, quoteCurrencySpec);
                                 return amount;
                             }).sum());
                 });
@@ -115,7 +115,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(positionRecord.currency);
                 final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(symbolId, RiskEngine.LastPriceCacheRecord.dummy);
                 long profit = positionRecord.estimateProfit(avgPrice);
-                profit = CoreArithmeticUtils.symbolToCurrencyScale(profit, spec, currencySpec);
+                profit = CoreArithmeticUtils.sizePriceToCurrencyScale(profit, spec, currencySpec);
                 currencyBalance.addToValue(positionRecord.currency, profit);
                 // 新增：统计extraMargin
                 if (positionRecord.extraMargin > 0) {

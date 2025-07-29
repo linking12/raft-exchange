@@ -121,7 +121,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         symbolIds.forEach(symbolId -> userIds.forEach(userId -> createUserWithMoney(userId, symbolId, deposit)));
     }
 
-    public void initMarkPrice(int symbol, int price) {
+    public void initMarkPrice(int symbol, long price) {
         ApiAdjustMarkPrice cmd = ApiAdjustMarkPrice.builder()
                 .transactionId(getRandomTransactionId())
                 .markPrice(price)
