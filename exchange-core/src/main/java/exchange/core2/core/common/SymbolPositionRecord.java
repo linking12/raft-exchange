@@ -205,7 +205,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * Pm = (sign * Pe * Q - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *    = (sign * openPriceSum - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *
-     * @return 返回强平价，-1表示无强平风险
+     * @return 返回强平价，-1表示无可用强平价
      */
     public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
                                          long totalBalance, long totalPnl, long totalMM) {
@@ -221,7 +221,12 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
             long mmOther = totalMM - maintenanceMargin;
             long numerator = sign * openPriceSum - totalBalance - pnlOther + mmOther;
-            long result = numerator / (openVolume * (sign * notional - maintenanceMargin) / notional);
+            // 按公式 result = numerator / (openVolume * (sign * notional - maintenanceMargin) / notional)
+            long diff = sign * notional - maintenanceMargin;
+            if (diff == 0) {
+                return -1; // 无法计算强平价
+            }
+            long result = numerator * notional / (openVolume * diff);
             if (result < 0 || (direction == PositionDirection.LONG && result > priceRecord.markPrice) || (direction == PositionDirection.SHORT && result < priceRecord.markPrice)) {
                 return -1;
             }
