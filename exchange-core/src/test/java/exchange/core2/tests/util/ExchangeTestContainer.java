@@ -716,7 +716,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void addCurrency(int id) {
-        addCurrency(id, 8);
+        addCurrency(id, 0);
     }
 
     public void addCurrency(int id, int digit) {
@@ -898,16 +898,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void loadSymbolsUsersAndPrefillOrders(TestDataFutures testDataFutures) {
-        // load currencies
-        Set<Integer> currencies = new HashSet<>();
-
         // load symbols
         final List<CoreSymbolSpecification> coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.join();
-        coreSymbolSpecifications.forEach(symbol -> {
-            currencies.add(symbol.baseCurrency);
-            currencies.add(symbol.quoteCurrency);
-        });
-        currencies.forEach(id -> addCurrency(id));
+        initPerfCurrencies(coreSymbolSpecifications);
+
         log.info("Loading {} symbols...", coreSymbolSpecifications.size());
         try (ExecutionTime ignore = new ExecutionTime(t -> log.debug("Loaded all symbols in {}", t))) {
             addSymbols(coreSymbolSpecifications);
@@ -936,10 +930,24 @@ public final class ExchangeTestContainer implements AutoCloseable {
         assertTrue(totalBalanceReport().isGlobalBalancesAllZero());
     }
 
+    private void initPerfCurrencies(List<CoreSymbolSpecification> coreSymbolSpecifications) {
+        // load currencies
+        Set<Integer> currencies = new HashSet<>();
+        coreSymbolSpecifications.forEach(symbol -> {
+            currencies.add(symbol.baseCurrency);
+            currencies.add(symbol.quoteCurrency);
+        });
+        currencies.forEach(id -> addCurrency(id));
+    }
+
     public void loadSymbolsUsersAndPrefillOrdersNoLog(TestDataFutures testDataFutures) {
 
         // load symbols
-        addSymbols(testDataFutures.coreSymbolSpecifications.join());
+        final List<CoreSymbolSpecification> coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.join();
+
+        initPerfCurrencies(coreSymbolSpecifications);
+        // load symbols
+        addSymbols(coreSymbolSpecifications);
 
         // init markPrice
         testDataFutures.coreSymbolSpecifications.join().forEach(symbol -> {
