@@ -101,10 +101,11 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.setConsumer(processor);
             container.initOneUser(UID_1);
+            container.addCurrency(SYMBOL_MARGIN);
             container.initFutureSymbol(symbolId, quoteId);
             container.addMoneyToUser(UID_1, SYMBOL_MARGIN, delta);
 
-            verify(handler, times(4)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(5)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).tradeEvent(any());
 
@@ -137,10 +138,13 @@ class ITFutureBasic {
             container.setConsumer(processor);
             container.initOneUser(UID_1);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.addCurrency(SYMBOL_MARGIN);
             container.addMoneyToUser(UID_1, SYMBOL_MARGIN, deposit);
             container.addMoneyToUser(UID_1, SYMBOL_MARGIN, withdraw);
 
-            verify(handler, times(5)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(8)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).tradeEvent(any());
 
@@ -198,6 +202,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createBidWithOrderId(orderId, userId1, size, 10000, symbolId);
@@ -206,7 +212,7 @@ class ITFutureBasic {
             container.cancelOrder(userId1, orderId, symbolId);
             container.sleepSeconds(1);
 
-            verify(handler, times(5)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(7)).commandResult(commandResultCaptor.capture());
             verify(handler, times(1)).reduceEvent(reduceEventCaptor.capture());
             verify(handler, never()).rejectEvent(any());
 
@@ -286,6 +292,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
@@ -293,7 +301,7 @@ class ITFutureBasic {
             container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
             container.createAskWithOrderId(takerOrderId, userId2, size, 10000, symbolId);
 
-            verify(handler, times(7)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
@@ -454,6 +462,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
@@ -461,7 +471,7 @@ class ITFutureBasic {
             container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
             container.createBidWithOrderId(takerOrderId, userId2, size, 10000, symbolId);
 
-            verify(handler, times(7)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
@@ -625,6 +635,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
@@ -632,7 +644,7 @@ class ITFutureBasic {
             container.createBidWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
             container.createAskWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId);
 
-            verify(handler, times(7)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
@@ -796,6 +808,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
@@ -803,7 +817,7 @@ class ITFutureBasic {
             container.createAskWithOrderId(makerOrderId, userId1, size, 10000, symbolId);
             container.createBidWithOrderId(takerOrderId, userId2, txSize, 10000, symbolId);
 
-            verify(handler, times(7)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(1)).tradeEvent(tradeEventCaptor.capture());
@@ -965,6 +979,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
@@ -977,7 +993,7 @@ class ITFutureBasic {
             container.createAskWithOrderId(makerOrderId3, userId1, 1, 10500, symbolId);
             container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId);
 
-            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(11)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(2)).tradeEvent(tradeEventCaptor.capture());
@@ -1047,6 +1063,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
@@ -1059,7 +1077,7 @@ class ITFutureBasic {
             container.createAskWithOrderId(makerOrderId3, userId1, 2, 10500, symbolId);
             container.createBidWithOrderId(takerOrderId4, userId2, 1, 10500, symbolId);
 
-            verify(handler, times(9)).commandResult(commandResultCaptor.capture());
+            verify(handler, times(11)).commandResult(commandResultCaptor.capture());
             verify(handler, never()).reduceEvent(any());
             verify(handler, never()).rejectEvent(any());
             verify(handler, times(2)).tradeEvent(tradeEventCaptor.capture());
@@ -1134,6 +1152,8 @@ class ITFutureBasic {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(UID_1, deposit, quoteId);
             container.createUserWithSpecificMoney(UID_2, MAX_VALUE, quoteId);
@@ -1148,7 +1168,7 @@ class ITFutureBasic {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(symbolId).profit, Is.is((0L)));
                 assertThat(profile.getPositions().get(symbolId).unrealizedProfit, Is.is((-95000L)));
-                assertThat(profile.getPositions().get(symbolId).marginRatioScaleK, Is.is((0L)));
+                assertThat(profile.getPositions().get(symbolId).marginRatioScaleK, Is.is((-1000L)));
             });
 
         } catch (ExecutionException e) {
