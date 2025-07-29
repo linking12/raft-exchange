@@ -15,9 +15,11 @@
  */
 package exchange.core2.core.common.api.reports;
 
+import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
@@ -37,6 +39,12 @@ import java.util.stream.Stream;
 @EqualsAndHashCode
 @ToString
 public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalCurrencyBalanceReportResult> {
+
+    private static CurrencySpecificationProvider currencySpecificationProvider;
+
+    private static void saveCurrencySpecificationProvider(CurrencySpecificationProvider provider) {
+        currencySpecificationProvider = provider;
+    }
 
     public TotalCurrencyBalanceReportQuery(BytesIn bytesIn) {
         // do nothing
@@ -61,14 +69,24 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                 .filter(ob -> ob.getSymbolSpec().type == SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .forEach(ob -> {
                     final CoreSymbolSpecification spec = ob.getSymbolSpec();
+                    final CoreCurrencySpecification baseCurrencySpec = currencySpecificationProvider.getCurrencySpecification(spec.getBaseCurrency());
+                    final CoreCurrencySpecification quoteCurrencySpec = currencySpecificationProvider.getCurrencySpecification(spec.getQuoteCurrency());
 
                     currencyBalance.addToValue(
                             spec.getBaseCurrency(),
-                            ob.askOrdersStream(false).mapToLong(ord -> CoreArithmeticUtils.calculateAmountAsk(ord.getSize() - ord.getFilled())).sum());
+                            ob.askOrdersStream(false).mapToLong(ord -> {
+                                long amount = CoreArithmeticUtils.calculateAmountAsk(ord.getSize() - ord.getFilled());
+                                amount = CoreArithmeticUtils.symbolToCurrencyScale(amount, spec, baseCurrencySpec);
+                                return amount;
+                            }).sum());
 
                     currencyBalance.addToValue(
                             spec.getQuoteCurrency(),
-                            ob.bidOrdersStream(false).mapToLong(ord -> CoreArithmeticUtils.calculateAmountBidTakerFee(ord.getSize() - ord.getFilled(), ord.getReserveBidPrice(), spec)).sum());
+                            ob.bidOrdersStream(false).mapToLong(ord -> {
+                                long amount = CoreArithmeticUtils.calculateAmountBidTakerFee(ord.getSize() - ord.getFilled(), ord.getReserveBidPrice(), spec);
+                                amount = CoreArithmeticUtils.symbolToCurrencyScale(amount, spec, quoteCurrencySpec);
+                                return amount;
+                            }).sum());
                 });
 
         return Optional.of(TotalCurrencyBalanceReportResult.ofOrderBalances(currencyBalance));
@@ -76,6 +94,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
 
     @Override
     public Optional<TotalCurrencyBalanceReportResult> process(final RiskEngine riskEngine) {
+        saveCurrencySpecificationProvider(riskEngine.getCurrencySpecificationProvider());
 
         // prepare fast price cache for profit estimation with some price (exact value is not important, except ask==bid condition)
         final IntObjectHashMap<RiskEngine.LastPriceCacheRecord> dummyLastPriceCache = new IntObjectHashMap<>();
@@ -93,11 +112,16 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
             userProfile.accounts.forEachKeyValue(currencyBalance::addToValue);
             userProfile.positions.forEachKeyValue((symbolId, positionRecord) -> {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbolId);
+                final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(positionRecord.currency);
                 final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(symbolId, RiskEngine.LastPriceCacheRecord.dummy);
-                currencyBalance.addToValue(positionRecord.currency, positionRecord.estimateProfit(avgPrice));
+                long profit = positionRecord.estimateProfit(avgPrice);
+                profit = CoreArithmeticUtils.symbolToCurrencyScale(profit, spec, currencySpec);
+                currencyBalance.addToValue(positionRecord.currency, profit);
                 // 新增：统计extraMargin
                 if (positionRecord.extraMargin > 0) {
-                    extraMargin.addToValue(positionRecord.currency, positionRecord.extraMargin);
+                    long amount = positionRecord.extraMargin;
+                    amount = CoreArithmeticUtils.symbolToCurrencyScale(amount, spec, currencySpec);
+                    extraMargin.addToValue(positionRecord.currency, amount);
                 }
                 if (positionRecord.direction == PositionDirection.LONG) {
                     symbolOpenInterestLong.addToValue(symbolId, positionRecord.openVolume);
