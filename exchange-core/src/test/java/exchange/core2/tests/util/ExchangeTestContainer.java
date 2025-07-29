@@ -238,7 +238,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
                 .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
-                .baseCurrency(1)
+                .baseCurrency(BASE_CURRENCY_ID)
                 .quoteCurrency(quoteId)
                 .baseScaleK(1)
                 .quoteScaleK(1)
@@ -323,10 +323,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
 
-        CoreCurrencySpecification btc = CoreCurrencySpecification.builder().id(CURRENECY_XBT).digit(8).build();
-        CoreCurrencySpecification usdt = CoreCurrencySpecification.builder().id(CURRENECY_USD).digit(8).build();
-        CoreCurrencySpecification eth = CoreCurrencySpecification.builder().id(CURRENECY_ETH).digit(8).build();
-        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(CURRENECY_LTC).digit(8).build();
+        CoreCurrencySpecification btc = CoreCurrencySpecification.builder().id(CURRENECY_XBT).digit(0).build();
+        CoreCurrencySpecification usdt = CoreCurrencySpecification.builder().id(CURRENECY_USD).digit(0).build();
+        CoreCurrencySpecification eth = CoreCurrencySpecification.builder().id(CURRENECY_ETH).digit(0).build();
+        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(CURRENECY_LTC).digit(0).build();
 
         api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(btc));
         api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(usdt));

@@ -24,7 +24,7 @@ import java.util.Set;
 
 public final class TestConstants {
 
-
+    public static final int BASE_CURRENCY_ID = 1;
     public static final int SYMBOL_MARGIN = 5991;
     public static final int SYMBOL_EXCHANGE = 9269;
     public static final int SYMBOL_EXCHANGE_FEE = 9340;
