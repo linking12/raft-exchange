@@ -169,11 +169,21 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public void initBasicSymbols() {
         addCurrency(SYMBOLSPEC_EUR_USD.baseCurrency, 0);
-        addCurrency(SYMBOLSPEC_EUR_USD.quoteCurrency, 0);
+        addCurrency(SYMBOLSPEC_EUR_USD.quoteCurrency, 1);
         addSymbol(TestConstants.SYMBOLSPEC_EUR_USD);
 
         addCurrency(SYMBOLSPEC_ETH_XBT.baseCurrency, 0);
-        addCurrency(SYMBOLSPEC_ETH_XBT.quoteCurrency, 0);
+        addCurrency(SYMBOLSPEC_ETH_XBT.quoteCurrency, 1);
+        addSymbol(TestConstants.SYMBOLSPEC_ETH_XBT);
+    }
+
+    public void initBasicSymbolsWithDigit(int digit) {
+        addCurrency(SYMBOLSPEC_EUR_USD.baseCurrency, digit);
+        addCurrency(SYMBOLSPEC_EUR_USD.quoteCurrency, digit);
+        addSymbol(TestConstants.SYMBOLSPEC_EUR_USD);
+
+        addCurrency(SYMBOLSPEC_ETH_XBT.baseCurrency, digit);
+        addCurrency(SYMBOLSPEC_ETH_XBT.quoteCurrency, digit);
         addSymbol(TestConstants.SYMBOLSPEC_ETH_XBT);
     }
 
