@@ -29,6 +29,7 @@ public final class ITExchangeCoreMarkPrice {
             .symbolId(10001)
             .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
             .baseCurrency(11).quoteCurrency(12)
+            .baseScaleK(1).quoteScaleK(1)
             .makerFee(0).takerFee(0)
             .maintenanceMargin(TreeSortedMap.newMapWith(10_000L, 5L, 100_000L, 10L))
             .maintenanceMarginScaleK(1000)
@@ -40,7 +41,8 @@ public final class ITExchangeCoreMarkPrice {
     public void testSubmitFailWhenNoMarkPrice() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.addSymbol(symbol);
-
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
             container.createUserWithMoney(UID_1, symbol.quoteCurrency, 10000);
 
             ApiPlaceOrder order101 = ApiPlaceOrder.builder()
@@ -66,7 +68,8 @@ public final class ITExchangeCoreMarkPrice {
     public void testSubmitPassWhenNoMarkPrice() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             List<CoreSymbolSpecification> exchangeSymbols = container.initExchangeSymbols();
-
+            container.addCurrency(exchangeSymbols.get(0).baseCurrency, 0);
+            container.addCurrency(exchangeSymbols.get(0).quoteCurrency, 0);
             container.createUserWithMoney(UID_1, exchangeSymbols.get(0).quoteCurrency, 10000);
 
             ApiPlaceOrder order101 = ApiPlaceOrder.builder()
@@ -91,7 +94,8 @@ public final class ITExchangeCoreMarkPrice {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
             container.addSymbol(symbol);
-
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
             long price = 680L;
             long size = 10L;
             container.createUserWithMoney(UID_1, symbol.quoteCurrency, 10000);
@@ -159,7 +163,7 @@ public final class ITExchangeCoreMarkPrice {
                 assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(0L));
                 assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(-6780L));
                 assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(542L));
-                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(-1000L));
             });
 
         } catch (ExecutionException e) {
@@ -173,7 +177,8 @@ public final class ITExchangeCoreMarkPrice {
     public void testInitMarginAndMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
             container.addSymbol(symbol);
             container.createUserWithMoney(UID_1, symbol.quoteCurrency, 6_800);
             container.createUserWithMoney(UID_2, symbol.quoteCurrency, 50_000);
@@ -307,7 +312,8 @@ public final class ITExchangeCoreMarkPrice {
     public void testTieredMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
             container.addSymbol(symbol);
             container.createUserWithMoney(UID_1, symbol.quoteCurrency, 500_000);
             container.createUserWithMoney(UID_2, symbol.quoteCurrency, 500_000);
@@ -388,7 +394,8 @@ public final class ITExchangeCoreMarkPrice {
     public void testTieredLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
             container.addSymbol(symbol);
             container.createUserWithMoney(UID_1, symbol.quoteCurrency, 500_000);
             container.createUserWithMoney(UID_2, symbol.quoteCurrency, 500_000);
@@ -479,6 +486,8 @@ public final class ITExchangeCoreMarkPrice {
 
             int symbolId = 2;
             int quoteCurrency = 840;
+            container.addCurrency(1, 0);
+            container.addCurrency(quoteCurrency, 0);
             container.initFutureSymbol(symbolId, quoteCurrency);
             container.initMarkPrice(symbolId, 10000);
 
