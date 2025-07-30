@@ -57,6 +57,8 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 6);
             container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
@@ -150,6 +152,8 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 6);
             container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(50, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 250_000L + takerFeeForPlaceOrder101;
@@ -244,6 +248,8 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 6);
             container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
@@ -314,7 +320,11 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.baseCurrency);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.quoteCurrency);
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.baseCurrency);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.quoteCurrency);
             container.initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId, 10000);
             container.initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.symbolId, 10000);
             long deposit = 26155L; // 价格够单独开order100或order101, 但不够一起开

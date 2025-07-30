@@ -202,6 +202,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         addSymbol(TestConstants.SYMBOLSPECFEE_USD_JPY);
     }
 
+    public void initFeeSymbol_Xbt_Ltc() {
+        addSymbol(TestConstants.SYMBOLSPECFEE_XBT_LTC);
+    }
+
     public void initFeeSymbolsMarkPrice() {
         initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
     }
@@ -715,13 +719,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
         sendBinaryDataCommandSync(new BatchAddSymbolsCommand(symbol), 5000);
     }
 
-    public void addCurrency(int id) {
-        addCurrency(id, 0);
+    public CoreCurrencySpecification addCurrency(int id) {
+        return addCurrency(id, 0);
     }
 
-    public void addCurrency(int id, int digit) {
+    public CoreCurrencySpecification addCurrency(int id, int digit) {
         CoreCurrencySpecification coreCurrencySpecification = CoreCurrencySpecification.builder().id(id).digit(digit).build();
         sendBinaryDataCommandSync(new BatchAddCurrenciesCommand(coreCurrencySpecification), 5000);
+        return coreCurrencySpecification;
     }
 
     public void addCurrency(final CoreCurrencySpecification currency) {
