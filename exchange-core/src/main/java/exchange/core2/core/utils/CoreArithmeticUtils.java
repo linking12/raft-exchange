@@ -173,7 +173,7 @@ public final class CoreArithmeticUtils {
 
     /**
      * 币对交易单位(symbol.base或quote) → 币种记账单位(currency)
-     * 返还补充保证金用到
+     * 返还补充保证金，现货加减base用到
      */
     public static long symbolToCurrencyScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
         if (currency.id == spec.baseCurrency) {

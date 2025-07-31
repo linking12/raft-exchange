@@ -740,6 +740,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         final long size = cmd.size;
         long orderHoldAmount;
+        CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
         if (cmd.action == OrderAction.BID) {
 
             if (cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET) {
@@ -761,7 +762,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 orderHoldAmount = CoreArithmeticUtils.calculateAmountBidTakerFee(size, cmd.reserveBidPrice, spec);
                 if (logDebug) CoreArithmeticUtils.logAmountBidTakerFee(orderHoldAmount, size, cmd.reserveBidPrice, spec);
             }
-
+            orderHoldAmount = CoreArithmeticUtils.sizePriceToCurrencyScale(orderHoldAmount, spec, currencySpec);
         } else {
 
             if (CoreArithmeticUtils.isAskPriceTooLow(cmd.price, spec)) {
@@ -772,10 +773,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
             orderHoldAmount = CoreArithmeticUtils.calculateAmountAsk(size);
             if (logDebug) log.debug("hold sell {}", orderHoldAmount);
+            orderHoldAmount = CoreArithmeticUtils.symbolToCurrencyScale(orderHoldAmount, spec, currencySpec);
         }
 
-        CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
-        orderHoldAmount = CoreArithmeticUtils.sizePriceToCurrencyScale(orderHoldAmount, spec, currencySpec);
         freeFuturesMargin = CoreArithmeticUtils.sizePriceToCurrencyScale(freeFuturesMargin, spec, currencySpec);
 
         if (logDebug) {
@@ -1143,7 +1143,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (takerSell) {
             CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.baseCurrency);
             long refund = CoreArithmeticUtils.calculateAmountAsk(ev.size);
-            refund = CoreArithmeticUtils.sizePriceToCurrencyScale(refund, spec, currencySpec);
+            refund = CoreArithmeticUtils.symbolToCurrencyScale(refund, spec, currencySpec);
             balance = taker.accounts.addToValue(spec.baseCurrency, refund);
         } else {
             long refund;
@@ -1212,7 +1212,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // 支付 quoteCurrency
                 long quoteCurrencyBalance = maker.accounts.addToValue(quoteCurrency, amountDiffToReleaseInQuoteCurrency);
                 long gainedAmountInBaseCurrency = CoreArithmeticUtils.calculateAmountAsk(size);
-                gainedAmountInBaseCurrency = CoreArithmeticUtils.sizePriceToCurrencyScale(gainedAmountInBaseCurrency, spec, baseCurrencySpec);
+                gainedAmountInBaseCurrency = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, spec, baseCurrencySpec);
                 // 接收 baseCurrency
                 long baseCurrencyBalance = maker.accounts.addToValue(spec.baseCurrency, gainedAmountInBaseCurrency);
                 /**
@@ -1346,7 +1346,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 this.eventsHelper.sendUnLockEvent(cmd, spec.symbolId, quoteCurrency, quoteCurrencyBalance - lockedMarginQuote, lockedMarginQuote);
             }
             // 接收 baseCurrency
-            long toBeAdded = CoreArithmeticUtils.sizePriceToCurrencyScale(takerSizeForThisHandler, spec, baseCurrencySpec);
+            long toBeAdded = CoreArithmeticUtils.symbolToCurrencyScale(takerSizeForThisHandler, spec, baseCurrencySpec);
             long baseCurrencyBalance = taker.accounts.addToValue(spec.baseCurrency, toBeAdded);
             /**
              * @modify 资金转移

@@ -178,12 +178,18 @@ public final class ITExchangeCorePriceScale {
             double tradeAmountFloat = tradeAmountCurrency * 1.0 / USDT.getCurrencyScaleK();
             assertThat(tradeAmountFloat, is(37.25615));
 
+            // 收入 0.05 BNB
+            long bnbBalance= CoreArithmeticUtils.symbolToCurrencyScale(size, BNB_USDT_SPOT, BNB);
+            // 再还原成浮点校验：
+            double bnbBalanceFloat = bnbBalance * 1.0 / BNB.getCurrencyScaleK();
+            assertThat(bnbBalanceFloat, is(0.05));
+
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getAccounts().get(USDT_ID), is(usdtDeposit - tradeAmountCurrency));
-                assertThat(report.getAccounts().get(BNB_ID),  is(size));
+                assertThat(report.getAccounts().get(BNB_ID),  is(bnbBalance));
             });
             container.validateUserState(UID_2, report -> {
-                assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit - size));
+                assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit - bnbBalance));
                 assertThat(report.getAccounts().get(USDT_ID), is(tradeAmountCurrency));
             });
 
