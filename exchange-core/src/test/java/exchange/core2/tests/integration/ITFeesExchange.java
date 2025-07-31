@@ -312,7 +312,7 @@ public abstract class ITFeesExchange {
             // verify seller taker balance
             long finalTakerFee = takerFee;
             container.validateUserState(UID_2, profile -> {
-//                assertThat(profile.getAccounts().get(CURRENECY_LTC), is( 1000L * symbol.baseScaleK * 11_500L * symbol.quoteScaleK - finalTakerFee));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is( 1000L * symbol.baseScaleK * 11_500L * symbol.quoteScaleK - finalTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - xbtAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
