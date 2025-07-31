@@ -15,6 +15,7 @@ package exchange.core2.core.utils;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.common.TenPowers;
 import exchange.core2.core.processors.RiskEngine;
 import lombok.extern.slf4j.Slf4j;
 
@@ -198,7 +199,14 @@ public final class CoreArithmeticUtils {
     }
 
     private static long convertScale(long amount, long fromScale, long toScale) {
-        return amount * toScale / fromScale;
+        if (fromScale == toScale) {
+            return amount;
+        }
+        int diff = TenPowers.log10(fromScale) - TenPowers.log10(toScale);
+        if (diff > 0) { // 缩小
+            return amount / TenPowers.pow10(diff);
+        } else { // 放大
+            return amount * TenPowers.pow10(-diff);
+        }
     }
-
 }

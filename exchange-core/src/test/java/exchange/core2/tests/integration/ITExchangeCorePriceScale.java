@@ -1,12 +1,12 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
-import exchange.core2.core.common.CoreCurrencySpecification.TenPowers;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.TenPowers;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
