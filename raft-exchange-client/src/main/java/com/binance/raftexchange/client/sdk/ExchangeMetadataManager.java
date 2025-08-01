@@ -57,11 +57,11 @@ public class ExchangeMetadataManager {
     }
 
     public CoreCurrencySpecification getCurrencySpec(int currencyId) {
-        CoreCurrencySpecification cur = currencyCache.get(currencyId);
-        if (cur == null) {
+        CoreCurrencySpecification currencySpec = currencyCache.get(currencyId);
+        if (currencySpec == null) {
             throw new IllegalArgumentException("unknow currency:" + currencyId);
         }
-        return cur;
+        return currencySpec;
     }
 
     public boolean symbolExists(int symbolId) {
@@ -75,6 +75,5 @@ public class ExchangeMetadataManager {
     public void shutdown() {
         scheduler.shutdownNow();
     }
-
 
 }
