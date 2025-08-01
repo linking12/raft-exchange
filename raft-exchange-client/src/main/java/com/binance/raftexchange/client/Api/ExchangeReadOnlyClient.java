@@ -7,6 +7,8 @@ import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.report.StateHashReportQuery;
 import com.binance.raftexchange.stubs.report.StateHashReportResult;
+import com.binance.raftexchange.stubs.report.SymbolCurrencyReportQuery;
+import com.binance.raftexchange.stubs.report.SymbolCurrencyReportResult;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
@@ -59,6 +61,11 @@ class ExchangeReadOnlyClient implements AutoCloseable {
     public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId, TotalCurrencyBalanceReportQuery query) {
         return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setTotalCurrencyBalance(query).build())
             .thenApply(ReportResult::getTotalCurrencyBalance);
+    }
+
+    public CompletableFuture<SymbolCurrencyReportResult> symbolCurrencyReport(int transferId, SymbolCurrencyReportQuery query) {
+        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setSymbolCurrencyReport(query).build())
+            .thenApply(ReportResult::getSymbolCurrencyReport);
     }
 
     private CompletableFuture<ReportResult> rawReporter(ReportQuery request) {
