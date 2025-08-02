@@ -14,6 +14,8 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import com.binance.raftexchange.stubs.CoreCurrencySpecification;
+import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import com.binance.raftexchange.stubs.report.HashCodeEntry;
 import com.binance.raftexchange.stubs.report.Order;
 import com.binance.raftexchange.stubs.report.OrderList;
@@ -35,6 +37,7 @@ import com.google.protobuf.ProtocolMessageEnum;
 
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.api.reports.StateHashReportResult;
+import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.OrderCommand;
 import io.grpc.Drainable;
@@ -211,13 +214,24 @@ public class SerializeHelper {
                     .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())
                     .setMarginModeValue(p.getMarginMode().ordinal()).setExtraMargin(p.getExtraMargin())
                     .setUnrealizedProfit(p.getUnrealizedProfit()).setLiquidationPrice(p.getLiquidationPrice())
-                    .setMarginRatioScaleK(p.getMarginRatioScaleK()).build();
+                    .setMarginRatioScaleK(p.getMarginRatioScaleK()).setMarkPrice(p.getMarkPrice()).build();
 
     private static final Function<List<exchange.core2.core.common.Order>, OrderList> ordersMapping = l ->
             OrderList.newBuilder().addAllOrders(l.stream().map(o -> Order.newBuilder()
                     .setOrderId(o.getOrderId()).setPrice(o.getPrice()).setSize(o.getSize()).setFilled(o.getFilled())
                     .setReserveBidPrice(o.getReserveBidPrice()).setActionValue(o.getAction().getCode())
                     .setUid(o.getUid()).setTimestamp(o.getTimestamp()).build()).collect(Collectors.toList())).build();
+
+    private static final Function<exchange.core2.core.common.CoreSymbolSpecification, CoreSymbolSpecification> symbolSpecMapping = s ->
+            CoreSymbolSpecification.newBuilder().setSymbolId(s.getSymbolId()).setTypeValue(s.getType().ordinal())
+                    .setBaseCurrency(s.getBaseCurrency()).setQuoteCurrency(s.getQuoteCurrency()).setBaseScaleK(s.getBaseScaleK())
+                    .setQuoteScaleK(s.getQuoteScaleK()).setTakerFee(s.getTakerFee()).setMakerFee(s.getMakerFee())
+                    .setFeeScaleK(s.getFeeScaleK()).setInitMargin(s.getInitMargin()).setInitMarginScaleK(s.getInitMarginScaleK())
+                    .putAllMaintenanceMargin(s.getMaintenanceMargin()).setMaintenanceMarginScaleK(s.getMaintenanceMarginScaleK())
+                    .putAllMaxLeverage(s.getMaxLeverage()).build();
+
+    private static final Function<exchange.core2.core.common.CoreCurrencySpecification, CoreCurrencySpecification> currencySpecMapping = c ->
+            CoreCurrencySpecification.newBuilder().setId(c.getId()).setName(c.getName()).setDigit(c.getDigit()).build();
 
     public static com.binance.raftexchange.stubs.report.ReportResult serializeToPb(SingleUserReportResult singleUserReportResult) {
 
@@ -274,6 +288,16 @@ public class SerializeHelper {
                 .build();
         return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
                 .setTotalCurrencyBalance(result)
+                .build();
+    }
+
+    public static com.binance.raftexchange.stubs.report.ReportResult serializeToPb(SymbolCurrencyReportResult symbolCurrencyReportResult) {
+        com.binance.raftexchange.stubs.report.SymbolCurrencyReportResult result = com.binance.raftexchange.stubs.report.SymbolCurrencyReportResult.newBuilder()
+                .putAllSymbolSpecs(convertToHashMap(symbolCurrencyReportResult.getSymbolSpecs(), symbolSpecMapping))
+                .putAllCurrencySpecs(convertToHashMap(symbolCurrencyReportResult.getCurrencySpecs(), currencySpecMapping))
+                .build();
+        return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
+                .setSymbolCurrencyReport(result)
                 .build();
     }
 

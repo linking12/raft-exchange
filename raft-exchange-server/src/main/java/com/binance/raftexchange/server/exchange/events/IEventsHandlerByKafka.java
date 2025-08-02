@@ -98,7 +98,8 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         if (!isLeader.get()) {
             return;
         }
-        TradeEventPB.Builder builder = builderPool.get(TradeEventPB.Builder.class).setSymbol(tradeEvent.getSymbol()).setTotalVolume(tradeEvent.getTotalVolume())
+        TradeEventPB.Builder builder = builderPool.get(TradeEventPB.Builder.class).setSymbol(tradeEvent.getSymbol())
+            .setBaseScaleK(tradeEvent.getBaseScaleK()).setQuoteScaleK(tradeEvent.getQuoteScaleK()).setTotalVolume(tradeEvent.getTotalVolume())
             .setTakerOrderId(tradeEvent.getTakerOrderId()).setTakerUid(tradeEvent.getTakerUid())
             .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode())).setTimestamp(tradeEvent.getTimestamp());
         if (tradeEvent.getTrades() != null) {
@@ -122,6 +123,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             return;
         }
         ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol())
+            .setBaseScaleK(reduceEvent.getBaseScaleK()).setQuoteScaleK(reduceEvent.getQuoteScaleK())
             .setReducedVolume(reduceEvent.getReducedVolume()).setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice())
             .setOrderId(reduceEvent.getOrderId()).setUid(reduceEvent.getUid()).setTimestamp(reduceEvent.getTimestamp()).build();
         if (LOG.isDebugEnabled()) {
@@ -164,14 +166,15 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         }
         FundsEventPB pbObject =
             builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
-                .setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
-                .setSymbol(fundsEvent.getSymbol()).setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setOpenVolume(fundsEvent.getOpenVolume())
+                .setCurrencyScakeK(fundsEvent.getCurrencyScaleK()).setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
+                .setSymbol(fundsEvent.getSymbol()).setBaseScaleK(fundsEvent.getBaseScaleK()).setQuoteScaleK(fundsEvent.getQuoteScaleK())
+                .setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setOpenVolume(fundsEvent.getOpenVolume())
                 .setOpenInitMarginSum(fundsEvent.getOpenInitMarginSum()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setProfit(fundsEvent.getProfit())
                 .setPendingSellSize(fundsEvent.getPendingSellSize()).setPendingBuySize(fundsEvent.getPendingBuySize())
                 .setPendingSellAvgPrice(fundsEvent.getPendingSellAvgPrice()).setPendingBuyAvgPrice(fundsEvent.getPendingBuyAvgPrice())
                 .setLeverage(fundsEvent.getLeverage()).setMarginModeValue(fundsEvent.getMarginMode().ordinal()).setExtraMargin(fundsEvent.getExtraMargin())
                 .setUnrealizedProfit(fundsEvent.getUnrealizedProfit()).setLiquidationPrice(fundsEvent.getLiquidationPrice())
-                .setMarginRatioScaleK(fundsEvent.getMarginRatioScaleK()).setTradeSize(fundsEvent.getTradeSize())
+                .setMarginRatioScaleK(fundsEvent.getMarginRatioScaleK()).setMarkPrice(fundsEvent.getMarkPrice()).setTradeSize(fundsEvent.getTradeSize())
                 .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();

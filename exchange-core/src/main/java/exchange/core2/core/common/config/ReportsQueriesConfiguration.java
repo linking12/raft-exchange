@@ -2,6 +2,7 @@ package exchange.core2.core.common.config;
 
 
 import exchange.core2.core.common.api.binary.BatchAddAccountsCommand;
+import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryCommandType;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
@@ -49,11 +50,13 @@ public final class ReportsQueriesConfiguration {
         // binary commands (not extendable)
         addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_ACCOUNTS, BatchAddAccountsCommand.class);
         addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_SYMBOLS, BatchAddSymbolsCommand.class);
+        addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_CURRENCIES, BatchAddCurrenciesCommand.class);
 
         // predefined queries (extendable)
         addQueryClass(reportConstructors, ReportType.STATE_HASH.getCode(), StateHashReportQuery.class);
         addQueryClass(reportConstructors, ReportType.SINGLE_USER_REPORT.getCode(), SingleUserReportQuery.class);
         addQueryClass(reportConstructors, ReportType.TOTAL_CURRENCY_BALANCE.getCode(), TotalCurrencyBalanceReportQuery.class);
+        addQueryClass(reportConstructors, ReportType.SYMBOL_CURRENCY_REPORT.getCode(), SymbolCurrencyReportQuery.class);
 
         customReports.forEach((code, customReport) -> addQueryClass(reportConstructors, code, customReport));
 

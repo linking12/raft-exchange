@@ -97,7 +97,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
             // TODO IOC_BUDGET and FOK support
             default:
                 log.warn("Unsupported order type: {}", cmd);
-                eventsHelper.attachRejectEvent(cmd, cmd.size);
+                eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
         }
     }
 
@@ -117,7 +117,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         long newOrderId = cmd.orderId;
         if (idMap.containsKey(newOrderId)) {
             // duplicate order id - can match, but can not place
-            eventsHelper.attachRejectEvent(cmd, cmd.size - filledSize);
+            eventsHelper.attachRejectEvent(cmd, cmd.size - filledSize, symbolSpec);
             log.warn("duplicate order id: {}", cmd);
             return;
         }
@@ -134,7 +134,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
                 cmd.timestamp);
 
         getBucketsByAction(action)
-                .computeIfAbsent(price, OrdersBucketNaive::new)
+                .computeIfAbsent(price, p -> new OrdersBucketNaive(symbolSpec, p))
                 .put(orderRecord);
 
         idMap.put(newOrderId, orderRecord);
@@ -148,7 +148,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
         if (rejectedSize != 0) {
             // was not matched completely - send reject for not-completed IoC order
-            eventsHelper.attachRejectEvent(cmd, rejectedSize);
+            eventsHelper.attachRejectEvent(cmd, rejectedSize, symbolSpec);
         }
     }
 
@@ -166,7 +166,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         if (budget.isPresent() && isBudgetLimitSatisfied(cmd.action, budget.get(), cmd.price)) {
             tryMatchInstantly(cmd, subtreeForMatching, 0, cmd);
         } else {
-            eventsHelper.attachRejectEvent(cmd, size);
+            eventsHelper.attachRejectEvent(cmd, size, symbolSpec);
         }
     }
 
@@ -313,7 +313,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         }
 
         // send reduce event
-        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, order.getSize() - order.getFilled(), true);
+        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, order.getSize() - order.getFilled(), true, symbolSpec);
 
         // fill action fields (for events handling)
         cmd.action = order.getAction();
@@ -366,7 +366,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         }
 
         // send reduce event
-        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, reduceBy, canRemove);
+        cmd.matcherEvent = eventsHelper.sendReduceEvent(order, reduceBy, canRemove, symbolSpec);
 
         // fill action fields (for events handling)
         cmd.action = order.getAction();
@@ -419,7 +419,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
         // if not filled completely - put it into corresponding bucket
         final OrdersBucketNaive anotherBucket = buckets.computeIfAbsent(newPrice, p -> {
-            OrdersBucketNaive b = new OrdersBucketNaive(p);
+            OrdersBucketNaive b = new OrdersBucketNaive(symbolSpec, p);
             return b;
         });
         anotherBucket.put(order);

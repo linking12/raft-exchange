@@ -50,6 +50,9 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
                 case TOTAL_CURRENCY_BALANCE:
                     return SyncTradeMiscApiController.getTotalCurrencyBalance(request.getTotalCurrencyBalance(), transferId)
                         .thenApply(SerializeHelper::serializeToPb);
+                case SYMBOL_CURRENCY_REPORT:
+                    return SyncTradeMiscApiController.getSymbolCurrencyReport(request.getSymbolCurrencyReport(), transferId)
+                            .thenApply(SerializeHelper::serializeToPb);
                 default:
                     return ThrowableFunction.failureFuture("Unsupported ReportQuery: " + queryTypeCase);
             }

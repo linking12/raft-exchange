@@ -20,6 +20,7 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
+import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.*;
@@ -120,7 +121,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         symbolIds.forEach(symbolId -> userIds.forEach(userId -> createUserWithMoney(userId, symbolId, deposit)));
     }
 
-    public void initMarkPrice(int symbol, int price) {
+    public void initMarkPrice(int symbol, long price) {
         ApiAdjustMarkPrice cmd = ApiAdjustMarkPrice.builder()
                 .transactionId(getRandomTransactionId())
                 .markPrice(price)
@@ -167,8 +168,22 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initBasicSymbols() {
-
+        addCurrency(SYMBOLSPEC_EUR_USD.baseCurrency, 0);
+        addCurrency(SYMBOLSPEC_EUR_USD.quoteCurrency, 1);
         addSymbol(TestConstants.SYMBOLSPEC_EUR_USD);
+
+        addCurrency(SYMBOLSPEC_ETH_XBT.baseCurrency, 0);
+        addCurrency(SYMBOLSPEC_ETH_XBT.quoteCurrency, 1);
+        addSymbol(TestConstants.SYMBOLSPEC_ETH_XBT);
+    }
+
+    public void initBasicSymbolsWithDigit(int digit) {
+        addCurrency(SYMBOLSPEC_EUR_USD.baseCurrency, digit);
+        addCurrency(SYMBOLSPEC_EUR_USD.quoteCurrency, digit);
+        addSymbol(TestConstants.SYMBOLSPEC_EUR_USD);
+
+        addCurrency(SYMBOLSPEC_ETH_XBT.baseCurrency, digit);
+        addCurrency(SYMBOLSPEC_ETH_XBT.quoteCurrency, digit);
         addSymbol(TestConstants.SYMBOLSPEC_ETH_XBT);
     }
 
@@ -178,8 +193,17 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initFeeSymbols() {
+        addCurrency(SYMBOLSPECFEE_XBT_LTC.baseCurrency, 0);
+        addCurrency(SYMBOLSPECFEE_XBT_LTC.quoteCurrency, 0);
         addSymbol(TestConstants.SYMBOLSPECFEE_XBT_LTC);
+
+        addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 0);
+        addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 0);
         addSymbol(TestConstants.SYMBOLSPECFEE_USD_JPY);
+    }
+
+    public void initFeeSymbol_Xbt_Ltc() {
+        addSymbol(TestConstants.SYMBOLSPECFEE_XBT_LTC);
     }
 
     public void initFeeSymbolsMarkPrice() {
@@ -187,7 +211,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initDynamicFeeSymbols() {
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.baseCurrency, 0);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC.quoteCurrency, 0);
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC);
+
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.baseCurrency, 0);
+        addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.quoteCurrency, 0);
         addSymbol(TestConstants.SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
     }
 
@@ -213,7 +242,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         CoreSymbolSpecification futuresSymbol = CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
                 .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
-                .baseCurrency(1)
+                .baseCurrency(BASE_CURRENCY_ID)
                 .quoteCurrency(quoteId)
                 .baseScaleK(1)
                 .quoteScaleK(1)
@@ -228,6 +257,18 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol));
         return futuresSymbol;
+    }
+
+    private void initCurrencies() {
+        CoreCurrencySpecification btc = CoreCurrencySpecification.builder().id(CURRENECY_XBT).digit(0).build();
+        CoreCurrencySpecification usdt = CoreCurrencySpecification.builder().id(CURRENECY_USD).digit(0).build();
+        CoreCurrencySpecification eth = CoreCurrencySpecification.builder().id(CURRENECY_ETH).digit(0).build();
+        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(CURRENECY_LTC).digit(0).build();
+
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(btc));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(usdt));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(eth));
+        api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(ltc));
     }
 
     public List<CoreSymbolSpecification> initFutureSymbols() {
@@ -297,9 +338,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol2));
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol3));
+
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
+
+        initCurrencies();
         return ret;
     }
 
@@ -368,6 +412,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
+
+        initCurrencies();
         return ret;
     }
 
@@ -432,6 +478,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         ret.add(futuresSymbol1);
         ret.add(futuresSymbol2);
         ret.add(futuresSymbol3);
+
+        initCurrencies();
         return ret;
     }
 
@@ -636,6 +684,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 //                .maxLeverage(50)
 //                .maintenanceMargin(50)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                .maintenanceMarginScaleK(1000)
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 10L, 5000L, 20L, 10000L, 50L))
                 .build();
 
@@ -666,9 +715,22 @@ public final class ExchangeTestContainer implements AutoCloseable {
         api.submitCommandsSync(cmds);
     }
 
-
     public void addSymbol(final CoreSymbolSpecification symbol) {
         sendBinaryDataCommandSync(new BatchAddSymbolsCommand(symbol), 5000);
+    }
+
+    public CoreCurrencySpecification addCurrency(int id) {
+        return addCurrency(id, 0);
+    }
+
+    public CoreCurrencySpecification addCurrency(int id, int digit) {
+        CoreCurrencySpecification coreCurrencySpecification = CoreCurrencySpecification.builder().id(id).digit(digit).build();
+        sendBinaryDataCommandSync(new BatchAddCurrenciesCommand(coreCurrencySpecification), 5000);
+        return coreCurrencySpecification;
+    }
+
+    public void addCurrency(final CoreCurrencySpecification currency) {
+        sendBinaryDataCommandSync(new BatchAddCurrenciesCommand(currency), 5000);
     }
 
     public void addSymbols(final List<CoreSymbolSpecification> symbols) {
@@ -768,6 +830,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return api.processReport(new SingleUserReportQuery(clientId), getRandomTransferId()).get();
     }
 
+    public SymbolCurrencyReportResult getSymbolCurrencyReport() throws InterruptedException, ExecutionException {
+        return api.processReport(new SymbolCurrencyReportQuery(), getRandomTransferId()).get();
+    }
+
     public TotalCurrencyBalanceReportResult totalBalanceReport() {
         final TotalCurrencyBalanceReportResult res = api.processReport(new TotalCurrencyBalanceReportQuery(), getRandomTransferId()).join();
         final IntLongHashMap openInterestLong = res.getOpenInterestLong();
@@ -837,9 +903,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void loadSymbolsUsersAndPrefillOrders(TestDataFutures testDataFutures) {
-
         // load symbols
         final List<CoreSymbolSpecification> coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.join();
+        initPerfCurrencies(coreSymbolSpecifications);
+
         log.info("Loading {} symbols...", coreSymbolSpecifications.size());
         try (ExecutionTime ignore = new ExecutionTime(t -> log.debug("Loaded all symbols in {}", t))) {
             addSymbols(coreSymbolSpecifications);
@@ -868,10 +935,24 @@ public final class ExchangeTestContainer implements AutoCloseable {
         assertTrue(totalBalanceReport().isGlobalBalancesAllZero());
     }
 
+    private void initPerfCurrencies(List<CoreSymbolSpecification> coreSymbolSpecifications) {
+        // load currencies
+        Set<Integer> currencies = new HashSet<>();
+        coreSymbolSpecifications.forEach(symbol -> {
+            currencies.add(symbol.baseCurrency);
+            currencies.add(symbol.quoteCurrency);
+        });
+        currencies.forEach(id -> addCurrency(id));
+    }
+
     public void loadSymbolsUsersAndPrefillOrdersNoLog(TestDataFutures testDataFutures) {
 
         // load symbols
-        addSymbols(testDataFutures.coreSymbolSpecifications.join());
+        final List<CoreSymbolSpecification> coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.join();
+
+        initPerfCurrencies(coreSymbolSpecifications);
+        // load symbols
+        addSymbols(coreSymbolSpecifications);
 
         // init markPrice
         testDataFutures.coreSymbolSpecifications.join().forEach(symbol -> {

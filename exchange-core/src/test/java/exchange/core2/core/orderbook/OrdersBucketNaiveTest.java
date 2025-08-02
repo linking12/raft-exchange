@@ -16,8 +16,10 @@
 package exchange.core2.core.orderbook;
 
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.Order;
+import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,10 +47,13 @@ public final class OrdersBucketNaiveTest {
 
     private OrdersBucketNaive bucket;
 
+    private final CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+            .symbolId(1).type(SymbolType.CURRENCY_EXCHANGE_PAIR).build();
+
     @BeforeEach
     public void beforeGlobal() {
 
-        bucket = new OrdersBucketNaive(PRICE);
+        bucket = new OrdersBucketNaive(spec, PRICE);
 
         bucket.put(Order.builder().orderId(1).uid(UID_1).size(100).build());
         assertThat(bucket.getNumOrders(), is(1));

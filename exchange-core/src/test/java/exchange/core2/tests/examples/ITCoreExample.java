@@ -7,6 +7,7 @@ import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
+import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportQuery;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -77,6 +78,15 @@ class ITCoreExample {
         final int symbolXbtLtc = 241;
 
         Future<CommandResultCode> future;
+
+        // init currency
+        CoreCurrencySpecification xbt = CoreCurrencySpecification.builder().id(currencyCodeXbt).digit(8).build();
+        future = api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(xbt));
+        System.out.println("BatchAddCurrencyCommand xbt result: " + future.get());
+
+        CoreCurrencySpecification ltc = CoreCurrencySpecification.builder().id(currencyCodeLtc).digit(8).build();
+        future = api.submitBinaryDataAsync(new BatchAddCurrenciesCommand(ltc));
+        System.out.println("BatchAddCurrencyCommand ltc result: " + future.get());
 
         // create symbol specification and publish it
         CoreSymbolSpecification symbolSpecXbtLtc = CoreSymbolSpecification.builder()

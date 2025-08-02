@@ -15,8 +15,6 @@
  */
 package exchange.core2.core.processors;
 
-import java.util.stream.Stream;
-
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 import exchange.core2.core.common.StateHash;
@@ -53,10 +51,6 @@ public final class UserProfileService implements WriteBytesMarshallable, StateHa
         this.userProfiles = SerializationUtils.readLongHashMap(bytes, UserProfile::new);
     }
 
-    public Stream<UserProfile> getAllUserProfiles() {
-        return userProfiles.values().stream();
-    }
-    
     /**
      * Find user profile
      *

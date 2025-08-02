@@ -205,7 +205,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * Pm = (sign * Pe * Q - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *    = (sign * openPriceSum - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *
-     * @return 返回强平价，-1表示无强平风险
+     * @return 返回强平价，-1表示无可用强平价
      */
     public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
                                          long totalBalance, long totalPnl, long totalMM) {
@@ -215,13 +215,18 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         if (marginMode == MarginMode.ISOLATED) {
-            return (long) ((direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) * 1.0 / openVolume);
+            return (direction.getMultiplier() * (maintenanceMargin - openInitMarginSum - extraMargin) + openPriceSum) / openVolume;
         } else {
             int sign = direction.getMultiplier();
             long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
             long mmOther = totalMM - maintenanceMargin;
             long numerator = sign * openPriceSum - totalBalance - pnlOther + mmOther;
-            long result = (long) (numerator / (openVolume * (sign * 1 - maintenanceMargin * 1.0 / notional)));
+            // 按公式 result = numerator / (openVolume * (sign * notional - maintenanceMargin) / notional)
+            long diff = sign * notional - maintenanceMargin;
+            if (diff == 0) {
+                return -1; // 无法计算强平价
+            }
+            long result = numerator * notional / (openVolume * diff);
             if (result < 0 || (direction == PositionDirection.LONG && result > priceRecord.markPrice) || (direction == PositionDirection.SHORT && result < priceRecord.markPrice)) {
                 return -1;
             }
@@ -234,9 +239,17 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * 注意结果乘以了maintenanceMarginScaleK进行缩放
      */
     public long estimateMarginRatioScaleK(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord, long totalMargin) {
+        if (openVolume == 0) {
+            return 0; // 无资金，不算保证金比率
+        }
+        if (totalMargin <= 0) {
+            // 只要totalMargin <= maintenanceMargin就应该被强平了，如果还没有强平，保证金比率会大于100%；
+            // 如果依然没有强平，totalMargin <=0 则返回-1，表示强平风险极大。
+            return spec.maintenanceMarginScaleK * -1;
+        }
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
-        return (long) (spec.maintenanceMarginScaleK * maintenanceMargin * 1.0 / totalMargin);
+        return spec.maintenanceMarginScaleK * maintenanceMargin / totalMargin;
     }
 
     /**

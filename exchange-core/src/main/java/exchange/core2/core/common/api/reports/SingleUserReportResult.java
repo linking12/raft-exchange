@@ -187,6 +187,9 @@ public final class SingleUserReportResult implements ReportResult {
         public final long unrealizedProfit;
         public final long liquidationPrice;
         public final long marginRatioScaleK;
+        // 额外字段
+        public final long markPrice;
+
 
         private Position(BytesIn bytes) {
 
@@ -210,6 +213,7 @@ public final class SingleUserReportResult implements ReportResult {
             this.unrealizedProfit = bytes.readLong();
             this.liquidationPrice = bytes.readLong();
             this.marginRatioScaleK = bytes.readLong();
+            this.markPrice = bytes.readLong();
         }
 
         @Override
@@ -230,6 +234,7 @@ public final class SingleUserReportResult implements ReportResult {
             bytes.writeLong(unrealizedProfit);
             bytes.writeLong(liquidationPrice);
             bytes.writeLong(marginRatioScaleK);
+            bytes.writeLong(markPrice);
         }
     }
 
