@@ -254,9 +254,9 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-            long makerFee = CoreArithmeticUtils.calculateAmountBidTakerFee(order101.size, order101.reservePrice, symbol);
-            makerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee, symbol, quoteSpec);
-            long expectedFundsLtc = ltcAmount - makerFee;
+            long takerFee = CoreArithmeticUtils.calculateAmountBidTakerFee(order101.size, order101.reservePrice, symbol);
+            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long expectedFundsLtc = ltcAmount - takerFee;
             // verify order placed with correct reserve price and account balance is updated accordingly
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedFundsLtc));
@@ -290,11 +290,12 @@ public abstract class ITFeesExchange {
 
             long makerFee1 = CoreArithmeticUtils.calculateMakerFee(order102.size, order101.price, symbol);
             makerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee1, symbol, quoteSpec);
-            long makerFee2 = CoreArithmeticUtils.calculateTakerFee(order101.size - order102.size, order101.reservePrice, symbol);
-            makerFee2 = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee2, symbol, quoteSpec);
-            long finalMakerFee = makerFee1 + makerFee2;
+            long takerFee1 = CoreArithmeticUtils.calculateTakerFee(order101.size - order102.size, order101.reservePrice, symbol);
+            takerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee1, symbol, quoteSpec);
+            long finalMakerFee = makerFee1 + takerFee1;
 
-            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(order102.size * order101.price, symbol, quoteSpec);
+            long orderSpend = order102.size * order101.price + ((order101.size - order102.size) * order101.reservePrice);
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             long gainedAmountInBaseCurrency = order102.size;
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer maker balance
@@ -304,10 +305,10 @@ public abstract class ITFeesExchange {
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
-            long takerFee = CoreArithmeticUtils.calculateTakerFee(order102.size, order101.price, symbol);
-            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long takerFee2 = CoreArithmeticUtils.calculateTakerFee(order102.size, order101.price, symbol);
+            takerFee2 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee2, symbol, quoteSpec);
             // verify seller taker balance
-            long finalTakerFee = takerFee;
+            long finalTakerFee = takerFee2;
             container.validateUserState(UID_2, profile -> {
 //                assertThat(profile.getAccounts().get(CURRENECY_LTC), is( 1000L * symbol.baseScaleK * 11_500L * symbol.quoteScaleK - finalTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - xbtAmount));
