@@ -56,13 +56,13 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
     public long extraMargin = 0; // 补充保证金，默认 0
 
-    public void initialize(long uid, int symbol, int currency, int leverage, MarginMode marginMode) {
+    public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
         this.symbol = symbol;
         this.currency = currency;
 
-        this.direction = PositionDirection.EMPTY;
+        this.direction = (orderAction == OrderAction.BID) ? PositionDirection.LONG : PositionDirection.SHORT;
         this.openVolume = 0;
         this.openInitMarginSum = 0;
         this.openPriceSum = 0;
@@ -113,7 +113,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return true if position is empty (no pending orders, no open trades)
      */
     public boolean isEmpty() {
-        return direction == PositionDirection.EMPTY
+        return openVolume == 0
                 && pendingSellSize == 0
                 && pendingBuySize == 0;
     }
@@ -260,7 +260,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return
      */
     public long calculateMaintenanceMargin(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
-        if (direction == PositionDirection.EMPTY) {
+        if (openVolume == 0) {
             return 0;
         }
         long notional = openVolume * priceRecord.markPrice;
@@ -362,7 +362,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize, profit);
 
-        if (direction == PositionDirection.EMPTY || direction == PositionDirection.of(action)) {
+        if (openVolume == 0 || direction == PositionDirection.of(action)) {
             // nothing to close
             return tradeSize;
         }
@@ -379,7 +379,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         profit += (openVolume * tradePrice - openPriceSum) * direction.getMultiplier();
         openInitMarginSum = 0;
         openPriceSum = 0;
-        direction = PositionDirection.EMPTY;
         final long sizeToOpen = tradeSize - openVolume;
         openVolume = 0;
 
@@ -436,10 +435,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     public void validateInternalState() {
         if (direction == PositionDirection.EMPTY && (openVolume != 0 || openPriceSum != 0)) {
-            log.error("uid {} : position:{} totalSize:{} openPriceSum:{}", uid, direction, openVolume, openPriceSum);
-            throw new IllegalStateException();
-        }
-        if (direction != PositionDirection.EMPTY && (openVolume <= 0 || openPriceSum <= 0)) {
             log.error("uid {} : position:{} totalSize:{} openPriceSum:{}", uid, direction, openVolume, openPriceSum);
             throw new IllegalStateException();
         }

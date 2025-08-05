@@ -312,7 +312,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         // 划转
                         long balance = userProfile.accounts.addToValue(pos.currency, -cmd.price);
                         CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(pos.currency);
-                        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+                        CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(pos.symbol);
                         pos.extraMargin += CoreArithmeticUtils.currencyToSymbolScale(cmd.price, spec, currencySpec);
                         cmd.resultCode = CommandResultCode.SUCCESS;
                         // send event
@@ -567,19 +567,20 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.AUTH_INVALID_USER;
         }
 
-        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+        SymbolPositionRecord position = userProfile.positions.get(cmd.symbol);
+        if (position == null) {
+            // 没有仓位不修改
+            return CommandResultCode.SUCCESS;
+        }
+
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
         if (spec == null) {
-            log.warn("Symbol {} not found", cmd.symbol);
+            log.warn("Symbol {} not found", position.symbol);
             return CommandResultCode.INVALID_SYMBOL;
         }
 
-        SymbolPositionRecord position = userProfile.positions.get(spec.symbolId);
-        // 没有仓位不修改
-        if (position == null) {
-            return CommandResultCode.SUCCESS;
-        }
         // 检查用户杠杆是否超过限制
-        LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
+        LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
         long notional = position.estimateNotionalForOrder(null, 0, priceRecord.markPrice);
         if (!spec.isValidLeverage(notional, cmd.leverage)) {
             return CommandResultCode.RISK_INVALID_LEVERAGE;
@@ -653,11 +654,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
             }
 
-            SymbolPositionRecord position = userProfile.positions.get(spec.symbolId);
+            int positionRecordKey = userProfile.getPositionRecordKey(spec.symbolId, cmd.action);
+            SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
-                position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.leverage, cmd.marginMode);
-                userProfile.positions.put(spec.symbolId, position);
+                position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.action, cmd.leverage, cmd.marginMode);
+                userProfile.positions.put(positionRecordKey, position);
             }
             // 检查用户已有的仓位模式和现有的仓位模式是否匹配，在同一币种下只能开一种模式
             if (position.marginMode != cmd.marginMode) {
@@ -910,7 +912,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final UserProfile takerUp = uidForThisHandler(cmd.uid) ? userProfileService.getUserProfileOrAddSuspended(cmd.uid) : null;
 
                 // for margin-mode symbols also resolve position record
-                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(symbol) : null;
+                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(takerUp.getPositionRecordKey(symbol, cmd.action)) : null;
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
@@ -967,20 +969,21 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private void settleFundingFees(OrderCommand cmd) {
         final int symbol = cmd.symbol;
         final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
-        userProfileService.getUserProfiles().forEachValue(userProfile -> {
-            SymbolPositionRecord position = userProfile.positions.get(symbol);
-            if (position == null || position.direction == PositionDirection.EMPTY) {
-                return; // 跳过空仓位
-            }
-            long fundingFee = position.openVolume * markPrice * cmd.price / cmd.size;
-            if (position.direction == PositionDirection.LONG) {
-                position.profit -= fundingFee;
-                eventsHelper.sendFundingFeeEvent(cmd, position, -fundingFee);
-            } else {
-                position.profit += fundingFee;
-                eventsHelper.sendFundingFeeEvent(cmd, position, fundingFee);
-            }
-        });
+        userProfileService.getUserProfiles().forEachValue(userProfile ->
+            userProfile.positions.forEachValue(position -> {
+                if (position == null || position.symbol != symbol || position.openVolume == 0) {
+                    return; // 跳过无关仓位和空仓位
+                }
+                long fundingFee = position.openVolume * markPrice * cmd.price / cmd.size;
+                if (position.direction == PositionDirection.LONG) {
+                    position.profit -= fundingFee;
+                    eventsHelper.sendFundingFeeEvent(cmd, position, -fundingFee);
+                } else {
+                    position.profit += fundingFee;
+                    eventsHelper.sendFundingFeeEvent(cmd, position, fundingFee);
+                }
+            })
+        );
     }
 
     /**
@@ -989,24 +992,25 @@ public final class RiskEngine implements WriteBytesMarshallable {
      */
     private void settlePnl(OrderCommand cmd) {
         final int symbol = cmd.symbol;
-        userProfileService.getUserProfiles().forEachValue(userProfile -> {
-            SymbolPositionRecord position = userProfile.positions.get(symbol);
-            if (position == null || position.direction == PositionDirection.EMPTY) {
-                return; // 跳过空仓位
-            }
-            // 1.关闭仓位
-            OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-            position.closeCurrentPositionFutures(action, position.openVolume, cmd.price);
-            // 2.清算盈亏到账户余额
-            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
-            CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(position.currency);
-            refundExtraMargin(cmd, userProfile.uid, spec, position, userProfile, currencySpec);
-            removePositionRecord(spec, position, userProfile, currencySpec);
-            // 3.发送结算事件
-            long balance = userProfile.accounts.get(position.currency);
-            long locked = calculateLockedMargin(userProfile, position.currency);
-            eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked, cmd.price);
-        });
+        userProfileService.getUserProfiles().forEachValue(userProfile ->
+            userProfile.positions.forEachValue(position -> {
+                if (position == null || position.symbol != symbol || position.openVolume == 0) {
+                    return; // 跳过无关仓位和空仓位
+                }
+                // 1.关闭仓位
+                OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
+                position.closeCurrentPositionFutures(action, position.openVolume, cmd.price);
+                // 2.清算盈亏到账户余额
+                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
+                CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(position.currency);
+                refundExtraMargin(cmd, userProfile.uid, spec, position, userProfile, currencySpec);
+                removePositionRecord(spec, position, userProfile, currencySpec);
+                // 3.发送结算事件
+                long balance = userProfile.accounts.get(position.currency);
+                long locked = calculateLockedMargin(userProfile, position.currency);
+                eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked, cmd.price);
+            })
+        );
     }
 
     private void handleMatcherEventMargin(final OrderCommand cmd,
@@ -1077,7 +1081,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (ev.eventType == MatcherEventType.TRADE && uidForThisHandler(ev.matchedOrderUid)) {
             // update maker's position
             UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
-            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(spec.symbolId);
+            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.getPositionRecordKey(spec.symbolId, takerAction.opposite()));
             long preVolume = makerSpr.openVolume;
 
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);
@@ -1389,7 +1393,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long profit = CoreArithmeticUtils.sizePriceToCurrencyScale(record.profit, spec, currencySpec);
             userProfile.accounts.addToValue(record.currency, profit);
         }
-        userProfile.positions.removeKey(record.symbol);
+        userProfile.positions.removeKey(userProfile.getPositionRecordKey(record));
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
 

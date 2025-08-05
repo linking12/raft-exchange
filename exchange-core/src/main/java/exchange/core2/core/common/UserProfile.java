@@ -31,8 +31,11 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
 
     public final long uid;
 
+    // 用户持仓模式，默认是单向持仓
+    public final PositionMode positionMode;
+
     // symbol -> margin position records
-    // TODO initialize lazily (only needed if margin trading allowed)
+    // 如果是双向持仓，symbol为正表示多头持仓，symbol为负表示空头持仓
     public final IntObjectHashMap<SymbolPositionRecord> positions;
 
     // protects from double adjustment
@@ -47,6 +50,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public UserProfile(long uid, UserStatus userStatus) {
         //log.debug("New {}", uid);
         this.uid = uid;
+        this.positionMode = PositionMode.ONEWAY;
         this.positions = new IntObjectHashMap<>();
         this.adjustmentsCounter = 0L;
         this.accounts = new IntLongHashMap();
@@ -56,6 +60,9 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public UserProfile(BytesIn bytesIn) {
 
         this.uid = bytesIn.readLong();
+
+        // positionMode
+        this.positionMode = PositionMode.of(bytesIn.readByte());
 
         // positions
         this.positions = SerializationUtils.readIntHashMap(bytesIn, b -> new SymbolPositionRecord(uid, b));
@@ -70,10 +77,24 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
         this.userStatus = UserStatus.of(bytesIn.readByte());
     }
 
-    public SymbolPositionRecord getPositionRecordOrThrowEx(int symbol) {
-        final SymbolPositionRecord record = positions.get(symbol);
+    public int getPositionRecordKey(int symbol, OrderAction orderAction) {
+        if (positionMode == PositionMode.HEDGE) {
+            return orderAction == OrderAction.BID ? symbol : -symbol;
+        }
+        return symbol;
+    }
+
+    public int getPositionRecordKey(SymbolPositionRecord position) {
+        if (positionMode == PositionMode.HEDGE) {
+            return position.direction.getMultiplier() * position.symbol;
+        }
+        return position.symbol;
+    }
+
+    public SymbolPositionRecord getPositionRecordOrThrowEx(int key) {
+        final SymbolPositionRecord record = positions.get(key);
         if (record == null) {
-            throw new IllegalStateException("not found position for symbol " + symbol);
+            throw new IllegalStateException("not found position for key " + key);
         }
         return record;
     }
@@ -82,6 +103,9 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public void writeMarshallable(BytesOut bytes) {
 
         bytes.writeLong(uid);
+
+        // positionMode
+        bytes.writeByte(positionMode.getCode());
 
         // positions
         SerializationUtils.marshallIntHashMap(positions, bytes);
@@ -101,6 +125,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public String toString() {
         return "UserProfile{" +
                 "uid=" + uid +
+                ", positionMode=" + positionMode +
                 ", positions=" + positions.size() +
                 ", accounts=" + accounts +
                 ", adjustmentsCounter=" + adjustmentsCounter +
@@ -112,6 +137,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public int stateHash() {
         return Objects.hash(
                 uid,
+                positionMode,
                 HashingUtils.stateHash(positions),
                 adjustmentsCounter,
                 accounts.hashCode(),

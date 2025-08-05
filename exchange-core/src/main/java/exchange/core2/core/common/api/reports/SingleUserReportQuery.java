@@ -97,8 +97,8 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 if (pos.marginMode == MarginMode.CROSS) {
                     crossPositionsByCurrency.getIfAbsentPut(pos.currency, FastList.newList()).add(pos);
                 } else {
-                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(symbol);
-                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(symbol);
+                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
+                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
                     long totalMargin = pos.openInitMarginSum + pos.estimateUnrealizedProfit(priceRecord) + pos.extraMargin;
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, 0, 0, 0);
@@ -125,7 +125,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balance + totalPnl);
-                    positions.put(pos.symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
+                    positions.put(userProfile.getPositionRecordKey(pos), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 
