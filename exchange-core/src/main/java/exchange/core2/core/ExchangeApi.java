@@ -593,6 +593,7 @@ public final class ExchangeApi {
         cmd.uid = api.uid;
         cmd.marginMode = api.marginMode;
         cmd.symbol = api.marginMode == MarginMode.ISOLATED ? api.symbol : api.currency;
+        cmd.action = api.action;
         cmd.price = api.amount;
         cmd.resultCode = CommandResultCode.NEW;
     };

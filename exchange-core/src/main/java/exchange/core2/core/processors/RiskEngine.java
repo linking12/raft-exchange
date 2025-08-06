@@ -294,7 +294,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 .forEach(pos -> eventsHelper.sendMarginAdjustmentEvent(cmd, pos, free, locked));
                         }
                     } else {
-                        SymbolPositionRecord pos = userProfile.positions.get(cmd.symbol);
+                        SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action));
                         if (pos == null) {
                             cmd.resultCode = CommandResultCode.RISK_MARGIN_POSITION_NOT_EXISTS;
                             return false;
