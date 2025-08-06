@@ -738,6 +738,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
         Lists.partition(symbols, 10000).forEach(partition -> sendBinaryDataCommandSync(new BatchAddSymbolsCommand(partition), 5000));
     }
 
+    public void adjustPositionMode(long uid, PositionMode mode) {
+        final ApiAdjustPositionMode cmd = ApiAdjustPositionMode.builder().uid(uid).positionMode(mode).build();
+        submitCommandSync(cmd, CommandResultCode.SUCCESS);
+    }
+
     public void sendBinaryDataCommandSync(final BinaryDataCommand data, final int timeOutMs) {
         final Future<CommandResultCode> future = api.submitBinaryDataAsync(data);
         try {
