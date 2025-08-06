@@ -15,7 +15,9 @@
  */
 package exchange.core2.core.processors;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -590,27 +592,31 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.AUTH_INVALID_USER;
         }
 
-        SymbolPositionRecord position = userProfile.positions.get(cmd.symbol);
-        if (position == null) {
-            // 没有仓位不修改
-            return CommandResultCode.SUCCESS;
-        }
-
-        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
         if (spec == null) {
-            log.warn("Symbol {} not found", position.symbol);
+            log.warn("Symbol {} not found", cmd.symbol);
             return CommandResultCode.INVALID_SYMBOL;
         }
 
+        List<SymbolPositionRecord> positions = new ArrayList<>();
+        userProfile.processPositionRecord(cmd.symbol, positions::add);
+        // 没有仓位不修改
+        if (positions.isEmpty()) {
+            return CommandResultCode.SUCCESS;
+        }
         // 检查用户杠杆是否超过限制
-        LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-        long notional = position.estimateNotionalForOrder(null, 0, priceRecord.markPrice);
-        if (!spec.isValidLeverage(notional, cmd.leverage)) {
-            return CommandResultCode.RISK_INVALID_LEVERAGE;
+        LastPriceCacheRecord priceRecord = lastPriceCache.get(cmd.symbol);
+        long oldRequired = 0L;
+        long newRequired = 0L;
+        for (SymbolPositionRecord position : positions) {
+            long notional = position.estimateNotionalForOrder(null, 0, priceRecord.markPrice);
+            if (!spec.isValidLeverage(notional, cmd.leverage)) {
+                return CommandResultCode.RISK_INVALID_LEVERAGE;
+            }
+            oldRequired += position.calculateRequiredMarginForFutures(spec);
+            newRequired += position.calculateRequiredMarginForFutures(spec, cmd.leverage);
         }
         // 检查保证金变化是否在可承受范围内
-        long oldRequired = position.calculateRequiredMarginForFutures(spec);
-        long newRequired = position.calculateRequiredMarginForFutures(spec, cmd.leverage);
         if (newRequired > oldRequired) {
             long balance = userProfile.accounts.get(spec.quoteCurrency);
             long locked = calculateLockedMargin(userProfile, spec.quoteCurrency);
@@ -620,7 +626,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
         }
         // 修改杠杆
-        position.updateLeverage(cmd.leverage);
+        for (SymbolPositionRecord position : positions) {
+            position.updateLeverage(cmd.leverage);
+        }
         return CommandResultCode.SUCCESS;
     }
 
