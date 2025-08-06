@@ -123,6 +123,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder)cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             ringBuffer.publishEvent(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage)cmd);
+        } else if (cmd instanceof ApiAdjustPositionMode) {
+            ringBuffer.publishEvent(ADJUST_POSITION_MODE_TRANSLATOR, (ApiAdjustPositionMode)cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             ringBuffer.publishEvent(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin)cmd);
         } else if (cmd instanceof ApiAdjustMarkPrice) {
@@ -176,6 +178,8 @@ public final class ExchangeApi {
             return submitCommandAsync(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder)cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             return submitCommandAsync(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage)cmd);
+        } else if (cmd instanceof ApiAdjustPositionMode) {
+            return submitCommandAsync(ADJUST_POSITION_MODE_TRANSLATOR, (ApiAdjustPositionMode)cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsync(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin)cmd);
         } else if (cmd instanceof ApiAdjustMarkPrice) {
@@ -225,6 +229,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder)cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             return submitCommandAsyncFullResponse(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage)cmd);
+        } else if (cmd instanceof ApiAdjustPositionMode) {
+            return submitCommandAsyncFullResponse(ADJUST_POSITION_MODE_TRANSLATOR, (ApiAdjustPositionMode)cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsyncFullResponse(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin)cmd);
         } else if (cmd instanceof ApiAdjustMarkPrice) {
@@ -569,6 +575,14 @@ public final class ExchangeApi {
         cmd.uid = api.uid;
         cmd.symbol = api.symbol;
         cmd.leverage = api.leverage;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiAdjustPositionMode> ADJUST_POSITION_MODE_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.POSITION_MODE_ADJUSTMENT;
+        cmd.timestamp = api.timestamp;
+        cmd.uid = api.uid;
+        cmd.action = OrderAction.of(api.positionMode.getCode());
         cmd.resultCode = CommandResultCode.NEW;
     };
 

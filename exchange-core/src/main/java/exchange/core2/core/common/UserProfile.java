@@ -32,7 +32,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public final long uid;
 
     // 用户持仓模式，默认是单向持仓
-    public final PositionMode positionMode;
+    public PositionMode positionMode;
 
     // symbol -> margin position records
     // 如果是双向持仓，symbol为正表示多头持仓，symbol为负表示空头持仓

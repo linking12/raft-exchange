@@ -91,6 +91,11 @@ message ApiAdjustLeverage {
   int32 leverage = 3;
 }
 
+message ApiAdjustPositionMode {
+  int64 uid = 1;
+  PositionMode positionMode = 2;
+}
+
 message ApiAdjustMargin {
   int64 transactionId = 1;
   int64 uid = 2;
@@ -135,10 +140,11 @@ message ApiCommand {
     ApiSuspendUser suspend_user = 12;
     ApiResumeUser resume_user = 13;
     ApiAdjustLeverage adjust_leverage = 14;
-    ApiAdjustMargin adjust_margin = 15;
-    ApiAdjustMarkPrice adjust_markprice = 16;
-    ApiSettleFundingFees settle_funding_fees = 17;
-    ApiSettlePNL settle_pnl = 18;
+    ApiAdjustPositionMode adjust_position_mode = 15;
+    ApiAdjustMargin adjust_margin = 16;
+    ApiAdjustMarkPrice adjust_markprice = 17;
+    ApiSettleFundingFees settle_funding_fees = 18;
+    ApiSettlePNL settle_pnl = 19;
   }
 }
 

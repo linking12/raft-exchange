@@ -34,6 +34,7 @@ import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
+import exchange.core2.core.common.PositionMode;
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
@@ -389,6 +390,28 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     cmd.resultCode = adjustLeverage(cmd);
                 }
                 return false;
+
+            case POSITION_MODE_ADJUSTMENT:
+                if (uidForThisHandler(cmd.uid)) {
+                    final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+                    if (userProfile == null) {
+                        cmd.resultCode = CommandResultCode.AUTH_INVALID_USER;
+                        return false;
+                    }
+                    PositionMode positionMode = PositionMode.of(cmd.action.getCode());
+                    if (userProfile.positionMode == positionMode) {
+                        cmd.resultCode = CommandResultCode.SUCCESS;
+                        return false;
+                    }
+                    if (!userProfile.positions.isEmpty()) {
+                        cmd.resultCode = CommandResultCode.RISK_MARGIN_POSITION_EXISTS;
+                        return false;
+                    }
+                    userProfile.positionMode = positionMode;
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
+
             case SETTLE_FUNDINGFEES: {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
                 if (spec == null || spec.type != SymbolType.FUTURES_CONTRACT_PERPETUAL) {

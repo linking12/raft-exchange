@@ -98,6 +98,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 case ADJUST_LEVERAGE:
                     result = SyncTradeOrdersApiController.adjustLeverage(apiCommand);
                     break;
+                case ADJUST_POSITION_MODE:
+                    result = SyncAdminApiAccountsController.adjustPositionMode(apiCommand);
+                    break;
                 case ADJUST_MARGIN:
                     result = SyncAdminApiAccountsController.adjustMargin(apiCommand);
                     break;
