@@ -993,9 +993,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         final int symbol = cmd.symbol;
         final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
         userProfileService.getUserProfiles().forEachValue(userProfile ->
-            userProfile.positions.forEachValue(position -> {
-                if (position == null || position.symbol != symbol || position.openVolume == 0) {
-                    return; // 跳过无关仓位和空仓位
+            userProfile.processPositionRecord(symbol, position -> {
+                if (position.openVolume == 0) {
+                    return; // 跳过空仓位
                 }
                 long fundingFee = position.openVolume * markPrice * cmd.price / cmd.size;
                 if (position.direction == PositionDirection.LONG) {
@@ -1016,9 +1016,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private void settlePnl(OrderCommand cmd) {
         final int symbol = cmd.symbol;
         userProfileService.getUserProfiles().forEachValue(userProfile ->
-            userProfile.positions.forEachValue(position -> {
-                if (position == null || position.symbol != symbol || position.openVolume == 0) {
-                    return; // 跳过无关仓位和空仓位
+            userProfile.processPositionRecord(symbol, position -> {
+                if (position.openVolume == 0) {
+                    return; // 跳过空仓位
                 }
                 // 1.关闭仓位
                 OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;

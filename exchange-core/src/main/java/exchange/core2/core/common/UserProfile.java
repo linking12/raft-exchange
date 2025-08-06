@@ -25,6 +25,7 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import java.util.Objects;
+import java.util.function.Consumer;
 
 @Slf4j
 public final class UserProfile implements WriteBytesMarshallable, StateHash {
@@ -89,6 +90,22 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
             return position.direction.getMultiplier() * position.symbol;
         }
         return position.symbol;
+    }
+
+    /**
+     * 用consumer处理指定symbol下所有仓位
+     */
+    public void processPositionRecord(int symbol, Consumer<SymbolPositionRecord> consumer) {
+        SymbolPositionRecord longRecord = positions.get(symbol);
+        if (longRecord != null) {
+            consumer.accept(longRecord);
+        }
+        if (positionMode == PositionMode.HEDGE) {
+            SymbolPositionRecord shortRecord = positions.get(-symbol);
+            if (shortRecord != null) {
+                consumer.accept(shortRecord);
+            }
+        }
     }
 
     public SymbolPositionRecord getPositionRecordOrThrowEx(int key) {
