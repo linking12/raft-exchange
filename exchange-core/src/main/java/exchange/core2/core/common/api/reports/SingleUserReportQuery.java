@@ -125,7 +125,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balance + totalPnl);
-                    positions.put(userProfile.getPositionRecordKey(pos), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
+                    positions.put(userProfile.createPositionsKey(pos), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 

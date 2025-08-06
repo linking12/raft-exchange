@@ -677,7 +677,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
             }
 
-            int positionRecordKey = userProfile.getPositionRecordKey(spec.symbolId, cmd.action);
+            int positionRecordKey = userProfile.createPositionsKey(spec.symbolId, cmd.action);
             SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
@@ -935,7 +935,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final UserProfile takerUp = uidForThisHandler(cmd.uid) ? userProfileService.getUserProfileOrAddSuspended(cmd.uid) : null;
 
                 // for margin-mode symbols also resolve position record
-                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(takerUp.getPositionRecordKey(symbol, cmd.action)) : null;
+                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(takerUp.createPositionsKey(symbol, cmd.action)) : null;
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
@@ -1104,7 +1104,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (ev.eventType == MatcherEventType.TRADE && uidForThisHandler(ev.matchedOrderUid)) {
             // update maker's position
             UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
-            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.getPositionRecordKey(spec.symbolId, takerAction.opposite()));
+            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.createPositionsKey(spec.symbolId, takerAction.opposite()));
             long preVolume = makerSpr.openVolume;
 
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);
@@ -1416,7 +1416,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long profit = CoreArithmeticUtils.sizePriceToCurrencyScale(record.profit, spec, currencySpec);
             userProfile.accounts.addToValue(record.currency, profit);
         }
-        userProfile.positions.removeKey(userProfile.getPositionRecordKey(record));
+        userProfile.positions.removeKey(userProfile.createPositionsKey(record));
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
 

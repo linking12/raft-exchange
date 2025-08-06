@@ -77,14 +77,14 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
         this.userStatus = UserStatus.of(bytesIn.readByte());
     }
 
-    public int getPositionRecordKey(int symbol, OrderAction orderAction) {
+    public int createPositionsKey(int symbol, OrderAction orderAction) {
         if (positionMode == PositionMode.HEDGE) {
             return orderAction == OrderAction.BID ? symbol : -symbol;
         }
         return symbol;
     }
 
-    public int getPositionRecordKey(SymbolPositionRecord position) {
+    public int createPositionsKey(SymbolPositionRecord position) {
         if (positionMode == PositionMode.HEDGE) {
             return position.direction.getMultiplier() * position.symbol;
         }
