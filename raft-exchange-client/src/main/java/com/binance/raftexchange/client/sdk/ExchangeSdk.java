@@ -11,11 +11,20 @@ import com.binance.raftexchange.stubs.OrderType;
 import com.binance.raftexchange.stubs.SymbolType;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
+import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
+import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
 import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
+import com.binance.raftexchange.stubs.request.ApiReduceOrder;
+import com.binance.raftexchange.stubs.request.ApiResumeUser;
+import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
+import com.binance.raftexchange.stubs.request.ApiSettlePNL;
+import com.binance.raftexchange.stubs.request.ApiSuspendUser;
 import com.binance.raftexchange.stubs.request.BatchAddCurrenciesCommand;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
@@ -226,7 +235,13 @@ public class ExchangeSdk implements AutoCloseable {
 
     public CompletableFuture<CommandResult> placeOrderAsync(long uid, long orderId, int symbol, OrderAction action, OrderType type,
                                                             double price, double reversePrice, double size, MarginMode marginMode, int leverage) {
-        return sendAsync(buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage));
+        final ApiCommand cmd;
+        try {
+            cmd = buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage);
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
     }
 
     public ApiCommand buildPlaceOrderCommand(long uid, long orderId, int symbol, OrderAction action, OrderType type,
@@ -252,17 +267,192 @@ public class ExchangeSdk implements AutoCloseable {
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setPlaceOrder(builder).build();
     }
 
-    // todo: 继续实现其他命令
-    public CommandResult cancelOrder(long uid, long orderId, int symbol) {
-        ApiCancelOrder co = ApiCancelOrder.newBuilder()
-                .setUid(uid)
-                .setOrderId(orderId)
-                .setSymbol(symbol)
-                .build();
-        ApiCommand cmd = ApiCommand.newBuilder().setCancelOrder(co).build();
-        return send(cmd, Duration.ofSeconds(3));
+    public CommandResult moveOrder(long uid, long orderId, int symbol, double newPrice) {
+        return send(buildMoveOrderCommand(uid, orderId, symbol, newPrice));
     }
 
+    public CompletableFuture<CommandResult> moveOrderAsync(long uid, long orderId, int symbol, double newPrice) {
+        final ApiCommand cmd;
+        try {
+            cmd = buildMoveOrderCommand(uid, orderId, symbol, newPrice);
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
+    }
+
+    public ApiCommand buildMoveOrderCommand(long uid, long orderId, int symbol, double newPrice) {
+        CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbol);
+        long scaledNewPrice = doubleToLong(newPrice, spec.getQuoteScaleK());
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setMoveOrder(ApiMoveOrder.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)
+                        .setNewPrice(scaledNewPrice)).build();
+    }
+
+    public CommandResult cancelOrder(long uid, long orderId, int symbol) {
+        return send(buildCancelOrderCommand(uid, orderId, symbol));
+    }
+
+    public CompletableFuture<CommandResult> cancelOrderAsync(long uid, long orderId, int symbol) {
+        return sendAsync(buildCancelOrderCommand(uid, orderId, symbol));
+    }
+
+    public ApiCommand buildCancelOrderCommand(long uid, long orderId, int symbol) {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setCancelOrder(ApiCancelOrder.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)).build();
+    }
+
+    public CommandResult reduceOrder(long uid, long orderId, int symbol, double size) {
+        return send(buildReduceOrderCommand(uid, orderId, symbol, size));
+    }
+
+    public CompletableFuture<CommandResult> reduceOrderAsync(long uid, long orderId, int symbol, double size) {
+        final ApiCommand cmd;
+        try {
+            cmd = buildReduceOrderCommand(uid, orderId, symbol, size);
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
+    }
+
+    public ApiCommand buildReduceOrderCommand(long uid, long orderId, int symbol, double size) {
+        CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbol);
+        long scaledSize = doubleToLong(size, spec.getBaseScaleK());
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setReduceOrder(ApiReduceOrder.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)
+                        .setReduceSize(scaledSize)).build();
+    }
+
+    public CommandResult suspendUser(long uid) {
+        return send(buildSuspendUserCommand(uid));
+    }
+
+    public CompletableFuture<CommandResult> suspendUserAsync(long uid) {
+        return sendAsync(buildSuspendUserCommand(uid));
+    }
+
+    public ApiCommand buildSuspendUserCommand(long uid) {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setSuspendUser(ApiSuspendUser.newBuilder().setUid(uid)).build();
+    }
+
+    public CommandResult resumeUser(long uid) {
+        return send(buildResumeUserCommand(uid));
+    }
+
+    public CompletableFuture<CommandResult> resumeUserAsync(long uid) {
+        return sendAsync(buildResumeUserCommand(uid));
+    }
+
+    public ApiCommand buildResumeUserCommand(long uid) {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setResumeUser(ApiResumeUser.newBuilder().setUid(uid)).build();
+    }
+
+    public CommandResult adjustLeverage(long uid, int symbol, int leverage) {
+        return send(buildAdjustLeverageCommand(uid, symbol, leverage));
+    }
+
+    public CompletableFuture<CommandResult> adjustLeverageAsync(long uid, int symbol, int leverage) {
+        return sendAsync(buildAdjustLeverageCommand(uid, symbol, leverage));
+    }
+
+    public ApiCommand buildAdjustLeverageCommand(long uid, int symbol, int leverage) {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setAdjustLeverage(ApiAdjustLeverage.newBuilder().setUid(uid).setSymbol(symbol).setLeverage(leverage)).build();
+    }
+
+    public CommandResult adjustMargin(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
+        return send(buildAdjustMarginCommand(uid, mode, symbolOrCurrency, amount));
+    }
+
+    public CompletableFuture<CommandResult> adjustMarginAsync(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
+        final ApiCommand cmd;
+        try {
+            cmd = buildAdjustMarginCommand(uid, mode, symbolOrCurrency, amount);
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
+    }
+
+    public ApiCommand buildAdjustMarginCommand(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
+        ApiAdjustMargin.Builder apiAdjustMargin;
+        if (mode == MarginMode.ISOLATED) {
+            CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbolOrCurrency);
+            long scaledAmount = doubleToLong(amount, spec.getQuoteScaleK());
+            apiAdjustMargin = ApiAdjustMargin.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
+                    .setUid(uid).setSymbol(symbolOrCurrency).setAmount(scaledAmount);
+        } else if (mode == MarginMode.CROSS) {
+            CoreCurrencySpecification currencySpec = metadataManager.getCurrencySpec(symbolOrCurrency);
+            long currencyScaleK = (long) Math.pow(10, currencySpec.getDigit());
+            long scaledAmount = doubleToLong(amount, currencyScaleK);
+            apiAdjustMargin = ApiAdjustMargin.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
+                    .setUid(uid).setCurrency(symbolOrCurrency).setAmount(scaledAmount);
+        } else {
+            throw new IllegalArgumentException("Unsupported margin mode: " + mode);
+        }
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setAdjustMargin(apiAdjustMargin).build();
+    }
+
+    public CommandResult adjustMarkPrice(int symbol, double markPrice) {
+        return send(buildAdjustMarkPriceCommand(symbol, markPrice));
+    }
+
+    public CompletableFuture<CommandResult> adjustMarkPriceAsync(int symbol, double markPrice) {
+        final ApiCommand cmd;
+        try {
+            cmd = buildAdjustMarkPriceCommand(symbol, markPrice);
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
+    }
+
+    public ApiCommand buildAdjustMarkPriceCommand(int symbol, double markPrice) {
+        CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbol);
+        long scaledMarkPrice = doubleToLong(markPrice, spec.getQuoteScaleK());
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setAdjustMarkprice(ApiAdjustMarkPrice.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
+                        .setSymbol(symbol).setMarkPrice(scaledMarkPrice)).build();
+    }
+
+    public CommandResult settleFundingFees(int symbol, long fundingRate, long rateScaleK) {
+        return send(buildSettleFundingFeesCommand(symbol, fundingRate, rateScaleK));
+    }
+
+    public CompletableFuture<CommandResult> settleFundingFeesAsync(int symbol, long fundingRate, long rateScaleK) {
+        return sendAsync(buildSettleFundingFeesCommand(symbol, fundingRate, rateScaleK));
+    }
+
+    public ApiCommand buildSettleFundingFeesCommand(int symbol, long fundingRate, long rateScaleK) {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setSettleFundingFees(ApiSettleFundingFees.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
+                        .setSymbol(symbol).setFundingRate(fundingRate).setRateScaleK(rateScaleK)).build();
+    }
+
+    public CommandResult settlePnl(int symbol, double price) {
+        return send(buildSettlePnlCommand(symbol, price));
+    }
+
+    public CompletableFuture<CommandResult> settlePnlAsync(int symbol, double price) {
+        final ApiCommand cmd;
+        try {
+            cmd = buildSettlePnlCommand(symbol, price);
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
+    }
+
+    public ApiCommand buildSettlePnlCommand(int symbol, double price) {
+        CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbol);
+        long scaledPrice = doubleToLong(price, spec.getQuoteScaleK());
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setSettlePnl(ApiSettlePNL.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
+                        .setSymbol(symbol).setSettlePrice(scaledPrice)).build();
+    }
 
     // ———————— 只读查询接口  ————————
     public CompletableFuture<SingleUserReportResult> queryUserReport(long userId) {
