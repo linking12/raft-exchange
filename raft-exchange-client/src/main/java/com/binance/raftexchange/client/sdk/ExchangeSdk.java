@@ -10,7 +10,6 @@ import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderType;
 import com.binance.raftexchange.stubs.SymbolType;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
-import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
@@ -30,7 +29,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+
+import static com.binance.raftexchange.client.sdk.ExchangeSdkHelper.doubleToLong;
+import static com.binance.raftexchange.client.sdk.ExchangeSdkHelper.getFloorValue;
 
 public class ExchangeSdk implements AutoCloseable {
 
@@ -213,7 +214,7 @@ public class ExchangeSdk implements AutoCloseable {
         long currencyScaleK = (long) Math.pow(10, currencySpec.getDigit());
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
                 .setAdjustBalance(ApiAdjustUserBalance.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
-                        .setUid(uid).setCurrency(currency).setAmount(ScaleUtil.doubleToLong(amount, currencyScaleK))
+                        .setUid(uid).setCurrency(currency).setAmount(doubleToLong(amount, currencyScaleK))
                         .setAdjustmentType(BalanceAdjustmentType.ADJUSTMENT))
                 .build();
     }
@@ -235,11 +236,11 @@ public class ExchangeSdk implements AutoCloseable {
         if (!exchangeSymbol && marginMode == null) {
             throw new IllegalArgumentException("MarginMode must be specified for non-exchange symbols.");
         }
-        long scaledPrice = ScaleUtil.doubleToLong(price, spec.getQuoteScaleK());
-        long scaledReversePrice = ScaleUtil.doubleToLong(reversePrice, spec.getQuoteScaleK());
-        long scaledSize = ScaleUtil.doubleToLong(size, spec.getBaseScaleK());
+        long scaledPrice = doubleToLong(price, spec.getQuoteScaleK());
+        long scaledReversePrice = doubleToLong(reversePrice, spec.getQuoteScaleK());
+        long scaledSize = doubleToLong(size, spec.getBaseScaleK());
         long scaledNotional = (action == OrderAction.BID ? scaledReversePrice : scaledPrice) * scaledSize;
-        long maxLeverage = ScaleUtil.getFloorValue(spec.getMaxLeverageMap(), scaledNotional);
+        long maxLeverage = getFloorValue(spec.getMaxLeverageMap(), scaledNotional);
         if (!exchangeSymbol && (leverage <= 0 || leverage > maxLeverage)) {
             throw new IllegalArgumentException("Leverage illegal: " + leverage);
         }
