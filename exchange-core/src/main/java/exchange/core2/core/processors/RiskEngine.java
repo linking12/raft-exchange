@@ -684,6 +684,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (priceRecord == null || priceRecord.markPrice == 0) {
                 return CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
             }
+            // 检查用户已有的仓位模式和现有的仓位模式是否匹配，在同一币种下只能开一种模式
+            if (userProfile.countPositionRecord(spec.symbolId,
+                    pos -> pos.marginMode != cmd.marginMode) > 0) {
+                return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
+            }
 
             int positionRecordKey = userProfile.createPositionsKey(spec.symbolId, cmd.action);
             SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
@@ -691,10 +696,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.action, cmd.leverage, cmd.marginMode);
                 userProfile.positions.put(positionRecordKey, position);
-            }
-            // 检查用户已有的仓位模式和现有的仓位模式是否匹配，在同一币种下只能开一种模式
-            if (position.marginMode != cmd.marginMode) {
-                return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
             }
             // 检查用户杠杆是否超过symbol的杠杆限制
             long notional = position.estimateNotionalForOrder(cmd.action, cmd.size, priceRecord.markPrice);

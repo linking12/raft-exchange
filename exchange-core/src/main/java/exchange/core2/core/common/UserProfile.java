@@ -26,6 +26,7 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 @Slf4j
 public final class UserProfile implements WriteBytesMarshallable, StateHash {
@@ -90,6 +91,24 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
             return position.direction.getMultiplier() * position.symbol;
         }
         return position.symbol;
+    }
+
+    /**
+     * 统计指定symbol下，满足predicate的仓位记录数量
+     */
+    public int countPositionRecord(int symbol, Predicate<SymbolPositionRecord> predicate) {
+        int count = 0;
+        SymbolPositionRecord longRecord = positions.get(symbol);
+        if (longRecord != null && predicate.test(longRecord)) {
+            count++;
+        }
+        if (positionMode == PositionMode.HEDGE) {
+            SymbolPositionRecord shortRecord = positions.get(-symbol);
+            if (shortRecord != null && predicate.test(shortRecord)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
