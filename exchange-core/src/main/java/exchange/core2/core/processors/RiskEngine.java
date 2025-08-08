@@ -496,6 +496,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     /**
      * 用于提现/划转判断，在 {@link #calculateLockedMargin} 基础上还考虑了pnl
+     * 结果会缩放到currency精度
      */
     private long calcFreeFuturesMargin(final UserProfile userProfile, final int currency) {
         long totalRealizedPnl = 0L;
@@ -503,19 +504,21 @@ public final class RiskEngine implements WriteBytesMarshallable {
         long totalIsolateRequire = 0L;
         long totalCrossRequireByInitMargin = 0L;
         long totalCrossRequireByMaintainceMargin = 0L;
+        CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
         for (final SymbolPositionRecord position : userProfile.positions) {
             if (position.currency == currency) {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 if (position.marginMode == MarginMode.CROSS) {
                     LastPriceCacheRecord lastPrice = lastPriceCache.get(position.symbol);
-                    totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);
+                    totalUnrealizedPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(position.estimateUnrealizedProfit(lastPrice), spec, currencySpec);
                     long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec);
-                    totalCrossRequireByInitMargin += requiredMarginForFutures;
-                    totalCrossRequireByMaintainceMargin += (requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec, lastPrice));
+                    totalCrossRequireByInitMargin += CoreArithmeticUtils.sizePriceToCurrencyScale(requiredMarginForFutures, spec, currencySpec);
+                    long crossMaintainDelta = requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec, lastPrice);
+                    totalCrossRequireByMaintainceMargin += CoreArithmeticUtils.sizePriceToCurrencyScale(crossMaintainDelta, spec, currencySpec);
                 } else {
-                    totalIsolateRequire += position.calculateRequiredMarginForFutures(spec);
+                    totalIsolateRequire += CoreArithmeticUtils.sizePriceToCurrencyScale(position.calculateRequiredMarginForFutures(spec), spec, currencySpec);
                 }
-                totalRealizedPnl += position.profit;
+                totalRealizedPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(position.profit, spec, currencySpec);
             }
         }
         return Math.min(
@@ -621,7 +624,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long balance = userProfile.accounts.get(spec.quoteCurrency);
             long locked = calculateLockedMargin(userProfile, spec.quoteCurrency);
             // 修改杠杆后新增的保证金占用 > 可以余额，不让修改
-            if ((newRequired - oldRequired) > (balance - locked)) {
+            CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
+            long diff = CoreArithmeticUtils.sizePriceToCurrencyScale(newRequired - oldRequired, spec, currencySpec);
+            if (diff > (balance - locked)) {
                 return CommandResultCode.RISK_NSF;
             }
         }
@@ -979,6 +984,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     
     /**
      * 计算用户在指定货币中的冻结保证金总额（包含pending部分，隐式锁定）。
+     * 结果会缩放到currency精度。
      */
     private long calculateLockedMargin(UserProfile userProfile, int currency) {
         long locked = 0;
