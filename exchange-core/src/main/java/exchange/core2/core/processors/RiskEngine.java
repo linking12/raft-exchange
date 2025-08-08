@@ -15,12 +15,12 @@
  */
 package exchange.core2.core.processors;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
@@ -598,7 +598,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.INVALID_SYMBOL;
         }
 
-        List<SymbolPositionRecord> positions = new ArrayList<>();
+        List<SymbolPositionRecord> positions = FastList.newList();
         userProfile.processPositionRecord(cmd.symbol, positions::add);
         // 没有仓位不修改
         if (positions.isEmpty()) {

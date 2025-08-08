@@ -941,13 +941,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     private void initPerfCurrencies(List<CoreSymbolSpecification> coreSymbolSpecifications) {
-        // load currencies
-        Set<Integer> currencies = new HashSet<>();
+        // init currencies，保证currency精度比交易对size*price精度高
         coreSymbolSpecifications.forEach(symbol -> {
-            currencies.add(symbol.baseCurrency);
-            currencies.add(symbol.quoteCurrency);
+            int digit = TenPowers.log10(symbol.baseScaleK * symbol.quoteScaleK);
+            addCurrency(symbol.baseCurrency, digit);
+            addCurrency(symbol.quoteCurrency, digit);
         });
-        currencies.forEach(id -> addCurrency(id));
     }
 
     public void loadSymbolsUsersAndPrefillOrdersNoLog(TestDataFutures testDataFutures) {
