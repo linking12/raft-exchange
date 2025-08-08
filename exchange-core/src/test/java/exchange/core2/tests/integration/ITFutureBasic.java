@@ -1166,9 +1166,9 @@ class ITFutureBasic {
             container.updateCurrentPriceTo(500, symbolId, quoteId);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbolId).profit, Is.is((0L)));
-                assertThat(profile.getPositions().get(symbolId).unrealizedProfit, Is.is((-95000L)));
-                assertThat(profile.getPositions().get(symbolId).marginRatioScaleK, Is.is((-1000L)));
+                assertThat(profile.getPositions().get(symbolId).get(0).profit, Is.is((0L)));
+                assertThat(profile.getPositions().get(symbolId).get(0).unrealizedProfit, Is.is((-95000L)));
+                assertThat(profile.getPositions().get(symbolId).get(0).marginRatioScaleK, Is.is((-1000L)));
             });
 
         } catch (ExecutionException e) {

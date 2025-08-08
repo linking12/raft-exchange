@@ -334,12 +334,12 @@ public class FutureCoreExample {
         checkOrder(userStatus, 1);
         checkPosition(userStatus, 1);
 
-        assertEquals(userStatus.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus.getPositions().getFirst().openPriceSum, 0);
-        assertEquals(userStatus.getPositions().getFirst().openVolume, 0);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).profit, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).openPriceSum, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).openVolume, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
     }
 
     // Long/Short仓位类型正确
@@ -350,7 +350,7 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
 
         long userId2 = createRandomUserWithMoney();
         createAsk(userId2, 1, 10000L);
@@ -358,22 +358,22 @@ public class FutureCoreExample {
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
         checkPosition(userStatus1, 1);
 
-        assertEquals(userStatus1.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus1.getPositions().getFirst().openPriceSum, 10000);
-        assertEquals(userStatus1.getPositions().getFirst().openVolume, 1);
-        assertEquals(userStatus1.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).profit, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).openPriceSum, 10000);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).openVolume, 1);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         SingleUserReportResult userStatus2 = getUserStatus(userId2);
         checkPosition(userStatus2, 1);
 
-        assertEquals(userStatus2.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus2.getPositions().getFirst().openPriceSum, 10000);
-        assertEquals(userStatus2.getPositions().getFirst().openVolume, 1);
-        assertEquals(userStatus2.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus2.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).profit, 0);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).openPriceSum, 10000);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).openVolume, 1);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
     }
 
     // 做空平仓, 仓位开出来以后需要用户主动开一个相反方向的订单
@@ -384,9 +384,9 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
 
         long userId2 = createRandomUserWithMoney();
         createBid(userId2, 1, 10000L);
@@ -394,9 +394,9 @@ public class FutureCoreExample {
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
         // 确认仓位信息, 保证做空确实开出来了
         checkPosition(userStatus1, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().direction, PositionDirection.SHORT);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
 
         // userId1下反向单, 主动平仓
         createBid(userId1, 1, 10000L);
@@ -417,9 +417,9 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
 
         long userId2 = createRandomUserWithMoney();
         createAsk(userId2, 1, 10000L);
@@ -427,9 +427,9 @@ public class FutureCoreExample {
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
         // 确认仓位信息, 保证做多确实开出来了
         checkPosition(userStatus1, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         // userId1下反向单, 主动平仓
         createAsk(userId1, 1, 10000L);
@@ -450,9 +450,9 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
 
         long userId2 = createRandomUserWithMoney();
         // orderId2成交后userId1做多仓位才算开出来
@@ -461,9 +461,9 @@ public class FutureCoreExample {
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
         // 确认仓位信息, 保证做多确实开出来了
         checkPosition(userStatus1, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         // 更新当前市场价格
         updateCurrentPriceTo(10500);
@@ -489,9 +489,9 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
 
         long userId2 = createRandomUserWithMoney();
         // orderId2成交后userId1做多仓位才算开出来
@@ -500,9 +500,9 @@ public class FutureCoreExample {
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
         // 确认仓位信息, 保证做多确实开出来了
         checkPosition(userStatus1, 1);
-        assertEquals(userStatus1.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().direction, PositionDirection.SHORT);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
 
         // 更新当前市场价格
         updateCurrentPriceTo(10500);
@@ -589,14 +589,14 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
 
         long userId2 = createRandomUserWithMoney();
         // order2成交后, userId1持有long仓位
         createAsk(userId2, 1, 10000L);
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 1);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         long userId3 = createRandomUserWithMoney();
         createBid(userId3, 1, 9000L);
@@ -619,14 +619,14 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
 
         long userId2 = createRandomUserWithMoney(1000);
         // order2成交后, userId1持有long仓位
         createAsk(userId2, 1, 10000L);
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 1);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         // 模拟市价波动
         updateCurrentPriceTo(8000);
@@ -644,14 +644,14 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
 
         long userId2 = createRandomUserWithMoney(1000);
         // order2成交后, userId1持有long仓位
         createBid(userId2, 1, 10000L);
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 1);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
 
         // 模拟市价波动
         updateCurrentPriceTo(11000);
@@ -670,14 +670,14 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
 
         long userId2 = createRandomUserWithMoney(1000);
         // order2成交后, userId1持有long仓位
         createAsk(userId2, 1, 10000L);
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 1);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.LONG);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         // 模拟市价波动
         createBiasPrice(9000);
@@ -734,14 +734,14 @@ public class FutureCoreExample {
 
         SingleUserReportResult userStatus = getUserStatus(userId1);
         checkPosition(userStatus, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
 
         long userId2 = createRandomUserWithMoney(1000);
         // order2成交后, userId1持有long仓位
         createBid(userId2, 1, 10000L);
         SingleUserReportResult userStatus2 = getUserStatus(userId1);
         checkPosition(userStatus2, 1);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
 
         // 模拟市价波动
         createBiasPrice(11001);
@@ -859,22 +859,22 @@ public class FutureCoreExample {
         SingleUserReportResult userStatus1 = getUserStatus(userId1);
         // 成交后postion会被清空
         checkPosition(userStatus1, 1);
-        assertEquals(userStatus1.getPositions().getFirst().direction, PositionDirection.LONG);
-        assertEquals(userStatus1.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus1.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus1.getPositions().getFirst().openVolume, ordersCount * size / 2);
-        assertEquals(userStatus1.getPositions().getFirst().openPriceSum, ordersCount * size / 2 * price);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).profit, 0);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).openVolume, ordersCount * size / 2);
+        assertEquals(userStatus1.getPositions().getFirst().get(0).openPriceSum, ordersCount * size / 2 * price);
 
         SingleUserReportResult userStatus2 = getUserStatus(userId2);
         // 成交后postion会被清空
         checkPosition(userStatus2, 1);
-        assertEquals(userStatus2.getPositions().getFirst().direction, PositionDirection.SHORT);
-        assertEquals(userStatus2.getPositions().getFirst().pendingSellSize, 0);
-        assertEquals(userStatus2.getPositions().getFirst().pendingBuySize, 0);
-        assertEquals(userStatus2.getPositions().getFirst().profit, 0);
-        assertEquals(userStatus2.getPositions().getFirst().openVolume, ordersCount * size / 2);
-        assertEquals(userStatus2.getPositions().getFirst().openPriceSum, ordersCount * size / 2 * price);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).pendingSellSize, 0);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).pendingBuySize, 0);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).profit, 0);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).openVolume, ordersCount * size / 2);
+        assertEquals(userStatus2.getPositions().getFirst().get(0).openPriceSum, ordersCount * size / 2 * price);
     }
 
     // withdraw时应考虑用户当前持仓
@@ -893,10 +893,10 @@ public class FutureCoreExample {
         checkOrder(userStatus, 1);
         // 账面资金和初始资金一致
         assertEquals(userStatus.getAccounts().get(quoteId), balance);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
-        assertEquals(userStatus.getPositions().getFirst().openVolume, 0);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).openVolume, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
 
         // do withdraw -> 此时期待结果为提现失败
         ApiAdjustUserBalance order2 = ApiAdjustUserBalance.builder()
@@ -928,10 +928,10 @@ public class FutureCoreExample {
         checkOrder(userStatus, 1);
         // 账面资金和初始资金一致
         assertEquals(userStatus.getAccounts().get(quoteId), balance);
-        assertEquals(userStatus.getPositions().getFirst().direction, PositionDirection.EMPTY);
-        assertEquals(userStatus.getPositions().getFirst().openVolume, 0);
-        assertEquals(userStatus.getPositions().getFirst().pendingBuySize, 1);
-        assertEquals(userStatus.getPositions().getFirst().pendingSellSize, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).openVolume, 0);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
+        assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
 
         // 下现货单
         // 1. 生产现货交易对

@@ -70,7 +70,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.RISK_LEVERAGE_MISMATCH);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(10L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(10L));
             });
         }
     }
@@ -104,7 +104,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size));
             });
 
             // 11倍可以开出来, 因为保证金用到的更少了
@@ -115,7 +115,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size));
             });
 
             // 手续费也应该要考虑
@@ -141,11 +141,11 @@ public final class ITExchangeCoreCustomLeverage {
             long fee = calculateFee(price, size, 1, spec.makerFee, spec.feeScaleK);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(deposit - fee));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(0L));
             });
 
         }
@@ -188,7 +188,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
-            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).get(0).getOpenVolume());
 
             // 最高50倍杠杆, 高于这个值会报RISK_INVALID_LEVERAGE
             container.submitCommandSync(ApiAdjustLeverage.builder()
@@ -364,7 +364,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
-            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).get(0).getOpenVolume());
 
             // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
             container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
@@ -430,10 +430,10 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(100L));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(100L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
 
             // do withdraw
@@ -482,10 +482,10 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(order1, CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
 
             // 再下一手20倍的买单
@@ -506,10 +506,10 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(order2, CommandResultCode.RISK_LEVERAGE_MISMATCH);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
 
                 assertThat(profile.getOrders().getFirst().get(0).size, is(size1));
                 assertThat(profile.getOrders().getFirst().get(0).orderId, is(order1.orderId));
@@ -548,10 +548,10 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(order1, CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
 
             // 再下一手20倍的买单
@@ -572,10 +572,10 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(order2, CommandResultCode.RISK_INVALID_LEVERAGE);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
 
                 assertThat(profile.getOrders().getFirst().get(0).size, is(size1));
                 assertThat(profile.getOrders().getFirst().get(0).orderId, is(order1.orderId));
@@ -631,10 +631,10 @@ public final class ITExchangeCoreCustomLeverage {
             container.submitCommandSync(order1, CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
 
             // 再下一手20倍的买单, 在process order时会因为leverage不同报错
@@ -656,10 +656,10 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(charge));
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingBuySize(), is(size1));
-                assertThat(profile.getPositions().get(spec.symbolId).getPendingSellSize(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
 
                 assertThat(profile.getOrders().getFirst().size(), is(1));
             });
@@ -703,20 +703,20 @@ public final class ITExchangeCoreCustomLeverage {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
-            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).get(0).getOpenVolume());
 
             container.validateUserState(UID_1, profile -> {
                 // taker fee 500L, 1%
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(2000L - 500L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(50L));
             });
 
             container.validateUserState(UID_2, profile -> {
                 // maker fee 1000L, 2%
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(100000L - 1000L));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(50L));
             });
 
             // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
@@ -740,14 +740,14 @@ public final class ITExchangeCoreCustomLeverage {
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(49L));
                 // 平1手多单，是减仓，不收费
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L));
             });
 
             // 检查用户被强平1手
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(49L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(49L));
                 // 平1手空弹，是减仓，不收费
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(99000L));
             });
@@ -790,7 +790,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
 
-            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).getOpenVolume());
+            assertEquals(50, container.getUserProfile(UID_1).getPositions().get(spec.symbolId).get(0).getOpenVolume());
 
             // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
             container.updateCurrentPriceTo(981, spec.symbolId, spec.quoteCurrency);
@@ -800,7 +800,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             // 用户没有被强平
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(50L));
             });
         }
     }
@@ -866,16 +866,16 @@ public final class ITExchangeCoreCustomLeverage {
             container.validateUserState(UID_1, profile -> {
                 // taker fee 500L, 1%
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(amount - makerFee));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(50L));
             });
 
             long takerFee = calculateFee(price, size, 1, spec.takerFee, spec.feeScaleK);
             container.validateUserState(UID_2, profile -> {
                 // maker fee 1000L, 2%
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(MAX_VALUE - takerFee));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(spec.symbolId).getOpenVolume(), is(50L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(50L));
             });
 
             // 模拟价格下跌，如果按照leverage为1来计算的话, 价格达到25才会触发强平了
@@ -895,7 +895,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getPositions().getFirst().openVolume, is(50L));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(50L));
             });
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 

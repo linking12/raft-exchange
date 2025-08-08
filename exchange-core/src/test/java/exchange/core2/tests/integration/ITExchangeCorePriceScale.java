@@ -111,9 +111,9 @@ public final class ITExchangeCorePriceScale {
             long openPriceSum = (long) (0.1 * 753.4 * TenPowers.pow10(3 + 5));
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getAccounts().get(USDT_ID), is(chargeUsdtAmount));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).unrealizedProfit, is(unrealizedPnL));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).openInitMarginSum, is(initialMargin));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).openPriceSum, is(openPriceSum));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).unrealizedProfit, is(unrealizedPnL));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openInitMarginSum, is(initialMargin));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openPriceSum, is(openPriceSum));
             });
 
             // 转回用户视角

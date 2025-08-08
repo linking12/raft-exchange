@@ -3,6 +3,7 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
+import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.PositionMode;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
@@ -94,8 +95,10 @@ public class ITExchangeCoreHedgeMode {
             container.submitCommandSync(order104, CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).openVolume, is(1L));
-                assertThat(profile.getPositions().get(-symbol.symbolId).openVolume, is(1L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openVolume, is(1L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(1).openVolume, is(1L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(1).direction, is(PositionDirection.SHORT));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getPositions().isEmpty(), is(true));

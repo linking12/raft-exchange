@@ -18,6 +18,7 @@ package exchange.core2.core.common.api.reports;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.Order;
+import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.processors.MatchingEngineRouter;
@@ -32,6 +33,7 @@ import net.openhft.chronicle.bytes.BytesOut;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -91,7 +93,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
         SymbolSpecificationProvider symbolSpecProvider = riskEngine.getSymbolSpecificationProvider();
 
         if (userProfile != null) {
-            final IntObjectHashMap<SingleUserReportResult.Position> positions = new IntObjectHashMap<>(userProfile.positions.size());
+            final IntObjectHashMap<List<SingleUserReportResult.Position>> positions = new IntObjectHashMap<>(userProfile.positions.size());
             IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
             userProfile.positions.forEachKeyValue((symbol, pos) -> {
                 if (pos.marginMode == MarginMode.CROSS) {
@@ -103,7 +105,8 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, 0, 0, 0);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
-                    positions.put(symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
+                    List<SingleUserReportResult.Position> list = positions.getIfAbsentPut(pos.symbol, FastList.newList());
+                    list.add(pos.direction == PositionDirection.LONG ? 0 : list.size(), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 
@@ -125,7 +128,8 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balance + totalPnl);
-                    positions.put(userProfile.createPositionsKey(pos), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
+                    List<SingleUserReportResult.Position> list = positions.getIfAbsentPut(pos.symbol, FastList.newList());
+                    list.add(pos.direction == PositionDirection.LONG ? 0 : list.size(), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 

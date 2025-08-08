@@ -119,11 +119,11 @@ public final class ITExchangeCoreMarkPrice {
 
             // 未成单的时候，按照挂单价估算，名义价值 680 * 10
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(size));
-                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuyAvgPrice, is(price));
-                assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).pendingBuySize, is(size));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).pendingBuyAvgPrice, is(price));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).liquidationPrice, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).marginRatioScaleK, is(0L));
             });
 
             // UID_2匹配上, 成交两手
@@ -135,14 +135,14 @@ public final class ITExchangeCoreMarkPrice {
             // liquidationPrice = maintenanceMargin - totalMargin + openPriceSum / openVolume = 6 / 2 = 3
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = 1000 * 6 / 1360 = (long) 4.4 = 4
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuyAvgPrice, is(680L));
-                assertThat(profile.getPositions().get(symbol.symbolId).openVolume, is(2L));
-                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(8L));
-                assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(3L));
-                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(4L));
-                assertThat(profile.getPositions().get(symbol.symbolId).openPriceSum, is(1360L));
-                assertThat(profile.getPositions().get(symbol.symbolId).openInitMarginSum, is(1360L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).pendingBuyAvgPrice, is(680L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openVolume, is(2L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).pendingBuySize, is(8L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).liquidationPrice, is(3L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).marginRatioScaleK, is(4L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openPriceSum, is(1360L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openInitMarginSum, is(1360L));
             });
 
             container.updateCurrentPriceTo(2, symbol.symbolId, symbol.quoteCurrency);
@@ -156,14 +156,14 @@ public final class ITExchangeCoreMarkPrice {
             // liquidationPrice = maintenanceMargin - totalMargin + openPriceSum / openVolume = (0 - 1376L + 6800) / 10 = 542L
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = 1000 * 0 / 1360 = 0
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).openPriceSum, is(6800L));
-                assertThat(profile.getPositions().get(symbol.symbolId).openInitMarginSum, is(1376L));
-                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuyAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).openVolume, is(10L));
-                assertThat(profile.getPositions().get(symbol.symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).unrealizedProfit, is(-6780L));
-                assertThat(profile.getPositions().get(symbol.symbolId).liquidationPrice, is(542L));
-                assertThat(profile.getPositions().get(symbol.symbolId).marginRatioScaleK, is(-1000L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openPriceSum, is(6800L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openInitMarginSum, is(1376L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).unrealizedProfit, is(-6780L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).liquidationPrice, is(542L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).marginRatioScaleK, is(-1000L));
             });
 
         } catch (ExecutionException e) {
@@ -201,8 +201,8 @@ public final class ITExchangeCoreMarkPrice {
 
             // 未成单的时候，按照挂单价估算，名义价值 680 * 10
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(10L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(680L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(10L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(680L));
             });
 
             container.submitCommandSync(ApiPlaceOrder.builder()
@@ -219,9 +219,9 @@ public final class ITExchangeCoreMarkPrice {
 
             // 有1单成交，openInitMarginSum 650 * 1 / 10 ；剩余pending仍按挂单价680 估算
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(65L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(9L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(680L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenInitMarginSum(), is(65L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(9L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(680L));
             });
 
             // 这时markPrice更新到 670
@@ -241,9 +241,9 @@ public final class ITExchangeCoreMarkPrice {
 
             // 剩余9单成交，openInitMarginSum 65 + 670 * 9 / 10 = 668
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(668L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenInitMarginSum(), is(668L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(0L));
             });
 
             // 这时用户1减仓1单
@@ -272,9 +272,9 @@ public final class ITExchangeCoreMarkPrice {
 
             // 减仓1单，openInitMarginSum -= 668 * 1/10（-=66）
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(602L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenInitMarginSum(), is(602L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(0L));
             });
 
             // 这时仓位 notional = 670 * 9 = 6030, 维持保证金率是0.5%，维持保证金 = 6030 * 0.5% = 30.15
@@ -284,7 +284,7 @@ public final class ITExchangeCoreMarkPrice {
             // markPrice 更新到 617，仓位不变
             container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(txId++).symbol(symbol.symbolId).markPrice(617).build(), CommandResultCode.SUCCESS);
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenVolume(), is(9L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenVolume(), is(9L));
             });
 
             // markPrice 更新到 616，会触发强平
@@ -348,9 +348,9 @@ public final class ITExchangeCoreMarkPrice {
 
             // 全部成交，openInitMarginSum 650 * 1000 / 10 = 65000
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(65000L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenInitMarginSum(), is(65000L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(0L));
             });
 
 
@@ -362,10 +362,10 @@ public final class ITExchangeCoreMarkPrice {
             // 保证金率  MM/权益 = 6220 / 65000 - 58*1000 = 6220 / 7000 = 0.888
             container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(txId++).symbol(symbol.symbolId).markPrice(622).build(), CommandResultCode.SUCCESS);
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenVolume(), is(1000L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getLiquidationPrice(), is(621L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenVolume(), is(1000L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getLiquidationPrice(), is(621L));
                 // 这里保证金比率已经是88.8%，后续基本上就是要全仓强平
-                assertThat(profile.getPositions().get(symbol.symbolId).getMarginRatioScaleK() * 1.0 / symbol.getMaintenanceMarginScaleK(), is(0.888));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getMarginRatioScaleK() * 1.0 / symbol.getMaintenanceMarginScaleK(), is(0.888));
             });
 
             // markPrice 更新到 621，会触发强平
@@ -470,10 +470,10 @@ public final class ITExchangeCoreMarkPrice {
             // 全部成交，openInitMarginSum 1000 * 100 / 75 + 1000 * 1 / 40 = 1358.33
             // 保证金比率 1000 * 101 * 1% / 1358 = 0.07437， scaleK = 743
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbol.symbolId).getOpenInitMarginSum(), is(1358L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getMarginRatioScaleK(), is(743L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuySize(), is(0L));
-                assertThat(profile.getPositions().get(symbol.symbolId).getPendingBuyAvgPrice(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenInitMarginSum(), is(1358L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getMarginRatioScaleK(), is(743L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(0L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(0L));
             });
 
         }
@@ -501,7 +501,7 @@ public final class ITExchangeCoreMarkPrice {
 
             // 全仓强平价9055
             container.validateUserState(UID_1, report -> {
-                assertThat(report.getPositions().get(symbolId).getLiquidationPrice(), is(9055L));
+                assertThat(report.getPositions().get(symbolId).get(0).getLiquidationPrice(), is(9055L));
             });
 
             // 更新价格到9054，触发强平
