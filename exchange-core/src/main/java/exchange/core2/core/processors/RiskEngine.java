@@ -134,7 +134,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             sharedPool, 
             reportsQueriesConfiguration, 
             shardId);
-        this.lastPriceCache = new IntObjectHashMap<>();
+        this.lastPriceCache = new IntObjectHashMap<LastPriceCacheRecord>();
         this.fees = new IntLongHashMap();
         this.adjustments = new IntLongHashMap();
         this.suspends = new IntLongHashMap();
