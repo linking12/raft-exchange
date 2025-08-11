@@ -94,7 +94,7 @@ public class FundEventsHelper {
             UserProfile userProfile = userProfileService.getUserProfile(position.uid);
             for (SymbolPositionRecord pos : userProfile.positions) {
                 if (pos.marginMode == MarginMode.CROSS && pos.currency == position.currency) {
-                    totalPnl += pos.estimateProfit(priceRecord);
+                    totalPnl += pos.estimatePnl(priceRecord);
                     totalMM += pos.calculateMaintenanceMargin(spec, priceRecord);
                 }
             }

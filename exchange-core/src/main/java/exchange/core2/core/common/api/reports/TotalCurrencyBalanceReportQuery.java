@@ -114,7 +114,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(positionRecord.symbol);
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(positionRecord.currency);
                 final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(positionRecord.symbol, RiskEngine.LastPriceCacheRecord.dummy);
-                long profit = positionRecord.estimateProfit(avgPrice);
+                long profit = positionRecord.estimatePnl(avgPrice);
                 profit = CoreArithmeticUtils.sizePriceToCurrencyScale(profit, spec, currencySpec);
                 currencyBalance.addToValue(positionRecord.currency, profit);
                 // 新增：统计extraMargin

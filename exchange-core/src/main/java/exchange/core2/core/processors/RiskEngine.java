@@ -880,11 +880,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (positionRecord.currency == spec.quoteCurrency) {
                     final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
                     // add P&L subtract margin
-                    freeMargin += positionRecord.estimateProfit(lastPriceCache.get(recSymbol));
+                    freeMargin += positionRecord.estimatePnl(lastPriceCache.get(recSymbol));
                     freeMargin -= positionRecord.calculateRequiredMarginForFutures(spec2);
                 }
             } else {
-                freeMargin += position.estimateProfit(lastPriceCache.get(spec.symbolId));
+                freeMargin += position.estimatePnl(lastPriceCache.get(spec.symbolId));
             }
         }
 

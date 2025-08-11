@@ -120,7 +120,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 for (SymbolPositionRecord pos : records) {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
-                    long pnl = pos.estimateProfit(priceRecord);
+                    long pnl = pos.estimatePnl(priceRecord);
                     totalPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(pnl, spec, quoteCurrency);
                     long mm = pos.calculateMaintenanceMargin(spec, priceRecord);
                     totalMM += CoreArithmeticUtils.sizePriceToCurrencyScale(mm, spec, quoteCurrency);

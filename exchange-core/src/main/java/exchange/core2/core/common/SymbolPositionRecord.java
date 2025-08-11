@@ -155,7 +155,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     /**
      * 估算Pnl = profit(已实现部分) + 未实现盈亏(以markPrice估价)。
      */
-    public long estimateProfit(final LastPriceCacheRecord lastPriceCacheRecord) {
+    public long estimatePnl(final LastPriceCacheRecord lastPriceCacheRecord) {
         return profit + estimateUnrealizedProfit(lastPriceCacheRecord);
     }
     
