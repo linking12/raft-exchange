@@ -15,16 +15,19 @@
  */
 package exchange.core2.core.common.api.reports;
 
+import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.Order;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -33,7 +36,6 @@ import net.openhft.chronicle.bytes.BytesOut;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -91,6 +93,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
         }
         final UserProfile userProfile = riskEngine.getUserProfileService().getUserProfile(this.uid);
         SymbolSpecificationProvider symbolSpecProvider = riskEngine.getSymbolSpecificationProvider();
+        CurrencySpecificationProvider currencySpecProvider = riskEngine.getCurrencySpecificationProvider();
 
         if (userProfile != null) {
             final IntObjectHashMap<List<SingleUserReportResult.Position>> positions = new IntObjectHashMap<>(userProfile.positions.size());
@@ -111,23 +114,28 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
             });
 
             crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
-                long totalPnl = records.stream().mapToLong(pos -> {
-                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
-                    return pos.estimateProfit(priceRecord);
-                }).sum();
-                long totalMM = records.stream().mapToLong(pos -> {
+                CoreCurrencySpecification quoteCurrency = currencySpecProvider.getCurrencySpecification(currency);
+                long totalPnl = 0L;
+                long totalMM = 0L;
+                for (SymbolPositionRecord pos : records) {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
-                    return pos.calculateMaintenanceMargin(spec, priceRecord);
-                }).sum();
+                    long pnl = pos.estimateProfit(priceRecord);
+                    totalPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(pnl, spec, quoteCurrency);
+                    long mm = pos.calculateMaintenanceMargin(spec, priceRecord);
+                    totalMM += CoreArithmeticUtils.sizePriceToCurrencyScale(mm, spec, quoteCurrency);
+                }
                 long balance = userProfile.accounts.get(currency);
 
                 for (SymbolPositionRecord pos : records) {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
                     LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
+                    long totalPnlSymbolScale = CoreArithmeticUtils.currencyToSizePriceScale(totalPnl, spec, quoteCurrency);
+                    long totalMMSymbolScale = CoreArithmeticUtils.currencyToSizePriceScale(totalMM, spec, quoteCurrency);
+                    long balanceSymbolScale = CoreArithmeticUtils.currencyToSizePriceScale(balance, spec, quoteCurrency);
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
-                    long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
-                    long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balance + totalPnl);
+                    long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balanceSymbolScale, totalPnlSymbolScale, totalMMSymbolScale);
+                    long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balanceSymbolScale + totalPnlSymbolScale);
                     List<SingleUserReportResult.Position> list = positions.getIfAbsentPut(pos.symbol, FastList.newList());
                     list.add(pos.direction == PositionDirection.LONG ? 0 : list.size(), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
