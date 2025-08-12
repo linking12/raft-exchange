@@ -8,12 +8,14 @@ import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import com.binance.raftexchange.stubs.MarginMode;
 import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderType;
+import com.binance.raftexchange.stubs.PositionMode;
 import com.binance.raftexchange.stubs.SymbolType;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
 import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
 import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
+import com.binance.raftexchange.stubs.request.ApiAdjustPositionMode;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
@@ -33,9 +35,7 @@ import io.grpc.stub.StreamObserver;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -46,50 +46,44 @@ public class ExchangeSdk implements AutoCloseable {
 
     private final ExchangeClient client;
     private final ExchangeMetadataManager metadataManager;
-    private final ApiStream commandStream;
     private final AtomicInteger reqIdGen = new AtomicInteger(1);
-    private final Queue<CompletableFuture<CommandResult>> pendingQueue = new ConcurrentLinkedQueue<>();
 
     private ExchangeSdk(String host, int port) {
         this.client = new ExchangeClient(host, port);
         this.metadataManager = new ExchangeMetadataManager(client, reqIdGen);
-        // 创建一个全局的 stream，用于发所有写命令
-        this.commandStream = client.createStream(new StreamObserver<CommandResult>() {
-            @Override
-            public void onNext(CommandResult result) {
-                CompletableFuture<CommandResult> f = pendingQueue.poll();
-                if (f != null) {
-                    f.complete(result);
-                }
-            }
-
-            @Override
-            public void onError(Throwable t) {
-                CompletableFuture<CommandResult> f;
-                while ((f = pendingQueue.poll()) != null) {
-                    f.completeExceptionally(t);
-                }
-            }
-
-            @Override
-            public void onCompleted() { /* no-op */ }
-        });
     }
 
     public static ExchangeSdk connect(String host, int port) {
         return new ExchangeSdk(host, port);
     }
 
-    public CompletableFuture<CommandResult> sendAsync(ApiCommand cmd) {
+    public CompletableFuture<CommandResultView> sendAsync(ApiCommand cmd) {
         CompletableFuture<CommandResult> f = new CompletableFuture<>();
-        // 先入队：保证 future 和即将发出的命令一一对应
-        pendingQueue.offer(f);
-        // 再发流
-        commandStream.onNext(cmd);
-        return f;
+        try (ApiStream commandStream = client.createStream(new StreamObserver<CommandResult>() {
+
+            @Override
+            public void onNext(CommandResult result) {
+                f.complete(result);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                f.completeExceptionally(t);
+            }
+
+            @Override
+            public void onCompleted() {
+                f.completeExceptionally(new IllegalStateException("empty response"));
+            }
+        })) {
+            commandStream.onNext(cmd);
+        } catch (Throwable t) {
+            f.completeExceptionally(t);
+        }
+        return f.thenApply(result -> CommandResultView.build(result, metadataManager));
     }
 
-    public CommandResult send(ApiCommand cmd, Duration timeout) {
+    public CommandResultView send(ApiCommand cmd, Duration timeout) {
         try {
             return sendAsync(cmd).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (Exception e) {
@@ -97,17 +91,17 @@ public class ExchangeSdk implements AutoCloseable {
         }
     }
 
-    public CommandResult send(ApiCommand cmd) {
+    public CommandResultView send(ApiCommand cmd) {
         return send(cmd, Duration.ofSeconds(2));
     }
 
     // ———————— 业务方法 ————————
 
-    public CommandResult addUser(long uid) {
+    public CommandResultView addUser(long uid) {
         return send(buildAddUserCommand(uid));
     }
 
-    public CompletableFuture<CommandResult> addUserAsync(long uid) {
+    public CompletableFuture<CommandResultView> addUserAsync(long uid) {
         return sendAsync(buildAddUserCommand(uid));
     }
 
@@ -115,13 +109,13 @@ public class ExchangeSdk implements AutoCloseable {
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setAddUser(ApiAddUser.newBuilder().setUid(uid)).build();
     }
 
-    public CommandResult addCurrency(int id, String name, int digit) {
-        CommandResult commandResult = send(buildAddCurrencyCommand(id, name, digit));
+    public CommandResultView addCurrency(int id, String name, int digit) {
+        CommandResultView commandResult = send(buildAddCurrencyCommand(id, name, digit));
         metadataManager.refreshAll();
         return commandResult;
     }
 
-    public CompletableFuture<CommandResult> addCurrencyAsync(int id, String name, int digit) {
+    public CompletableFuture<CommandResultView> addCurrencyAsync(int id, String name, int digit) {
         final ApiCommand cmd;
         try {
             cmd = buildAddCurrencyCommand(id, name, digit);
@@ -147,18 +141,18 @@ public class ExchangeSdk implements AutoCloseable {
                 .build();
     }
 
-    public CommandResult addSymbol(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
+    public CommandResultView addSymbol(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
                                    long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long feeScaleK,
                                    long initMargin, long initMarginScaleK, Map<Long, Long> maintenanceMargin,
                                    long maintenanceMarginScaleK, Map<Long, Long> maxLeverage) {
-        CommandResult commandResult = send(buildAddSymbolCommand(id, symbolType, baseCurrency, quoteCurrency,
+        CommandResultView commandResult = send(buildAddSymbolCommand(id, symbolType, baseCurrency, quoteCurrency,
                 baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, initMargin, initMarginScaleK,
                 maintenanceMargin, maintenanceMarginScaleK, maxLeverage));
         metadataManager.refreshAll();
         return commandResult;
     }
 
-    public CompletableFuture<CommandResult> addSymbolAsync(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
+    public CompletableFuture<CommandResultView> addSymbolAsync(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
                                                            long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long feeScaleK,
                                                            long initMargin, long initMarginScaleK, Map<Long, Long> maintenanceMargin,
                                                            long maintenanceMarginScaleK, Map<Long, Long> maxLeverage) {
@@ -204,11 +198,11 @@ public class ExchangeSdk implements AutoCloseable {
                 .build();
     }
 
-    public CommandResult adjustUserBalance(long uid, int currency, double amount) {
+    public CommandResultView adjustUserBalance(long uid, int currency, double amount) {
         return send(buildAdjustUserBalanceCommand(uid, currency, amount));
     }
 
-    public CompletableFuture<CommandResult> adjustUserBalanceAsync(long uid, int currency, double amount) {
+    public CompletableFuture<CommandResultView> adjustUserBalanceAsync(long uid, int currency, double amount) {
         final ApiCommand cmd;
         try {
             cmd = buildAdjustUserBalanceCommand(uid, currency, amount);
@@ -228,12 +222,12 @@ public class ExchangeSdk implements AutoCloseable {
                 .build();
     }
 
-    public CommandResult placeOrder(long uid, long orderId, int symbol, OrderAction action, OrderType type,
+    public CommandResultView placeOrder(long uid, long orderId, int symbol, OrderAction action, OrderType type,
                                     double price, double reversePrice, double size, MarginMode marginMode, int leverage) {
         return send(buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage));
     }
 
-    public CompletableFuture<CommandResult> placeOrderAsync(long uid, long orderId, int symbol, OrderAction action, OrderType type,
+    public CompletableFuture<CommandResultView> placeOrderAsync(long uid, long orderId, int symbol, OrderAction action, OrderType type,
                                                             double price, double reversePrice, double size, MarginMode marginMode, int leverage) {
         final ApiCommand cmd;
         try {
@@ -267,11 +261,11 @@ public class ExchangeSdk implements AutoCloseable {
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setPlaceOrder(builder).build();
     }
 
-    public CommandResult moveOrder(long uid, long orderId, int symbol, double newPrice) {
+    public CommandResultView moveOrder(long uid, long orderId, int symbol, double newPrice) {
         return send(buildMoveOrderCommand(uid, orderId, symbol, newPrice));
     }
 
-    public CompletableFuture<CommandResult> moveOrderAsync(long uid, long orderId, int symbol, double newPrice) {
+    public CompletableFuture<CommandResultView> moveOrderAsync(long uid, long orderId, int symbol, double newPrice) {
         final ApiCommand cmd;
         try {
             cmd = buildMoveOrderCommand(uid, orderId, symbol, newPrice);
@@ -289,11 +283,11 @@ public class ExchangeSdk implements AutoCloseable {
                         .setNewPrice(scaledNewPrice)).build();
     }
 
-    public CommandResult cancelOrder(long uid, long orderId, int symbol) {
+    public CommandResultView cancelOrder(long uid, long orderId, int symbol) {
         return send(buildCancelOrderCommand(uid, orderId, symbol));
     }
 
-    public CompletableFuture<CommandResult> cancelOrderAsync(long uid, long orderId, int symbol) {
+    public CompletableFuture<CommandResultView> cancelOrderAsync(long uid, long orderId, int symbol) {
         return sendAsync(buildCancelOrderCommand(uid, orderId, symbol));
     }
 
@@ -302,11 +296,11 @@ public class ExchangeSdk implements AutoCloseable {
                 .setCancelOrder(ApiCancelOrder.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)).build();
     }
 
-    public CommandResult reduceOrder(long uid, long orderId, int symbol, double size) {
+    public CommandResultView reduceOrder(long uid, long orderId, int symbol, double size) {
         return send(buildReduceOrderCommand(uid, orderId, symbol, size));
     }
 
-    public CompletableFuture<CommandResult> reduceOrderAsync(long uid, long orderId, int symbol, double size) {
+    public CompletableFuture<CommandResultView> reduceOrderAsync(long uid, long orderId, int symbol, double size) {
         final ApiCommand cmd;
         try {
             cmd = buildReduceOrderCommand(uid, orderId, symbol, size);
@@ -324,11 +318,11 @@ public class ExchangeSdk implements AutoCloseable {
                         .setReduceSize(scaledSize)).build();
     }
 
-    public CommandResult suspendUser(long uid) {
+    public CommandResultView suspendUser(long uid) {
         return send(buildSuspendUserCommand(uid));
     }
 
-    public CompletableFuture<CommandResult> suspendUserAsync(long uid) {
+    public CompletableFuture<CommandResultView> suspendUserAsync(long uid) {
         return sendAsync(buildSuspendUserCommand(uid));
     }
 
@@ -337,11 +331,11 @@ public class ExchangeSdk implements AutoCloseable {
                 .setSuspendUser(ApiSuspendUser.newBuilder().setUid(uid)).build();
     }
 
-    public CommandResult resumeUser(long uid) {
+    public CommandResultView resumeUser(long uid) {
         return send(buildResumeUserCommand(uid));
     }
 
-    public CompletableFuture<CommandResult> resumeUserAsync(long uid) {
+    public CompletableFuture<CommandResultView> resumeUserAsync(long uid) {
         return sendAsync(buildResumeUserCommand(uid));
     }
 
@@ -350,11 +344,11 @@ public class ExchangeSdk implements AutoCloseable {
                 .setResumeUser(ApiResumeUser.newBuilder().setUid(uid)).build();
     }
 
-    public CommandResult adjustLeverage(long uid, int symbol, int leverage) {
+    public CommandResultView adjustLeverage(long uid, int symbol, int leverage) {
         return send(buildAdjustLeverageCommand(uid, symbol, leverage));
     }
 
-    public CompletableFuture<CommandResult> adjustLeverageAsync(long uid, int symbol, int leverage) {
+    public CompletableFuture<CommandResultView> adjustLeverageAsync(long uid, int symbol, int leverage) {
         return sendAsync(buildAdjustLeverageCommand(uid, symbol, leverage));
     }
 
@@ -363,11 +357,24 @@ public class ExchangeSdk implements AutoCloseable {
                 .setAdjustLeverage(ApiAdjustLeverage.newBuilder().setUid(uid).setSymbol(symbol).setLeverage(leverage)).build();
     }
 
-    public CommandResult adjustMargin(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
+    public CommandResultView adjustPositionMode(long uid, PositionMode positionMode) {
+        return send(buildAdjustPositionModeCommand(uid, positionMode));
+    }
+
+    public CompletableFuture<CommandResultView> adjustPositionModeAsync(long uid, PositionMode positionMode) {
+        return sendAsync(buildAdjustPositionModeCommand(uid, positionMode));
+    }
+
+    public ApiCommand buildAdjustPositionModeCommand(long uid, PositionMode positionMode) {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setAdjustPositionMode(ApiAdjustPositionMode.newBuilder().setUid(uid).setPositionMode(positionMode)).build();
+    }
+
+    public CommandResultView adjustMargin(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
         return send(buildAdjustMarginCommand(uid, mode, symbolOrCurrency, amount));
     }
 
-    public CompletableFuture<CommandResult> adjustMarginAsync(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
+    public CompletableFuture<CommandResultView> adjustMarginAsync(long uid, MarginMode mode, int symbolOrCurrency, double amount) {
         final ApiCommand cmd;
         try {
             cmd = buildAdjustMarginCommand(uid, mode, symbolOrCurrency, amount);
@@ -396,11 +403,11 @@ public class ExchangeSdk implements AutoCloseable {
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setAdjustMargin(apiAdjustMargin).build();
     }
 
-    public CommandResult adjustMarkPrice(int symbol, double markPrice) {
+    public CommandResultView adjustMarkPrice(int symbol, double markPrice) {
         return send(buildAdjustMarkPriceCommand(symbol, markPrice));
     }
 
-    public CompletableFuture<CommandResult> adjustMarkPriceAsync(int symbol, double markPrice) {
+    public CompletableFuture<CommandResultView> adjustMarkPriceAsync(int symbol, double markPrice) {
         final ApiCommand cmd;
         try {
             cmd = buildAdjustMarkPriceCommand(symbol, markPrice);
@@ -418,11 +425,11 @@ public class ExchangeSdk implements AutoCloseable {
                         .setSymbol(symbol).setMarkPrice(scaledMarkPrice)).build();
     }
 
-    public CommandResult settleFundingFees(int symbol, long fundingRate, long rateScaleK) {
+    public CommandResultView settleFundingFees(int symbol, long fundingRate, long rateScaleK) {
         return send(buildSettleFundingFeesCommand(symbol, fundingRate, rateScaleK));
     }
 
-    public CompletableFuture<CommandResult> settleFundingFeesAsync(int symbol, long fundingRate, long rateScaleK) {
+    public CompletableFuture<CommandResultView> settleFundingFeesAsync(int symbol, long fundingRate, long rateScaleK) {
         return sendAsync(buildSettleFundingFeesCommand(symbol, fundingRate, rateScaleK));
     }
 
@@ -432,11 +439,11 @@ public class ExchangeSdk implements AutoCloseable {
                         .setSymbol(symbol).setFundingRate(fundingRate).setRateScaleK(rateScaleK)).build();
     }
 
-    public CommandResult settlePnl(int symbol, double price) {
+    public CommandResultView settlePnl(int symbol, double price) {
         return send(buildSettlePnlCommand(symbol, price));
     }
 
-    public CompletableFuture<CommandResult> settlePnlAsync(int symbol, double price) {
+    public CompletableFuture<CommandResultView> settlePnlAsync(int symbol, double price) {
         final ApiCommand cmd;
         try {
             cmd = buildSettlePnlCommand(symbol, price);
@@ -466,7 +473,6 @@ public class ExchangeSdk implements AutoCloseable {
     @Override
     public void close() {
         try {
-            commandStream.onCompleted();
             metadataManager.shutdown();
             client.close();
         } catch (Exception ignore) {
