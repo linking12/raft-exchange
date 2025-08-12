@@ -56,13 +56,13 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
     public long extraMargin = 0; // 补充保证金，默认 0
 
-    public void initialize(long uid, int symbol, int currency, int leverage, MarginMode marginMode) {
+    public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
         this.symbol = symbol;
         this.currency = currency;
 
-        this.direction = PositionDirection.EMPTY;
+        this.direction = (orderAction == OrderAction.BID) ? PositionDirection.LONG : PositionDirection.SHORT;
         this.openVolume = 0;
         this.openInitMarginSum = 0;
         this.openPriceSum = 0;
@@ -113,7 +113,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return true if position is empty (no pending orders, no open trades)
      */
     public boolean isEmpty() {
-        return direction == PositionDirection.EMPTY
+        return openVolume == 0
                 && pendingSellSize == 0
                 && pendingBuySize == 0;
     }
@@ -153,40 +153,14 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
 
     /**
-     * P&L = 已实现盈亏 + (当前价 - 开仓均价) * 持仓量 = profit + 当前价 * 持仓量 - 名义价值
-     * 返回纯利润，不包含冻结保证金。
+     * 估算Pnl = profit(已实现部分) + 未实现盈亏(以markPrice估价)。
      */
-    public long estimateProfit(final LastPriceCacheRecord lastPriceCacheRecord) {
-        switch (direction) {
-            case EMPTY:
-                return profit;
-            case LONG:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0) {
-                    return profit + (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum);
-                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    // fallback: 使用标记价格
-                    return profit + (openVolume * lastPriceCacheRecord.markPrice - openPriceSum);
-                } else {
-                    // fallback: 用开仓均价作为当前价，即浮盈为0
-                    return profit;
-                }
-            case SHORT:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE) {
-                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.askPrice);
-                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    // fallback: 使用标记价格
-                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.markPrice);
-                } else {
-                    // fallback: 用开仓均价作为当前价，即浮盈为0
-                    return profit;
-                }
-            default:
-                throw new IllegalStateException();
-        }
+    public long estimatePnl(final LastPriceCacheRecord lastPriceCacheRecord) {
+        return profit + estimateUnrealizedProfit(lastPriceCacheRecord);
     }
     
     /**
-     * 【强平风险评估用】计算未实现盈亏，基于标记价格。
+     * 估算未实现盈亏，基于标记价格。
      * - 多头：(markPrice - 开仓价格) * 数量
      * - 空头：(开仓价格 - markPrice) * 数量
      */
@@ -205,7 +179,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * Pm = (sign * Pe * Q - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *    = (sign * openPriceSum - B - PNL(other) + MM(other)) / Q * (sign * 1 - Rmm)
      *
-     * @return 返回强平价，-1表示无强平风险
+     * @return 返回强平价，-1表示无可用强平价
      */
     public long estimateLiquidationPrice(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
                                          long totalBalance, long totalPnl, long totalMM) {
@@ -221,7 +195,12 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             long pnlOther = totalPnl - estimateUnrealizedProfit(priceRecord);
             long mmOther = totalMM - maintenanceMargin;
             long numerator = sign * openPriceSum - totalBalance - pnlOther + mmOther;
-            long result = numerator / (openVolume * (sign * notional - maintenanceMargin) / notional);
+            // 按公式 result = numerator / (openVolume * (sign * notional - maintenanceMargin) / notional)
+            long diff = sign * notional - maintenanceMargin;
+            if (diff == 0) {
+                return -1; // 无法计算强平价
+            }
+            long result = numerator * notional / (openVolume * diff);
             if (result < 0 || (direction == PositionDirection.LONG && result > priceRecord.markPrice) || (direction == PositionDirection.SHORT && result < priceRecord.markPrice)) {
                 return -1;
             }
@@ -237,6 +216,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (openVolume == 0) {
             return 0; // 无资金，不算保证金比率
         }
+        if (totalMargin <= 0) {
+            // 只要totalMargin <= maintenanceMargin就应该被强平了，如果还没有强平，保证金比率会大于100%；
+            // 如果依然没有强平，totalMargin <=0 则返回-1，表示强平风险极大。
+            return spec.maintenanceMarginScaleK * -1;
+        }
         long notional = openVolume * priceRecord.markPrice;
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
         return spec.maintenanceMarginScaleK * maintenanceMargin / totalMargin;
@@ -250,7 +234,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * @return
      */
     public long calculateMaintenanceMargin(CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
-        if (direction == PositionDirection.EMPTY) {
+        if (openVolume == 0) {
             return 0;
         }
         long notional = openVolume * priceRecord.markPrice;
@@ -352,7 +336,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize, profit);
 
-        if (direction == PositionDirection.EMPTY || direction == PositionDirection.of(action)) {
+        if (openVolume == 0 || direction == PositionDirection.of(action)) {
             // nothing to close
             return tradeSize;
         }
@@ -369,7 +353,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         profit += (openVolume * tradePrice - openPriceSum) * direction.getMultiplier();
         openInitMarginSum = 0;
         openPriceSum = 0;
-        direction = PositionDirection.EMPTY;
         final long sizeToOpen = tradeSize - openVolume;
         openVolume = 0;
 
@@ -426,10 +409,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     public void validateInternalState() {
         if (direction == PositionDirection.EMPTY && (openVolume != 0 || openPriceSum != 0)) {
-            log.error("uid {} : position:{} totalSize:{} openPriceSum:{}", uid, direction, openVolume, openPriceSum);
-            throw new IllegalStateException();
-        }
-        if (direction != PositionDirection.EMPTY && (openVolume <= 0 || openPriceSum <= 0)) {
             log.error("uid {} : position:{} totalSize:{} openPriceSum:{}", uid, direction, openVolume, openPriceSum);
             throw new IllegalStateException();
         }

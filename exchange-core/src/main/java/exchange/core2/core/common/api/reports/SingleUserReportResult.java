@@ -50,7 +50,7 @@ public final class SingleUserReportResult implements ReportResult {
 
     private final UserStatus userStatus;
     private final IntLongHashMap accounts;
-    private final IntObjectHashMap<Position> positions;
+    private final IntObjectHashMap<List<Position>> positions;
 
     // matching engine: orders placed by user
     // symbol -> orders
@@ -64,7 +64,7 @@ public final class SingleUserReportResult implements ReportResult {
         return new SingleUserReportResult(uid, null, null, null, orders, QueryExecutionStatus.OK);
     }
 
-    public static SingleUserReportResult createFromRiskEngineFound(long uid, UserStatus userStatus, IntLongHashMap accounts, IntObjectHashMap<Position> positions) {
+    public static SingleUserReportResult createFromRiskEngineFound(long uid, UserStatus userStatus, IntLongHashMap accounts, IntObjectHashMap<List<Position>> positions) {
         return new SingleUserReportResult(uid, userStatus, accounts, positions, null, QueryExecutionStatus.OK);
     }
 
@@ -83,7 +83,7 @@ public final class SingleUserReportResult implements ReportResult {
 //        this.userProfile = bytesIn.readBoolean() ? new UserProfile(bytesIn) : null;
         this.userStatus = bytesIn.readBoolean() ? UserStatus.of(bytesIn.readByte()) : null;
         this.accounts = bytesIn.readBoolean() ? SerializationUtils.readIntLongHashMap(bytesIn) : null;
-        this.positions = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, Position::new) : null;
+        this.positions = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, b -> SerializationUtils.readList(b, Position::new)) : null;
         this.orders = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, b -> SerializationUtils.readList(b, Order::new)) : null;
         this.queryExecutionStatus = QueryExecutionStatus.of(bytesIn.readInt());
     }
@@ -110,7 +110,7 @@ public final class SingleUserReportResult implements ReportResult {
 
         bytes.writeBoolean(positions != null);
         if (positions != null) {
-            SerializationUtils.marshallIntHashMap(positions, bytes);
+            SerializationUtils.marshallIntHashMap(positions, bytes, pos -> SerializationUtils.marshallList(pos, bytes));
         }
 
         bytes.writeBoolean(orders != null);
@@ -156,7 +156,7 @@ public final class SingleUserReportResult implements ReportResult {
 //                                SerializationUtils.preferNotNull(a.userProfile, b.userProfile),
                                 SerializationUtils.preferNotNull(a.userStatus, b.userStatus),
                                 SerializationUtils.preferNotNull(a.accounts, b.accounts),
-                                SerializationUtils.preferNotNull(a.positions, b.positions),
+                                SerializationUtils.mergeOverride(a.positions, b.positions),
                                 SerializationUtils.mergeOverride(a.orders, b.orders),
                                 a.queryExecutionStatus != QueryExecutionStatus.OK ? a.queryExecutionStatus : b.queryExecutionStatus));
     }

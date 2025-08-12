@@ -87,6 +87,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -104,6 +106,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -115,6 +119,8 @@ class ITPerpetualContractIntegration {
                     .build();
             container.addSymbol(spec1);
 
+            container.addCurrency(spec0.baseCurrency, 0);
+            container.addCurrency(spec0.quoteCurrency, 0);
             ApiSettleFundingFees cmd1 = ApiSettleFundingFees.builder()
                     .transactionId(1004L)
                     .symbol(symbolId1)
@@ -146,6 +152,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -163,6 +171,8 @@ class ITPerpetualContractIntegration {
                     .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
                     .baseCurrency(11)
                     .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
                     .initMargin(1)
                     .initMarginScaleK(100)
                     .feeScaleK(100)
@@ -173,6 +183,9 @@ class ITPerpetualContractIntegration {
                     .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                     .build();
             container.addSymbol(spec1);
+
+            container.addCurrency(spec0.baseCurrency, 0);
+            container.addCurrency(spec0.quoteCurrency, 0);
 
             ApiSettlePNL cmd0 = ApiSettlePNL.builder()
                     .settlePrice(10000L)
@@ -214,12 +227,12 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuySize, is(10L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuyAvgPrice, is(1000L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
             });
 
             ApiSettlePNL cmd1 = ApiSettlePNL.builder()
@@ -231,12 +244,12 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuySize, is(10L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuyAvgPrice, is(1000L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
             });
         }
     }
@@ -270,22 +283,22 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).getDirection(), is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).getDirection(), is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
             });
 
             ApiSettlePNL cmd1 = ApiSettlePNL.builder()
@@ -333,12 +346,12 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(10L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(1000L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
             });
 
             ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
@@ -352,12 +365,12 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(10L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(1000L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
             });
         }
     }
@@ -413,26 +426,26 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).profit, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).profit, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
             });
             // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
             ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
@@ -446,20 +459,20 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openVolume, is(10L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openPriceSum, is(10000L));
-                assertThat(profile.getPositions().getFirst().profit < 0, is(true));
-                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).profit < 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openVolume, is(10L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openInitMarginSum, is(150L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).openPriceSum, is(10000L));
-                assertThat(profile.getPositions().getFirst().profit > 0, is(true));
-                assertThat(profile.getPositions().getFirst().profit, is(1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).profit > 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(1L * size * fundingRate * updatedPrice / rateScale));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
@@ -469,10 +482,10 @@ class ITPerpetualContractIntegration {
             // init margin = 150 - 150/10 = 135
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
-                assertThat(profile.getPositions().getFirst().openVolume, is(size - 1L));
-                assertThat(profile.getPositions().getFirst().profit, is(-150L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(1000L * size - updatedPrice));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(135L));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(size - 1L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-150L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(1000L * size - updatedPrice));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(135L));
             });
 
             // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit
@@ -587,22 +600,22 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).getDirection(), is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).marginMode, is(MarginMode.CROSS));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingSellAvgPrice, is(0L));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
             });
 
             // 永续cmd请求发起后, 合约价格低于现货价格时设置资金费率 < 0(fundingRate/rateScale=-1%), 此时做空用户按比例减钱给做多用户, 鼓励做多
@@ -617,14 +630,14 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().profit > 0, is(true));
-                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().getFirst().get(0).profit > 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().profit < 0, is(true));
-                assertThat(profile.getPositions().getFirst().profit, is(1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().getFirst().get(0).profit < 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(1L * size * fundingRate * updatedPrice / rateScale));
 
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
@@ -635,10 +648,10 @@ class ITPerpetualContractIntegration {
             // init margin = 150 - 150/10 = 135
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
-                assertThat(profile.getPositions().getFirst().openVolume, is(size - 1L));
-                assertThat(profile.getPositions().getFirst().profit, is(150L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(1000L * size - updatedPrice));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(135L));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(size - 1L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(150L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(1000L * size - updatedPrice));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(135L));
             });
 
             // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit
@@ -687,7 +700,8 @@ class ITPerpetualContractIntegration {
                     .initMarginScaleK(100)
                     .build();
             container.addSymbol(spec);
-
+            container.addCurrency(spec.baseCurrency, 0);
+            container.addCurrency(spec.quoteCurrency, 0);
             // 0. 充钱
             List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
             userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, deposit));
@@ -709,8 +723,8 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(spec.symbolId).getDirection(), is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(spec.symbolId).profit, is(0L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).profit, is(0L));
             });
 
             // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
@@ -727,7 +741,7 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
             });
 
             // 再次发起settle funding fee cmd, unitFee为100%, 即每手按照标记价格给对方
@@ -746,10 +760,10 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(size * price * 1L));
-                assertThat(profile.getPositions().getFirst().profit, is(-1L * size * fundingRate * updatedPrice / rateScale - size * updatedPrice));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(size * price * 1L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale - size * updatedPrice));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
@@ -764,11 +778,11 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(10000L));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
-                assertThat(profile.getPositions().getFirst().profit, is(-11110L));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-11110L));
             });
 
             container.updateCurrentPriceTo(600, spec.symbolId, spec.quoteCurrency);
@@ -787,11 +801,11 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(10000L));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
-                assertThat(profile.getPositions().getFirst().profit, is(-11110L));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-11110L));
             });
 
             // 再次触发强平, 此时期待当前持仓不再被强平
@@ -799,11 +813,11 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openInitMarginSum, is(110L));
-                assertThat(profile.getPositions().getFirst().openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(110L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(10000L));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().openVolume, is(10L));
-                assertThat(profile.getPositions().getFirst().profit, is(-11110L));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-11110L));
             });
         }
     }

@@ -15,6 +15,7 @@ package exchange.core2.core.utils;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.common.TenPowers;
 import exchange.core2.core.processors.RiskEngine;
 import lombok.extern.slf4j.Slf4j;
 
@@ -172,8 +173,15 @@ public final class CoreArithmeticUtils {
     }
 
     /**
+     * 币种记账单位(currency) → 撮合内部乘积单位(baseScale * quoteScale)
+     */
+    public static long currencyToSizePriceScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        return convertScale(amount, currency.getCurrencyScaleK(), spec.baseScaleK * spec.quoteScaleK);
+    }
+
+    /**
      * 币对交易单位(symbol.base或quote) → 币种记账单位(currency)
-     * 返还补充保证金用到
+     * 返还补充保证金，现货加减base用到
      */
     public static long symbolToCurrencyScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
         if (currency.id == spec.baseCurrency) {
@@ -198,7 +206,14 @@ public final class CoreArithmeticUtils {
     }
 
     private static long convertScale(long amount, long fromScale, long toScale) {
-        return amount * toScale / fromScale;
+        if (fromScale == toScale) {
+            return amount;
+        }
+        int diff = TenPowers.log10(fromScale) - TenPowers.log10(toScale);
+        if (diff > 0) { // 缩小
+            return amount / TenPowers.pow10(diff);
+        } else { // 放大
+            return amount * TenPowers.pow10(-diff);
+        }
     }
-
 }

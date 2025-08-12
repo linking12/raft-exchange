@@ -115,7 +115,7 @@ public final class LiquidationScanner {
             MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
             IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
             positions.forEachValue(position -> {
-                if (position == null || position.direction == PositionDirection.EMPTY) {
+                if (position == null || position.openVolume == 0) {
                     return; // 跳过空仓位
                 }
                 int symbol = position.symbol;
@@ -183,7 +183,7 @@ public final class LiquidationScanner {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                long profit = position.estimateProfit(priceRecord);
+                long profit = position.estimatePnl(priceRecord);
                 long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
                 profit = CoreArithmeticUtils.sizePriceToCurrencyScale(profit, spec, currencySpec);
                 maintenance = CoreArithmeticUtils.sizePriceToCurrencyScale(maintenance, spec, currencySpec);

@@ -1,12 +1,12 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
-import exchange.core2.core.common.CoreCurrencySpecification.TenPowers;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.TenPowers;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
@@ -111,9 +111,9 @@ public final class ITExchangeCorePriceScale {
             long openPriceSum = (long) (0.1 * 753.4 * TenPowers.pow10(3 + 5));
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getAccounts().get(USDT_ID), is(chargeUsdtAmount));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).unrealizedProfit, is(unrealizedPnL));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).openInitMarginSum, is(initialMargin));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).openPriceSum, is(openPriceSum));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).unrealizedProfit, is(unrealizedPnL));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openInitMarginSum, is(initialMargin));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openPriceSum, is(openPriceSum));
             });
 
             // 转回用户视角
@@ -178,12 +178,18 @@ public final class ITExchangeCorePriceScale {
             double tradeAmountFloat = tradeAmountCurrency * 1.0 / USDT.getCurrencyScaleK();
             assertThat(tradeAmountFloat, is(37.25615));
 
+            // 收入 0.05 BNB
+            long bnbBalance= CoreArithmeticUtils.symbolToCurrencyScale(size, BNB_USDT_SPOT, BNB);
+            // 再还原成浮点校验：
+            double bnbBalanceFloat = bnbBalance * 1.0 / BNB.getCurrencyScaleK();
+            assertThat(bnbBalanceFloat, is(0.05));
+
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getAccounts().get(USDT_ID), is(usdtDeposit - tradeAmountCurrency));
-                assertThat(report.getAccounts().get(BNB_ID),  is(size));
+                assertThat(report.getAccounts().get(BNB_ID),  is(bnbBalance));
             });
             container.validateUserState(UID_2, report -> {
-                assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit - size));
+                assertThat(report.getAccounts().get(BNB_ID),  is(bnbDeposit - bnbBalance));
                 assertThat(report.getAccounts().get(USDT_ID), is(tradeAmountCurrency));
             });
 

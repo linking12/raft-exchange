@@ -78,6 +78,10 @@ message Position {
   int64 mark_price = 16;
 }
 
+message PositionList {
+  repeated Position positions = 1;
+}
+
 message Order {
   int64 order_id = 1;
   int64 price = 2;
@@ -103,7 +107,7 @@ message SingleUserReportResult {
   int64 user_id = 1;
   UserStatus user_status = 2;
   map<int32, int64> accounts = 3;
-  map<int32, Position> positions = 4;
+  map<int32, PositionList> positions = 4;
   map<int32, OrderList> orders = 5;
   QueryExecutionStatus query_execution_status = 6;
 }

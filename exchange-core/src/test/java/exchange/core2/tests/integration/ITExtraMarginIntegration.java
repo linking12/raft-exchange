@@ -180,8 +180,8 @@ class ITExtraMarginIntegration {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
-            container.addCurrency(1);
-            container.addCurrency(quoteId);
+            container.addCurrency(BASE_CURRENCY_ID, 0);
+            container.addCurrency(quoteId, 0);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit1, quoteId);
 
@@ -239,7 +239,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().extraMargin, is(deposit2));
+                assertThat(profile.getPositions().getFirst().get(0).extraMargin, is(deposit2));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -260,7 +260,7 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(event1.fee));
             assertThat(PositionDirection.EMPTY, is(event1.direction));
             assertThat(FundEvent.FundEventType.MARGIN_ADJUST, is(event1.eventType));
-            assertThat(1880L, is(event1.free));
+            assertThat(880L, is(event1.free));
             assertThat(120L, is(event1.locked));
             assertThat(0L, is(event1.openPriceSum));
             assertThat(0L, is(event1.openVolume));
@@ -289,6 +289,8 @@ class ITExtraMarginIntegration {
         long takerOrderId4 = 1008L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
+            container.addCurrency(BASE_CURRENCY_ID, 0);
+            container.addCurrency(quoteId, 0);
             container.initFutureSymbol(symbolId, quoteId);
             container.initMarkPrice(symbolId, 10000);
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -300,7 +302,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().extraMargin, is(0L));
+                assertThat(profile.getPositions().getFirst().get(0).extraMargin, is(0L));
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
@@ -313,8 +315,8 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().getFirst().extraMargin, is(deposit2));
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertThat(profile.getPositions().getFirst().get(0).extraMargin, is(deposit2));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - deposit2));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -324,7 +326,7 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
-                assertThat(profile.getAccounts().get(quoteId), is(deposit + deposit2 + price2 - price1 - fee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit + deposit2 + price2 - price1 - fee - deposit2));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -343,7 +345,7 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(marginAdjust.fee));
             assertThat(PositionDirection.LONG, is(marginAdjust.direction));
             assertThat(FundEvent.FundEventType.MARGIN_ADJUST, is(marginAdjust.eventType));
-            assertThat(890L, is(marginAdjust.free));
+            assertThat(390L, is(marginAdjust.free));
             assertThat(100L, is(marginAdjust.locked));
             assertThat(10000L, is(marginAdjust.openPriceSum));
             assertThat(1L, is(marginAdjust.openVolume));
@@ -365,7 +367,7 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(marginRefund.fee));
             assertThat(PositionDirection.EMPTY, is(marginRefund.direction));
             assertThat(FundEvent.FundEventType.MARGIN_REFUND, is(marginRefund.eventType));
-            assertThat(deposit - fee + price2 - price1, is(marginRefund.free));
+            assertThat(deposit - fee + price2 - price1 - deposit2, is(marginRefund.free));
             assertThat(0L, is(marginRefund.locked));
             assertThat(0L, is(marginRefund.openPriceSum));
             assertThat(0L, is(marginRefund.openVolume));
@@ -410,10 +412,10 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).extraMargin, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).direction, is(PositionDirection.SHORT));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -422,8 +424,8 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(200L));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(300L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(200L));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).extraMargin, is(300L));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -432,8 +434,8 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(500L));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(500L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(500L));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).extraMargin, is(500L));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -459,7 +461,7 @@ class ITExtraMarginIntegration {
         long makerOrderId1 = 1005L;
         long takerOrderId1 = 1006L;
         long fee = 10;
-        long adjustMarginOrderId = 0;
+        long extraMarginDeposit = 10L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
@@ -496,25 +498,25 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(0L));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            adjustMarginOrderId = container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, 10, MarginMode.ISOLATED);
+            container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, extraMarginDeposit, MarginMode.ISOLATED);
 
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - extraMarginDeposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(10L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(extraMarginDeposit));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - extraMarginDeposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(10L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(extraMarginDeposit));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -610,7 +612,7 @@ class ITExtraMarginIntegration {
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(0L));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -618,18 +620,18 @@ class ITExtraMarginIntegration {
             container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, marginDeposit, MarginMode.ISOLATED);
 
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - marginDeposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(marginDeposit));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(marginDeposit));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - marginDeposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(marginDeposit));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(marginDeposit));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -926,8 +928,8 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getExtraMargin(), is(900L));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).getExtraMargin(), is(2900L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getExtraMargin(), is(900L));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).getExtraMargin(), is(2900L));
             });
 
             // userId3先设置一个单子用于强制平仓, 此时
@@ -936,12 +938,23 @@ class ITExtraMarginIntegration {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getExtraMargin(), is(900L));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).getExtraMargin(), is(2900L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getExtraMargin(), is(900L));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).getExtraMargin(), is(2900L));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            });
+            container.validateUserState(userId3, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).direction, is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).direction, is(PositionDirection.EMPTY));
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(userId3, profile -> {
+                assertThat(profile.getPositions().size(), is(2));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).direction, is(PositionDirection.SHORT));
+            });
 
             long fee1 = 10; // symbol0 1手 maker, 固定手续费10
             long fee2 = container.calculateFee(price2, 1, 1, symbols.get(1).makerFee, symbols.get(1).feeScaleK); // symbol1 1手maker, 动态手续费
@@ -952,7 +965,7 @@ class ITExtraMarginIntegration {
                 // fee = fee1 + fee2
                 // 做多做空delta = delta1 + delta2
                 // balance = deposit - fee - delta1 - delta2 + adjustMargin1 + adjustMargin2
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee1 - fee2 - delta1 - delta2 + adjustMargin1 + adjustMargin2));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - fee1 - fee2 - delta1 - delta2));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
@@ -971,7 +984,7 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(refund1.fee));
             assertThat(PositionDirection.EMPTY, is(refund1.direction));
             assertThat(FundEvent.FundEventType.MARGIN_REFUND, is(refund1.eventType));
-            assertThat(10640L, is(refund1.free));
+            assertThat(6840L, is(refund1.free));
             assertThat(100L, is(refund1.locked));
             assertThat(0L, is(refund1.openPriceSum));
             assertThat(0L, is(refund1.openVolume));
@@ -986,7 +999,7 @@ class ITExtraMarginIntegration {
             assertThat(0L, is(refund2.fee));
             assertThat(PositionDirection.EMPTY, is(refund2.direction));
             assertThat(FundEvent.FundEventType.MARGIN_REFUND, is(refund2.eventType));
-            assertThat(12640L, is(refund2.free));
+            assertThat(8840L, is(refund2.free));
             assertThat(0L, is(refund2.locked));
             assertThat(0L, is(refund2.openPriceSum));
             assertThat(0L, is(refund2.openVolume));
@@ -1016,13 +1029,13 @@ class ITExtraMarginIntegration {
 
             container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId);
             container.createAskWithOrderId(makerOrderId3, userId1, size, price2, symbols.get(1).symbolId);
-
+            // 此时划转会失败
             container.placeExtraMargin(userId1, quoteId, symbols.get(0).symbolId, deposit, MarginMode.ISOLATED);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).extraMargin, is(deposit));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).extraMargin, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).extraMargin, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).extraMargin, is(0L));
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 

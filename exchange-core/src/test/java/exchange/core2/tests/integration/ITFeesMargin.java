@@ -57,6 +57,8 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 6);
             container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
@@ -112,11 +114,11 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1 - makerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
-                assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
-                assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(10L));
-                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, is(30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingSellSize, is(10L));
+                assertThat(profile.getPositions().get(symbolId).get(0).openPriceSum, is(10770L * 30L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -124,11 +126,11 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount2 - takerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
-                assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
-                assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L)); // 成交总价
+                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, is(30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).openPriceSum, is(10770L * 30L)); // 成交总价
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -150,6 +152,8 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 6);
             container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(50, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 250_000L + takerFeeForPlaceOrder101;
@@ -205,11 +209,11 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1 - makerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
-                assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
-                assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(20L));
-                assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, is(30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingBuySize, is(20L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).openPriceSum, is(10770L * 30L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -217,11 +221,11 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount2 - takerFee * 30));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
-                assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(symbolId).openVolume, is(30L));
-                assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).openPriceSum, is(10770L * 30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, is(30L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).openPriceSum, is(10770L * 30L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -244,6 +248,8 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPECFEE_USD_JPY);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
+            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 6);
             container.initMarkPrice(SYMBOLSPECFEE_USD_JPY.symbolId, 10000);
             final long takerFeeForPlaceOrder101 = CoreArithmeticUtils.calculateTakerFee(40, 10770L, SYMBOLSPECFEE_USD_JPY);
             final long jpyAmount1 = 240_000L + takerFeeForPlaceOrder101;
@@ -274,10 +280,10 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
-                assertThat(profile.getPositions().get(symbolId).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(symbolId).openVolume, is(0L));
-                assertThat(profile.getPositions().get(symbolId).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(symbolId).pendingSellSize, is(40L));
+                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(symbolId).get(0).pendingSellSize, is(40L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -314,7 +320,11 @@ public abstract class ITFeesMargin {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.baseCurrency);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.quoteCurrency);
             container.addSymbol(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.baseCurrency);
+            container.addCurrency(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.quoteCurrency);
             container.initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId, 10000);
             container.initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_ETH_USD.symbolId, 10000);
             long deposit = 26155L; // 价格够单独开order100或order101, 但不够一起开

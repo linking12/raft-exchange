@@ -25,14 +25,19 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 @Slf4j
 public final class UserProfile implements WriteBytesMarshallable, StateHash {
 
     public final long uid;
 
+    // 用户持仓模式，默认是单向持仓
+    public PositionMode positionMode;
+
     // symbol -> margin position records
-    // TODO initialize lazily (only needed if margin trading allowed)
+    // 如果是双向持仓，symbol为正表示多头持仓，symbol为负表示空头持仓
     public final IntObjectHashMap<SymbolPositionRecord> positions;
 
     // protects from double adjustment
@@ -47,6 +52,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public UserProfile(long uid, UserStatus userStatus) {
         //log.debug("New {}", uid);
         this.uid = uid;
+        this.positionMode = PositionMode.ONEWAY;
         this.positions = new IntObjectHashMap<>();
         this.adjustmentsCounter = 0L;
         this.accounts = new IntLongHashMap();
@@ -56,6 +62,9 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public UserProfile(BytesIn bytesIn) {
 
         this.uid = bytesIn.readLong();
+
+        // positionMode
+        this.positionMode = PositionMode.of(bytesIn.readByte());
 
         // positions
         this.positions = SerializationUtils.readIntHashMap(bytesIn, b -> new SymbolPositionRecord(uid, b));
@@ -70,10 +79,58 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
         this.userStatus = UserStatus.of(bytesIn.readByte());
     }
 
-    public SymbolPositionRecord getPositionRecordOrThrowEx(int symbol) {
-        final SymbolPositionRecord record = positions.get(symbol);
+    public int createPositionsKey(int symbol, OrderAction orderAction) {
+        if (positionMode == PositionMode.HEDGE) {
+            return orderAction == OrderAction.BID ? symbol : -symbol;
+        }
+        return symbol;
+    }
+
+    public int createPositionsKey(SymbolPositionRecord position) {
+        if (positionMode == PositionMode.HEDGE) {
+            return position.direction.getMultiplier() * position.symbol;
+        }
+        return position.symbol;
+    }
+
+    /**
+     * 统计指定symbol下，满足predicate的仓位记录数量
+     */
+    public int countPositionRecord(int symbol, Predicate<SymbolPositionRecord> predicate) {
+        int count = 0;
+        SymbolPositionRecord longRecord = positions.get(symbol);
+        if (longRecord != null && predicate.test(longRecord)) {
+            count++;
+        }
+        if (positionMode == PositionMode.HEDGE) {
+            SymbolPositionRecord shortRecord = positions.get(-symbol);
+            if (shortRecord != null && predicate.test(shortRecord)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 用consumer处理指定symbol下所有仓位
+     */
+    public void processPositionRecord(int symbol, Consumer<SymbolPositionRecord> consumer) {
+        SymbolPositionRecord longRecord = positions.get(symbol);
+        if (longRecord != null) {
+            consumer.accept(longRecord);
+        }
+        if (positionMode == PositionMode.HEDGE) {
+            SymbolPositionRecord shortRecord = positions.get(-symbol);
+            if (shortRecord != null) {
+                consumer.accept(shortRecord);
+            }
+        }
+    }
+
+    public SymbolPositionRecord getPositionRecordOrThrowEx(int key) {
+        final SymbolPositionRecord record = positions.get(key);
         if (record == null) {
-            throw new IllegalStateException("not found position for symbol " + symbol);
+            throw new IllegalStateException("not found position for key " + key);
         }
         return record;
     }
@@ -82,6 +139,9 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public void writeMarshallable(BytesOut bytes) {
 
         bytes.writeLong(uid);
+
+        // positionMode
+        bytes.writeByte(positionMode.getCode());
 
         // positions
         SerializationUtils.marshallIntHashMap(positions, bytes);
@@ -101,6 +161,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public String toString() {
         return "UserProfile{" +
                 "uid=" + uid +
+                ", positionMode=" + positionMode +
                 ", positions=" + positions.size() +
                 ", accounts=" + accounts +
                 ", adjustmentsCounter=" + adjustmentsCounter +
@@ -112,6 +173,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public int stateHash() {
         return Objects.hash(
                 uid,
+                positionMode,
                 HashingUtils.stateHash(positions),
                 adjustmentsCounter,
                 accounts.hashCode(),

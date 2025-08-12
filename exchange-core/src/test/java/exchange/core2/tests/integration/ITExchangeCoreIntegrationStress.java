@@ -66,7 +66,7 @@ public abstract class ITExchangeCoreIntegrationStress {
     public void manyOperations(final CoreSymbolSpecification symbolSpec) throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
-            container.initBasicSymbols();
+            container.initBasicSymbolsWithDigit(0);
             container.initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 100);
             //container.initBasicUsers();
             final ExchangeApi api = container.getApi();

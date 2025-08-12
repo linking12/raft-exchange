@@ -15,14 +15,13 @@
  */
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.common.MarginMode;
-import exchange.core2.core.common.OrderAction;
-import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
@@ -51,18 +50,31 @@ public abstract class ITFeesExchange {
     // configuration provided by child class
     public abstract PerformanceConfiguration getPerformanceConfiguration();
 
+    public static final CoreSymbolSpecification symbol = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_EXCHANGE_FEE)
+            .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(CURRENECY_XBT)    // base = satoshi
+            .quoteCurrency(CURRENECY_LTC)   // quote = litoshi
+            .baseScaleK(1_000)
+            .quoteScaleK(10)
+            .takerFee(1900)                 // taker fee 1900 litoshi per 1 lot
+            .makerFee(700)                  // maker fee 700 litoshi per 1 lot
+            .build();
 
     @Test
     @Timeout(10)
     public void shouldRequireTakerFees_GtcCancel() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
+            container.addSymbol(symbol);
+            container.addCurrency(symbol.baseCurrency, 8);
+            container.addCurrency(symbol.quoteCurrency, 8);
 
             // ----------------- 1 test GTC BID cancel ------------------
 
             // create user - 3.42B litoshi (34.2 LTC)
             final long ltcAmount = 3_420_000_000L;
+            final long needAmount = 399000L * symbol.baseScaleK * symbol.quoteScaleK;
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             // submit BID order for 1000 lots - should be rejected because of the fee
@@ -70,7 +82,7 @@ public abstract class ITFeesExchange {
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
             // add fee-1 - NSF
-            container.addMoneyToUser(UID_2, CURRENECY_LTC, takerFee * 30 - 1);
+            container.addMoneyToUser(UID_2, CURRENECY_LTC, needAmount - ltcAmount - 1);
             container.submitCommandSync(order203, CommandResultCode.RISK_NSF);
 
             // add 1 extra - SUCCESS
@@ -83,13 +95,13 @@ public abstract class ITFeesExchange {
                     CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount + takerFee * 30));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(needAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
             assertTrue(totalBal1.isGlobalBalancesAllZero());
-            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount + takerFee * 30));
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_LTC), is(needAmount));
             assertThat(totalBal1.getFees().get(CURRENECY_LTC), is(0L));
 
             // ----------------- 2 test GTC ASK cancel ------------------
@@ -115,7 +127,7 @@ public abstract class ITFeesExchange {
             // no fees collected
             TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertTrue(totalBal2.isGlobalBalancesAllZero());
-            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount + takerFee * 30));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(needAmount));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_XBT), is(0L));
@@ -128,17 +140,19 @@ public abstract class ITFeesExchange {
     public void shouldProcessFees_BidGtcMaker_AskIocTakerPartial() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
-            final long ltcAmount = 200_000_000_000L;
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_LTC, ltcAmount); // 200B litoshi (2,000 LTC)
 
             // submit an GtC order - limit BUY 1,731 lots, price 115M (11,500 x10,000 step) for each lot 1M satoshi
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_553L)
-                    .size(1731L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_553L * symbol.quoteScaleK)
+                    .size(1731L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -147,7 +161,8 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-            final long expectedFundsLtc = ltcAmount - (order101.reservePrice * step + takerFee) * order101.size;
+            long makerFee = CoreArithmeticUtils.calculateAmountBidTakerFee(order101.size, order101.reservePrice, symbol);
+            long expectedFundsLtc = ltcAmount - CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee, symbol, quoteSpec);
             // verify order placed with correct reserve price and account balance is updated accordingly
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedFundsLtc));
@@ -155,22 +170,22 @@ public abstract class ITFeesExchange {
             });
 
             // create second user
-            final long btcAmount = 2_000_000_000L;
-            container.createUserWithMoney(UID_2, CURRENECY_XBT, btcAmount);
+            final long xbtAmount = 2_000L * baseSpec.getCurrencyScaleK();
+            container.createUserWithMoney(UID_2, CURRENECY_XBT, xbtAmount);
 
             // no fees collected
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
             assertTrue(totalBal1.isGlobalBalancesAllZero());
             assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount));
-            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+            assertThat(totalBal1.getClientsBalancesSum().get(CURRENECY_XBT), is(xbtAmount));
             assertThat(totalBal1.getFees().get(CURRENECY_LTC), is(0L));
 
             // submit an IoC order - sell 2,000 lots, price 114,930K (11,493 x10,000 step)
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_493L)
-                    .size(2000L)
+                    .price(11_493L * symbol.quoteScaleK)
+                    .size(2000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -180,26 +195,34 @@ public abstract class ITFeesExchange {
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
             // verify buyer maker balance
+            long makerFeeU1 = CoreArithmeticUtils.calculateMakerFee(order101.size, order101.price, symbol);
+            long finalFeeU1 = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFeeU1, symbol, quoteSpec);
+            // order
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(order101.size * order101.price, symbol, quoteSpec);
+            // 收到1731个xbt
+            long xbtBalance = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (order101.price * step + makerFee) * 1731L));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(1731L * SYMBOLSPECFEE_XBT_LTC.baseScaleK));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalFeeU1));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtBalance));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // verify seller taker balance
+            long takerFeeU2 = CoreArithmeticUtils.calculateTakerFee(order101.size, order101.price, symbol);
+            long finalFeeU2 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFeeU2, symbol, quoteSpec);
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((order101.price * step - takerFee) * 1731L));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - 1731L * SYMBOLSPECFEE_XBT_LTC.baseScaleK));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalFeeU2));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount - xbtBalance));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
-            final long ltcFees = (makerFee + takerFee) * 1731L;
+            final long ltcFees = finalFeeU1 + finalFeeU2;
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
-            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+            assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(xbtAmount));
         }
 
     }
@@ -210,17 +233,19 @@ public abstract class ITFeesExchange {
     public void shouldProcessFees_BidGtcMakerPartial_AskIocTaker() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
-            final long ltcAmount = 200_000_000_000L;
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_LTC, ltcAmount); // 200B litoshi (2,000 LTC)
 
             // submit an GtC order - limit BUY 1,731 lots, price 115M (11,500 x10,000 step) for each lot 1M satoshi
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_553L)
-                    .size(1731L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_553L * symbol.quoteScaleK)
+                    .size(1731L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -229,7 +254,9 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-            final long expectedFundsLtc = ltcAmount - (order101.reservePrice * step + takerFee) * order101.size;
+            long takerFee = CoreArithmeticUtils.calculateAmountBidTakerFee(order101.size, order101.reservePrice, symbol);
+            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long expectedFundsLtc = ltcAmount - takerFee;
             // verify order placed with correct reserve price and account balance is updated accordingly
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedFundsLtc));
@@ -237,7 +264,7 @@ public abstract class ITFeesExchange {
             });
 
             // create second user
-            final long btcAmount = 2_000_000_000L;
+            final long btcAmount = 2_000L * baseSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_2, CURRENECY_XBT, btcAmount);
 
             // no fees collected
@@ -251,8 +278,8 @@ public abstract class ITFeesExchange {
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_493L)
-                    .size(1000L)
+                    .price(11_493L * symbol.quoteScaleK)
+                    .size(1000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -261,25 +288,38 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
+            long makerFee1 = CoreArithmeticUtils.calculateMakerFee(order102.size, order101.price, symbol);
+            makerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee1, symbol, quoteSpec);
+            long takerFee1 = CoreArithmeticUtils.calculateTakerFee(order101.size - order102.size, order101.reservePrice, symbol);
+            takerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee1, symbol, quoteSpec);
+            long finalMakerFee = makerFee1 + takerFee1;
+
+            long orderSpend = order102.size * order101.price + ((order101.size - order102.size) * order101.reservePrice);
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
+            long gainedAmountInBaseCurrency = order102.size;
+            long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC),
-                        is(ltcAmount - (order101.price * step + makerFee) * 1000L - (order101.reservePrice * step + takerFee) * 731L));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(1000L * SYMBOLSPECFEE_XBT_LTC.baseScaleK));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalMakerFee));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
+            long takerFee2 = CoreArithmeticUtils.calculateTakerFee(order102.size, order101.price, symbol);
+            takerFee2 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee2, symbol, quoteSpec);
             // verify seller taker balance
+            long finalTakerFee = takerFee2;
+            long order1 = CoreArithmeticUtils.sizePriceToCurrencyScale(order102.size * order101.price, symbol, quoteSpec);
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((order101.price * step - takerFee) * 1000L));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - 1000L * SYMBOLSPECFEE_XBT_LTC.baseScaleK));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order1 - finalTakerFee));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - xbtAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertTrue(totalBal2.isGlobalBalancesAllZero());
-            final long ltcFees = (makerFee + takerFee) * 1000L;
+            final long ltcFees = makerFee1 + finalTakerFee;
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
@@ -292,18 +332,20 @@ public abstract class ITFeesExchange {
     public void shouldProcessFees_AskGtcMaker_BidIocTakerPartial() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
 
-            final long btcAmount = 2_000_000_000L;
+            final long btcAmount = 2_000L * baseSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
 
             // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
-                    .size(2000L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK)
+                    .size(2000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -312,14 +354,15 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
+            long expected = btcAmount - CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(expected));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
             // create second user
-            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -332,9 +375,9 @@ public abstract class ITFeesExchange {
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_521L)
-                    .reservePrice(11_659L)
-                    .size(2197L)
+                    .price(11_521L * symbol.quoteScaleK)
+                    .reservePrice(11_659L * symbol.quoteScaleK)
+                    .size(2197L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -344,22 +387,35 @@ public abstract class ITFeesExchange {
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
             // verify seller maker balance
+            long makerFee = CoreArithmeticUtils.calculateMakerFee(order101.size, order101.price, symbol);
+            makerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee, symbol, quoteSpec);
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(order101.size * order101.price, symbol, quoteSpec);
+            long finalMakerFee = makerFee;
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((11_500L * step - makerFee) * 2000L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // verify buyer taker balance
+            long takerFee1 = CoreArithmeticUtils.calculateTakerFee(order101.size, order101.price, symbol);
+            takerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee1, symbol, quoteSpec);
+            long takerFee2 = CoreArithmeticUtils.calculateTakerFee(order102.size - order101.size, order102.reservePrice, symbol);
+            takerFee2 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee2, symbol, quoteSpec);
+            long finalTakerFee = takerFee1 + takerFee2;
+
+            long orderSpend = order101.size * order101.price + (order102.size - order101.size) * order102.reservePrice;
+            long order2 = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
+            long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPECFEE_XBT_LTC.baseScaleK * 2000L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 2000L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order2 - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
-            final long ltcFees = (makerFee + takerFee) * 2000L;
+            final long ltcFees = finalMakerFee + takerFee1;
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
@@ -373,18 +429,20 @@ public abstract class ITFeesExchange {
     public void shouldProcessFees_AskGtcMakerPartial_BidIocTaker() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
 
-            final long btcAmount = 2_000_000_000L;
+            final long btcAmount = 2_000L * baseSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
 
             // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
-                    .size(2000L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK)
+                    .size(2000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -393,14 +451,15 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order101, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
+            long hold = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - hold));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
             // create second user
-            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -413,9 +472,9 @@ public abstract class ITFeesExchange {
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_521L)
-                    .reservePrice(11_659L)
-                    .size(1997L)
+                    .price(11_521L * symbol.quoteScaleK)
+                    .reservePrice(11_659L * symbol.quoteScaleK)
+                    .size(1997L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(OrderType.IOC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -424,22 +483,34 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
+            long makerFee = CoreArithmeticUtils.calculateMakerFee(order102.size, order101.price, symbol);
+            makerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee, symbol, quoteSpec);
+
+            long orderSpend = order102.size * order101.price;
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             // verify seller maker balance
+            long finalMakerFee = makerFee;
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((11_500L * step - makerFee) * 1997L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
+            long takerFee = CoreArithmeticUtils.calculateTakerFee(order102.size, order101.price, symbol);
+            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long finalTakerFee = takerFee;
+
+            long gainedAmountInBaseCurrency = order102.size;
+            long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPECFEE_XBT_LTC.baseScaleK * 1997L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 1997L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
-            final long ltcFees = (makerFee + takerFee) * 1997L;
+            final long ltcFees = finalMakerFee + finalTakerFee;
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
@@ -453,18 +524,20 @@ public abstract class ITFeesExchange {
     public void shouldProcessFees_AskGtcMakerPartial_BidGtcTaker() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
 
-            final long btcAmount = 2_000_000_000L;
+            final long btcAmount = 2_000L * baseSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
 
             // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
-                    .size(2000L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK)
+                    .size(2000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -480,7 +553,7 @@ public abstract class ITFeesExchange {
             });
 
             // create second user
-            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -493,9 +566,9 @@ public abstract class ITFeesExchange {
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_521L)
-                    .reservePrice(11_659L)
-                    .size(1997L)
+                    .price(11_521L * symbol.quoteScaleK)
+                    .reservePrice(11_659L * symbol.quoteScaleK)
+                    .size(1997L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -504,22 +577,34 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
+            long makerFee = CoreArithmeticUtils.calculateMakerFee(order102.size, order101.price, symbol);
+            makerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee, symbol, quoteSpec);
+            long finalMakerFee = makerFee;
+
+            long orderSpend = order102.size * order101.price;
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((11_500L * step - makerFee) * 1997L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
+            long takerFee = CoreArithmeticUtils.calculateTakerFee(order102.size, order101.price, symbol);
+            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long finalTakerFee = takerFee;
+
+            long gainedAmountInBaseCurrency = order102.size;
+            long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPECFEE_XBT_LTC.baseScaleK * 1997L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 1997L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
-            final long ltcFees = (makerFee + takerFee) * 1997L;
+            final long ltcFees = finalMakerFee + finalTakerFee;
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
@@ -533,18 +618,20 @@ public abstract class ITFeesExchange {
     public void shouldNotProcessFees_AskGtcMakerPartial_BidFokTaker() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
 
-            final long btcAmount = 2_000_000_000L;
+            final long btcAmount = 2_000L * baseSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
 
             // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
-                    .size(2000L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK)
+                    .size(2000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -560,7 +647,7 @@ public abstract class ITFeesExchange {
             });
 
             // create second user
-            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -573,9 +660,9 @@ public abstract class ITFeesExchange {
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
-                    .size(1000L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK)
+                    .size(1000L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(FOK_BUDGET)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -613,18 +700,20 @@ public abstract class ITFeesExchange {
     public void shouldProcessFees_AskGtcMakerPartial_BidFokTaker() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.initFeeSymbols();
+            container.addSymbol(symbol);
+            CoreCurrencySpecification baseSpec = container.addCurrency(symbol.baseCurrency, 8);
+            CoreCurrencySpecification quoteSpec = container.addCurrency(symbol.quoteCurrency, 8);
 
-            final long btcAmount = 2_000_000_000L;
+            final long btcAmount = 2_000L * baseSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_1, CURRENECY_XBT, btcAmount);
 
             // submit an ASK GtC order, no fees, sell 2,000 lots, price 115,000K (11,500 x10,000 step)
             final ApiPlaceOrder order101 = ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(101L)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
-                    .size(2000L)
+                    .price(11_500L * symbol.quoteScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK)
+                    .size(2000L * symbol.baseScaleK)
                     .action(OrderAction.ASK)
                     .orderType(GTC)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -640,7 +729,7 @@ public abstract class ITFeesExchange {
             });
 
             // create second user
-            final long ltcAmount = 260_000_000_000L;// 260B litoshi (2,600 LTC)
+            final long ltcAmount = 2_000_000_000L * quoteSpec.getCurrencyScaleK();
             container.createUserWithMoney(UID_2, CURRENECY_LTC, ltcAmount);
 
             TotalCurrencyBalanceReportResult totalBal1 = container.totalBalanceReport();
@@ -653,8 +742,8 @@ public abstract class ITFeesExchange {
             final ApiPlaceOrder order102 = ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(102)
-                    .price(11_500L)
-                    .reservePrice(11_500L)
+                    .price(11_500L * symbol.quoteScaleK * 1000L * symbol.baseScaleK)
+                    .reservePrice(11_500L * symbol.quoteScaleK * 1000L * symbol.baseScaleK)
                     .size(1L)
                     .action(OrderAction.BID)
                     .orderType(FOK_BUDGET)
@@ -664,22 +753,34 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
+            long makerFee1 = CoreArithmeticUtils.calculateMakerFee(1000L * symbol.baseScaleK, order101.price, symbol);
+            makerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee1, symbol, quoteSpec);
+            long finalMakerFee = makerFee1;
+
+            long orderSpend = 1000L * symbol.baseScaleK * 11_500L * symbol.quoteScaleK;
+            long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is((11_500L * step - makerFee) * 1L));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
+            long takerFee = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(order102.size, order102.price, symbol);
+            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long finalTakerFee = takerFee;
+
+            long gainedAmountInBaseCurrency = order102.size;
+            long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(SYMBOLSPECFEE_XBT_LTC.baseScaleK * 1L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - (11_500L * step + takerFee) * 1L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
+                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
             // total balance remains the same
-            final long ltcFees = (makerFee + takerFee) * 1L;
+            final long ltcFees = finalMakerFee + finalTakerFee;
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));

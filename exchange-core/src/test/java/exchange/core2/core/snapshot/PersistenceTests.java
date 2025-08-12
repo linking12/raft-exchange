@@ -151,7 +151,7 @@ public class PersistenceTests {
 
     private static void doCheckExtra(ExchangeTestContainer container) throws ExecutionException, InterruptedException {
         container.validateUserState(UID_1, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(50L, pos.openVolume); // 仓位保持不变
             assertEquals(50, pos.leverage);
@@ -162,7 +162,7 @@ public class PersistenceTests {
         });
         container.validateUserState(UID_2, profile -> {
             // 仓位应被部分或全部平仓
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertTrue(pos == null || pos.openVolume < 50L);
             // 账户余额应为负或接近零
             long balance = profile.getAccounts().get(CURRENCY_FUT);
@@ -228,7 +228,7 @@ public class PersistenceTests {
 
         // 7. 验证初始持仓状态
         container.validateUserState(UID_ISOLATED, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(PositionDirection.LONG, pos.direction);
             assertEquals(50L, pos.openVolume); // 100手
@@ -238,7 +238,7 @@ public class PersistenceTests {
         });
 
         container.validateUserState(UID_CROSS, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(PositionDirection.SHORT, pos.direction);
             assertEquals(50L, pos.openVolume); // 50手
@@ -255,7 +255,7 @@ public class PersistenceTests {
 
         // 验证追加保证金后状态
         container.validateUserState(UID_ISOLATED, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertEquals(50000000L, pos.extraMargin);
             // 计算未实现盈利: (10,500 - 10,000) * 50 = 2500 FUT
             assertThat(25000L, is(pos.unrealizedProfit));
@@ -271,7 +271,7 @@ public class PersistenceTests {
         // 12. 验证全仓用户被强平
         container.validateUserState(UID_CROSS, profile -> {
             // 仓位应被部分或全部平仓
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertTrue(pos == null || pos.openVolume < 50L);
             // 账户余额应为负或接近零
             long balance = profile.getAccounts().get(CURRENCY_FUT);
@@ -280,7 +280,7 @@ public class PersistenceTests {
 
         // 13. 验证逐仓用户未被强平
         container.validateUserState(UID_ISOLATED, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(50L, pos.openVolume); // 仓位保持不变
             assertEquals(50, pos.leverage);
