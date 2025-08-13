@@ -10,7 +10,6 @@ import com.binance.raftexchange.stubs.OrderAction;
 import com.binance.raftexchange.stubs.OrderType;
 import com.binance.raftexchange.stubs.PositionMode;
 import com.binance.raftexchange.stubs.SymbolType;
-import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
 import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
@@ -462,12 +461,14 @@ public class ExchangeSdk implements AutoCloseable {
     }
 
     // ———————— 只读查询接口  ————————
-    public CompletableFuture<SingleUserReportResult> queryUserReport(long userId) {
-        return client.singleUserReport(reqIdGen.getAndIncrement(), userId);
+    public CompletableFuture<SingleUserReportResultView> queryUserReport(long userId) {
+        return client.singleUserReport(reqIdGen.getAndIncrement(), userId)
+                .thenApply(result -> SingleUserReportResultView.build(result, metadataManager));
     }
 
-    public CompletableFuture<CommandResult> searchOrderBook(int symbol) {
-        return client.searchOrderBook(symbol, 20);
+    public CompletableFuture<CommandResultView> searchOrderBook(int symbol) {
+        return client.searchOrderBook(symbol, 20)
+                .thenApply(result -> CommandResultView.build(result, metadataManager));
     }
 
     @Override

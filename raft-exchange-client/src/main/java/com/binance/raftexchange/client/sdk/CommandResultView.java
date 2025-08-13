@@ -7,13 +7,17 @@ import com.binance.raftexchange.stubs.response.L2MarketData;
 import com.binance.raftexchange.stubs.response.MatcherEventType;
 import com.binance.raftexchange.stubs.response.MatcherTradeEvent;
 import com.binance.raftexchange.stubs.response.OrderCommand;
+import lombok.Getter;
 
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static com.binance.raftexchange.client.sdk.ExchangeSdkHelper.longToDouble;
+
+@Getter
 public class CommandResultView {
 
-    private CommandResultCode resultCode;
+    private final CommandResultCode resultCode;
 
     private MatcherTradeEventView matcherEvent;
 
@@ -58,9 +62,9 @@ public class CommandResultView {
             view.matchedOrderCompleted = cur.getMatchedOrderCompleted();
             long baseScaleK = cur.getBaseScaleK();
             long quoteScaleK = cur.getQuoteScaleK();
-            view.price = cur.getPrice() * 1.0 / quoteScaleK;
-            view.size = cur.getSize() * 1.0  / baseScaleK;
-            view.bidderHoldPrice = cur.getBidderHoldPrice() * 1.0 / quoteScaleK;
+            view.price = longToDouble(cur.getPrice(), quoteScaleK);
+            view.size = longToDouble(cur.getSize(), baseScaleK);
+            view.bidderHoldPrice = longToDouble(cur.getBidderHoldPrice(), quoteScaleK);
 
             if (headView == null) {
                 headView = view;
@@ -80,15 +84,16 @@ public class CommandResultView {
         view.bidSize = marketData.getBidSizes();
         long baseScaleK = spec.getBaseScaleK();
         long quoteScaleK = spec.getQuoteScaleK();
-        view.askPrices = marketData.getAskPricesList().stream().map(a -> a * 1.0 / quoteScaleK).collect(Collectors.toList());
-        view.askVolumes = marketData.getAskVolumesList().stream().map(a -> a * 1.0 / baseScaleK).collect(Collectors.toList());
+        view.askPrices = marketData.getAskPricesList().stream().map(a -> longToDouble(a, quoteScaleK)).collect(Collectors.toList());
+        view.askVolumes = marketData.getAskVolumesList().stream().map(a -> longToDouble(a, baseScaleK)).collect(Collectors.toList());
         view.askOrders = marketData.getAskOrdersList();
-        view.bidPrices = marketData.getBidPricesList().stream().map(b -> b * 1.0 / quoteScaleK).collect(Collectors.toList());
-        view.bidVolumes = marketData.getBidVolumesList().stream().map(b -> b * 1.0 / baseScaleK).collect(Collectors.toList());
+        view.bidPrices = marketData.getBidPricesList().stream().map(b -> longToDouble(b, quoteScaleK)).collect(Collectors.toList());
+        view.bidVolumes = marketData.getBidVolumesList().stream().map(b ->longToDouble(b, baseScaleK)).collect(Collectors.toList());
         view.bidOrders = marketData.getBidOrdersList();
         return view;
     }
 
+    @Getter
     public static class MatcherTradeEventView {
         private MatcherEventType eventType;
         private boolean activeOrderCompleted;
@@ -101,6 +106,7 @@ public class CommandResultView {
         private MatcherTradeEventView nextEvent;
     }
 
+    @Getter
     public static class L2MarketDataView {
         private int askSize;
         private int bidSize;

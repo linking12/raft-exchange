@@ -206,7 +206,7 @@ public class SerializeHelper {
     private static final Function<List<SingleUserReportResult.Position>, PositionList> positionMapping = l ->
             PositionList.newBuilder().addAllPositions(l.stream().map(p -> Position.newBuilder()
                     .setQuoteCurrency(p.getQuoteCurrency()).setDirectionValue(p.getDirection().getMultiplier() & 0xFF)
-                    .setOpenVolume(p.getOpenVolume()).setOpenPriceSum(p.getOpenPriceSum())
+                    .setOpenVolume(p.getOpenVolume()).setOpenInitMarginSum(p.getOpenInitMarginSum()).setOpenPriceSum(p.getOpenPriceSum())
                     .setProfit(p.getProfit()).setPendingSellSize(p.getPendingSellSize())
                     .setPendingBuySize(p.getPendingBuySize()).setPendingSellAvgPrice(p.getPendingSellAvgPrice())
                     .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())

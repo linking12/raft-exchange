@@ -9,11 +9,11 @@ public class ExchangeSdkHelper {
     }
 
     /**
-     * 将 double 类型的数值转换为 long 类型，使用指定的 valueScaleK 作为缩放因子。
+     * 将 double 类型的数值转换为 long 类型，使用指定的 valueScaleK 放大。
      * 注意：如果整数部分过大，可能会导致溢出。
      *
      * @param value       要转换的 double 值
-     * @param valueScaleK 缩放因子
+     * @param valueScaleK 放大倍数
      * @return 转换后的 long 值
      * @throws ArithmeticException 如果整数部分过大，可能会导致溢出
      */
@@ -24,6 +24,17 @@ public class ExchangeSdkHelper {
             throw new ArithmeticException("Integer part too large, overflow risk");
         }
         return integer * valueScaleK + fraction;
+    }
+
+    /**
+     * 将 long 类型的数值转换为 double 类型，使用指定的 valueScaleK 缩小。
+     *
+     * @param value       要转换的 long 值
+     * @param valueScaleK 缩小倍数
+     * @return 转换后的 double 值
+     */
+    public static double longToDouble(long value, long valueScaleK) {
+        return value / (double) valueScaleK;
     }
 
     /**
