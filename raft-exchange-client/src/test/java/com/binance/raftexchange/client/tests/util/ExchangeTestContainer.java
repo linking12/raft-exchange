@@ -1,7 +1,7 @@
 package com.binance.raftexchange.client.tests.util;
 
-import com.binance.raftexchange.client.Api.ApiStream;
-import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.client.grpc.ApiStream;
+import com.binance.raftexchange.client.grpc.ExchangeClient;
 import com.binance.raftexchange.stubs.SymbolType;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
@@ -42,7 +42,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;

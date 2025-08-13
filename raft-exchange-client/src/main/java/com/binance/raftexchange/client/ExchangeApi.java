@@ -1,7 +1,7 @@
-package com.binance.raftexchange.client.sdk;
+package com.binance.raftexchange.client;
 
-import com.binance.raftexchange.client.Api.ApiStream;
-import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.client.grpc.ApiStream;
+import com.binance.raftexchange.client.grpc.ExchangeClient;
 import com.binance.raftexchange.stubs.BalanceAdjustmentType;
 import com.binance.raftexchange.stubs.CoreCurrencySpecification;
 import com.binance.raftexchange.stubs.CoreSymbolSpecification;
@@ -38,22 +38,22 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.binance.raftexchange.client.sdk.ExchangeSdkHelper.doubleToLong;
-import static com.binance.raftexchange.client.sdk.ExchangeSdkHelper.getFloorValue;
+import static com.binance.raftexchange.client.ExchangeApiHelper.doubleToLong;
+import static com.binance.raftexchange.client.ExchangeApiHelper.getFloorValue;
 
-public class ExchangeSdk implements AutoCloseable {
+public class ExchangeApi implements AutoCloseable {
 
     private final ExchangeClient client;
     private final ExchangeMetadataManager metadataManager;
     private final AtomicInteger reqIdGen = new AtomicInteger(1);
 
-    private ExchangeSdk(String host, int port) {
+    private ExchangeApi(String host, int port) {
         this.client = new ExchangeClient(host, port);
         this.metadataManager = new ExchangeMetadataManager(client, reqIdGen);
     }
 
-    public static ExchangeSdk connect(String host, int port) {
-        return new ExchangeSdk(host, port);
+    public static ExchangeApi connect(String host, int port) {
+        return new ExchangeApi(host, port);
     }
 
     public CompletableFuture<CommandResultView> sendAsync(ApiCommand cmd) {

@@ -1,6 +1,6 @@
-package com.binance.raftexchange.client.sdk;
+package com.binance.raftexchange.client;
 
-import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.client.grpc.ExchangeClient;
 import com.binance.raftexchange.stubs.CoreCurrencySpecification;
 import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import lombok.extern.slf4j.Slf4j;

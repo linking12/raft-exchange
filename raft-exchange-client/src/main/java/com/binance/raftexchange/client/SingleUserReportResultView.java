@@ -1,4 +1,4 @@
-package com.binance.raftexchange.client.sdk;
+package com.binance.raftexchange.client;
 
 import com.binance.raftexchange.stubs.CoreCurrencySpecification;
 import com.binance.raftexchange.stubs.CoreSymbolSpecification;
@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static com.binance.raftexchange.client.sdk.ExchangeSdkHelper.longToDouble;
+import static com.binance.raftexchange.client.ExchangeApiHelper.longToDouble;
 
 @Getter
 public class SingleUserReportResultView {

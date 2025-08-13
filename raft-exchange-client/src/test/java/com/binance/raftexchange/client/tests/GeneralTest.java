@@ -1,7 +1,7 @@
 package com.binance.raftexchange.client.tests;
 
-import com.binance.raftexchange.client.Api.ApiStream;
-import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.client.grpc.ApiStream;
+import com.binance.raftexchange.client.grpc.ExchangeClient;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;

@@ -1,4 +1,4 @@
-package com.binance.raftexchange.client.Api;
+package com.binance.raftexchange.client.grpc;
 
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;

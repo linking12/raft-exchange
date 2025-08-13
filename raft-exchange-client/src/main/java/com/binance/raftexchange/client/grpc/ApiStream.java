@@ -1,4 +1,4 @@
-package com.binance.raftexchange.client.Api;
+package com.binance.raftexchange.client.grpc;
 
 import java.util.concurrent.atomic.AtomicInteger;
 

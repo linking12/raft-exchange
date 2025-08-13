@@ -1,11 +1,11 @@
-package com.binance.raftexchange.client.sdk;
+package com.binance.raftexchange.client;
 
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 
-public class ExchangeSdkHelper {
-    private ExchangeSdkHelper() {
+public class ExchangeApiHelper {
+    private ExchangeApiHelper() {
     }
 
     /**

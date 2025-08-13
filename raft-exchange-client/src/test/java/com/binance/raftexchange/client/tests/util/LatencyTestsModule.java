@@ -17,8 +17,8 @@ package com.binance.raftexchange.client.tests.util;
 
 import static com.binance.raftexchange.client.tests.util.ExchangeTestContainer.newApiStream;
 
-import com.binance.raftexchange.client.Api.ApiStream;
-import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.client.grpc.ApiStream;
+import com.binance.raftexchange.client.grpc.ExchangeClient;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.google.common.collect.Lists;
