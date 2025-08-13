@@ -73,7 +73,7 @@ public class CommandResultView {
             }
             tailView = view;
 
-            cur = cur.getNextEvent();
+            cur = cur.hasNextEvent() ? cur.getNextEvent() : null;
         } while (cur != null);
         return headView;
     }

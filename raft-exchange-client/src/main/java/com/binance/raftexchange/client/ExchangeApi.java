@@ -58,7 +58,7 @@ public class ExchangeApi implements AutoCloseable {
 
     public CompletableFuture<CommandResultView> sendAsync(ApiCommand cmd) {
         CompletableFuture<CommandResult> f = new CompletableFuture<>();
-        try (ApiStream commandStream = client.createStream(new StreamObserver<CommandResult>() {
+        ApiStream commandStream = client.createStream(new StreamObserver<CommandResult>() {
 
             @Override
             public void onNext(CommandResult result) {
@@ -74,12 +74,10 @@ public class ExchangeApi implements AutoCloseable {
             public void onCompleted() {
                 f.completeExceptionally(new IllegalStateException("empty response"));
             }
-        })) {
-            commandStream.onNext(cmd);
-        } catch (Throwable t) {
-            f.completeExceptionally(t);
-        }
-        return f.thenApply(result -> CommandResultView.build(result, metadataManager));
+        });
+        commandStream.onNext(cmd);
+        return f.whenComplete((res, err) -> commandStream.onCompleted())
+                .thenApply(result -> CommandResultView.build(result, metadataManager));
     }
 
     public CommandResultView send(ApiCommand cmd, Duration timeout) {
@@ -182,18 +180,20 @@ public class ExchangeApi implements AutoCloseable {
         if (!metadataManager.currencyExists(quoteCurrency)) {
             throw new IllegalArgumentException("Currency with id " + quoteCurrency + " does not exist.");
         }
-        CoreSymbolSpecification symbolToAdd = CoreSymbolSpecification.newBuilder()
+        CoreSymbolSpecification.Builder symbolToAdd = CoreSymbolSpecification.newBuilder()
                 .setSymbolId(id).setType(symbolType)
                 .setBaseCurrency(baseCurrency).setQuoteCurrency(quoteCurrency)
                 .setBaseScaleK(baseScaleK).setQuoteScaleK(quoteScaleK)
-                .setTakerFee(takerFee).setMakerFee(makerFee).setFeeScaleK(feeScaleK)
-                .setInitMargin(initMargin).setInitMarginScaleK(initMarginScaleK)
-                .putAllMaintenanceMargin(maintenanceMargin).setMaintenanceMarginScaleK(maintenanceMarginScaleK)
-                .putAllMaxLeverage(maxLeverage).build();
+                .setTakerFee(takerFee).setMakerFee(makerFee).setFeeScaleK(feeScaleK);
+        if (symbolType != SymbolType.CURRENCY_EXCHANGE_PAIR) {
+            symbolToAdd.setInitMargin(initMargin).setInitMarginScaleK(initMarginScaleK)
+                    .putAllMaintenanceMargin(maintenanceMargin).setMaintenanceMarginScaleK(maintenanceMarginScaleK)
+                    .putAllMaxLeverage(maxLeverage);
+        }
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
                 .setBinaryData(ApiBinaryDataCommand.newBuilder().setTransferId(reqIdGen.getAndIncrement())
                         .setData(BinaryDataCommand.newBuilder()
-                                .setAddSymbols(BatchAddSymbolsCommand.newBuilder().putSymbols(id, symbolToAdd))))
+                                .setAddSymbols(BatchAddSymbolsCommand.newBuilder().putSymbols(id, symbolToAdd.build()))))
                 .build();
     }
 
@@ -248,9 +248,11 @@ public class ExchangeApi implements AutoCloseable {
         long scaledReversePrice = doubleToLong(reversePrice, spec.getQuoteScaleK());
         long scaledSize = doubleToLong(size, spec.getBaseScaleK());
         long scaledNotional = (action == OrderAction.BID ? scaledReversePrice : scaledPrice) * scaledSize;
-        long maxLeverage = getFloorValue(spec.getMaxLeverageMap(), scaledNotional);
-        if (!exchangeSymbol && (leverage <= 0 || leverage > maxLeverage)) {
-            throw new IllegalArgumentException("Leverage illegal: " + leverage);
+        if (!exchangeSymbol) {
+            long maxLeverage = getFloorValue(spec.getMaxLeverageMap(), scaledNotional);
+            if (leverage <= 0 || leverage > maxLeverage) {
+                throw new IllegalArgumentException("Leverage illegal: " + leverage);
+            }
         }
         ApiPlaceOrder.Builder builder = ApiPlaceOrder.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)
                 .setAction(action).setOrderType(type).setPrice(scaledPrice).setReservePrice(scaledReversePrice).setSize(scaledSize);
