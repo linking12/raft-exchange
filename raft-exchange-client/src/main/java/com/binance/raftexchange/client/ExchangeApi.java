@@ -30,6 +30,7 @@ import com.binance.raftexchange.stubs.request.BatchAddCurrenciesCommand;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
+import com.binance.raftexchange.stubs.response.CommandResultCode;
 import io.grpc.stub.StreamObserver;
 
 import java.time.Duration;
@@ -107,9 +108,13 @@ public class ExchangeApi implements AutoCloseable {
     }
 
     public CommandResultView addCurrency(int id, String name, int digit) {
-        CommandResultView commandResult = send(buildAddCurrencyCommand(id, name, digit));
-        metadataManager.refreshAll();
-        return commandResult;
+        ApiCommand cmd = buildAddCurrencyCommand(id, name, digit);
+        CommandResultView result = send(cmd);
+        if (result.getResultCode() == CommandResultCode.SUCCESS) {
+            CoreCurrencySpecification currencySpec = cmd.getBinaryData().getData().getAddCurrencies().getCurrenciesMap().get(id);
+            metadataManager.addCurrencySpec(currencySpec);
+        }
+        return result;
     }
 
     public CompletableFuture<CommandResultView> addCurrencyAsync(int id, String name, int digit) {
@@ -120,7 +125,10 @@ public class ExchangeApi implements AutoCloseable {
             return CompletableFuture.failedFuture(ex);
         }
         return sendAsync(cmd).thenApply(result -> {
-            metadataManager.refreshAll();
+            if (result.getResultCode() == CommandResultCode.SUCCESS) {
+                CoreCurrencySpecification currencySpec = cmd.getBinaryData().getData().getAddCurrencies().getCurrenciesMap().get(id);
+                metadataManager.addCurrencySpec(currencySpec);
+            }
             return result;
         });
     }
@@ -142,11 +150,15 @@ public class ExchangeApi implements AutoCloseable {
                                    long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long feeScaleK,
                                    long initMargin, long initMarginScaleK, Map<Long, Long> maintenanceMargin,
                                    long maintenanceMarginScaleK, Map<Long, Long> maxLeverage) {
-        CommandResultView commandResult = send(buildAddSymbolCommand(id, symbolType, baseCurrency, quoteCurrency,
+        ApiCommand cmd = buildAddSymbolCommand(id, symbolType, baseCurrency, quoteCurrency,
                 baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, initMargin, initMarginScaleK,
-                maintenanceMargin, maintenanceMarginScaleK, maxLeverage));
-        metadataManager.refreshAll();
-        return commandResult;
+                maintenanceMargin, maintenanceMarginScaleK, maxLeverage);
+        CommandResultView result = send(cmd);
+        if (result.getResultCode() == CommandResultCode.SUCCESS) {
+            CoreSymbolSpecification spec = cmd.getBinaryData().getData().getAddSymbols().getSymbolsMap().get(id);
+            metadataManager.addSymbolSpec(spec);
+        }
+        return result;
     }
 
     public CompletableFuture<CommandResultView> addSymbolAsync(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
@@ -162,7 +174,10 @@ public class ExchangeApi implements AutoCloseable {
             return CompletableFuture.failedFuture(ex);
         }
         return sendAsync(cmd).thenApply(result -> {
-            metadataManager.refreshAll();
+            if (result.getResultCode() == CommandResultCode.SUCCESS) {
+                CoreSymbolSpecification spec = cmd.getBinaryData().getData().getAddSymbols().getSymbolsMap().get(id);
+                metadataManager.addSymbolSpec(spec);
+            }
             return result;
         });
     }

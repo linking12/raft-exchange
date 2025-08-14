@@ -36,16 +36,30 @@ public class ExchangeMetadataManager {
         scheduler.scheduleAtFixedRate(this::refreshAll, 5, 5, TimeUnit.MINUTES);
     }
 
-    public void refreshAll() {
+    private void refreshAll() {
         try {
             exchangeClient.symbolCurrencyReport(reqIdGen.getAndIncrement())
                     .thenAccept(result -> {
                         symbolCache.putAll(result.getSymbolSpecsMap());
                         currencyCache.putAll(result.getCurrencySpecsMap());
-                    });
+                    }).get(2, TimeUnit.SECONDS);
         } catch (Exception ex) {
             log.warn("refresh symbol&currency failed.", ex);
         }
+    }
+
+    public void addSymbolSpec(CoreSymbolSpecification spec) {
+        if (spec == null || spec.getSymbolId() <= 0) {
+            throw new IllegalArgumentException("Invalid symbol specification");
+        }
+        symbolCache.put(spec.getSymbolId(), spec);
+    }
+
+    public void addCurrencySpec(CoreCurrencySpecification currencySpec) {
+        if (currencySpec == null || currencySpec.getId() <= 0) {
+            throw new IllegalArgumentException("Invalid currency specification");
+        }
+        currencyCache.put(currencySpec.getId(), currencySpec);
     }
 
     public CoreSymbolSpecification getSymbolSpec(int symbolId) {
