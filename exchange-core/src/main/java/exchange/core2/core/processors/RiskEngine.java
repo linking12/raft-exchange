@@ -499,6 +499,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 结果会缩放到currency精度
      */
     private long calcFreeFuturesMargin(final UserProfile userProfile, final int currency) {
+        return calcFreeFuturesMargin(userProfile, currency, -1);
+    }
+
+    /**
+     * 用于现货下单判断判断，逐仓的未实现盈亏能参与当前symbol的分摊
+     * 结果会缩放到currency精度
+     */
+    private long calcFreeFuturesMargin(final UserProfile userProfile, final int currency, final int curPosSymbol) {
         long totalRealizedPnl = 0L;
         long totalUnrealizedPnl = 0L;
         long totalIsolateRequire = 0L;
@@ -508,14 +516,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
         for (final SymbolPositionRecord position : userProfile.positions) {
             if (position.currency == currency) {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                final LastPriceCacheRecord lastPrice = lastPriceCache.get(position.symbol);
                 if (position.marginMode == MarginMode.CROSS) {
-                    LastPriceCacheRecord lastPrice = lastPriceCache.get(position.symbol);
                     totalUnrealizedPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(position.estimateUnrealizedProfit(lastPrice), spec, currencySpec);
                     long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec);
                     totalCrossRequireByInitMargin += CoreArithmeticUtils.sizePriceToCurrencyScale(requiredMarginForFutures, spec, currencySpec);
                     long crossMaintainDelta = requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec, lastPrice);
                     totalCrossRequireByMaintainceMargin += CoreArithmeticUtils.sizePriceToCurrencyScale(crossMaintainDelta, spec, currencySpec);
                 } else {
+                    if (curPosSymbol == position.symbol) {
+                        // 逐仓的未实现盈亏只能参与当前symbol的分摊
+                        totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);
+                    }
                     totalIsolateRequire += CoreArithmeticUtils.sizePriceToCurrencyScale(position.calculateRequiredMarginForFutures(spec), spec, currencySpec);
                 }
                 totalRealizedPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(position.profit, spec, currencySpec);
@@ -744,37 +756,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // futures positions check for this currency
         long freeFuturesMargin = 0L;
         if (cfgMarginTradingEnabled) {
-            long totalRealizedPnl = 0L;
-            long totalUnrealizedPnl = 0L;
-            long totalIsolateRequire = 0L;
-            long totalCrossRequireByInitMargin = 0L;
-            long totalCrossRequireByMaintainceMargin = 0L;
-            for (final SymbolPositionRecord position : userProfile.positions) {
-                if (position.currency == currency) {
-                    final int recSymbol = position.symbol;
-                    final CoreSymbolSpecification spec2 = symbolSpecificationProvider.getSymbolSpecification(recSymbol);
-                    if (position.marginMode == MarginMode.CROSS) {
-                        LastPriceCacheRecord lastPrice = lastPriceCache.get(recSymbol);
-                        totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);// 全仓的未实现盈亏永远参与分摊
-                        long requiredMarginForFutures = position.calculateRequiredMarginForFutures(spec2);
-                        totalCrossRequireByInitMargin += requiredMarginForFutures;
-                        totalCrossRequireByMaintainceMargin += (requiredMarginForFutures - position.openInitMarginSum + position.calculateMaintenanceMargin(spec2, lastPrice));
-                    } else {
-                        if (spec.symbolId == recSymbol) {
-                            // 逐仓的未实现盈亏只能参与当前symbol的分摊
-                            totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPriceCache.get(recSymbol));
-                        }
-                        totalIsolateRequire += position.calculateRequiredMarginForFutures(spec2);
-                    }
-                    totalRealizedPnl += position.profit;
-                }
-            }
-            freeFuturesMargin = Math.min(
-                    // 如果算上了未实现盈亏，则全仓按初始保证金扣除
-                    totalRealizedPnl + totalUnrealizedPnl - totalCrossRequireByInitMargin - totalIsolateRequire,
-                    // 如果完全不算未实现盈亏，则全仓按维持保证金扣除
-                    totalRealizedPnl - totalCrossRequireByMaintainceMargin - totalIsolateRequire
-            );
+            freeFuturesMargin = calcFreeFuturesMargin(userProfile, currency, spec.symbolId);
         }
 
         final long size = cmd.size;
@@ -814,8 +796,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (logDebug) log.debug("hold sell {}", orderHoldAmount);
             orderHoldAmount = CoreArithmeticUtils.symbolToCurrencyScale(orderHoldAmount, spec, currencySpec);
         }
-
-        freeFuturesMargin = CoreArithmeticUtils.sizePriceToCurrencyScale(freeFuturesMargin, spec, currencySpec);
 
         if (logDebug) {
             log.debug("R1 uid={} : orderHoldAmount={} vs userProfile.accounts.get({})={} + freeFuturesMargin={}",
