@@ -50,6 +50,17 @@ public class ITExchangeCoreHedgeMode {
             .maxLeverage(TreeSortedMap.newMapWith(10_000 * TenPowers.pow10(3 + 5), 75L))
             .build();
 
+    private final CoreSymbolSpecification BNB_USDT_DELIVERY = CoreSymbolSpecification.builder()
+            .symbolId(30001)
+            .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
+            .baseCurrency(BNB_ID).baseScaleK(TenPowers.pow10(3))
+            .quoteCurrency(USDT_ID).quoteScaleK(TenPowers.pow10(5))
+            .makerFee(0).takerFee(0)
+            .maintenanceMargin(TreeSortedMap.newMapWith(10_000 * TenPowers.pow10(3 + 5), 5L))
+            .maintenanceMarginScaleK(1000)
+            .maxLeverage(TreeSortedMap.newMapWith(10_000 * TenPowers.pow10(3 + 5), 75L))
+            .build();
+
     private void initUsersAndSymbol(ExchangeTestContainer container) {
         container.addCurrency(BNB);
         container.addCurrency(USDT);
@@ -573,6 +584,140 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L)); // LONG
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(80L)); // SHORT
+            });
+        }
+    }
+
+    // 测试6: 混合多种持仓，发送资金费率命令，检查多空持仓加减profit正确
+    @Test
+    public void testMixedFundingRate() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            initHedgeOrders(container);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L)); // LONG
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L)); // SHORT
+            });
+
+            // 假设发送资金费率命令（funding rate >0，多头付空头）
+            container.submitCommandSync(ApiSettleFundingFees.builder() // 假设有这个API
+                    .transactionId(container.getRandomTransactionId())
+                    .symbol(BNB_USDT.symbolId)
+                    .fundingRate(1L)
+                    .rateScaleK(100)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                // 多头profit减少，空头profit增加
+                assertTrue(profile.getPositions().get(BNB_USDT.symbolId).get(0).profit < 0); // LONG profit -
+                assertTrue(profile.getPositions().get(BNB_USDT.symbolId).get(1).profit > 0); // SHORT profit +
+            });
+        }
+    }
+
+    // 测试7: 发起settlePnl, 交割后持仓正确
+    @Test
+    public void testSettlePnl() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.addCurrency(BNB);
+            container.addCurrency(USDT);
+            container.addSymbol(BNB_USDT_DELIVERY);
+            // markPrice 750
+            long markPrice = 750 * BNB_USDT_DELIVERY.getQuoteScaleK();
+            container.initMarkPrice(BNB_USDT_DELIVERY.symbolId, markPrice);
+
+            long deposit = 10000 * USDT.getCurrencyScaleK();
+            container.createUserWithMoney(UID_1, USDT_ID, deposit);
+            container.createUserWithMoney(UID_2, USDT_ID, deposit);
+            container.createUserWithMoney(UID_3, USDT_ID, deposit);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 开多100
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT_DELIVERY.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(10002L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT_DELIVERY.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT_DELIVERY.symbolId).get(0).openVolume, Is.is(100L));
+            });
+
+            // 开空50
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10003L)
+                    .price(80000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT_DELIVERY.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_3)
+                    .orderId(10004L)
+                    .price(80000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT_DELIVERY.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 模拟markPrice涨到800
+            long markPrice2 = 800 * BNB_USDT_DELIVERY.getQuoteScaleK();
+            container.initMarkPrice(BNB_USDT_DELIVERY.symbolId, markPrice2);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(USDT_ID), Is.is(deposit));
+                assertThat(profile.getPositions().get(BNB_USDT_DELIVERY.symbolId).size(), Is.is(2));
+            });
+
+            // 结算pnl
+            container.submitCommandSync(ApiSettlePNL.builder()
+                    .symbol(BNB_USDT_DELIVERY.symbolId)
+                    .settlePrice(markPrice)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().size(), Is.is(0));
+                // balance增加pnl
+                assertThat(profile.getAccounts().get(USDT_ID), Is.is(10002500000L));
             });
         }
     }
