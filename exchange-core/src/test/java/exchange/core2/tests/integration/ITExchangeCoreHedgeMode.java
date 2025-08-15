@@ -4,10 +4,13 @@ import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
 import org.junit.Test;
+
+import java.util.concurrent.ExecutionException;
 
 import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
@@ -282,6 +285,7 @@ public class ITExchangeCoreHedgeMode {
         }
     }
 
+    // 双向持仓正向测试用例, 允许用户同时开多/开空, 且会存储到不同的postion上
     @Test
     public void testMarginHedgeMode() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
@@ -355,4 +359,370 @@ public class ITExchangeCoreHedgeMode {
             });
         }
     }
+
+    // 测试4: 双向持仓position信息要正确
+    // 1. 因为多空存储在不同仓位, 所以允许不同杠杆
+    // 2. 多空marginMode不能不同, 要么都是全仓, 要么都是逐仓
+    @Test
+    public void testDualPositionSign() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 开多
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 双向持仓中的单向仓位不允许leverage不同
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10002L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(11)
+                    .build(), CommandResultCode.RISK_LEVERAGE_MISMATCH);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(10003L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 开空失败, 双向持仓不允许开不同类型margin
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10004L)
+                    .price(75000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.CROSS)
+                    .leverage(11)
+                    .build(), CommandResultCode.RISK_MARGIN_MODE_MISMATCH);
+
+            // 开空成功
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10005L)
+                    .price(75000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(11)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(10006L)
+                    .price(75000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
+            });
+        }
+    }
+
+    // 测试5: 测试关仓
+    @Test
+    public void testPositionOpenCloseChange() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 开多100
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2)
+                    .orderId(10002L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+            });
+
+            // 开空50
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10003L)
+                    .price(80000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_3)
+                    .orderId(10004L)
+                    .price(80000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
+            });
+
+            // 开空30
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10005L)
+                    .price(81000000L)
+                    .size(30L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_3)
+                    .orderId(10006L)
+                    .price(81000000L)
+                    .size(30L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L)); // LONG
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(80L)); // SHORT
+            });
+        }
+    }
+
+    // 测试8: 有双向持仓时打快照，通过快照恢复双向持仓仓位依然正确
+    // 在exchange.core2.core.snapshot.PersistenceTests已经覆盖
+
+    // 测试10: 双向持仓时增加保证金能正确加到相应仓位上
+    @Test
+    public void testAddExtraMarginToDualPosition() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            initHedgeOrders(container);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(USDT_ID), Is.is(10000 * USDT.getCurrencyScaleK()));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).extraMargin, Is.is(0L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).extraMargin, Is.is(0L));
+            });
+
+            // 加到LONG
+            long depositLong = 100 * USDT.getCurrencyScaleK();
+            long scaledLong = CoreArithmeticUtils.currencyToSymbolScale(depositLong, BNB_USDT, USDT);
+            container.submitCommandSync(ApiAdjustMargin.builder()
+                    .transactionId(container.getRandomTransactionId())
+                    .uid(UID_1)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .amount(depositLong)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 加到SHORT
+            long depositShort = 200 * USDT.getCurrencyScaleK();
+            long scaledShort = CoreArithmeticUtils.currencyToSymbolScale(depositShort, BNB_USDT, USDT);
+            container.submitCommandSync(ApiAdjustMargin.builder()
+                    .transactionId(container.getRandomTransactionId())
+                    .uid(UID_1)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .amount(depositShort)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).extraMargin, Is.is(scaledLong)); // LONG
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).extraMargin, Is.is(scaledShort)); // SHORT
+                // 一开始充值的1000, Isolated补充保证金相当于从balance划转到期货账户的extraMargin下
+                assertThat(profile.getAccounts().get(USDT_ID), Is.is(10000 * USDT.getCurrencyScaleK() - depositLong - depositShort));
+            });
+
+            // 如果cross margin, 直接加到balance上
+            long depositCross = 500 * USDT.getCurrencyScaleK();
+            container.submitCommandSync(ApiAdjustMargin.builder()
+                    .transactionId(container.getRandomTransactionId())
+                    .uid(UID_1)
+                    .currency(USDT_ID)
+                    .action(OrderAction.BID)
+                    .amount(depositCross)
+                    .marginMode(MarginMode.CROSS)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).extraMargin, Is.is(scaledLong)); // LONG
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).extraMargin, Is.is(scaledShort)); // SHORT
+                assertThat(profile.getAccounts().get(USDT_ID), Is.is(10000 * USDT.getCurrencyScaleK() - depositLong - depositShort + depositCross));
+            });
+        }
+    }
+
+    private void initHedgeOrders(ExchangeTestContainer container) throws ExecutionException, InterruptedException {
+        // 开多100
+        container.submitCommandSync(ApiPlaceOrder.builder()
+                .uid(UID_1)
+                .orderId(10001L)
+                .price(75000000L)
+                .size(100L)
+                .symbol(BNB_USDT.symbolId)
+                .action(OrderAction.BID)
+                .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
+                .leverage(10)
+                .build(), CommandResultCode.SUCCESS);
+
+        container.submitCommandSync(ApiPlaceOrder.builder()
+                .uid(UID_2)
+                .orderId(10002L)
+                .price(75000000L)
+                .size(100L)
+                .symbol(BNB_USDT.symbolId)
+                .action(OrderAction.ASK)
+                .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
+                .leverage(10)
+                .build(), CommandResultCode.SUCCESS);
+
+        container.validateUserState(UID_1, report -> {
+            assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+        });
+
+        // 开空50
+        container.submitCommandSync(ApiPlaceOrder.builder()
+                .uid(UID_1)
+                .orderId(10003L)
+                .price(80000000L)
+                .size(50L)
+                .symbol(BNB_USDT.symbolId)
+                .action(OrderAction.ASK)
+                .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
+                .leverage(10)
+                .build(), CommandResultCode.SUCCESS);
+
+        container.submitCommandSync(ApiPlaceOrder.builder()
+                .uid(UID_3)
+                .orderId(10004L)
+                .price(80000000L)
+                .size(50L)
+                .symbol(BNB_USDT.symbolId)
+                .action(OrderAction.BID)
+                .orderType(OrderType.GTC)
+                .marginMode(MarginMode.ISOLATED)
+                .leverage(10)
+                .build(), CommandResultCode.SUCCESS);
+    }
+
+    // 测试11: 调整杠杆，两个仓位是否都能调
+    @Test
+    public void testAdjustLeverageDual() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            initHedgeOrders(container);
+
+            // 调整杠杆（假设调整应用到所有方向）
+            container.submitCommandSync(ApiAdjustLeverage.builder()
+                    .uid(UID_1)
+                    .symbol(BNB_USDT.symbolId)
+                    .leverage(20)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, report -> {
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).getLeverage(), Is.is(20)); // LONG
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(1).getLeverage(), Is.is(20)); // SHORT
+            });
+        }
+    }
+
 }
