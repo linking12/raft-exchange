@@ -706,6 +706,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     pos -> pos.marginMode != cmd.marginMode) > 0) {
                 return CommandResultCode.RISK_MARGIN_MODE_MISMATCH;
             }
+            // 检查用户已有的仓位杠杆和现有的杠杆是否匹配，在同一币种下只能开同一杠杆
+            if (userProfile.countPositionRecord(spec.symbolId,
+                    pos -> !pos.isSameLeverage(cmd.leverage)) > 0) {
+                return CommandResultCode.RISK_LEVERAGE_MISMATCH;
+            }
 
             int positionRecordKey = userProfile.createPositionsKey(spec.symbolId, cmd.action);
             SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
@@ -718,9 +723,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long notional = position.estimateNotionalForOrder(cmd.action, cmd.size, priceRecord.markPrice);
             if (!spec.isValidLeverage(notional, cmd.leverage)) {
                 return CommandResultCode.RISK_INVALID_LEVERAGE;
-            }
-            if (!position.isSameLeverage(cmd.leverage)) {
-                return CommandResultCode.RISK_LEVERAGE_MISMATCH;
             }
 
             // calculateLockedMargin 仅统计仓位实际冻结的开仓保证金；
