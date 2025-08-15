@@ -424,7 +424,7 @@ public class ITExchangeCoreHedgeMode {
                     .leverage(11)
                     .build(), CommandResultCode.RISK_MARGIN_MODE_MISMATCH);
 
-            // 开空成功
+            // 开空失败, 双向持仓杠杆倍数必须一致
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_1)
                     .orderId(10005L)
@@ -435,11 +435,24 @@ public class ITExchangeCoreHedgeMode {
                     .orderType(OrderType.GTC)
                     .marginMode(MarginMode.ISOLATED)
                     .leverage(11)
+                    .build(), CommandResultCode.RISK_LEVERAGE_MISMATCH);
+
+            // 开空成功
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10006L)
+                    .price(75000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
                     .build(), CommandResultCode.SUCCESS);
 
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
-                    .orderId(10006L)
+                    .orderId(10007L)
                     .price(75000000L)
                     .size(50L)
                     .symbol(BNB_USDT.symbolId)
