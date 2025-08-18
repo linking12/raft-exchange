@@ -684,13 +684,22 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (position == null) {
             return CommandResultCode.SUCCESS;
         }
-        long closeSize = Math.min(cmd.size, position.openVolume);
+        long pendingClose = (cmd.action == OrderAction.ASK) ? position.pendingSellSize : position.pendingBuySize;
+        long closable = Math.max(0, position.openVolume - pendingClose);
+        long closeSize = Math.min(cmd.size, closable);
         if (closeSize <= 0) {
             return CommandResultCode.SUCCESS;
         }
         cmd.size = closeSize;
         cmd.leverage = position.getLeverage();
         cmd.marginMode = position.marginMode;
+
+        position.pendingHold(cmd.action, cmd.size, cmd.price);
+        long totalBalance = userProfile.accounts.get(position.currency);
+        long lockedMargin = calculateLockedMargin(userProfile, position.currency);
+        long free = totalBalance - lockedMargin;
+        eventsHelper.sendLockPendingEvent(cmd, position, free, lockedMargin);
+
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
     }
 

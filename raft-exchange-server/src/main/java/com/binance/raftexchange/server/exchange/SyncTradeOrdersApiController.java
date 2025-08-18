@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.exchange;
 import com.binance.raftexchange.server.util.SerializeHelper;
 import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
+import com.binance.raftexchange.stubs.request.ApiClosePosition;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
@@ -93,5 +94,18 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
                 .symbol(grpcApiAdjustLeverage.getSymbol()).leverage(grpcApiAdjustLeverage.getLeverage()).build();
         apiAdjustLeverage.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiAdjustLeverage);
+    }
+
+    /**
+     * 关仓
+     */
+    public static CompletableFuture<byte[]> closePosition(ApiCommand apiCommand) {
+        ApiClosePosition grpcApiClosePosition = apiCommand.getClosePosition();
+        exchange.core2.core.common.api.ApiClosePosition apiClosePosition =
+                exchange.core2.core.common.api.ApiClosePosition.builder().price(grpcApiClosePosition.getPrice()).size(grpcApiClosePosition.getSize())
+                        .orderId(grpcApiClosePosition.getOrderId()).action(exchange.core2.core.common.OrderAction.of((byte) grpcApiClosePosition.getAction().getNumber()))
+                        .uid(grpcApiClosePosition.getUid()).symbol(grpcApiClosePosition.getSymbol()).build();
+        apiClosePosition.updateTimestamp(apiCommand.getTimestamp());
+        return callExchange(apiClosePosition);
     }
 }
