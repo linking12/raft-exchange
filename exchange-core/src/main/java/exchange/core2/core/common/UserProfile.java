@@ -83,7 +83,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
     public int createPositionsKey(int symbol, OrderAction orderAction, OrderCommandType command) {
         if (positionMode == PositionMode.HEDGE) {
             int key = orderAction == OrderAction.BID ? symbol : -symbol;
-            if (command == OrderCommandType.CLOSE_POSITION) {
+            if (command == OrderCommandType.CLOSE_POSITION || command == OrderCommandType.FORCE_LIQUIDATION) {
                 return -key; // 平仓时翻转到对侧仓位
             }
             return key;
