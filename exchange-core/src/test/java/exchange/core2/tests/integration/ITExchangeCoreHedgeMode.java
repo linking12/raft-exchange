@@ -2,6 +2,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
+import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.utils.CoreArithmeticUtils;
@@ -9,8 +10,10 @@ import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
 import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
 
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
@@ -72,6 +75,7 @@ public class ITExchangeCoreHedgeMode {
         container.createUserWithMoney(UID_1, USDT_ID, 10000 * USDT.getCurrencyScaleK());
         container.createUserWithMoney(UID_2, USDT_ID, 10000 * USDT.getCurrencyScaleK());
         container.createUserWithMoney(UID_3, USDT_ID, 10000 * USDT.getCurrencyScaleK());
+        container.createUserWithMoney(UID_4, USDT_ID, 10000 * USDT.getCurrencyScaleK());
     }
 
     // 测试1: 默认单项持仓 - one-way, 默认只有1个仓位, 反向开单只会抵消之前持仓, 不会新开仓位
@@ -725,6 +729,25 @@ public class ITExchangeCoreHedgeMode {
     // 测试8: 有双向持仓时打快照，通过快照恢复双向持仓仓位依然正确
     // 在exchange.core2.core.snapshot.PersistenceTests已经覆盖
 
+    // 测试9: total balance正确（包括pnl）
+    @Test
+    public void testTotalBalance() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            initHedgeOrders(container);
+
+            TotalCurrencyBalanceReportResult totalBal = container.totalBalanceReport();
+            Assertions.assertTrue(totalBal.isGlobalBalancesAllZero());
+        }
+    }
+
     // 测试10: 双向持仓时增加保证金能正确加到相应仓位上
     @Test
     public void testAddExtraMarginToDualPosition() throws Exception {
@@ -879,6 +902,74 @@ public class ITExchangeCoreHedgeMode {
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).getLeverage(), Is.is(20)); // LONG
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(1).getLeverage(), Is.is(20)); // SHORT
+            });
+        }
+    }
+
+    // 测试12: 强平看下loop是否符合预期（逐个方向强平？）
+    @Test
+    public void testLiquidationLoop() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            initHedgeOrders(container);
+
+            // 更新价格触发强平
+            container.submitCommandSync(ApiAdjustMarkPrice.builder()
+                    .transactionId(1L)
+                    .symbol(BNB_USDT.symbolId)
+                    .markPrice(95000000L) // 假设触发LONG强平
+                    .build(), CommandResultCode.SUCCESS);
+
+            // UID_4挂单准备吃掉强平单
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_4)
+                    .orderId(20001L)
+                    .price(80000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                // 假设LONG被强平，SHORT保留
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
+            });
+
+            container.validateUserState(UID_4, report -> {
+                // 假设LONG被强平，SHORT保留
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).size(), is(1));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, is(0L));
+            });
+
+            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+
+            container.validateUserState(UID_4, report -> {
+                // 假设LONG被强平，SHORT保留
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).size(), is(1));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, is(100L));
+            });
+
+            container.validateUserState(UID_1, profile -> {
+                // 假设LONG被强平，SHORT保留
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), is(1));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, is(PositionDirection.SHORT));
             });
         }
     }
