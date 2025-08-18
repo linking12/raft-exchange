@@ -261,6 +261,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
             case FORCE_LIQUIDATION:
                 return false;
 
+            case CLOSE_POSITION:
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = closePositionRiskCheck(cmd);
+                }
+                return false;
+
             case PLACE_ORDER:
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = placeOrderRiskCheck(cmd);
@@ -296,7 +302,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                 .forEach(pos -> eventsHelper.sendMarginAdjustmentEvent(cmd, pos, free, locked));
                         }
                     } else {
-                        SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action));
+                        SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
                         if (pos == null) {
                             cmd.resultCode = CommandResultCode.RISK_MARGIN_POSITION_NOT_EXISTS;
                             return false;
@@ -649,6 +655,45 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return CommandResultCode.SUCCESS;
     }
 
+    private CommandResultCode closePositionRiskCheck(final OrderCommand cmd) {
+        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (userProfile == null) {
+            cmd.resultCode = CommandResultCode.AUTH_INVALID_USER;
+            log.warn("User profile {} not found", cmd.uid);
+            return CommandResultCode.AUTH_INVALID_USER;
+        }
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+        if (spec == null) {
+            log.warn("Symbol {} not found", cmd.symbol);
+            return CommandResultCode.INVALID_SYMBOL;
+        }
+        if (cfgIgnoreRiskProcessing) {
+            // skip processing
+            return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+        }
+
+        if (!SymbolType.isFuturesContract(spec.type)) {
+            return CommandResultCode.UNSUPPORTED_SYMBOL_TYPE;
+        }
+        if (!cfgMarginTradingEnabled) {
+            return CommandResultCode.RISK_MARGIN_TRADING_DISABLED;
+        }
+
+        int positionRecordKey = userProfile.createPositionsKey(spec.symbolId, cmd.action, cmd.command);
+        SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
+        if (position == null) {
+            return CommandResultCode.SUCCESS;
+        }
+        long closeSize = Math.min(cmd.size, position.openVolume);
+        if (closeSize <= 0) {
+            return CommandResultCode.SUCCESS;
+        }
+        cmd.size = closeSize;
+        cmd.leverage = position.getLeverage();
+        cmd.marginMode = position.marginMode;
+        return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+    }
+
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
 
         final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
@@ -681,7 +726,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return resultCode;
     }
 
-
     private CommandResultCode placeOrder(final OrderCommand cmd,
                                          final UserProfile userProfile,
                                          final CoreSymbolSpecification spec) {
@@ -712,7 +756,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return CommandResultCode.RISK_LEVERAGE_MISMATCH;
             }
 
-            int positionRecordKey = userProfile.createPositionsKey(spec.symbolId, cmd.action);
+            int positionRecordKey = userProfile.createPositionsKey(spec.symbolId, cmd.action, cmd.command);
             SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
             if (position == null) {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
@@ -931,7 +975,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final UserProfile takerUp = uidForThisHandler(cmd.uid) ? userProfileService.getUserProfileOrAddSuspended(cmd.uid) : null;
 
                 // for margin-mode symbols also resolve position record
-                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(takerUp.createPositionsKey(symbol, cmd.action)) : null;
+                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(takerUp.createPositionsKey(symbol, cmd.action, cmd.command)) : null;
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
@@ -1101,7 +1145,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (ev.eventType == MatcherEventType.TRADE && uidForThisHandler(ev.matchedOrderUid)) {
             // update maker's position
             UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
-            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.createPositionsKey(spec.symbolId, takerAction.opposite()));
+            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.createPositionsKey(spec.symbolId, takerAction.opposite(), cmd.command));
             long preVolume = makerSpr.openVolume;
 
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);

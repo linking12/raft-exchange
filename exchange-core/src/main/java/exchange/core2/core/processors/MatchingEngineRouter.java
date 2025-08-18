@@ -167,6 +167,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
                 || command == OrderCommandType.PLACE_ORDER
                 || command == OrderCommandType.FORCE_LIQUIDATION
                 || command == OrderCommandType.REDUCE_ORDER
+                || command == OrderCommandType.CLOSE_POSITION
                 || command == OrderCommandType.ORDER_BOOK_REQUEST) {
             // process specific symbol group only
             if (symbolForThisHandler(cmd.symbol)) {
