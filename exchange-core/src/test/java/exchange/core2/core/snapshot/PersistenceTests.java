@@ -162,8 +162,8 @@ public class PersistenceTests {
         });
         container.validateUserState(UID_2, profile -> {
             // 仓位应被部分或全部平仓
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
-            assertTrue(pos == null || pos.openVolume < 50L);
+            List<SingleUserReportResult.Position> pos = profile.getPositions().get(SYMBOL_FUTURES);
+            assertTrue(pos == null);
             // 账户余额应为负或接近零
             long balance = profile.getAccounts().get(CURRENCY_FUT);
             assertTrue(balance != 25000L, "Balance should be negative after liquidation");
