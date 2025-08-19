@@ -14,6 +14,7 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -74,14 +75,14 @@ public class FundEventsHelper {
         event.leverage = position.getLeverage();
         event.marginMode = position.marginMode;
         event.extraMargin = position.extraMargin;
-        calc(event, position, spec, priceRecord);
+        calc(event, position, spec, currencySpec, priceRecord);
         event.markPrice = priceRecord.markPrice;
         event.free = free;
         event.locked = locked;
         return event;
     }
 
-    private void calc(FundEvent event, SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord) {
+    private void calc(FundEvent event, SymbolPositionRecord position, CoreSymbolSpecification spec, CoreCurrencySpecification currencySpec, LastPriceCacheRecord priceRecord) {
         if (position.openVolume == 0) {
             return; // 无持仓，不计算
         }
@@ -91,11 +92,14 @@ public class FundEventsHelper {
         long totalMargin = 0;
         if (position.marginMode == MarginMode.CROSS) {
             UserProfile userProfile = userProfileService.getUserProfile(position.uid);
-            totalPnl = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
-                .sumOfLong(pos -> pos.estimateProfit(priceRecord));
-            totalMM = userProfile.positions.select(pos -> pos.marginMode == MarginMode.CROSS && pos.currency == position.currency)
-                .sumOfLong(pos -> pos.calculateMaintenanceMargin(spec, priceRecord));
+            for (SymbolPositionRecord pos : userProfile.positions) {
+                if (pos.marginMode == MarginMode.CROSS && pos.currency == position.currency) {
+                    totalPnl += pos.estimatePnl(priceRecord);
+                    totalMM += pos.calculateMaintenanceMargin(spec, priceRecord);
+                }
+            }
             balance = userProfile.accounts.get(position.currency);
+            balance = CoreArithmeticUtils.currencyToSizePriceScale(balance, spec, currencySpec);
             totalMargin = balance + totalPnl;
         } else {
             totalMargin = position.openInitMarginSum + position.estimateUnrealizedProfit(priceRecord) + position.extraMargin;
