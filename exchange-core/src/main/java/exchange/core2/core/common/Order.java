@@ -15,6 +15,7 @@
  */
 package exchange.core2.core.common;
 
+import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -56,6 +57,9 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     // required for PLACE_ORDER only;
     @Getter
     public OrderAction action;
+
+    @Getter
+    public OrderCommandType command;
 
     @Getter
     public long uid;

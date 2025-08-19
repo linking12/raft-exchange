@@ -15,6 +15,8 @@
  */
 package exchange.core2.core.common;
 
+import exchange.core2.core.common.cmd.OrderCommandType;
+
 public interface IOrder extends StateHash {
 
     long getPrice();
@@ -26,6 +28,8 @@ public interface IOrder extends StateHash {
     long getUid();
 
     OrderAction getAction();
+
+    OrderCommandType getCommand();
 
     long getOrderId();
 

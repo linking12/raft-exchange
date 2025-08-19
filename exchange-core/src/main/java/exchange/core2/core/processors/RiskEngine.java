@@ -1154,7 +1154,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (ev.eventType == MatcherEventType.TRADE && uidForThisHandler(ev.matchedOrderUid)) {
             // update maker's position
             UserProfile maker = userProfileService.getUserProfileOrAddSuspended(ev.matchedOrderUid);
-            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.createPositionsKey(spec.symbolId, takerAction.opposite(), cmd.command));
+            SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.createPositionsKey(spec.symbolId, takerAction.opposite(), ev.matchedOrderCommandType));
             long preVolume = makerSpr.openVolume;
 
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);

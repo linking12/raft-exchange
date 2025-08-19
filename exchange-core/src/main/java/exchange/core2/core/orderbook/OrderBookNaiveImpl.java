@@ -130,6 +130,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
                 filledSize,
                 cmd.reserveBidPrice,
                 action,
+                cmd.command,
                 cmd.uid,
                 cmd.timestamp);
 
