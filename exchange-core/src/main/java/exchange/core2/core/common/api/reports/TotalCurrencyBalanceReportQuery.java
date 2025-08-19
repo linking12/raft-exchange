@@ -111,10 +111,10 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         riskEngine.getUserProfileService().getUserProfiles().forEach(userProfile -> {
             userProfile.accounts.forEachKeyValue(currencyBalance::addToValue);
             userProfile.positions.forEachKeyValue((symbolId, positionRecord) -> {
-                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbolId);
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(positionRecord.symbol);
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(positionRecord.currency);
-                final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(symbolId, RiskEngine.LastPriceCacheRecord.dummy);
-                long profit = positionRecord.estimateProfit(avgPrice);
+                final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(positionRecord.symbol, RiskEngine.LastPriceCacheRecord.dummy);
+                long profit = positionRecord.estimatePnl(avgPrice);
                 profit = CoreArithmeticUtils.sizePriceToCurrencyScale(profit, spec, currencySpec);
                 currencyBalance.addToValue(positionRecord.currency, profit);
                 // 新增：统计extraMargin

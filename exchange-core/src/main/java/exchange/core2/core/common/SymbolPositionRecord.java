@@ -153,40 +153,14 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
 
     /**
-     * P&L = 已实现盈亏 + (当前价 - 开仓均价) * 持仓量 = profit + 当前价 * 持仓量 - 名义价值
-     * 返回纯利润，不包含冻结保证金。
+     * 估算Pnl = profit(已实现部分) + 未实现盈亏(以markPrice估价)。
      */
-    public long estimateProfit(final LastPriceCacheRecord lastPriceCacheRecord) {
-        switch (direction) {
-            case EMPTY:
-                return profit;
-            case LONG:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.bidPrice != 0) {
-                    return profit + (openVolume * lastPriceCacheRecord.bidPrice - openPriceSum);
-                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    // fallback: 使用标记价格
-                    return profit + (openVolume * lastPriceCacheRecord.markPrice - openPriceSum);
-                } else {
-                    // fallback: 用开仓均价作为当前价，即浮盈为0
-                    return profit;
-                }
-            case SHORT:
-                if (lastPriceCacheRecord != null && lastPriceCacheRecord.askPrice != Long.MAX_VALUE) {
-                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.askPrice);
-                } else if (lastPriceCacheRecord != null && lastPriceCacheRecord.markPrice != 0) {
-                    // fallback: 使用标记价格
-                    return profit + (openPriceSum - openVolume * lastPriceCacheRecord.markPrice);
-                } else {
-                    // fallback: 用开仓均价作为当前价，即浮盈为0
-                    return profit;
-                }
-            default:
-                throw new IllegalStateException();
-        }
+    public long estimatePnl(final LastPriceCacheRecord lastPriceCacheRecord) {
+        return profit + estimateUnrealizedProfit(lastPriceCacheRecord);
     }
     
     /**
-     * 【强平风险评估用】计算未实现盈亏，基于标记价格。
+     * 估算未实现盈亏，基于标记价格。
      * - 多头：(markPrice - 开仓价格) * 数量
      * - 空头：(开仓价格 - markPrice) * 数量
      */

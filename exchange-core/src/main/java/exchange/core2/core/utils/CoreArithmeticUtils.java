@@ -173,6 +173,13 @@ public final class CoreArithmeticUtils {
     }
 
     /**
+     * 币种记账单位(currency) → 撮合内部乘积单位(baseScale * quoteScale)
+     */
+    public static long currencyToSizePriceScale(long amount, CoreSymbolSpecification spec, CoreCurrencySpecification currency) {
+        return convertScale(amount, currency.getCurrencyScaleK(), spec.baseScaleK * spec.quoteScaleK);
+    }
+
+    /**
      * 币对交易单位(symbol.base或quote) → 币种记账单位(currency)
      * 返还补充保证金，现货加减base用到
      */
