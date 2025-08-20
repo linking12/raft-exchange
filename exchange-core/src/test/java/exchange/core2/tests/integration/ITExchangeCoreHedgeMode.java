@@ -76,6 +76,7 @@ public class ITExchangeCoreHedgeMode {
         container.createUserWithMoney(UID_2, USDT_ID, 10000 * USDT.getCurrencyScaleK());
         container.createUserWithMoney(UID_3, USDT_ID, 10000 * USDT.getCurrencyScaleK());
         container.createUserWithMoney(UID_4, USDT_ID, 10000 * USDT.getCurrencyScaleK());
+        container.createUserWithMoney(UID_5, USDT_ID, 10000 * USDT.getCurrencyScaleK());
     }
 
     // 测试1: 默认单项持仓 - one-way, 默认只有1个仓位, 反向开单只会抵消之前持仓, 不会新开仓位
@@ -488,7 +489,7 @@ public class ITExchangeCoreHedgeMode {
 
     // 测试5: 测试关仓
     @Test
-    public void testPositionOpenCloseChange() throws Exception {
+    public void testClosePosition() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             initUsersAndSymbol(container);
 
@@ -507,23 +508,20 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
             });
 
-            ApiClosePosition.ApiClosePositionBuilder builder = ApiClosePosition.builder();
-
-            // 开空30
-            container.submitCommandSync(ApiPlaceOrder.builder()
-                    .uid(UID_1)
+            // 关多仓
+            ApiClosePosition closeLong = ApiClosePosition.builder()
                     .orderId(10005L)
+                    .uid(UID_1)
+                    .symbol(BNB_USDT.symbolId)
                     .price(81000000L)
                     .size(30L)
-                    .symbol(BNB_USDT.symbolId)
                     .action(OrderAction.ASK)
-                    .orderType(OrderType.GTC)
-                    .marginMode(MarginMode.ISOLATED)
-                    .leverage(10)
-                    .build(), CommandResultCode.SUCCESS);
+                    .build();
+
+            container.submitCommandSync(closeLong, CommandResultCode.SUCCESS);
 
             container.submitCommandSync(ApiPlaceOrder.builder()
-                    .uid(UID_3)
+                    .uid(UID_4)
                     .orderId(10006L)
                     .price(81000000L)
                     .size(30L)
@@ -534,10 +532,130 @@ public class ITExchangeCoreHedgeMode {
                     .leverage(10)
                     .build(), CommandResultCode.SUCCESS);
 
-            container.validateUserState(UID_1, report -> {
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L)); // LONG
-                assertThat(report.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(80L)); // SHORT
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(70L)); // LONG
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L)); // SHORT
+            });
+
+            // 关空仓
+            ApiClosePosition closeShort = ApiClosePosition.builder()
+                    .orderId(10007L)
+                    .uid(UID_1)
+                    .symbol(BNB_USDT.symbolId)
+                    .price(74000000L)
+                    .size(30L)
+                    .action(OrderAction.BID)
+                    .build();
+
+            container.submitCommandSync(closeShort, CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_5)
+                    .orderId(10008L)
+                    .price(74000000L)
+                    .size(30L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(70L)); // LONG
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(20L)); // SHORT
+            });
+        }
+    }
+
+    // 测试5.2: 双向持仓之间互相match
+    @Test
+    public void testHedgeModeMatch() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            // 切换到双向
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(75000000L)
+                    .size(100L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10003L)
+                    .price(80000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(0L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(0L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
+            });
+
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_5)
+                    .positionMode(PositionMode.HEDGE)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // 关多仓
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_5)
+                    .orderId(10003L)
+                    .price(75000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.ASK)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_5)
+                    .orderId(10004L)
+                    .price(80000000L)
+                    .size(50L)
+                    .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(10)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
+            });
+            container.validateUserState(UID_5, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).direction, Is.is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).direction, Is.is(PositionDirection.SHORT));
             });
         }
     }
