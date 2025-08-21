@@ -1,4 +1,4 @@
-package com.binance.raftexchange.client.Api;
+package com.binance.raftexchange.client.grpc;
 
 import com.binance.raftexchange.stubs.api.ApiCommandServiceGrpc;
 import com.binance.raftexchange.stubs.api.ServerNodeServiceGrpc;
@@ -6,6 +6,8 @@ import com.binance.raftexchange.stubs.report.SingleUserReportQuery;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.report.StateHashReportQuery;
 import com.binance.raftexchange.stubs.report.StateHashReportResult;
+import com.binance.raftexchange.stubs.report.SymbolCurrencyReportQuery;
+import com.binance.raftexchange.stubs.report.SymbolCurrencyReportResult;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiCommand;
@@ -93,6 +95,10 @@ public class ExchangeClient implements AutoCloseable {
 
     public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId) {
         return readOnlyClient.totalCurrencyBalanceReport(transferId, TotalCurrencyBalanceReportQuery.getDefaultInstance());
+    }
+
+    public CompletableFuture<SymbolCurrencyReportResult> symbolCurrencyReport(int transferId) {
+        return readOnlyClient.symbolCurrencyReport(transferId, SymbolCurrencyReportQuery.getDefaultInstance());
     }
 
     private ManagedChannel createChannel(String host, int port) {

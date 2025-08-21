@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.raft;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -93,10 +94,19 @@ public class RaftClusterContainer {
     }
 
     public List<RaftNode> listNodes() {
-        List<RaftNode> raftNodes = new ArrayList<>();
-        for (Node node : NodeManager.getInstance().getNodesByGroupId(raftClusterName)) {
-            PeerId peerId = node.getNodeId().getPeerId();
-            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getIp()), node.isLeader() ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
+        // nodeManager只能拿到本机节点
+        List<Node> nodes = NodeManager.getInstance().getNodesByGroupId(raftClusterName);
+        if (nodes.isEmpty()) {
+            LOGGER.warn("No raft node found for group: {}", raftClusterName);
+            return Collections.emptyList();
+        }
+        Node node = nodes.get(0);
+        PeerId leaderId = node.getLeaderId();
+        // jraft配置禁用了cli，因此没有动态加入的节点，initConf中就是所有节点
+        List<PeerId> peers = node.getOptions().getInitialConf().getPeers();
+        List<RaftNode> raftNodes = new ArrayList<>(peers.size());
+        for (PeerId peerId : peers) {
+            raftNodes.add(new RaftNode(peerId.getIp(), getGrpcPort(peerId.getEndpoint().toString()), peerId.equals(leaderId) ? RaftNode.NodeType.LEADER : RaftNode.NodeType.FOLLOWER));
         }
         return raftNodes;
     }
@@ -116,11 +126,10 @@ public class RaftClusterContainer {
         return future;
     }
 
-    private int getGrpcPort(String raftIp) {
-        for (String grpcWorker : raftClusterDiscovery.raftGrpcWorkers()) {
-            if (grpcWorker.startsWith(raftIp)) {
-                return Integer.parseInt(grpcWorker.split(":")[1]);
-            }
+    private int getGrpcPort(String raftPeer) {
+        String grpcPeer = raftClusterDiscovery.raftToGrpcPeerMap().get(raftPeer);
+        if (grpcPeer != null) {
+            return Integer.parseInt(grpcPeer.split(":")[1]);
         }
         return -1;
     }

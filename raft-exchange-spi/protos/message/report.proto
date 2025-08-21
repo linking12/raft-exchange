@@ -63,19 +63,20 @@ message Position {
   int32 quote_currency = 1;
   PositionDirection direction = 2;
   int64 open_volume = 3;
-  int64 open_price_sum = 4;
-  int64 profit = 5;
-  int64 pending_sell_size = 6;
-  int64 pending_buy_size = 7;
-  int64 pending_sell_avg_price = 8;
-  int64 pending_buy_avg_price = 9;
-  int32 leverage = 10;
-  MarginMode margin_mode = 11;
-  int64 extra_margin = 12;
-  int64 unrealized_profit = 13;
-  int64 liquidation_price = 14;
-  int64 margin_ratio_scale_k = 15;
-  int64 mark_price = 16;
+  int64 open_init_margin_sum = 4;
+  int64 open_price_sum = 5;
+  int64 profit = 6;
+  int64 pending_sell_size = 7;
+  int64 pending_buy_size = 8;
+  int64 pending_sell_avg_price = 9;
+  int64 pending_buy_avg_price = 10;
+  int32 leverage = 11;
+  MarginMode margin_mode = 12;
+  int64 extra_margin = 13;
+  int64 unrealized_profit = 14;
+  int64 liquidation_price = 15;
+  int64 margin_ratio_scale_k = 16;
+  int64 mark_price = 17;
 }
 
 message PositionList {

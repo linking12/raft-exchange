@@ -7,8 +7,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.util.Deque;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -130,28 +128,27 @@ public class SerializeHelper {
             return null;
         }
 
-        // 使用栈来模拟递归调用
-        Deque<exchange.core2.core.common.MatcherTradeEvent> stack = new LinkedList<>();
-        while (matcherTradeEvent != null) {
-            stack.push(matcherTradeEvent);
-            matcherTradeEvent = matcherTradeEvent.nextEvent;
-        }
-        MatcherTradeEvent.Builder builder = null;
-        while (!stack.isEmpty()) {
-            exchange.core2.core.common.MatcherTradeEvent currentEvent = stack.pop();
-            MatcherTradeEvent.Builder newBuilder = MatcherTradeEvent.newBuilder()
-                    .setOrderId(currentEvent.matchedOrderId)
-                    .setPrice(currentEvent.price)
-                    .setSize(currentEvent.size)
-                    .setEventTypeValue(currentEvent.eventType.ordinal())
-                    .setActiveOrderCompleted(currentEvent.activeOrderCompleted)
-                    .setMatchedOrderCompleted(currentEvent.matchedOrderCompleted);
-            if (builder != null) {
-                newBuilder.setNextEvent(builder.build()); // 先构建 nextEvent
+        MatcherTradeEvent.Builder head = MatcherTradeEvent.newBuilder();
+        MatcherTradeEvent.Builder curBuilder = head;
+        exchange.core2.core.common.MatcherTradeEvent curSrc = matcherTradeEvent;
+        do {
+            curBuilder.setEventTypeValue(curSrc.eventType.ordinal())
+                    .setSection(curSrc.section)
+                    .setActiveOrderCompleted(curSrc.activeOrderCompleted)
+                    .setMatchedOrderId(curSrc.matchedOrderId)
+                    .setMatchedOrderUid(curSrc.matchedOrderUid)
+                    .setMatchedOrderCompleted(curSrc.matchedOrderCompleted)
+                    .setPrice(curSrc.price)
+                    .setSize(curSrc.size)
+                    .setBidderHoldPrice(curSrc.bidderHoldPrice)
+                    .setBaseScaleK(curSrc.baseScaleK)
+                    .setQuoteScaleK(curSrc.quoteScaleK);
+            curSrc = curSrc.nextEvent;
+            if (curSrc != null) {
+                curBuilder = curBuilder.getNextEventBuilder();
             }
-            builder = newBuilder; // 更新 builder
-        }
-        return builder != null ? builder.build() : null;
+        } while (curSrc != null);
+        return head.build();
     }
 
     private static L2MarketData toPbObject(exchange.core2.core.common.L2MarketData l2MarketData) {
@@ -209,7 +206,7 @@ public class SerializeHelper {
     private static final Function<List<SingleUserReportResult.Position>, PositionList> positionMapping = l ->
             PositionList.newBuilder().addAllPositions(l.stream().map(p -> Position.newBuilder()
                     .setQuoteCurrency(p.getQuoteCurrency()).setDirectionValue(p.getDirection().getMultiplier() & 0xFF)
-                    .setOpenVolume(p.getOpenVolume()).setOpenPriceSum(p.getOpenPriceSum())
+                    .setOpenVolume(p.getOpenVolume()).setOpenInitMarginSum(p.getOpenInitMarginSum()).setOpenPriceSum(p.getOpenPriceSum())
                     .setProfit(p.getProfit()).setPendingSellSize(p.getPendingSellSize())
                     .setPendingBuySize(p.getPendingBuySize()).setPendingSellAvgPrice(p.getPendingSellAvgPrice())
                     .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())

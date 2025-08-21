@@ -122,20 +122,23 @@ enum MatcherEventType {
     BINARY_EVENT = 3;
 }
 
-// Message for Matcher Trade Event (simplified, as full structure not provided)
+// Message for MatcherTradeEvent
 message MatcherTradeEvent {
-    int64 order_id = 1;
-    int64 price = 2;
-    int64 size = 3;
-
-    MatcherEventType eventType = 4;
-    bool activeOrderCompleted = 5;
+    MatcherEventType eventType = 1;
+    int32 section = 2;
+    bool activeOrderCompleted = 3;
+    int64 matchedOrderId = 4;
+    int64 matchedOrderUid = 5;
     bool matchedOrderCompleted = 6;
-
-    MatcherTradeEvent next_event = 7;  // Linked list structure
+    int64 price = 7;
+    int64 size = 8;
+    int64 bidderHoldPrice = 9;
+    int64 baseScaleK = 10;
+    int64 quoteScaleK = 11;
+    MatcherTradeEvent next_event = 12;
 }
 
-// Message for L2 Market Data (simplified placeholder)
+// Message for L2MarketData
 message L2MarketData {
     int32 ask_sizes = 1;
     int32 bid_sizes = 2;

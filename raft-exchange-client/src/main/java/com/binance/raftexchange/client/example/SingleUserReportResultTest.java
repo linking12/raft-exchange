@@ -1,6 +1,6 @@
 package com.binance.raftexchange.client.example;
 
-import com.binance.raftexchange.client.Api.ExchangeClient;
+import com.binance.raftexchange.client.grpc.ExchangeClient;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 
 import java.util.concurrent.CompletableFuture;

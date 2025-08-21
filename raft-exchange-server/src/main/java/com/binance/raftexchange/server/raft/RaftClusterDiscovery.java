@@ -34,7 +34,8 @@ public class RaftClusterDiscovery {
 
     private String lastAppsHashCode;
     private List<String> raftClusterHostAndPorts;
-    private List<String> raftGrpcWorkerHostAndPorts;
+    // raftIP:raftPort -> grpcIP:grpcPort
+    private Map<String, String> raftToGrpcPeerMap;
 
     public RaftClusterDiscovery(EurekaClient eurekaClient) {
         this.raftPort = System.getProperty(RAFT_PORT, "7800");
@@ -63,10 +64,11 @@ public class RaftClusterDiscovery {
                     .filter(instance -> (instance.getMetadata().containsKey(RAFT_PORT)
                         && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
                     .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(RAFT_PORT))).collect(Collectors.toList());
-                this.raftGrpcWorkerHostAndPorts = clusterInstanceList.stream()
+                this.raftToGrpcPeerMap = clusterInstanceList.stream()
                     .filter(instance -> (instance.getMetadata().containsKey(GRPC_PORT)
                         && StringUtils.equals(instance.getMetadata().get(EUREKA_METADATA_FLOWFLAG), EnvUtil.getFlowFlag())))
-                    .map(instance -> formatPeer(instance.getIPAddr(), instance.getMetadata().get(GRPC_PORT))).collect(Collectors.toList());
+                    .collect(Collectors.toMap(inst -> formatPeer(inst.getIPAddr(), inst.getMetadata().get(RAFT_PORT)),
+                        inst -> formatPeer(inst.getIPAddr(), inst.getMetadata().get(GRPC_PORT)), (v1, v2) -> v1));
                 if (this.raftClusterHostAndPorts == null || !CollectionUtils.isEqualCollection(this.raftClusterHostAndPorts, clusterHostAndPort)) {
                     this.raftClusterHostAndPorts = clusterHostAndPort;
                     LOGGER.info("update last clusters to {}", this.raftClusterHostAndPorts);
@@ -76,8 +78,8 @@ public class RaftClusterDiscovery {
         }
     }
 
-    public List<String> raftGrpcWorkers() {
-        return Collections.unmodifiableList(raftGrpcWorkerHostAndPorts);
+    public Map<String, String> raftToGrpcPeerMap() {
+        return raftToGrpcPeerMap == null ? Collections.emptyMap() : Collections.unmodifiableMap(raftToGrpcPeerMap);
     }
 
     public String raftMemberCluster() {
