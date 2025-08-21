@@ -139,7 +139,7 @@ class ITMixedIntegration {
             assertThat(quoteId, Is.is(marginEvent.currency));
             assertThat(makerOrderId1, Is.is(marginEvent.orderId));
             assertThat(0L, Is.is(marginEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(marginEvent.direction));
+            assertThat(PositionDirection.LONG, Is.is(marginEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(marginEvent.eventType));
             assertThat(deposit - fee, Is.is(marginEvent.free));
             assertThat(fee, Is.is(marginEvent.locked));
@@ -414,7 +414,7 @@ class ITMixedIntegration {
             assertThat(quoteId, Is.is(event.currency));
             assertThat(10000, Is.is(event.symbol));
             assertThat(0L, Is.is(event.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(event.direction));
+            assertThat(PositionDirection.LONG, Is.is(event.direction));
             assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(event.eventType));
             assertThat(9900L, Is.is(event.free));
             assertThat(0L, Is.is(event.locked));

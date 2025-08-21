@@ -280,10 +280,11 @@ public final class ITExchangeCorePriceScale {
 
             // 期货持仓冻结750 USDT
             long extraUsdtDeposit = 750 * USDT.getCurrencyScaleK() - 1;
-            container.createUserWithMoney(UID_1, USDT_ID, extraUsdtDeposit);
+            container.addMoneyToUser(UID_1, USDT_ID, extraUsdtDeposit);
             container.submitCommandSync(cmd, CommandResultCode.RISK_NSF);
 
-            container.createUserWithMoney(UID_1, USDT_ID, 1);
+            container.addMoneyToUser(UID_1, USDT_ID, 1);
+            cmd = ApiAdjustUserBalance.builder().uid(UID_1).transactionId(100L).amount(-usdtDeposit).currency(USDT_ID).build();
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
         }
     }

@@ -280,7 +280,7 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_JPY), is(jpyAmount1));
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(0L));
-                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.SHORT));
                 assertThat(profile.getPositions().get(symbolId).get(0).openVolume, is(0L));
                 assertThat(profile.getPositions().get(symbolId).get(0).pendingBuySize, is(0L));
                 assertThat(profile.getPositions().get(symbolId).get(0).pendingSellSize, is(40L));

@@ -710,8 +710,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void addMoneyToUser(long uid, int currency, long amount) {
+        long orderId = getRandomTransactionId();
+        addMoneyToUserWithOrderId(orderId, uid, currency, amount);
+    }
+
+    public void addMoneyToUserWithOrderId(long orderId, long uid, int currency, long amount) {
         final List<ApiCommand> cmds = new ArrayList<>();
-        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(currency).build());
+        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(orderId).amount(amount).currency(currency).build());
         api.submitCommandsSync(cmds);
     }
 

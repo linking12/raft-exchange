@@ -227,7 +227,7 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
                 assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
                 assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
@@ -244,7 +244,7 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
                 assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
                 assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
@@ -346,7 +346,7 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
@@ -365,7 +365,7 @@ class ITPerpetualContractIntegration {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit));
                 assertThat(profile.getPositions().size(), is(1));
-                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
                 assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));

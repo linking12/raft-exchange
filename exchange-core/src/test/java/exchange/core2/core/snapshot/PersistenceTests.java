@@ -293,14 +293,6 @@ public class PersistenceTests {
         container.submitCommandSync(hedgeShortOrder, cmd ->
                 assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-        container.validateUserState(UID_HEDGE, profile -> {
-            assertThat(profile.getPositions().get(SYMBOL_FUTURES).size(), Is.is(2));
-            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).direction, Is.is(PositionDirection.LONG));
-            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).leverage, Is.is(10));
-            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).direction, Is.is(PositionDirection.SHORT));
-            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).leverage, Is.is(10));
-        });
-
         // 8. 更新标记价格使逐仓用户盈利，全仓用户亏损
         container.initMarkPrice(SYMBOL_FUTURES, 10_500);
 
@@ -343,6 +335,14 @@ public class PersistenceTests {
             assertEquals(1050000L, pos.unrealizedProfit);
             assertEquals(-989785L, pos.liquidationPrice);
             assertEquals(212, pos.marginRatioScaleK);
+        });
+
+        container.validateUserState(UID_HEDGE, profile -> {
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).size(), Is.is(2));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).direction, Is.is(PositionDirection.LONG));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).leverage, Is.is(10));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).direction, Is.is(PositionDirection.SHORT));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).leverage, Is.is(10));
         });
 
         // 14. 验证系统总余额

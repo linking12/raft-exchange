@@ -258,7 +258,7 @@ class ITExtraMarginIntegration {
             assertThat(symbolId, is(event1.symbol));
             assertThat(10001L, is(event1.orderId));
             assertThat(0L, is(event1.fee));
-            assertThat(PositionDirection.EMPTY, is(event1.direction));
+            assertThat(PositionDirection.LONG, is(event1.direction));
             assertThat(FundEvent.FundEventType.MARGIN_ADJUST, is(event1.eventType));
             assertThat(880L, is(event1.free));
             assertThat(120L, is(event1.locked));
@@ -365,7 +365,7 @@ class ITExtraMarginIntegration {
             assertThat(quoteId, is(marginRefund.currency));
             assertThat(symbolId, is(marginRefund.symbol));
             assertThat(0L, is(marginRefund.fee));
-            assertThat(PositionDirection.EMPTY, is(marginRefund.direction));
+            assertThat(PositionDirection.LONG, is(marginRefund.direction));
             assertThat(FundEvent.FundEventType.MARGIN_REFUND, is(marginRefund.eventType));
             assertThat(deposit - fee + price2 - price1 - deposit2, is(marginRefund.free));
             assertThat(0L, is(marginRefund.locked));
@@ -944,8 +944,8 @@ class ITExtraMarginIntegration {
             });
             container.validateUserState(userId3, profile -> {
                 assertThat(profile.getPositions().size(), is(2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).direction, is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).direction, is(PositionDirection.SHORT));
             });
 
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
@@ -982,7 +982,7 @@ class ITExtraMarginIntegration {
             assertThat(quoteId, is(refund1.currency));
             assertThat(10000, is(refund1.symbol));
             assertThat(0L, is(refund1.fee));
-            assertThat(PositionDirection.EMPTY, is(refund1.direction));
+            assertThat(PositionDirection.LONG, is(refund1.direction));
             assertThat(FundEvent.FundEventType.MARGIN_REFUND, is(refund1.eventType));
             assertThat(6840L, is(refund1.free));
             assertThat(100L, is(refund1.locked));
@@ -997,7 +997,7 @@ class ITExtraMarginIntegration {
             assertThat(quoteId, is(refund2.currency));
             assertThat(10001, is(refund2.symbol));
             assertThat(0L, is(refund2.fee));
-            assertThat(PositionDirection.EMPTY, is(refund2.direction));
+            assertThat(PositionDirection.SHORT, is(refund2.direction));
             assertThat(FundEvent.FundEventType.MARGIN_REFUND, is(refund2.eventType));
             assertThat(8840L, is(refund2.free));
             assertThat(0L, is(refund2.locked));

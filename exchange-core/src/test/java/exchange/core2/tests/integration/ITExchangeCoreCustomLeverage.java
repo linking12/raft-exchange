@@ -431,7 +431,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(100L));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
@@ -483,7 +483,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
@@ -507,7 +507,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
 
@@ -549,7 +549,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
@@ -569,11 +569,11 @@ public final class ITExchangeCoreCustomLeverage {
                     .marginMode(MarginMode.ISOLATED)
                     .leverage(50)
                     .build();
-            container.submitCommandSync(order2, CommandResultCode.RISK_INVALID_LEVERAGE);
+            container.submitCommandSync(order2, CommandResultCode.RISK_LEVERAGE_MISMATCH);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
 
@@ -632,7 +632,7 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
             });
@@ -657,7 +657,7 @@ public final class ITExchangeCoreCustomLeverage {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(spec.quoteCurrency), is(charge));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(0L));
-                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.EMPTY));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingBuySize(), is(size1));
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getPendingSellSize(), is(0L));
 
