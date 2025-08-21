@@ -189,7 +189,7 @@ public interface IOrderBook extends WriteBytesMarshallable, StateHash {
 
             return orderBook.reduceOrder(cmd);
 
-        } else if (commandType == OrderCommandType.PLACE_ORDER) {
+        } else if (commandType == OrderCommandType.PLACE_ORDER || commandType == OrderCommandType.CLOSE_POSITION) {
 
             if (cmd.resultCode == CommandResultCode.VALID_FOR_MATCHING_ENGINE) {
                 orderBook.newOrder(cmd);

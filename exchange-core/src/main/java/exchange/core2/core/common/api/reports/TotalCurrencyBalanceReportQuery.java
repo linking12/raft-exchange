@@ -124,9 +124,9 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                     extraMargin.addToValue(positionRecord.currency, amount);
                 }
                 if (positionRecord.direction == PositionDirection.LONG) {
-                    symbolOpenInterestLong.addToValue(symbolId, positionRecord.openVolume);
+                    symbolOpenInterestLong.addToValue(positionRecord.symbol, positionRecord.openVolume);
                 } else if (positionRecord.direction == PositionDirection.SHORT) {
-                    symbolOpenInterestShort.addToValue(symbolId, positionRecord.openVolume);
+                    symbolOpenInterestShort.addToValue(positionRecord.symbol, positionRecord.openVolume);
                 }
             });
         });

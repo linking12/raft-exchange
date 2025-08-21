@@ -339,7 +339,7 @@ public class FutureCoreExample {
         assertEquals(userStatus.getPositions().getFirst().get(0).openVolume, 0);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
     }
 
     // Long/Short仓位类型正确
@@ -386,7 +386,7 @@ public class FutureCoreExample {
         checkPosition(userStatus, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 0);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
 
         long userId2 = createRandomUserWithMoney();
         createBid(userId2, 1, 10000L);
@@ -419,7 +419,7 @@ public class FutureCoreExample {
         checkPosition(userStatus, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         long userId2 = createRandomUserWithMoney();
         createAsk(userId2, 1, 10000L);
@@ -452,7 +452,7 @@ public class FutureCoreExample {
         checkPosition(userStatus, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
 
         long userId2 = createRandomUserWithMoney();
         // orderId2成交后userId1做多仓位才算开出来
@@ -491,7 +491,7 @@ public class FutureCoreExample {
         checkPosition(userStatus, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 0);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 1);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.SHORT);
 
         long userId2 = createRandomUserWithMoney();
         // orderId2成交后userId1做多仓位才算开出来
@@ -893,7 +893,7 @@ public class FutureCoreExample {
         checkOrder(userStatus, 1);
         // 账面资金和初始资金一致
         assertEquals(userStatus.getAccounts().get(quoteId), balance);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
         assertEquals(userStatus.getPositions().getFirst().get(0).openVolume, 0);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);
@@ -928,7 +928,7 @@ public class FutureCoreExample {
         checkOrder(userStatus, 1);
         // 账面资金和初始资金一致
         assertEquals(userStatus.getAccounts().get(quoteId), balance);
-        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.EMPTY);
+        assertEquals(userStatus.getPositions().getFirst().get(0).direction, PositionDirection.LONG);
         assertEquals(userStatus.getPositions().getFirst().get(0).openVolume, 0);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingBuySize, 1);
         assertEquals(userStatus.getPositions().getFirst().get(0).pendingSellSize, 0);

@@ -92,6 +92,7 @@ enum OrderCommandType {
     CANCEL_ORDER = 2;
     MOVE_ORDER = 3;
     REDUCE_ORDER = 4;
+    CLOSE_POSITION = 5;
     ORDER_BOOK_REQUEST = 6;
     ADD_USER = 10;
     BALANCE_ADJUSTMENT = 11;

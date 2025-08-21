@@ -15,6 +15,7 @@
  */
 package exchange.core2.core.common;
 
+import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -58,6 +59,9 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     public OrderAction action;
 
     @Getter
+    public OrderCommandType command;
+
+    @Getter
     public long uid;
 
     @Getter
@@ -74,6 +78,8 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         this.filled = bytes.readLong(); // filled
         this.reserveBidPrice = bytes.readLong(); // price2
         this.action = OrderAction.of(bytes.readByte());
+        byte commandByte = bytes.readByte();
+        this.command = commandByte == 0 ? null : OrderCommandType.fromCode(commandByte);
         this.uid = bytes.readLong(); // uid
         this.timestamp = bytes.readLong(); // timestamp
 //        this.userCookie = bytes.readInt();  // userCookie
@@ -88,6 +94,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         bytes.writeLong(filled);
         bytes.writeLong(reserveBidPrice);
         bytes.writeByte(action.getCode());
+        bytes.writeByte(command == null ? 0 : command.getCode());
         bytes.writeLong(uid);
         bytes.writeLong(timestamp);
 //        bytes.writeInt(userCookie);
@@ -96,6 +103,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     @Override
     public String toString() {
         return "[" + orderId + " " + (action == OrderAction.ASK ? 'A' : 'B')
+                + " " + command + " "
                 + price + ":" + size + "F" + filled
                 // + " C" + userCookie
                 + " U" + uid + "]";
@@ -103,7 +111,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
 
     @Override
     public int hashCode() {
-        return Objects.hash(orderId, action, price, size, reserveBidPrice, filled,
+        return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled,
                 //userCookie, timestamp
                 uid);
     }
@@ -123,6 +131,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         // ignore timestamp and userCookie
         return orderId == other.orderId
                 && action == other.action
+                && command == other.command
                 && price == other.price
                 && size == other.size
                 && reserveBidPrice == other.reserveBidPrice

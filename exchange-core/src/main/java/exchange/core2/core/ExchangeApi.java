@@ -108,7 +108,9 @@ public final class ExchangeApi {
         } else if (cmd instanceof ApiCancelOrder) {
             ringBuffer.publishEvent(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder)cmd);
         } else if (cmd instanceof ApiReduceOrder) {
-            ringBuffer.publishEvent(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder)cmd);
+            ringBuffer.publishEvent(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder) cmd);
+        } else if (cmd instanceof ApiClosePosition) {
+            ringBuffer.publishEvent(CLOSE_POSITION_TRANSLATOR, (ApiClosePosition) cmd);
         } else if (cmd instanceof ApiOrderBookRequest) {
             ringBuffer.publishEvent(ORDER_BOOK_REQUEST_TRANSLATOR, (ApiOrderBookRequest)cmd);
         } else if (cmd instanceof ApiAddUser) {
@@ -164,6 +166,8 @@ public final class ExchangeApi {
             return submitCommandAsync(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder)cmd);
         } else if (cmd instanceof ApiReduceOrder) {
             return submitCommandAsync(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder)cmd);
+        } else if (cmd instanceof ApiClosePosition) {
+            return submitCommandAsync(CLOSE_POSITION_TRANSLATOR, (ApiClosePosition) cmd);
         } else if (cmd instanceof ApiOrderBookRequest) {
             return submitCommandAsync(ORDER_BOOK_REQUEST_TRANSLATOR, (ApiOrderBookRequest)cmd);
         } else if (cmd instanceof ApiAddUser) {
@@ -215,6 +219,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder)cmd);
         } else if (cmd instanceof ApiReduceOrder) {
             return submitCommandAsyncFullResponse(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder)cmd);
+        } else if (cmd instanceof ApiClosePosition) {
+            return submitCommandAsyncFullResponse(CLOSE_POSITION_TRANSLATOR, (ApiClosePosition) cmd);
         } else if (cmd instanceof ApiOrderBookRequest) {
             return submitCommandAsyncFullResponse(ORDER_BOOK_REQUEST_TRANSLATOR, (ApiOrderBookRequest)cmd);
         } else if (cmd instanceof ApiAddUser) {
@@ -652,6 +658,20 @@ public final class ExchangeApi {
         cmd.uid = api.uid;
         cmd.size = api.reduceSize;
         cmd.timestamp = api.timestamp;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiClosePosition> CLOSE_POSITION_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.CLOSE_POSITION;
+        cmd.price = api.price;
+        cmd.reserveBidPrice = api.price;
+        cmd.size = api.size;
+        cmd.orderId = api.orderId;
+        cmd.timestamp = api.timestamp;
+        cmd.action = api.action;
+        cmd.orderType = OrderType.GTC;
+        cmd.symbol = api.symbol;
+        cmd.uid = api.uid;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

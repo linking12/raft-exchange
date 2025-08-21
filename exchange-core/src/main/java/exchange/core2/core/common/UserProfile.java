@@ -15,6 +15,7 @@
  */
 package exchange.core2.core.common;
 
+import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -79,9 +80,13 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
         this.userStatus = UserStatus.of(bytesIn.readByte());
     }
 
-    public int createPositionsKey(int symbol, OrderAction orderAction) {
+    public int createPositionsKey(int symbol, OrderAction orderAction, OrderCommandType command) {
         if (positionMode == PositionMode.HEDGE) {
-            return orderAction == OrderAction.BID ? symbol : -symbol;
+            int key = orderAction == OrderAction.BID ? symbol : -symbol;
+            if (command == OrderCommandType.CLOSE_POSITION || command == OrderCommandType.FORCE_LIQUIDATION) {
+                return -key; // 平仓时翻转到对侧仓位
+            }
+            return key;
         }
         return symbol;
     }
