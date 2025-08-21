@@ -18,6 +18,7 @@ import com.binance.raftexchange.stubs.request.ApiAdjustPositionMode;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
+import com.binance.raftexchange.stubs.request.ApiClosePosition;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
@@ -275,6 +276,23 @@ public class ExchangeApi implements AutoCloseable {
             builder.setMarginMode(marginMode).setLeverage(leverage);
         }
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setPlaceOrder(builder).build();
+    }
+
+    public CommandResultView closePosition(long uid, long orderId, int symbol, OrderAction action, double price, double size) {
+        return send(buildClosePositionCommand(uid, orderId, symbol, action, price, size));
+    }
+
+    public CompletableFuture<CommandResultView> closePositionAsync(long uid, long orderId, int symbol, OrderAction action, double price, double size) {
+        return sendAsync(buildClosePositionCommand(uid, orderId, symbol, action, price, size));
+    }
+
+    private ApiCommand buildClosePositionCommand(long uid, long orderId, int symbol, OrderAction action, double price, double size) {
+        CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbol);
+        long scaledPrice = doubleToLong(price, spec.getQuoteScaleK());
+        long scaledSize = doubleToLong(size, spec.getBaseScaleK());
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setClosePosition(ApiClosePosition.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)
+                        .setAction(action).setPrice(scaledPrice).setSize(scaledSize)).build();
     }
 
     public CommandResultView moveOrder(long uid, long orderId, int symbol, double newPrice) {
