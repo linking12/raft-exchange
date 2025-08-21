@@ -139,7 +139,7 @@ class ITMixedIntegration {
             assertThat(quoteId, Is.is(marginEvent.currency));
             assertThat(makerOrderId1, Is.is(marginEvent.orderId));
             assertThat(0L, Is.is(marginEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(marginEvent.direction));
+            assertThat(PositionDirection.LONG, Is.is(marginEvent.direction));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(marginEvent.eventType));
             assertThat(deposit - fee, Is.is(marginEvent.free));
             assertThat(fee, Is.is(marginEvent.locked));
@@ -207,7 +207,7 @@ class ITMixedIntegration {
             // 开仓成功，uid1作为maker，余额-10元
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(1L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getOpenVolume(), is(1L));
             });
 
             ApiPlaceOrder order = container.genOrderWithId(exchangeOrderId, userId1, 1, 10000, symbolsExchange.get(0).symbolId, BID, GTC);
@@ -273,7 +273,7 @@ class ITMixedIntegration {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(10L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getOpenVolume(), is(10L));
             });
 
             // 反向开单数量大于openVolume
@@ -281,13 +281,13 @@ class ITMixedIntegration {
             container.createBidWithOrderId(TAKER_2, UID_3, 11, price2, symbols.get(0).symbolId, MarginMode.CROSS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).profit, is((price2 - price1) * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).openVolume, is(1L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(1L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(150L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(74517L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(1L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).profit, is((price2 - price1) * size));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).openVolume, is(1L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).pendingSellSize, is(1L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).liquidationPrice, is(74517L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).marginRatioScaleK, is(1L));
             });
 
         } catch (ExecutionException e) {
@@ -323,7 +323,7 @@ class ITMixedIntegration {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(10L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getOpenVolume(), is(10L));
             });
 
             // 反向开单数量大于openVolume
@@ -331,24 +331,24 @@ class ITMixedIntegration {
             container.createBidWithOrderId(TAKER_2, UID_3, 11, price2, symbols.get(0).symbolId, MarginMode.CROSS);
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).profit, is((price2 - price1) * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).openVolume, is(1L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(1L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(90L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(18796L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(4L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).profit, is((price2 - price1) * size));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).openVolume, is(1L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).pendingSellSize, is(1L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).openInitMarginSum, is(90L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).liquidationPrice, is(18796L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).marginRatioScaleK, is(4L));
             });
 
             container.createBidWithOrderId(TAKER_3, UID_4, 1, price2, symbols.get(0).symbolId, MarginMode.CROSS);
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).profit, is((price2 - price1) * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).openVolume, is(2L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).openInitMarginSum, is(90L * 2));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).unrealizedProfit, is(0L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).liquidationPrice, is(13870L));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).marginRatioScaleK, is(9L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).profit, is((price2 - price1) * size));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).openVolume, is(2L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).openInitMarginSum, is(90L * 2));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).unrealizedProfit, is(0L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).liquidationPrice, is(13870L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).marginRatioScaleK, is(9L));
             });
 
         } catch (ExecutionException e) {
@@ -382,7 +382,7 @@ class ITMixedIntegration {
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).getOpenVolume(), is(10L));
+                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getOpenVolume(), is(10L));
             });
 
             container.validateUserState(UID_3, profile -> {
@@ -414,7 +414,7 @@ class ITMixedIntegration {
             assertThat(quoteId, Is.is(event.currency));
             assertThat(10000, Is.is(event.symbol));
             assertThat(0L, Is.is(event.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(event.direction));
+            assertThat(PositionDirection.LONG, Is.is(event.direction));
             assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(event.eventType));
             assertThat(9900L, Is.is(event.free));
             assertThat(0L, Is.is(event.locked));

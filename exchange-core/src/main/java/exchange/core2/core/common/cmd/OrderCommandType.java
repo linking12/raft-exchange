@@ -27,6 +27,7 @@ public enum OrderCommandType {
     CANCEL_ORDER((byte) 2, true),
     MOVE_ORDER((byte) 3, true),
     REDUCE_ORDER((byte) 4, true),
+    CLOSE_POSITION((byte) 5, true),
 
     ORDER_BOOK_REQUEST((byte) 6, false),
 
@@ -37,10 +38,11 @@ public enum OrderCommandType {
 
     FORCE_LIQUIDATION((byte) 20, true),
     LEVERAGE_ADJUSTMENT((byte) 21, true),
-    MARGIN_ADJUSTMENT((byte) 22, true),
-    MARKPRICE_ADJUSTMENT((byte) 23, true),
-    SETTLE_FUNDINGFEES((byte) 24, true),
-    SETTLE_PNL((byte) 25, true),
+    POSITION_MODE_ADJUSTMENT((byte) 22, true),
+    MARGIN_ADJUSTMENT((byte) 23, true),
+    MARKPRICE_ADJUSTMENT((byte) 24, true),
+    SETTLE_FUNDINGFEES((byte) 25, true),
+    SETTLE_PNL((byte) 26, true),
 
     SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
 

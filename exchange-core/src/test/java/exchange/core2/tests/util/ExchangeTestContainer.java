@@ -710,8 +710,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void addMoneyToUser(long uid, int currency, long amount) {
+        long orderId = getRandomTransactionId();
+        addMoneyToUserWithOrderId(orderId, uid, currency, amount);
+    }
+
+    public void addMoneyToUserWithOrderId(long orderId, long uid, int currency, long amount) {
         final List<ApiCommand> cmds = new ArrayList<>();
-        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(getRandomTransactionId()).amount(amount).currency(currency).build());
+        cmds.add(ApiAdjustUserBalance.builder().uid(uid).transactionId(orderId).amount(amount).currency(currency).build());
         api.submitCommandsSync(cmds);
     }
 
@@ -736,6 +741,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public void addSymbols(final List<CoreSymbolSpecification> symbols) {
         // split by chunks
         Lists.partition(symbols, 10000).forEach(partition -> sendBinaryDataCommandSync(new BatchAddSymbolsCommand(partition), 5000));
+    }
+
+    public void adjustPositionMode(long uid, PositionMode mode) {
+        final ApiAdjustPositionMode cmd = ApiAdjustPositionMode.builder().uid(uid).positionMode(mode).build();
+        submitCommandSync(cmd, CommandResultCode.SUCCESS);
     }
 
     public void sendBinaryDataCommandSync(final BinaryDataCommand data, final int timeOutMs) {
@@ -936,13 +946,12 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     private void initPerfCurrencies(List<CoreSymbolSpecification> coreSymbolSpecifications) {
-        // load currencies
-        Set<Integer> currencies = new HashSet<>();
+        // init currencies，保证currency精度比交易对size*price精度高
         coreSymbolSpecifications.forEach(symbol -> {
-            currencies.add(symbol.baseCurrency);
-            currencies.add(symbol.quoteCurrency);
+            int digit = TenPowers.log10(symbol.baseScaleK * symbol.quoteScaleK);
+            addCurrency(symbol.baseCurrency, digit);
+            addCurrency(symbol.quoteCurrency, digit);
         });
-        currencies.forEach(id -> addCurrency(id));
     }
 
     public void loadSymbolsUsersAndPrefillOrdersNoLog(TestDataFutures testDataFutures) {

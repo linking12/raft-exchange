@@ -20,6 +20,7 @@ import com.binance.raftexchange.stubs.report.HashCodeEntry;
 import com.binance.raftexchange.stubs.report.Order;
 import com.binance.raftexchange.stubs.report.OrderList;
 import com.binance.raftexchange.stubs.report.Position;
+import com.binance.raftexchange.stubs.report.PositionList;
 import com.binance.raftexchange.stubs.report.QueryExecutionStatus;
 import com.binance.raftexchange.stubs.report.SubmoduleKey;
 import com.binance.raftexchange.stubs.report.UserStatus;
@@ -205,16 +206,16 @@ public class SerializeHelper {
         throw new IllegalArgumentException("Unknown enum value: " + intValue);
     }
 
-    private static final Function<SingleUserReportResult.Position, Position> positionMapping = p ->
-            Position.newBuilder().setQuoteCurrency(p.getQuoteCurrency())
-                    .setDirectionValue(p.getDirection().getMultiplier() & 0xFF)
+    private static final Function<List<SingleUserReportResult.Position>, PositionList> positionMapping = l ->
+            PositionList.newBuilder().addAllPositions(l.stream().map(p -> Position.newBuilder()
+                    .setQuoteCurrency(p.getQuoteCurrency()).setDirectionValue(p.getDirection().getMultiplier() & 0xFF)
                     .setOpenVolume(p.getOpenVolume()).setOpenPriceSum(p.getOpenPriceSum())
                     .setProfit(p.getProfit()).setPendingSellSize(p.getPendingSellSize())
                     .setPendingBuySize(p.getPendingBuySize()).setPendingSellAvgPrice(p.getPendingSellAvgPrice())
                     .setPendingBuyAvgPrice(p.getPendingBuyAvgPrice()).setLeverage(p.getLeverage())
                     .setMarginModeValue(p.getMarginMode().ordinal()).setExtraMargin(p.getExtraMargin())
                     .setUnrealizedProfit(p.getUnrealizedProfit()).setLiquidationPrice(p.getLiquidationPrice())
-                    .setMarginRatioScaleK(p.getMarginRatioScaleK()).setMarkPrice(p.getMarkPrice()).build();
+                    .setMarginRatioScaleK(p.getMarginRatioScaleK()).setMarkPrice(p.getMarkPrice()).build()).collect(Collectors.toList())).build();
 
     private static final Function<List<exchange.core2.core.common.Order>, OrderList> ordersMapping = l ->
             OrderList.newBuilder().addAllOrders(l.stream().map(o -> Order.newBuilder()

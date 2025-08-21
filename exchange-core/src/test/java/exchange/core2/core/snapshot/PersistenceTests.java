@@ -151,7 +151,7 @@ public class PersistenceTests {
 
     private static void doCheckExtra(ExchangeTestContainer container) throws ExecutionException, InterruptedException {
         container.validateUserState(UID_1, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(50L, pos.openVolume); // 仓位保持不变
             assertEquals(50, pos.leverage);
@@ -162,11 +162,18 @@ public class PersistenceTests {
         });
         container.validateUserState(UID_2, profile -> {
             // 仓位应被部分或全部平仓
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
-            assertTrue(pos == null || pos.openVolume < 50L);
+            List<SingleUserReportResult.Position> pos = profile.getPositions().get(SYMBOL_FUTURES);
+            assertTrue(pos == null);
             // 账户余额应为负或接近零
             long balance = profile.getAccounts().get(CURRENCY_FUT);
             assertTrue(balance != 25000L, "Balance should be negative after liquidation");
+        });
+        container.validateUserState(UID_4, profile -> {
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).size(), Is.is(2));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).direction, Is.is(PositionDirection.LONG));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).leverage, Is.is(10));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).direction, Is.is(PositionDirection.SHORT));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).leverage, Is.is(10));
         });
     }
 
@@ -184,6 +191,7 @@ public class PersistenceTests {
         final long UID_ISOLATED = UID_1; // 逐仓用户
         final long UID_CROSS = UID_2;    // 全仓用户
         final long UID_LIQ = UID_3;
+        final long UID_HEDGE = UID_4; // 双向持仓用户
 
         // 逐仓用户充值1,000,000 FUT (足够开仓和追加保证金)
         container.createUserWithMoney(UID_ISOLATED, CURRENCY_FUT, 1_000_000_000L);
@@ -191,6 +199,13 @@ public class PersistenceTests {
         // 全仓用户充值500,000 FUT (临界值，可能触发强平)
         container.createUserWithMoney(UID_CROSS, CURRENCY_FUT, 1000_000L);
         container.createUserWithMoney(UID_LIQ, CURRENCY_FUT, MAX_VALUE);
+        container.createUserWithMoney(UID_HEDGE, CURRENCY_FUT, MAX_VALUE);
+
+        // 设置UID_HEDGE为双向持仓
+        container.submitCommandSync(ApiAdjustPositionMode.builder()
+                .uid(UID_HEDGE)
+                .positionMode(PositionMode.HEDGE)
+                .build(), CommandResultCode.SUCCESS);
 
         // 4. 设置初始标记价格 (10,000 FUT per 1 XBT)
         container.initMarkPrice(SYMBOL_FUTURES, 10_000);
@@ -228,7 +243,7 @@ public class PersistenceTests {
 
         // 7. 验证初始持仓状态
         container.validateUserState(UID_ISOLATED, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(PositionDirection.LONG, pos.direction);
             assertEquals(50L, pos.openVolume); // 100手
@@ -238,13 +253,45 @@ public class PersistenceTests {
         });
 
         container.validateUserState(UID_CROSS, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(PositionDirection.SHORT, pos.direction);
             assertEquals(50L, pos.openVolume); // 50手
             assertEquals(MarginMode.CROSS, pos.marginMode);
             assertEquals(0L, pos.pendingSellSize);
         });
+
+        // 6.1 HEDGE用户开多
+        ApiPlaceOrder hedgeLongOrder = ApiPlaceOrder.builder()
+                .uid(UID_HEDGE)
+                .orderId(5003L)
+                .price(9_000L)
+                .size(10L)
+                .action(OrderAction.BID)
+                .orderType(OrderType.GTC)
+                .symbol(SYMBOL_FUTURES)
+                .marginMode(MarginMode.ISOLATED)
+                .leverage(10)
+                .build();
+
+        container.submitCommandSync(hedgeLongOrder, cmd ->
+                assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+        // 6.2 HEDGE用户开空
+        ApiPlaceOrder hedgeShortOrder = ApiPlaceOrder.builder()
+                .uid(UID_HEDGE)
+                .orderId(5004L)
+                .price(11_000L)
+                .size(20L)
+                .action(OrderAction.ASK)
+                .orderType(OrderType.GTC)
+                .symbol(SYMBOL_FUTURES)
+                .marginMode(MarginMode.ISOLATED)
+                .leverage(10)
+                .build();
+
+        container.submitCommandSync(hedgeShortOrder, cmd ->
+                assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
         // 8. 更新标记价格使逐仓用户盈利，全仓用户亏损
         container.initMarkPrice(SYMBOL_FUTURES, 10_500);
@@ -255,7 +302,7 @@ public class PersistenceTests {
 
         // 验证追加保证金后状态
         container.validateUserState(UID_ISOLATED, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertEquals(50000000L, pos.extraMargin);
             // 计算未实现盈利: (10,500 - 10,000) * 50 = 2500 FUT
             assertThat(25000L, is(pos.unrealizedProfit));
@@ -271,8 +318,8 @@ public class PersistenceTests {
         // 12. 验证全仓用户被强平
         container.validateUserState(UID_CROSS, profile -> {
             // 仓位应被部分或全部平仓
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
-            assertTrue(pos == null || pos.openVolume < 50L);
+            List<SingleUserReportResult.Position> pos = profile.getPositions().get(SYMBOL_FUTURES);
+            assertTrue(pos == null);
             // 账户余额应为负或接近零
             long balance = profile.getAccounts().get(CURRENCY_FUT);
             assertTrue(balance != 25000L, "Balance should be negative after liquidation");
@@ -280,7 +327,7 @@ public class PersistenceTests {
 
         // 13. 验证逐仓用户未被强平
         container.validateUserState(UID_ISOLATED, profile -> {
-            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES);
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
             assertEquals(50L, pos.openVolume); // 仓位保持不变
             assertEquals(50, pos.leverage);
@@ -288,6 +335,14 @@ public class PersistenceTests {
             assertEquals(1050000L, pos.unrealizedProfit);
             assertEquals(-989785L, pos.liquidationPrice);
             assertEquals(212, pos.marginRatioScaleK);
+        });
+
+        container.validateUserState(UID_HEDGE, profile -> {
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).size(), Is.is(2));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).direction, Is.is(PositionDirection.LONG));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(0).leverage, Is.is(10));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).direction, Is.is(PositionDirection.SHORT));
+            assertThat(profile.getPositions().get(SYMBOL_FUTURES).get(1).leverage, Is.is(10));
         });
 
         // 14. 验证系统总余额

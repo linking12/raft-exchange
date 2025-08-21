@@ -19,6 +19,7 @@ import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.Order;
+import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
@@ -95,19 +96,20 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
         CurrencySpecificationProvider currencySpecProvider = riskEngine.getCurrencySpecificationProvider();
 
         if (userProfile != null) {
-            final IntObjectHashMap<SingleUserReportResult.Position> positions = new IntObjectHashMap<>(userProfile.positions.size());
+            final IntObjectHashMap<List<SingleUserReportResult.Position>> positions = new IntObjectHashMap<>(userProfile.positions.size());
             IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
             userProfile.positions.forEachKeyValue((symbol, pos) -> {
                 if (pos.marginMode == MarginMode.CROSS) {
                     crossPositionsByCurrency.getIfAbsentPut(pos.currency, FastList.newList()).add(pos);
                 } else {
-                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(symbol);
-                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(symbol);
+                    CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
+                    LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(pos.symbol);
                     long totalMargin = pos.openInitMarginSum + pos.estimateUnrealizedProfit(priceRecord) + pos.extraMargin;
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, 0, 0, 0);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
-                    positions.put(symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
+                    List<SingleUserReportResult.Position> list = positions.getIfAbsentPut(pos.symbol, FastList.newList());
+                    list.add(pos.direction == PositionDirection.LONG ? 0 : list.size(), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 
@@ -134,7 +136,8 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long unrealizedPnl = pos.estimateUnrealizedProfit(priceRecord);
                     long liquidationPrice = pos.estimateLiquidationPrice(spec, priceRecord, balanceSymbolScale, totalPnlSymbolScale, totalMMSymbolScale);
                     long marginRatioScaleK = pos.estimateMarginRatioScaleK(spec, priceRecord, balanceSymbolScale + totalPnlSymbolScale);
-                    positions.put(pos.symbol, buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
+                    List<SingleUserReportResult.Position> list = positions.getIfAbsentPut(pos.symbol, FastList.newList());
+                    list.add(pos.direction == PositionDirection.LONG ? 0 : list.size(), buildPositionReport(pos, unrealizedPnl, liquidationPrice, marginRatioScaleK, priceRecord.markPrice));
                 }
             });
 

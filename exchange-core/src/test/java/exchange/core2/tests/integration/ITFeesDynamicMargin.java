@@ -161,8 +161,8 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(size));
             });
 
             // create second user
@@ -197,12 +197,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // verify seller taker balance
@@ -212,12 +212,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // total balance remains the same
@@ -262,8 +262,8 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(size));
             });
 
             // create second user
@@ -298,12 +298,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(size - askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(size - askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // verify seller taker balance
@@ -313,12 +313,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // total balance remains the same
@@ -362,8 +362,8 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(size));
             });
 
             // create second user
@@ -395,12 +395,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // verify seller taker balance
@@ -410,12 +410,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // total balance remains the same
@@ -459,9 +459,9 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size));
             });
 
             // create second user
@@ -496,12 +496,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // verify seller taker balance
@@ -511,12 +511,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // total balance remains the same
@@ -561,9 +561,9 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size));
             });
 
             // create second user
@@ -598,12 +598,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size - askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size - askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // verify seller taker balance
@@ -613,12 +613,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // total balance remains the same
@@ -662,9 +662,9 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size));
             });
 
             // create second user
@@ -699,12 +699,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size - askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size - askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // verify seller taker balance
@@ -714,12 +714,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // total balance remains the same
@@ -763,9 +763,9 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size));
             });
 
             // create second user
@@ -800,12 +800,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // verify seller taker balance
@@ -814,12 +814,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(askSize - size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(size * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(askSize - size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(size * price));
             });
 
             // total balance remains the same
@@ -863,9 +863,9 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size));
             });
 
             // create second user
@@ -899,12 +899,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.SHORT));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size - askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size - askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // verify seller taker balance
@@ -914,12 +914,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(MAX_VALUE - actualTakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.LONG));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(askSize));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(askSize * price));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(askSize));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(askSize * price));
             });
 
             // total balance remains the same
@@ -963,9 +963,9 @@ public abstract class ITFeesDynamicMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
             });
 
             // create second user
@@ -1000,12 +1000,12 @@ public abstract class ITFeesDynamicMargin {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(usdtAmount - actualMakerFee));
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).direction, is(PositionDirection.EMPTY));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingBuySize, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).pendingSellSize, is(size));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openVolume, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).profit, is(0L));
-                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).openPriceSum, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).direction, is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).pendingSellSize, is(size));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openVolume, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(SYMBOL_MARGIN_FEE).get(0).openPriceSum, is(0L));
             });
 
             // verify seller taker balance

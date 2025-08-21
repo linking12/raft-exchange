@@ -108,7 +108,9 @@ public final class ExchangeApi {
         } else if (cmd instanceof ApiCancelOrder) {
             ringBuffer.publishEvent(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder)cmd);
         } else if (cmd instanceof ApiReduceOrder) {
-            ringBuffer.publishEvent(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder)cmd);
+            ringBuffer.publishEvent(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder) cmd);
+        } else if (cmd instanceof ApiClosePosition) {
+            ringBuffer.publishEvent(CLOSE_POSITION_TRANSLATOR, (ApiClosePosition) cmd);
         } else if (cmd instanceof ApiOrderBookRequest) {
             ringBuffer.publishEvent(ORDER_BOOK_REQUEST_TRANSLATOR, (ApiOrderBookRequest)cmd);
         } else if (cmd instanceof ApiAddUser) {
@@ -123,6 +125,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder)cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             ringBuffer.publishEvent(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage)cmd);
+        } else if (cmd instanceof ApiAdjustPositionMode) {
+            ringBuffer.publishEvent(ADJUST_POSITION_MODE_TRANSLATOR, (ApiAdjustPositionMode)cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             ringBuffer.publishEvent(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin)cmd);
         } else if (cmd instanceof ApiAdjustMarkPrice) {
@@ -162,6 +166,8 @@ public final class ExchangeApi {
             return submitCommandAsync(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder)cmd);
         } else if (cmd instanceof ApiReduceOrder) {
             return submitCommandAsync(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder)cmd);
+        } else if (cmd instanceof ApiClosePosition) {
+            return submitCommandAsync(CLOSE_POSITION_TRANSLATOR, (ApiClosePosition) cmd);
         } else if (cmd instanceof ApiOrderBookRequest) {
             return submitCommandAsync(ORDER_BOOK_REQUEST_TRANSLATOR, (ApiOrderBookRequest)cmd);
         } else if (cmd instanceof ApiAddUser) {
@@ -176,6 +182,8 @@ public final class ExchangeApi {
             return submitCommandAsync(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder)cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             return submitCommandAsync(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage)cmd);
+        } else if (cmd instanceof ApiAdjustPositionMode) {
+            return submitCommandAsync(ADJUST_POSITION_MODE_TRANSLATOR, (ApiAdjustPositionMode)cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsync(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin)cmd);
         } else if (cmd instanceof ApiAdjustMarkPrice) {
@@ -211,6 +219,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(CANCEL_ORDER_TRANSLATOR, (ApiCancelOrder)cmd);
         } else if (cmd instanceof ApiReduceOrder) {
             return submitCommandAsyncFullResponse(REDUCE_ORDER_TRANSLATOR, (ApiReduceOrder)cmd);
+        } else if (cmd instanceof ApiClosePosition) {
+            return submitCommandAsyncFullResponse(CLOSE_POSITION_TRANSLATOR, (ApiClosePosition) cmd);
         } else if (cmd instanceof ApiOrderBookRequest) {
             return submitCommandAsyncFullResponse(ORDER_BOOK_REQUEST_TRANSLATOR, (ApiOrderBookRequest)cmd);
         } else if (cmd instanceof ApiAddUser) {
@@ -225,6 +235,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(LIQUIDATION_ORDER_TRANSLATOR, (ApiLiquidationOrder)cmd);
         } else if (cmd instanceof ApiAdjustLeverage) {
             return submitCommandAsyncFullResponse(ADJUST_LEVERAGE_TRANSLATOR, (ApiAdjustLeverage)cmd);
+        } else if (cmd instanceof ApiAdjustPositionMode) {
+            return submitCommandAsyncFullResponse(ADJUST_POSITION_MODE_TRANSLATOR, (ApiAdjustPositionMode)cmd);
         } else if (cmd instanceof ApiAdjustMargin) {
             return submitCommandAsyncFullResponse(ADJUST_MARGIN_TRANSLATOR, (ApiAdjustMargin)cmd);
         } else if (cmd instanceof ApiAdjustMarkPrice) {
@@ -572,6 +584,14 @@ public final class ExchangeApi {
         cmd.resultCode = CommandResultCode.NEW;
     };
 
+    private static final EventTranslatorOneArg<OrderCommand, ApiAdjustPositionMode> ADJUST_POSITION_MODE_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.POSITION_MODE_ADJUSTMENT;
+        cmd.timestamp = api.timestamp;
+        cmd.uid = api.uid;
+        cmd.action = OrderAction.of(api.positionMode.getCode());
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
     private static final EventTranslatorOneArg<OrderCommand, ApiAdjustMargin> ADJUST_MARGIN_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.MARGIN_ADJUSTMENT;
         cmd.timestamp = api.timestamp;
@@ -579,6 +599,7 @@ public final class ExchangeApi {
         cmd.uid = api.uid;
         cmd.marginMode = api.marginMode;
         cmd.symbol = api.marginMode == MarginMode.ISOLATED ? api.symbol : api.currency;
+        cmd.action = api.action;
         cmd.price = api.amount;
         cmd.resultCode = CommandResultCode.NEW;
     };
@@ -637,6 +658,20 @@ public final class ExchangeApi {
         cmd.uid = api.uid;
         cmd.size = api.reduceSize;
         cmd.timestamp = api.timestamp;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiClosePosition> CLOSE_POSITION_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.CLOSE_POSITION;
+        cmd.price = api.price;
+        cmd.reserveBidPrice = api.price;
+        cmd.size = api.size;
+        cmd.orderId = api.orderId;
+        cmd.timestamp = api.timestamp;
+        cmd.action = api.action;
+        cmd.orderType = OrderType.GTC;
+        cmd.symbol = api.symbol;
+        cmd.uid = api.uid;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

@@ -16,6 +16,7 @@
 package exchange.core2.core.common;
 
 
+import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.NoArgsConstructor;
@@ -48,6 +49,7 @@ public final class MatcherTradeEvent {
     public long matchedOrderId;
     public long matchedOrderUid; // 0 for rejection
     public boolean matchedOrderCompleted; // false, except when matchedOrder is completely filled
+    public OrderCommandType matchedOrderCommandType;
 
     // actual price of the deal (from maker order), 0 for rejection (price can be take from original order)
     public long price;
@@ -78,6 +80,7 @@ public final class MatcherTradeEvent {
         evt.matchedOrderId = this.matchedOrderId;
         evt.matchedOrderUid = this.matchedOrderUid;
         evt.matchedOrderCompleted = this.matchedOrderCompleted;
+        evt.matchedOrderCommandType = this.matchedOrderCommandType;
         evt.price = this.price;
         evt.size = this.size;
 //        evt.timestamp = this.timestamp;
@@ -145,6 +148,7 @@ public final class MatcherTradeEvent {
                 && matchedOrderId == other.matchedOrderId
                 && matchedOrderUid == other.matchedOrderUid
                 && matchedOrderCompleted == other.matchedOrderCompleted
+                && matchedOrderCommandType == other.matchedOrderCommandType
                 && price == other.price
                 && size == other.size
                 && bidderHoldPrice == other.bidderHoldPrice
@@ -164,6 +168,7 @@ public final class MatcherTradeEvent {
                 matchedOrderId,
                 matchedOrderUid,
                 matchedOrderCompleted,
+                matchedOrderCommandType,
                 price,
                 size,
                 bidderHoldPrice,
@@ -182,6 +187,7 @@ public final class MatcherTradeEvent {
                 ", matchedOrderId=" + matchedOrderId +
                 ", matchedOrderUid=" + matchedOrderUid +
                 ", matchedOrderCompleted=" + matchedOrderCompleted +
+                ", matchedOrderCommandType=" + matchedOrderCommandType +
                 ", price=" + price +
                 ", size=" + size +
 //                ", timestamp=" + timestamp +

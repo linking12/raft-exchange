@@ -38,6 +38,7 @@ import lombok.ToString;
 @ToString
 public final class OrderCommand implements IOrder {
 
+    @Getter
     public OrderCommandType command;
 
     @Getter

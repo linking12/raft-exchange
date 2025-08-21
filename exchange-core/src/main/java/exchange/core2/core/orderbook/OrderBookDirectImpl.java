@@ -150,6 +150,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
         orderRecord.size = size;
         orderRecord.reserveBidPrice = cmd.reserveBidPrice;
         orderRecord.action = cmd.action;
+        orderRecord.command = cmd.command;
         orderRecord.uid = cmd.uid;
         orderRecord.timestamp = cmd.timestamp;
         orderRecord.filled = filledSize;
@@ -823,6 +824,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
         public OrderAction action;
 
         @Getter
+        private OrderCommandType command;
+
+        @Getter
         public long uid;
 
         @Getter
@@ -850,6 +854,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             this.filled = bytes.readLong(); // filled
             this.reserveBidPrice = bytes.readLong(); // price2
             this.action = OrderAction.of(bytes.readByte());
+            this.command = OrderCommandType.fromCode(bytes.readByte());
             this.uid = bytes.readLong(); // uid
             this.timestamp = bytes.readLong(); // timestamp
             // this.userCookie = bytes.readInt();  // userCookie
@@ -865,6 +870,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             bytes.writeLong(filled);
             bytes.writeLong(reserveBidPrice);
             bytes.writeByte(action.getCode());
+            bytes.writeByte(command.getCode());
             bytes.writeLong(uid);
             bytes.writeLong(timestamp);
             // bytes.writeInt(userCookie);
@@ -874,6 +880,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
         @Override
         public String toString() {
             return "[" + orderId + " " + (action == OrderAction.ASK ? 'A' : 'B')
+                    + " " + command + " "
                     + price + ":" + size + "F" + filled
                     // + " C" + userCookie
                     + " U" + uid + "]";
@@ -881,7 +888,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         @Override
         public int hashCode() {
-            return Objects.hash(orderId, action, price, size, reserveBidPrice, filled,
+            return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled,
                     //userCookie,
                     uid);
         }
@@ -901,6 +908,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             // ignore userCookie && timestamp
             return orderId == other.orderId
                     && action == other.action
+                    && command == other.command
                     && price == other.price
                     && size == other.size
                     && reserveBidPrice == other.reserveBidPrice
@@ -910,7 +918,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         @Override
         public int stateHash() {
-            return Objects.hash(orderId, action, price, size, reserveBidPrice, filled,
+            return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled,
                     //userCookie,
                     uid);
         }

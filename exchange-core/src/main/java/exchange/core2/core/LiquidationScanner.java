@@ -115,7 +115,7 @@ public final class LiquidationScanner {
             MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
             IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
             positions.forEachValue(position -> {
-                if (position == null || position.direction == PositionDirection.EMPTY) {
+                if (position == null || position.openVolume == 0) {
                     return; // 跳过空仓位
                 }
                 int symbol = position.symbol;

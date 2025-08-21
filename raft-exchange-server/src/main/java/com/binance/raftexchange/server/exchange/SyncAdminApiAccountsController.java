@@ -3,6 +3,7 @@ package com.binance.raftexchange.server.exchange;
 import com.binance.raftexchange.stubs.request.AccountBalanceMap;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
 import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
+import com.binance.raftexchange.stubs.request.ApiAdjustPositionMode;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiResumeUser;
@@ -87,13 +88,26 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     }
 
     /**
+     * 调整持仓模式
+     */
+    public static CompletableFuture<byte[]> adjustPositionMode(ApiCommand apiCommand) {
+        ApiAdjustPositionMode grpcApiAdjustPositionMode = apiCommand.getAdjustPositionMode();
+        exchange.core2.core.common.api.ApiAdjustPositionMode apiAdjustPositionMode = exchange.core2.core.common.api.ApiAdjustPositionMode.builder()
+            .uid(grpcApiAdjustPositionMode.getUid()).positionMode(exchange.core2.core.common.PositionMode.values()[grpcApiAdjustPositionMode.getPositionMode().getNumber()]).build();
+        apiAdjustPositionMode.updateTimestamp(apiCommand.getTimestamp());
+        LOG.debug("ApiAdjustPositionMode applied, msg: {}", apiAdjustPositionMode);
+        return callExchange(apiAdjustPositionMode);
+    }
+
+    /**
      * 增加补充保证金
      */
     public static CompletableFuture<byte[]> adjustMargin(ApiCommand apiCommand) {
         ApiAdjustMargin grpcApiAdjustMargin = apiCommand.getAdjustMargin();
         exchange.core2.core.common.api.ApiAdjustMargin apiAdjustMargin = exchange.core2.core.common.api.ApiAdjustMargin.builder()
             .transactionId(grpcApiAdjustMargin.getTransactionId()).uid(grpcApiAdjustMargin.getUid()).symbol(grpcApiAdjustMargin.getSymbol())
-            .currency(grpcApiAdjustMargin.getCurrency()).amount(grpcApiAdjustMargin.getAmount()).marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiAdjustMargin.getMarginMode().getNumber()]).build();
+            .currency(grpcApiAdjustMargin.getCurrency()).amount(grpcApiAdjustMargin.getAmount())
+            .marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiAdjustMargin.getMarginMode().getNumber()]).build();
         apiAdjustMargin.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("ApiAdjustMargin applied, msg: {}", apiAdjustMargin);
         return callExchange(apiAdjustMargin);
