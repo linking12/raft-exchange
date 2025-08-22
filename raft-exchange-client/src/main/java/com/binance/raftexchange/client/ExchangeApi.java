@@ -33,6 +33,7 @@ import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import io.grpc.stub.StreamObserver;
+import lombok.Getter;
 
 import java.time.Duration;
 import java.util.Map;
@@ -46,6 +47,7 @@ import static com.binance.raftexchange.client.ExchangeApiHelper.getFloorValue;
 public class ExchangeApi implements AutoCloseable {
 
     private final ExchangeClient client;
+    @Getter
     private final ExchangeMetadataManager metadataManager;
     private final AtomicInteger reqIdGen = new AtomicInteger(1);
 
@@ -213,25 +215,25 @@ public class ExchangeApi implements AutoCloseable {
                 .build();
     }
 
-    public CommandResultView adjustUserBalance(long uid, int currency, double amount) {
-        return send(buildAdjustUserBalanceCommand(uid, currency, amount));
+    public CommandResultView adjustUserBalance(long uid, long transactionId, int currency, double amount) {
+        return send(buildAdjustUserBalanceCommand(uid, transactionId, currency, amount));
     }
 
-    public CompletableFuture<CommandResultView> adjustUserBalanceAsync(long uid, int currency, double amount) {
+    public CompletableFuture<CommandResultView> adjustUserBalanceAsync(long uid, long transactionId, int currency, double amount) {
         final ApiCommand cmd;
         try {
-            cmd = buildAdjustUserBalanceCommand(uid, currency, amount);
+            cmd = buildAdjustUserBalanceCommand(uid, transactionId, currency, amount);
         } catch (Exception ex) {
             return CompletableFuture.failedFuture(ex);
         }
         return sendAsync(cmd);
     }
 
-    private ApiCommand buildAdjustUserBalanceCommand(long uid, int currency, double amount) {
+    private ApiCommand buildAdjustUserBalanceCommand(long uid, long transactionId, int currency, double amount) {
         CoreCurrencySpecification currencySpec = metadataManager.getCurrencySpec(currency);
         long currencyScaleK = (long) Math.pow(10, currencySpec.getDigit());
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
-                .setAdjustBalance(ApiAdjustUserBalance.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
+                .setAdjustBalance(ApiAdjustUserBalance.newBuilder().setTransactionId(transactionId)
                         .setUid(uid).setCurrency(currency).setAmount(doubleToLong(amount, currencyScaleK))
                         .setAdjustmentType(BalanceAdjustmentType.ADJUSTMENT))
                 .build();

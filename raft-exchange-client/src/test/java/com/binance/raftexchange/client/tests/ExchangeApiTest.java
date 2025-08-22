@@ -39,8 +39,9 @@ public class ExchangeApiTest {
         exchangeApi.addUser(UID_1);
         exchangeApi.addUser(UID_2);
 
-        exchangeApi.adjustUserBalance(UID_1, USDT_ID, 8888);
-        exchangeApi.adjustUserBalance(UID_2, BNB_ID, 10.78);
+        long adjustId = 100000L;
+        exchangeApi.adjustUserBalance(UID_1, adjustId++, USDT_ID, 8888);
+        exchangeApi.adjustUserBalance(UID_2, adjustId++, BNB_ID, 10.78);
 
         long orderId = 100001L;
         CommandResultView resultU1 = exchangeApi.placeOrder(UID_1, orderId++, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, null, 0);
