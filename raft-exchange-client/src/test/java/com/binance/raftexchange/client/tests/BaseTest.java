@@ -22,23 +22,23 @@ public class BaseTest {
     long UID_6 = 10006L;
     long UID_7 = 10007L;
 
-    long UID_11 = 20001L;
-    long UID_12 = 20002L;
-    long UID_13 = 20003L;
-    long UID_14 = 20004L;
-    long UID_15 = 20005L;
-    long UID_16 = 20006L;
-    long UID_17 = 20007L;
-    long UID_18 = 20008L;
-    long UID_19 = 20009L;
-    long UID_20 = 20010L;
+    long UID_11 = 10011L;
+    long UID_12 = 10012L;
+    long UID_13 = 10013L;
+    long UID_14 = 10014L;
+    long UID_15 = 10015L;
+    long UID_16 = 10016L;
+    long UID_17 = 10017L;
+    long UID_18 = 10018L;
+    long UID_19 = 10019L;
+    long UID_20 = 10020L;
 
     int BNB_ID = 1;
     int USDT_ID = 2;
     int BNB_USDT_SPOT = 11;
     int BNB_USDT_FU = 12;
 
-    double usdtDeposit = 10000D;
+    double usdtDeposit = 10000;
     double bnbDeposit = 100;
 
     ExchangeApi exchangeApi;
