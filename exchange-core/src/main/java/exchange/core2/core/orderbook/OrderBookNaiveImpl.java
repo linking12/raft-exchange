@@ -108,7 +108,9 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         final long size = cmd.size;
 
         // check if order is marketable (if there are opposite matching orders)
-        final long filledSize = tryMatchInstantly(cmd, subtreeForMatching(action, price), 0, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, subtreeForMatching(action, price), 0, cmd);
+        final long filledSize = matchResult[0];
+        final long filledNotional = matchResult[1];
         if (filledSize == size) {
             // order was matched completely - nothing to place - can just return
             return;
@@ -128,7 +130,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
                 price,
                 size,
                 filledSize,
-                cmd.matcherEvent.findTail().filledNotional,
+                filledNotional,
                 cmd.reserveBidPrice,
                 action,
                 cmd.command,
@@ -144,7 +146,8 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
     private void newOrderMatchIoc(final OrderCommand cmd) {
 
-        final long filledSize = tryMatchInstantly(cmd, subtreeForMatching(cmd.action, cmd.price), 0, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, subtreeForMatching(cmd.action, cmd.price), 0, cmd);
+        final long filledSize = matchResult[0];
 
         final long rejectedSize = cmd.size - filledSize;
 
@@ -216,9 +219,9 @@ public final class OrderBookNaiveImpl implements IOrderBook {
      * @param matchingBuckets - sorted buckets map
      * @param filled          - current 'filled' value for the order
      * @param triggerCmd      - triggered command (taker)
-     * @return new filled size
+     * @return [filledSize, filledNotional]
      */
-    private long tryMatchInstantly(
+    private long[] tryMatchInstantly(
             final IOrder activeOrder,
             final SortedMap<Long, OrdersBucketNaive> matchingBuckets,
             long filled,
@@ -227,13 +230,14 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 //        log.info("matchInstantly: {} {}", order, matchingBuckets);
 
         if (matchingBuckets.size() == 0) {
-            return filled;
+            return new long[]{filled, 0};
         }
 
         final long orderSize = activeOrder.getSize();
 
         MatcherTradeEvent eventsTail = null;
 
+        long filledNotional = 0;
         List<Long> emptyBuckets = new ArrayList<>();
         for (final OrdersBucketNaive bucket : matchingBuckets.values()) {
 
@@ -247,6 +251,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
             bucketMatchings.ordersToRemove.forEach(idMap::remove);
 
             filled += bucketMatchings.volume;
+            filledNotional += bucketMatchings.notional;
 
             // attach chain received from bucket matcher
             if (eventsTail == null) {
@@ -279,7 +284,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 //        log.debug("emptyBuckets: {}", emptyBuckets);
 //        log.debug("matchingRecords: {}", matchingRecords);
 
-        return filled;
+        return new long[]{filled, filledNotional};
     }
 
     /**
@@ -411,7 +416,8 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
         // try match with new price
         final SortedMap<Long, OrdersBucketNaive> matchingArea = subtreeForMatching(order.action, newPrice);
-        final long filled = tryMatchInstantly(order, matchingArea, order.filled, cmd);
+        final long[] matchResult = tryMatchInstantly(order, matchingArea, order.filled, cmd);
+        final long filled = matchResult[0];
         if (filled == order.size) {
             // order was fully matched (100% marketable) - removing from order book
             idMap.remove(orderId);

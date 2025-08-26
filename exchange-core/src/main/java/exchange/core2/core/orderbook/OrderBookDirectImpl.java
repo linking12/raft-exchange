@@ -125,7 +125,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
         final long size = cmd.size;
 
         // check if order is marketable there are matching orders
-        final long filledSize = tryMatchInstantly(cmd, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, cmd);
+        final long filledSize = matchResult[0];
+        final long filledNotional = matchResult[1];
         if (filledSize == size) {
             // completed before being placed - can just return
             return;
@@ -154,7 +156,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
         orderRecord.uid = cmd.uid;
         orderRecord.timestamp = cmd.timestamp;
         orderRecord.filled = filledSize;
-        orderRecord.filledNotional = cmd.matcherEvent.findTail().filledNotional;
+        orderRecord.filledNotional = filledNotional;
 
         orderIdIndex.put(orderId, orderRecord);
         insertOrder(orderRecord, null);
@@ -162,7 +164,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
     private void newOrderMatchIoc(final OrderCommand cmd) {
 
-        final long filledSize = tryMatchInstantly(cmd, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, cmd);
+        final long filledSize = matchResult[0];
 
         final long rejectedSize = cmd.size - filledSize;
 
@@ -221,7 +224,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
     }
 
 
-    private long tryMatchInstantly(final IOrder takerOrder,
+    private long[] tryMatchInstantly(final IOrder takerOrder,
                                    final OrderCommand triggerCmd) {
 
         final boolean isBidAction = takerOrder.getAction() == OrderAction.BID;
@@ -234,19 +237,19 @@ public final class OrderBookDirectImpl implements IOrderBook {
         if (isBidAction) {
             makerOrder = bestAskOrder;
             if (makerOrder == null || makerOrder.price > limitPrice) {
-                return takerOrder.getFilled();
+                return new long[]{takerOrder.getFilled(), 0};
             }
         } else {
             makerOrder = bestBidOrder;
             if (makerOrder == null || makerOrder.price < limitPrice) {
-                return takerOrder.getFilled();
+                return new long[]{takerOrder.getFilled(), 0};
             }
         }
 
         long remainingSize = takerOrder.getSize() - takerOrder.getFilled();
 
         if (remainingSize == 0) {
-            return takerOrder.getFilled();
+            return new long[]{takerOrder.getFilled(), 0};
         }
 
         DirectOrder priceBucketTail = makerOrder.parent.tail;
@@ -338,8 +341,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
             bestBidOrder = makerOrder;
         }
 
-        // return filled amount
-        return takerOrder.getSize() - remainingSize;
+        // return [filledSize, filledNotional]
+        return new long[]{takerFilled, takerFilledNotional};
     }
 
     @Override
@@ -431,7 +434,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
         cmd.action = orderToMove.getAction();
 
         // try match with new price as a taker order
-        final long filled = tryMatchInstantly(orderToMove, cmd);
+        final long[] matchResult = tryMatchInstantly(orderToMove, cmd);
+        final long filled = matchResult[0];
         if (filled == orderToMove.size) {
             // order was fully matched - removing
             orderIdIndex.remove(cmd.orderId);

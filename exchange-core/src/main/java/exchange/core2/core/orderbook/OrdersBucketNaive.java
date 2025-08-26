@@ -107,8 +107,6 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
 
         final Iterator<Map.Entry<Long, Order>> iterator = entries.entrySet().iterator();
 
-        long totalMatchingVolume = 0;
-
         final List<Long> ordersToRemove = new ArrayList<>();
 
         MatcherTradeEvent eventsHead = null;
@@ -125,8 +123,6 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
 //            log.debug("volumeToCollect={} order: s{} f{}", volumeToCollect, order.size, order.filled);
             final long v = Math.min(volumeToCollect, order.size - order.filled);
             final long p = order.price;
-            totalMatchingVolume += v;
-//            log.debug("totalMatchingVolume={} v={}", totalMatchingVolume, v);
 
             takerFilled += v;
             takerFilledNotional += v * p;
@@ -155,7 +151,7 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
             }
         }
 
-        return new MatcherResult(eventsHead, eventsTail, totalMatchingVolume, ordersToRemove);
+        return new MatcherResult(eventsHead, eventsTail, takerFilled, takerFilledNotional, ordersToRemove);
     }
 
     /**
@@ -251,6 +247,7 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
         public MatcherTradeEvent eventsChainHead;
         public MatcherTradeEvent eventsChainTail;
         public long volume;
+        public long notional;
         public List<Long> ordersToRemove;
     }
 
