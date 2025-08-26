@@ -50,6 +50,9 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     @Getter
     public long filled;
 
+    @Getter
+    public long filledNotional;
+
     // new orders - reserved price for fast moves of GTC bid orders in exchange mode
     @Getter
     public long reserveBidPrice;
@@ -76,6 +79,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         this.price = bytes.readLong();  // price
         this.size = bytes.readLong(); // size
         this.filled = bytes.readLong(); // filled
+        this.filledNotional = bytes.readLong(); // filledNotional
         this.reserveBidPrice = bytes.readLong(); // price2
         this.action = OrderAction.of(bytes.readByte());
         byte commandByte = bytes.readByte();
@@ -92,6 +96,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         bytes.writeLong(price);
         bytes.writeLong(size);
         bytes.writeLong(filled);
+        bytes.writeLong(filledNotional);
         bytes.writeLong(reserveBidPrice);
         bytes.writeByte(action.getCode());
         bytes.writeByte(command == null ? 0 : command.getCode());
@@ -104,14 +109,14 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     public String toString() {
         return "[" + orderId + " " + (action == OrderAction.ASK ? 'A' : 'B')
                 + " " + command + " "
-                + price + ":" + size + "F" + filled
+                + price + ":" + size + "F" + filled + "FN" + filledNotional
                 // + " C" + userCookie
                 + " U" + uid + "]";
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled,
+        return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled, filledNotional,
                 //userCookie, timestamp
                 uid);
     }
@@ -136,6 +141,7 @@ public final class Order implements WriteBytesMarshallable, IOrder {
                 && size == other.size
                 && reserveBidPrice == other.reserveBidPrice
                 && filled == other.filled
+                && filledNotional == other.filledNotional
                 && uid == other.uid;
     }
 

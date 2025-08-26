@@ -25,6 +25,8 @@ public interface IOrder extends StateHash {
 
     long getFilled();
 
+    long getFilledNotional();
+
     long getUid();
 
     OrderAction getAction();

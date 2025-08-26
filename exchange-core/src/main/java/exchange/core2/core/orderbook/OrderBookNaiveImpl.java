@@ -128,6 +128,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
                 price,
                 size,
                 filledSize,
+                cmd.matcherEvent.findTail().filledNotional,
                 cmd.reserveBidPrice,
                 action,
                 cmd.command,
