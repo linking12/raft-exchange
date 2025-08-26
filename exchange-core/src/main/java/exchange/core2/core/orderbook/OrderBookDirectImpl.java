@@ -233,23 +233,25 @@ public final class OrderBookDirectImpl implements IOrderBook {
                 ? 0L
                 : takerOrder.getPrice();
 
+        long takerFilled = takerOrder.getFilled();
+        long takerFilledNotional = takerOrder.getFilledNotional();
         DirectOrder makerOrder;
         if (isBidAction) {
             makerOrder = bestAskOrder;
             if (makerOrder == null || makerOrder.price > limitPrice) {
-                return new long[]{takerOrder.getFilled(), 0};
+                return new long[]{takerFilled, takerFilledNotional};
             }
         } else {
             makerOrder = bestBidOrder;
             if (makerOrder == null || makerOrder.price < limitPrice) {
-                return new long[]{takerOrder.getFilled(), 0};
+                return new long[]{takerFilled, takerFilledNotional};
             }
         }
 
         long remainingSize = takerOrder.getSize() - takerOrder.getFilled();
 
         if (remainingSize == 0) {
-            return new long[]{takerOrder.getFilled(), 0};
+            return new long[]{takerFilled, takerFilledNotional};
         }
 
         DirectOrder priceBucketTail = makerOrder.parent.tail;
@@ -260,8 +262,6 @@ public final class OrderBookDirectImpl implements IOrderBook {
 //        log.debug("MATCHING taker: {} remainingSize={}", takerOrder, remainingSize);
 
         MatcherTradeEvent eventsTail = null;
-        long takerFilled = 0;
-        long takerFilledNotional = 0;
         // iterate through all orders
         do {
 
