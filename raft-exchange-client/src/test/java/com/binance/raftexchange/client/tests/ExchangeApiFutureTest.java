@@ -3,10 +3,7 @@ package com.binance.raftexchange.client.tests;
 import com.binance.raftexchange.client.CommandResultView;
 import com.binance.raftexchange.client.ExchangeApi;
 import com.binance.raftexchange.client.SingleUserReportResultView;
-import com.binance.raftexchange.stubs.MarginMode;
-import com.binance.raftexchange.stubs.OrderAction;
-import com.binance.raftexchange.stubs.OrderType;
-import com.binance.raftexchange.stubs.SymbolType;
+import com.binance.raftexchange.stubs.*;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import org.junit.After;
 import org.junit.Before;
@@ -108,7 +105,7 @@ public class ExchangeApiFutureTest extends BaseTest {
 
     // 订单成交
     @Test
-    public void testCheckFee() throws Exception {
+    public void testOpenPosition() throws Exception {
         long orderId1 = getInitOrderId(Long.class);
         long orderId2 = orderId1 + 1;
 
@@ -132,6 +129,53 @@ public class ExchangeApiFutureTest extends BaseTest {
         // 断言检查
         assertThat(aOpenVolume1, is(openVolume1 + 500L));
         assertThat(aOpenVolume2, is(openVolume2 + 500L));
+    }
+
+    // 双向持仓
+    @Test
+    public void testEnableHedgeMode() throws Exception {
+        long orderId1 = getInitOrderId(Long.class);
+        long orderId2 = orderId1 + 1;
+
+        CommandResultView view1 = exchangeApi.adjustPositionMode(UID_18, PositionMode.HEDGE);
+        assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
+
+        // 下单
+        CommandResultView view2 = exchangeApi.placeOrder(UID_18, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 850.2, 0.5, MarginMode.ISOLATED, 1);
+        CommandResultView view3 = exchangeApi.placeOrder(UID_18, orderId2, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 900.4, 900.4, 0.5, MarginMode.ISOLATED, 1);
+        assertThat(view2.getResultCode(), is(CommandResultCode.SUCCESS));
+        assertThat(view3.getResultCode(), is(CommandResultCode.SUCCESS));
+        Thread.sleep(1000L);
+
+        List<SingleUserReportResultView.PositionView> aPosition = getPosition(UID_18, BNB_USDT_FU);
+
+        assertThat(aPosition.size(), is(2));
+        assertThat(aPosition.get(0).getPendingBuyAvgPrice(), is(850.2));
+        assertThat(aPosition.get(0).getDirection(), is(PositionDirection.LONG));
+        assertThat(aPosition.get(1).getDirection(), is(PositionDirection.SHORT));
+        assertThat(aPosition.get(1).getPendingSellAvgPrice(), is(900.4));
+    }
+
+    // 增加保证金
+    @Test
+    public void testAddExtraMargin() throws Exception {
+        long orderId1 = getInitOrderId(Long.class);
+
+        List<SingleUserReportResultView.PositionView> position1 = getPosition(UID_20, BNB_USDT_FU);
+        double extraMargin = position1 != null && position1.get(0) != null ? position1.get(0).getExtraMargin() : 0;
+
+        // 下单
+        CommandResultView view1 = exchangeApi.placeOrder(UID_20, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1);
+        assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
+
+        CommandResultView view2 = exchangeApi.adjustMargin(UID_20, MarginMode.ISOLATED, BNB_USDT_FU, 500);
+        assertThat(view2.getResultCode(), is(CommandResultCode.SUCCESS));
+
+        List<SingleUserReportResultView.PositionView> aPosition = getPosition(UID_20, BNB_USDT_FU);
+        double aExtraMargin = aPosition.get(0).getExtraMargin();
+
+        // 断言检查
+        assertThat(aExtraMargin, is(extraMargin + 50));
     }
 
 }
