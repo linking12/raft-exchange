@@ -617,6 +617,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             cmd.symbolType = spec.type;
             cmd.baseScaleK = spec.baseScaleK;
             cmd.quoteScaleK = spec.quoteScaleK;
+            cmd.baseCurrency = spec.baseCurrency;
             cmd.quoteCurrency = spec.quoteCurrency;
         }
     }

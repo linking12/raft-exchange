@@ -49,6 +49,7 @@ public final class OrderCommand implements IOrder {
     public SymbolType symbolType;
     public long baseScaleK;
     public long quoteScaleK;
+    public int baseCurrency; 
     public int quoteCurrency;
 
     @Getter
