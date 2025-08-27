@@ -255,10 +255,24 @@ public final class RiskEngine implements WriteBytesMarshallable {
     public boolean preProcessCommand(final long seq, final OrderCommand cmd) {
         switch (cmd.command) {
             case MOVE_ORDER:
-            case CANCEL_ORDER:
-            case REDUCE_ORDER:
             case ORDER_BOOK_REQUEST:
             case FORCE_LIQUIDATION:
+                return false;
+
+            case CANCEL_ORDER:
+            case REDUCE_ORDER:
+                if (uidForThisHandler(cmd.uid)) {
+                    final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+                    if (spec == null) {
+                        log.warn("Symbol {} not found", cmd.symbol);
+                        cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
+                    }
+                    cmd.symbolType = spec.type;
+                    cmd.baseScaleK = spec.baseScaleK;
+                    cmd.quoteScaleK = spec.quoteScaleK;
+                    cmd.quoteCurrency = spec.quoteCurrency;
+                    cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+                }
                 return false;
 
             case CLOSE_POSITION:
@@ -717,7 +731,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
             log.warn("Symbol {} not found", cmd.symbol);
             return CommandResultCode.INVALID_SYMBOL;
         }
-        cmd.symbolSpec = spec;
+        cmd.symbolType = spec.type;
+        cmd.baseScaleK = spec.baseScaleK;
+        cmd.quoteScaleK = spec.quoteScaleK;
+        cmd.quoteCurrency = spec.quoteCurrency;
 
         if (cfgIgnoreRiskProcessing) {
             // skip processing

@@ -107,6 +107,9 @@ public final class OrderBookEventsHelper {
 //        event.size = order.getSize() - order.getFilled();
         event.size = reduceSize;
 
+        event.filled = order.getFilled();
+        event.filledNotional = order.getFilledNotional();
+
         event.bidderHoldPrice = order.getReserveBidPrice(); // set order reserved price for correct released EBids
 
         event.symbolType = spec.type;
