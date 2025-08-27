@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.IOrder;
 import exchange.core2.core.common.L2MarketData;
@@ -45,6 +46,8 @@ public final class OrderCommand implements IOrder {
     public long orderId;
 
     public int symbol;
+
+    public CoreSymbolSpecification symbolSpec;
 
     @Getter
     public long price;
@@ -196,6 +199,7 @@ public final class OrderCommand implements IOrder {
         cmd2.command = this.command;
         cmd2.orderId = this.orderId;
         cmd2.symbol = this.symbol;
+        cmd2.symbolSpec = this.symbolSpec;
         cmd2.uid = this.uid;
         cmd2.timestamp = this.timestamp;
         cmd2.leverage = this.leverage;

@@ -3,8 +3,11 @@ package exchange.core2.core;
 import java.util.List;
 
 import exchange.core2.core.common.OrderAction;
+import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
+import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.Data;
 
 /**
@@ -143,5 +146,81 @@ public interface ITradeEventsHandler {
         public final long price;
         public final long volume;
         public final int orders;
+    }
+
+    default void executionReport(SpotExecutionReport executionReport) {
+
+    }
+
+    enum ExecType {NEW, TRADE, CANCELED, REJECT}
+
+    enum OrderStatus {NEW, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED}
+
+    @Data
+    class SpotExecutionReport {
+        public final long executionId; // 本记录id
+        public final ExecType executionType;
+        public final OrderStatus orderStatus;
+
+        public final int symbol;
+        public final long baseScaleK;
+        public final long quoteScaleK;
+        public final long accountId;
+        public final long clOrdId; // userCookie
+        public final long orderId;
+        public final OrderType orderType;
+        public final OrderAction side;
+        public final long qty;
+        public final long price;
+        public final long quoteOrderQty; // 以quote计价的订单总预算，用于budget单
+        public final long orderCreationTime;
+
+        public final long tradeId; // 一个matcherEvent对应一个tradeId
+        public final long lastQty;
+        public final long cumulativeQty;
+        public final long lastPrice;
+        public final long lastQuoteQty;
+        public final long cumulativeQuoteQty;
+        public final long commission;
+        public final int commissionAsset;
+        public final boolean isMaker;
+        public final boolean workingIndicator; // 是否在订单簿
+
+        public static SpotExecutionReport placeOrder(OrderCommand cmd, long seq) {
+            boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            return new SpotExecutionReport(seq,
+                    ExecType.NEW,
+                    OrderStatus.NEW,
+                    cmd.symbol,
+                    cmd.symbolSpec.baseScaleK,
+                    cmd.symbolSpec.quoteScaleK,
+                    cmd.uid,
+                    cmd.userCookie,
+                    cmd.orderId,
+                    cmd.orderType,
+                    cmd.action,
+                    cmd.size,
+                    budgetOrder ? 0L : cmd.price,
+                    budgetOrder ? cmd.price : 0L,
+                    cmd.timestamp,
+                    -1L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    cmd.symbolSpec.quoteCurrency,
+                    false,
+                    cmd.orderType == OrderType.GTC);
+        }
+    }
+
+    @Data
+    class FuturesExecutionReport {
+
+
+
+
     }
 }

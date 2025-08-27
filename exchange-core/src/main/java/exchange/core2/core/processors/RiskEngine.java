@@ -717,6 +717,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             log.warn("Symbol {} not found", cmd.symbol);
             return CommandResultCode.INVALID_SYMBOL;
         }
+        cmd.symbolSpec = spec;
 
         if (cfgIgnoreRiskProcessing) {
             // skip processing
