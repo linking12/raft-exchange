@@ -254,35 +254,28 @@ public final class RiskEngine implements WriteBytesMarshallable {
      */
     public boolean preProcessCommand(final long seq, final OrderCommand cmd) {
         switch (cmd.command) {
-            case MOVE_ORDER:
             case ORDER_BOOK_REQUEST:
-            case FORCE_LIQUIDATION:
                 return false;
 
+            case MOVE_ORDER:
             case CANCEL_ORDER:
             case REDUCE_ORDER:
+            case FORCE_LIQUIDATION:
                 if (uidForThisHandler(cmd.uid)) {
-                    final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
-                    if (spec == null) {
-                        log.warn("Symbol {} not found", cmd.symbol);
-                        cmd.resultCode = CommandResultCode.INVALID_SYMBOL;
-                    }
-                    cmd.symbolType = spec.type;
-                    cmd.baseScaleK = spec.baseScaleK;
-                    cmd.quoteScaleK = spec.quoteScaleK;
-                    cmd.quoteCurrency = spec.quoteCurrency;
-                    cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+                    attachSymbolSpecInfo(cmd);
                 }
                 return false;
 
             case CLOSE_POSITION:
                 if (uidForThisHandler(cmd.uid)) {
+                    attachSymbolSpecInfo(cmd);
                     cmd.resultCode = closePositionRiskCheck(cmd);
                 }
                 return false;
 
             case PLACE_ORDER:
                 if (uidForThisHandler(cmd.uid)) {
+                    attachSymbolSpecInfo(cmd);
                     cmd.resultCode = placeOrderRiskCheck(cmd);
                 }
                 return false;
@@ -618,6 +611,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return (shardMask == 0) || ((uid & shardMask) == shardId);
     }
 
+    private void attachSymbolSpecInfo(final OrderCommand cmd) {
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+        if (spec != null) {
+            cmd.symbolType = spec.type;
+            cmd.baseScaleK = spec.baseScaleK;
+            cmd.quoteScaleK = spec.quoteScaleK;
+            cmd.quoteCurrency = spec.quoteCurrency;
+        }
+    }
 
     private CommandResultCode adjustLeverage(final OrderCommand cmd) {
         final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
@@ -731,10 +733,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             log.warn("Symbol {} not found", cmd.symbol);
             return CommandResultCode.INVALID_SYMBOL;
         }
-        cmd.symbolType = spec.type;
-        cmd.baseScaleK = spec.baseScaleK;
-        cmd.quoteScaleK = spec.quoteScaleK;
-        cmd.quoteCurrency = spec.quoteCurrency;
 
         if (cfgIgnoreRiskProcessing) {
             // skip processing
