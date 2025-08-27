@@ -4,7 +4,6 @@ import java.util.List;
 
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
-import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
