@@ -52,7 +52,7 @@ public final class OrderCommand implements IOrder {
     public long quoteScaleK;
     public int baseCurrency; 
     public int quoteCurrency;
-    public PositionMode positionMode;
+   
 
     @Getter
     public long price;
@@ -75,6 +75,8 @@ public final class OrderCommand implements IOrder {
     @Getter
     public long uid;
 
+    public PositionMode positionMode;
+    
     @Getter
     public long timestamp;
 
