@@ -67,6 +67,7 @@ public final class OrderCommand implements IOrder {
     @Getter
     public OrderAction action;
 
+    @Getter
     public OrderType orderType;
 
     @Getter
@@ -75,6 +76,7 @@ public final class OrderCommand implements IOrder {
     @Getter
     public long timestamp;
 
+    @Getter
     public int userCookie;
 
     // 新增字段：杠杆倍数（默认 1 表示无杠杆）

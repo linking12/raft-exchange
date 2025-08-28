@@ -31,6 +31,8 @@ public interface IOrder extends StateHash {
 
     OrderAction getAction();
 
+    OrderType getOrderType();
+
     OrderCommandType getCommand();
 
     long getOrderId();
@@ -38,5 +40,7 @@ public interface IOrder extends StateHash {
     long getTimestamp();
 
     long getReserveBidPrice();
+
+    int getUserCookie();
 
 }

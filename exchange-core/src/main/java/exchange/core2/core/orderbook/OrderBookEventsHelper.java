@@ -74,9 +74,13 @@ public final class OrderBookEventsHelper {
         event.matchedOrderUid = matchingOrder.getUid();
         event.matchedOrderCompleted = makerCompleted;
         event.matchedOrderCommandType = matchingOrder.getCommand();
-
         event.matchedOrderFilled = matchingOrder.getFilled();
         event.matchedOrderFilledNotional = matchingOrder.getFilledNotional();
+        event.matchedOrderType = matchingOrder.getOrderType();
+        event.matchedOrderPrice = matchingOrder.getPrice();
+        event.matchedOrderSize = matchingOrder.getSize();
+        event.matchedUserCookie = matchingOrder.getUserCookie();
+        event.matchedOrderTimestamp = matchingOrder.getTimestamp();
 
         event.price = matchingOrder.getPrice();
         event.size = size;

@@ -154,7 +154,7 @@ public interface ITradeEventsHandler {
         public final int orders;
     }
 
-    default void executionReport(SpotExecutionReport executionReport) {
+    default void spotExecutionReport(SpotExecutionReport executionReport) {
 
     }
 
@@ -306,6 +306,36 @@ public interface ITradeEventsHandler {
                     cmd.quoteCurrency,
                     false,
                     (cmd.orderType == OrderType.GTC) && !ev.activeOrderCompleted);
+        }
+
+        public static SpotExecutionReport tradeMaker(OrderCommand cmd, long seq, MatcherTradeEvent ev, int tradeIndex) {
+            boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            return new SpotExecutionReport(buildTradeExecId(seq, tradeIndex, true),
+                    ExecType.TRADE,
+                    ev.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
+                    cmd.symbol,
+                    cmd.baseScaleK,
+                    cmd.quoteScaleK,
+                    ev.matchedOrderUid,
+                    ev.matchedUserCookie,
+                    ev.matchedOrderId,
+                    ev.matchedOrderType,
+                    cmd.action.opposite(),
+                    ev.matchedOrderSize,
+                    budgetOrder ? 0L : ev.matchedOrderPrice,
+                    budgetOrder ? ev.matchedOrderPrice : 0L,
+                    ev.matchedOrderTimestamp,
+                    buildTradeId(seq, tradeIndex),
+                    ev.size,
+                    ev.price,
+                    ev.size * ev.price,
+                    ev.matchedOrderFilled,
+                    ev.matchedOrderFilledNotional,
+                    0L,
+                    cmd.quoteCurrency,
+                    false,
+                    (ev.matchedOrderType == OrderType.GTC) && !ev.matchedOrderCompleted
+            );
         }
     }
 

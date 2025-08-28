@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ObjLongConsumer;
 
+import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
+import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.cmd.OrderCommandType;
 import org.agrona.collections.MutableBoolean;
 import org.agrona.collections.MutableLong;
 import org.agrona.collections.MutableReference;
@@ -43,13 +46,49 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
                 sendFundEvents(cmd);
             } else {
                 // 主流程撮合结果处理
-                sendCommandResult(cmd, seq);
-                sendTradeEvents(cmd);
+                sendExecutionReport(cmd, seq);
+//                sendCommandResult(cmd, seq);
+//                sendTradeEvents(cmd);
                 sendFundEvents(cmd);
                 sendMarketData(cmd);
             }
         } catch (Exception ex) {
             log.error("Exception when handling command result data", ex);
+        }
+    }
+
+    private void sendExecutionReport(OrderCommand cmd, long seq) {
+        final MatcherTradeEvent first = cmd.matcherEvent;
+
+//        cmd.symbolType == SymbolType.CURRENCY_EXCHANGE_PAIR;
+
+        // -------- 1) NEW（下单入口） --------
+        if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.placeOrder(cmd, seq));
+        }
+        // ------------REJECT（下单拒绝）----------
+        if (first != null && first.eventType == MatcherEventType.REJECT) {
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.rejectOrder(cmd, seq));
+            return; // REJECT 后无需再看成交事件
+        }
+
+        // -------- 2) CANCELED（主动撤单/减少） --------
+        if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER)
+                && cmd.resultCode == CommandResultCode.SUCCESS && first != null && first.eventType == MatcherEventType.REDUCE) {
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.reduceOrder(cmd, seq, first));
+            return; // 取消类指令处理完毕
+        }
+
+        // 没有成交事件直接返回
+        if (first == null) return;
+
+        // -------- 3) TRADE（逐笔撮合：taker + maker 各发一条） --------
+        int tradeIndex = 0;
+        for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
+            if (ev.eventType != MatcherEventType.TRADE) continue;
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeTaker(cmd, seq, ev, tradeIndex));
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeMaker(cmd, seq, ev, tradeIndex));
+            tradeIndex++;
         }
     }
 

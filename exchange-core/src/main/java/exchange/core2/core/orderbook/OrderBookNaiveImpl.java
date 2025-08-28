@@ -133,9 +133,11 @@ public final class OrderBookNaiveImpl implements IOrderBook {
                 filledNotional,
                 cmd.reserveBidPrice,
                 action,
+                cmd.orderType,
                 cmd.command,
                 cmd.uid,
-                cmd.timestamp);
+                cmd.timestamp,
+                cmd.userCookie);
 
         getBucketsByAction(action)
                 .computeIfAbsent(price, p -> new OrdersBucketNaive(symbolSpec, p))

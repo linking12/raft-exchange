@@ -52,6 +52,11 @@ public final class MatcherTradeEvent {
     public OrderCommandType matchedOrderCommandType;
     public long matchedOrderFilled;
     public long matchedOrderFilledNotional;
+    public OrderType matchedOrderType;
+    public long matchedOrderPrice;
+    public long matchedOrderSize;
+    public int matchedUserCookie;
+    public long matchedOrderTimestamp;
 
     // actual price of the deal (from maker order), 0 for rejection (price can be take from original order)
     public long price;
@@ -89,6 +94,11 @@ public final class MatcherTradeEvent {
         evt.matchedOrderCommandType = this.matchedOrderCommandType;
         evt.matchedOrderFilled = this.matchedOrderFilled;
         evt.matchedOrderFilledNotional = this.matchedOrderFilledNotional;
+        evt.matchedOrderType = this.matchedOrderType;
+        evt.matchedOrderPrice = this.matchedOrderPrice;
+        evt.matchedOrderSize = this.matchedOrderSize;
+        evt.matchedUserCookie = this.matchedUserCookie;
+        evt.matchedOrderTimestamp = this.matchedOrderTimestamp;
         evt.price = this.price;
         evt.size = this.size;
         evt.filled = this.filled;
@@ -162,6 +172,11 @@ public final class MatcherTradeEvent {
                 && matchedOrderCommandType == other.matchedOrderCommandType
                 && matchedOrderFilled == other.matchedOrderFilled
                 && matchedOrderFilledNotional == other.matchedOrderFilledNotional
+                && matchedOrderType == other.matchedOrderType
+                && matchedOrderPrice == other.matchedOrderPrice
+                && matchedOrderSize == other.matchedOrderSize
+                && matchedUserCookie == other.matchedUserCookie
+                && matchedOrderTimestamp == other.matchedOrderTimestamp
                 && price == other.price
                 && size == other.size
                 && filled == other.filled
@@ -187,6 +202,11 @@ public final class MatcherTradeEvent {
                 matchedOrderCommandType,
                 matchedOrderFilled,
                 matchedOrderFilledNotional,
+                matchedOrderType,
+                matchedOrderPrice,
+                matchedOrderSize,
+                matchedUserCookie,
+                matchedOrderTimestamp,
                 price,
                 size,
                 filled,
@@ -211,6 +231,11 @@ public final class MatcherTradeEvent {
                 ", matchedOrderCommandType=" + matchedOrderCommandType +
                 ", matchedOrderFilled=" + matchedOrderFilled +
                 ", matchedOrderFilledNotional=" + matchedOrderFilledNotional +
+                ", matchedOrderType=" + matchedOrderType +
+                ", matchedOrderPrice=" + matchedOrderPrice +
+                ", matchedOrderSize=" + matchedOrderSize +
+                ", matchedUserCookie=" + matchedUserCookie +
+                ", matchedOrderTimestamp=" + matchedOrderTimestamp +
                 ", price=" + price +
                 ", size=" + size +
                 ", filled=" + filled +

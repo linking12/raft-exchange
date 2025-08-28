@@ -62,6 +62,9 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     public OrderAction action;
 
     @Getter
+    public OrderType orderType;
+
+    @Getter
     public OrderCommandType command;
 
     @Getter
@@ -70,7 +73,8 @@ public final class Order implements WriteBytesMarshallable, IOrder {
     @Getter
     public long timestamp;
 
-//    public int userCookie;
+    @Getter
+    public int userCookie;
 
     public Order(BytesIn bytes) {
 
@@ -82,11 +86,12 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         this.filledNotional = bytes.readLong(); // filledNotional
         this.reserveBidPrice = bytes.readLong(); // price2
         this.action = OrderAction.of(bytes.readByte());
+        this.orderType = OrderType.of(bytes.readByte());
         byte commandByte = bytes.readByte();
         this.command = commandByte == 0 ? null : OrderCommandType.fromCode(commandByte);
         this.uid = bytes.readLong(); // uid
         this.timestamp = bytes.readLong(); // timestamp
-//        this.userCookie = bytes.readInt();  // userCookie
+        this.userCookie = bytes.readInt();  // userCookie
 
     }
 
@@ -99,26 +104,26 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         bytes.writeLong(filledNotional);
         bytes.writeLong(reserveBidPrice);
         bytes.writeByte(action.getCode());
+        bytes.writeByte(orderType.getCode());
         bytes.writeByte(command == null ? 0 : command.getCode());
         bytes.writeLong(uid);
         bytes.writeLong(timestamp);
-//        bytes.writeInt(userCookie);
+        bytes.writeInt(userCookie);
     }
 
     @Override
     public String toString() {
         return "[" + orderId + " " + (action == OrderAction.ASK ? 'A' : 'B')
-                + " " + command + " "
+                + " " + orderType + " " + command + " "
                 + price + ":" + size + "F" + filled + "FN" + filledNotional
-                // + " C" + userCookie
+                + " C" + userCookie
                 + " U" + uid + "]";
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled, filledNotional,
-                //userCookie, timestamp
-                uid);
+        return Objects.hash(orderId, action, orderType, command, price, size, reserveBidPrice, filled, filledNotional,
+                uid, userCookie);
     }
 
 
@@ -136,13 +141,15 @@ public final class Order implements WriteBytesMarshallable, IOrder {
         // ignore timestamp and userCookie
         return orderId == other.orderId
                 && action == other.action
+                && orderType == other.orderType
                 && command == other.command
                 && price == other.price
                 && size == other.size
                 && reserveBidPrice == other.reserveBidPrice
                 && filled == other.filled
                 && filledNotional == other.filledNotional
-                && uid == other.uid;
+                && uid == other.uid
+                && userCookie == other.userCookie;
     }
 
     @Override
