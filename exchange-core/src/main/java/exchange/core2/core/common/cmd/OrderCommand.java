@@ -26,6 +26,7 @@ import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.PositionMode;
 import exchange.core2.core.common.SymbolType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -51,6 +52,7 @@ public final class OrderCommand implements IOrder {
     public long quoteScaleK;
     public int baseCurrency; 
     public int quoteCurrency;
+    public PositionMode positionMode;
 
     @Getter
     public long price;

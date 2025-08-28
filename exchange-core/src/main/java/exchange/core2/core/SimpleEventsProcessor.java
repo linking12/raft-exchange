@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ObjLongConsumer;
 
+import exchange.core2.core.ITradeEventsHandler.FuturesExecutionReport;
 import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.cmd.OrderCommandType;
@@ -58,9 +59,23 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     }
 
     private void sendExecutionReport(OrderCommand cmd, long seq) {
-        final MatcherTradeEvent first = cmd.matcherEvent;
+        switch (cmd.symbolType) {
+            case CURRENCY_EXCHANGE_PAIR:
+                sendSpotExecutionReport(cmd, seq);
+                break;
+            case FUTURES_CONTRACT_PERPETUAL:
+            case FUTURES_CONTRACT_DELIVERY:
+                sendFuturesExecutionReport(cmd, seq);
+                break;
+        }
+    }
 
-//        cmd.symbolType == SymbolType.CURRENCY_EXCHANGE_PAIR;
+    private void sendFuturesExecutionReport(OrderCommand cmd, long seq) {
+        FuturesExecutionReport.placeOrder(cmd, seq);
+    }
+
+    private void sendSpotExecutionReport(OrderCommand cmd, long seq) {
+        final MatcherTradeEvent first = cmd.matcherEvent;
 
         // -------- 1) NEW（下单入口） --------
         if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {

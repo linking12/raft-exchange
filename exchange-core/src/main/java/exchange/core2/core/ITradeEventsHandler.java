@@ -5,6 +5,8 @@ import java.util.List;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.PositionMode;
+import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -155,7 +157,11 @@ public interface ITradeEventsHandler {
     }
 
     default void spotExecutionReport(SpotExecutionReport executionReport) {
+        System.out.println(executionReport);
+    }
 
+    default void futuresExecutionReport(FuturesExecutionReport executionReport) {
+        System.out.println(executionReport);
     }
 
     enum ExecType {NEW, TRADE, CANCELED, REJECT}
@@ -341,10 +347,74 @@ public interface ITradeEventsHandler {
 
     @Data
     class FuturesExecutionReport {
+        public final long execId;
+        public final ExecType executionType;
+        public final OrderStatus orderStatus;
 
+        public final long symbolId;
+        public final long orderQtyScale;
+        public final long priceScale;
+        public final long userId;
+        public final long clOrderId; // userCookie
+        public final long orderId;
+        public final OrderType orderType;
+        public final OrderAction side;
+        public final long counterpartyId; // 对手方uid
+        public final long price;
+        public final long orderQty;
+        public final long createTime;
 
+        public final SymbolType contractType; //判断 PERPETUAL/DELIVERY
+        public final PositionMode positionSide;
+        public final long lastQty; // ev.size
+        public final long lastPx; // ev.price
+        public final long cumQty;
+        public final long cumQuoteQty; // ev.size * ev.price
+        public final long avgPx; // cumQuoteQty / cumQty
+        public final long fee;
+        public final int feeAssetId;
+        public final long settleAmt;
+        public final int settleAssetId;
+        public final boolean isMaker;
+        public final long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
+        public final long asksNotional;
+        public final long bidsQty;  // 剩余买单数量，pendingBuySize
+        public final long asksQty;
 
-
+        public static FuturesExecutionReport placeOrder(OrderCommand cmd, long seq) {
+            boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            return new FuturesExecutionReport(buildNewExecId(seq),
+                    ExecType.NEW,
+                    OrderStatus.NEW,
+                    cmd.symbol,
+                    cmd.baseScaleK,
+                    cmd.quoteScaleK,
+                    cmd.uid,
+                    cmd.userCookie,
+                    cmd.orderId,
+                    cmd.orderType,
+                    cmd.action,
+                    -1L,
+                    budgetOrder ? 0 : cmd.price,
+                    budgetOrder ? cmd.price : cmd.size,
+                    cmd.timestamp,
+                    cmd.symbolType,
+                    cmd.positionMode,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    cmd.quoteCurrency,
+                    0L,
+                    cmd.quoteCurrency,
+                    false,
+                    0L,
+                    0L,
+                    0L,
+                    0L);
+        }
     }
 
     class ExecutionIdGenerator {

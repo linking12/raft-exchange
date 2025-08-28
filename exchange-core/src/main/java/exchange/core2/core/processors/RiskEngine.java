@@ -620,6 +620,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
             cmd.baseCurrency = spec.baseCurrency;
             cmd.quoteCurrency = spec.quoteCurrency;
         }
+        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (userProfile != null) {
+            cmd.positionMode = userProfile.positionMode;
+        }
     }
 
     private CommandResultCode adjustLeverage(final OrderCommand cmd) {
