@@ -22,9 +22,6 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
     private IEventsHandler4Test eventsHandler;
 
-    private long baseScaleK = 0L;
-    private long quoteScaleK = 0L;
-
     public SimpleEventsProcessor4Test(IEventsHandler4Test eventsHandler) {
         super(eventsHandler, eventsHandler);
         this.eventsHandler = eventsHandler;
@@ -61,13 +58,13 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
             } else if (evt.eventType == MatcherEventType.REJECT) {
 
-                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, baseScaleK, quoteScaleK, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
+                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
         });
 
         if (!trades.isEmpty()) {
 
-            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, baseScaleK, quoteScaleK,
+            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol,
                     mutableLong.value, cmd.orderId, cmd.uid, cmd.action, takerOrderCompleted.value, cmd.timestamp, trades);
 
             eventsHandler.tradeEvent(evt);

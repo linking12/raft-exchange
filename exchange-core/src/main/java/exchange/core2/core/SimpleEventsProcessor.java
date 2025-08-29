@@ -6,8 +6,14 @@ import java.util.function.ObjLongConsumer;
 
 import exchange.core2.core.ITradeEventsHandler.FuturesExecutionReport;
 import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
-import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.CoreCurrencySpecification;
+import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommandType;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
+import lombok.Setter;
 import org.agrona.collections.MutableBoolean;
 import org.agrona.collections.MutableLong;
 import org.agrona.collections.MutableReference;
@@ -38,6 +44,12 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private final ITradeEventsHandler tradeEventsHandler;
     private final IFundEventsHandler fundEventsHandler;
+    @Setter
+    private SymbolSpecificationProvider symbolSpecificationProvider;
+    @Setter
+    private CurrencySpecificationProvider currencySpecificationProvider;
+    @Setter
+    private UserProfileService userProfileService;
 
     @Override
     public void accept(OrderCommand cmd, long seq) {
@@ -59,38 +71,40 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     }
 
     private void sendExecutionReport(OrderCommand cmd, long seq) {
-        switch (cmd.symbolType) {
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+        switch (spec.type) {
             case CURRENCY_EXCHANGE_PAIR:
-                sendSpotExecutionReport(cmd, seq);
+                sendSpotExecutionReport(cmd, seq, spec);
                 break;
             case FUTURES_CONTRACT_PERPETUAL:
             case FUTURES_CONTRACT_DELIVERY:
-                sendFuturesExecutionReport(cmd, seq);
+                sendFuturesExecutionReport(cmd, seq, spec);
                 break;
         }
     }
 
-    private void sendFuturesExecutionReport(OrderCommand cmd, long seq) {
-        FuturesExecutionReport.placeOrder(cmd, seq);
+    private void sendFuturesExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
+        UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        FuturesExecutionReport.placeOrder(cmd, seq, spec, userProfile);
     }
 
-    private void sendSpotExecutionReport(OrderCommand cmd, long seq) {
+    private void sendSpotExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
         final MatcherTradeEvent first = cmd.matcherEvent;
 
         // -------- 1) NEW（下单入口） --------
         if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.placeOrder(cmd, seq));
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.placeOrder(cmd, seq, spec));
         }
         // ------------REJECT（下单拒绝）----------
         if (first != null && first.eventType == MatcherEventType.REJECT) {
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.rejectOrder(cmd, seq));
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.rejectOrder(cmd, seq, spec));
             return; // REJECT 后无需再看成交事件
         }
 
         // -------- 2) CANCELED（主动撤单/减少） --------
         if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER)
                 && cmd.resultCode == CommandResultCode.SUCCESS && first != null && first.eventType == MatcherEventType.REDUCE) {
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.reduceOrder(cmd, seq, first));
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.reduceOrder(cmd, seq, spec, first));
             return; // 取消类指令处理完毕
         }
 
@@ -101,8 +115,8 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         int tradeIndex = 0;
         for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
             if (ev.eventType != MatcherEventType.TRADE) continue;
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeTaker(cmd, seq, ev, tradeIndex));
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeMaker(cmd, seq, ev, tradeIndex));
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeTaker(cmd, seq, spec, ev, tradeIndex));
+            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeMaker(cmd, seq, spec, ev, tradeIndex));
             tradeIndex++;
         }
     }
@@ -114,8 +128,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
         if (firstEvent.eventType == MatcherEventType.REDUCE) {
 
-            final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.baseScaleK,
-                firstEvent.quoteScaleK, firstEvent.size, firstEvent.activeOrderCompleted, firstEvent.price, cmd.orderId,
+            final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted, firstEvent.price, cmd.orderId,
                 cmd.uid, cmd.timestamp);
 
             tradeEventsHandler.reduceEvent(evt);
@@ -171,8 +184,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
         final MutableLong mutableLong = new MutableLong(0L);
         final List<ITradeEventsHandler.Trade> trades = new ArrayList<>();
-        long baseScaleK = cmd.matcherEvent != null ? cmd.matcherEvent.baseScaleK : 0;
-        long quoteScaleK = cmd.matcherEvent != null ? cmd.matcherEvent.quoteScaleK : 0;
 
         final MutableReference<ITradeEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
 
@@ -192,13 +203,13 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
             } else if (evt.eventType == MatcherEventType.REJECT) {
 
-                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, baseScaleK, quoteScaleK, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
+                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
             }
         });
 
         if (!trades.isEmpty()) {
 
-            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, baseScaleK, quoteScaleK,
+            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol,
                 mutableLong.value, cmd.orderId, cmd.uid, cmd.action, takerOrderCompleted.value, cmd.timestamp, trades);
 
             tradeEventsHandler.tradeEvent(evt);

@@ -140,9 +140,7 @@ public class SerializeHelper {
                     .setMatchedOrderCompleted(curSrc.matchedOrderCompleted)
                     .setPrice(curSrc.price)
                     .setSize(curSrc.size)
-                    .setBidderHoldPrice(curSrc.bidderHoldPrice)
-                    .setBaseScaleK(curSrc.baseScaleK)
-                    .setQuoteScaleK(curSrc.quoteScaleK);
+                    .setBidderHoldPrice(curSrc.bidderHoldPrice);
             curSrc = curSrc.nextEvent;
             if (curSrc != null) {
                 curBuilder = curBuilder.getNextEventBuilder();

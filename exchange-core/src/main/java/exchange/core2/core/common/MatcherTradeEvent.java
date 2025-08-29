@@ -74,10 +74,6 @@ public final class MatcherTradeEvent {
     // frozen price from BID order owner (depends on activeOrderAction)
     public long bidderHoldPrice;
 
-    public SymbolType symbolType;
-    public long baseScaleK; // 基础货币的缩放系数（用于还原size）
-    public long quoteScaleK; // 计价货币的缩放系数（用于还原price）
-
     // reference to next event in chain
     public MatcherTradeEvent nextEvent;
 
@@ -105,9 +101,6 @@ public final class MatcherTradeEvent {
         evt.filledNotional = this.filledNotional;
 //        evt.timestamp = this.timestamp;
         evt.bidderHoldPrice = this.bidderHoldPrice;
-        evt.symbolType = this.symbolType;
-        evt.baseScaleK = this.baseScaleK;
-        evt.quoteScaleK = this.quoteScaleK;
         return evt;
     }
 
@@ -182,9 +175,6 @@ public final class MatcherTradeEvent {
                 && filled == other.filled
                 && filledNotional == other.filledNotional
                 && bidderHoldPrice == other.bidderHoldPrice
-                && symbolType == other.symbolType
-                && baseScaleK == other.baseScaleK
-                && quoteScaleK == other.quoteScaleK
                 && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
 
@@ -212,9 +202,6 @@ public final class MatcherTradeEvent {
                 filled,
                 filledNotional,
                 bidderHoldPrice,
-                symbolType,
-                baseScaleK,
-                quoteScaleK,
                 nextEvent);
     }
 
@@ -242,9 +229,6 @@ public final class MatcherTradeEvent {
                 ", filledNotional=" + filledNotional +
 //                ", timestamp=" + timestamp +
                 ", bidderHoldPrice=" + bidderHoldPrice +
-                ", symbolType=" + symbolType +
-                ", baseScaleK=" + baseScaleK +
-                ", quoteScaleK=" + quoteScaleK +
                 ", nextEvent=" + (nextEvent != null) +
                 '}';
     }

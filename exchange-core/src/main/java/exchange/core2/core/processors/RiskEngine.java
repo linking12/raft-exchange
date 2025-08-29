@@ -19,7 +19,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.ObjLongConsumer;
 
+import exchange.core2.core.SimpleEventsProcessor;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -96,14 +98,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final boolean cfgMarginTradingEnabled;
     private final ISerializationProcessor serializationProcessor;
     private final boolean logDebug;
-    private ReportsQueriesConfiguration reportsQueriesConfiguration;
-   
+    private final ReportsQueriesConfiguration reportsQueriesConfiguration;
+    private final ObjLongConsumer<OrderCommand> resultsConsumer;
 
     public RiskEngine(final int shardId,
                       final int numShards,
                       final ISerializationProcessor serializationProcessor,
                       final SharedPool sharedPool,
-                      final ExchangeConfiguration exchangeConfiguration) {
+                      final ExchangeConfiguration exchangeConfiguration,
+                      final ObjLongConsumer<OrderCommand> resultsConsumer) {
         if (Long.bitCount(numShards) != 1) {
             throw new IllegalArgumentException("Invalid number of shards " + numShards + " - must be power of 2");
         }
@@ -121,6 +124,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgIgnoreRiskProcessing = ordersProcCfg.getRiskProcessingMode() == OrdersProcessingConfiguration.RiskProcessingMode.NO_RISK_PROCESSING;
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
+        this.resultsConsumer = resultsConsumer;
         this.initState(numShards);
     }
     
@@ -143,6 +147,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
         this.eventsHelper.setUserProfileService(this.userProfileService);
         this.eventsHelper.setLastPriceCache(this.lastPriceCache);
+        if (this.resultsConsumer instanceof SimpleEventsProcessor) {
+            SimpleEventsProcessor simpleEventsProcessor = (SimpleEventsProcessor) this.resultsConsumer;
+            simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
+            simpleEventsProcessor.setCurrencySpecificationProvider(this.currencySpecificationProvider);
+            simpleEventsProcessor.setUserProfileService(this.userProfileService);
+        }
     }
 
     
@@ -189,6 +199,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
             this.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
             this.eventsHelper.setUserProfileService(this.userProfileService);
             this.eventsHelper.setLastPriceCache(this.lastPriceCache);
+            if (this.resultsConsumer instanceof SimpleEventsProcessor) {
+                SimpleEventsProcessor simpleEventsProcessor = (SimpleEventsProcessor) this.resultsConsumer;
+                simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
+                simpleEventsProcessor.setCurrencySpecificationProvider(this.currencySpecificationProvider);
+                simpleEventsProcessor.setUserProfileService(this.userProfileService);
+            }
             this.fees = state.fees;
             this.adjustments = state.adjustments;
             this.suspends = state.suspends;
@@ -254,28 +270,21 @@ public final class RiskEngine implements WriteBytesMarshallable {
      */
     public boolean preProcessCommand(final long seq, final OrderCommand cmd) {
         switch (cmd.command) {
-            case ORDER_BOOK_REQUEST:
-                return false;
-
             case MOVE_ORDER:
             case CANCEL_ORDER:
             case REDUCE_ORDER:
+            case ORDER_BOOK_REQUEST:
             case FORCE_LIQUIDATION:
-                if (uidForThisHandler(cmd.uid)) {
-                    attachSymbolSpecInfo(cmd);
-                }
                 return false;
 
             case CLOSE_POSITION:
                 if (uidForThisHandler(cmd.uid)) {
-                    attachSymbolSpecInfo(cmd);
                     cmd.resultCode = closePositionRiskCheck(cmd);
                 }
                 return false;
 
             case PLACE_ORDER:
                 if (uidForThisHandler(cmd.uid)) {
-                    attachSymbolSpecInfo(cmd);
                     cmd.resultCode = placeOrderRiskCheck(cmd);
                 }
                 return false;
@@ -609,21 +618,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     public boolean uidForThisHandler(final long uid) {
         return (shardMask == 0) || ((uid & shardMask) == shardId);
-    }
-
-    private void attachSymbolSpecInfo(final OrderCommand cmd) {
-        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
-        if (spec != null) {
-            cmd.symbolType = spec.type;
-            cmd.baseScaleK = spec.baseScaleK;
-            cmd.quoteScaleK = spec.quoteScaleK;
-            cmd.baseCurrency = spec.baseCurrency;
-            cmd.quoteCurrency = spec.quoteCurrency;
-        }
-        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
-        if (userProfile != null) {
-            cmd.positionMode = userProfile.positionMode;
-        }
     }
 
     private CommandResultCode adjustLeverage(final OrderCommand cmd) {
