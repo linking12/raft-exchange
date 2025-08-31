@@ -6,7 +6,6 @@ import java.util.function.ObjLongConsumer;
 
 import exchange.core2.core.ITradeEventsHandler.FuturesExecutionReport;
 import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
-import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommandType;
@@ -71,15 +70,17 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     }
 
     private void sendExecutionReport(OrderCommand cmd, long seq) {
-        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
-        switch (spec.type) {
-            case CURRENCY_EXCHANGE_PAIR:
-                sendSpotExecutionReport(cmd, seq, spec);
-                break;
-            case FUTURES_CONTRACT_PERPETUAL:
-            case FUTURES_CONTRACT_DELIVERY:
-                sendFuturesExecutionReport(cmd, seq, spec);
-                break;
+        if (isReportableCommand(cmd.command)) {
+            final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+            switch (spec.type) {
+                case CURRENCY_EXCHANGE_PAIR:
+                    sendSpotExecutionReport(cmd, seq, spec);
+                    break;
+                case FUTURES_CONTRACT_PERPETUAL:
+                case FUTURES_CONTRACT_DELIVERY:
+                    sendFuturesExecutionReport(cmd, seq, spec);
+                    break;
+            }
         }
     }
 
@@ -118,6 +119,26 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeTaker(cmd, seq, spec, ev, tradeIndex));
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeMaker(cmd, seq, spec, ev, tradeIndex));
             tradeIndex++;
+        }
+    }
+
+
+    public boolean isReportableCommand(OrderCommandType commandType) {
+        switch (commandType) {
+            // 纯订单生命周期
+            case PLACE_ORDER:
+            case CANCEL_ORDER:
+            case MOVE_ORDER:
+            case REDUCE_ORDER:
+            // 引起仓位变化的特殊订单
+            case CLOSE_POSITION:
+            case FORCE_LIQUIDATION:
+            // 引起仓位变化的系统事件
+            case SETTLE_FUNDINGFEES:
+            case SETTLE_PNL:
+                return true;
+            default:
+                return false;
         }
     }
 

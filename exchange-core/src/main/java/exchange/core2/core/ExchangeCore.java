@@ -162,7 +162,7 @@ public final class ExchangeCore {
                 .collect(Collectors.toMap(
                         shardId -> shardId,
                         shardId -> CompletableFuture.supplyAsync(
-                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration),
+                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer),
                                 loaderExecutor)));
 
         final EventHandler<OrderCommand>[] matchingEngineHandlers = matchingEngineFutures.values().stream()

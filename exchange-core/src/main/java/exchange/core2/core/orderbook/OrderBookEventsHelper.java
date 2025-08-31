@@ -147,7 +147,7 @@ public final class OrderBookEventsHelper {
                                                      final int section,
                                                      final NativeBytes<Void> bytes) {
 
-        long[] dataArray = SerializationUtils.bytesToLongArray(bytes, 7);
+        long[] dataArray = SerializationUtils.bytesToLongArray(bytes, 5);
 
         MatcherTradeEvent firstEvent = null;
         MatcherTradeEvent lastEvent = null;

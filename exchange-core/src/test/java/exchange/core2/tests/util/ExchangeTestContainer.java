@@ -18,6 +18,9 @@ package exchange.core2.tests.util;
 import com.google.common.collect.Lists;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
+import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
@@ -68,8 +71,32 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
     @Setter
-    private ObjLongConsumer<OrderCommand> consumer = (cmd, seq) -> {
-    };
+    private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor(new ITradeEventsHandler() {
+        @Override
+        public void commandResult(ApiCommandResult commandResult) {
+
+        }
+
+        @Override
+        public void tradeEvent(TradeEvent tradeEvent) {
+
+        }
+
+        @Override
+        public void reduceEvent(ReduceEvent reduceEvent) {
+
+        }
+
+        @Override
+        public void orderBook(OrderBook orderBook) {
+
+        }
+    }, new IFundEventsHandler() {
+        @Override
+        public void fundsEvent(FundsEvent fundsEvent) {
+
+        }
+    });
 
     public static final Consumer<OrderCommand> CHECK_SUCCESS = cmd -> assertEquals(CommandResultCode.SUCCESS, cmd.resultCode);
 
@@ -156,7 +183,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         this.exchangeCore = ExchangeCore.builder()
-                .resultsConsumer((cmd, seq) -> consumer.accept(cmd, seq))
+                .resultsConsumer(consumer)
                 .exchangeConfiguration(exchangeConfiguration)
                 .build();
 

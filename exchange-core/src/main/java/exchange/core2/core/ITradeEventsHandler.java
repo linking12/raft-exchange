@@ -2,11 +2,13 @@ package exchange.core2.core;
 
 import java.util.List;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionMode;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -86,8 +88,6 @@ public interface ITradeEventsHandler {
     @Data
     class TradeEvent {
         public final int symbol;
-        public final long baseScaleK;
-        public final long quoteScaleK;
         public final long totalVolume;
         public final long takerOrderId;
         public final long takerUid;
@@ -109,8 +109,6 @@ public interface ITradeEventsHandler {
     @Data
     class ReduceEvent {
         public final int symbol;
-        public final long baseScaleK;
-        public final long quoteScaleK;
         public final long reducedVolume;
         public final boolean orderCompleted;
         public final long price;
@@ -122,8 +120,6 @@ public interface ITradeEventsHandler {
     @Data
     class RejectEvent {
         public final int symbol;
-        public final long baseScaleK;
-        public final long quoteScaleK;
         public final long rejectedVolume;
         public final long price;
         public final long orderId;
@@ -198,14 +194,14 @@ public interface ITradeEventsHandler {
         public final boolean isMaker;
         public final boolean workingIndicator; // 是否在订单簿
 
-        public static SpotExecutionReport placeOrder(OrderCommand cmd, long seq) {
+        public static SpotExecutionReport placeOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildNewExecId(seq),
                     ExecType.NEW,
                     OrderStatus.NEW,
                     cmd.symbol,
-                    cmd.baseScaleK,
-                    cmd.quoteScaleK,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
                     cmd.uid,
                     cmd.userCookie,
                     cmd.orderId,
@@ -222,19 +218,19 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     false,
                     cmd.orderType == OrderType.GTC);
         }
 
-        public static SpotExecutionReport rejectOrder(OrderCommand cmd, long seq) {
+        public static SpotExecutionReport rejectOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildRejectExecId(seq),
                     ExecType.REJECT,
                     OrderStatus.REJECTED,
                     cmd.symbol,
-                    cmd.baseScaleK,
-                    cmd.quoteScaleK,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
                     cmd.uid,
                     cmd.userCookie,
                     cmd.orderId,
@@ -251,19 +247,19 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     false,
                     false);
         }
 
-        public static SpotExecutionReport reduceOrder(OrderCommand cmd, long seq, MatcherTradeEvent event) {
+        public static SpotExecutionReport reduceOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec, MatcherTradeEvent event) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildCancelExecId(seq),
                     ExecType.CANCELED,
                     OrderStatus.CANCELED,
                     cmd.symbol,
-                    cmd.baseScaleK,
-                    cmd.quoteScaleK,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
                     cmd.uid,
                     cmd.userCookie,
                     cmd.orderId,
@@ -280,19 +276,19 @@ public interface ITradeEventsHandler {
                     event.filled,
                     event.filledNotional,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     false,
                     false);
         }
 
-        public static SpotExecutionReport tradeTaker(OrderCommand cmd, long seq, MatcherTradeEvent ev, int tradeIndex) {
+        public static SpotExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec, MatcherTradeEvent ev, int tradeIndex) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildTradeExecId(seq, tradeIndex, false),
                     ExecType.TRADE,
                     ev.activeOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
                     cmd.symbol,
-                    cmd.baseScaleK,
-                    cmd.quoteScaleK,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
                     cmd.uid,
                     cmd.userCookie,
                     cmd.orderId,
@@ -309,19 +305,19 @@ public interface ITradeEventsHandler {
                     ev.filled,
                     ev.filledNotional,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     false,
                     (cmd.orderType == OrderType.GTC) && !ev.activeOrderCompleted);
         }
 
-        public static SpotExecutionReport tradeMaker(OrderCommand cmd, long seq, MatcherTradeEvent ev, int tradeIndex) {
+        public static SpotExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec, MatcherTradeEvent ev, int tradeIndex) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,
                     ev.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
                     cmd.symbol,
-                    cmd.baseScaleK,
-                    cmd.quoteScaleK,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
                     ev.matchedOrderUid,
                     ev.matchedUserCookie,
                     ev.matchedOrderId,
@@ -338,7 +334,7 @@ public interface ITradeEventsHandler {
                     ev.matchedOrderFilled,
                     ev.matchedOrderFilledNotional,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     false,
                     (ev.matchedOrderType == OrderType.GTC) && !ev.matchedOrderCompleted
             );
@@ -381,14 +377,14 @@ public interface ITradeEventsHandler {
         public final long bidsQty;  // 剩余买单数量，pendingBuySize
         public final long asksQty;
 
-        public static FuturesExecutionReport placeOrder(OrderCommand cmd, long seq) {
+        public static FuturesExecutionReport placeOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec, UserProfile userProfile) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new FuturesExecutionReport(buildNewExecId(seq),
                     ExecType.NEW,
                     OrderStatus.NEW,
                     cmd.symbol,
-                    cmd.baseScaleK,
-                    cmd.quoteScaleK,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
                     cmd.uid,
                     cmd.userCookie,
                     cmd.orderId,
@@ -398,17 +394,17 @@ public interface ITradeEventsHandler {
                     budgetOrder ? 0 : cmd.price,
                     budgetOrder ? cmd.price : cmd.size,
                     cmd.timestamp,
-                    cmd.symbolType,
-                    cmd.positionMode,
+                    spec.type,
+                    userProfile.positionMode,
                     0L,
                     0L,
                     0L,
                     0L,
                     0L,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     0L,
-                    cmd.quoteCurrency,
+                    spec.quoteCurrency,
                     false,
                     0L,
                     0L,

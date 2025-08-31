@@ -1,5 +1,8 @@
 package exchange.core2.tests.integration;
 
+import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
@@ -159,6 +162,32 @@ public final class ITExchangeCorePriceScale {
     @Test
     public void testSpotTradePriceScale() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.setConsumer(new SimpleEventsProcessor(new ITradeEventsHandler() {
+                @Override
+                public void commandResult(ApiCommandResult commandResult) {
+
+                }
+
+                @Override
+                public void tradeEvent(TradeEvent tradeEvent) {
+
+                }
+
+                @Override
+                public void reduceEvent(ReduceEvent reduceEvent) {
+
+                }
+
+                @Override
+                public void orderBook(OrderBook orderBook) {
+
+                }
+            }, new IFundEventsHandler() {
+                @Override
+                public void fundsEvent(FundsEvent fundsEvent) {
+
+                }
+            }));
             container.addCurrency(BNB);
             container.addCurrency(USDT);
             container.addSymbol(BNB_USDT_SPOT);
