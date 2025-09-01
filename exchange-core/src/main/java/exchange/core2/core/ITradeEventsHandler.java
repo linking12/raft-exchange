@@ -130,16 +130,6 @@ public interface ITradeEventsHandler {
     }
 
     @Data
-    class CommandExecutionResult {
-        public final int symbol;
-        public final long volume;
-        public final long price;
-        public final long orderId;
-        public final long uid;
-        public final long timestamp;
-    }
-
-    @Data
     class OrderBook {
         public final int symbol;
         public final List<OrderBookRecord> asks;
@@ -155,11 +145,9 @@ public interface ITradeEventsHandler {
     }
 
     default void spotExecutionReport(SpotExecutionReport executionReport) {
-        System.out.println(executionReport);
     }
 
     default void futuresExecutionReport(FuturesExecutionReport executionReport) {
-        System.out.println(executionReport);
     }
 
     enum ExecType {NEW, TRADE, REDUCE, CANCEL, REJECT}
@@ -366,7 +354,7 @@ public interface ITradeEventsHandler {
         public final ExecType executionType;
         public final OrderStatus orderStatus;
 
-        public final long symbolId;
+        public final int symbolId;
         public final long orderQtyScale;
         public final long priceScale;
         public final long userId;
@@ -389,8 +377,6 @@ public interface ITradeEventsHandler {
         public final long avgPx; // cumQuoteQty / cumQty
         public final long fee;
         public final int feeAssetId;
-        public final long settleAmt;
-        public final int settleAssetId;
         public final boolean isMaker;
         public final long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
         public final long asksNotional;
@@ -423,8 +409,6 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     0L,
-                    0L,
-                    spec.quoteCurrency,
                     0L,
                     spec.quoteCurrency,
                     false,
@@ -460,8 +444,6 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     0L,
-                    0L,
-                    spec.quoteCurrency,
                     0L,
                     spec.quoteCurrency,
                     false,
@@ -514,8 +496,6 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     spec.quoteCurrency,
-                    0L,
-                    spec.quoteCurrency,
                     false,
                     0L,
                     0L,
@@ -552,8 +532,6 @@ public interface ITradeEventsHandler {
                     event.filled == 0 ? 0L : event.filledNotional / event.filled,
                     0L,
                     spec.quoteCurrency,
-                    0L,
-                    spec.quoteCurrency,
                     false,
                     pos.pendingBuySize * pos.pendingBuyAvgPrice,
                     pos.pendingSellSize * pos.pendingSellAvgPrice,
@@ -588,8 +566,6 @@ public interface ITradeEventsHandler {
                     event.matchedOrderFilled,
                     event.matchedOrderFilledNotional,
                     event.matchedOrderFilled == 0 ? 0L : event.matchedOrderFilledNotional / event.matchedOrderFilled,
-                    0L,
-                    spec.quoteCurrency,
                     0L,
                     spec.quoteCurrency,
                     true,

@@ -4,32 +4,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ObjLongConsumer;
 
+import exchange.core2.core.IFundEventsHandler.PositionOutReport;
 import exchange.core2.core.ITradeEventsHandler.FuturesExecutionReport;
 import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommandType;
-import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.UserProfileService;
 import lombok.Setter;
-import org.agrona.collections.MutableBoolean;
-import org.agrona.collections.MutableLong;
-import org.agrona.collections.MutableReference;
 
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
-import exchange.core2.core.common.api.ApiAddUser;
-import exchange.core2.core.common.api.ApiAdjustUserBalance;
-import exchange.core2.core.common.api.ApiBinaryDataCommand;
-import exchange.core2.core.common.api.ApiCancelOrder;
-import exchange.core2.core.common.api.ApiCommand;
-import exchange.core2.core.common.api.ApiMoveOrder;
-import exchange.core2.core.common.api.ApiOrderBookRequest;
-import exchange.core2.core.common.api.ApiPlaceOrder;
-import exchange.core2.core.common.api.ApiReduceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import lombok.Getter;
@@ -46,8 +34,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
     @Setter
     private SymbolSpecificationProvider symbolSpecificationProvider;
     @Setter
-    private CurrencySpecificationProvider currencySpecificationProvider;
-    @Setter
     private UserProfileService userProfileService;
 
     @Override
@@ -59,8 +45,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             } else {
                 // 主流程撮合结果处理
                 sendExecutionReport(cmd, seq);
-//                sendCommandResult(cmd, seq);
-//                sendTradeEvents(cmd);
                 sendFundEvents(cmd);
                 sendMarketData(cmd);
             }
@@ -161,28 +145,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
     }
 
-    private void sendTradeEvents(OrderCommand cmd) {
-        final MatcherTradeEvent firstEvent = cmd.matcherEvent;
-        if (firstEvent == null) {
-            return;
-        }
-        if (firstEvent.eventType == MatcherEventType.REDUCE) {
-
-            final ITradeEventsHandler.ReduceEvent evt = new ITradeEventsHandler.ReduceEvent(cmd.symbol, firstEvent.size, firstEvent.activeOrderCompleted, firstEvent.price, cmd.orderId,
-                cmd.uid, cmd.timestamp);
-
-            tradeEventsHandler.reduceEvent(evt);
-
-            if (firstEvent.nextEvent != null) {
-                throw new IllegalStateException("Only single REDUCE event is expected");
-            }
-
-            return;
-        }
-
-        sendTradeEvent(cmd);
-    }
-
     private void sendFundEvents(OrderCommand cmd) {
         FundEvent event = cmd.takerFundEvents;
         while (event != null) {
@@ -209,52 +171,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             return;
         }
         fundEvent.processed = true;
-        final IFundEventsHandler.FundsEvent evt = new IFundEventsHandler.FundsEvent(fundEvent.eventType, fundEvent.orderId,
-            fundEvent.uid, fundEvent.currency, fundEvent.currencyScakeK, fundEvent.free, fundEvent.locked, fundEvent.symbol,
-            fundEvent.baseScaleK, fundEvent.quoteScaleK, fundEvent.direction, fundEvent.openVolume, fundEvent.openInitMarginSum,
-            fundEvent.openPriceSum, fundEvent.profit, fundEvent.pendingSellSize, fundEvent.pendingBuySize,
-            fundEvent.pendingSellAvgPrice, fundEvent.pendingBuyAvgPrice, fundEvent.leverage, fundEvent.marginMode,
-            fundEvent.extraMargin, fundEvent.unrealizedProfit, fundEvent.liquidationPrice, fundEvent.marginRatioScaleK,
-            fundEvent.markPrice, fundEvent.tradeSize, fundEvent.tradePrice, fundEvent.fee);
-        fundEventsHandler.fundsEvent(evt);
-    }
-
-    public void sendTradeEvent(OrderCommand cmd) {
-
-        final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
-        final MutableLong mutableLong = new MutableLong(0L);
-        final List<ITradeEventsHandler.Trade> trades = new ArrayList<>();
-
-        final MutableReference<ITradeEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
-
-        cmd.processMatcherEvents(evt -> {
-
-            if (evt.eventType == MatcherEventType.TRADE) {
-
-                final ITradeEventsHandler.Trade trade =
-                    new ITradeEventsHandler.Trade(evt.matchedOrderId, evt.matchedOrderUid, evt.matchedOrderCompleted, evt.price, evt.size);
-
-                trades.add(trade);
-                mutableLong.value += evt.size;
-
-                if (evt.activeOrderCompleted) {
-                    takerOrderCompleted.value = true;
-                }
-
-            } else if (evt.eventType == MatcherEventType.REJECT) {
-
-                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
-            }
-        });
-
-        if (!trades.isEmpty()) {
-
-            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol,
-                mutableLong.value, cmd.orderId, cmd.uid, cmd.action, takerOrderCompleted.value, cmd.timestamp, trades);
-
-            tradeEventsHandler.tradeEvent(evt);
-        }
-
+        fundEventsHandler.positionOutReport(PositionOutReport.fromFundEvent(fundEvent));
     }
 
     private void sendMarketData(OrderCommand cmd) {
@@ -274,46 +191,4 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
     }
 
-    private void sendCommandResult(OrderCommand cmd, long seq) {
-
-        switch (cmd.command) {
-            case PLACE_ORDER:
-                sendApiCommandResult(new ApiPlaceOrder(cmd.price, cmd.size, cmd.orderId, cmd.action, cmd.orderType, cmd.uid, cmd.symbol, cmd.userCookie,
-                    cmd.leverage, cmd.marginMode, cmd.reserveBidPrice), cmd.resultCode, cmd.timestamp, seq);
-                break;
-            case MOVE_ORDER:
-                sendApiCommandResult(new ApiMoveOrder(cmd.orderId, cmd.price, cmd.uid, cmd.symbol), cmd.resultCode, cmd.timestamp, seq);
-                break;
-            case CANCEL_ORDER:
-                sendApiCommandResult(new ApiCancelOrder(cmd.orderId, cmd.uid, cmd.symbol), cmd.resultCode, cmd.timestamp, seq);
-                break;
-            case REDUCE_ORDER:
-                sendApiCommandResult(new ApiReduceOrder(cmd.orderId, cmd.uid, cmd.symbol, cmd.size), cmd.resultCode, cmd.timestamp, seq);
-                break;
-            case ADD_USER:
-                sendApiCommandResult(new ApiAddUser(cmd.uid), cmd.resultCode, cmd.timestamp, seq);
-                break;
-            case BALANCE_ADJUSTMENT:
-                sendApiCommandResult(new ApiAdjustUserBalance(cmd.uid, cmd.symbol, cmd.price, cmd.orderId), cmd.resultCode, cmd.timestamp, seq);
-                break;
-            case BINARY_DATA_COMMAND:
-                if (cmd.resultCode != CommandResultCode.ACCEPTED) {
-                    sendApiCommandResult(new ApiBinaryDataCommand(cmd.userCookie, null), cmd.resultCode, cmd.timestamp, seq);
-                }
-                break;
-            case ORDER_BOOK_REQUEST:
-                sendApiCommandResult(new ApiOrderBookRequest(cmd.symbol, (int)cmd.size), cmd.resultCode, cmd.timestamp, seq);
-                break;
-
-            // TODO add rest of commands
-
-        }
-
-    }
-
-    public void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
-        cmd.timestamp = timestamp;
-        final ITradeEventsHandler.ApiCommandResult commandResult = new ITradeEventsHandler.ApiCommandResult(cmd, resultCode, seq);
-        tradeEventsHandler.commandResult(commandResult);
-    }
 }
