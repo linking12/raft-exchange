@@ -7,14 +7,16 @@ import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionMode;
+import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.Data;
 
-import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.buildCancelExecId;
+import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.buildReduceExecId;
 import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.buildNewExecId;
 import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.buildRejectExecId;
 import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId;
@@ -160,7 +162,7 @@ public interface ITradeEventsHandler {
         System.out.println(executionReport);
     }
 
-    enum ExecType {NEW, TRADE, CANCELED, REJECT}
+    enum ExecType {NEW, TRADE, REDUCE, CANCEL, REJECT}
 
     enum OrderStatus {NEW, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED}
 
@@ -183,7 +185,7 @@ public interface ITradeEventsHandler {
         public final long quoteOrderQty; // 以quote计价的订单总预算，用于budget单
         public final long orderCreationTime;
 
-        public final long tradeId; // 一个matcherEvent对应一个tradeId
+        public final long tradeId; // 一个matcherEvent对应一个tradeId, maker taker公用一个id
         public final long lastQty;
         public final long lastPrice;
         public final long lastQuoteQty;
@@ -252,11 +254,27 @@ public interface ITradeEventsHandler {
                     false);
         }
 
-        public static SpotExecutionReport reduceOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec, MatcherTradeEvent event) {
+        public static SpotExecutionReport reduceOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                      MatcherTradeEvent event) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
-            return new SpotExecutionReport(buildCancelExecId(seq),
-                    ExecType.CANCELED,
-                    OrderStatus.CANCELED,
+            ExecType execType;
+            OrderStatus orderStatus;
+            if (cmd.command == OrderCommandType.REDUCE_ORDER) {
+                execType = ExecType.REDUCE;
+                if (event.filled == 0) {
+                    orderStatus = OrderStatus.NEW;
+                } else if (event.activeOrderCompleted) {
+                    orderStatus = OrderStatus.CANCELED;
+                } else {
+                    orderStatus = OrderStatus.PARTIALLY_FILLED;
+                }
+            } else {
+                execType = ExecType.CANCEL;
+                orderStatus = OrderStatus.CANCELED;
+            }
+            return new SpotExecutionReport(buildReduceExecId(seq),
+                    execType,
+                    orderStatus,
                     cmd.symbol,
                     spec.baseScaleK,
                     spec.quoteScaleK,
@@ -281,7 +299,8 @@ public interface ITradeEventsHandler {
                     false);
         }
 
-        public static SpotExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec, MatcherTradeEvent ev, int tradeIndex) {
+        public static SpotExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                     MatcherTradeEvent ev, int tradeIndex) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildTradeExecId(seq, tradeIndex, false),
                     ExecType.TRADE,
@@ -307,10 +326,11 @@ public interface ITradeEventsHandler {
                     0L,
                     spec.quoteCurrency,
                     false,
-                    (cmd.orderType == OrderType.GTC) && !ev.activeOrderCompleted);
+                    cmd.orderType == OrderType.GTC && !ev.activeOrderCompleted);
         }
 
-        public static SpotExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec, MatcherTradeEvent ev, int tradeIndex) {
+        public static SpotExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                     MatcherTradeEvent ev, int tradeIndex) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,
@@ -336,14 +356,13 @@ public interface ITradeEventsHandler {
                     0L,
                     spec.quoteCurrency,
                     false,
-                    (ev.matchedOrderType == OrderType.GTC) && !ev.matchedOrderCompleted
-            );
+                    ev.matchedOrderType == OrderType.GTC && !ev.matchedOrderCompleted);
         }
     }
 
     @Data
     class FuturesExecutionReport {
-        public final long execId;
+        public final long uniId;
         public final ExecType executionType;
         public final OrderStatus orderStatus;
 
@@ -360,12 +379,13 @@ public interface ITradeEventsHandler {
         public final long orderQty;
         public final long createTime;
 
+        public final long execId; // 一个matcherEvent对应一个execId, maker taker公用一个id
         public final SymbolType contractType; //判断 PERPETUAL/DELIVERY
         public final PositionMode positionSide;
         public final long lastQty; // ev.size
         public final long lastPx; // ev.price
         public final long cumQty;
-        public final long cumQuoteQty; // ev.size * ev.price
+        public final long cumQuoteQty;
         public final long avgPx; // cumQuoteQty / cumQty
         public final long fee;
         public final int feeAssetId;
@@ -377,7 +397,8 @@ public interface ITradeEventsHandler {
         public final long bidsQty;  // 剩余买单数量，pendingBuySize
         public final long asksQty;
 
-        public static FuturesExecutionReport placeOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec, UserProfile userProfile) {
+        public static FuturesExecutionReport placeOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                        UserProfile userProfile) {
             boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             return new FuturesExecutionReport(buildNewExecId(seq),
                     ExecType.NEW,
@@ -394,6 +415,7 @@ public interface ITradeEventsHandler {
                     budgetOrder ? 0 : cmd.price,
                     budgetOrder ? cmd.price : cmd.size,
                     cmd.timestamp,
+                    -1L,
                     spec.type,
                     userProfile.positionMode,
                     0L,
@@ -410,6 +432,171 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     0L);
+        }
+
+        public static FuturesExecutionReport rejectOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                         UserProfile userProfile) {
+            final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            return new FuturesExecutionReport(buildRejectExecId(seq),
+                    ExecType.REJECT,
+                    OrderStatus.REJECTED,
+                    cmd.symbol,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
+                    cmd.uid,
+                    cmd.userCookie,
+                    cmd.orderId,
+                    cmd.orderType,
+                    cmd.action,
+                    -1L,
+                    budgetOrder ? 0L : cmd.price,
+                    budgetOrder ? cmd.price : cmd.size,
+                    cmd.timestamp,
+                    -1L,
+                    spec.type,
+                    userProfile.positionMode,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    spec.quoteCurrency,
+                    0L,
+                    spec.quoteCurrency,
+                    false,
+                    0L,
+                    0L,
+                    0L,
+                    0L);
+        }
+
+        public static FuturesExecutionReport reduceOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                         UserProfile userProfile, MatcherTradeEvent event) {
+            final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            ExecType execType;
+            OrderStatus orderStatus;
+            if (cmd.command == OrderCommandType.REDUCE_ORDER) {
+                execType = ExecType.REDUCE;
+                if (event.filled == 0) {
+                    orderStatus = OrderStatus.NEW;
+                } else if (event.activeOrderCompleted) {
+                    orderStatus = OrderStatus.CANCELED;
+                } else {
+                    orderStatus = OrderStatus.PARTIALLY_FILLED;
+                }
+            } else {
+                execType = ExecType.CANCEL;
+                orderStatus = OrderStatus.CANCELED;
+            }
+            return new FuturesExecutionReport(buildReduceExecId(seq),
+                    execType,
+                    orderStatus,
+                    cmd.symbol,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
+                    cmd.uid,
+                    cmd.userCookie,
+                    cmd.orderId,
+                    cmd.orderType,
+                    cmd.action,
+                    -1L,
+                    budgetOrder ? 0L : cmd.price,
+                    budgetOrder ? cmd.price : cmd.size,
+                    cmd.timestamp,
+                    -1L,
+                    spec.type,
+                    userProfile.positionMode,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    spec.quoteCurrency,
+                    0L,
+                    spec.quoteCurrency,
+                    false,
+                    0L,
+                    0L,
+                    0L,
+                    0L);
+        }
+
+        public static FuturesExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                        UserProfile userProfile, MatcherTradeEvent event, int tradeIndex) {
+            final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            final SymbolPositionRecord pos = userProfile.getPositionRecordOrThrowEx(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
+            return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, false),
+                    ExecType.TRADE,
+                    event.activeOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
+                    cmd.symbol,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
+                    cmd.uid,
+                    cmd.userCookie,
+                    cmd.orderId,
+                    cmd.orderType,
+                    cmd.action,
+                    event.matchedOrderUid,
+                    budgetOrder ? 0L : cmd.price,
+                    budgetOrder ? cmd.price : cmd.size,
+                    cmd.timestamp,
+                    buildTradeId(seq, tradeIndex),
+                    spec.type,
+                    userProfile.positionMode,
+                    event.size,
+                    event.price,
+                    event.filled,
+                    event.filledNotional,
+                    event.filled == 0 ? 0L : event.filledNotional / event.filled,
+                    0L,
+                    spec.quoteCurrency,
+                    0L,
+                    spec.quoteCurrency,
+                    false,
+                    pos.pendingBuySize * pos.pendingBuyAvgPrice,
+                    pos.pendingSellSize * pos.pendingSellAvgPrice,
+                    pos.pendingBuySize,
+                    pos.pendingSellSize);
+        }
+
+        public static FuturesExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
+                                                        UserProfile makerProfile, MatcherTradeEvent event, int tradeIndex) {
+            final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            final SymbolPositionRecord pos = makerProfile.getPositionRecordOrThrowEx(makerProfile.createPositionsKey(cmd.symbol, cmd.action.opposite(), event.matchedOrderCommandType));
+            return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, true),
+                    ExecType.TRADE,
+                    event.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
+                    cmd.symbol,
+                    spec.baseScaleK,
+                    spec.quoteScaleK,
+                    event.matchedOrderUid,
+                    event.matchedUserCookie,
+                    event.matchedOrderUid,
+                    event.matchedOrderType,
+                    cmd.action.opposite(),
+                    event.matchedOrderUid,
+                    budgetOrder ? 0L : event.matchedOrderPrice,
+                    budgetOrder ? event.matchedOrderPrice : event.matchedOrderSize,
+                    event.matchedOrderTimestamp,
+                    buildTradeId(seq, tradeIndex),
+                    spec.type,
+                    makerProfile.positionMode,
+                    event.size,
+                    event.price,
+                    event.matchedOrderFilled,
+                    event.matchedOrderFilledNotional,
+                    event.matchedOrderFilled == 0 ? 0L : event.matchedOrderFilledNotional / event.matchedOrderFilled,
+                    0L,
+                    spec.quoteCurrency,
+                    0L,
+                    spec.quoteCurrency,
+                    true,
+                    pos.pendingBuySize * pos.pendingBuyAvgPrice,
+                    pos.pendingSellSize * pos.pendingSellAvgPrice,
+                    pos.pendingBuySize,
+                    pos.pendingSellSize);
         }
     }
 
@@ -445,7 +632,7 @@ public interface ITradeEventsHandler {
         /**
          * CANCEL / REDUCE
          */
-        public static long buildCancelExecId(long seq) {
+        public static long buildReduceExecId(long seq) {
             return (seq << SHIFT_BITS) | IDX_CANCEL;
         }
 

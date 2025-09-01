@@ -84,11 +84,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
     }
 
-    private void sendFuturesExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
-        UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
-        FuturesExecutionReport.placeOrder(cmd, seq, spec, userProfile);
-    }
-
     private void sendSpotExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
         final MatcherTradeEvent first = cmd.matcherEvent;
 
@@ -122,20 +117,44 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
     }
 
+    private void sendFuturesExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
+        final MatcherTradeEvent first = cmd.matcherEvent;
+        UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
+            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.placeOrder(cmd, seq, spec, userProfile));
+        }
+        if (first != null && first.eventType == MatcherEventType.REJECT) {
+            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.rejectOrder(cmd, seq, spec, userProfile));
+            return;
+        }
+        if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER)
+                && cmd.resultCode == CommandResultCode.SUCCESS && first != null && first.eventType == MatcherEventType.REDUCE) {
+            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.reduceOrder(cmd, seq, spec, userProfile, first));
+            return;
+        }
+        // 没有成交事件直接返回
+        if (first == null) return;
 
-    public boolean isReportableCommand(OrderCommandType commandType) {
+        int tradeIndex = 0;
+        for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
+            if (ev.eventType != MatcherEventType.TRADE) continue;
+            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeTaker(cmd, seq, spec, userProfile, ev, tradeIndex));
+            UserProfile makerProfile = userProfileService.getUserProfile(ev.matchedOrderUid);
+            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeMaker(cmd, seq, spec, makerProfile, ev, tradeIndex));
+            tradeIndex++;
+        }
+    }
+
+    private boolean isReportableCommand(OrderCommandType commandType) {
         switch (commandType) {
             // 纯订单生命周期
             case PLACE_ORDER:
             case CANCEL_ORDER:
             case MOVE_ORDER:
             case REDUCE_ORDER:
-            // 引起仓位变化的特殊订单
+            // 特殊订单，但也是调用了orderBook.newOrder
             case CLOSE_POSITION:
             case FORCE_LIQUIDATION:
-            // 引起仓位变化的系统事件
-            case SETTLE_FUNDINGFEES:
-            case SETTLE_PNL:
                 return true;
             default:
                 return false;
