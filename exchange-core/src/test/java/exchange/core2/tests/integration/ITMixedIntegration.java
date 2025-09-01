@@ -409,7 +409,16 @@ class ITMixedIntegration {
             verify(handler, times(36)).fundsEvent(fundEventCapor.capture());
             // check fund event
             List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event = fundEvents.get(31);
+            IFundEventsHandler.FundsEvent event = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundsEvent evt = fundEvents.get(i);
+                if (evt.eventType.equals(FundEvent.FundEventType.LIQUIDATION)) {
+                    event = evt;
+                    break;
+                }
+            }
+
             assertThat(UID_1, Is.is(event.uid));
             assertThat(quoteId, Is.is(event.currency));
             assertThat(10000, Is.is(event.symbol));
