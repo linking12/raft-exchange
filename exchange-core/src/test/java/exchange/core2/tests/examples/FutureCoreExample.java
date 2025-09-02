@@ -55,29 +55,20 @@ public class FutureCoreExample {
     @Before
     public void setUp() throws Exception {
         SimpleEventsProcessor4Test eventsProcessor = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
+
             @Override
-            public void tradeEvent(TradeEvent tradeEvent) {
-                log.debug("tradeEvent: {}", tradeEvent);
+            public void spotExecutionReport(SpotExecutionReport executionReport) {
+                log.debug("SpotExecutionReport: {}", executionReport);
             }
 
             @Override
-            public void rejectEvent(RejectEvent rejectEvent) {
-                log.debug("rejectEvent: {}", rejectEvent);
+            public void futuresExecutionReport(FuturesExecutionReport executionReport) {
+                log.debug("FuturesExecutionReport: {}", executionReport);
             }
 
             @Override
-            public void fundsEvent(FundsEvent fundsEvent) {
-                log.debug("fundsEvent: {}", fundsEvent);
-            }
-
-            @Override
-            public void reduceEvent(ReduceEvent reduceEvent) {
-                log.debug("Reduce event: {}", reduceEvent);
-            }
-
-            @Override
-            public void commandResult(ApiCommandResult commandResult) {
-                log.debug("Command result: " + commandResult);
+            public void positionOutReport(PositionOutReport positionOut) {
+                log.debug("PositionOutReport: {}", positionOut);
             }
 
             @Override

@@ -10,8 +10,6 @@ import exchange.core2.core.common.PositionMode;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
-import exchange.core2.core.common.api.ApiCommand;
-import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.Data;
@@ -52,82 +50,12 @@ import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.build
 public interface ITradeEventsHandler {
 
     /**
-     * Method is called after each commands execution.
-     *
-     * @param commandResult - immutable object describing original command, result code, and assigned sequence number.
-     */
-    void commandResult(ApiCommandResult commandResult);
-
-    /**
-     * Method is called if order execution was resulted to one or more trades.
-     *
-     * @param tradeEvent - immutable object describing event details
-     */
-    void tradeEvent(TradeEvent tradeEvent);
-
-    /**
-     * Method is called if Cancel or Reduce command was successfully executed.
-     *
-     * @param reduceEvent - immutable object describing event details
-     */
-    void reduceEvent(ReduceEvent reduceEvent);
-
-    /**
      * Method is called when order book snapshot (L2MarketData) was attached to commands by matching engine. That always
      * happens for ApiOrderBookRequest, sometimes for other commands.
      *
      * @param orderBook - immutable object containing L2 OrderBook snapshot
      */
     void orderBook(OrderBook orderBook);
-
-    @Data
-    class ApiCommandResult {
-        public final ApiCommand command;
-        public final CommandResultCode resultCode;
-        public final long seq;
-    }
-
-    @Data
-    class TradeEvent {
-        public final int symbol;
-        public final long totalVolume;
-        public final long takerOrderId;
-        public final long takerUid;
-        public final OrderAction takerAction;
-        public final boolean takeOrderCompleted;
-        public final long timestamp;
-        public final List<Trade> trades;
-    }
-
-    @Data
-    class Trade {
-        public final long makerOrderId;
-        public final long makerUid;
-        public final boolean makerOrderCompleted;
-        public final long price;
-        public final long volume;
-    }
-
-    @Data
-    class ReduceEvent {
-        public final int symbol;
-        public final long reducedVolume;
-        public final boolean orderCompleted;
-        public final long price;
-        public final long orderId;
-        public final long uid;
-        public final long timestamp;
-    }
-
-    @Data
-    class RejectEvent {
-        public final int symbol;
-        public final long rejectedVolume;
-        public final long price;
-        public final long orderId;
-        public final long uid;
-        public final long timestamp;
-    }
 
     @Data
     class OrderBook {
@@ -144,11 +72,9 @@ public interface ITradeEventsHandler {
         public final int orders;
     }
 
-    default void spotExecutionReport(SpotExecutionReport executionReport) {
-    }
+    void spotExecutionReport(SpotExecutionReport executionReport);
 
-    default void futuresExecutionReport(FuturesExecutionReport executionReport) {
-    }
+    void futuresExecutionReport(FuturesExecutionReport executionReport);
 
     enum ExecType {NEW, TRADE, REDUCE, CANCEL, REJECT}
 

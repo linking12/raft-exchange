@@ -63,9 +63,6 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         RoleChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
     }
 
-    @Override
-    public void commandResult(ApiCommandResult commandResult) {
-    }
 
     @Override
     public void spotExecutionReport(SpotExecutionReport executionReport) {
@@ -122,14 +119,6 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
     }
 
     @Override
-    public void tradeEvent(TradeEvent tradeEvent) {
-    }
-
-    @Override
-    public void reduceEvent(ReduceEvent reduceEvent) {
-    }
-
-    @Override
     public void orderBook(OrderBook orderBook) {
         if (!isLeader.get()) {
             return;
@@ -153,11 +142,6 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         byte[] pbData = pbObject.toByteArray();
         producers.get(TopicGroup.OTHER).send(new ProducerRecord<>(topics.get(TopicGroup.OTHER), IGNORE_UID, pbData));
     }
-
-    @Override
-    public void fundsEvent(FundsEvent fundsEvent) {
-    }
-
 
     @Override
     public void positionOutReport(PositionOutReport positionOut) {

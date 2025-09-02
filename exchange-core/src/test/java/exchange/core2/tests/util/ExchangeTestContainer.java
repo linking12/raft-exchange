@@ -73,27 +73,22 @@ public final class ExchangeTestContainer implements AutoCloseable {
     @Setter
     private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor(new ITradeEventsHandler() {
         @Override
-        public void commandResult(ApiCommandResult commandResult) {
-
-        }
-
-        @Override
-        public void tradeEvent(TradeEvent tradeEvent) {
-
-        }
-
-        @Override
-        public void reduceEvent(ReduceEvent reduceEvent) {
-
-        }
-
-        @Override
         public void orderBook(OrderBook orderBook) {
+
+        }
+
+        @Override
+        public void spotExecutionReport(SpotExecutionReport executionReport) {
+
+        }
+
+        @Override
+        public void futuresExecutionReport(FuturesExecutionReport executionReport) {
 
         }
     }, new IFundEventsHandler() {
         @Override
-        public void fundsEvent(FundsEvent fundsEvent) {
+        public void positionOutReport(PositionOutReport positionOut) {
 
         }
     });
