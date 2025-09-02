@@ -1,5 +1,8 @@
 package com.binance.raftexchange.server;
 
+import java.time.Duration;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
@@ -40,11 +43,33 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     private GrpcServerContainer grpcServerContainer;
 
-    @Value("${raftexchange.kafka.boostrap.servers}")
-    public String kafkaServers;
+    private final Map<IEventsHandlerByKafka.TopicGroup, KafkaProducer<Long, byte[]>> producers = new EnumMap<>(IEventsHandlerByKafka.TopicGroup.class);
+    private final Map<IEventsHandlerByKafka.TopicGroup, String> topics = new EnumMap<>(IEventsHandlerByKafka.TopicGroup.class);
 
-    @Value("${raftexchange.kafka.topicPrefix}")
-    public String topicPrefix;
+    @Value("${raftexchange.kafka.spot.bootstrap.servers}")
+    private String spotServers;
+    @Value("${raftexchange.kafka.spot.topic}")
+    private String spotTopic;
+
+    @Value("${raftexchange.kafka.perp.bootstrap.servers}")
+    private String perpServers;
+    @Value("${raftexchange.kafka.perp.topic}")
+    private String perpTopic;
+
+    @Value("${raftexchange.kafka.delivery.bootstrap.servers}")
+    private String deliveryServers;
+    @Value("${raftexchange.kafka.delivery.topic}")
+    private String deliveryTopic;
+
+    @Value("${raftexchange.kafka.fund.bootstrap.servers}")
+    private String fundServers;
+    @Value("${raftexchange.kafka.fund.topic}")
+    private String fundTopic;
+
+    @Value("${raftexchange.kafka.other.bootstrap.servers}")
+    private String otherServers;
+    @Value("${raftexchange.kafka.other.topic}")
+    private String otherTopic;
 
     @Override
     public void run(String... arg0) throws Exception {
@@ -91,14 +116,27 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         properties.put("max.in.flight.requests.per.connection", 5); // 控制并发inflight请求数量
         properties.put("enable.idempotence", false);  // 禁止幂等（重试/leader切换/broker挂掉导致重复，以及局部乱序）
         properties.put("connections.max.idle.ms", 60000); // 保持连接活跃1分钟
-        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaServers);
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
         properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
         properties.setProperty(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG, "false");
         properties.setProperty(ProducerConfig.PARTITIONER_CLASS_CONFIG, IEventsHandlerByKafka.CommandPartitioner.class.getName());
-        KafkaProducer<Long, byte[]> producer = new KafkaProducer<Long, byte[]>(properties);
-        IEventsHandlerByKafka.init(producer, topicPrefix);
+
+        createKafkaProducer(IEventsHandlerByKafka.TopicGroup.SPOT, properties, spotServers, spotTopic);
+        createKafkaProducer(IEventsHandlerByKafka.TopicGroup.PERP, properties, perpServers, perpTopic);
+        createKafkaProducer(IEventsHandlerByKafka.TopicGroup.DELIVERY, properties, deliveryServers, deliveryTopic);
+        createKafkaProducer(IEventsHandlerByKafka.TopicGroup.FUND, properties, fundServers, fundTopic);
+        createKafkaProducer(IEventsHandlerByKafka.TopicGroup.OTHER, properties, otherServers, otherTopic);
+
+        IEventsHandlerByKafka.init(producers, topics);
+    }
+
+    private void createKafkaProducer(IEventsHandlerByKafka.TopicGroup group, Properties base, String bootstrapServers, String topic) {
+        Properties props = new Properties(base);
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        KafkaProducer<Long, byte[]> producer = new KafkaProducer<>(props);
+        producers.put(group, producer);
+        topics.put(group, topic);
     }
 
     @Override
@@ -115,6 +153,13 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
                 this.raftClusterContainer.doStop();
             } catch (Exception e) {
                 LOGGER.error(e.getMessage(), e);
+            }
+        }
+        for (KafkaProducer<Long, byte[]> producer : producers.values()) {
+            try {
+                producer.close(Duration.ofSeconds(5));
+            } catch (Exception e) {
+                LOGGER.warn("Error closing Kafka producer", e);
             }
         }
     }

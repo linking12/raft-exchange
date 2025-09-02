@@ -14,21 +14,18 @@ import org.apache.kafka.common.PartitionInfo;
 import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.util.ProtoBuilderPool;
-import com.binance.raftexchange.stubs.FundsEventPB;
-import com.binance.raftexchange.stubs.OrderAction;
+import com.binance.raftexchange.stubs.BalanceSnapshot;
+import com.binance.raftexchange.stubs.FuturesExecutionReportPB;
 import com.binance.raftexchange.stubs.OrderBookPB;
 import com.binance.raftexchange.stubs.OrderBookRecordPB;
-import com.binance.raftexchange.stubs.ReduceEventPB;
-import com.binance.raftexchange.stubs.TradeEventPB;
-import com.binance.raftexchange.stubs.TradePB;
-import com.binance.raftexchange.stubs.response.OrderCommand;
+import com.binance.raftexchange.stubs.PositionOutReportPB;
+import com.binance.raftexchange.stubs.PositionSnapshot;
+import com.binance.raftexchange.stubs.SpotExecutionReportPB;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.common.FundEvent.FundEventType;
-import exchange.core2.core.common.api.ApiCommand;
-import exchange.core2.core.common.api.ApiMoveOrder;
-import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.FundEvent;
+import exchange.core2.core.common.SymbolType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,99 +35,98 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
     private static final ProtoBuilderPool builderPool;
     private static IEventsHandlerByKafka INSTANCE;
 
+    public enum TopicGroup {
+        SPOT, PERP, DELIVERY, FUND, OTHER
+    }
+
     static {
         builderPool = new ProtoBuilderPool();
-        builderPool.register(OrderCommand.Builder.class, OrderCommand::newBuilder);
-        builderPool.register(TradeEventPB.Builder.class, TradeEventPB::newBuilder);
-        builderPool.register(ReduceEventPB.Builder.class, ReduceEventPB::newBuilder);
+        builderPool.register(SpotExecutionReportPB.Builder.class, SpotExecutionReportPB::newBuilder);
+        builderPool.register(FuturesExecutionReportPB.Builder.class, FuturesExecutionReportPB::newBuilder);
         builderPool.register(OrderBookPB.Builder.class, OrderBookPB::newBuilder);
-        builderPool.register(FundsEventPB.Builder.class, FundsEventPB::newBuilder);
+        builderPool.register(PositionOutReportPB.Builder.class, PositionOutReportPB::newBuilder);
+        builderPool.register(BalanceSnapshot.Builder.class, BalanceSnapshot::newBuilder);
+        builderPool.register(PositionSnapshot.Builder.class, PositionSnapshot::newBuilder);
     }
 
-    private final KafkaProducer<Long, byte[]> sender;
     private final AtomicBoolean isLeader = new AtomicBoolean(false);
-    private final String orderEventTopic;
-    private final String tradeEventTopic;
-    private final String fundEventTopic;
-    private final String alertEventTopic;
-    private final String marketDataTopic;
+    private final Map<IEventsHandlerByKafka.TopicGroup, KafkaProducer<Long, byte[]>> producers;
+    private final Map<IEventsHandlerByKafka.TopicGroup, String> topics;
 
-    public static void init(KafkaProducer<Long, byte[]> sender, String topicPrefix) {
-        INSTANCE = new IEventsHandlerByKafka(sender, topicPrefix);
+    public static void init(Map<TopicGroup, KafkaProducer<Long, byte[]>> producers, Map<TopicGroup, String> topics) {
+        INSTANCE = new IEventsHandlerByKafka(producers, topics);
     }
 
-    private IEventsHandlerByKafka(KafkaProducer<Long, byte[]> sender, String topicPrefix) {
-        this.sender = sender;
-        this.orderEventTopic = topicPrefix + "-order-event";
-        this.tradeEventTopic = topicPrefix + "-trade-event";
-        this.fundEventTopic = topicPrefix + "-fund-event";
-        this.alertEventTopic = topicPrefix + "-alert-event";
-        this.marketDataTopic = topicPrefix + "-market-data";
+    private IEventsHandlerByKafka(Map<TopicGroup, KafkaProducer<Long, byte[]>> producers, Map<TopicGroup, String> topics) {
+        this.producers = producers;
+        this.topics = topics;
         RoleChangeEventbus.INSTANCE.registerListener(nodeType -> isLeader.set(nodeType == RaftNode.NodeType.LEADER));
     }
 
     @Override
     public void commandResult(ApiCommandResult commandResult) {
+    }
+
+    @Override
+    public void spotExecutionReport(SpotExecutionReport executionReport) {
         if (!isLeader.get()) {
             return;
         }
-        OrderCommand.Builder builder = builderPool.get(OrderCommand.Builder.class);
-        ApiCommand apiCommand = commandResult.getCommand();
-        if (apiCommand instanceof ApiPlaceOrder) {
-            builder.setPrice(((ApiPlaceOrder)apiCommand).price).setSize(((ApiPlaceOrder)apiCommand).size).setOrderId(((ApiPlaceOrder)apiCommand).orderId)
-                .setActionValue(((ApiPlaceOrder)apiCommand).action.getCode()).setOrderTypeValue(((ApiPlaceOrder)apiCommand).orderType.getCode())
-                .setUid(((ApiPlaceOrder)apiCommand).uid).setSymbol(((ApiPlaceOrder)apiCommand).symbol).setUserCookie(((ApiPlaceOrder)apiCommand).userCookie)
-                .setLeverage(((ApiPlaceOrder)apiCommand).leverage).setReserveBidPrice(((ApiPlaceOrder)apiCommand).reservePrice);
-        } else if (apiCommand instanceof ApiMoveOrder) {
-            builder.setOrderId(((ApiMoveOrder)apiCommand).orderId).setPrice(((ApiMoveOrder)apiCommand).newPrice).setUid(((ApiMoveOrder)apiCommand).uid)
-                .setSymbol(((ApiMoveOrder)apiCommand).symbol);
-        } else {
-            // reduce和cancel会从reduceEvent发出来，其他命令暂时不关注
+        SpotExecutionReportPB pbObject = builderPool.get(SpotExecutionReportPB.Builder.class).setExecutionId(executionReport.getExecutionId())
+                .setExecutionTypeValue(executionReport.getExecutionType().ordinal()).setOrderStatusValue(executionReport.getOrderStatus().ordinal())
+                .setSymbol(executionReport.getSymbol()).setBaseScaleK(executionReport.getBaseScaleK()).setQuoteScaleK(executionReport.getQuoteScaleK())
+                .setAccountId(executionReport.getAccountId()).setClOrdId(executionReport.getClOrdId()).setOrderId(executionReport.getOrderId())
+                .setOrderTypeValue(executionReport.getOrderType().getCode()).setSideValue(executionReport.getSide().getCode())
+                .setQty(executionReport.getQty()).setPrice(executionReport.getPrice()).setQuoteOrderQty(executionReport.getQuoteOrderQty())
+                .setOrderCreationTime(executionReport.getOrderCreationTime()).setTradeId(executionReport.getTradeId())
+                .setLastQty(executionReport.getLastQty()).setLastPrice(executionReport.getLastPrice()).setLastQuoteQty(executionReport.getLastQuoteQty())
+                .setCumulativeQty(executionReport.getCumulativeQty()).setCumulativeQuoteQty(executionReport.getCumulativeQuoteQty())
+                .setCommission(executionReport.getCommission()).setCommissionAsset(executionReport.getCommissionAsset())
+                .setIsMaker(executionReport.isMaker()).setWorkingIndicator(executionReport.isWorkingIndicator()).build();
+        if (LOG.isDebugEnabled()) {
+            String formateString = pbObject.toString();
+            LOG.debug("SpotExecutionReportPB: {}", formateString);
+        }
+        byte[] pbData = pbObject.toByteArray();
+        producers.get(TopicGroup.SPOT).send(new ProducerRecord<>(topics.get(TopicGroup.SPOT), executionReport.getAccountId(), pbData));
+    }
+
+    @Override
+    public void futuresExecutionReport(FuturesExecutionReport executionReport) {
+        if (!isLeader.get()) {
             return;
         }
-        builder.setResultCodeValue(Math.abs(commandResult.getResultCode().getCode()));
-        OrderCommand command = builder.build();
-        sender.send(new ProducerRecord<>(orderEventTopic, command.getUid(), command.toByteArray()));
+        FuturesExecutionReportPB pbObject = builderPool.get(FuturesExecutionReportPB.Builder.class).setUniId(executionReport.getUniId())
+                .setExecutionTypeValue(executionReport.getExecutionType().ordinal()).setOrderStatusValue(executionReport.getOrderStatus().ordinal())
+                .setSymbol(executionReport.getSymbolId()).setOrderQtyScale(executionReport.getOrderQtyScale()).setPriceScale(executionReport.getPriceScale())
+                .setUserId(executionReport.getUserId()).setClOrdId(executionReport.getClOrderId()).setOrderId(executionReport.getOrderId())
+                .setOrderTypeValue(executionReport.getOrderType().getCode()).setSideValue(executionReport.getSide().getCode())
+                .setCounterpartyId(executionReport.getCounterpartyId()).setPrice(executionReport.getPrice())
+                .setOrderQty(executionReport.getOrderQty()).setCreateTime(executionReport.getCreateTime())
+                .setExecId(executionReport.getExecId()).setContractTypeValue(executionReport.getContractType().getCode())
+                .setPositionSideValue(executionReport.getPositionSide().getCode()).setLastQty(executionReport.getLastQty())
+                .setLastPx(executionReport.getLastPx()).setCumQty(executionReport.getCumQty()).setCumQuoteQty(executionReport.getCumQuoteQty())
+                .setAvgPx(executionReport.getAvgPx()).setFee(executionReport.getFee()).setFeeAssetId(executionReport.getFeeAssetId())
+                .setIsMaker(executionReport.isMaker()).setBidsNotional(executionReport.getBidsNotional()).setAsksNotional(executionReport.getAsksNotional())
+                .setBidsQty(executionReport.getBidsQty()).setAsksQty(executionReport.getAsksQty()).build();
+        if (LOG.isDebugEnabled()) {
+            String formateString = pbObject.toString();
+            LOG.debug("FuturesExecutionReportPB: {}", formateString);
+        }
+        byte[] pbData = pbObject.toByteArray();
+        if (executionReport.getContractType() == SymbolType.FUTURES_CONTRACT_PERPETUAL) {
+            producers.get(TopicGroup.PERP).send(new ProducerRecord<>(topics.get(TopicGroup.PERP), executionReport.getUserId(), pbData));
+        } else if (executionReport.getContractType() == SymbolType.FUTURES_CONTRACT_DELIVERY) {
+            producers.get(TopicGroup.DELIVERY).send(new ProducerRecord<>(topics.get(TopicGroup.DELIVERY), executionReport.getUserId(), pbData));
+        }
     }
 
     @Override
     public void tradeEvent(TradeEvent tradeEvent) {
-        if (!isLeader.get()) {
-            return;
-        }
-        TradeEventPB.Builder builder = builderPool.get(TradeEventPB.Builder.class).setSymbol(tradeEvent.getSymbol())
-            .setTotalVolume(tradeEvent.getTotalVolume())
-            .setTakerOrderId(tradeEvent.getTakerOrderId()).setTakerUid(tradeEvent.getTakerUid())
-            .setTakerAction(OrderAction.forNumber(tradeEvent.getTakerAction().getCode())).setTimestamp(tradeEvent.getTimestamp());
-        if (tradeEvent.getTrades() != null) {
-            for (Trade trade : tradeEvent.getTrades()) {
-                builder.addTrades(TradePB.newBuilder().setMakerOrderId(trade.getMakerOrderId()).setMakerUid(trade.getMakerUid())
-                    .setMakerOrderCompleted(trade.isMakerOrderCompleted()).setPrice(trade.getPrice()).setVolume(trade.getVolume()).build());
-            }
-        }
-        TradeEventPB pbObject = builder.build();
-        if (LOG.isDebugEnabled()) {
-            String formateString = pbObject.toString();
-            LOG.debug("tradeEvent: {}", formateString);
-        }
-        byte[] pbData = pbObject.toByteArray();
-        sender.send(new ProducerRecord<>(tradeEventTopic, tradeEvent.getTakerUid(), pbData));
     }
 
     @Override
     public void reduceEvent(ReduceEvent reduceEvent) {
-        if (!isLeader.get()) {
-            return;
-        }
-        ReduceEventPB pbObject = builderPool.get(ReduceEventPB.Builder.class).setSymbol(reduceEvent.getSymbol())
-            .setReducedVolume(reduceEvent.getReducedVolume()).setOrderCompleted(reduceEvent.isOrderCompleted()).setPrice(reduceEvent.getPrice())
-            .setOrderId(reduceEvent.getOrderId()).setUid(reduceEvent.getUid()).setTimestamp(reduceEvent.getTimestamp()).build();
-        if (LOG.isDebugEnabled()) {
-            String formateString = pbObject.toString();
-            LOG.debug("reduceEvent: {}", formateString);
-        }
-        byte[] pbData = pbObject.toByteArray();
-        sender.send(new ProducerRecord<>(orderEventTopic, reduceEvent.uid, pbData));
     }
 
     @Override
@@ -152,41 +148,53 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         OrderBookPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
-            LOG.debug("orderBook: {}", formateString);
+            LOG.debug("OrderBookPB: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        sender.send(new ProducerRecord<>(marketDataTopic, IGNORE_UID, pbData));
+        producers.get(TopicGroup.OTHER).send(new ProducerRecord<>(topics.get(TopicGroup.OTHER), IGNORE_UID, pbData));
     }
 
     @Override
     public void fundsEvent(FundsEvent fundsEvent) {
+    }
+
+
+    @Override
+    public void positionOutReport(PositionOutReport positionOut) {
         if (!isLeader.get()) {
             return;
         }
-        FundsEventPB pbObject =
-            builderPool.get(FundsEventPB.Builder.class).setOrderId(fundsEvent.getOrderId()).setUid(fundsEvent.getUid()).setCurrency(fundsEvent.getCurrency())
-                .setCurrencyScakeK(fundsEvent.getCurrencyScaleK()).setFree(fundsEvent.getFree()).setLocked(fundsEvent.getLocked()).setEventTypeValue(fundsEvent.getEventType().getCode())
-                .setSymbol(fundsEvent.getSymbol()).setBaseScaleK(fundsEvent.getBaseScaleK()).setQuoteScaleK(fundsEvent.getQuoteScaleK())
-                .setDirectionValue(fundsEvent.getDirection().getMultiplier() & 0xFF).setOpenVolume(fundsEvent.getOpenVolume())
-                .setOpenInitMarginSum(fundsEvent.getOpenInitMarginSum()).setOpenPriceSum(fundsEvent.getOpenPriceSum()).setProfit(fundsEvent.getProfit())
-                .setPendingSellSize(fundsEvent.getPendingSellSize()).setPendingBuySize(fundsEvent.getPendingBuySize())
-                .setPendingSellAvgPrice(fundsEvent.getPendingSellAvgPrice()).setPendingBuyAvgPrice(fundsEvent.getPendingBuyAvgPrice())
-                .setLeverage(fundsEvent.getLeverage()).setMarginModeValue(fundsEvent.getMarginMode().ordinal()).setExtraMargin(fundsEvent.getExtraMargin())
-                .setUnrealizedProfit(fundsEvent.getUnrealizedProfit()).setLiquidationPrice(fundsEvent.getLiquidationPrice())
-                .setMarginRatioScaleK(fundsEvent.getMarginRatioScaleK()).setMarkPrice(fundsEvent.getMarkPrice()).setTradeSize(fundsEvent.getTradeSize())
-                .setTradePrice(fundsEvent.getTradePrice()).setFee(fundsEvent.getFee()).build();
+        PositionOutReportPB.Builder builder = builderPool.get(PositionOutReportPB.Builder.class)
+                .setAccountId(positionOut.getAccountId()).setEventTypeValue(positionOut.getEventType().getCode());
+        PositionOutReport.BalanceSnapshot balance = positionOut.getBalances();
+        builder.setBalances(builderPool.get(BalanceSnapshot.Builder.class).setCurrency(balance.getCurrency())
+                .setCurrencyScakeK(balance.getCurrencyScakeK()).setFree(balance.getFree()).setLocked(balance.getLocked()));
+        PositionOutReport.PositionSnapshot position = positionOut.getPositions();
+        if (positionOut.getEventType().getCode() >= FundEvent.FundEventType.LOCK_PENDING.getCode()) {
+            builder.setPositions(builderPool.get(PositionSnapshot.Builder.class).setSymbolId(position.getSymbolId())
+                    .setBaseScaleK(position.getBaseScaleK()).setQuoteScaleK(position.getQuoteScaleK())
+                    .setDirectionValue(position.getDirection().getMultiplier() & 0xFF).setQuantity(position.getQuantity())
+                    .setOpenPriceSum(position.getOpenPriceSum()).setCumRealized(position.getCumRealized()).setIsolated(position.isIsolated())
+                    .setIsolatedWallet(position.getIsolatedWallet()).setLeverage(position.getLeverage()).setOpenInitMarginSum(position.getOpenInitMarginSum())
+                    .setMarkPrice(position.getMarkPrice()).setUnrealizedProfit(position.getUnrealizedProfit()).setLiquidationPrice(position.getLiquidationPrice())
+                    .setMarginRatioScaleK(position.getMarginRatioScaleK()));
+        }
+        PositionOutReportPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
-            LOG.debug("fundsEvent: {}", formateString);
+            LOG.debug("PositionOutReportPB: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        String topic = fundsEvent.getEventType().getCode() >= FundEventType.MARGIN_ALERT.getCode() ? alertEventTopic : fundEventTopic;
-        sender.send(new ProducerRecord<>(topic, fundsEvent.uid, pbData));
+        if (positionOut.getEventType().getCode() >= FundEvent.FundEventType.MARGIN_ALERT.getCode()) {
+            producers.get(TopicGroup.OTHER).send(new ProducerRecord<>(topics.get(TopicGroup.OTHER), positionOut.getAccountId(), pbData));
+        } else {
+            producers.get(TopicGroup.FUND).send(new ProducerRecord<>(topics.get(TopicGroup.FUND), positionOut.getAccountId(), pbData));
+        }
     }
 
     public static IEventsHandlerByKafka getInstance() {
         if (INSTANCE == null) {
-            throw new IllegalStateException("IEventsHandlerByKafka has not been initialized. Call init(sender, topic) first.");
+            throw new IllegalStateException("IEventsHandlerByKafka has not been initialized. Call init(producers, topics) first.");
         }
         return INSTANCE;
     }
