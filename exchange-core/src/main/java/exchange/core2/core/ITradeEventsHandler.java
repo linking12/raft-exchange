@@ -554,7 +554,7 @@ public interface ITradeEventsHandler {
                     event.matchedOrderUid,
                     event.matchedOrderType,
                     cmd.action.opposite(),
-                    event.matchedOrderUid,
+                    cmd.uid,
                     budgetOrder ? 0L : event.matchedOrderPrice,
                     budgetOrder ? event.matchedOrderPrice : event.matchedOrderSize,
                     event.matchedOrderTimestamp,

@@ -73,6 +73,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
             TimeUnit.SECONDS.sleep(5);
         } while (!raftClusterContainer.started());
         grpcServerContainer.doStart();
+        this.grpcServerContainer = grpcServerContainer;
     }
 
     private void startKafkaSender() {
