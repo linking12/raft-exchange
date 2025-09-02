@@ -1,5 +1,7 @@
 package exchange.core2.core.event;
 
+import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiCancelOrder;
