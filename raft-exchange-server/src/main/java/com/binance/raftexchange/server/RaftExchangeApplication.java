@@ -132,7 +132,8 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
     }
 
     private void createKafkaProducer(IEventsHandlerByKafka.TopicGroup group, Properties base, String bootstrapServers, String topic) {
-        Properties props = new Properties(base);
+        Properties props = new Properties();
+        props.putAll(base);
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         KafkaProducer<Long, byte[]> producer = new KafkaProducer<>(props);
         producers.put(group, producer);
