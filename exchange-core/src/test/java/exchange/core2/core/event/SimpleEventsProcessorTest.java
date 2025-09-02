@@ -52,10 +52,29 @@ public final class SimpleEventsProcessorTest {
     public void shouldHandleSimpleCommand() {
 
         OrderCommand cmd = sampleCancelCommand();
+        cmd.matcherEvent = new MatcherTradeEvent(MatcherEventType.REDUCE, 0, true, 0, 0, true,
+                OrderCommandType.PLACE_ORDER, 0, 0, OrderType.GTC, 0, 0, 0, 0, 0, 0, 0, 0, 0, null);
 
+        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 0L, 0L, 0, 0L, 0L, 0L, 1, 0L, 0L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0, 0, 0, null);
+        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 0L, 0L, 0, 0L, 0L, 0L, 1, 0L, 0L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0, 0, 0, null);
 
         processor.accept(cmd, 192837L);
 
+        verify(handler, times(1)).spotExecutionReport(tradeEventCaptor.capture());
+        verify(handler, never()).futuresExecutionReport(any());
+        verify(handler, times(2)).positionOutReport(fundEventCaptor.capture());
+
+        ITradeEventsHandler.SpotExecutionReport report = tradeEventCaptor.getValue();
+        assertThat(report.getOrderId(), Is.is(123L));
+        assertThat(report.getSymbol(), Is.is(3));
+        assertThat(report.getAccountId(), Is.is(29851L));
+
+        List<IFundEventsHandler.PositionOutReport> fundEvents = fundEventCaptor.getAllValues();
+        assertThat(fundEvents.size(), Is.is(2));
+        IFundEventsHandler.PositionOutReport locked = fundEvents.get(0);
+        assertThat(locked.getEventType(), Is.is(FundEvent.FundEventType.LOCKED));
+        IFundEventsHandler.PositionOutReport unlocked = fundEvents.get(1);
+        assertThat(unlocked.getEventType(), Is.is(FundEvent.FundEventType.UNLOCKED));
     }
 
 //    @Test
