@@ -27,6 +27,7 @@
 //import exchange.core2.tests.util.ExchangeTestContainer;
 //import exchange.core2.tests.util.TestConstants;
 //import lombok.extern.slf4j.Slf4j;
+//import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 //import org.hamcrest.core.Is;
 //import org.junit.jupiter.api.AfterEach;
 //import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +63,21 @@
 //
 //    @Mock
 //    private IEventsHandler4Test handler;
+//
+//    @Captor
+//    private ArgumentCaptor<ITradeEventsHandler.ApiCommandResult> commandResultCaptor;
+//
+//    @Captor
+//    private ArgumentCaptor<ITradeEventsHandler.TradeEvent> tradeEventCaptor;
+//
+//    @Captor
+//    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCapor;
+//
+//    @Captor
+//    private ArgumentCaptor<ITradeEventsHandler.ReduceEvent> reduceEventCaptor;
+//
+//    @Captor
+//    private ArgumentCaptor<ITradeEventsHandler.RejectEvent> rejectEventCaptor;
 //
 //
 //    @BeforeEach
@@ -1381,6 +1397,40 @@
 //        return ApiPlaceOrder.builder().uid(uid).action(action).orderType(type).symbol(symbolId).marginMode(MarginMode.ISOLATED);
 //    }
 //
+//    private void doInit(ExchangeTestContainer container) {
+//        container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 0);
+//        container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 0);
+//        container.addSymbol(CoreSymbolSpecification.builder()
+//                .symbolId(SYMBOL_MARGIN)
+//                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+//                .baseCurrency(CURRENECY_USD)
+//                .quoteCurrency(CURRENECY_JPY)
+//                .baseScaleK(1)
+//                .quoteScaleK(1)
+//                .initMargin(1)
+//                .initMarginScaleK(21)
+//                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+//                .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+//                .takerFee(3)
+//                .makerFee(2)
+//                .build());
+//
+//        container.addCurrency(SYMBOLSPECFEE_XBT_LTC.baseCurrency, 0);
+//        container.addCurrency(SYMBOLSPECFEE_XBT_LTC.quoteCurrency, 0);
+//        container.addSymbol(CoreSymbolSpecification.builder()
+//                .symbolId(SYMBOL_EXCHANGE_FEE)
+//                .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+//                .baseCurrency(CURRENECY_XBT)
+//                .quoteCurrency(CURRENECY_LTC)
+//                .baseScaleK(1)
+//                .quoteScaleK(1)
+//                .takerFee(1900)
+//                .makerFee(700)
+//                .build());
+//        container.initFeeSymbolsMarkPrice();
+//        container.initFeeUsers();
+//    }
+//
 //    // TODO count/verify number of commands and events
 //    private void testMultiBuy(final CoreSymbolSpecification symbolSpec, final OrderType orderType, final RejectionCause rejectionCause) {
 //
@@ -1389,16 +1439,8 @@
 //        final long size = 40L + (rejectionCause == RejectionCause.REJECTION_BY_SIZE ? 1 : 0);
 //
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-//            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 6);
-//            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 2);
-//            container.addSymbol(TestConstants.SYMBOLSPECFEE_USD_JPY);
 //
-//            container.addCurrency(SYMBOLSPECFEE_XBT_LTC.baseCurrency, 7);
-//            container.addCurrency(SYMBOLSPECFEE_XBT_LTC.quoteCurrency, 5);
-//            container.addSymbol(TestConstants.SYMBOLSPECFEE_XBT_LTC);
-//
-//            container.initFeeSymbolsMarkPrice();
-//            container.initFeeUsers();
+//            doInit(container);
 //
 //            container.setConsumer(processor);
 //
@@ -1415,7 +1457,7 @@
 //
 //            container.submitCommandSync(builderPlace(symbolId, UID_4, BID, orderType).orderId(405L).price(price).reservePrice(price).size(size).build(), CommandResultCode.SUCCESS);
 //
-////            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+//            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 //        }
 //
 //        verify(handler, times(5)).commandResult(commandResultCaptor.capture());
@@ -1486,15 +1528,7 @@
 //
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
 //
-//            container.addCurrency(SYMBOLSPECFEE_XBT_LTC.baseCurrency, 6);
-//            container.addCurrency(SYMBOLSPECFEE_XBT_LTC.quoteCurrency, 4);
-//            container.addSymbol(TestConstants.SYMBOLSPECFEE_XBT_LTC);
-//
-//            container.addCurrency(SYMBOLSPECFEE_USD_JPY.baseCurrency, 5);
-//            container.addCurrency(SYMBOLSPECFEE_USD_JPY.quoteCurrency, 1);
-//            container.addSymbol(TestConstants.SYMBOLSPECFEE_USD_JPY);
-//            container.initFeeSymbolsMarkPrice();
-//            container.initFeeUsers();
+//            doInit(container);
 //
 //            container.setConsumer(processor);
 //
@@ -1510,7 +1544,7 @@
 //
 //            container.submitCommandSync(builderPlace(symbolId, UID_4, ASK, orderType).orderId(405L).price(price).size(size).build(), CommandResultCode.SUCCESS);
 //
-////            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+//            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 //        }
 //
 //        verify(handler, times(5)).commandResult(commandResultCaptor.capture());

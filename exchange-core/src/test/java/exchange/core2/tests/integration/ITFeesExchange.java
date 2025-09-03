@@ -398,24 +398,20 @@ public abstract class ITFeesExchange {
             });
 
             // verify buyer taker balance
-            long takerFee1 = CoreArithmeticUtils.calculateTakerFee(order101.size, order101.price, symbol);
-            takerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee1, symbol, quoteSpec);
-            long takerFee2 = CoreArithmeticUtils.calculateTakerFee(order102.size - order101.size, order102.reservePrice, symbol);
-            takerFee2 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee2, symbol, quoteSpec);
-            long finalTakerFee = takerFee1 + takerFee2;
-
-            long orderSpend = order101.size * order101.price + (order102.size - order101.size) * order102.reservePrice;
+            long takerFee = CoreArithmeticUtils.calculateTakerFee(order101.size, order101.price, symbol);
+            takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
+            long orderSpend = order101.size * order101.price;
             long order2 = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
+            long finalTakerFee = takerFee;
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
                 assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order2 - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
-            // total balance remains the same
             final TotalCurrencyBalanceReportResult totalBal2 = container.totalBalanceReport();
-            final long ltcFees = finalMakerFee + takerFee1;
+            final long ltcFees = finalMakerFee + finalTakerFee;
             assertTrue(totalBal2.isGlobalBalancesAllZero());
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
@@ -744,7 +740,7 @@ public abstract class ITFeesExchange {
                     .orderId(102)
                     .price(11_500L * symbol.quoteScaleK * 1000L * symbol.baseScaleK)
                     .reservePrice(11_500L * symbol.quoteScaleK * 1000L * symbol.baseScaleK)
-                    .size(1L)
+                    .size(1000L * symbol.baseScaleK)
                     .action(OrderAction.BID)
                     .orderType(FOK_BUDGET)
                     .symbol(SYMBOL_EXCHANGE_FEE)
@@ -753,11 +749,11 @@ public abstract class ITFeesExchange {
 
             container.submitCommandSync(order102, cmd -> assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
 
-            long makerFee1 = CoreArithmeticUtils.calculateMakerFee(1000L * symbol.baseScaleK, order101.price, symbol);
-            makerFee1 = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee1, symbol, quoteSpec);
-            long finalMakerFee = makerFee1;
+            long makerFee1 = CoreArithmeticUtils.calculateMakerFee(order102.size, order101.price, symbol);
+            long makerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee1, symbol, quoteSpec);
+            long finalMakerFee = makerFee;
 
-            long orderSpend = 1000L * symbol.baseScaleK * 11_500L * symbol.quoteScaleK;
+            long orderSpend = order102.price;
             long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
@@ -766,7 +762,7 @@ public abstract class ITFeesExchange {
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
-            long takerFee = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(order102.size, order102.price, symbol);
+            long takerFee = CoreArithmeticUtils.calculateTakerFee(order102.size, order101.price, symbol);
             takerFee = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee, symbol, quoteSpec);
             long finalTakerFee = takerFee;
 

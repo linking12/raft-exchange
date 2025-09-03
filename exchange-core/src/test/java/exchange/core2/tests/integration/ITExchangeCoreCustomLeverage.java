@@ -20,6 +20,46 @@ import static org.junit.Assert.assertEquals;
 
 public final class ITExchangeCoreCustomLeverage {
 
+    // 测试初始不设置leverage
+    @Test
+    public void testInitLeverage() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                    .symbolId(10001)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                    .baseCurrency(11).quoteCurrency(12)
+                    .baseScaleK(1).quoteScaleK(1)
+                    .feeScaleK(1_000_000)
+                    .makerFee(0).takerFee(0)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 5000L, 20L))
+                    .build();
+
+            container.addCurrency(spec.baseCurrency, 0);
+            container.addCurrency(spec.quoteCurrency, 0);
+            container.addSymbol(spec);
+            container.initMarkPrice(10001, 10000);
+            container.createUserWithMoney(UID_1, spec.quoteCurrency, 10_000);
+            container.createUserWithMoney(UID_2, spec.quoteCurrency, 50_000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1)
+                    .orderId(10001L)
+                    .price(1000)
+                    .reservePrice(1000)
+                    .size(10)
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .build(), CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).leverage, is(1));
+            });
+        }
+    }
+
     // 测试下不同leverage报mismatch的错误
     @Test
     public void testLeverageMismatch() throws Exception {
