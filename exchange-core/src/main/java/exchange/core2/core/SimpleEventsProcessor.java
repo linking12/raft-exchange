@@ -41,11 +41,11 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         try {
             if (seq < 0) {
                 // 来自R2风控阶段
-                sendFundEvents(cmd);
+                sendFundEvents(cmd, seq);
             } else {
                 // 主流程撮合结果处理
                 sendExecutionReport(cmd, seq);
-                sendFundEvents(cmd);
+                sendFundEvents(cmd, seq);
                 sendMarketData(cmd);
             }
         } catch (Exception ex) {
@@ -145,33 +145,31 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
     }
 
-    private void sendFundEvents(OrderCommand cmd) {
+    private void sendFundEvents(OrderCommand cmd, long seq) {
         FundEvent event = cmd.takerFundEvents;
+        int index = 0;
         while (event != null) {
             if (!event.processed) {
-                sendFundEvent(event);
+                event.processed = true;
+                long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, false);
+                fundEventsHandler.positionOutReport(PositionOutReport.fromFundEvent(event, uniId));
             }
             event = event.nextEvent;
+            index++;
         }
         if (cmd.makerFundEventsByShard != null) {
             for (FundEvent shardHead : cmd.makerFundEventsByShard) {
                 FundEvent e = shardHead;
                 while (e != null) {
                     if (!e.processed) {
-                        sendFundEvent(e);
+                        e.processed = true;
+                        long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, true);
+                        fundEventsHandler.positionOutReport(PositionOutReport.fromFundEvent(e, uniId));
                     }
                     e = e.nextEvent;
                 }
             }
         }
-    }
-
-    public void sendFundEvent(FundEvent fundEvent) {
-        if (fundEvent == null) {
-            return;
-        }
-        fundEvent.processed = true;
-        fundEventsHandler.positionOutReport(PositionOutReport.fromFundEvent(fundEvent));
     }
 
     private void sendMarketData(OrderCommand cmd) {

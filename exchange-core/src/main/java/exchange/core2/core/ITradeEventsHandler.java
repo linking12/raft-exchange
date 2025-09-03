@@ -539,7 +539,7 @@ public interface ITradeEventsHandler {
         }
 
         /**
-         * TRADE（同一个 matcherEventIndex 对应两条，taker/maker 各一条）
+         * execId for TRADE（同一个 matcherEventIndex 对应两条，taker/maker 各一条）
          *
          * @param seq        全局命令序号
          * @param tradeIndex 第几笔成交（从 0 开始）

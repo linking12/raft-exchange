@@ -13,6 +13,7 @@ public interface IFundEventsHandler {
 
     @Data
     class PositionOutReport {
+        private final long uniId;
         private final long accountId;
         private final FundEventType eventType;
         private final BalanceSnapshot balances;
@@ -46,8 +47,8 @@ public interface IFundEventsHandler {
             private final long marginRatioScaleK;
         }
 
-        public static PositionOutReport fromFundEvent(FundEvent fundEvent) {
-            return new PositionOutReport(fundEvent.uid, fundEvent.eventType,
+        public static PositionOutReport fromFundEvent(FundEvent fundEvent, long uniId) {
+            return new PositionOutReport(uniId, fundEvent.uid, fundEvent.eventType,
                     new BalanceSnapshot(fundEvent.currency, fundEvent.currencyScakeK, fundEvent.free, fundEvent.locked),
                     new PositionSnapshot(fundEvent.symbol, fundEvent.baseScaleK, fundEvent.quoteScaleK, fundEvent.direction,
                             fundEvent.openVolume, fundEvent.openPriceSum, fundEvent.profit,
