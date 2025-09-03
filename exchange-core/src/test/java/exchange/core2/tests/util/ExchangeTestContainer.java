@@ -178,7 +178,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         this.exchangeCore = ExchangeCore.builder()
-                .resultsConsumer(consumer)
+                .resultsConsumer((cmd, seq) -> consumer.accept(cmd, seq))
                 .exchangeConfiguration(exchangeConfiguration)
                 .build();
 

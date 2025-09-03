@@ -41,7 +41,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         try {
             if (seq < 0) {
                 // 来自R2风控阶段
-                sendFundEvents(cmd, seq);
+                sendFundEvents(cmd, -seq);
             } else {
                 // 主流程撮合结果处理
                 sendExecutionReport(cmd, seq);
