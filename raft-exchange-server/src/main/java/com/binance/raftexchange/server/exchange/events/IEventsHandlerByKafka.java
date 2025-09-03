@@ -15,10 +15,10 @@ import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.util.ProtoBuilderPool;
 import com.binance.raftexchange.stubs.BalanceSnapshot;
+import com.binance.raftexchange.stubs.FundEventReportPB;
 import com.binance.raftexchange.stubs.FuturesExecutionReportPB;
 import com.binance.raftexchange.stubs.OrderBookPB;
 import com.binance.raftexchange.stubs.OrderBookRecordPB;
-import com.binance.raftexchange.stubs.PositionOutReportPB;
 import com.binance.raftexchange.stubs.PositionSnapshot;
 import com.binance.raftexchange.stubs.SpotExecutionReportPB;
 
@@ -44,7 +44,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         builderPool.register(SpotExecutionReportPB.Builder.class, SpotExecutionReportPB::newBuilder);
         builderPool.register(FuturesExecutionReportPB.Builder.class, FuturesExecutionReportPB::newBuilder);
         builderPool.register(OrderBookPB.Builder.class, OrderBookPB::newBuilder);
-        builderPool.register(PositionOutReportPB.Builder.class, PositionOutReportPB::newBuilder);
+        builderPool.register(FundEventReportPB.Builder.class, FundEventReportPB::newBuilder);
         builderPool.register(BalanceSnapshot.Builder.class, BalanceSnapshot::newBuilder);
         builderPool.register(PositionSnapshot.Builder.class, PositionSnapshot::newBuilder);
     }
@@ -144,17 +144,17 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
     }
 
     @Override
-    public void positionOutReport(PositionOutReport positionOut) {
+    public void fundEventReport(FundEventReport fundEventReport) {
         if (!isLeader.get()) {
             return;
         }
-        PositionOutReportPB.Builder builder = builderPool.get(PositionOutReportPB.Builder.class)
-                .setAccountId(positionOut.getAccountId()).setEventTypeValue(positionOut.getEventType().getCode());
-        PositionOutReport.BalanceSnapshot balance = positionOut.getBalances();
+        FundEventReportPB.Builder builder = builderPool.get(FundEventReportPB.Builder.class)
+                .setAccountId(fundEventReport.getAccountId()).setEventTypeValue(fundEventReport.getEventType().getCode());
+        FundEventReport.BalanceSnapshot balance = fundEventReport.getBalances();
         builder.setBalances(builderPool.get(BalanceSnapshot.Builder.class).setCurrency(balance.getCurrency())
                 .setCurrencyScakeK(balance.getCurrencyScakeK()).setFree(balance.getFree()).setLocked(balance.getLocked()));
-        PositionOutReport.PositionSnapshot position = positionOut.getPositions();
-        if (positionOut.getEventType().getCode() >= FundEvent.FundEventType.LOCK_PENDING.getCode()) {
+        FundEventReport.PositionSnapshot position = fundEventReport.getPositions();
+        if (fundEventReport.getEventType().getCode() >= FundEvent.FundEventType.LOCK_PENDING.getCode()) {
             builder.setPositions(builderPool.get(PositionSnapshot.Builder.class).setSymbolId(position.getSymbolId())
                     .setBaseScaleK(position.getBaseScaleK()).setQuoteScaleK(position.getQuoteScaleK())
                     .setDirectionValue(position.getDirection().getMultiplier() & 0xFF).setQuantity(position.getQuantity())
@@ -163,16 +163,16 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                     .setMarkPrice(position.getMarkPrice()).setUnrealizedProfit(position.getUnrealizedProfit()).setLiquidationPrice(position.getLiquidationPrice())
                     .setMarginRatioScaleK(position.getMarginRatioScaleK()));
         }
-        PositionOutReportPB pbObject = builder.build();
+        FundEventReportPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("PositionOutReportPB: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        if (positionOut.getEventType().getCode() >= FundEvent.FundEventType.MARGIN_ALERT.getCode()) {
-            producers.get(TopicGroup.OTHER).send(new ProducerRecord<>(topics.get(TopicGroup.OTHER), positionOut.getAccountId(), pbData));
+        if (fundEventReport.getEventType().getCode() >= FundEvent.FundEventType.MARGIN_ALERT.getCode()) {
+            producers.get(TopicGroup.OTHER).send(new ProducerRecord<>(topics.get(TopicGroup.OTHER), fundEventReport.getAccountId(), pbData));
         } else {
-            producers.get(TopicGroup.FUND).send(new ProducerRecord<>(topics.get(TopicGroup.FUND), positionOut.getAccountId(), pbData));
+            producers.get(TopicGroup.FUND).send(new ProducerRecord<>(topics.get(TopicGroup.FUND), fundEventReport.getAccountId(), pbData));
         }
     }
 

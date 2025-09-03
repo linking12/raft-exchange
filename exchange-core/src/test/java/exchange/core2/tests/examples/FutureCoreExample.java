@@ -5,7 +5,6 @@ import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
-import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportQuery;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -15,7 +14,6 @@ import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
-import org.hamcrest.core.Is;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -67,8 +65,8 @@ public class FutureCoreExample {
             }
 
             @Override
-            public void positionOutReport(PositionOutReport positionOut) {
-                log.debug("PositionOutReport: {}", positionOut);
+            public void fundEventReport(FundEventReport fundEventReport) {
+                log.debug("PositionOutReport: {}", fundEventReport);
             }
 
             @Override

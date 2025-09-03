@@ -9,10 +9,10 @@ import lombok.Data;
 
 public interface IFundEventsHandler {
 
-    void positionOutReport(PositionOutReport positionOut);
+    void fundEventReport(FundEventReport fundEventReport);
 
     @Data
-    class PositionOutReport {
+    class FundEventReport {
         private final long uniId;
         private final long accountId;
         private final FundEventType eventType;
@@ -47,8 +47,8 @@ public interface IFundEventsHandler {
             private final long marginRatioScaleK;
         }
 
-        public static PositionOutReport fromFundEvent(FundEvent fundEvent, long uniId) {
-            return new PositionOutReport(uniId, fundEvent.uid, fundEvent.eventType,
+        public static FundEventReport fromFundEvent(FundEvent fundEvent, long uniId) {
+            return new FundEventReport(uniId, fundEvent.uid, fundEvent.eventType,
                     new BalanceSnapshot(fundEvent.currency, fundEvent.currencyScakeK, fundEvent.free, fundEvent.locked),
                     new PositionSnapshot(fundEvent.symbol, fundEvent.baseScaleK, fundEvent.quoteScaleK, fundEvent.direction,
                             fundEvent.openVolume, fundEvent.openPriceSum, fundEvent.profit,

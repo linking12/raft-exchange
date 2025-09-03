@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ObjLongConsumer;
 
-import exchange.core2.core.IFundEventsHandler.PositionOutReport;
+import exchange.core2.core.IFundEventsHandler.FundEventReport;
 import exchange.core2.core.ITradeEventsHandler.FuturesExecutionReport;
 import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -152,7 +152,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             if (!event.processed) {
                 event.processed = true;
                 long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, false);
-                fundEventsHandler.positionOutReport(PositionOutReport.fromFundEvent(event, uniId));
+                fundEventsHandler.fundEventReport(FundEventReport.fromFundEvent(event, uniId));
             }
             event = event.nextEvent;
             index++;
@@ -164,7 +164,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
                     if (!e.processed) {
                         e.processed = true;
                         long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, true);
-                        fundEventsHandler.positionOutReport(PositionOutReport.fromFundEvent(e, uniId));
+                        fundEventsHandler.fundEventReport(FundEventReport.fromFundEvent(e, uniId));
                     }
                     e = e.nextEvent;
                 }

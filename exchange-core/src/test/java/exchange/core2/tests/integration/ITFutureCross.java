@@ -68,7 +68,7 @@ class ITFutureCross {
     private ArgumentCaptor<ITradeEventsHandler.FuturesExecutionReport> futuresEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IFundEventsHandler.PositionOutReport> fundEventCaptor;
+    private ArgumentCaptor<IFundEventsHandler.FundEventReport> fundEventCaptor;
 
 
 
@@ -721,10 +721,10 @@ class ITFutureCross {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(55)).positionOutReport(fundEventCaptor.capture());
+            verify(handler, times(55)).fundEventReport(fundEventCaptor.capture());
             // check fund event
-            List<IFundEventsHandler.PositionOutReport> fundEvents = fundEventCaptor.getAllValues();
-            IFundEventsHandler.PositionOutReport liquidationAlertEvt = fundEvents.get(47);
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+            IFundEventsHandler.FundEventReport liquidationAlertEvt = fundEvents.get(47);
             assertThat(userId3, Is.is(liquidationAlertEvt.getAccountId()));
             assertThat(quoteId, Is.is(liquidationAlertEvt.getBalances().getCurrency()));
             assertThat(10000, Is.is(liquidationAlertEvt.getPositions().getSymbolId()));
@@ -742,7 +742,7 @@ class ITFutureCross {
             assertThat(9900L, Is.is(liquidationAlertEvt.getPositions().getLiquidationPrice()));
             assertThat(-1000L, Is.is(liquidationAlertEvt.getPositions().getMarginRatioScaleK()));
 
-            IFundEventsHandler.PositionOutReport liquidationEvt = fundEvents.get(49);
+            IFundEventsHandler.FundEventReport liquidationEvt = fundEvents.get(49);
 //            assertThat(userId3, Is.is(liquidationEvt.uid));
             assertThat(quoteId, Is.is(liquidationEvt.getBalances().getCurrency()));
             assertThat(10000, Is.is(liquidationEvt.getPositions().getSymbolId()));
@@ -844,7 +844,7 @@ class ITFutureCross {
 //    }
 //
     // check unrealizedProfit/liquidationPrice/marginRatioScaleK should be zero
-    private void checkEvent(IFundEventsHandler.PositionOutReport evt) {
+    private void checkEvent(IFundEventsHandler.FundEventReport evt) {
         assertThat(0L, Is.is(evt.getPositions().getUnrealizedProfit()));
         assertThat(0L, Is.is(evt.getPositions().getLiquidationPrice()));
         assertThat(0L, Is.is(evt.getPositions().getMarginRatioScaleK()));

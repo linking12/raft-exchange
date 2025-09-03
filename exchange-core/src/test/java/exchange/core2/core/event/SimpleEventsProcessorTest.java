@@ -3,10 +3,6 @@ package exchange.core2.core.event;
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.*;
-import exchange.core2.core.common.api.ApiAdjustUserBalance;
-import exchange.core2.core.common.api.ApiCancelOrder;
-import exchange.core2.core.common.api.ApiPlaceOrder;
-import exchange.core2.core.common.api.ApiReduceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
@@ -24,7 +20,6 @@ import java.util.List;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -41,7 +36,7 @@ public final class SimpleEventsProcessorTest {
     private ArgumentCaptor<ITradeEventsHandler.SpotExecutionReport> tradeEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IFundEventsHandler.PositionOutReport> fundEventCaptor;
+    private ArgumentCaptor<IFundEventsHandler.FundEventReport> fundEventCaptor;
 
     @BeforeEach
     public void before() {
@@ -62,18 +57,18 @@ public final class SimpleEventsProcessorTest {
 
         verify(handler, times(1)).spotExecutionReport(tradeEventCaptor.capture());
         verify(handler, never()).futuresExecutionReport(any());
-        verify(handler, times(2)).positionOutReport(fundEventCaptor.capture());
+        verify(handler, times(2)).fundEventReport(fundEventCaptor.capture());
 
         ITradeEventsHandler.SpotExecutionReport report = tradeEventCaptor.getValue();
         assertThat(report.getOrderId(), Is.is(123L));
         assertThat(report.getSymbol(), Is.is(3));
         assertThat(report.getAccountId(), Is.is(29851L));
 
-        List<IFundEventsHandler.PositionOutReport> fundEvents = fundEventCaptor.getAllValues();
+        List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
         assertThat(fundEvents.size(), Is.is(2));
-        IFundEventsHandler.PositionOutReport locked = fundEvents.get(0);
+        IFundEventsHandler.FundEventReport locked = fundEvents.get(0);
         assertThat(locked.getEventType(), Is.is(FundEvent.FundEventType.LOCKED));
-        IFundEventsHandler.PositionOutReport unlocked = fundEvents.get(1);
+        IFundEventsHandler.FundEventReport unlocked = fundEvents.get(1);
         assertThat(unlocked.getEventType(), Is.is(FundEvent.FundEventType.UNLOCKED));
     }
 

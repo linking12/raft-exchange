@@ -179,7 +179,7 @@ public final class ITExchangeCorePriceScale {
                 }
             }, new IFundEventsHandler() {
                 @Override
-                public void positionOutReport(PositionOutReport positionOut) {
+                public void fundEventReport(FundEventReport fundEventReport) {
 
                 }
             }));

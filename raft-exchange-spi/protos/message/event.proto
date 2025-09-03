@@ -98,7 +98,7 @@ message OrderBookPB {
   int64 timestamp = 4;
 }
 
-message PositionOutReportPB {
+message FundEventReportPB {
   int64 accountId = 1;
   FundEventType eventType = 2;
   BalanceSnapshot balances = 3;

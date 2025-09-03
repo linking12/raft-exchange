@@ -88,7 +88,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         }
     }, new IFundEventsHandler() {
         @Override
-        public void positionOutReport(PositionOutReport positionOut) {
+        public void fundEventReport(FundEventReport fundEventReport) {
 
         }
     });

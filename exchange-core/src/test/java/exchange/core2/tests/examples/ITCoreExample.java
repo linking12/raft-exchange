@@ -45,8 +45,8 @@ class ITCoreExample {
             }
         }, new IFundEventsHandler() {
             @Override
-            public void positionOutReport(PositionOutReport positionOut) {
-                System.out.println("PositionOutReport: " + positionOut);
+            public void fundEventReport(FundEventReport fundEventReport) {
+                System.out.println("PositionOutReport: " + fundEventReport);
             }
         });
 
