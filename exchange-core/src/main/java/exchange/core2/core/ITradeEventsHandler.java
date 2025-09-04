@@ -432,7 +432,24 @@ public interface ITradeEventsHandler {
         public static FuturesExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile userProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
-            final SymbolPositionRecord pos = userProfile.getPositionRecordOrThrowEx(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
+            long bidsNotional = -1;
+            long asksNotional = -1;
+            long bidsQty = -1;
+            long asksQty = -1;
+            if (event.activeOrderCompleted) {
+                bidsNotional = 0;
+                asksNotional = 0;
+                bidsQty = 0;
+                asksQty = 0;
+            } else {
+                SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
+                if (pos != null) {
+                    bidsNotional = pos.pendingBuySize * pos.pendingBuyAvgPrice;
+                    asksNotional = pos.pendingSellSize * pos.pendingSellAvgPrice;
+                    bidsQty = pos.pendingBuySize;
+                    asksQty = pos.pendingSellSize;
+                }
+            }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, false),
                     ExecType.TRADE,
                     event.activeOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -459,16 +476,33 @@ public interface ITradeEventsHandler {
                     0L,
                     spec.quoteCurrency,
                     false,
-                    pos.pendingBuySize * pos.pendingBuyAvgPrice,
-                    pos.pendingSellSize * pos.pendingSellAvgPrice,
-                    pos.pendingBuySize,
-                    pos.pendingSellSize);
+                    bidsNotional,
+                    asksNotional,
+                    bidsQty,
+                    asksQty);
         }
 
         public static FuturesExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile makerProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
-            final SymbolPositionRecord pos = makerProfile.getPositionRecordOrThrowEx(makerProfile.createPositionsKey(cmd.symbol, cmd.action.opposite(), event.matchedOrderCommandType));
+            long bidsNotional = -1;
+            long asksNotional = -1;
+            long bidsQty = -1;
+            long asksQty = -1;
+            if (event.matchedOrderCompleted) {
+                bidsNotional = 0;
+                asksNotional = 0;
+                bidsQty = 0;
+                asksQty = 0;
+            } else {
+                SymbolPositionRecord pos = makerProfile.positions.get(makerProfile.createPositionsKey(cmd.symbol, cmd.action.opposite(), event.matchedOrderCommandType));
+                if (pos != null) {
+                    bidsNotional = pos.pendingBuySize * pos.pendingBuyAvgPrice;
+                    asksNotional = pos.pendingSellSize * pos.pendingSellAvgPrice;
+                    bidsQty = pos.pendingBuySize;
+                    asksQty = pos.pendingSellSize;
+                }
+            }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,
                     event.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -495,10 +529,10 @@ public interface ITradeEventsHandler {
                     0L,
                     spec.quoteCurrency,
                     true,
-                    pos.pendingBuySize * pos.pendingBuyAvgPrice,
-                    pos.pendingSellSize * pos.pendingSellAvgPrice,
-                    pos.pendingBuySize,
-                    pos.pendingSellSize);
+                    bidsNotional,
+                    asksNotional,
+                    bidsQty,
+                    asksQty);
         }
     }
 
