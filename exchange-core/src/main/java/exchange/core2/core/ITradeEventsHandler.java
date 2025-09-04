@@ -511,7 +511,7 @@ public interface ITradeEventsHandler {
                     spec.quoteScaleK,
                     event.matchedOrderUid,
                     event.matchedUserCookie,
-                    event.matchedOrderUid,
+                    event.matchedOrderId,
                     event.matchedOrderType,
                     cmd.action.opposite(),
                     cmd.uid,
