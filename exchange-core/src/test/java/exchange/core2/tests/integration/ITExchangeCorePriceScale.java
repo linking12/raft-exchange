@@ -1,8 +1,5 @@
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.IFundEventsHandler;
-import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
@@ -23,7 +20,6 @@ import static exchange.core2.tests.util.TestConstants.UID_1;
 import static exchange.core2.tests.util.TestConstants.UID_2;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public final class ITExchangeCorePriceScale {
 
@@ -162,27 +158,6 @@ public final class ITExchangeCorePriceScale {
     @Test
     public void testSpotTradePriceScale() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.setConsumer(new SimpleEventsProcessor(new ITradeEventsHandler() {
-                @Override
-                public void orderBook(OrderBook orderBook) {
-
-                }
-
-                @Override
-                public void spotExecutionReport(SpotExecutionReport executionReport) {
-
-                }
-
-                @Override
-                public void futuresExecutionReport(FuturesExecutionReport executionReport) {
-
-                }
-            }, new IFundEventsHandler() {
-                @Override
-                public void fundEventReport(FundEventReport fundEventReport) {
-
-                }
-            }));
             container.addCurrency(BNB);
             container.addCurrency(USDT);
             container.addSymbol(BNB_USDT_SPOT);

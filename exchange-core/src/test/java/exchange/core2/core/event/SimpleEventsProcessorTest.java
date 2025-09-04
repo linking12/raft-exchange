@@ -41,6 +41,8 @@ public final class SimpleEventsProcessorTest {
     @BeforeEach
     public void before() {
         processor = new SimpleEventsProcessor4Test(handler);
+        processor.getSymbolSpecificationMap().put(3, processor.fakeSpotSymbol(3));
+        processor.getSymbolSpecificationMap().put(30, processor.fakeSpotSymbol(30));
     }
 
     @Test

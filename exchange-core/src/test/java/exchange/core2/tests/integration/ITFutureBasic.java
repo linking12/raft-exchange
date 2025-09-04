@@ -102,7 +102,6 @@
 //    public void testBalanceIncrease() {
 //        long delta = 100L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-//            container.setConsumer(processor);
 //            container.initOneUser(UID_1);
 //            container.addCurrency(SYMBOL_MARGIN);
 //            container.initFutureSymbol(symbolId, quoteId);
@@ -138,7 +137,6 @@
 //        long deposit = 100L;
 //        long withdraw = -40L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initOneUser(UID_1);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
@@ -203,7 +201,6 @@
 //        long orderId = 1005L;
 //        int size = 1;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -293,7 +290,6 @@
 //        long takerOrderId = 1006L;
 //        int size = 1;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -463,7 +459,6 @@
 //        long takerOrderId = 1006L;
 //        int size = 1;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -636,7 +631,6 @@
 //        long takerOrderId = 1006L;
 //        int txSize = 2;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -809,7 +803,6 @@
 //        long takerOrderId = 1006L;
 //        int txSize = 2;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -980,7 +973,6 @@
 //        long makerOrderId3 = 1007L;
 //        long takerOrderId4 = 1008L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -1064,7 +1056,6 @@
 //        long makerOrderId3 = 1007L;
 //        long takerOrderId4 = 1008L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -1153,7 +1144,6 @@
 //        int deposit = 100000;
 //        int size = 10;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID);
 //            container.addCurrency(quoteId);
@@ -1195,7 +1185,6 @@
 //            container.initFeeSymbolsMarkPrice();
 //            container.initFeeUsers();
 //
-//            container.setConsumer(processor);
 //
 //            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).build(), CommandResultCode.SUCCESS);
 //            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).build(), CommandResultCode.SUCCESS);
@@ -1442,7 +1431,6 @@
 //
 //            doInit(container);
 //
-//            container.setConsumer(processor);
 //
 //            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).build(), CommandResultCode.SUCCESS);
 //            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).build(), CommandResultCode.SUCCESS);
@@ -1530,7 +1518,6 @@
 //
 //            doInit(container);
 //
-//            container.setConsumer(processor);
 //
 //            long price = 159_900L;
 //            if (orderType == FOK_BUDGET) {

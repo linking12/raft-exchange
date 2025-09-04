@@ -68,7 +68,6 @@
 //        long deposit = 10000L;
 //        long userId1 = 1003L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //
 //            container.createUserWithSpecificMoney(userId1, 0, quoteId);
@@ -109,7 +108,6 @@
 //        long deposit2 = 1000L;
 //        long userId1 = 1003L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(1);
 //            container.addCurrency(quoteId);
@@ -162,7 +160,6 @@
 //        long userId1 = 1003L;
 //        long size = 1;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            container.addCurrency(BASE_CURRENCY_ID, 0);
 //            container.addCurrency(quoteId, 0);
@@ -272,7 +269,6 @@
 //        long makerOrderId3 = 1007L;
 //        long takerOrderId4 = 1008L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.addCurrency(BASE_CURRENCY_ID, 0);
 //            container.addCurrency(quoteId, 0);
 //            container.initFutureSymbol(symbolId, quoteId);
@@ -380,7 +376,6 @@
 //        long makerOrderId5 = 1009L;
 //        long makerOrderId6 = 1010L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -447,7 +442,6 @@
 //        long fee = 10;
 //        long extraMarginDeposit = 10L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -562,7 +556,6 @@
 //        long takerOrderId1 = 1006L;
 //        long fee = 10;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -665,7 +658,6 @@
 //        long makerOrderId6 = 1010L;
 //        int fee = 10;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -766,7 +758,6 @@
 //        long makerOrderId6 = 1010L;
 //        int fee = 10;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -885,7 +876,6 @@
 //        long adjustMargin1 = 900L;
 //        long adjustMargin2 = 2900L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -1006,7 +996,6 @@
 //        long makerOrderId3 = 1007L;
 //        long takerOrderId4 = 1008L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 //            container.createUserWithSpecificMoney(userId1, deposit, quoteId);

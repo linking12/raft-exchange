@@ -96,7 +96,6 @@ class ITFutureCross {
         long userId1 = 1003L;
         int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
             initCurrencies(container);
             container.initMarkPrice(symbolId, 10000);
@@ -151,7 +150,6 @@ class ITFutureCross {
         long userId1 = 1003L;
         int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
             initCurrencies(container);
             container.initMarkPrice(symbolId, 10000);
@@ -189,7 +187,6 @@ class ITFutureCross {
         long makerOrderId3 = 1007L;
         long takerOrderId4 = 1008L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
             initCurrencies(container);
             container.initMarkPrice(symbolId, 10000);
@@ -242,7 +239,6 @@ class ITFutureCross {
         long makerOrderId3 = 1007L;
         long takerOrderId4 = 1008L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.initFutureSymbol(symbolId, quoteId);
             initCurrencies(container);
             container.initMarkPrice(symbolId, 10000);
@@ -288,7 +284,6 @@ class ITFutureCross {
         long makerOrderId3 = 1007L;
         long takerOrderId4 = 1008L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -335,7 +330,6 @@ class ITFutureCross {
         long makerOrderId5 = 1009L;
         long takerOrderId6 = 1010L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -399,7 +393,6 @@ class ITFutureCross {
         long makerOrderId1 = 1005L;
         long makerOrderId2 = 1007L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -448,7 +441,6 @@ class ITFutureCross {
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -508,7 +500,6 @@ class ITFutureCross {
         long takerOrderId4 = 1008L;
         long makerOrderId5 = 1009L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -566,7 +557,6 @@ class ITFutureCross {
         long makerOrderId5 = 1009L;
         long makerOrderId6 = 1010L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -641,7 +631,6 @@ class ITFutureCross {
         long makerOrderId7 = 1017L;
         long takerOrderId7 = 1018L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -775,7 +764,6 @@ class ITFutureCross {
 //        long takerOrderId2 = 1008L;
 //
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
@@ -860,7 +848,6 @@ class ITFutureCross {
 //        long takerOrderId = 1006L;
 //        int size = 1;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1029,7 +1016,6 @@ class ITFutureCross {
 //        long takerOrderId = 1006L;
 //        int size = 1;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1201,7 +1187,6 @@ class ITFutureCross {
 //        long takerOrderId = 1006L;
 //        int txSize = 2;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1373,7 +1358,6 @@ class ITFutureCross {
 //        long takerOrderId = 1006L;
 //        int txSize = 2;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1543,7 +1527,6 @@ class ITFutureCross {
 //        long makerOrderId3 = 1007L;
 //        long takerOrderId4 = 1008L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1625,7 +1608,6 @@ class ITFutureCross {
 //        long makerOrderId3 = 1007L;
 //        long takerOrderId4 = 1008L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1687,7 +1669,6 @@ class ITFutureCross {
 //        long makerOrderId1 = 1005L;
 //        long takerOrderId2 = 1006L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            container.initFutureSymbol(symbolId, quoteId);
 //            initCurrencies(container);
 //            container.initMarkPrice(symbolId, 10000);
@@ -1719,7 +1700,6 @@ class ITFutureCross {
 //            container.initFeeSymbolsMarkPrice();
 //            container.initFeeUsers();
 //
-//            container.setConsumer(processor);
 //
 //            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 //            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
@@ -1969,7 +1949,6 @@ class ITFutureCross {
 //
 //            doInit(container);
 //
-//            container.setConsumer(processor);
 //
 //            container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
 //            container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).marginMode(MarginMode.CROSS).build(), CommandResultCode.SUCCESS);
@@ -2056,7 +2035,6 @@ class ITFutureCross {
 //
 //            doInit(container);
 //
-//            container.setConsumer(processor);
 //
 //            long price = 159_900L;
 //            if (orderType == FOK_BUDGET) {

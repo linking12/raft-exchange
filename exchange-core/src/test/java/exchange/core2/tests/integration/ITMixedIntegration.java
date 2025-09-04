@@ -90,7 +90,6 @@
 //        long makerOrderId2 = 1007L;
 //        long exchangeOrderId = 112233L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 //            List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
@@ -191,7 +190,6 @@
 //        long exchangeOrderId = 112233L;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
 //            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 //            List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
@@ -258,7 +256,6 @@
 //        int price2 = 15000;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
 //            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 //
@@ -306,7 +303,6 @@
 //        int price2 = 9000;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
 //            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 //
@@ -367,7 +363,6 @@
 //        int price2 = 15000;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
 //            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-//            container.setConsumer(processor);
 //            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
 //            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 //

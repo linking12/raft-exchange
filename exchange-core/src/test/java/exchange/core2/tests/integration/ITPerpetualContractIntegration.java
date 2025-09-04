@@ -62,7 +62,6 @@
 //    @Test
 //    public void testInvalidSymbol() {
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-//            container.setConsumer(processor);
 //            int symbolId0 = 10000;
 //            CoreSymbolSpecification spec0 = CoreSymbolSpecification.builder()
 //                    .symbolId(symbolId0)
@@ -377,7 +376,6 @@
 //        int rateScale = 100;
 //        int updatedPrice = 1500;
 //        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-//            container.setConsumer(processor);
 //            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
 //            List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 //

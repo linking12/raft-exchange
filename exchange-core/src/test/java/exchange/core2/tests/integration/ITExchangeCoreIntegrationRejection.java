@@ -261,8 +261,6 @@ public abstract class ITExchangeCoreIntegrationRejection {
             container.initFeeUsers();
             container.initMarkPrice(symbolId, 1000);
 
-            container.setConsumer(processor);
-
             container.submitCommandSync(builderPlace(symbolId, UID_1, ASK, GTC).orderId(101L).price(160000L).size(7L).build(), CommandResultCode.SUCCESS);
             container.submitCommandSync(builderPlace(symbolId, UID_2, ASK, GTC).orderId(202L).price(159900L).size(10L).build(), CommandResultCode.SUCCESS);
             container.submitCommandSync(builderPlace(symbolId, UID_3, ASK, GTC).orderId(303L).price(160000L).size(3L).build(), CommandResultCode.SUCCESS);
@@ -349,8 +347,6 @@ public abstract class ITExchangeCoreIntegrationRejection {
             container.initFeeSymbols();
             container.initFeeUsers();
             container.initMarkPrice(symbolId, 1000);
-
-            container.setConsumer(processor);
 
             long price = 159_900L;
             if (orderType == FOK_BUDGET) {

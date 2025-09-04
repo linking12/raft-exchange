@@ -18,9 +18,6 @@ package exchange.core2.tests.util;
 import com.google.common.collect.Lists;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.ExchangeCore;
-import exchange.core2.core.IFundEventsHandler;
-import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
@@ -30,6 +27,8 @@ import exchange.core2.core.common.api.reports.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.*;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import lombok.Builder;
 import lombok.Data;
@@ -71,7 +70,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
     @Setter
-    private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor(new ITradeEventsHandler() {
+    private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
         @Override
         public void orderBook(OrderBook orderBook) {
 
@@ -86,7 +85,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         public void futuresExecutionReport(FuturesExecutionReport executionReport) {
 
         }
-    }, new IFundEventsHandler() {
+
         @Override
         public void fundEventReport(FundEventReport fundEventReport) {
 
@@ -178,7 +177,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         this.exchangeCore = ExchangeCore.builder()
-                .resultsConsumer((cmd, seq) -> consumer.accept(cmd, seq))
+                .resultsConsumer(consumer)
                 .exchangeConfiguration(exchangeConfiguration)
                 .build();
 
