@@ -70,7 +70,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private void sendSpotExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
         final MatcherTradeEvent first = cmd.matcherEvent;
-
         // -------- 1) NEW（下单入口） --------
         if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.placeOrder(cmd, seq, spec));
@@ -80,21 +79,20 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.rejectOrder(cmd, seq, spec));
             return; // REJECT 后无需再看成交事件
         }
-
         // -------- 2) CANCELED（主动撤单/减少） --------
-        if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER)
-                && cmd.resultCode == CommandResultCode.SUCCESS && first != null && first.eventType == MatcherEventType.REDUCE) {
+        if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER) && cmd.resultCode == CommandResultCode.SUCCESS
+            && first != null && first.eventType == MatcherEventType.REDUCE) {
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.reduceOrder(cmd, seq, spec, first));
             return; // 取消类指令处理完毕
         }
-
         // 没有成交事件直接返回
-        if (first == null) return;
-
+        if (first == null)
+            return;
         // -------- 3) TRADE（逐笔撮合：taker + maker 各发一条） --------
         int tradeIndex = 0;
         for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
-            if (ev.eventType != MatcherEventType.TRADE) continue;
+            if (ev.eventType != MatcherEventType.TRADE)
+                continue;
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeTaker(cmd, seq, spec, ev, tradeIndex));
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeMaker(cmd, seq, spec, ev, tradeIndex));
             tradeIndex++;
@@ -111,17 +109,19 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.rejectOrder(cmd, seq, spec, userProfile));
             return;
         }
-        if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER)
-                && cmd.resultCode == CommandResultCode.SUCCESS && first != null && first.eventType == MatcherEventType.REDUCE) {
+        if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER) && cmd.resultCode == CommandResultCode.SUCCESS
+            && first != null && first.eventType == MatcherEventType.REDUCE) {
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.reduceOrder(cmd, seq, spec, userProfile, first));
             return;
         }
         // 没有成交事件直接返回
-        if (first == null) return;
+        if (first == null)
+            return;
 
         int tradeIndex = 0;
         for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
-            if (ev.eventType != MatcherEventType.TRADE) continue;
+            if (ev.eventType != MatcherEventType.TRADE)
+                continue;
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeTaker(cmd, seq, spec, userProfile, ev, tradeIndex));
             UserProfile makerProfile = userProfileService.getUserProfile(ev.matchedOrderUid);
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeMaker(cmd, seq, spec, makerProfile, ev, tradeIndex));
@@ -136,7 +136,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             case CANCEL_ORDER:
             case MOVE_ORDER:
             case REDUCE_ORDER:
-            // 特殊订单，但也是调用了orderBook.newOrder
+                // 特殊订单，但也是调用了orderBook.newOrder
             case CLOSE_POSITION:
             case FORCE_LIQUIDATION:
                 return true;
