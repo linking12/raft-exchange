@@ -630,7 +630,7 @@ class ITFutureCross {
         long takerOrderId6 = 1016L;
         long makerOrderId7 = 1017L;
         long takerOrderId7 = 1018L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));

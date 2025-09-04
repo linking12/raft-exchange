@@ -101,13 +101,19 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg) {
         return new ExchangeTestContainer(perfCfg,
                 InitialStateConfiguration.CLEAN_TEST,
-                SerializationConfiguration.DEFAULT);
+                SerializationConfiguration.DEFAULT, null);
+    }
+
+    public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg, ObjLongConsumer<OrderCommand> consumer) {
+        return new ExchangeTestContainer(perfCfg,
+                InitialStateConfiguration.CLEAN_TEST,
+                SerializationConfiguration.DEFAULT, consumer);
     }
 
     public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg,
                                                final InitialStateConfiguration initStateCfg,
                                                final SerializationConfiguration serializationCfg) {
-        return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg);
+        return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg, null);
     }
 
     public static TestDataFutures prepareTestDataAsync(TestDataParameters parameters, int seed) {
@@ -161,7 +167,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     private ExchangeTestContainer(final PerformanceConfiguration perfCfg,
                                   final InitialStateConfiguration initStateCfg,
-                                  final SerializationConfiguration serializationCfg) {
+                                  final SerializationConfiguration serializationCfg,
+                                  final ObjLongConsumer<OrderCommand> consumer) {
 
         //log.debug("CREATING exchange container");
 
@@ -177,7 +184,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         this.exchangeCore = ExchangeCore.builder()
-                .resultsConsumer(consumer)
+                .resultsConsumer(consumer == null ? this.consumer : consumer)
                 .exchangeConfiguration(exchangeConfiguration)
                 .build();
 
