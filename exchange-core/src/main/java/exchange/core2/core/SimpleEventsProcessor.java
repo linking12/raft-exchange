@@ -77,7 +77,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         // ------------REJECT（下单拒绝）----------
         if (first != null && first.eventType == MatcherEventType.REJECT) {
             tradeEventsHandler.spotExecutionReport(SpotExecutionReport.rejectOrder(cmd, seq, spec));
-            return; // REJECT 后无需再看成交事件
         }
         // -------- 2) CANCELED（主动撤单/减少） --------
         if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER) && cmd.resultCode == CommandResultCode.SUCCESS
@@ -107,7 +106,6 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
         if (first != null && first.eventType == MatcherEventType.REJECT) {
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.rejectOrder(cmd, seq, spec, userProfile));
-            return;
         }
         if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER) && cmd.resultCode == CommandResultCode.SUCCESS
             && first != null && first.eventType == MatcherEventType.REDUCE) {
