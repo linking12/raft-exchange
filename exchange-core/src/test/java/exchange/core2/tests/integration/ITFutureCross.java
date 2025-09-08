@@ -57,7 +57,7 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCancelSuccess() {
         long deposit = 2000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.initFutureSymbol(symbolId, quoteId);
@@ -111,7 +111,7 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testDefaultMargin() {
         long deposit = 20000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.initFutureSymbol(symbolId, quoteId);
@@ -144,8 +144,8 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void tesCloseMarginThenChangeMode() {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         long makerOrderId3 = 1007L;
@@ -192,9 +192,9 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testPendingAvgPrice() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
-        long userId3 = 1005L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long userId3 = UID_3;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -239,7 +239,7 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCrossMarginWithdraw() {
         long deposit = 10000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -281,9 +281,9 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCrossMarginWithdraw2() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
-        long userId3 = 1005L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long userId3 = UID_3;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -350,7 +350,7 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testPlaceExchange() {
         long deposit = 10000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -397,8 +397,8 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testPlaceExchange2() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -452,9 +452,9 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCrossMarginLiquidation() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
-        long userId3 = 1005L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long userId3 = UID_3;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -508,9 +508,9 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCrossMarginLiquidation2() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
-        long userId3 = 1005L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long userId3 = UID_3;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -571,12 +571,12 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCrossMarginLiquidation3() {
         long deposit = 10000L;
-        long userId1 = 11003L;
-        long userId2 = 11004L;
-        long userId3 = 11005L;
-        long userId4 = 11006L;
-        long userId5 = 11007L;
-        long userId6 = 11008L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long userId3 = UID_3;
+        long userId4 = UID_4;
+        long userId5 = UID_5;
+        long userId6 = UID_6;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -716,9 +716,9 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testCrossMarginLiquidationWarning() {
         long deposit = 10000L;
-        long userId1 = 11003L;
-        long userId2 = 11004L;
-        long userId3 = 11005L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long userId3 = UID_3;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -802,8 +802,8 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testOpenPosition4Bid() throws InterruptedException {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int size = 1;
@@ -1098,8 +1098,8 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testOpenPosition4Ask() throws InterruptedException {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int size = 1;
@@ -1392,8 +1392,8 @@ class ITFutureCross extends ITFutureBase {
     public void testOpenMultiplePosition4Bid() throws InterruptedException {
         int size = 10;
         int deposit = 1000 * size;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int txSize = 2;
@@ -1688,8 +1688,8 @@ class ITFutureCross extends ITFutureBase {
     public void testOpenMultiplePosition4Ask() throws InterruptedException {
         int size = 10;
         int deposit = 1000 * size;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int txSize = 2;
@@ -1978,8 +1978,8 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testClosePosition() {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         long makerOrderId3 = 1007L;
@@ -2286,8 +2286,8 @@ class ITFutureCross extends ITFutureBase {
     @Test
     public void testPartialClosePosition() {
         int deposit = 10000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         long makerOrderId3 = 1007L;

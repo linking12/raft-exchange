@@ -643,10 +643,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         long uid = 100000 + getRandomTransactionId();
         submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(uid).symbol(symbolId).markPrice(price).build(), CommandResultCode.SUCCESS);
         // update bid/ask price
-        long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
-        createBid(userId1, 10, price, symbolId);
-        long userId2 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
-        createAsk(userId2, 10, price, symbolId);
+        createUserWithMoney(UPDATE_PRICE_USER1, quoteId, TestConstants.MAX_VALUE);
+        createUserWithMoney(UPDATE_PRICE_USER2, quoteId, TestConstants.MAX_VALUE);
+        createBid(UPDATE_PRICE_USER1, 10, price, symbolId);
+        createAsk(UPDATE_PRICE_USER2, 10, price, symbolId);
         // 触发让R2做完
         api.groupingControl(0, 1);
     }

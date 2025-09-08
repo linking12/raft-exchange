@@ -4,6 +4,7 @@ import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
+import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.UserProfileService;
 import lombok.Getter;
@@ -11,6 +12,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
 import java.util.Map;
+
+import static exchange.core2.tests.util.TestConstants.ALL_USERS;
 
 @Getter
 @Slf4j
@@ -27,6 +30,7 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
         this.symbolSpecificationMap = new HashMap<>();
         this.userProfileMap = new HashMap<>();
+        ALL_USERS.forEach(e -> userProfileMap.put(e, new UserProfile(e, UserStatus.valueOf("ACTIVE"))));
     }
 
     @Override

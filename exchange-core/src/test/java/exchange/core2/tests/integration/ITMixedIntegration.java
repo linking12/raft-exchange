@@ -73,7 +73,7 @@ class ITMixedIntegration {
     @Test
     public void testMixedExchangeAndMargin() {
         long deposit = 10000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         long fee = 120L;
         int size = 1;
         long price1 = 10000;
@@ -169,8 +169,8 @@ class ITMixedIntegration {
     @Test
     public void testMixedExchangeAndMargin2() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;

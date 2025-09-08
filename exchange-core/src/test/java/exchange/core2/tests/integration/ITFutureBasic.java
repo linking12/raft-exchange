@@ -160,7 +160,7 @@ class ITFutureBasic extends ITFutureBase {
     @Test
     public void testCancelSuccess() {
         long deposit = 1000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         long orderId = 1005L;
         int size = 1;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
@@ -320,8 +320,8 @@ class ITFutureBasic extends ITFutureBase {
     @Test
     public void testOpenPosition4Bid() throws InterruptedException {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int size = 1;
@@ -358,8 +358,8 @@ class ITFutureBasic extends ITFutureBase {
     @Test
     public void testOpenPosition4Ask() throws InterruptedException {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int size = 1;
@@ -396,8 +396,8 @@ class ITFutureBasic extends ITFutureBase {
     public void testOpenMultiplePosition4Bid() throws InterruptedException {
         int size = 10;
         int deposit = 1000 * size;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int txSize = 2;
@@ -434,8 +434,8 @@ class ITFutureBasic extends ITFutureBase {
     public void testOpenMultiplePosition4Ask() throws InterruptedException {
         int size = 10;
         int deposit = 1000 * size;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId = 1005L;
         long takerOrderId = 1006L;
         int txSize = 2;
@@ -471,8 +471,8 @@ class ITFutureBasic extends ITFutureBase {
     @Test
     public void testClosePosition() {
         int deposit = 1000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         long makerOrderId3 = 1007L;
@@ -518,8 +518,8 @@ class ITFutureBasic extends ITFutureBase {
     @Test
     public void testPartialClosePosition() {
         int deposit = 10000;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         long makerOrderId3 = 1007L;

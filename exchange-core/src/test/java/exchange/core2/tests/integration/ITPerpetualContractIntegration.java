@@ -188,7 +188,7 @@ class ITPerpetualContractIntegration {
     @Test
     public void testDeliveryScenario0() throws Exception {
         long deposit = 20000L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
