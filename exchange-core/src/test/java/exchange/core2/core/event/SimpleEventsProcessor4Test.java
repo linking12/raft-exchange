@@ -27,21 +27,28 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
         this.symbolSpecificationMap = new HashMap<>();
         this.userProfileMap = new HashMap<>();
-        setSymbolSpecificationProvider(new SymbolSpecificationProvider() {
+    }
+
+    @Override
+    public void setSymbolSpecificationProvider(SymbolSpecificationProvider symbolSpecificationProvider) {
+        super.setSymbolSpecificationProvider(new SymbolSpecificationProvider() {
             @Override
             public CoreSymbolSpecification getSymbolSpecification(int symbol) {
                 if (symbolSpecificationMap.isEmpty()) {
-                    return super.getSymbolSpecification(symbol);
+                    return symbolSpecificationProvider.getSymbolSpecification(symbol);
                 }
                 return symbolSpecificationMap.get(symbol);
             }
         });
+    }
 
-        setUserProfileService(new UserProfileService() {
+    @Override
+    public void setUserProfileService(UserProfileService userProfileService) {
+        super.setUserProfileService(new UserProfileService() {
             @Override
             public UserProfile getUserProfile(long uid) {
                 if (userProfileMap.isEmpty()) {
-                    return super.getUserProfile(uid);
+                    return userProfileService.getUserProfile(uid);
                 }
                 return userProfileMap.get(uid);
             }
