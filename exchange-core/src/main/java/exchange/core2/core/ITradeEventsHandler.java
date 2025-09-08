@@ -7,7 +7,6 @@ import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionMode;
-import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -304,10 +303,6 @@ public interface ITradeEventsHandler {
         public final long fee;
         public final int feeAssetId;
         public final boolean isMaker;
-        public final long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
-        public final long asksNotional;
-        public final long bidsQty;  // 剩余买单数量，pendingBuySize
-        public final long asksQty;
 
         public static FuturesExecutionReport placeOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile userProfile) {
@@ -337,11 +332,7 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     spec.quoteCurrency,
-                    false,
-                    0L,
-                    0L,
-                    0L,
-                    0L);
+                    false);
         }
 
         public static FuturesExecutionReport rejectOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
@@ -372,11 +363,7 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     spec.quoteCurrency,
-                    false,
-                    0L,
-                    0L,
-                    0L,
-                    0L);
+                    false);
         }
 
         public static FuturesExecutionReport reduceOrder(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
@@ -422,34 +409,12 @@ public interface ITradeEventsHandler {
                     0L,
                     0L,
                     spec.quoteCurrency,
-                    false,
-                    0L,
-                    0L,
-                    0L,
-                    0L);
+                    false);
         }
 
         public static FuturesExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile userProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
-            long bidsNotional = -1;
-            long asksNotional = -1;
-            long bidsQty = -1;
-            long asksQty = -1;
-            if (event.activeOrderCompleted) {
-                bidsNotional = 0;
-                asksNotional = 0;
-                bidsQty = 0;
-                asksQty = 0;
-            } else {
-                SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
-                if (pos != null) {
-                    bidsNotional = pos.pendingBuySize * pos.pendingBuyAvgPrice;
-                    asksNotional = pos.pendingSellSize * pos.pendingSellAvgPrice;
-                    bidsQty = pos.pendingBuySize;
-                    asksQty = pos.pendingSellSize;
-                }
-            }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, false),
                     ExecType.TRADE,
                     event.activeOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -475,34 +440,12 @@ public interface ITradeEventsHandler {
                     event.filled == 0 ? 0L : event.filledNotional / event.filled,
                     0L,
                     spec.quoteCurrency,
-                    false,
-                    bidsNotional,
-                    asksNotional,
-                    bidsQty,
-                    asksQty);
+                    false);
         }
 
         public static FuturesExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile makerProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
-            long bidsNotional = -1;
-            long asksNotional = -1;
-            long bidsQty = -1;
-            long asksQty = -1;
-            if (event.matchedOrderCompleted) {
-                bidsNotional = 0;
-                asksNotional = 0;
-                bidsQty = 0;
-                asksQty = 0;
-            } else {
-                SymbolPositionRecord pos = makerProfile.positions.get(makerProfile.createPositionsKey(cmd.symbol, cmd.action.opposite(), event.matchedOrderCommandType));
-                if (pos != null) {
-                    bidsNotional = pos.pendingBuySize * pos.pendingBuyAvgPrice;
-                    asksNotional = pos.pendingSellSize * pos.pendingSellAvgPrice;
-                    bidsQty = pos.pendingBuySize;
-                    asksQty = pos.pendingSellSize;
-                }
-            }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,
                     event.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -528,11 +471,7 @@ public interface ITradeEventsHandler {
                     event.matchedOrderFilled == 0 ? 0L : event.matchedOrderFilledNotional / event.matchedOrderFilled,
                     0L,
                     spec.quoteCurrency,
-                    true,
-                    bidsNotional,
-                    asksNotional,
-                    bidsQty,
-                    asksQty);
+                    true);
         }
     }
 

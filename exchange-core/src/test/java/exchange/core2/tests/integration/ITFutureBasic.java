@@ -204,10 +204,6 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
             assertThat(event1.executionType, Is.is(ITradeEventsHandler.ExecType.CANCEL));
@@ -234,10 +230,6 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             // check balance
             container.validateUserState(userId1, profile -> {

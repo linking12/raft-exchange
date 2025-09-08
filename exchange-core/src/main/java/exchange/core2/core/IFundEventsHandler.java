@@ -45,6 +45,10 @@ public interface IFundEventsHandler {
             private final long unrealizedProfit;
             private final long liquidationPrice;
             private final long marginRatioScaleK;
+            private final long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
+            private final long asksNotional;
+            private final long bidsQty;  // 剩余买单数量，pendingBuySize
+            private final long asksQty;
         }
 
         public static FundEventReport fromFundEvent(FundEvent fundEvent, long uniId) {
@@ -58,7 +62,11 @@ public interface IFundEventsHandler {
                             fundEvent.markPrice,
                             fundEvent.unrealizedProfit,
                             fundEvent.liquidationPrice,
-                            fundEvent.marginRatioScaleK));
+                            fundEvent.marginRatioScaleK,
+                            fundEvent.pendingBuySize * fundEvent.pendingBuyAvgPrice,
+                            fundEvent.pendingSellSize * fundEvent.pendingSellAvgPrice,
+                            fundEvent.pendingBuySize,
+                            fundEvent.pendingSellSize));
         }
     }
 }

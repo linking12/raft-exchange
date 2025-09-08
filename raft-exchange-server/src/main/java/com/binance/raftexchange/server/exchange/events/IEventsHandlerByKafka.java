@@ -104,8 +104,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setPositionSideValue(executionReport.getPositionSide().getCode()).setLastQty(executionReport.getLastQty())
                 .setLastPx(executionReport.getLastPx()).setCumQty(executionReport.getCumQty()).setCumQuoteQty(executionReport.getCumQuoteQty())
                 .setAvgPx(executionReport.getAvgPx()).setFee(executionReport.getFee()).setFeeAssetId(executionReport.getFeeAssetId())
-                .setIsMaker(executionReport.isMaker()).setBidsNotional(executionReport.getBidsNotional()).setAsksNotional(executionReport.getAsksNotional())
-                .setBidsQty(executionReport.getBidsQty()).setAsksQty(executionReport.getAsksQty()).build();
+                .setIsMaker(executionReport.isMaker()).build();
         if (LOG.isDebugEnabled()) {
             String formateString = pbObject.toString();
             LOG.debug("FuturesExecutionReportPB: {}", formateString);
@@ -161,7 +160,8 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                     .setOpenPriceSum(position.getOpenPriceSum()).setCumRealized(position.getCumRealized()).setIsolated(position.isIsolated())
                     .setIsolatedWallet(position.getIsolatedWallet()).setLeverage(position.getLeverage()).setOpenInitMarginSum(position.getOpenInitMarginSum())
                     .setMarkPrice(position.getMarkPrice()).setUnrealizedProfit(position.getUnrealizedProfit()).setLiquidationPrice(position.getLiquidationPrice())
-                    .setMarginRatioScaleK(position.getMarginRatioScaleK()));
+                    .setMarginRatioScaleK(position.getMarginRatioScaleK()).setBidsNotional(position.getBidsNotional()).setAsksNotional(position.getAsksNotional())
+                    .setBidsQty(position.getBidsQty()).setAsksQty(position.getAsksQty()));
         }
         FundEventReportPB pbObject = builder.build();
         if (LOG.isDebugEnabled()) {

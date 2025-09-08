@@ -846,10 +846,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
             assertThat(event1.executionType, Is.is(ITradeEventsHandler.ExecType.NEW));
@@ -876,10 +872,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event2 = events.get(2);
             assertThat(event2.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -905,10 +897,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.fee, Is.is(0L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
-            assertThat(event2.bidsNotional, Is.is(0L));
-            assertThat(event2.asksNotional, Is.is(0L));
-            assertThat(event2.bidsQty, Is.is(0L));
-            assertThat(event2.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event3 = events.get(3);
             assertThat(event3.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -934,10 +922,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-            assertThat(event3.bidsNotional, Is.is(0L));
-            assertThat(event3.asksNotional, Is.is(0L));
-            assertThat(event3.bidsQty, Is.is(0L));
-            assertThat(event3.asksQty, Is.is(0L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -1158,10 +1142,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
             assertThat(event1.executionType, Is.is(ITradeEventsHandler.ExecType.NEW));
@@ -1188,10 +1168,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event2 = events.get(2);
             assertThat(event2.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -1217,10 +1193,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.fee, Is.is(0L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
-            assertThat(event2.bidsNotional, Is.is(0L));
-            assertThat(event2.asksNotional, Is.is(0L));
-            assertThat(event2.bidsQty, Is.is(0L));
-            assertThat(event2.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event3 = events.get(3);
             assertThat(event3.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -1246,10 +1218,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-            assertThat(event3.bidsNotional, Is.is(0L));
-            assertThat(event3.asksNotional, Is.is(0L));
-            assertThat(event3.bidsQty, Is.is(0L));
-            assertThat(event3.asksQty, Is.is(0L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -1468,10 +1436,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
             assertThat(event1.executionType, Is.is(ITradeEventsHandler.ExecType.NEW));
@@ -1498,10 +1462,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event2 = events.get(2);
             assertThat(event2.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -1527,10 +1487,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.fee, Is.is(0L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
-            assertThat(event2.bidsNotional, Is.is(0L));
-            assertThat(event2.asksNotional, Is.is(0L));
-            assertThat(event2.bidsQty, Is.is(0L));
-            assertThat(event2.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event3 = events.get(3);
             assertThat(event3.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -1556,10 +1512,10 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-            assertThat(event3.bidsNotional, Is.is(100000L));
-            assertThat(event3.asksNotional, Is.is(0L));
-            assertThat(event3.bidsQty, Is.is(10L));
-            assertThat(event3.asksQty, Is.is(0L));
+//            assertThat(event3.bidsNotional, Is.is(100000L));
+//            assertThat(event3.asksNotional, Is.is(0L));
+//            assertThat(event3.bidsQty, Is.is(10L));
+//            assertThat(event3.asksQty, Is.is(0L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -1776,10 +1732,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
             assertThat(event1.executionType, Is.is(ITradeEventsHandler.ExecType.NEW));
@@ -1806,10 +1758,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event2 = events.get(2);
             assertThat(event2.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -1835,10 +1783,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.fee, Is.is(0L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
-            assertThat(event2.bidsNotional, Is.is(0L));
-            assertThat(event2.asksNotional, Is.is(0L));
-            assertThat(event2.bidsQty, Is.is(0L));
-            assertThat(event2.asksQty, Is.is(0L));
 
             ITradeEventsHandler.FuturesExecutionReport event3 = events.get(3);
             assertThat(event3.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
@@ -1864,10 +1808,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-            assertThat(event3.bidsNotional, Is.is(0L));
-            assertThat(event3.asksNotional, Is.is(100000L));
-            assertThat(event3.bidsQty, Is.is(0L));
-            assertThat(event3.asksQty, Is.is(10L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -2090,10 +2030,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             // Check NEW event for taker order (open position)
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
@@ -2121,10 +2057,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             // Check TRADE event for taker order (open position)
             ITradeEventsHandler.FuturesExecutionReport event2 = events.get(2);
@@ -2151,10 +2083,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.fee, Is.is(0L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
-            assertThat(event2.bidsNotional, Is.is(0L));
-            assertThat(event2.asksNotional, Is.is(0L));
-            assertThat(event2.bidsQty, Is.is(0L));
-            assertThat(event2.asksQty, Is.is(0L));
 
             // Check TRADE event for maker order (open position)
             ITradeEventsHandler.FuturesExecutionReport event3 = events.get(3);
@@ -2181,10 +2109,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-            assertThat(event3.bidsNotional, Is.is(0L));
-            assertThat(event3.asksNotional, Is.is(0L));
-            assertThat(event3.bidsQty, Is.is(0L));
-            assertThat(event3.asksQty, Is.is(0L));
 
             // Check NEW event for maker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event4 = events.get(4);
@@ -2212,10 +2136,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event4.fee, Is.is(0L));
             assertThat(event4.feeAssetId, Is.is(840));
             assertThat(event4.isMaker, Is.is(false));
-            assertThat(event4.bidsNotional, Is.is(0L));
-            assertThat(event4.asksNotional, Is.is(0L));
-            assertThat(event4.bidsQty, Is.is(0L));
-            assertThat(event4.asksQty, Is.is(0L));
 
             // Check NEW event for taker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event5 = events.get(5);
@@ -2243,10 +2163,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event5.fee, Is.is(0L));
             assertThat(event5.feeAssetId, Is.is(840));
             assertThat(event5.isMaker, Is.is(false));
-            assertThat(event5.bidsNotional, Is.is(0L));
-            assertThat(event5.asksNotional, Is.is(0L));
-            assertThat(event5.bidsQty, Is.is(0L));
-            assertThat(event5.asksQty, Is.is(0L));
 
             // Check TRADE event for taker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event6 = events.get(6);
@@ -2273,10 +2189,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event6.fee, Is.is(0L));
             assertThat(event6.feeAssetId, Is.is(840));
             assertThat(event6.isMaker, Is.is(false));
-            assertThat(event6.bidsNotional, Is.is(0L));
-            assertThat(event6.asksNotional, Is.is(0L));
-            assertThat(event6.bidsQty, Is.is(0L));
-            assertThat(event6.asksQty, Is.is(0L));
 
             // Check TRADE event for maker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event7 = events.get(7);
@@ -2303,10 +2215,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.fee, Is.is(0L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
-            assertThat(event7.bidsNotional, Is.is(0L));
-            assertThat(event7.asksNotional, Is.is(0L));
-            assertThat(event7.bidsQty, Is.is(0L));
-            assertThat(event7.asksQty, Is.is(0L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -2430,10 +2338,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event0.fee, Is.is(0L));
             assertThat(event0.feeAssetId, Is.is(840));
             assertThat(event0.isMaker, Is.is(false));
-            assertThat(event0.bidsNotional, Is.is(0L));
-            assertThat(event0.asksNotional, Is.is(0L));
-            assertThat(event0.bidsQty, Is.is(0L));
-            assertThat(event0.asksQty, Is.is(0L));
 
             // Check NEW event for taker order (open position)
             ITradeEventsHandler.FuturesExecutionReport event1 = events.get(1);
@@ -2461,10 +2365,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event1.fee, Is.is(0L));
             assertThat(event1.feeAssetId, Is.is(840));
             assertThat(event1.isMaker, Is.is(false));
-            assertThat(event1.bidsNotional, Is.is(0L));
-            assertThat(event1.asksNotional, Is.is(0L));
-            assertThat(event1.bidsQty, Is.is(0L));
-            assertThat(event1.asksQty, Is.is(0L));
 
             // Check TRADE event for taker order (open position)
             ITradeEventsHandler.FuturesExecutionReport event2 = events.get(2);
@@ -2491,10 +2391,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.fee, Is.is(0L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
-            assertThat(event2.bidsNotional, Is.is(0L));
-            assertThat(event2.asksNotional, Is.is(0L));
-            assertThat(event2.bidsQty, Is.is(0L));
-            assertThat(event2.asksQty, Is.is(0L));
 
             // Check TRADE event for maker order (open position)
             ITradeEventsHandler.FuturesExecutionReport event3 = events.get(3);
@@ -2521,10 +2417,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-            assertThat(event3.bidsNotional, Is.is(0L));
-            assertThat(event3.asksNotional, Is.is(0L));
-            assertThat(event3.bidsQty, Is.is(0L));
-            assertThat(event3.asksQty, Is.is(0L));
 
             // Check NEW event for maker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event4 = events.get(4);
@@ -2552,10 +2444,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event4.fee, Is.is(0L));
             assertThat(event4.feeAssetId, Is.is(840));
             assertThat(event4.isMaker, Is.is(false));
-            assertThat(event4.bidsNotional, Is.is(0L));
-            assertThat(event4.asksNotional, Is.is(0L));
-            assertThat(event4.bidsQty, Is.is(0L));
-            assertThat(event4.asksQty, Is.is(0L));
 
             // Check NEW event for taker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event5 = events.get(5);
@@ -2583,10 +2471,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event5.fee, Is.is(0L));
             assertThat(event5.feeAssetId, Is.is(840));
             assertThat(event5.isMaker, Is.is(false));
-            assertThat(event5.bidsNotional, Is.is(0L));
-            assertThat(event5.asksNotional, Is.is(0L));
-            assertThat(event5.bidsQty, Is.is(0L));
-            assertThat(event5.asksQty, Is.is(0L));
 
             // Check TRADE event for taker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event6 = events.get(6);
@@ -2613,10 +2497,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event6.fee, Is.is(0L));
             assertThat(event6.feeAssetId, Is.is(840));
             assertThat(event6.isMaker, Is.is(false));
-            assertThat(event6.bidsNotional, Is.is(0L));
-            assertThat(event6.asksNotional, Is.is(0L));
-            assertThat(event6.bidsQty, Is.is(0L));
-            assertThat(event6.asksQty, Is.is(0L));
 
             // Check TRADE event for maker order (close position)
             ITradeEventsHandler.FuturesExecutionReport event7 = events.get(7);
@@ -2643,10 +2523,10 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.fee, Is.is(0L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
-            assertThat(event7.bidsNotional, Is.is(100000L));
-            assertThat(event7.asksNotional, Is.is(21000L));
-            assertThat(event7.bidsQty, Is.is(10L));
-            assertThat(event7.asksQty, Is.is(2L));
+//            assertThat(event7.bidsNotional, Is.is(100000L));
+//            assertThat(event7.asksNotional, Is.is(21000L));
+//            assertThat(event7.bidsQty, Is.is(10L));
+//            assertThat(event7.asksQty, Is.is(2L));
 
             // check balance
             container.validateUserState(userId1, profile -> {

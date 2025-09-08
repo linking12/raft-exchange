@@ -78,10 +78,6 @@ message FuturesExecutionReportPB {
   int64 fee = 24;
   int32 feeAssetId = 25;
   bool isMaker = 26;
-  int64 bidsNotional = 27;
-  int64 asksNotional = 28;
-  int64 bidsQty = 29;
-  int64 asksQty = 30;
 }
 
 message OrderBookRecordPB {
@@ -128,6 +124,10 @@ message PositionSnapshot {
   int64 unrealizedProfit = 13;
   int64 liquidationPrice = 14;
   int64 marginRatioScaleK = 15;
+  int64 bidsNotional = 16;
+  int64 asksNotional = 17;
+  int64 bidsQty = 18;
+  int64 asksQty = 19;
 }
 
 enum FundEventType {
