@@ -149,8 +149,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.eventsHelper.setLastPriceCache(this.lastPriceCache);
         if (this.resultsConsumer instanceof SimpleEventsProcessor) {
             SimpleEventsProcessor simpleEventsProcessor = (SimpleEventsProcessor) this.resultsConsumer;
+            simpleEventsProcessor.setNumShards(numShards);
             simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
-            simpleEventsProcessor.setUserProfileService(this.userProfileService);
+            simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
         }
     }
 
@@ -201,7 +202,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (this.resultsConsumer instanceof SimpleEventsProcessor) {
                 SimpleEventsProcessor simpleEventsProcessor = (SimpleEventsProcessor) this.resultsConsumer;
                 simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
-                simpleEventsProcessor.setUserProfileService(this.userProfileService);
+                simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
             }
             this.fees = state.fees;
             this.adjustments = state.adjustments;

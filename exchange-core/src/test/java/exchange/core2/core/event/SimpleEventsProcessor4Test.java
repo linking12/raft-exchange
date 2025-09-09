@@ -55,8 +55,8 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
     }
 
     @Override
-    public void setUserProfileService(UserProfileService userProfileService) {
-        super.setUserProfileService(new UserProfileService() {
+    public void setUserProfileService(int shardId, UserProfileService userProfileService) {
+        super.setUserProfileService(shardId, new UserProfileService() {
             @Override
             public UserProfile getUserProfile(long uid) {
                 if (userProfileMap.isEmpty()) {

@@ -2,6 +2,8 @@ package exchange.core2.core;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ObjLongConsumer;
 
 import exchange.core2.core.IFundEventsHandler.FundEventReport;
@@ -20,21 +22,20 @@ import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @RequiredArgsConstructor
-@Getter
 @Slf4j
 public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private final ITradeEventsHandler tradeEventsHandler;
     private final IFundEventsHandler fundEventsHandler;
+    private final Map<Integer, UserProfileService> userProfileServices = new ConcurrentHashMap<>();
     @Setter
     private SymbolSpecificationProvider symbolSpecificationProvider;
     @Setter
-    private UserProfileService userProfileService;
+    private int numShards;
 
     @Override
     public void accept(OrderCommand cmd, long seq) {
@@ -100,7 +101,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private void sendFuturesExecutionReport(OrderCommand cmd, long seq, CoreSymbolSpecification spec) {
         final MatcherTradeEvent first = cmd.matcherEvent;
-        UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        UserProfile userProfile = userProfileServices.get(shardIdOfUid(cmd.uid)).getUserProfile(cmd.uid);
         if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.placeOrder(cmd, seq, spec, userProfile));
         }
@@ -121,7 +122,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             if (ev.eventType != MatcherEventType.TRADE)
                 continue;
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeTaker(cmd, seq, spec, userProfile, ev, tradeIndex));
-            UserProfile makerProfile = userProfileService.getUserProfile(ev.matchedOrderUid);
+            UserProfile makerProfile = userProfileServices.get(shardIdOfUid(ev.matchedOrderUid)).getUserProfile(ev.matchedOrderUid);
             tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeMaker(cmd, seq, spec, makerProfile, ev, tradeIndex));
             tradeIndex++;
         }
@@ -187,4 +188,12 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         }
     }
 
+    public int shardIdOfUid(long uid) {
+        int shardMask = numShards - 1;
+        return (int) (uid & shardMask);
+    }
+
+    public void setUserProfileService(int shardId, UserProfileService userProfileService) {
+        userProfileServices.put(shardId, userProfileService);
+    }
 }
