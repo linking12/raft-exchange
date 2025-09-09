@@ -163,7 +163,7 @@ public final class ExchangeCore {
                 .collect(Collectors.toMap(
                         shardId -> shardId,
                         shardId -> CompletableFuture.supplyAsync(
-                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer, api),
+                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer),
                                 loaderExecutor)));
 
         final EventHandler<OrderCommand>[] matchingEngineHandlers = matchingEngineFutures.values().stream()
@@ -232,7 +232,10 @@ public final class ExchangeCore {
 
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
             liquidationEngines = riskEngines.values().stream().map(RiskEngine::getLiquidationEngine).collect(Collectors.toList());
-            liquidationEngines.forEach(liquidationEngine -> liquidationEngine.start());
+            liquidationEngines.forEach(liquidationEngine -> {
+                liquidationEngine.setApi(api);
+                liquidationEngine.start();
+            });
         }
 
         try {

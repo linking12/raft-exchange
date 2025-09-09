@@ -8,6 +8,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import lombok.Setter;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
 import org.eclipse.collections.api.tuple.primitive.DoubleObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
@@ -43,17 +44,17 @@ public final class LiquidationEngine {
 
     private final AffinityThreadFactory threadFactory = new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-");
     private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
-    private final ExchangeApi api;
     private final int shardId;
     private final FundEventsHelper eventsHelper;
+    @Setter
+    private ExchangeApi api;
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private ScheduledExecutorService scheduler;
 
-    public LiquidationEngine(ExchangeApi api, Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
-        this.api = api;
+    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
         this.shardId = shardId;
         eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
     }

@@ -26,7 +26,6 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.collections.objpool.ObjectsPool;
-import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreCurrencySpecification;
@@ -107,8 +106,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                       final ISerializationProcessor serializationProcessor,
                       final SharedPool sharedPool,
                       final ExchangeConfiguration exchangeConfiguration,
-                      final ObjLongConsumer<OrderCommand> resultsConsumer,
-                      final ExchangeApi api) {
+                      final ObjLongConsumer<OrderCommand> resultsConsumer) {
         if (Long.bitCount(numShards) != 1) {
             throw new IllegalArgumentException("Invalid number of shards " + numShards + " - must be power of 2");
         }
@@ -127,7 +125,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
-        this.liquidationEngine = new LiquidationEngine(api, sharedPool::getFundEventChain, shardId, numShards);
+        this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards);
         this.initState(numShards);
     }
     
