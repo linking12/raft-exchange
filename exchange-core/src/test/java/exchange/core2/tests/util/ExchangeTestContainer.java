@@ -116,6 +116,13 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg, null);
     }
 
+    public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg,
+                                               final InitialStateConfiguration initStateCfg,
+                                               final SerializationConfiguration serializationCfg,
+                                               ObjLongConsumer<OrderCommand> consumer) {
+        return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg, consumer);
+    }
+
     public static TestDataFutures prepareTestDataAsync(TestDataParameters parameters, int seed) {
 
         final CompletableFuture<List<CoreSymbolSpecification>> coreSymbolSpecificationsFuture = CompletableFuture.supplyAsync(

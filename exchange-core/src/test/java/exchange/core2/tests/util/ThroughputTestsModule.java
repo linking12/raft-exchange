@@ -18,12 +18,14 @@ package exchange.core2.tests.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.TimeUnit;
+import java.util.function.ObjLongConsumer;
 import java.util.stream.IntStream;
 
 
@@ -35,10 +37,52 @@ public class ThroughputTestsModule {
                                           final InitialStateConfiguration initialStateCfg,
                                           final SerializationConfiguration serializationCfg,
                                           final int iterations) {
-
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg)) {
+            //性能测试不开强平检查
+            //性能测试准备的order不会考虑强平单，如果强平导致仓位没有了，但是测试生成的订单不知道，还是会用到这个仓位，会报错仓位不存在。
+            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.SECONDS);
+
+            final float avgMt = container.executeTestingThread(
+                    () -> (float) IntStream.range(0, iterations)
+                            .mapToObj(j -> {
+                                container.loadSymbolsUsersAndPrefillOrdersNoLog(testDataFutures);
+                                final float perfMt = container.benchmarkMtps(testDataFutures.getGenResult().join().apiCommandsBenchmark.join());
+                                log.info("{}. {} MT/s", j, String.format("%.3f", perfMt));
+
+                                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+                                // compare orderBook final state just to make sure all commands executed same way
+                                testDataFutures.coreSymbolSpecifications.join().forEach(
+                                        symbol -> assertEquals(
+                                                testDataFutures.getGenResult().join().getGenResults().get(symbol.symbolId).getFinalOrderBookSnapshot(),
+                                                container.requestCurrentOrderBook(symbol.symbolId)));
+
+                                // TODO compare events, balances, positions
+
+                                container.resetExchangeCore();
+
+                                System.gc();
+
+                                return perfMt;
+                            })
+                            .mapToDouble(x -> x)
+                            .average().orElse(0));
+
+            log.info("Average: {} MT/s", avgMt);
+        }
+    }
+
+    public static void throughputTestImpl(final PerformanceConfiguration performanceCfg,
+                                          final TestDataParameters testDataParameters,
+                                          final InitialStateConfiguration initialStateCfg,
+                                          final SerializationConfiguration serializationCfg,
+                                          final int iterations,
+                                          final ObjLongConsumer<OrderCommand> consumer) {
+        final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg, consumer)) {
             //性能测试不开强平检查
             //性能测试准备的order不会考虑强平单，如果强平导致仓位没有了，但是测试生成的订单不知道，还是会用到这个仓位，会报错仓位不存在。
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.SECONDS);

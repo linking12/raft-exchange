@@ -18,12 +18,28 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.*;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-
+@ExtendWith(MockitoExtension.class)
 public final class ITMultiOperation {
+
+    SimpleEventsProcessor4Test processor;
+
+    @Mock
+    IEventsHandler4Test handler;
+
+    @BeforeEach
+    public void before() {
+        processor = new SimpleEventsProcessor4Test(handler, true);
+    }
 
     @Test
     @Timeout(60)
@@ -44,7 +60,8 @@ public final class ITMultiOperation {
                         .build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                2
+                2,
+                processor
         );
     }
 
@@ -67,7 +84,8 @@ public final class ITMultiOperation {
                         .build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                2);
+                2,
+                processor);
     }
 
     @Test
@@ -89,6 +107,7 @@ public final class ITMultiOperation {
                         .build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                2);
+                2,
+                processor);
     }
 }

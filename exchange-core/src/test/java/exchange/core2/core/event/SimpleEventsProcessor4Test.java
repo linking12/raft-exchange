@@ -33,6 +33,14 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
         ALL_USERS.forEach(e -> userProfileMap.put(e, new UserProfile(e, UserStatus.valueOf("ACTIVE"))));
     }
 
+    public SimpleEventsProcessor4Test(IEventsHandler4Test eventsHandler, Boolean isPerfTest) {
+        super(eventsHandler, eventsHandler);
+        this.eventsHandler = eventsHandler;
+
+        this.symbolSpecificationMap = new HashMap<>();
+        this.userProfileMap = new HashMap<>();
+    }
+
     @Override
     public void setSymbolSpecificationProvider(SymbolSpecificationProvider symbolSpecificationProvider) {
         super.setSymbolSpecificationProvider(new SymbolSpecificationProvider() {

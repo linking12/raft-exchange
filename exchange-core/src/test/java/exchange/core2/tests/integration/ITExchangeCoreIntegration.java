@@ -201,7 +201,7 @@ public abstract class ITExchangeCoreIntegration {
             l2helper.setAskPriceVolume(0, 1580, 1).removeBid(0);
             assertEquals(l2helper.build(), container.requestCurrentOrderBook(symbolSpec.symbolId));
 
-//            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
     }
 
@@ -592,7 +592,7 @@ public abstract class ITExchangeCoreIntegration {
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
-//            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
     }
 }
