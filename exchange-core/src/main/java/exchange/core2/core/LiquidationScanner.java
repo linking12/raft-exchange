@@ -1,14 +1,11 @@
 package exchange.core2.core;
 
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
 import org.eclipse.collections.api.map.primitive.MutableLongObjectMap;
@@ -38,49 +35,45 @@ import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.utils.CoreArithmeticUtils;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 /**
  * Liquidation scanner for checking user profiles and triggering liquidations.
  */
+@Data
 @Slf4j
 public final class LiquidationScanner {
 
     private final ExchangeApi api;
-    private final Collection<RiskEngine> riskEngines;
-    private final Map<Integer, FundEventsHelper> fundEventsHelpers;
-    private final ScheduledExecutorService scheduler;
+    private final RiskEngine riskEngine;
+    public final FundEventsHelper eventsHelper;
     private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
-
-    public LiquidationScanner(ExchangeApi api, Collection<RiskEngine> riskEngines, int riskEnginesNum) {
-        this.api = api;
-        this.riskEngines = riskEngines;
-        this.fundEventsHelpers =
-            riskEngines.stream().collect(Collectors.toMap(RiskEngine::getShardId, r -> {
-                FundEventsHelper eventsHelper = new FundEventsHelper(() -> r.getSharedPool().getFundEventChain(), r.getShardId(), riskEnginesNum);
-                eventsHelper.setSymbolSpecificationProvider(r.getSymbolSpecificationProvider());
-                eventsHelper.setCurrencySpecificationProvider(r.getCurrencySpecificationProvider());
-                eventsHelper.setUserProfileService(r.getUserProfileService());
-                eventsHelper.setLastPriceCache(r.getLastPriceCache());
-                return eventsHelper;
-            }));
-        this.scheduler = Executors.newScheduledThreadPool(riskEngines.size(), r -> new Thread(r, "LiquidationScanner"));
-    }
+    private ScheduledExecutorService scheduler;
 
     public void start() {
-        for (RiskEngine riskEngine : riskEngines) {
-            scheduler.scheduleWithFixedDelay(() -> {
-                log.debug("Checking liquidation for shard {}", riskEngine.getShardId());
-                try {
-                    checkLiquidations(riskEngine);
-                } catch (Throwable e) {
-                    log.error("Error during liquidation check for shard {}", riskEngine.getShardId(), e);
-                }
-            }, scanIntervalSec, scanIntervalSec, TimeUnit.SECONDS);
+        if (this.scheduler != null) {
+            return;
         }
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, "LiquidationScanner"));
+        scheduler.scheduleWithFixedDelay(() -> {
+            log.debug("Checking liquidation for shard {}", riskEngine.getShardId());
+            try {
+                checkLiquidations(riskEngine, eventsHelper);
+            } catch (Throwable e) {
+                log.error("Error during liquidation check for shard {}", riskEngine.getShardId(), e);
+            }
+        }, scanIntervalSec, scanIntervalSec, TimeUnit.SECONDS);
+    }
+
+    public  void stop() {
+        stop(1, TimeUnit.MINUTES);
     }
 
     public void stop(long timeout, TimeUnit timeUnit) {
+        if (scheduler == null) {
+            return;
+        }
         scheduler.shutdown();
         try {
             if (!scheduler.awaitTermination(timeout, timeUnit)) {
@@ -89,25 +82,23 @@ public final class LiquidationScanner {
         } catch (InterruptedException e) {
             scheduler.shutdownNow();
         }
+        scheduler = null;
     }
 
     public void triggerOnce() {
-        for (RiskEngine riskEngine : riskEngines) {
-            try {
-                log.info("Manual trigger: Checking liquidation for shard {}", riskEngine.getShardId());
-                checkLiquidations(riskEngine);
-            } catch (Throwable e) {
-                log.error("Manual trigger failed for shard {}", riskEngine.getShardId(), e);
-            }
+        try {
+            log.info("Manual trigger: Checking liquidation for shard {}", riskEngine.getShardId());
+            checkLiquidations(riskEngine, eventsHelper);
+        } catch (Throwable e) {
+            log.error("Manual trigger failed for shard {}", riskEngine.getShardId(), e);
         }
     }
 
-    private void checkLiquidations(RiskEngine riskEngine) {
+    private void checkLiquidations(RiskEngine riskEngine, FundEventsHelper eventsHelper) {
         SymbolSpecificationProvider symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
         CurrencySpecificationProvider currencySpecificationProvider = riskEngine.getCurrencySpecificationProvider();
         MutableLongObjectMap<UserProfile> userProfiles = riskEngine.getUserProfileService().getUserProfiles().asUnmodifiable();
         MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
-        FundEventsHelper eventsHelper = fundEventsHelpers.get(riskEngine.getShardId());
         userProfiles.forEachValue(userProfile -> {
             if (userProfile == null)
                 return;
@@ -144,7 +135,7 @@ public final class LiquidationScanner {
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
-        SymbolPositionRecord position, FundEventsHelper eventsHelper) {
+                                          SymbolPositionRecord position, FundEventsHelper eventsHelper) {
         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
         long profit = position.estimateUnrealizedProfit(priceRecord);
         // 当前持仓所需的初始保证金
@@ -215,7 +206,7 @@ public final class LiquidationScanner {
     }
 
     private void forceCrossLiquidation(UserProfile userProfile, List<DoubleObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
-        FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
+                                       FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
         long marginReleased = 0;
         for (DoubleObjectPair<SymbolPositionRecord> pair : positionPairs) {
             if (marginReleased >= deficit)
@@ -250,16 +241,16 @@ public final class LiquidationScanner {
     }
 
     private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, CoreSymbolSpecification spec, long price, long size,
-        FundEventsHelper eventsHelper) {
+                                         FundEventsHelper eventsHelper) {
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
         CompletableFuture<OrderCommand> liquidationFuture = api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
-            .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
+                .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
         liquidationFuture.whenCompleteAsync((cmd, err) -> {
             /**
              * 如果第一个事件是reject，说明没有完全成交。
-             * 
+             *
              * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
              */
             MatcherTradeEvent firstEvent = cmd.matcherEvent;
@@ -274,7 +265,7 @@ public final class LiquidationScanner {
                         if (cmd2.matcherEvent.eventType == MatcherEventType.REJECT) {
                             /**
                              * FOK的reject，是全额reject
-                             * 
+                             *
                              * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchFokBudget
                              */
                             handleLiquidationFailure(position, cmd2.matcherEvent.size);

@@ -1,5 +1,6 @@
 package exchange.core2.tests.integration;
 
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
@@ -978,7 +979,7 @@ public class ITExchangeCoreHedgeMode {
     @Test
     public void testLiquidationLoop() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
 
             initUsersAndSymbol(container);
 
@@ -1025,7 +1026,7 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, is(0L));
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(UID_4, report -> {
                 // UID_4吃掉UID_2和UID_1开出来的空单
@@ -1046,7 +1047,7 @@ public class ITExchangeCoreHedgeMode {
     @Test
     public void testLiquidationLoop2() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
 
             initUsersAndSymbol(container);
 
@@ -1167,7 +1168,7 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, is(0L));
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(UID_4, report -> {
                 // UID_4吃掉UID_2和UID_1开出来的空单
@@ -1192,7 +1193,7 @@ public class ITExchangeCoreHedgeMode {
     @Test
     public void testLiquidationLoop3() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
 
             container.addCurrency(BNB);
             container.addCurrency(USDT);
@@ -1298,7 +1299,7 @@ public class ITExchangeCoreHedgeMode {
                     .symbol(BNB_USDT.symbolId)
                     .markPrice(95000000L)
                     .build(), CommandResultCode.SUCCESS);
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(size));
@@ -1313,7 +1314,7 @@ public class ITExchangeCoreHedgeMode {
                     .symbol(BNB_USDT.symbolId)
                     .markPrice(55000000L)
                     .build(), CommandResultCode.SUCCESS);
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(size));

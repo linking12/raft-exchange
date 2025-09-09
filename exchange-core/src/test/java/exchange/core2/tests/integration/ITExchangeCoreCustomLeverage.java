@@ -1,5 +1,6 @@
 package exchange.core2.tests.integration;
 
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiAdjustLeverage;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
@@ -362,7 +363,7 @@ public final class ITExchangeCoreCustomLeverage {
     @Test
     public void testLiquidationTriggeredByHighLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10003)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
@@ -423,7 +424,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
@@ -710,7 +711,7 @@ public final class ITExchangeCoreCustomLeverage {
     @Test
     public void testLiquidationOfMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
             CoreSymbolSpecification spec = container.initSymbol();
             container.addCurrency(spec.baseCurrency, 0);
             container.addCurrency(spec.quoteCurrency, 0);
@@ -776,7 +777,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
@@ -836,7 +837,7 @@ public final class ITExchangeCoreCustomLeverage {
             container.updateCurrentPriceTo(981, spec.symbolId, spec.quoteCurrency);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             // 用户没有被强平
             container.validateUserState(UID_1, profile -> {
@@ -937,7 +938,7 @@ public final class ITExchangeCoreCustomLeverage {
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getPositions().getFirst().get(0).openVolume, is(50L));
             });
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {

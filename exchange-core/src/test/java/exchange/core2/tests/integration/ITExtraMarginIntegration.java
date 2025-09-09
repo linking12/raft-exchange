@@ -2,6 +2,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -383,7 +384,7 @@ class ITExtraMarginIntegration {
         long makerOrderId5 = 1009L;
         long makerOrderId6 = 1010L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -449,7 +450,7 @@ class ITExtraMarginIntegration {
         long fee = 10;
         long extraMarginDeposit = 10L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -478,7 +479,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
@@ -496,7 +497,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - extraMarginDeposit));
@@ -565,7 +566,7 @@ class ITExtraMarginIntegration {
         long takerOrderId1 = 1006L;
         long fee = 10;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -593,7 +594,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
@@ -612,7 +613,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - marginDeposit));
@@ -669,7 +670,7 @@ class ITExtraMarginIntegration {
         long makerOrderId6 = 1010L;
         int fee = 10;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -699,7 +700,7 @@ class ITExtraMarginIntegration {
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
             container.createAskWithOrderId(makerOrderId6, userId3, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
             // 期待结果makerOrderId6可以被挂出的强平吃掉
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
@@ -715,7 +716,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9860L));
                 assertThat(profile.getPositions().size(), is(2));
@@ -770,7 +771,7 @@ class ITExtraMarginIntegration {
         long makerOrderId6 = 1010L;
         int fee = 10;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -802,7 +803,7 @@ class ITExtraMarginIntegration {
 
             long initialBalance = 9840L;
             long marginDeposit = 12L;
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
             // 期待结果makerOrderId6可以被挂出的强平吃掉
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(initialBalance));
@@ -818,7 +819,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(initialBalance + marginDeposit));
                 assertThat(profile.getPositions().size(), is(2));
@@ -888,7 +889,7 @@ class ITExtraMarginIntegration {
         long adjustMargin1 = 900L;
         long adjustMargin2 = 2900L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -934,7 +935,7 @@ class ITExtraMarginIntegration {
                 assertThat(profile.getPositions().get(symbols.get(1).symbolId).get(0).direction, is(PositionDirection.SHORT));
             });
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
 
             container.validateUserState(userId3, profile -> {
                 assertThat(profile.getPositions().size(), is(2));

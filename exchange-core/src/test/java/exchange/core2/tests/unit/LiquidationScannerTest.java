@@ -70,8 +70,7 @@ class LiquidationScannerTest {
     }
 
     private LiquidationScanner getScanner() {
-        Collection<RiskEngine> riskEngines = Collections.emptyList();
-        LiquidationScanner scanner = new LiquidationScanner(null, riskEngines, 0);
+        LiquidationScanner scanner = new LiquidationScanner(null, null);
         return scanner;
     }
 

@@ -18,6 +18,7 @@ package exchange.core2.tests.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -42,7 +43,7 @@ public class ThroughputTestsModule {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg)) {
             //性能测试不开强平检查
             //性能测试准备的order不会考虑强平单，如果强平导致仓位没有了，但是测试生成的订单不知道，还是会用到这个仓位，会报错仓位不存在。
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.SECONDS);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
 
             final float avgMt = container.executeTestingThread(
                     () -> (float) IntStream.range(0, iterations)
@@ -85,7 +86,7 @@ public class ThroughputTestsModule {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg, consumer)) {
             //性能测试不开强平检查
             //性能测试准备的order不会考虑强平单，如果强平导致仓位没有了，但是测试生成的订单不知道，还是会用到这个仓位，会报错仓位不存在。
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.SECONDS);
+            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
 
             final float avgMt = container.executeTestingThread(
                     () -> (float) IntStream.range(0, iterations)

@@ -21,13 +21,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
-import exchange.core2.core.SimpleEventsProcessor;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.collections.objpool.ObjectsPool;
+import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -100,13 +101,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final boolean logDebug;
     private final ReportsQueriesConfiguration reportsQueriesConfiguration;
     private final ObjLongConsumer<OrderCommand> resultsConsumer;
+    private final LiquidationScanner liquidationScanner;
 
     public RiskEngine(final int shardId,
                       final int numShards,
                       final ISerializationProcessor serializationProcessor,
                       final SharedPool sharedPool,
                       final ExchangeConfiguration exchangeConfiguration,
-                      final ObjLongConsumer<OrderCommand> resultsConsumer) {
+                      final ObjLongConsumer<OrderCommand> resultsConsumer,
+                      final ExchangeApi api) {
         if (Long.bitCount(numShards) != 1) {
             throw new IllegalArgumentException("Invalid number of shards " + numShards + " - must be power of 2");
         }
@@ -125,6 +128,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
+        this.liquidationScanner = new LiquidationScanner(api, this, new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards));
         this.initState(numShards);
     }
     
@@ -153,6 +157,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
             simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
             simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
         }
+        this.liquidationScanner.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
+        this.liquidationScanner.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
+        this.liquidationScanner.eventsHelper.setUserProfileService(this.userProfileService);
+        this.liquidationScanner.eventsHelper.setLastPriceCache(this.lastPriceCache);
     }
 
     
@@ -204,6 +212,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
                 simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
             }
+            this.liquidationScanner.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
+            this.liquidationScanner.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
+            this.liquidationScanner.eventsHelper.setUserProfileService(this.userProfileService);
+            this.liquidationScanner.eventsHelper.setLastPriceCache(this.lastPriceCache);
             this.fees = state.fees;
             this.adjustments = state.adjustments;
             this.suspends = state.suspends;

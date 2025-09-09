@@ -83,7 +83,7 @@ public final class ExchangeCore {
     public static final boolean EVENTS_POOLING = true;
 
     @Getter
-    public LiquidationScanner liquidationScanner;
+    public List<LiquidationScanner> liquidationScanners;
 
     /**
      * Exchange core constructor.
@@ -162,7 +162,7 @@ public final class ExchangeCore {
                 .collect(Collectors.toMap(
                         shardId -> shardId,
                         shardId -> CompletableFuture.supplyAsync(
-                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer),
+                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer, api),
                                 loaderExecutor)));
 
         final EventHandler<OrderCommand>[] matchingEngineHandlers = matchingEngineFutures.values().stream()
@@ -230,8 +230,8 @@ public final class ExchangeCore {
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
 
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
-            liquidationScanner = new LiquidationScanner(api, riskEngines.values(), riskEnginesNum);
-            liquidationScanner.start();
+            liquidationScanners = riskEngines.values().stream().map(RiskEngine::getLiquidationScanner).collect(Collectors.toList());
+            liquidationScanners.forEach(LiquidationScanner::start);
         }
 
         try {
@@ -282,9 +282,11 @@ public final class ExchangeCore {
         if (!stopped) {
             stopped = true;
             // TODO stop accepting new events first
-            if (liquidationScanner != null) {
+            if (liquidationScanners != null) {
                 log.info("Shutdown liquidation scanner...");
-                liquidationScanner.stop(timeout, timeUnit);
+                for (LiquidationScanner liquidationScanner : liquidationScanners) {
+                    liquidationScanner.stop(timeout, timeUnit);
+                }
                 log.info("Liquidation scanner stopped");
             }
             try {

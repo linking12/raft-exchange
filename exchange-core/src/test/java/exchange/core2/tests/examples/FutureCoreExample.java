@@ -621,7 +621,7 @@ public class FutureCoreExample {
         updateCurrentPriceTo(8000);
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationScanners.forEach(LiquidationScanner::triggerOnce);
         // should raise Margin call warning
     }
 
@@ -646,14 +646,14 @@ public class FutureCoreExample {
         updateCurrentPriceTo(11000);
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationScanners.forEach(LiquidationScanner::triggerOnce);
         // should raise Margin call warning
     }
 
     // 做多被强制平仓
 //    @Test
     public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
-        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
+        exchangeCore.liquidationScanners.forEach(LiquidationScanner::stop);
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
 
@@ -677,7 +677,7 @@ public class FutureCoreExample {
         }
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationScanners.forEach(LiquidationScanner::triggerOnce);
         // should trigger liquidate
         // search log Liquidated: uid=
 //        SingleUserReportResult userStatus3 = getUserStatus(userId1);
@@ -717,7 +717,7 @@ public class FutureCoreExample {
     // 做空被强制平仓
 //    @Test
     public void testShortPositionForcedLiquidate() throws ExecutionException, InterruptedException {
-        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
+        exchangeCore.liquidationScanners.forEach(LiquidationScanner::stop);
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
 
@@ -741,7 +741,7 @@ public class FutureCoreExample {
         }
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationScanners.forEach(LiquidationScanner::triggerOnce);
         // should trigger liquidate
         // search log Liquidated: uid=
         // SingleUserReportResult userStatus3 = getUserStatus(userId1);

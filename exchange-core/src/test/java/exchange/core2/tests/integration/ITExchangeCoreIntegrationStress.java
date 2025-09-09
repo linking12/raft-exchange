@@ -16,6 +16,7 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.ExchangeApi;
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.api.ApiCommand;
@@ -65,7 +66,7 @@ public abstract class ITExchangeCoreIntegrationStress {
 
     public void manyOperations(final CoreSymbolSpecification symbolSpec) throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
             container.initBasicSymbolsWithDigit(0);
             container.initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 100);
             //container.initBasicUsers();

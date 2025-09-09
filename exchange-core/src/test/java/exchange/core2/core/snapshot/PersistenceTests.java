@@ -15,6 +15,7 @@
  */
 package exchange.core2.core.snapshot;
 
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -103,7 +104,7 @@ public class PersistenceTests {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, firstStartConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
             container.loadSymbolsUsersAndPrefillOrders(testDataFutures);
             doExtra(container);
 
@@ -127,7 +128,7 @@ public class PersistenceTests {
             final long tLoad = System.currentTimeMillis();
             try (final ExchangeTestContainer recreatedContainer = ExchangeTestContainer.create(performanceConfiguration, fromSnapshotConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
-                recreatedContainer.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+                recreatedContainer.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
 
                 recreatedContainer.getApi().submitRecoverCommandAsync(ApiRecoverState.builder().snapshotId(fromSnapshotConfig.getSnapshotId()).build()).get();
 
@@ -313,7 +314,7 @@ public class PersistenceTests {
         container.createAskWithOrderId(MAKER_3, UID_LIQ, 100, 11_000, SYMBOL_FUTURES, MarginMode.CROSS);
 
         // 11. 手动触发强平扫描
-        container.getExchangeCore().liquidationScanner.triggerOnce();
+        container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::triggerOnce);
 
         // 12. 验证全仓用户被强平
         container.validateUserState(UID_CROSS, profile -> {

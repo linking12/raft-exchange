@@ -15,6 +15,7 @@
  */
 package exchange.core2.tests.util;
 
+import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiRecoverState;
@@ -61,7 +62,7 @@ public class PersistenceTestsModule {
 
             try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, firstStartConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
-                container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+                container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
                 container.loadSymbolsUsersAndPrefillOrders(testDataFutures);
 
                 log.info("Creating snapshot...");
@@ -98,7 +99,7 @@ public class PersistenceTestsModule {
             final long tLoad = System.currentTimeMillis();
             try (final ExchangeTestContainer recreatedContainer = ExchangeTestContainer.create(performanceConfiguration, fromSnapshotConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
-                recreatedContainer.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+                recreatedContainer.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
 
                 recreatedContainer.getApi().submitRecoverCommandAsync(ApiRecoverState.builder().snapshotId(fromSnapshotConfig.getSnapshotId()).build()).get();
 
