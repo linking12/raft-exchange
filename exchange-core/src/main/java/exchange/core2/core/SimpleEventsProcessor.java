@@ -2,27 +2,26 @@ package exchange.core2.core;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ObjLongConsumer;
+
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.core.IFundEventsHandler.FundEventReport;
 import exchange.core2.core.ITradeEventsHandler.FuturesExecutionReport;
 import exchange.core2.core.ITradeEventsHandler.SpotExecutionReport;
 import exchange.core2.core.common.CoreSymbolSpecification;
-import exchange.core2.core.common.UserProfile;
-import exchange.core2.core.common.cmd.OrderCommandType;
-import exchange.core2.core.processors.SymbolSpecificationProvider;
-import exchange.core2.core.processors.UserProfileService;
-import lombok.Setter;
-
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.common.cmd.OrderCommandType;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 @RequiredArgsConstructor
@@ -31,7 +30,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private final ITradeEventsHandler tradeEventsHandler;
     private final IFundEventsHandler fundEventsHandler;
-    private final Map<Integer, UserProfileService> userProfileServices = new ConcurrentHashMap<>();
+    private final IntObjectHashMap<UserProfileService> userProfileServices = new IntObjectHashMap<UserProfileService>();
     @Setter
     private SymbolSpecificationProvider symbolSpecificationProvider;
     @Setter
@@ -190,7 +189,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     public int shardIdOfUid(long uid) {
         int shardMask = numShards - 1;
-        return (int) (uid & shardMask);
+        return (int)(uid & shardMask);
     }
 
     public void setUserProfileService(int shardId, UserProfileService userProfileService) {
