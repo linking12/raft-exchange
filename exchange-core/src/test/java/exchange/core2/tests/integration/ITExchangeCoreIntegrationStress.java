@@ -16,13 +16,12 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
-import exchange.core2.tests.util.TestConstants;
 import exchange.core2.tests.util.TestOrdersGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
@@ -31,7 +30,6 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -66,7 +64,7 @@ public abstract class ITExchangeCoreIntegrationStress {
 
     public void manyOperations(final CoreSymbolSpecification symbolSpec) throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.initBasicSymbolsWithDigit(0);
             container.initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 100);
             //container.initBasicUsers();

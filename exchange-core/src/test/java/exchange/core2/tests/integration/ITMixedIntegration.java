@@ -2,7 +2,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MarginMode;
@@ -26,7 +26,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static exchange.core2.core.common.OrderAction.BID;
 import static exchange.core2.core.common.OrderType.GTC;
@@ -179,7 +178,7 @@ class ITMixedIntegration {
         long takerOrderId2 = 1006L;
         long exchangeOrderId = 112233L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
@@ -245,7 +244,7 @@ class ITMixedIntegration {
         long price1 = 10000;
         int price2 = 15000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -292,7 +291,7 @@ class ITMixedIntegration {
         long price1 = 10000;
         int price2 = 9000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -352,7 +351,7 @@ class ITMixedIntegration {
         long price1 = 10000;
         int price2 = 15000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -377,7 +376,7 @@ class ITMixedIntegration {
             container.updateCurrentPriceTo(9930, symbols.get(0).symbolId, quoteId);
             // 强平价格为9930, 破产价为9920, 挂一个9920单子准备成交
             container.createBidWithOrderId(MAKER_2, UID_3, size, 9920, symbols.get(0).symbolId, MarginMode.ISOLATED);
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));

@@ -1,16 +1,12 @@
 package exchange.core2.tests.unit;
 
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
-import exchange.core2.core.processors.RiskEngine;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.jupiter.api.Test;
-
-import java.util.Collection;
-import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -69,8 +65,8 @@ class LiquidationScannerTest {
         return spec;
     }
 
-    private LiquidationScanner getScanner() {
-        LiquidationScanner scanner = new LiquidationScanner(null, null, null);
+    private LiquidationEngine getScanner() {
+        LiquidationEngine scanner = new LiquidationEngine(null, null, null);
         return scanner;
     }
 

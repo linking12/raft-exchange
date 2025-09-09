@@ -47,6 +47,7 @@ import exchange.core2.core.common.config.SerializationConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.processors.DisruptorExceptionHandler;
 import exchange.core2.core.processors.GroupingProcessor;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.ResultsHandler;
 import exchange.core2.core.processors.RiskEngine;
@@ -83,7 +84,7 @@ public final class ExchangeCore {
     public static final boolean EVENTS_POOLING = true;
 
     @Getter
-    public List<LiquidationScanner> liquidationScanners;
+    public List<LiquidationEngine> liquidationEngines;
 
     /**
      * Exchange core constructor.
@@ -230,8 +231,8 @@ public final class ExchangeCore {
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
 
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
-            liquidationScanners = riskEngines.values().stream().map(RiskEngine::getLiquidationScanner).collect(Collectors.toList());
-            liquidationScanners.forEach(LiquidationScanner::start);
+            liquidationEngines = riskEngines.values().stream().map(RiskEngine::getLiquidationEngine).collect(Collectors.toList());
+            liquidationEngines.forEach(liquidationEngine -> liquidationEngine.start(threadFactory));
         }
 
         try {
@@ -282,10 +283,10 @@ public final class ExchangeCore {
         if (!stopped) {
             stopped = true;
             // TODO stop accepting new events first
-            if (liquidationScanners != null) {
+            if (liquidationEngines != null) {
                 log.info("Shutdown liquidation scanner...");
-                for (LiquidationScanner liquidationScanner : liquidationScanners) {
-                    liquidationScanner.stop(timeout, timeUnit);
+                for (LiquidationEngine liquidationEngine : liquidationEngines) {
+                    liquidationEngine.stop(timeout, timeUnit);
                 }
                 log.info("Liquidation scanner stopped");
             }

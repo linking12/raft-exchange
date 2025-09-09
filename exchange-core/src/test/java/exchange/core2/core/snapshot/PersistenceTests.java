@@ -15,7 +15,7 @@
  */
 package exchange.core2.core.snapshot;
 
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -30,12 +30,8 @@ import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
 import org.junit.Test;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -104,7 +100,7 @@ public class PersistenceTests {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, firstStartConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.loadSymbolsUsersAndPrefillOrders(testDataFutures);
             doExtra(container);
 
@@ -128,7 +124,7 @@ public class PersistenceTests {
             final long tLoad = System.currentTimeMillis();
             try (final ExchangeTestContainer recreatedContainer = ExchangeTestContainer.create(performanceConfiguration, fromSnapshotConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
 
-                recreatedContainer.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+                recreatedContainer.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
 
                 recreatedContainer.getApi().submitRecoverCommandAsync(ApiRecoverState.builder().snapshotId(fromSnapshotConfig.getSnapshotId()).build()).get();
 
@@ -314,7 +310,7 @@ public class PersistenceTests {
         container.createAskWithOrderId(MAKER_3, UID_LIQ, 100, 11_000, SYMBOL_FUTURES, MarginMode.CROSS);
 
         // 11. 手动触发强平扫描
-        container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::triggerOnce);
+        container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::triggerOnce);
 
         // 12. 验证全仓用户被强平
         container.validateUserState(UID_CROSS, profile -> {

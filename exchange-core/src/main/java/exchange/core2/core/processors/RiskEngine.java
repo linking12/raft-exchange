@@ -27,7 +27,6 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.LiquidationScanner;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreCurrencySpecification;
@@ -101,7 +100,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final boolean logDebug;
     private final ReportsQueriesConfiguration reportsQueriesConfiguration;
     private final ObjLongConsumer<OrderCommand> resultsConsumer;
-    private final LiquidationScanner liquidationScanner;
+    private final LiquidationEngine liquidationEngine;
 
     public RiskEngine(final int shardId,
                       final int numShards,
@@ -128,7 +127,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
-        this.liquidationScanner = new LiquidationScanner(api, this, new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards));
+        this.liquidationEngine = new LiquidationEngine(api, this, numShards);
         this.initState(numShards);
     }
     
@@ -157,10 +156,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
             simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
         }
-        this.liquidationScanner.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
-        this.liquidationScanner.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
-        this.liquidationScanner.eventsHelper.setUserProfileService(this.userProfileService);
-        this.liquidationScanner.eventsHelper.setLastPriceCache(this.lastPriceCache);
+        this.liquidationEngine.updateProvider(this);
     }
 
     
@@ -212,10 +208,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
                 simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
             }
-            this.liquidationScanner.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
-            this.liquidationScanner.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
-            this.liquidationScanner.eventsHelper.setUserProfileService(this.userProfileService);
-            this.liquidationScanner.eventsHelper.setLastPriceCache(this.lastPriceCache);
+            this.liquidationEngine.updateProvider(this);
             this.fees = state.fees;
             this.adjustments = state.adjustments;
             this.suspends = state.suspends;
@@ -1141,7 +1134,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (closedSize > 0) {
                     long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
                     long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
-                    boolean isLiquidation = LiquidationScanner.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
+                    boolean isLiquidation = LiquidationEngine.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
                     eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked, closedSize, ev.price, 0);
                 }
 

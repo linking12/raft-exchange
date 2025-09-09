@@ -18,7 +18,7 @@ package exchange.core2.tests.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiCommand;
@@ -44,7 +44,6 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -325,7 +324,7 @@ public class LatencyTestsModule {
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, initialStateConfiguration, SerializationConfiguration.DEFAULT)) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             final ExchangeApi api = container.getApi();
 
             final IntFunction<TreeMap<ZonedDateTime, Long>> testIteration = tps -> {

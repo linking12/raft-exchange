@@ -1,7 +1,7 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -25,7 +25,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static exchange.core2.tests.util.TestConstants.*;
@@ -190,7 +189,7 @@ class ITPerpetualContractIntegration {
     public void testDeliveryScenario0() throws Exception {
         long deposit = 20000L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
             // 0. 充钱
@@ -245,7 +244,7 @@ class ITPerpetualContractIntegration {
         int makerFee = 100;
         int takerFee = 200;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
             // 0. 充钱
@@ -308,7 +307,7 @@ class ITPerpetualContractIntegration {
     public void testPerpetualScenario0() throws Exception {
         long deposit = 20000L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
@@ -379,7 +378,7 @@ class ITPerpetualContractIntegration {
         int rateScale = 100;
         int updatedPrice = 1500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
@@ -549,7 +548,7 @@ class ITPerpetualContractIntegration {
         int rateScale = 100;
         int updatedPrice = 1500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
@@ -660,7 +659,7 @@ class ITPerpetualContractIntegration {
         int updatedPrice = 1100;
         int price = 1000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanners.forEach(LiquidationScanner::stop);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10000)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
@@ -713,7 +712,7 @@ class ITPerpetualContractIntegration {
                     .build();
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
             // 第一次触发强平uid_1 position不会被强平
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
@@ -748,7 +747,7 @@ class ITPerpetualContractIntegration {
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 11000 * 5 / 10 = 5500
             // equity = balance + profit = 4900 + 1000 = 5900 > maintenance
             // 此时不会触发强平
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             // openPriceSum = 10 * 1000 - 6 * 1100 = 3400
             // openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110
@@ -771,7 +770,7 @@ class ITPerpetualContractIntegration {
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
             // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
             // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             //  openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 4/10 = 66L
             // openPriceSum = 10 * 1000 - 4 * 600 = 7600L
@@ -786,7 +785,7 @@ class ITPerpetualContractIntegration {
             });
 
             // 再次触发强平, 此时期待当前持仓不再被强平
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));

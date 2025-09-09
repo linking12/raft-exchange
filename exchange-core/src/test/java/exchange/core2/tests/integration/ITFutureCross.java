@@ -17,7 +17,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.LiquidationScanner;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiPlaceOrder;
@@ -31,7 +31,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static exchange.core2.core.common.OrderAction.ASK;
 import static exchange.core2.core.common.OrderAction.BID;
@@ -465,7 +464,7 @@ class ITFutureCross extends ITFutureBase {
         long takerOrderId4 = 1008L;
         long makerOrderId5 = 1009L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -492,7 +491,7 @@ class ITFutureCross extends ITFutureBase {
             // userId3先设置一个单子用于强制平仓, 此时
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             // 期待结果makerOrderId5可以被吃掉, position数量为1
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
@@ -522,7 +521,7 @@ class ITFutureCross extends ITFutureBase {
         long makerOrderId5 = 1009L;
         long makerOrderId6 = 1010L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -550,7 +549,7 @@ class ITFutureCross extends ITFutureBase {
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
             container.createAskWithOrderId(makerOrderId6, userId3, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             // 期待结果makerOrderId6可以被挂出的强平吃掉
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
@@ -596,7 +595,7 @@ class ITFutureCross extends ITFutureBase {
         long makerOrderId7 = 1017L;
         long takerOrderId7 = 1018L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -652,7 +651,7 @@ class ITFutureCross extends ITFutureBase {
             // userId5先设置一个单子(两手)用于强制平仓, 此时userId3会被强平, userId1不会强平
             container.createBidWithOrderId(makerOrderId5, userId5, 2, 100, symbols.get(0).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
@@ -729,7 +728,7 @@ class ITFutureCross extends ITFutureBase {
         long takerOrderId2 = 1008L;
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
@@ -761,7 +760,7 @@ class ITFutureCross extends ITFutureBase {
                 assertThat(profile.getPositions().size(), is(2));
             });
 
-            container.getExchangeCore().getLiquidationScanners().forEach(LiquidationScanner::triggerOnce);
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));

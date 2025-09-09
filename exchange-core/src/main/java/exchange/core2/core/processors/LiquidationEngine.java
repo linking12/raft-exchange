@@ -1,19 +1,20 @@
-package exchange.core2.core;
+package exchange.core2.core.processors;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
-import org.eclipse.collections.api.map.primitive.MutableLongObjectMap;
 import org.eclipse.collections.api.tuple.primitive.DoubleObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.tuple.primitive.PrimitiveTuples;
 
+import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
@@ -29,39 +30,54 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
-import exchange.core2.core.processors.CurrencySpecificationProvider;
-import exchange.core2.core.processors.FundEventsHelper;
-import exchange.core2.core.processors.RiskEngine;
-import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.utils.CoreArithmeticUtils;
-import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 /**
  * Liquidation scanner for checking user profiles and triggering liquidations.
  */
-@Data
 @Slf4j
-public final class LiquidationScanner {
+public final class LiquidationEngine {
 
-    private final ExchangeApi api;
-    private final RiskEngine riskEngine;
-    public final FundEventsHelper eventsHelper;
     private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
+    private final ExchangeApi api;
+    private final int shardId;
+    private final FundEventsHelper eventsHelper;
+    private SymbolSpecificationProvider symbolSpecificationProvider;
+    private CurrencySpecificationProvider currencySpecificationProvider;
+    private UserProfileService userProfileService;
+    private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private ScheduledExecutorService scheduler;
 
-    public void start() {
-        if (this.scheduler != null) {
+    public LiquidationEngine(ExchangeApi exchangeApi, RiskEngine riskEngine, int numShards) {
+        api = exchangeApi;
+        shardId = riskEngine.getShardId();
+        eventsHelper = new FundEventsHelper(riskEngine.getSharedPool()::getFundEventChain, shardId, numShards);
+    }
+
+    public void updateProvider(RiskEngine riskEngine) {
+        symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
+        currencySpecificationProvider = riskEngine.getCurrencySpecificationProvider();
+        userProfileService = riskEngine.getUserProfileService();
+        lastPriceCache = riskEngine.getLastPriceCache();
+        eventsHelper.setSymbolSpecificationProvider(symbolSpecificationProvider);
+        eventsHelper.setCurrencySpecificationProvider(currencySpecificationProvider);
+        eventsHelper.setUserProfileService(userProfileService);
+        eventsHelper.setLastPriceCache(lastPriceCache);
+    }
+
+    public void start(ThreadFactory threadFactory) {
+        if (scheduler != null) {
             return;
         }
-        scheduler = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, "LiquidationScanner"));
+        scheduler = Executors.newSingleThreadScheduledExecutor(threadFactory);
         scheduler.scheduleWithFixedDelay(() -> {
-            log.debug("Checking liquidation for shard {}", riskEngine.getShardId());
+            log.debug("Checking liquidation for shard {}", shardId);
             try {
-                checkLiquidations(riskEngine, eventsHelper);
+                checkLiquidations();
             } catch (Throwable e) {
-                log.error("Error during liquidation check for shard {}", riskEngine.getShardId(), e);
+                log.error("Error during liquidation check for shard {}", shardId, e);
             }
         }, scanIntervalSec, scanIntervalSec, TimeUnit.SECONDS);
     }
@@ -87,19 +103,15 @@ public final class LiquidationScanner {
 
     public void triggerOnce() {
         try {
-            log.info("Manual trigger: Checking liquidation for shard {}", riskEngine.getShardId());
-            checkLiquidations(riskEngine, eventsHelper);
+            log.info("Manual trigger: Checking liquidation for shard {}", shardId);
+            checkLiquidations();
         } catch (Throwable e) {
-            log.error("Manual trigger failed for shard {}", riskEngine.getShardId(), e);
+            log.error("Manual trigger failed for shard {}", shardId, e);
         }
     }
 
-    private void checkLiquidations(RiskEngine riskEngine, FundEventsHelper eventsHelper) {
-        SymbolSpecificationProvider symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
-        CurrencySpecificationProvider currencySpecificationProvider = riskEngine.getCurrencySpecificationProvider();
-        MutableLongObjectMap<UserProfile> userProfiles = riskEngine.getUserProfileService().getUserProfiles().asUnmodifiable();
-        MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache = riskEngine.getLastPriceCache().asUnmodifiable();
-        userProfiles.forEachValue(userProfile -> {
+    private void checkLiquidations() {
+        userProfileService.getUserProfiles().forEachValue(userProfile -> {
             if (userProfile == null)
                 return;
             // 遍历每个用户的所有持仓
