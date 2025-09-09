@@ -231,8 +231,8 @@ public final class ExchangeCore {
         IntStream.range(0, riskEnginesNum).forEach(i -> procR1.get(i).setSlaveProcessor(procR2.get(i)));
 
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
-            liquidationEngines = riskEngines.values().stream().map(RiskEngine::getLiquidationEngine).collect(Collectors.toList());
-            liquidationEngines.forEach(liquidationEngine -> liquidationEngine.start());
+            this.liquidationEngines = riskEngines.values().stream().map(RiskEngine::getLiquidationEngine).collect(Collectors.toList());
+            this.liquidationEngines.forEach(liquidationEngine -> liquidationEngine.start());
         }
 
         try {
