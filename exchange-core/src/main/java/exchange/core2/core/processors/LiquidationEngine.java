@@ -40,8 +40,8 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public final class LiquidationEngine {
-
-    private final AffinityThreadFactory threadFactory = new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-");
+    private final AffinityThreadFactory threadFactory =
+        new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-");
     private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
     private final ExchangeApi api;
     private final int shardId;
@@ -55,11 +55,11 @@ public final class LiquidationEngine {
     public LiquidationEngine(ExchangeApi api, Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
         this.api = api;
         this.shardId = shardId;
-        eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
+        this.eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
     }
 
     public void updateProvider(SymbolSpecificationProvider symbolSpecProvider, CurrencySpecificationProvider currencySpecProvider,
-                               UserProfileService userService, IntObjectHashMap<LastPriceCacheRecord> lastPriceService) {
+        UserProfileService userService, IntObjectHashMap<LastPriceCacheRecord> lastPriceService) {
         symbolSpecificationProvider = symbolSpecProvider;
         currencySpecificationProvider = currencySpecProvider;
         userProfileService = userService;
@@ -145,12 +145,13 @@ public final class LiquidationEngine {
                 }
             });
             // 检查用户全仓模式下的强平状态
-            checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, currencySpecificationProvider, lastPriceCache, eventsHelper);
+            checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, currencySpecificationProvider, lastPriceCache,
+                eventsHelper);
         });
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
-                                          SymbolPositionRecord position, FundEventsHelper eventsHelper) {
+        SymbolPositionRecord position, FundEventsHelper eventsHelper) {
         // 未实现盈亏，基于标记价格（markPrice），反映持仓的市场价值变化
         long profit = position.estimateUnrealizedProfit(priceRecord);
         // 当前持仓所需的初始保证金
@@ -178,8 +179,8 @@ public final class LiquidationEngine {
     }
 
     private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency,
-                                       SymbolSpecificationProvider symbolSpecificationProvider, CurrencySpecificationProvider currencySpecificationProvider,
-                                       MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
+        SymbolSpecificationProvider symbolSpecificationProvider, CurrencySpecificationProvider currencySpecificationProvider,
+        MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
             // 计算总盈亏和维持保证金
             long totalProfit = 0;
@@ -221,7 +222,7 @@ public final class LiquidationEngine {
     }
 
     private void forceCrossLiquidation(UserProfile userProfile, List<DoubleObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
-                                       FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
+        FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
         long marginReleased = 0;
         for (DoubleObjectPair<SymbolPositionRecord> pair : positionPairs) {
             if (marginReleased >= deficit)
@@ -256,12 +257,12 @@ public final class LiquidationEngine {
     }
 
     private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, CoreSymbolSpecification spec, long price, long size,
-                                         FundEventsHelper eventsHelper) {
+        FundEventsHelper eventsHelper) {
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
         CompletableFuture<OrderCommand> liquidationFuture = api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
-                .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
+            .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
         liquidationFuture.whenCompleteAsync((cmd, err) -> {
             /**
              * 如果第一个事件是reject，说明没有完全成交。
