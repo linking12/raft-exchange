@@ -66,7 +66,7 @@ class LiquidationScannerTest {
     }
 
     private LiquidationEngine getScanner() {
-        LiquidationEngine scanner = new LiquidationEngine(null, null, 0, 1);
+        LiquidationEngine scanner = new LiquidationEngine(null, 0, 1);
         return scanner;
     }
 
