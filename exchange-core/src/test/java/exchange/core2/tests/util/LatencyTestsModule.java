@@ -45,6 +45,7 @@ import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.IntFunction;
@@ -69,10 +70,19 @@ public class LatencyTestsModule {
 
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
 
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg)) {
+        final SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
+        AtomicReference<CountDownLatch> refLatchBenchmark = new AtomicReference<>();
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceCfg, initialStateCfg, serializationCfg,
+                (cmd, seq) -> {
+                    if (refLatchBenchmark.get() == null) {
+                        return;
+                    }
+                    final long latency = System.nanoTime() - cmd.timestamp;
+                    hdrRecorder.recordValue(Math.min(latency, Integer.MAX_VALUE));
+                    refLatchBenchmark.get().countDown();
+                })) {
 
             final ExchangeApi api = container.getApi();
-            final SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
 
             // TODO - first run should validate the output (orders are accepted and processed properly)
 
@@ -83,12 +93,7 @@ public class LatencyTestsModule {
                     final TestOrdersGenerator.MultiSymbolGenResult genResult = testDataFutures.genResult.join();
 
                     final CountDownLatch latchBenchmark = new CountDownLatch(genResult.getBenchmarkCommandsSize());
-
-                    container.setConsumer((cmd, seq) -> {
-                        final long latency = System.nanoTime() - cmd.timestamp;
-                        hdrRecorder.recordValue(Math.min(latency, Integer.MAX_VALUE));
-                        latchBenchmark.countDown();
-                    });
+                    refLatchBenchmark.set(latchBenchmark);
 
                     final int nanosPerCmd = 1_000_000_000 / tps;
                     final long startTimeMs = System.currentTimeMillis();
@@ -105,8 +110,7 @@ public class LatencyTestsModule {
                     }
 
                     latchBenchmark.await();
-                    container.setConsumer((cmd, seq) -> {
-                    });
+                    refLatchBenchmark.set(null);
 
                     final long processingTimeMs = System.currentTimeMillis() - startTimeMs;
                     final float perfMt = (float) genResult.getBenchmarkCommandsSize() / (float) processingTimeMs / 1000.0f;
@@ -164,7 +168,35 @@ public class LatencyTestsModule {
         final int[] minLatencies = new int[testDataParameters.totalTransactionsNumber];
         Arrays.fill(minLatencies, Integer.MAX_VALUE);
 
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, initialStateConfiguration, SerializationConfiguration.DEFAULT)) {
+        final AtomicLong orderProgressCounter = new AtomicLong(0);
+        MutableInteger counter = new MutableInteger(0);
+        AtomicReference<int[]> latenciesRef = new AtomicReference<>();
+        AtomicReference<int[]> matcherEventsRef = new AtomicReference<>();
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, initialStateConfiguration, SerializationConfiguration.DEFAULT,
+                (cmd, seq) -> {
+                    if (latenciesRef.get() == null || matcherEventsRef.get() == null) {
+                        return;
+                    }
+
+                    orderProgressCounter.lazySet(cmd.timestamp);
+
+                    final long latency = System.nanoTime() - cmd.timestamp;
+                    long lat = Math.min(latency, Integer.MAX_VALUE);
+                    int i = counter.value++;
+
+                    latenciesRef.get()[i] = (int) lat;
+
+
+                    MatcherTradeEvent matcherEvent = cmd.matcherEvent;
+                    while (matcherEvent != null) {
+                        matcherEvent = matcherEvent.nextEvent;
+                        matcherEventsRef.get()[i]++;
+                    }
+
+                    if (cmd.resultCode != CommandResultCode.SUCCESS) {
+                        throw new IllegalStateException();
+                    }
+                })) {
 
             // TODO - first run should validate the output (orders are accepted and processed properly)
 
@@ -180,30 +212,10 @@ public class LatencyTestsModule {
                     final List<ApiCommand> apiCommandsBenchmark = genResult.getApiCommandsBenchmark().join();
                     final int[] latencies = new int[apiCommandsBenchmark.size()];
                     final int[] matcherEvents = new int[apiCommandsBenchmark.size()];
-                    MutableInteger counter = new MutableInteger(0);
-
-                    final AtomicLong orderProgressCounter = new AtomicLong(0);
-                    container.setConsumer((cmd, seq) -> {
-
-                        orderProgressCounter.lazySet(cmd.timestamp);
-
-                        final long latency = System.nanoTime() - cmd.timestamp;
-                        long lat = Math.min(latency, Integer.MAX_VALUE);
-                        int i = counter.value++;
-
-                        latencies[i] = (int) lat;
-
-
-                        MatcherTradeEvent matcherEvent = cmd.matcherEvent;
-                        while (matcherEvent != null) {
-                            matcherEvent = matcherEvent.nextEvent;
-                            matcherEvents[i]++;
-                        }
-
-                        if (cmd.resultCode != CommandResultCode.SUCCESS) {
-                            throw new IllegalStateException();
-                        }
-                    });
+                    orderProgressCounter.set(0);
+                    counter.set(0);
+                    latenciesRef.set(latencies);
+                    matcherEventsRef.set(matcherEvents);
 
                     for (ApiCommand cmd : apiCommandsBenchmark) {
                         long t = System.nanoTime();
@@ -214,8 +226,8 @@ public class LatencyTestsModule {
                         }
                     }
 
-                    container.setConsumer((cmd, seq) -> {
-                    });
+                    latenciesRef.set(null);
+                    matcherEventsRef.set(null);
 
                     final Map<Class<? extends ApiCommand>, SingleWriterRecorder> commandsClassLatencies = new HashMap<>();
 
@@ -322,8 +334,27 @@ public class LatencyTestsModule {
         final long hiccupThresholdNs = 200_000;
 
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
-
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, initialStateConfiguration, SerializationConfiguration.DEFAULT)) {
+        final MutableLong nextHiccupAcceptTimestampNs = new MutableLong(0);
+        final LongLongHashMap hiccupTimestampsNs = new LongLongHashMap(10000);
+        AtomicReference<CountDownLatch> refLatchBenchmark = new AtomicReference<>();
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, initialStateConfiguration, SerializationConfiguration.DEFAULT,
+                (cmd, seq) -> {
+                    if (refLatchBenchmark.get() == null) {
+                        return;
+                    }
+                    long now = System.nanoTime();
+                    // skip other messages in delayed group
+                    if (now < nextHiccupAcceptTimestampNs.value) {
+                        return;
+                    }
+                    long diffNs = now - cmd.timestamp;
+                    // register hiccup timestamps
+                    if (diffNs > hiccupThresholdNs) {
+                        hiccupTimestampsNs.put(cmd.timestamp, diffNs);
+                        nextHiccupAcceptTimestampNs.value = cmd.timestamp + diffNs;
+                    }
+                    refLatchBenchmark.get().countDown();
+                })) {
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             final ExchangeApi api = container.getApi();
 
@@ -333,25 +364,10 @@ public class LatencyTestsModule {
 
                     final TestOrdersGenerator.MultiSymbolGenResult genResult = testDataFutures.genResult.join();
 
-                    final LongLongHashMap hiccupTimestampsNs = new LongLongHashMap(10000);
                     final CountDownLatch latchBenchmark = new CountDownLatch(genResult.getBenchmarkCommandsSize());
-
-                    final MutableLong nextHiccupAcceptTimestampNs = new MutableLong(0);
-
-                    container.setConsumer((cmd, seq) -> {
-                        long now = System.nanoTime();
-                        // skip other messages in delayed group
-                        if (now < nextHiccupAcceptTimestampNs.value) {
-                            return;
-                        }
-                        long diffNs = now - cmd.timestamp;
-                        // register hiccup timestamps
-                        if (diffNs > hiccupThresholdNs) {
-                            hiccupTimestampsNs.put(cmd.timestamp, diffNs);
-                            nextHiccupAcceptTimestampNs.value = cmd.timestamp + diffNs;
-                        }
-                        latchBenchmark.countDown();
-                    });
+                    hiccupTimestampsNs.clear();
+                    nextHiccupAcceptTimestampNs.set(0);
+                    refLatchBenchmark.set(latchBenchmark);
 
                     final long startTimeNs = System.nanoTime();
                     final long startTimeMs = System.currentTimeMillis();
@@ -370,8 +386,7 @@ public class LatencyTestsModule {
 
                     latchBenchmark.await();
 
-                    container.setConsumer((cmd, seq) -> {
-                    });
+                    refLatchBenchmark.set(null);
 
                     final TreeMap<ZonedDateTime, Long> sorted = new TreeMap<>();
                     // convert nanosecond timestamp into Instant

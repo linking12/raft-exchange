@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -63,7 +64,13 @@ public abstract class ITExchangeCoreIntegrationStress {
     }
 
     public void manyOperations(final CoreSymbolSpecification symbolSpec) throws Exception {
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+        AtomicReference<CountDownLatch> refOrdersLatch = new AtomicReference<>();
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(),
+                (cmd, seq) -> {
+                    if (refOrdersLatch.get() != null) {
+                        refOrdersLatch.get().countDown();
+                    }
+                });) {
             container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.initBasicSymbolsWithDigit(0);
             container.initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 100);
@@ -104,7 +111,7 @@ public abstract class ITExchangeCoreIntegrationStress {
 
             log.debug("Running benchmark...");
             final CountDownLatch ordersLatch = new CountDownLatch(apiCommands.size());
-            container.setConsumer((cmd, seq) -> ordersLatch.countDown());
+            refOrdersLatch.set(ordersLatch);
             for (ApiCommand cmd : apiCommands) {
                 cmd.timestamp = System.currentTimeMillis();
                 api.submitCommand(cmd);

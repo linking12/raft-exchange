@@ -69,7 +69,6 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private AtomicLong uniqueIdCounterLong = new AtomicLong();
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
-    @Setter
     private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
         @Override
         public void orderBook(OrderBook orderBook) {
