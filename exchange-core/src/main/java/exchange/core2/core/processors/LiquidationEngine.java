@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
 import org.eclipse.collections.api.tuple.primitive.DoubleObjectPair;
@@ -31,6 +31,7 @@ import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
 
@@ -40,6 +41,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class LiquidationEngine {
 
+    private final AffinityThreadFactory threadFactory = new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-");
     private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
     private final ExchangeApi api;
     private final int shardId;
@@ -50,24 +52,25 @@ public final class LiquidationEngine {
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private ScheduledExecutorService scheduler;
 
-    public LiquidationEngine(ExchangeApi exchangeApi, RiskEngine riskEngine, int numShards) {
-        api = exchangeApi;
-        shardId = riskEngine.getShardId();
-        eventsHelper = new FundEventsHelper(riskEngine.getSharedPool()::getFundEventChain, shardId, numShards);
+    public LiquidationEngine(ExchangeApi api, Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
+        this.api = api;
+        this.shardId = shardId;
+        eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
     }
 
-    public void updateProvider(RiskEngine riskEngine) {
-        symbolSpecificationProvider = riskEngine.getSymbolSpecificationProvider();
-        currencySpecificationProvider = riskEngine.getCurrencySpecificationProvider();
-        userProfileService = riskEngine.getUserProfileService();
-        lastPriceCache = riskEngine.getLastPriceCache();
+    public void updateProvider(SymbolSpecificationProvider symbolSpecProvider, CurrencySpecificationProvider currencySpecProvider,
+                               UserProfileService userService, IntObjectHashMap<LastPriceCacheRecord> lastPriceService) {
+        symbolSpecificationProvider = symbolSpecProvider;
+        currencySpecificationProvider = currencySpecProvider;
+        userProfileService = userService;
+        lastPriceCache = lastPriceService;
         eventsHelper.setSymbolSpecificationProvider(symbolSpecificationProvider);
         eventsHelper.setCurrencySpecificationProvider(currencySpecificationProvider);
         eventsHelper.setUserProfileService(userProfileService);
         eventsHelper.setLastPriceCache(lastPriceCache);
     }
 
-    public void start(ThreadFactory threadFactory) {
+    public void start() {
         if (scheduler != null) {
             return;
         }
@@ -82,7 +85,7 @@ public final class LiquidationEngine {
         }, scanIntervalSec, scanIntervalSec, TimeUnit.SECONDS);
     }
 
-    public  void stop() {
+    public void stop() {
         stop(1, TimeUnit.MINUTES);
     }
 

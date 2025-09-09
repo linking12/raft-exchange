@@ -127,7 +127,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
-        this.liquidationEngine = new LiquidationEngine(api, this, numShards);
+        this.liquidationEngine = new LiquidationEngine(api, sharedPool::getFundEventChain, shardId, numShards);
         this.initState(numShards);
     }
     
@@ -156,7 +156,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
             simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
         }
-        this.liquidationEngine.updateProvider(this);
+        this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache);
     }
 
     
@@ -208,7 +208,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
                 simpleEventsProcessor.setUserProfileService(shardId, this.userProfileService);
             }
-            this.liquidationEngine.updateProvider(this);
+            this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache);
             this.fees = state.fees;
             this.adjustments = state.adjustments;
             this.suspends = state.suspends;
