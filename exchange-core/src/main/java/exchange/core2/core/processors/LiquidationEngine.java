@@ -36,7 +36,7 @@ import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Liquidation scanner for checking user profiles and triggering liquidations.
+ * Liquidation Engine for checking user profiles and triggering liquidations.
  */
 @Slf4j
 public final class LiquidationEngine {
