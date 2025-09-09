@@ -20,11 +20,14 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import exchange.core2.tests.util.TestConstants;
 import exchange.core2.tests.util.TestOrdersGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -34,7 +37,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import static exchange.core2.tests.util.TestConstants.SYMBOLSPEC_ETH_XBT;
 import static exchange.core2.tests.util.TestConstants.SYMBOLSPEC_EUR_USD;
@@ -44,7 +51,16 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Slf4j
+@ExtendWith(MockitoExtension.class)
 public abstract class ITExchangeCoreIntegrationStress {
+    SimpleEventsProcessor4Test processor;
+    @Mock
+    IEventsHandler4Test handler;
+
+    @BeforeEach
+    public void before() {
+        processor = new SimpleEventsProcessor4Test(handler, true);
+    }
 
     // configuration provided by child class
     public abstract PerformanceConfiguration getPerformanceConfiguration();
@@ -64,7 +80,7 @@ public abstract class ITExchangeCoreIntegrationStress {
     }
 
     public void manyOperations(final CoreSymbolSpecification symbolSpec) throws Exception {
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             container.initBasicSymbolsWithDigit(0);
             container.initMarkPrice(SYMBOLSPEC_EUR_USD.symbolId, 100);

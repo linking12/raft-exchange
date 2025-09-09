@@ -65,6 +65,12 @@ public abstract class ITFutureBase {
         assertThat(0L, Is.is(evt.getPositions().getMarginRatioScaleK()));
     }
 
+    public void checkEventPending(IFundEventsHandler.FundEventReport evt) {
+        assertThat(0L, Is.is(evt.getPositions().getBidsNotional()));
+        assertThat(0L, Is.is(evt.getPositions().getAsksNotional()));
+        assertThat(0L, Is.is(evt.getPositions().getBidsQty()));
+        assertThat(0L, Is.is(evt.getPositions().getAsksQty()));
+    }
     public void doCheckEvtCnt(final CoreSymbolSpecification symbolSpec, final OrderType orderType, final ITFutureCross.RejectionCause rejectionCause) {
         // 如果是budget订单，且不成交的话只有下单
         if (orderType == FOK_BUDGET && rejectionCause != ITFutureCross.RejectionCause.NO_REJECTION) {

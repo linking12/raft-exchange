@@ -885,8 +885,6 @@ class ITExtraMarginIntegration {
         long makerOrderId6 = 1010L;
         int delta1 = 1000;
         int delta2 = 3000;
-        long adjustMargin1 = 900L;
-        long adjustMargin2 = 2900L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             container.getExchangeCore().getLiquidationScanner().stop(10, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
@@ -963,7 +961,16 @@ class ITExtraMarginIntegration {
             verify(handler, times(47)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
-            IFundEventsHandler.FundEventReport refund1 = fundEvents.get(40);
+            IFundEventsHandler.FundEventReport refund1 = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.MARGIN_REFUND)) {
+                    refund1 = report;
+                    break;
+                }
+            }
+
             assertThat(userId1, Is.is(refund1.getAccountId()));
             assertThat(quoteId, Is.is(refund1.getBalances().getCurrency()));
             assertThat(10000, Is.is(refund1.getPositions().getSymbolId()));
