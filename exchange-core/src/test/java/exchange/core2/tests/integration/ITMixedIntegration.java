@@ -378,6 +378,8 @@ class ITMixedIntegration {
             container.createBidWithOrderId(MAKER_2, UID_3, size, 9920, symbols.get(0).symbolId, MarginMode.ISOLATED);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
+            // 有可能强平还没触发, 加个sleep保证强平触发吃掉UID_3的订单
+            Thread.sleep(1000);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
                 assertThat(profile.getAccounts().get(quoteId), Is.is(9100L));

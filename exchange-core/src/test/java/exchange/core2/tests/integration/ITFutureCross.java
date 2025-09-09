@@ -589,11 +589,6 @@ class ITFutureCross extends ITFutureBase {
         long makerOrderId4 = 1011L;
         long takerOrderId4 = 1012L;
         long makerOrderId5 = 1013L;
-        long takerOrderId5 = 1014L;
-        long makerOrderId6 = 1015L;
-        long takerOrderId6 = 1016L;
-        long makerOrderId7 = 1017L;
-        long takerOrderId7 = 1018L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
@@ -677,11 +672,19 @@ class ITFutureCross extends ITFutureBase {
             verify(handler, times(55)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
-            IFundEventsHandler.FundEventReport liquidationAlertEvt = fundEvents.get(47);
+            IFundEventsHandler.FundEventReport liquidationAlertEvt = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_ALERT) && report.getAccountId() == userId3) {
+                    liquidationAlertEvt = report;
+                    break;
+                }
+            }
+
             assertThat(userId3, Is.is(liquidationAlertEvt.getAccountId()));
             assertThat(quoteId, Is.is(liquidationAlertEvt.getBalances().getCurrency()));
             assertThat(10000, Is.is(liquidationAlertEvt.getPositions().getSymbolId()));
-//            assertThat(takerOrderId, Is.is(liquidationAlertEvt.orderId));
             assertThat(PositionDirection.LONG, Is.is(liquidationAlertEvt.getPositions().getDirection()));
             assertThat(FundEvent.FundEventType.LIQUIDATION_ALERT, Is.is(liquidationAlertEvt.getEventType()));
             assertThat(0L, Is.is(liquidationAlertEvt.getBalances().getFree()));
@@ -695,8 +698,17 @@ class ITFutureCross extends ITFutureBase {
             assertThat(9900L, Is.is(liquidationAlertEvt.getPositions().getLiquidationPrice()));
             assertThat(-1000L, Is.is(liquidationAlertEvt.getPositions().getMarginRatioScaleK()));
 
-            IFundEventsHandler.FundEventReport liquidationEvt = fundEvents.get(49);
-//            assertThat(userId3, Is.is(liquidationEvt.uid));
+            IFundEventsHandler.FundEventReport liquidationEvt = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION) && report.getAccountId() == userId3) {
+                    liquidationEvt = report;
+                    break;
+                }
+            }
+
+            assertThat(userId3, Is.is(liquidationEvt.getAccountId()));
             assertThat(quoteId, Is.is(liquidationEvt.getBalances().getCurrency()));
             assertThat(10000, Is.is(liquidationEvt.getPositions().getSymbolId()));
 //            assertThat(takerOrderId, Is.is(liquidationEvt.orderId));
@@ -1512,10 +1524,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.fee, Is.is(0L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
-//            assertThat(event3.bidsNotional, Is.is(100000L));
-//            assertThat(event3.asksNotional, Is.is(0L));
-//            assertThat(event3.bidsQty, Is.is(10L));
-//            assertThat(event3.asksQty, Is.is(0L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -1553,6 +1561,14 @@ class ITFutureCross extends ITFutureBase {
             assertThat(1, Is.is(takerEvent.getPositions().getLeverage()));
             assertThat(0L, Is.is(takerEvent.getPositions().getOpenPriceSum()));
             assertThat(10000L, Is.is(takerEvent.getPositions().getMarkPrice()));
+            assertThat(100000L, Is.is(takerEvent.getPositions().getBidsNotional()));
+            assertThat(0L, Is.is(takerEvent.getPositions().getAsksNotional()));
+            assertThat(10L, Is.is(takerEvent.getPositions().getBidsQty()));
+            assertThat(0L, Is.is(takerEvent.getPositions().getAsksQty()));
+            assertThat(100000L, Is.is(takerEvent.getPositions().getBidsNotional()));
+            assertThat(0L, Is.is(takerEvent.getPositions().getAsksNotional()));
+            assertThat(10L, Is.is(takerEvent.getPositions().getBidsQty()));
+            assertThat(0L, Is.is(takerEvent.getPositions().getAsksQty()));
             checkEvent(takerEvent);
 
             // check lock_pending event for taker
@@ -1577,6 +1593,10 @@ class ITFutureCross extends ITFutureBase {
             assertThat(1, Is.is(makerEvent.getPositions().getLeverage()));
             assertThat(0L, Is.is(makerEvent.getPositions().getOpenPriceSum()));
             assertThat(10000L, Is.is(makerEvent.getPositions().getMarkPrice()));
+            assertThat(0L, Is.is(makerEvent.getPositions().getBidsNotional()));
+            assertThat(20000L, Is.is(makerEvent.getPositions().getAsksNotional()));
+            assertThat(0L, Is.is(makerEvent.getPositions().getBidsQty()));
+            assertThat(2L, Is.is(makerEvent.getPositions().getAsksQty()));
             checkEvent(makerEvent);
 
             // check unlock_pending event for taker
@@ -1601,6 +1621,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(0L, Is.is(takerUnlockEvent.getPositions().getOpenPriceSum()));
             assertThat(10000L, Is.is(takerUnlockEvent.getPositions().getMarkPrice()));
             checkEvent(takerUnlockEvent);
+            checkEventPending(takerUnlockEvent);
 
             // check open position event for taker
             IFundEventsHandler.FundEventReport takerOpenPositionEvent = fundEvents.get(5);
@@ -1629,6 +1650,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(1999980L, Is.is(takerOpenPositionEvent.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * (50 * txSize) / (MAX_VALUE)) = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.getPositions().getMarginRatioScaleK()));
+            checkEventPending(takerOpenPositionEvent);
 
             // check unlock_pending event for maker
             IFundEventsHandler.FundEventReport makerUnlockEvent = fundEvents.get(6);
@@ -1652,6 +1674,10 @@ class ITFutureCross extends ITFutureBase {
             assertThat(1, Is.is(makerUnlockEvent.getPositions().getLeverage()));
             assertThat(0L, Is.is(makerUnlockEvent.getPositions().getOpenPriceSum()));
             assertThat(10000L, Is.is(makerUnlockEvent.getPositions().getMarkPrice()));
+            assertThat(80000L, Is.is(makerUnlockEvent.getPositions().getBidsNotional()));
+            assertThat(0L, Is.is(makerUnlockEvent.getPositions().getAsksNotional()));
+            assertThat(8L, Is.is(makerUnlockEvent.getPositions().getBidsQty()));
+            assertThat(0L, Is.is(makerUnlockEvent.getPositions().getAsksQty()));
             checkEvent(makerUnlockEvent);
 
             // check open position event for maker
@@ -1680,6 +1706,10 @@ class ITFutureCross extends ITFutureBase {
             assertThat(0L, Is.is(makerOpenPositionEvent.getPositions().getUnrealizedProfit()));
             assertThat(5035L, Is.is(makerOpenPositionEvent.getPositions().getLiquidationPrice()));
             assertThat(10L, Is.is(makerOpenPositionEvent.getPositions().getMarginRatioScaleK()));
+            assertThat(80000L, Is.is(makerOpenPositionEvent.getPositions().getBidsNotional()));
+            assertThat(0L, Is.is(makerOpenPositionEvent.getPositions().getAsksNotional()));
+            assertThat(8L, Is.is(makerOpenPositionEvent.getPositions().getBidsQty()));
+            assertThat(0L, Is.is(makerOpenPositionEvent.getPositions().getAsksQty()));
         }
     }
 
@@ -2523,10 +2553,6 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.fee, Is.is(0L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
-//            assertThat(event7.bidsNotional, Is.is(100000L));
-//            assertThat(event7.asksNotional, Is.is(21000L));
-//            assertThat(event7.bidsQty, Is.is(10L));
-//            assertThat(event7.asksQty, Is.is(2L));
 
             // check balance
             container.validateUserState(userId1, profile -> {
@@ -2573,6 +2599,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(452106L, Is.is(takerCloseEvent.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = 1000 * 450 / MAX_VALUE ≈ 0
             assertThat(0L, Is.is(takerCloseEvent.getPositions().getMarginRatioScaleK()));
+            checkEventPending(takerCloseEvent);
         }
     }
 
