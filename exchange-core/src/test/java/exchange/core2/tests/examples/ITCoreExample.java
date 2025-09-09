@@ -30,18 +30,13 @@ class ITCoreExample {
         // simple async events handler
         SimpleEventsProcessor eventsProcessor = new SimpleEventsProcessor(new ITradeEventsHandler() {
             @Override
-            public void commandResult(ApiCommandResult commandResult) {
-
+            public void spotExecutionReport(SpotExecutionReport executionReport) {
+                System.out.println("SpotExecutionReport: " + executionReport);
             }
 
             @Override
-            public void tradeEvent(TradeEvent tradeEvent) {
-                System.out.println("Trade event: " + tradeEvent);
-            }
-
-            @Override
-            public void reduceEvent(ReduceEvent reduceEvent) {
-                System.out.println("Reduce event: " + reduceEvent);
+            public void futuresExecutionReport(FuturesExecutionReport executionReport) {
+                System.out.println("FuturesExecutionReport: " + executionReport);
             }
 
             @Override
@@ -50,8 +45,8 @@ class ITCoreExample {
             }
         }, new IFundEventsHandler() {
             @Override
-            public void fundsEvent(FundsEvent fundsEvent) {
-                System.out.println("Fund event: " + fundsEvent);
+            public void fundEventReport(FundEventReport fundEventReport) {
+                System.out.println("PositionOutReport: " + fundEventReport);
             }
         });
 

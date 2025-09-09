@@ -61,6 +61,7 @@ public final class OrderCommand implements IOrder {
     @Getter
     public OrderAction action;
 
+    @Getter
     public OrderType orderType;
 
     @Getter
@@ -69,11 +70,14 @@ public final class OrderCommand implements IOrder {
     @Getter
     public long timestamp;
 
+    @Getter
     public int userCookie;
 
     // 新增字段：杠杆倍数（默认 1 表示无杠杆）
+    @Builder.Default
     public int leverage = 1;
     // 新增字段：仓位类型（默认 逐仓）
+    @Builder.Default
     public MarginMode marginMode = MarginMode.ISOLATED;
 
     // filled by grouping processor:
@@ -235,6 +239,11 @@ public final class OrderCommand implements IOrder {
 
     @Override
     public long getFilled() {
+        return 0;
+    }
+
+    @Override
+    public long getFilledNotional() {
         return 0;
     }
 

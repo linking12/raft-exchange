@@ -50,6 +50,13 @@ public final class MatcherTradeEvent {
     public long matchedOrderUid; // 0 for rejection
     public boolean matchedOrderCompleted; // false, except when matchedOrder is completely filled
     public OrderCommandType matchedOrderCommandType;
+    public long matchedOrderFilled;
+    public long matchedOrderFilledNotional;
+    public OrderType matchedOrderType;
+    public long matchedOrderPrice;
+    public long matchedOrderSize;
+    public int matchedUserCookie;
+    public long matchedOrderTimestamp;
 
     // actual price of the deal (from maker order), 0 for rejection (price can be take from original order)
     public long price;
@@ -59,13 +66,13 @@ public final class MatcherTradeEvent {
     // REJECT - unmatched size of rejected order
     public long size;
 
+    public long filled;
+    public long filledNotional;
+
     //public long timestamp; // same as activeOrder related event timestamp
 
     // frozen price from BID order owner (depends on activeOrderAction)
     public long bidderHoldPrice;
-
-    public long baseScaleK; // 基础货币的缩放系数（用于还原size）
-    public long quoteScaleK; // 计价货币的缩放系数（用于还原price）
 
     // reference to next event in chain
     public MatcherTradeEvent nextEvent;
@@ -81,12 +88,19 @@ public final class MatcherTradeEvent {
         evt.matchedOrderUid = this.matchedOrderUid;
         evt.matchedOrderCompleted = this.matchedOrderCompleted;
         evt.matchedOrderCommandType = this.matchedOrderCommandType;
+        evt.matchedOrderFilled = this.matchedOrderFilled;
+        evt.matchedOrderFilledNotional = this.matchedOrderFilledNotional;
+        evt.matchedOrderType = this.matchedOrderType;
+        evt.matchedOrderPrice = this.matchedOrderPrice;
+        evt.matchedOrderSize = this.matchedOrderSize;
+        evt.matchedUserCookie = this.matchedUserCookie;
+        evt.matchedOrderTimestamp = this.matchedOrderTimestamp;
         evt.price = this.price;
         evt.size = this.size;
+        evt.filled = this.filled;
+        evt.filledNotional = this.filledNotional;
 //        evt.timestamp = this.timestamp;
         evt.bidderHoldPrice = this.bidderHoldPrice;
-        evt.baseScaleK = this.baseScaleK;
-        evt.quoteScaleK = this.quoteScaleK;
         return evt;
     }
 
@@ -149,11 +163,18 @@ public final class MatcherTradeEvent {
                 && matchedOrderUid == other.matchedOrderUid
                 && matchedOrderCompleted == other.matchedOrderCompleted
                 && matchedOrderCommandType == other.matchedOrderCommandType
+                && matchedOrderFilled == other.matchedOrderFilled
+                && matchedOrderFilledNotional == other.matchedOrderFilledNotional
+                && matchedOrderType == other.matchedOrderType
+                && matchedOrderPrice == other.matchedOrderPrice
+                && matchedOrderSize == other.matchedOrderSize
+                && matchedUserCookie == other.matchedUserCookie
+                && matchedOrderTimestamp == other.matchedOrderTimestamp
                 && price == other.price
                 && size == other.size
+                && filled == other.filled
+                && filledNotional == other.filledNotional
                 && bidderHoldPrice == other.bidderHoldPrice
-                && baseScaleK == other.baseScaleK
-                && quoteScaleK == other.quoteScaleK
                 && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
 
@@ -169,11 +190,18 @@ public final class MatcherTradeEvent {
                 matchedOrderUid,
                 matchedOrderCompleted,
                 matchedOrderCommandType,
+                matchedOrderFilled,
+                matchedOrderFilledNotional,
+                matchedOrderType,
+                matchedOrderPrice,
+                matchedOrderSize,
+                matchedUserCookie,
+                matchedOrderTimestamp,
                 price,
                 size,
+                filled,
+                filledNotional,
                 bidderHoldPrice,
-                baseScaleK,
-                quoteScaleK,
                 nextEvent);
     }
 
@@ -188,12 +216,19 @@ public final class MatcherTradeEvent {
                 ", matchedOrderUid=" + matchedOrderUid +
                 ", matchedOrderCompleted=" + matchedOrderCompleted +
                 ", matchedOrderCommandType=" + matchedOrderCommandType +
+                ", matchedOrderFilled=" + matchedOrderFilled +
+                ", matchedOrderFilledNotional=" + matchedOrderFilledNotional +
+                ", matchedOrderType=" + matchedOrderType +
+                ", matchedOrderPrice=" + matchedOrderPrice +
+                ", matchedOrderSize=" + matchedOrderSize +
+                ", matchedUserCookie=" + matchedUserCookie +
+                ", matchedOrderTimestamp=" + matchedOrderTimestamp +
                 ", price=" + price +
                 ", size=" + size +
+                ", filled=" + filled +
+                ", filledNotional=" + filledNotional +
 //                ", timestamp=" + timestamp +
                 ", bidderHoldPrice=" + bidderHoldPrice +
-                ", baseScaleK=" + baseScaleK +
-                ", quoteScaleK=" + quoteScaleK +
                 ", nextEvent=" + (nextEvent != null) +
                 '}';
     }

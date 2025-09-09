@@ -5,7 +5,6 @@ import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
-import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportQuery;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -15,7 +14,6 @@ import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
-import org.hamcrest.core.Is;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -55,29 +53,20 @@ public class FutureCoreExample {
     @Before
     public void setUp() throws Exception {
         SimpleEventsProcessor4Test eventsProcessor = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
+
             @Override
-            public void tradeEvent(TradeEvent tradeEvent) {
-                log.debug("tradeEvent: {}", tradeEvent);
+            public void spotExecutionReport(SpotExecutionReport executionReport) {
+                log.debug("SpotExecutionReport: {}", executionReport);
             }
 
             @Override
-            public void rejectEvent(RejectEvent rejectEvent) {
-                log.debug("rejectEvent: {}", rejectEvent);
+            public void futuresExecutionReport(FuturesExecutionReport executionReport) {
+                log.debug("FuturesExecutionReport: {}", executionReport);
             }
 
             @Override
-            public void fundsEvent(FundsEvent fundsEvent) {
-                log.debug("fundsEvent: {}", fundsEvent);
-            }
-
-            @Override
-            public void reduceEvent(ReduceEvent reduceEvent) {
-                log.debug("Reduce event: {}", reduceEvent);
-            }
-
-            @Override
-            public void commandResult(ApiCommandResult commandResult) {
-                log.debug("Command result: " + commandResult);
+            public void fundEventReport(FundEventReport fundEventReport) {
+                log.debug("PositionOutReport: {}", fundEventReport);
             }
 
             @Override

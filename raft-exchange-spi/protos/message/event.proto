@@ -7,29 +7,77 @@ option java_multiple_files = true;
 
 import "message/common.proto";
 
-message TradeEventPB {
-  int32 symbol = 1;
-  int64 baseScaleK = 2;
-  int64 quoteScaleK = 3;
-  int64 totalVolume = 4;
-  int64 takerOrderId = 5;
-  int64 takerUid = 6;
-  OrderAction takerAction = 7;
-  bool takeOrderCompleted = 8;
-  int64 timestamp = 9;
-  repeated TradePB trades = 10;
+message SpotExecutionReportPB {
+  int64 executionId = 1;
+  ExecType executionType = 2;
+  OrderStatus orderStatus = 3;
+  int32 symbol = 4;
+  int64 baseScaleK = 5;
+  int64 quoteScaleK = 6;
+  int64 accountId = 7;
+  int64 clOrdId = 8;
+  int64 orderId = 9;
+  OrderType orderType = 10;
+  OrderAction side = 11;
+  int64 qty = 12;
+  int64 price = 13;
+  int64 quoteOrderQty = 14;
+  int64 orderCreationTime = 15;
+  int64 tradeId = 16;
+  int64 lastQty = 17;
+  int64 lastPrice = 18;
+  int64 lastQuoteQty = 19;
+  int64 cumulativeQty = 20;
+  int64 cumulativeQuoteQty = 21;
+  int64 commission = 22;
+  int32 commissionAsset = 23;
+  bool isMaker = 24;
+  bool workingIndicator = 25;
 }
 
-message ReduceEventPB {
-  int32 symbol = 1;
-  int64 baseScaleK = 2;
-  int64 quoteScaleK = 3;
-  int64 reducedVolume = 4;
-  bool orderCompleted = 5;
-  int64 price = 6;
-  int64 orderId = 7;
-  int64 uid = 8;
-  int64 timestamp = 9;
+enum ExecType {
+  NEW = 0;
+  TRADE = 1;
+  REDUCE = 2;
+  CANCEL = 3;
+  REJECT = 4;
+}
+
+enum OrderStatus {
+  NEWED = 0;
+  PARTIALLY_FILLED = 1;
+  FILLED = 2;
+  CANCELED = 3;
+  REJECTED = 4;
+}
+
+message FuturesExecutionReportPB {
+  int64 uniId = 1;
+  ExecType executionType = 2;
+  OrderStatus orderStatus = 3;
+  int32 symbol = 4;
+  int64 orderQtyScale = 5;
+  int64 priceScale = 6;
+  int64 userId = 7;
+  int64 clOrdId = 8;
+  int64 orderId = 9;
+  OrderType orderType = 10;
+  OrderAction side = 11;
+  int64 counterpartyId = 12;
+  int64 price = 13;
+  int64 orderQty = 14;
+  int64 createTime = 15;
+  int64 execId = 16;
+  SymbolType contractType = 17;
+  PositionMode positionSide = 18;
+  int64 lastQty = 19;
+  int64 lastPx = 20;
+  int64 cumQty = 21;
+  int64 cumQuoteQty = 22;
+  int64 avgPx = 23;
+  int64 fee = 24;
+  int32 feeAssetId = 25;
+  bool isMaker = 26;
 }
 
 message OrderBookRecordPB {
@@ -46,36 +94,40 @@ message OrderBookPB {
   int64 timestamp = 4;
 }
 
-message FundsEventPB {
-  int64 orderId = 1;
-  int64 uid = 2;
-  int32 currency = 3;
-  int64 currencyScakeK = 4;
-  int64 free = 5;
-  int64 locked = 6;
-  FundEventType eventType = 7;
-  int32 symbol = 8;
-  int64 baseScaleK = 9;
-  int64 quoteScaleK = 10;
-  PositionDirection direction = 11;
-  int64 openVolume = 12;
-  int64 openInitMarginSum = 13;
-  int64 openPriceSum = 14;
-  int64 profit = 15;
-  int64 pendingSellSize = 16;
-  int64 pendingBuySize = 17;
-  int64 pendingSellAvgPrice = 18;
-  int64 pendingBuyAvgPrice = 19;
-  int32 leverage = 20;
-  MarginMode marginMode = 21;
-  int64 extraMargin = 22;
-  int64 unrealizedProfit = 23;
-  int64 liquidationPrice = 24;
-  int64 marginRatioScaleK = 25;
-  int64 markPrice = 26;
-  int64 tradeSize = 27;
-  int64 tradePrice = 28;
-  int64 fee = 29;
+message FundEventReportPB {
+  int64 accountId = 1;
+  FundEventType eventType = 2;
+  BalanceSnapshot balances = 3;
+  PositionSnapshot positions = 4;
+}
+
+message BalanceSnapshot {
+  int32 currency = 1;
+  int64 currencyScakeK = 2;
+  int64 free = 3;
+  int64 locked = 4;
+}
+
+message PositionSnapshot {
+  int32 symbolId = 1;
+  int64 baseScaleK = 2;
+  int64 quoteScaleK = 3;
+  PositionDirection direction = 4;
+  int64 quantity = 5;
+  int64 openPriceSum = 6;
+  int64 cumRealized = 7;
+  bool isolated = 8;
+  int64 isolatedWallet = 9;
+  int32 leverage = 10;
+  int64 openInitMarginSum = 11;
+  int64 markPrice = 12;
+  int64 unrealizedProfit = 13;
+  int64 liquidationPrice = 14;
+  int64 marginRatioScaleK = 15;
+  int64 bidsNotional = 16;
+  int64 asksNotional = 17;
+  int64 bidsQty = 18;
+  int64 asksQty = 19;
 }
 
 enum FundEventType {
@@ -100,12 +152,4 @@ enum FundEventType {
 
   MARGIN_ALERT = 15;
   LIQUIDATION_ALERT = 16;
-}
-
-message TradePB {
-  int64 makerOrderId = 1;
-  int64 makerUid = 2;
-  bool makerOrderCompleted = 3;
-  int64 price = 4;
-  int64 volume = 5;
 }

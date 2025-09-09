@@ -107,13 +107,13 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
 
         final Iterator<Map.Entry<Long, Order>> iterator = entries.entrySet().iterator();
 
-        long totalMatchingVolume = 0;
-
         final List<Long> ordersToRemove = new ArrayList<>();
 
         MatcherTradeEvent eventsHead = null;
         MatcherTradeEvent eventsTail = null;
 
+        long takerFilled = 0;
+        long takerFilledNotional = 0;
         // iterate through all orders
         while (iterator.hasNext() && volumeToCollect > 0) {
             final Map.Entry<Long, Order> next = iterator.next();
@@ -122,10 +122,12 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
             // calculate exact volume can fill for this order
 //            log.debug("volumeToCollect={} order: s{} f{}", volumeToCollect, order.size, order.filled);
             final long v = Math.min(volumeToCollect, order.size - order.filled);
-            totalMatchingVolume += v;
-//            log.debug("totalMatchingVolume={} v={}", totalMatchingVolume, v);
+            final long p = order.price;
 
+            takerFilled += v;
+            takerFilledNotional += v * p;
             order.filled += v;
+            order.filledNotional += v * p;
             volumeToCollect -= v;
             totalVolume -= v;
 
@@ -133,7 +135,8 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
             final boolean fullMatch = order.size == order.filled;
 
             final long bidderHoldPrice = order.action == OrderAction.ASK ? activeOrder.getReserveBidPrice() : order.reserveBidPrice;
-            final MatcherTradeEvent tradeEvent = helper.sendTradeEvent(order, fullMatch, volumeToCollect == 0, v, bidderHoldPrice, symbolSpec);
+            final MatcherTradeEvent tradeEvent = helper.sendTradeEvent(order, fullMatch, volumeToCollect == 0, v,
+                    takerFilled, takerFilledNotional, bidderHoldPrice, symbolSpec);
 
             if (eventsTail == null) {
                 eventsHead = tradeEvent;
@@ -148,7 +151,7 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
             }
         }
 
-        return new MatcherResult(eventsHead, eventsTail, totalMatchingVolume, ordersToRemove);
+        return new MatcherResult(eventsHead, eventsTail, takerFilled, takerFilledNotional, ordersToRemove);
     }
 
     /**
@@ -244,6 +247,7 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
         public MatcherTradeEvent eventsChainHead;
         public MatcherTradeEvent eventsChainTail;
         public long volume;
+        public long notional;
         public List<Long> ordersToRemove;
     }
 

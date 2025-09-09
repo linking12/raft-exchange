@@ -125,7 +125,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
         final long size = cmd.size;
 
         // check if order is marketable there are matching orders
-        final long filledSize = tryMatchInstantly(cmd, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, cmd);
+        final long filledSize = matchResult[0];
+        final long filledNotional = matchResult[1];
         if (filledSize == size) {
             // completed before being placed - can just return
             return;
@@ -148,12 +150,15 @@ public final class OrderBookDirectImpl implements IOrderBook {
         orderRecord.orderId = orderId;
         orderRecord.price = price;
         orderRecord.size = size;
+        orderRecord.filled = filledSize;
+        orderRecord.filledNotional = filledNotional;
         orderRecord.reserveBidPrice = cmd.reserveBidPrice;
         orderRecord.action = cmd.action;
+        orderRecord.orderType = cmd.orderType;
         orderRecord.command = cmd.command;
         orderRecord.uid = cmd.uid;
         orderRecord.timestamp = cmd.timestamp;
-        orderRecord.filled = filledSize;
+        orderRecord.userCookie = cmd.userCookie;
 
         orderIdIndex.put(orderId, orderRecord);
         insertOrder(orderRecord, null);
@@ -161,7 +166,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
     private void newOrderMatchIoc(final OrderCommand cmd) {
 
-        final long filledSize = tryMatchInstantly(cmd, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, cmd);
+        final long filledSize = matchResult[0];
 
         final long rejectedSize = cmd.size - filledSize;
 
@@ -220,7 +226,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
     }
 
 
-    private long tryMatchInstantly(final IOrder takerOrder,
+    private long[] tryMatchInstantly(final IOrder takerOrder,
                                    final OrderCommand triggerCmd) {
 
         final boolean isBidAction = takerOrder.getAction() == OrderAction.BID;
@@ -229,23 +235,25 @@ public final class OrderBookDirectImpl implements IOrderBook {
                 ? 0L
                 : takerOrder.getPrice();
 
+        long takerFilled = takerOrder.getFilled();
+        long takerFilledNotional = takerOrder.getFilledNotional();
         DirectOrder makerOrder;
         if (isBidAction) {
             makerOrder = bestAskOrder;
             if (makerOrder == null || makerOrder.price > limitPrice) {
-                return takerOrder.getFilled();
+                return new long[]{takerFilled, takerFilledNotional};
             }
         } else {
             makerOrder = bestBidOrder;
             if (makerOrder == null || makerOrder.price < limitPrice) {
-                return takerOrder.getFilled();
+                return new long[]{takerFilled, takerFilledNotional};
             }
         }
 
         long remainingSize = takerOrder.getSize() - takerOrder.getFilled();
 
         if (remainingSize == 0) {
-            return takerOrder.getFilled();
+            return new long[]{takerFilled, takerFilledNotional};
         }
 
         DirectOrder priceBucketTail = makerOrder.parent.tail;
@@ -256,7 +264,6 @@ public final class OrderBookDirectImpl implements IOrderBook {
 //        log.debug("MATCHING taker: {} remainingSize={}", takerOrder, remainingSize);
 
         MatcherTradeEvent eventsTail = null;
-
         // iterate through all orders
         do {
 
@@ -265,8 +272,12 @@ public final class OrderBookDirectImpl implements IOrderBook {
             // calculate exact volume can fill for this order
             final long tradeSize = Math.min(remainingSize, makerOrder.size - makerOrder.filled);
 //                log.debug("  tradeSize: {} MIN(remainingSize={}, makerOrder={})", tradeSize, remainingSize, makerOrder.size - makerOrder.filled);
+            final long tradePrice = makerOrder.price;
 
+            takerFilled += tradeSize;
+            takerFilledNotional += tradeSize * tradePrice;
             makerOrder.filled += tradeSize;
+            makerOrder.filledNotional += tradeSize * tradePrice;
             makerOrder.parent.volume -= tradeSize;
             remainingSize -= tradeSize;
 
@@ -277,7 +288,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
             }
 
             final MatcherTradeEvent tradeEvent = eventsHelper.sendTradeEvent(makerOrder, makerCompleted, remainingSize == 0, tradeSize,
-                    isBidAction ? takerReserveBidPrice : makerOrder.reserveBidPrice, symbolSpec);
+                    takerFilled, takerFilledNotional, isBidAction ? takerReserveBidPrice : makerOrder.reserveBidPrice, symbolSpec);
 
             if (eventsTail == null) {
                 triggerCmd.matcherEvent = tradeEvent;
@@ -332,8 +343,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
             bestBidOrder = makerOrder;
         }
 
-        // return filled amount
-        return takerOrder.getSize() - remainingSize;
+        // return [filledSize, filledNotional]
+        return new long[]{takerFilled, takerFilledNotional};
     }
 
     @Override
@@ -425,7 +436,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
         cmd.action = orderToMove.getAction();
 
         // try match with new price as a taker order
-        final long filled = tryMatchInstantly(orderToMove, cmd);
+        final long[] matchResult = tryMatchInstantly(orderToMove, cmd);
+        final long filled = matchResult[0];
         if (filled == orderToMove.size) {
             // order was fully matched - removing
             orderIdIndex.remove(cmd.orderId);
@@ -730,10 +742,14 @@ public final class OrderBookDirectImpl implements IOrderBook {
                         .price(order.price)
                         .size(order.size)
                         .filled(order.filled)
+                        .filledNotional(order.filledNotional)
                         .reserveBidPrice(order.reserveBidPrice)
                         .action(order.action)
+                        .orderType(order.orderType)
+                        .command(order.command)
                         .uid(order.uid)
                         .timestamp(order.timestamp)
+                        .userCookie(order.userCookie)
                         .build());
             }
         }, Integer.MAX_VALUE);
@@ -815,6 +831,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
         @Getter
         public long filled;
 
+        @Getter
+        public long filledNotional;
+
         // new orders - reserved price for fast moves of GTC bid orders in exchange mode
         @Getter
         public long reserveBidPrice;
@@ -824,6 +843,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
         public OrderAction action;
 
         @Getter
+        public OrderType orderType;
+
+        @Getter
         private OrderCommandType command;
 
         @Getter
@@ -831,6 +853,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         @Getter
         public long timestamp;
+
+        @Getter
+        public int userCookie;
 
         // fast orders structure
 
@@ -843,23 +868,21 @@ public final class OrderBookDirectImpl implements IOrderBook {
         DirectOrder prev;
 
 
-        // public int userCookie;
-
         public DirectOrder(BytesIn bytes) {
-
 
             this.orderId = bytes.readLong(); // orderId
             this.price = bytes.readLong();  // price
             this.size = bytes.readLong(); // size
             this.filled = bytes.readLong(); // filled
+            this.filledNotional = bytes.readLong();// filledNotional
             this.reserveBidPrice = bytes.readLong(); // price2
             this.action = OrderAction.of(bytes.readByte());
+            this.orderType = OrderType.of(bytes.readByte());
             this.command = OrderCommandType.fromCode(bytes.readByte());
             this.uid = bytes.readLong(); // uid
             this.timestamp = bytes.readLong(); // timestamp
-            // this.userCookie = bytes.readInt();  // userCookie
+            this.userCookie = bytes.readInt();  // userCookie
 
-            // TODO
         }
 
         @Override
@@ -868,29 +891,29 @@ public final class OrderBookDirectImpl implements IOrderBook {
             bytes.writeLong(price);
             bytes.writeLong(size);
             bytes.writeLong(filled);
+            bytes.writeLong(filledNotional);
             bytes.writeLong(reserveBidPrice);
             bytes.writeByte(action.getCode());
+            bytes.writeByte(orderType.getCode());
             bytes.writeByte(command.getCode());
             bytes.writeLong(uid);
             bytes.writeLong(timestamp);
-            // bytes.writeInt(userCookie);
-            // TODO
+            bytes.writeInt(userCookie);
         }
 
         @Override
         public String toString() {
             return "[" + orderId + " " + (action == OrderAction.ASK ? 'A' : 'B')
-                    + " " + command + " "
-                    + price + ":" + size + "F" + filled
-                    // + " C" + userCookie
+                    + " " + orderType + " " + command + " "
+                    + price + ":" + size + "F" + filled + "FN" + filledNotional
+                    + " C" + userCookie
                     + " U" + uid + "]";
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled,
-                    //userCookie,
-                    uid);
+            return Objects.hash(orderId, action, orderType, command, price, size, reserveBidPrice, filled, filledNotional,
+                    uid, userCookie);
         }
 
 
@@ -908,19 +931,20 @@ public final class OrderBookDirectImpl implements IOrderBook {
             // ignore userCookie && timestamp
             return orderId == other.orderId
                     && action == other.action
+                    && orderType == other.orderType
                     && command == other.command
                     && price == other.price
                     && size == other.size
                     && reserveBidPrice == other.reserveBidPrice
                     && filled == other.filled
-                    && uid == other.uid;
+                    && filledNotional == other.filledNotional
+                    && uid == other.uid
+                    && userCookie == other.userCookie;
         }
 
         @Override
         public int stateHash() {
-            return Objects.hash(orderId, action, command, price, size, reserveBidPrice, filled,
-                    //userCookie,
-                    uid);
+            return hashCode();
         }
     }
 

@@ -1,7 +1,6 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
-import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -43,26 +42,11 @@ class ITPerpetualContractIntegration {
 
     private SimpleEventsProcessor4Test processor;
 
+    @Captor
+    ArgumentCaptor<IFundEventsHandler.FundEventReport> fundEventCaptor;
+
     @Mock
     private IEventsHandler4Test handler;
-
-    @Captor
-    private ArgumentCaptor<ITradeEventsHandler.ApiCommandResult> commandResultCaptor;
-
-    @Captor
-    private ArgumentCaptor<ITradeEventsHandler.TradeEvent> tradeEventCaptor;
-
-    @Captor
-    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCaptor;
-
-    @Captor
-    private ArgumentCaptor<ITradeEventsHandler.ReduceEvent> reduceEventCaptor;
-
-    @Captor
-    private ArgumentCaptor<ITradeEventsHandler.RejectEvent> rejectEventCaptor;
-
-    @Captor
-    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCapor;
 
     @BeforeEach
     public void before() {
@@ -80,7 +64,6 @@ class ITPerpetualContractIntegration {
     @Test
     public void testInvalidSymbol() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.setConsumer(processor);
             int symbolId0 = 10000;
             CoreSymbolSpecification spec0 = CoreSymbolSpecification.builder()
                     .symbolId(symbolId0)
@@ -205,7 +188,7 @@ class ITPerpetualContractIntegration {
     @Test
     public void testDeliveryScenario0() throws Exception {
         long deposit = 20000L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
@@ -394,8 +377,7 @@ class ITPerpetualContractIntegration {
         int fundingRate = 1;
         int rateScale = 100;
         int updatedPrice = 1500;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
-            container.setConsumer(processor);
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
             container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
@@ -497,58 +479,52 @@ class ITPerpetualContractIntegration {
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         } finally {
-            verify(handler, times(33)).fundsEvent(fundEventCapor.capture());
-            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
+            verify(handler, times(33)).fundEventReport(fundEventCaptor.capture());
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
-            IFundEventsHandler.FundsEvent event1 = fundEvents.get(17);
-            assertThat(UID_1, is(event1.uid));
-            assertThat(quoteId, is(event1.currency));
-            assertThat(10000, is(event1.symbol));
-            // fee = funding fee
-            assertThat(-150L, is(event1.fee));
-            assertThat(-150L, is(event1.profit));
-            assertThat(PositionDirection.LONG, is(event1.direction));
-            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event1.eventType));
-            assertThat(0L, is(event1.free));
-            assertThat(0L, is(event1.locked));
-            assertThat(10000L, is(event1.openPriceSum));
-            assertThat(10L, is(event1.openVolume));
-            assertThat(0L, is(event1.tradeSize));
-            assertThat(0L, is(event1.tradePrice));
+            IFundEventsHandler.FundEventReport event1 = fundEvents.get(17);
+            assertThat(UID_1, is(event1.getAccountId()));
+            assertThat(quoteId, is(event1.getBalances().getCurrency()));
+            assertThat(10000, is(event1.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, is(event1.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event1.getEventType()));
+            assertThat(0L, is(event1.getBalances().getFree()));
+            assertThat(0L, is(event1.getBalances().getLocked()));
+            assertThat(-150L, is(event1.getPositions().getCumRealized()));
+            assertThat(10000L, is(event1.getPositions().getOpenPriceSum()));
+            assertThat(10L, is(event1.getPositions().getQuantity()));
             // 标记价格从10000变为1500, openVolume * priceRecord.markPrice - openPriceSum = 10 * 1500 - 10000 = 5000
-            assertThat(5000L, is(event1.unrealizedProfit));
+            assertThat(5000L, is(event1.getPositions().getUnrealizedProfit()));
             // maintenanceMargin = 75
             // totalPnl = 4850
             // totalMargin = balance + pnl = 24750
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum
             // numerator = openPriceSum - totalBalance - pnlOther + mmOther
             // numerator < 0时liquidationPrice=0
-            assertThat(-1L, is(event1.liquidationPrice));
+            assertThat(-1L, is(event1.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 24750) = 3
-            assertThat(3L, is(event1.marginRatioScaleK));
+            assertThat(3L, is(event1.getPositions().getMarginRatioScaleK()));
 
-            IFundEventsHandler.FundsEvent event2 = fundEvents.get(18);
-            assertThat(UID_2, is(event2.uid));
-            assertThat(quoteId, is(event2.currency));
-            assertThat(10000, is(event2.symbol));
-            assertThat(150L, is(event2.fee));
-            assertThat(150L, is(event2.profit));
-            assertThat(PositionDirection.SHORT, is(event2.direction));
-            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event2.eventType));
-            assertThat(0L, is(event2.free));
-            assertThat(0L, is(event2.locked));
-            assertThat(10000L, is(event2.openPriceSum));
-            assertThat(10L, is(event2.openVolume));
-            assertThat(0L, is(event2.tradeSize));
-            assertThat(0L, is(event2.tradePrice));
+            IFundEventsHandler.FundEventReport event2 = fundEvents.get(18);
+            assertThat(UID_2, is(event2.getAccountId()));
+            assertThat(quoteId, is(event2.getBalances().getCurrency()));
+            assertThat(10000, is(event2.getPositions().getSymbolId()));
+            // assertThat(takerOrderId, is(event2.orderId));
+            assertThat(PositionDirection.SHORT, is(event2.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event2.getEventType()));
+            assertThat(0L, is(event2.getBalances().getFree()));
+            assertThat(0L, is(event2.getBalances().getLocked()));
+            assertThat(150L, is(event2.getPositions().getCumRealized()));
+            assertThat(10000L, is(event2.getPositions().getOpenPriceSum()));
+            assertThat(10L, is(event2.getPositions().getQuantity()));
             // 标记价格和开仓价格相同, 所以算出来的unrealizedProfit=10000-10*1500=-5000
-            assertThat(-5000L, is(event2.unrealizedProfit));
+            assertThat(-5000L, is(event2.getPositions().getUnrealizedProfit()));
             // numerator = openPriceSum - totalBalance - pnlOther + mmOther
             // numerator < 0时liquidationPrice=0
-            assertThat(2980L, is(event2.liquidationPrice));
+            assertThat(2980L, is(event2.getPositions().getLiquidationPrice()));
             // totalMargin = balance + totalPnl = 19800 - 4850 = 14950
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 14950) = 5
-            assertThat(5L, is(event2.marginRatioScaleK));
+            assertThat(5L, is(event2.getPositions().getMarginRatioScaleK()));
         }
     }
 

@@ -20,6 +20,7 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 
+import java.util.HashSet;
 import java.util.Set;
 
 public final class TestConstants {
@@ -39,6 +40,9 @@ public final class TestConstants {
     public static final long UID_6 = 1440006;
     public static final long UID_7 = 1440007;
     public static final long UID_8 = 1440008;
+    public static final long UID_9 = 1440008;
+    public static final long UID_10 = 1440008;
+
     public static final long MAKER_1 = 13000L;
     public static final long MAKER_2 = 13001L;
     public static final long MAKER_3 = 13002L;
@@ -79,6 +83,62 @@ public final class TestConstants {
     public static final long TAKER_18 = 14018L;
     public static final long TAKER_19 = 14019L;
     public static final long TAKER_20 = 14020L;
+    public static final long UPDATE_PRICE_USER1 = 19000L;
+    public static final long UPDATE_PRICE_USER2 = 19001L;
+    public static final Set<Long> ALL_USERS = Sets.newHashSet(
+            UID_1,
+            UID_2,
+            UID_3,
+            UID_4,
+            UID_5,
+            UID_6,
+            UID_7,
+            UID_8,
+            UID_9,
+            UID_10,
+            MAKER_1,
+            MAKER_2,
+            MAKER_3,
+            MAKER_4,
+            MAKER_5,
+            MAKER_6,
+            MAKER_7,
+            MAKER_8,
+            MAKER_9,
+            MAKER_10,
+            MAKER_11,
+            MAKER_12,
+            MAKER_13,
+            MAKER_14,
+            MAKER_15,
+            MAKER_16,
+            MAKER_17,
+            MAKER_18,
+            MAKER_19,
+            MAKER_20,
+            TAKER_1,
+            TAKER_2,
+            TAKER_3,
+            TAKER_4,
+            TAKER_5,
+            TAKER_6,
+            TAKER_7,
+            TAKER_8,
+            TAKER_9,
+            TAKER_10,
+            TAKER_11,
+            TAKER_12,
+            TAKER_13,
+            TAKER_14,
+            TAKER_15,
+            TAKER_16,
+            TAKER_17,
+            TAKER_18,
+            TAKER_19,
+            TAKER_20,
+            UPDATE_PRICE_USER1,
+            UPDATE_PRICE_USER2
+    );
 
     public static final long MAX_VALUE = 4000000L;
 

@@ -53,6 +53,8 @@ public final class OrderBookEventsHelper {
                                             final boolean makerCompleted,
                                             final boolean takerCompleted,
                                             final long size,
+                                            final long filled,
+                                            final long filledNotional,
                                             final long bidderHoldPrice,
                                             final CoreSymbolSpecification spec) {
         //final long takerOrderTimestamp
@@ -71,15 +73,23 @@ public final class OrderBookEventsHelper {
         event.matchedOrderUid = matchingOrder.getUid();
         event.matchedOrderCompleted = makerCompleted;
         event.matchedOrderCommandType = matchingOrder.getCommand();
+        event.matchedOrderFilled = matchingOrder.getFilled();
+        event.matchedOrderFilledNotional = matchingOrder.getFilledNotional();
+        event.matchedOrderType = matchingOrder.getOrderType();
+        event.matchedOrderPrice = matchingOrder.getPrice();
+        event.matchedOrderSize = matchingOrder.getSize();
+        event.matchedUserCookie = matchingOrder.getUserCookie();
+        event.matchedOrderTimestamp = matchingOrder.getTimestamp();
 
         event.price = matchingOrder.getPrice();
         event.size = size;
 
+        event.filled = filled;
+        event.filledNotional = filledNotional;
+
         // set order reserved price for correct released EBids
         event.bidderHoldPrice = bidderHoldPrice;
 
-        event.baseScaleK = spec.baseScaleK;
-        event.quoteScaleK = spec.quoteScaleK;
         return event;
 
     }
@@ -97,10 +107,11 @@ public final class OrderBookEventsHelper {
 //        event.size = order.getSize() - order.getFilled();
         event.size = reduceSize;
 
+        event.filled = order.getFilled();
+        event.filledNotional = order.getFilledNotional();
+
         event.bidderHoldPrice = order.getReserveBidPrice(); // set order reserved price for correct released EBids
 
-        event.baseScaleK = spec.baseScaleK;
-        event.quoteScaleK = spec.quoteScaleK;
         return event;
     }
 
@@ -127,9 +138,6 @@ public final class OrderBookEventsHelper {
 
         event.bidderHoldPrice = cmd.reserveBidPrice; // set command reserved price for correct released EBids
 
-        event.baseScaleK = spec.baseScaleK;
-        event.quoteScaleK = spec.quoteScaleK;
-
         // insert event
         event.nextEvent = cmd.matcherEvent;
         cmd.matcherEvent = event;
@@ -139,11 +147,11 @@ public final class OrderBookEventsHelper {
                                                      final int section,
                                                      final NativeBytes<Void> bytes) {
 
-        long[] dataArray = SerializationUtils.bytesToLongArray(bytes, 7);
+        long[] dataArray = SerializationUtils.bytesToLongArray(bytes, 5);
 
         MatcherTradeEvent firstEvent = null;
         MatcherTradeEvent lastEvent = null;
-        for (int i = 0; i < dataArray.length; i += 7) {
+        for (int i = 0; i < dataArray.length; i += 5) {
 
             final MatcherTradeEvent event = newMatcherEvent();
 
@@ -155,8 +163,6 @@ public final class OrderBookEventsHelper {
             event.price = dataArray[i + 2];
             event.size = dataArray[i + 3];
             event.bidderHoldPrice = dataArray[i + 4];
-            event.baseScaleK = dataArray[i + 5];
-            event.quoteScaleK = dataArray[i + 6];
 
             event.nextEvent = null;
 
@@ -189,9 +195,7 @@ public final class OrderBookEventsHelper {
                             evt.matchedOrderUid,
                             evt.price,
                             evt.size,
-                            evt.bidderHoldPrice,
-                            evt.baseScaleK,
-                            evt.quoteScaleK))
+                            evt.bidderHoldPrice))
                     .mapToLong(s -> s)
                     .toArray();
 

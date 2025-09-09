@@ -27,6 +27,8 @@ import exchange.core2.core.common.api.reports.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.*;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import lombok.Builder;
 import lombok.Data;
@@ -68,8 +70,27 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
     @Setter
-    private ObjLongConsumer<OrderCommand> consumer = (cmd, seq) -> {
-    };
+    private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
+        @Override
+        public void orderBook(OrderBook orderBook) {
+
+        }
+
+        @Override
+        public void spotExecutionReport(SpotExecutionReport executionReport) {
+
+        }
+
+        @Override
+        public void futuresExecutionReport(FuturesExecutionReport executionReport) {
+
+        }
+
+        @Override
+        public void fundEventReport(FundEventReport fundEventReport) {
+
+        }
+    });
 
     public static final Consumer<OrderCommand> CHECK_SUCCESS = cmd -> assertEquals(CommandResultCode.SUCCESS, cmd.resultCode);
 
@@ -80,13 +101,26 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg) {
         return new ExchangeTestContainer(perfCfg,
                 InitialStateConfiguration.CLEAN_TEST,
-                SerializationConfiguration.DEFAULT);
+                SerializationConfiguration.DEFAULT, null);
+    }
+
+    public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg, ObjLongConsumer<OrderCommand> consumer) {
+        return new ExchangeTestContainer(perfCfg,
+                InitialStateConfiguration.CLEAN_TEST,
+                SerializationConfiguration.DEFAULT, consumer);
     }
 
     public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg,
                                                final InitialStateConfiguration initStateCfg,
                                                final SerializationConfiguration serializationCfg) {
-        return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg);
+        return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg, null);
+    }
+
+    public static ExchangeTestContainer create(final PerformanceConfiguration perfCfg,
+                                               final InitialStateConfiguration initStateCfg,
+                                               final SerializationConfiguration serializationCfg,
+                                               ObjLongConsumer<OrderCommand> consumer) {
+        return new ExchangeTestContainer(perfCfg, initStateCfg, serializationCfg, consumer);
     }
 
     public static TestDataFutures prepareTestDataAsync(TestDataParameters parameters, int seed) {
@@ -140,7 +174,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     private ExchangeTestContainer(final PerformanceConfiguration perfCfg,
                                   final InitialStateConfiguration initStateCfg,
-                                  final SerializationConfiguration serializationCfg) {
+                                  final SerializationConfiguration serializationCfg,
+                                  final ObjLongConsumer<OrderCommand> consumer) {
 
         //log.debug("CREATING exchange container");
 
@@ -156,7 +191,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .build();
 
         this.exchangeCore = ExchangeCore.builder()
-                .resultsConsumer((cmd, seq) -> consumer.accept(cmd, seq))
+                .resultsConsumer(consumer == null ? this.consumer : consumer)
                 .exchangeConfiguration(exchangeConfiguration)
                 .build();
 
@@ -615,10 +650,10 @@ public final class ExchangeTestContainer implements AutoCloseable {
         long uid = 100000 + getRandomTransactionId();
         submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(uid).symbol(symbolId).markPrice(price).build(), CommandResultCode.SUCCESS);
         // update bid/ask price
-        long userId1 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
-        createBid(userId1, 10, price, symbolId);
-        long userId2 = createRandomUserWithMoney(TestConstants.MAX_VALUE, quoteId);
-        createAsk(userId2, 10, price, symbolId);
+        createUserWithMoney(UPDATE_PRICE_USER1, quoteId, TestConstants.MAX_VALUE);
+        createUserWithMoney(UPDATE_PRICE_USER2, quoteId, TestConstants.MAX_VALUE);
+        createBid(UPDATE_PRICE_USER1, 10, price, symbolId);
+        createAsk(UPDATE_PRICE_USER2, 10, price, symbolId);
         // 触发让R2做完
         api.groupingControl(0, 1);
     }

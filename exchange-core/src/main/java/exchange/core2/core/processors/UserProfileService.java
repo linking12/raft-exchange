@@ -35,7 +35,7 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
  * TODO make multi instance
  */
 @Slf4j
-public final class UserProfileService implements WriteBytesMarshallable, StateHash {
+public class UserProfileService implements WriteBytesMarshallable, StateHash {
 
     /*
      * State: uid to UserProfile

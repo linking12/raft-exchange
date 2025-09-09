@@ -1,87 +1,75 @@
 package exchange.core2.core.event;
 
-import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.SimpleEventsProcessor;
-import exchange.core2.core.common.FundEvent;
-import exchange.core2.core.common.MatcherEventType;
-import exchange.core2.core.common.api.*;
-import exchange.core2.core.common.cmd.CommandResultCode;
-import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.UserProfile;
+import exchange.core2.core.common.UserStatus;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.agrona.collections.MutableBoolean;
-import org.agrona.collections.MutableLong;
-import org.agrona.collections.MutableReference;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+
+import static exchange.core2.tests.util.TestConstants.ALL_USERS;
 
 @Getter
 @Slf4j
 public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
-    private IEventsHandler4Test eventsHandler;
+    private final IEventsHandler4Test eventsHandler;
 
-    private long baseScaleK = 0L;
-    private long quoteScaleK = 0L;
+    private final Map<Integer, CoreSymbolSpecification> symbolSpecificationMap;
+    private final Map<Long, UserProfile> userProfileMap;
 
     public SimpleEventsProcessor4Test(IEventsHandler4Test eventsHandler) {
         super(eventsHandler, eventsHandler);
         this.eventsHandler = eventsHandler;
+
+        this.symbolSpecificationMap = new HashMap<>();
+        this.userProfileMap = new HashMap<>();
+        ALL_USERS.forEach(e -> userProfileMap.put(e, new UserProfile(e, UserStatus.valueOf("ACTIVE"))));
+    }
+
+    public SimpleEventsProcessor4Test(IEventsHandler4Test eventsHandler, Boolean isPerfTest) {
+        super(eventsHandler, eventsHandler);
+        this.eventsHandler = eventsHandler;
+
+        this.symbolSpecificationMap = new HashMap<>();
+        this.userProfileMap = new HashMap<>();
     }
 
     @Override
-    public void sendFundEvent(FundEvent fundEvent) {
-        // todo override for test
-        super.sendFundEvent(fundEvent);
-    }
-
-    @Override
-    public void sendTradeEvent(OrderCommand cmd) {
-
-        final MutableBoolean takerOrderCompleted = new MutableBoolean(false);
-        final MutableLong mutableLong = new MutableLong(0L);
-        final List<ITradeEventsHandler.Trade> trades = new ArrayList<>();
-
-        final MutableReference<ITradeEventsHandler.RejectEvent> rejectEvent = new MutableReference<>(null);
-
-        cmd.processMatcherEvents(evt -> {
-
-            if (evt.eventType == MatcherEventType.TRADE) {
-
-                final ITradeEventsHandler.Trade trade =
-                        new ITradeEventsHandler.Trade(evt.matchedOrderId, evt.matchedOrderUid, evt.matchedOrderCompleted, evt.price, evt.size);
-
-                trades.add(trade);
-                mutableLong.value += evt.size;
-
-                if (evt.activeOrderCompleted) {
-                    takerOrderCompleted.value = true;
+    public void setSymbolSpecificationProvider(SymbolSpecificationProvider symbolSpecificationProvider) {
+        super.setSymbolSpecificationProvider(new SymbolSpecificationProvider() {
+            @Override
+            public CoreSymbolSpecification getSymbolSpecification(int symbol) {
+                if (symbolSpecificationMap.isEmpty()) {
+                    return symbolSpecificationProvider.getSymbolSpecification(symbol);
                 }
-
-            } else if (evt.eventType == MatcherEventType.REJECT) {
-
-                rejectEvent.set(new ITradeEventsHandler.RejectEvent(cmd.symbol, baseScaleK, quoteScaleK, evt.size, evt.price, cmd.orderId, cmd.uid, cmd.timestamp));
+                return symbolSpecificationMap.get(symbol);
             }
         });
-
-        if (!trades.isEmpty()) {
-
-            final ITradeEventsHandler.TradeEvent evt = new ITradeEventsHandler.TradeEvent(cmd.symbol, baseScaleK, quoteScaleK,
-                    mutableLong.value, cmd.orderId, cmd.uid, cmd.action, takerOrderCompleted.value, cmd.timestamp, trades);
-
-            eventsHandler.tradeEvent(evt);
-        }
-
-        if (rejectEvent.ref != null) {
-            eventsHandler.rejectEvent(rejectEvent.ref);
-        }
-
     }
+
     @Override
-    public void sendApiCommandResult(ApiCommand cmd, CommandResultCode resultCode, long timestamp, long seq) {
-        cmd.timestamp = timestamp;
-        final IEventsHandler4Test.ApiCommandResult commandResult = new IEventsHandler4Test.ApiCommandResult(cmd, resultCode, seq);
-        eventsHandler.commandResult(commandResult);
+    public void setUserProfileService(int shardId, UserProfileService userProfileService) {
+        super.setUserProfileService(shardId, new UserProfileService() {
+            @Override
+            public UserProfile getUserProfile(long uid) {
+                if (userProfileMap.isEmpty()) {
+                    return userProfileService.getUserProfile(uid);
+                }
+                return userProfileMap.get(uid);
+            }
+        });
     }
+
+    public CoreSymbolSpecification fakeSpotSymbol(int symbol) {
+        return new CoreSymbolSpecification(symbol, SymbolType.CURRENCY_EXCHANGE_PAIR, 1, 2, 1000, 1000,
+                0, 0, 0, 0, 0, null, 0, null);
+    }
+
 }

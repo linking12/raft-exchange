@@ -108,7 +108,9 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         final long size = cmd.size;
 
         // check if order is marketable (if there are opposite matching orders)
-        final long filledSize = tryMatchInstantly(cmd, subtreeForMatching(action, price), 0, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, subtreeForMatching(action, price), cmd);
+        final long filledSize = matchResult[0];
+        final long filledNotional = matchResult[1];
         if (filledSize == size) {
             // order was matched completely - nothing to place - can just return
             return;
@@ -128,11 +130,14 @@ public final class OrderBookNaiveImpl implements IOrderBook {
                 price,
                 size,
                 filledSize,
+                filledNotional,
                 cmd.reserveBidPrice,
                 action,
+                cmd.orderType,
                 cmd.command,
                 cmd.uid,
-                cmd.timestamp);
+                cmd.timestamp,
+                cmd.userCookie);
 
         getBucketsByAction(action)
                 .computeIfAbsent(price, p -> new OrdersBucketNaive(symbolSpec, p))
@@ -143,7 +148,8 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
     private void newOrderMatchIoc(final OrderCommand cmd) {
 
-        final long filledSize = tryMatchInstantly(cmd, subtreeForMatching(cmd.action, cmd.price), 0, cmd);
+        final long[] matchResult = tryMatchInstantly(cmd, subtreeForMatching(cmd.action, cmd.price), cmd);
+        final long filledSize = matchResult[0];
 
         final long rejectedSize = cmd.size - filledSize;
 
@@ -165,7 +171,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
         if (logDebug) log.debug("Budget calc: {} requested: {}", budget, cmd.price);
 
         if (budget.isPresent() && isBudgetLimitSatisfied(cmd.action, budget.get(), cmd.price)) {
-            tryMatchInstantly(cmd, subtreeForMatching, 0, cmd);
+            tryMatchInstantly(cmd, subtreeForMatching, cmd);
         } else {
             eventsHelper.attachRejectEvent(cmd, size, symbolSpec);
         }
@@ -213,20 +219,20 @@ public final class OrderBookNaiveImpl implements IOrderBook {
      *
      * @param activeOrder     - GTC or IOC order to match
      * @param matchingBuckets - sorted buckets map
-     * @param filled          - current 'filled' value for the order
      * @param triggerCmd      - triggered command (taker)
-     * @return new filled size
+     * @return [filledSize, filledNotional]
      */
-    private long tryMatchInstantly(
+    private long[] tryMatchInstantly(
             final IOrder activeOrder,
             final SortedMap<Long, OrdersBucketNaive> matchingBuckets,
-            long filled,
             final OrderCommand triggerCmd) {
 
 //        log.info("matchInstantly: {} {}", order, matchingBuckets);
+        long filled = activeOrder.getFilled();
+        long filledNotional = activeOrder.getFilledNotional();
 
         if (matchingBuckets.size() == 0) {
-            return filled;
+            return new long[]{filled, filledNotional};
         }
 
         final long orderSize = activeOrder.getSize();
@@ -246,6 +252,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
             bucketMatchings.ordersToRemove.forEach(idMap::remove);
 
             filled += bucketMatchings.volume;
+            filledNotional += bucketMatchings.notional;
 
             // attach chain received from bucket matcher
             if (eventsTail == null) {
@@ -278,7 +285,7 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 //        log.debug("emptyBuckets: {}", emptyBuckets);
 //        log.debug("matchingRecords: {}", matchingRecords);
 
-        return filled;
+        return new long[]{filled, filledNotional};
     }
 
     /**
@@ -410,7 +417,8 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
         // try match with new price
         final SortedMap<Long, OrdersBucketNaive> matchingArea = subtreeForMatching(order.action, newPrice);
-        final long filled = tryMatchInstantly(order, matchingArea, order.filled, cmd);
+        final long[] matchResult = tryMatchInstantly(order, matchingArea, cmd);
+        final long filled = matchResult[0];
         if (filled == order.size) {
             // order was fully matched (100% marketable) - removing from order book
             idMap.remove(orderId);

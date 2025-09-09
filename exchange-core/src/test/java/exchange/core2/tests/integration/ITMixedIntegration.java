@@ -32,7 +32,6 @@ import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -49,20 +48,13 @@ class ITMixedIntegration {
     private IEventsHandler4Test handler;
 
     @Captor
-    private ArgumentCaptor<ITradeEventsHandler.ApiCommandResult> commandResultCaptor;
+    ArgumentCaptor<ITradeEventsHandler.SpotExecutionReport> spotEventCaptor;
 
     @Captor
-    private ArgumentCaptor<ITradeEventsHandler.TradeEvent> tradeEventCaptor;
+    ArgumentCaptor<ITradeEventsHandler.FuturesExecutionReport> futuresEventCaptor;
 
     @Captor
-    private ArgumentCaptor<IFundEventsHandler.FundsEvent> fundEventCapor;
-
-    @Captor
-    private ArgumentCaptor<ITradeEventsHandler.ReduceEvent> reduceEventCaptor;
-
-    @Captor
-    private ArgumentCaptor<ITradeEventsHandler.RejectEvent> rejectEventCaptor;
-
+    ArgumentCaptor<IFundEventsHandler.FundEventReport> fundEventCaptor;
 
     @BeforeEach
     public void before() {
@@ -81,7 +73,7 @@ class ITMixedIntegration {
     @Test
     public void testMixedExchangeAndMargin() {
         long deposit = 10000L;
-        long userId1 = 1003L;
+        long userId1 = UID_1;
         long fee = 120L;
         int size = 1;
         long price1 = 10000;
@@ -89,8 +81,7 @@ class ITMixedIntegration {
         long makerOrderId1 = 1005L;
         long makerOrderId2 = 1007L;
         long exchangeOrderId = 112233L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
-            container.setConsumer(processor);
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
@@ -131,49 +122,46 @@ class ITMixedIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(5)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(5)).fundEventReport(fundEventCaptor.capture());
             // check margin event
-            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent marginEvent = fundEvents.get(1);
-            assertThat(userId1, Is.is(marginEvent.uid));
-            assertThat(quoteId, Is.is(marginEvent.currency));
-            assertThat(makerOrderId1, Is.is(marginEvent.orderId));
-            assertThat(0L, Is.is(marginEvent.fee));
-            assertThat(PositionDirection.LONG, Is.is(marginEvent.direction));
-            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(marginEvent.eventType));
-            assertThat(deposit - fee, Is.is(marginEvent.free));
-            assertThat(fee, Is.is(marginEvent.locked));
-            assertThat(0L, Is.is(marginEvent.openPriceSum));
-            assertThat(0L, Is.is(marginEvent.openVolume));
-            assertThat(0L, Is.is(marginEvent.tradeSize));
-            assertThat(0L, Is.is(marginEvent.tradePrice));
-            // symbol is not set in placeExchange event
-            assertThat(10000, Is.is(marginEvent.symbol));
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+            IFundEventsHandler.FundEventReport marginEvent = fundEvents.get(1);
+            assertThat(userId1, Is.is(marginEvent.getAccountId()));
+            assertThat(quoteId, Is.is(marginEvent.getBalances().getCurrency()));
+            assertThat(10000, Is.is(marginEvent.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, Is.is(marginEvent.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(marginEvent.getEventType()));
+            assertThat(deposit - fee, Is.is(marginEvent.getBalances().getFree()));
+            assertThat(0L, Is.is(marginEvent.getPositions().getCumRealized()));
+            assertThat(fee, Is.is(marginEvent.getBalances().getLocked()));
+            assertThat(0L, Is.is(marginEvent.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(marginEvent.getPositions().getQuantity()));
+            assertThat(0L, Is.is(marginEvent.getPositions().getUnrealizedProfit()));
+            assertThat(0L, Is.is(marginEvent.getPositions().getLiquidationPrice()));
+            assertThat(0L, Is.is(marginEvent.getPositions().getMarginRatioScaleK()));
 
-            IFundEventsHandler.FundsEvent deposit2 = fundEvents.get(2);
-            assertThat(10019L, Is.is(deposit2.free));
-            assertThat(120L, Is.is(deposit2.locked));
+            IFundEventsHandler.FundEventReport deposit2 = fundEvents.get(2);
+            assertThat(10019L, Is.is(deposit2.getBalances().getFree()));
+            assertThat(120L, Is.is(deposit2.getBalances().getLocked()));
 
-            IFundEventsHandler.FundsEvent deposit3 = fundEvents.get(3);
-            assertThat(10020L, Is.is(deposit3.free));
-            assertThat(120L, Is.is(deposit3.locked));
+            IFundEventsHandler.FundEventReport deposit3 = fundEvents.get(3);
+            assertThat(10020L, Is.is(deposit3.getBalances().getFree()));
+            assertThat(120L, Is.is(deposit3.getBalances().getLocked()));
 
-            // check place exchange event
-            IFundEventsHandler.FundsEvent exchangeLockEvent = fundEvents.get(4);
-            assertThat(userId1, Is.is(exchangeLockEvent.uid));
-            assertThat(quoteId, Is.is(exchangeLockEvent.currency));
-            assertThat(exchangeOrderId, Is.is(exchangeLockEvent.orderId));
-            assertThat(0L, Is.is(exchangeLockEvent.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(exchangeLockEvent.direction));
-            assertThat(FundEvent.FundEventType.LOCKED, Is.is(exchangeLockEvent.eventType));
-            assertThat(0L, Is.is(exchangeLockEvent.free));
-            assertThat(120L, Is.is(exchangeLockEvent.locked));
-            assertThat(0L, Is.is(exchangeLockEvent.openPriceSum));
-            assertThat(0L, Is.is(exchangeLockEvent.openVolume));
-            assertThat(0L, Is.is(exchangeLockEvent.tradeSize));
-            assertThat(0L, Is.is(exchangeLockEvent.tradePrice));
-            // symbol is not set in placeExchange event
-            assertThat(10003, Is.is(exchangeLockEvent.symbol));
+            IFundEventsHandler.FundEventReport exchangeLockEvent = fundEvents.get(4);
+            assertThat(userId1, Is.is(exchangeLockEvent.getAccountId()));
+            assertThat(quoteId, Is.is(exchangeLockEvent.getBalances().getCurrency()));
+            assertThat(10003, Is.is(exchangeLockEvent.getPositions().getSymbolId()));
+            assertThat(PositionDirection.EMPTY, Is.is(exchangeLockEvent.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.LOCKED, Is.is(exchangeLockEvent.getEventType()));
+            assertThat(0L, Is.is(exchangeLockEvent.getBalances().getFree()));
+            assertThat(0L, Is.is(exchangeLockEvent.getPositions().getCumRealized()));
+            assertThat(120L, Is.is(exchangeLockEvent.getBalances().getLocked()));
+            assertThat(0L, Is.is(exchangeLockEvent.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(exchangeLockEvent.getPositions().getQuantity()));
+            assertThat(0L, Is.is(exchangeLockEvent.getPositions().getUnrealizedProfit()));
+            assertThat(0L, Is.is(exchangeLockEvent.getPositions().getLiquidationPrice()));
+            assertThat(0L, Is.is(exchangeLockEvent.getPositions().getMarginRatioScaleK()));
         }
     }
 
@@ -181,17 +169,16 @@ class ITMixedIntegration {
     @Test
     public void testMixedExchangeAndMargin2() {
         long deposit = 10000L;
-        long userId1 = 1003L;
-        long userId2 = 1004L;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
         long makerOrderId1 = 1005L;
         long takerOrderId2 = 1006L;
         long exchangeOrderId = 112233L;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             List<CoreSymbolSpecification> symbolsExchange = container.initExchangeSymbols();
@@ -229,23 +216,23 @@ class ITMixedIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(19)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(19)).fundEventReport(fundEventCaptor.capture());
             // check fund event
-            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event1 = fundEvents.get(18);
-            assertThat(userId1, Is.is(event1.uid));
-            assertThat(quoteId, Is.is(event1.currency));
-//            assertThat(10000, Is.is(event1.symbol));
-            assertThat(exchangeOrderId, Is.is(event1.orderId));
-            assertThat(0L, Is.is(event1.fee));
-            assertThat(PositionDirection.EMPTY, Is.is(event1.direction));
-            assertThat(FundEvent.FundEventType.LOCKED, Is.is(event1.eventType));
-            assertThat(100L, Is.is(event1.locked)); // 100不变，还是仓位的初始保证金
-            assertThat(-25L, Is.is(event1.free)); // 下完单后balance应该是75, 75-100 = -25
-            assertThat(0L, Is.is(event1.openPriceSum));
-            assertThat(0L, Is.is(event1.openVolume));
-            assertThat(0L, Is.is(event1.tradeSize));
-            assertThat(0L, Is.is(event1.tradePrice));
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+            IFundEventsHandler.FundEventReport event = fundEvents.get(18);
+            assertThat(userId1, Is.is(event.getAccountId()));
+            assertThat(quoteId, Is.is(event.getBalances().getCurrency()));
+            assertThat(10003, Is.is(event.getPositions().getSymbolId()));
+            assertThat(PositionDirection.EMPTY, Is.is(event.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.LOCKED, Is.is(event.getEventType()));
+            assertThat(-25L, Is.is(event.getBalances().getFree()));
+            assertThat(0L, Is.is(event.getPositions().getCumRealized()));
+            assertThat(100L, Is.is(event.getBalances().getLocked()));
+            assertThat(0L, Is.is(event.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(event.getPositions().getQuantity()));
+            assertThat(0L, Is.is(event.getPositions().getUnrealizedProfit()));
+            assertThat(0L, Is.is(event.getPositions().getLiquidationPrice()));
+            assertThat(0L, Is.is(event.getPositions().getMarginRatioScaleK()));
         }
     }
 
@@ -258,7 +245,6 @@ class ITMixedIntegration {
         int price2 = 15000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -306,7 +292,6 @@ class ITMixedIntegration {
         int price2 = 9000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -365,9 +350,8 @@ class ITMixedIntegration {
         int size = 10;
         long price1 = 10000;
         int price2 = 15000;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration());) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
-            container.setConsumer(processor);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
 
@@ -394,6 +378,8 @@ class ITMixedIntegration {
             container.createBidWithOrderId(MAKER_2, UID_3, size, 9920, symbols.get(0).symbolId, MarginMode.ISOLATED);
             container.getExchangeCore().getLiquidationScanner().triggerOnce();
 
+            // 有可能强平还没触发, 加个sleep保证强平触发吃掉UID_3的订单
+            Thread.sleep(1000);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
                 assertThat(profile.getAccounts().get(quoteId), Is.is(9100L));
@@ -406,35 +392,34 @@ class ITMixedIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(36)).fundsEvent(fundEventCapor.capture());
+            verify(handler, times(36)).fundEventReport(fundEventCaptor.capture());
             // check fund event
-            List<IFundEventsHandler.FundsEvent> fundEvents = fundEventCapor.getAllValues();
-            IFundEventsHandler.FundsEvent event = null;
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+            IFundEventsHandler.FundEventReport event = null;
 
             for (int i = 0; i < fundEvents.size(); i++) {
-                IFundEventsHandler.FundsEvent evt = fundEvents.get(i);
-                if (evt.eventType.equals(FundEvent.FundEventType.LIQUIDATION)) {
+                IFundEventsHandler.FundEventReport evt = fundEvents.get(i);
+                if (evt.getEventType().equals(FundEvent.FundEventType.LIQUIDATION)) {
                     event = evt;
                     break;
                 }
             }
 
-            assertThat(UID_1, Is.is(event.uid));
-            assertThat(quoteId, Is.is(event.currency));
-            assertThat(10000, Is.is(event.symbol));
-            assertThat(0L, Is.is(event.fee));
-            assertThat(PositionDirection.LONG, Is.is(event.direction));
-            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(event.eventType));
-            assertThat(9900L, Is.is(event.free));
-            assertThat(0L, Is.is(event.locked));
-            assertThat(0L, Is.is(event.openPriceSum));
-            assertThat(0L, Is.is(event.openVolume));
-            assertThat(10L, Is.is(event.tradeSize));
-            assertThat(-800L, Is.is(event.profit));
-            assertThat(9920L, Is.is(event.tradePrice));
-            assertThat(0L, Is.is(event.unrealizedProfit));
-            assertThat(0L, Is.is(event.liquidationPrice));
-            assertThat(0L, Is.is(event.marginRatioScaleK));
+            assertThat(UID_1, Is.is(event.getAccountId()));
+            assertThat(quoteId, Is.is(event.getBalances().getCurrency()));
+            assertThat(10000, Is.is(event.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, Is.is(event.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(event.getEventType()));
+            assertThat(9900L, Is.is(event.getBalances().getFree()));
+            assertThat(-800L, Is.is(event.getPositions().getCumRealized()));
+            assertThat(0L, Is.is(event.getBalances().getLocked()));
+            assertThat(0L, Is.is(event.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(event.getPositions().getQuantity()));
+            // 10000价格跌到100, unrealizedProfit = 100 - 10000 = -9900
+            assertThat(0L, Is.is(event.getPositions().getUnrealizedProfit()));
+            // 逐仓强平价格计算
+            assertThat(0L, Is.is(event.getPositions().getLiquidationPrice()));
+            assertThat(0L, Is.is(event.getPositions().getMarginRatioScaleK()));
         }
     }
 }

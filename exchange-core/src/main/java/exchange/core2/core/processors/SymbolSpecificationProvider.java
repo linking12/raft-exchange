@@ -31,7 +31,7 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 @Slf4j
-public final class SymbolSpecificationProvider implements WriteBytesMarshallable, StateHash {
+public class SymbolSpecificationProvider implements WriteBytesMarshallable, StateHash {
 
     // symbol->specs
     @Getter

@@ -5,8 +5,4 @@ import exchange.core2.core.IFundEventsHandler;
 
 public interface IEventsHandler4Test extends ITradeEventsHandler, IFundEventsHandler {
 
-    void rejectEvent(RejectEvent rejectEvent);
-
-    void commandResult(ApiCommandResult commandResult);
-
 }
