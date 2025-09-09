@@ -70,7 +70,7 @@ class LiquidationScannerTest {
     }
 
     private LiquidationScanner getScanner() {
-        LiquidationScanner scanner = new LiquidationScanner(null, null);
+        LiquidationScanner scanner = new LiquidationScanner(null, null, null);
         return scanner;
     }
 
