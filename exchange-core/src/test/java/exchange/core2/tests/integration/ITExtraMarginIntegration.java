@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 import static exchange.core2.core.common.OrderAction.BID;
 import static exchange.core2.core.common.OrderType.*;
@@ -545,6 +546,10 @@ class ITExtraMarginIntegration {
             assertThat(9939L, Is.is(marginAdjust.getPositions().getLiquidationPrice()));
             assertThat(816L, Is.is(marginAdjust.getPositions().getMarginRatioScaleK()));
             checkEventPending(marginAdjust);
+
+            // 确认补充足够的保证金后margin_alert不会再发
+            int num = fundEvents.stream().filter(e -> e.getEventType().equals(FundEvent.FundEventType.MARGIN_ALERT) && e.getAccountId() == userId1).collect(Collectors.toList()).size();
+            assertThat(num == 1, Is.is(true));
         }
     }
 
@@ -644,6 +649,10 @@ class ITExtraMarginIntegration {
             assertThat(9949L, Is.is(alertEvent.getPositions().getLiquidationPrice()));
             assertThat(980L, Is.is(alertEvent.getPositions().getMarginRatioScaleK()));
             checkEventPending(alertEvent);
+
+            // 保证金虽然补了, 但还不是不够后会再次发送margin_alert
+            int num = fundEvents.stream().filter(e -> e.getEventType().equals(FundEvent.FundEventType.MARGIN_ALERT) && e.getAccountId() == userId1).collect(Collectors.toList()).size();
+            assertThat(num == 2, Is.is(true));
         }
     }
 
