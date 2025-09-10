@@ -94,7 +94,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.orderBookFactory = orderBookFactory;
-        this.eventsHelper = new OrderBookEventsHelper(sharedPool::getChain);
+        this.eventsHelper = new OrderBookEventsHelper(sharedPool::getTradeEventChain);
 
         this.loggingCfg = exchangeCfg.getLoggingCfg();
         this.logDebug = loggingCfg.getLoggingLevels().contains(LoggingConfiguration.LoggingLevel.LOGGING_MATCHING_DEBUG);

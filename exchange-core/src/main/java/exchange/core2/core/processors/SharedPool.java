@@ -21,7 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class SharedPool {
 
-    private final DisruptorBlockingQueue<MatcherTradeEvent> eventChainsBuffer;
+    private final DisruptorBlockingQueue<MatcherTradeEvent> tradeEventChainsBuffer;
 
     private final DisruptorBlockingQueue<FundEvent> fundEventChainsBuffer;
 
@@ -47,12 +47,12 @@ public final class SharedPool {
             throw new IllegalArgumentException("too big poolInitialSize");
         }
 
-        this.eventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
+        this.tradeEventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.fundEventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.chainLength = chainLength;
 
         for (int i = 0; i < poolInitialSize; i++) {
-            this.eventChainsBuffer.add(MatcherTradeEvent.createEventChain(chainLength));
+            this.tradeEventChainsBuffer.add(MatcherTradeEvent.createEventChain(chainLength));
         }
 
         for (int i = 0; i < poolInitialSize; i++) {
@@ -61,14 +61,8 @@ public final class SharedPool {
 
     }
 
-    /**
-     * Request next chain from buffer Threadsafe
-     *
-     * @return chain, otherwise null
-     */
-    public MatcherTradeEvent getChain() {
-        MatcherTradeEvent poll = eventChainsBuffer.poll();
-        // log.debug("<<< POLL CHAIN HEAD size={}", poll == null ? 0 : poll.getChainSize());
+    public MatcherTradeEvent getTradeEventChain() {
+        MatcherTradeEvent poll = tradeEventChainsBuffer.poll();
         if (poll == null) {
             poll = MatcherTradeEvent.createEventChain(chainLength);
         }
@@ -76,14 +70,8 @@ public final class SharedPool {
         return poll;
     }
 
-    /**
-     * Offers next chain. Threadsafe (single producer safety is sufficient)
-     *
-     * @param head - pointer to the first element
-     */
-    public void putChain(MatcherTradeEvent head) {
-        boolean offer = eventChainsBuffer.offer(head);
-        // log.debug(">>> OFFER CHAIN HEAD size={} order={}", head.getChainSize(), offer);
+    public void putTradeEventChain(MatcherTradeEvent head) {
+        tradeEventChainsBuffer.offer(head);
     }
 
     public FundEvent getFundEventChain() {
