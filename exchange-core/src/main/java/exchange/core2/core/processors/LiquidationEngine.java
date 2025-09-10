@@ -47,7 +47,7 @@ public final class LiquidationEngine {
     private final int shardId;
     private final FundEventsHelper eventsHelper;
     @Setter
-    private ExchangeApi api;
+    private ExchangeApi exchangeApi;
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
@@ -218,7 +218,7 @@ public final class LiquidationEngine {
 
     private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, FundEventsHelper eventsHelper, long equity, long warningThreshold) {
         FundEvent event = eventsHelper.sendMarginAlertEvent(position);
-        api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+        exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
         log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
     }
 
@@ -262,7 +262,7 @@ public final class LiquidationEngine {
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
-        CompletableFuture<OrderCommand> liquidationFuture = api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
+        CompletableFuture<OrderCommand> liquidationFuture = exchangeApi.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
             .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
         liquidationFuture.whenCompleteAsync((cmd, err) -> {
             /**
@@ -276,7 +276,7 @@ public final class LiquidationEngine {
                 long remainSize = firstEvent.size;
                 long bankruptcyOrderId = generateLiquidationOrderId(position.symbol, position.uid);
                 long bankruptcyPrice = calculateBankruptcyPrice(position, spec);
-                api.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.FOK_BUDGET).symbol(position.symbol)
+                exchangeApi.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.FOK_BUDGET).symbol(position.symbol)
                     .orderId(bankruptcyOrderId).uid(position.uid).price(bankruptcyPrice * remainSize).size(remainSize).action(action).build())
                     .whenCompleteAsync((cmd2, err2) -> {
                         if (cmd2.matcherEvent.eventType == MatcherEventType.REJECT) {
@@ -289,13 +289,13 @@ public final class LiquidationEngine {
                         }
                     });
                 FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position, bankruptcyPrice, remainSize);
-                api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+                exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
                 log.debug("Liquidated(p2): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, bankruptcyPrice);
             }
         });
         // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
         FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position, price, size);
-        api.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+        exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
         log.debug("Liquidated(p1): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }
 

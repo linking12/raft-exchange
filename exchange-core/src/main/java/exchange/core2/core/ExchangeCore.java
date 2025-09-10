@@ -233,7 +233,7 @@ public final class ExchangeCore {
         if (exchangeConfiguration.getOrdersProcessingCfg().getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED) {
             liquidationEngines = riskEngines.values().stream().map(RiskEngine::getLiquidationEngine).collect(Collectors.toList());
             liquidationEngines.forEach(liquidationEngine -> {
-                liquidationEngine.setApi(api);
+                liquidationEngine.setExchangeApi(api);
                 liquidationEngine.start();
             });
         }
