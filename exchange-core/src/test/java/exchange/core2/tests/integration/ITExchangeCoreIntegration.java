@@ -115,17 +115,17 @@ public abstract class ITExchangeCoreIntegration {
                 assertNull(cmd.matcherEvent);
             });
 
-//            container.validateUserState(UID_1, profile -> {
-//                assertThat(profile.getAccounts().get(symbolSpec.baseCurrency), is(99999993L));
-//                assertThat(profile.getAccounts().get(symbolSpec.quoteCurrency), is(99937560L));
-//                assertThat(profile.getOrders().getFirst().get(0).price, is(1600L));
-//                assertThat(profile.getOrders().getFirst().get(0).size, is(7L));
-//                assertThat(profile.getOrders().getFirst().get(0).action, is(ASK));
-//                assertThat(profile.getOrders().getFirst().get(1).price, is(1550L));
-//                assertThat(profile.getOrders().getFirst().get(1).reserveBidPrice, is(1561L));
-//                assertThat(profile.getOrders().getFirst().get(1).size, is(4L));
-//                assertThat(profile.getOrders().getFirst().get(1).action, is(BID));
-//            });
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getOrders().getFirst().get(0).price, is(1600L));
+                assertThat(profile.getOrders().getFirst().get(0).size, is(7L));
+                assertThat(profile.getOrders().getFirst().get(0).action, is(ASK));
+                assertThat(profile.getOrders().getFirst().get(1).price, is(1550L));
+                if (symbolSpec.type == SymbolType.CURRENCY_EXCHANGE_PAIR) {
+                    assertThat(profile.getOrders().getFirst().get(1).reserveBidPrice, is(1561L));
+                }
+                assertThat(profile.getOrders().getFirst().get(1).size, is(4L));
+                assertThat(profile.getOrders().getFirst().get(1).action, is(BID));
+            });
 
             final L2MarketDataHelper l2helper = new L2MarketDataHelper().addAsk(1600, 7).addBid(1550, 4);
             assertEquals(l2helper.build(), container.requestCurrentOrderBook(symbolSpec.symbolId));
@@ -202,6 +202,10 @@ public abstract class ITExchangeCoreIntegration {
             assertEquals(l2helper.build(), container.requestCurrentOrderBook(symbolSpec.symbolId));
 
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
