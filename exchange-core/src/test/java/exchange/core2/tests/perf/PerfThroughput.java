@@ -18,12 +18,29 @@ package exchange.core2.tests.perf;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.*;
 import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 @Slf4j
+@ExtendWith(MockitoExtension.class)
 public final class PerfThroughput {
+
+    private SimpleEventsProcessor4Test processor;
+
+    @Mock
+    private IEventsHandler4Test handler;
+
+    @BeforeEach
+    public void before() {
+        processor = new SimpleEventsProcessor4Test(handler, true);
+    }
 
     // TODO shutdown disruptor if test fails
 
@@ -45,7 +62,8 @@ public final class PerfThroughput {
                 TestDataParameters.singlePairMarginBuilder().build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                50);
+                50,
+                processor);
     }
 
     @Test
@@ -59,7 +77,8 @@ public final class PerfThroughput {
                 TestDataParameters.singlePairExchangeBuilder().build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                50);
+                50,
+                processor);
     }
 
     @Test
@@ -82,7 +101,8 @@ public final class PerfThroughput {
                         .build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                50);
+                50,
+                processor);
     }
 
     /**
@@ -100,7 +120,8 @@ public final class PerfThroughput {
                 TestDataParameters.mediumBuilder().build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                25);
+                25,
+                processor);
     }
 
     /**
@@ -119,7 +140,8 @@ public final class PerfThroughput {
                 TestDataParameters.largeBuilder().build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                25);
+                25,
+                processor);
     }
 
     /**
@@ -141,7 +163,8 @@ public final class PerfThroughput {
                 TestDataParameters.hugeBuilder().build(),
                 InitialStateConfiguration.CLEAN_TEST,
                 SerializationConfiguration.DEFAULT,
-                25);
+                25,
+                processor);
     }
 
 }
