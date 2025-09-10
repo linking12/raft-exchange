@@ -192,7 +192,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         return (int)(uid & shardMask);
     }
 
-    public void setUserProfileService(int shardId, UserProfileService userProfileService) {
+    public void saveUserProfileService(int shardId, UserProfileService userProfileService) {
         userProfileServices.put(shardId, userProfileService);
     }
 }

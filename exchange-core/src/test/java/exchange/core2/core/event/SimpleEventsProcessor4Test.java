@@ -32,7 +32,7 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
         this.userProfileMap = new HashMap<>();
         ALL_USERS.forEach(e -> userProfileMap.put(e, new UserProfile(e, UserStatus.valueOf("ACTIVE"))));
         setSymbolSpecificationProvider(null);
-        setUserProfileService(0, null);
+        saveUserProfileService(0, null);
     }
 
     public SimpleEventsProcessor4Test(IEventsHandler4Test eventsHandler, Boolean isPerfTest) {
@@ -57,8 +57,8 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
     }
 
     @Override
-    public void setUserProfileService(int shardId, UserProfileService userProfileService) {
-        super.setUserProfileService(shardId, new UserProfileService() {
+    public void saveUserProfileService(int shardId, UserProfileService userProfileService) {
+        super.saveUserProfileService(shardId, new UserProfileService() {
             @Override
             public UserProfile getUserProfile(long uid) {
                 if (userProfileMap.isEmpty()) {
