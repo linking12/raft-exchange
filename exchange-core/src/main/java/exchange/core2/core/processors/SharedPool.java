@@ -42,19 +42,15 @@ public final class SharedPool {
      *            can cause event placeholders starvation.
      */
     public SharedPool(final int poolMaxSize, final int poolInitialSize, final int chainLength) {
-
         if (poolInitialSize > poolMaxSize) {
             throw new IllegalArgumentException("too big poolInitialSize");
         }
-
         this.tradeEventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.fundEventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.chainLength = chainLength;
-
         for (int i = 0; i < poolInitialSize; i++) {
             this.tradeEventChainsBuffer.add(MatcherTradeEvent.createEventChain(chainLength));
         }
-
         for (int i = 0; i < poolInitialSize; i++) {
             this.fundEventChainsBuffer.add(FundEvent.createEventChain(chainLength));
         }
