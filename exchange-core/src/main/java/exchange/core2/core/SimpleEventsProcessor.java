@@ -30,7 +30,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
 
     private final ITradeEventsHandler tradeEventsHandler;
     private final IFundEventsHandler fundEventsHandler;
-    private final IntObjectHashMap<UserProfileService> userProfileServices = new IntObjectHashMap<UserProfileService>();
+    private final IntObjectHashMap<UserProfileService> userProfileServices = IntObjectHashMap.newMap();
     @Setter
     private SymbolSpecificationProvider symbolSpecificationProvider;
     @Setter
