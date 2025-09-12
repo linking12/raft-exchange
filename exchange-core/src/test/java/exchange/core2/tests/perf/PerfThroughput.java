@@ -15,32 +15,40 @@
  */
 package exchange.core2.tests.perf;
 
+import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
-import exchange.core2.core.event.IEventsHandler4Test;
-import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.*;
 import lombok.extern.slf4j.Slf4j;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 @Slf4j
-@ExtendWith(MockitoExtension.class)
 public final class PerfThroughput {
 
-    private SimpleEventsProcessor4Test processor;
+    private final SimpleEventsProcessor processor = new SimpleEventsProcessor(new ITradeEventsHandler() {
+        @Override
+        public void orderBook(OrderBook orderBook) {
 
-    @Mock
-    private IEventsHandler4Test handler;
+        }
 
-    @BeforeEach
-    public void before() {
-        processor = new SimpleEventsProcessor4Test(handler, true);
-    }
+        @Override
+        public void spotExecutionReport(SpotExecutionReport executionReport) {
+
+        }
+
+        @Override
+        public void futuresExecutionReport(FuturesExecutionReport executionReport) {
+
+        }
+    }, new IFundEventsHandler() {
+        @Override
+        public void fundEventReport(FundEventReport fundEventReport) {
+
+        }
+    });
 
     // TODO shutdown disruptor if test fails
 
