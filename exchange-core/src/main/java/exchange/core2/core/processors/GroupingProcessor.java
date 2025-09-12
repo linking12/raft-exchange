@@ -201,7 +201,7 @@ public final class GroupingProcessor implements EventProcessor {
                             if (tradeEventCounter >= tradeEventChainLengthTarget) {
                                 // chain is big enough -> send to the shared pool
                                 tradeEventCounter = 0;
-                                sharedPool.putChain(tradeEventHead);
+                                sharedPool.putTradeEventChain(tradeEventHead);
                                 tradeEventTail = null;
                                 tradeEventHead = null;
                             }

@@ -73,7 +73,7 @@ public final class BinaryCommandsProcessor implements WriteBytesMarshallable, St
         this.completeMessagesHandler = completeMessagesHandler;
         this.reportQueriesHandler = reportQueriesHandler;
         this.incomingData = new LongObjectHashMap<>();
-        this.eventsHelper = new OrderBookEventsHelper(sharedPool::getChain);
+        this.eventsHelper = new OrderBookEventsHelper(sharedPool::getTradeEventChain);
         this.queriesConfiguration = queriesConfiguration;
         this.section = section;
     }
@@ -87,7 +87,7 @@ public final class BinaryCommandsProcessor implements WriteBytesMarshallable, St
         this.completeMessagesHandler = completeMessagesHandler;
         this.reportQueriesHandler = reportQueriesHandler;
         this.incomingData = SerializationUtils.readLongHashMap(bytesIn, b -> new TransferRecord(bytesIn));
-        this.eventsHelper = new OrderBookEventsHelper(sharedPool::getChain);
+        this.eventsHelper = new OrderBookEventsHelper(sharedPool::getTradeEventChain);
         this.section = section;
         this.queriesConfiguration = queriesConfiguration;
     }

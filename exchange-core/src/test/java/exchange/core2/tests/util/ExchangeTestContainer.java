@@ -69,7 +69,6 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private AtomicLong uniqueIdCounterLong = new AtomicLong();
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
-    @Setter
     private ObjLongConsumer<OrderCommand> consumer = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
         @Override
         public void orderBook(OrderBook orderBook) {
@@ -323,11 +322,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .initMargin(1)
                 .initMarginScaleK(100)
-//                .marginBuy(100)
-//                .marginSell(100)
-//                .maxLeverage(10)
-//                .maintenanceMargin(50)
                 .build();
+
         // ETH_USDT
         CoreSymbolSpecification futuresSymbol2 = CoreSymbolSpecification.builder()
                 .symbolId(10001)
@@ -344,11 +340,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .initMargin(1)
                 .initMarginScaleK(100)
-//                .marginBuy(100)
-//                .marginSell(100)
-//                .maxLeverage(20)
-//                .maintenanceMargin(100)
                 .build();
+
         // LTC_USDT
         CoreSymbolSpecification futuresSymbol3 = CoreSymbolSpecification.builder()
                 .symbolId(10002)
@@ -364,10 +357,6 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
                 .initMargin(1)
                 .initMarginScaleK(100)
-//                .marginBuy(100)
-//                .marginSell(100)
-//                .maxLeverage(50)
-//                .maintenanceMargin(200)
                 .build();
 
         api.submitBinaryDataAsync(new BatchAddSymbolsCommand(futuresSymbol1));

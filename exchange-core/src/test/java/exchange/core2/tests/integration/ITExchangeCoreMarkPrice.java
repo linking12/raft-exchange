@@ -1,5 +1,6 @@
 package exchange.core2.tests.integration;
 
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
@@ -16,7 +17,6 @@ import org.junit.Test;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
@@ -92,7 +92,7 @@ public final class ITExchangeCoreMarkPrice {
     @Test
     public void testMarkPrice() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.addSymbol(symbol);
             container.addCurrency(symbol.baseCurrency, 0);
             container.addCurrency(symbol.quoteCurrency, 0);
@@ -146,7 +146,7 @@ public final class ITExchangeCoreMarkPrice {
             });
 
             container.updateCurrentPriceTo(2, symbol.symbolId, symbol.quoteCurrency);
-            container.getExchangeCore().liquidationScanner.triggerOnce();
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::triggerOnce);
 
             // 还剩8手被对手方吃掉
             // openPriceSum = 680 * 10 = 6800 开仓价格
@@ -176,7 +176,7 @@ public final class ITExchangeCoreMarkPrice {
     @Test
     public void testInitMarginAndMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.addCurrency(symbol.baseCurrency, 0);
             container.addCurrency(symbol.quoteCurrency, 0);
             container.addSymbol(symbol);
@@ -301,7 +301,7 @@ public final class ITExchangeCoreMarkPrice {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().isEmpty(), is(true));
             });
@@ -311,7 +311,7 @@ public final class ITExchangeCoreMarkPrice {
     @Test
     public void testTieredMaintenanceMargin() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.addCurrency(symbol.baseCurrency, 0);
             container.addCurrency(symbol.quoteCurrency, 0);
             container.addSymbol(symbol);
@@ -382,7 +382,7 @@ public final class ITExchangeCoreMarkPrice {
                     .marginMode(MarginMode.ISOLATED)
                     .leverage(10)
                     .build(), CommandResultCode.SUCCESS);
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().isEmpty(), is(true));
             });
@@ -393,7 +393,7 @@ public final class ITExchangeCoreMarkPrice {
     @Test
     public void testTieredLeverage() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.addCurrency(symbol.baseCurrency, 0);
             container.addCurrency(symbol.quoteCurrency, 0);
             container.addSymbol(symbol);
@@ -482,7 +482,7 @@ public final class ITExchangeCoreMarkPrice {
     @Test
     public void testCrossMarginLiquidation() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
 
             int symbolId = 2;
             int quoteCurrency = 840;
@@ -509,7 +509,7 @@ public final class ITExchangeCoreMarkPrice {
 
             container.createBidWithOrderId(orderId++, UID_2, 1, 9054, symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getPositions().isEmpty(), is(true));

@@ -15,6 +15,10 @@
  */
 package exchange.core2.core.snapshot;
 
+import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -27,14 +31,15 @@ import exchange.core2.tests.util.*;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.function.ObjLongConsumer;
 
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -43,10 +48,21 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Slf4j
+@ExtendWith(MockitoExtension.class)
 public class PersistenceTests {
 
     private static final int SYMBOL_FUTURES = 41;
     private static final int CURRENCY_FUT = 42;
+
+    private SimpleEventsProcessor4Test processor;
+
+    @Mock
+    private IEventsHandler4Test handler;
+
+    @BeforeEach
+    public void before() {
+        processor = new SimpleEventsProcessor4Test(handler, true);
+    }
 
     // 创建期货合约规格
     private static CoreSymbolSpecification createFuturesSpec() {
@@ -85,11 +101,11 @@ public class PersistenceTests {
         TestDataParameters testDataParameters = TestDataParameters.singlePairMarginBuilder()
                 .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER_PLUS_QUARTER)
                 .build();
-        persistenceTestImpl(performanceConfiguration, testDataParameters);
+        persistenceTestImpl(performanceConfiguration, testDataParameters, processor);
     }
 
     public static void persistenceTestImpl(final PerformanceConfiguration performanceConfiguration,
-                                           final TestDataParameters testDataParameters) throws InterruptedException, ExecutionException {
+                                           final TestDataParameters testDataParameters, ObjLongConsumer<OrderCommand> consumer) throws InterruptedException, ExecutionException {
 
 
         final long stateId;
@@ -101,9 +117,9 @@ public class PersistenceTests {
 
         final long originalPrefillStateHash;
 
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, firstStartConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(performanceConfiguration, firstStartConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY, consumer)) {
 
-            container.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             container.loadSymbolsUsersAndPrefillOrders(testDataFutures);
             doExtra(container);
 
@@ -125,9 +141,9 @@ public class PersistenceTests {
 
             log.debug("Creating new exchange from persisted state...");
             final long tLoad = System.currentTimeMillis();
-            try (final ExchangeTestContainer recreatedContainer = ExchangeTestContainer.create(performanceConfiguration, fromSnapshotConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
+            try (final ExchangeTestContainer recreatedContainer = ExchangeTestContainer.create(performanceConfiguration, fromSnapshotConfig, SerializationConfiguration.DISK_SNAPSHOT_ONLY, consumer)) {
 
-                recreatedContainer.getExchangeCore().getLiquidationScanner().stop(1, TimeUnit.MINUTES);
+                recreatedContainer.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
 
                 recreatedContainer.getApi().submitRecoverCommandAsync(ApiRecoverState.builder().snapshotId(fromSnapshotConfig.getSnapshotId()).build()).get();
 
@@ -313,7 +329,7 @@ public class PersistenceTests {
         container.createAskWithOrderId(MAKER_3, UID_LIQ, 100, 11_000, SYMBOL_FUTURES, MarginMode.CROSS);
 
         // 11. 手动触发强平扫描
-        container.getExchangeCore().liquidationScanner.triggerOnce();
+        container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::triggerOnce);
 
         // 12. 验证全仓用户被强平
         container.validateUserState(UID_CROSS, profile -> {

@@ -76,7 +76,6 @@ public final class SimpleEventsProcessorTest {
 
     @Test
     public void shouldHandleWithReduceCommand() {
-
         OrderCommand cmd = sampleReduceCommand();
 
         cmd.matcherEvent = MatcherTradeEvent.builder()
@@ -97,23 +96,36 @@ public final class SimpleEventsProcessorTest {
         verify(handler, never()).futuresExecutionReport(any());
         verify(handler, never()).fundEventReport(any());
 
-        ITradeEventsHandler.SpotExecutionReport report = tradeEventCaptor.getValue();
-        assertThat(report.getOrderId(), Is.is(123L));
-        assertThat(report.getLastQty(), Is.is(0L));
-        assertThat(report.getSymbol(), Is.is(3));
+        List<ITradeEventsHandler.SpotExecutionReport> reports = tradeEventCaptor.getAllValues();
+        assertThat(reports.size(), Is.is(1));
+
+        ITradeEventsHandler.SpotExecutionReport report = reports.get(0);
         assertThat(report.executionType, Is.is(ITradeEventsHandler.ExecType.REDUCE));
+        assertThat(report.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.CANCELED));
+        assertThat(report.getSymbol(), Is.is(3));
+        assertThat(report.getBaseScaleK(), Is.is(1000L));
+        assertThat(report.getQuoteScaleK(), Is.is(1000L));
         assertThat(report.getAccountId(), Is.is(29851L));
-        assertThat(report.price, Is.is(52200L));
+        assertThat(report.getClOrdId(), Is.is(44188L));
+        assertThat(report.getOrderId(), Is.is(123L));
+        assertThat(report.getOrderType(), Is.is(OrderType.GTC));
+        assertThat(report.getSide(), Is.is(OrderAction.BID));
         assertThat(report.qty, Is.is(3200L));
+        assertThat(report.price, Is.is(52200L));
+        assertThat(report.quoteOrderQty, Is.is(0L));
+        assertThat(report.orderCreationTime, Is.is(1578930983745201L));
+        assertThat(report.lastQty, Is.is(0L));
+        assertThat(report.lastPrice, Is.is(0L));
         assertThat(report.cumulativeQty, Is.is(100L));
         assertThat(report.cumulativeQuoteQty, Is.is(10000L));
+        assertThat(report.commission, Is.is(0L));
         assertThat(report.commissionAsset, Is.is(2));
         assertThat(report.isMaker, Is.is(false));
+        assertThat(report.workingIndicator, Is.is(false));
     }
 
     @Test
     public void shouldHandleWithSingleTrade() {
-
         OrderCommand cmd = samplePlaceOrderCommand();
 
         cmd.matcherEvent = MatcherTradeEvent.builder()
@@ -148,48 +160,83 @@ public final class SimpleEventsProcessorTest {
         verify(handler, times(2)).fundEventReport(fundEventCaptor.capture());
 
         List<ITradeEventsHandler.SpotExecutionReport> reports = tradeEventCaptor.getAllValues();
+        assertThat(reports.size(), Is.is(3));
 
         ITradeEventsHandler.SpotExecutionReport newOrder = reports.get(0);
         assertThat(newOrder.executionType, Is.is(ITradeEventsHandler.ExecType.NEW));
-        assertThat(newOrder.getOrderId(), Is.is(123L));
+        assertThat(newOrder.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.NEW));
         assertThat(newOrder.getSymbol(), Is.is(3));
+        assertThat(newOrder.getBaseScaleK(), Is.is(1000L));
+        assertThat(newOrder.getQuoteScaleK(), Is.is(1000L));
         assertThat(newOrder.getAccountId(), Is.is(29851L));
-        assertThat(newOrder.commissionAsset, Is.is(2));
-        assertThat(newOrder.getSymbol(), Is.is(3));
-        assertThat(newOrder.price, Is.is(52200L));
+        assertThat(newOrder.getClOrdId(), Is.is(44188L));
+        assertThat(newOrder.getOrderId(), Is.is(123L));
+        assertThat(newOrder.getOrderType(), Is.is(OrderType.IOC));
+        assertThat(newOrder.getSide(), Is.is(OrderAction.BID));
         assertThat(newOrder.qty, Is.is(3200L));
+        assertThat(newOrder.price, Is.is(52200L));
+        assertThat(newOrder.quoteOrderQty, Is.is(0L));
+        assertThat(newOrder.orderCreationTime, Is.is(1578930983745201L));
+        assertThat(newOrder.lastQty, Is.is(0L));
+        assertThat(newOrder.lastPrice, Is.is(0L));
         assertThat(newOrder.cumulativeQty, Is.is(0L));
         assertThat(newOrder.cumulativeQuoteQty, Is.is(0L));
+        assertThat(newOrder.commission, Is.is(0L));
         assertThat(newOrder.commissionAsset, Is.is(2));
         assertThat(newOrder.isMaker, Is.is(false));
+        assertThat(newOrder.workingIndicator, Is.is(false));
 
         ITradeEventsHandler.SpotExecutionReport maker = reports.get(1);
         assertThat(maker.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
-        assertThat(maker.getOrderId(), Is.is(123L));
+        assertThat(maker.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.PARTIALLY_FILLED));
         assertThat(maker.getSymbol(), Is.is(3));
+        assertThat(maker.getBaseScaleK(), Is.is(1000L));
+        assertThat(maker.getQuoteScaleK(), Is.is(1000L));
         assertThat(maker.getAccountId(), Is.is(29851L));
-        assertThat(maker.commissionAsset, Is.is(2));
-        assertThat(maker.getSymbol(), Is.is(3));
-        assertThat(maker.price, Is.is(52200L));
+        assertThat(maker.getClOrdId(), Is.is(44188L));
+        assertThat(maker.getOrderId(), Is.is(123L));
+        assertThat(maker.getOrderType(), Is.is(OrderType.IOC));
+        assertThat(maker.getSide(), Is.is(OrderAction.BID));
         assertThat(maker.qty, Is.is(3200L));
+        assertThat(maker.price, Is.is(52200L));
+        assertThat(maker.quoteOrderQty, Is.is(0L));
+        assertThat(maker.orderCreationTime, Is.is(1578930983745201L));
+        assertThat(maker.tradeId, Is.is(789862400L));
+        assertThat(maker.lastQty, Is.is(8272L));
+        assertThat(maker.lastPrice, Is.is(20100L));
         assertThat(maker.cumulativeQty, Is.is(123L));
         assertThat(maker.cumulativeQuoteQty, Is.is(1000L));
+        assertThat(maker.commission, Is.is(0L));
         assertThat(maker.commissionAsset, Is.is(2));
         assertThat(maker.isMaker, Is.is(false));
+        assertThat(maker.workingIndicator, Is.is(false));
 
         ITradeEventsHandler.SpotExecutionReport taker = reports.get(2);
         assertThat(taker.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
-        assertThat(taker.getOrderId(), Is.is(276810L));
+        assertThat(taker.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.FILLED));
         assertThat(taker.getSymbol(), Is.is(3));
+        assertThat(taker.getBaseScaleK(), Is.is(1000L));
+        assertThat(taker.getQuoteScaleK(), Is.is(1000L));
         assertThat(taker.getAccountId(), Is.is(10332L));
-        assertThat(taker.commissionAsset, Is.is(2));
-        assertThat(taker.getSymbol(), Is.is(3));
-        assertThat(taker.price, Is.is(12233L));
+        assertThat(taker.getClOrdId(), Is.is(778899L));
+        assertThat(taker.getOrderId(), Is.is(276810L));
+        assertThat(taker.getOrderType(), Is.is(OrderType.GTC));
+        assertThat(taker.getSide(), Is.is(OrderAction.ASK));
         assertThat(taker.qty, Is.is(23L));
+        assertThat(taker.price, Is.is(12233L));
+        assertThat(taker.quoteOrderQty, Is.is(0L));
+        assertThat(taker.orderCreationTime, Is.is(177777777777L));
+        assertThat(taker.tradeId, Is.is(789862400L));
+        assertThat(taker.lastQty, Is.is(8272L));
+        assertThat(taker.lastPrice, Is.is(20100L));
         assertThat(taker.cumulativeQty, Is.is(123L));
         assertThat(taker.cumulativeQuoteQty, Is.is(1000L));
+        assertThat(taker.commission, Is.is(0L));
         assertThat(taker.commissionAsset, Is.is(2));
-        assertThat(taker.isMaker, Is.is(false));
+        assertThat(taker.isMaker, Is.is(true));
+        assertThat(taker.workingIndicator, Is.is(false));
+
+        assertThat(taker.tradeId == maker.tradeId, Is.is(true));
 
         List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
         assertThat(fundEvents.size(), Is.is(2));
@@ -287,31 +334,60 @@ public final class SimpleEventsProcessorTest {
 
         ITradeEventsHandler.SpotExecutionReport maker = reports.get(3);
         assertThat(maker.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
-        assertThat(maker.getOrderId(), Is.is(123L));
+        assertThat(maker.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.PARTIALLY_FILLED));
         assertThat(maker.getSymbol(), Is.is(3));
+        assertThat(maker.getBaseScaleK(), Is.is(1000L));
+        assertThat(maker.getQuoteScaleK(), Is.is(1000L));
         assertThat(maker.getAccountId(), Is.is(29851L));
-        assertThat(maker.commissionAsset, Is.is(2));
-        assertThat(maker.getSymbol(), Is.is(3));
-        assertThat(maker.price, Is.is(52200L));
+        assertThat(maker.getClOrdId(), Is.is(44188L));
+        assertThat(maker.getOrderId(), Is.is(123L));
+        assertThat(maker.getOrderType(), Is.is(OrderType.IOC));
+        assertThat(maker.getSide(), Is.is(OrderAction.BID));
         assertThat(maker.qty, Is.is(3200L));
+        assertThat(maker.price, Is.is(52200L));
+        assertThat(maker.quoteOrderQty, Is.is(0L));
+        assertThat(maker.quoteOrderQty, Is.is(0L));
+        assertThat(maker.orderCreationTime, Is.is(1578930983745201L));
+
+        assertThat(maker.tradeId, Is.is(53173130196993L));
+        assertThat(maker.lastQty, Is.is(8273L));
+        assertThat(maker.lastPrice, Is.is(20101L));
         assertThat(maker.cumulativeQty, Is.is(124L));
         assertThat(maker.cumulativeQuoteQty, Is.is(10000L));
+        assertThat(maker.commission, Is.is(0L));
         assertThat(maker.commissionAsset, Is.is(2));
         assertThat(maker.isMaker, Is.is(false));
+        assertThat(maker.workingIndicator, Is.is(false));
 
         ITradeEventsHandler.SpotExecutionReport taker = reports.get(4);
         assertThat(taker.executionType, Is.is(ITradeEventsHandler.ExecType.TRADE));
-        assertThat(taker.getOrderId(), Is.is(276811L));
+        assertThat(taker.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.PARTIALLY_FILLED));
         assertThat(taker.getSymbol(), Is.is(3));
+        assertThat(taker.getBaseScaleK(), Is.is(1000L));
+        assertThat(taker.getQuoteScaleK(), Is.is(1000L));
         assertThat(taker.getAccountId(), Is.is(10333L));
-        assertThat(taker.commissionAsset, Is.is(2));
-        assertThat(taker.getSymbol(), Is.is(3));
-        assertThat(taker.price, Is.is(12233L));
+        assertThat(taker.getClOrdId(), Is.is(778999L));
+        assertThat(taker.getOrderId(), Is.is(276811L));
+        assertThat(taker.getOrderType(), Is.is(OrderType.GTC));
+        assertThat(taker.getSide(), Is.is(OrderAction.ASK));
         assertThat(taker.qty, Is.is(13L));
+        assertThat(taker.price, Is.is(12233L));
+        assertThat(taker.quoteOrderQty, Is.is(0L));
+        assertThat(taker.quoteOrderQty, Is.is(0L));
+        assertThat(taker.orderCreationTime, Is.is(177777777778L));
+
+        assertThat(taker.tradeId, Is.is(53173130196993L));
+        assertThat(taker.lastQty, Is.is(8273L));
+        assertThat(taker.lastPrice, Is.is(20101L));
         assertThat(taker.cumulativeQty, Is.is(223L));
         assertThat(taker.cumulativeQuoteQty, Is.is(1100L));
+        assertThat(taker.commission, Is.is(0L));
         assertThat(taker.commissionAsset, Is.is(2));
-        assertThat(taker.isMaker, Is.is(false));
+        assertThat(taker.isMaker, Is.is(true));
+        assertThat(taker.workingIndicator, Is.is(true));
+
+        // taker和maker的tradeId需要一致
+        assertThat(taker.tradeId == maker.tradeId, Is.is(true));
 
         List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
         assertThat(fundEvents.size(), Is.is(2));
@@ -407,10 +483,8 @@ public final class SimpleEventsProcessorTest {
 
     }
 
-
     @Test
-    public void shouldHandlerWithSingleReject() {
-
+    public void shouldHandleWithSingleReject() {
         OrderCommand cmd = samplePlaceOrderCommand();
 
         cmd.matcherEvent = MatcherTradeEvent.builder()
@@ -432,32 +506,51 @@ public final class SimpleEventsProcessorTest {
 
         ITradeEventsHandler.SpotExecutionReport newOrder = reports.get(0);
         assertThat(newOrder.executionType, Is.is(ITradeEventsHandler.ExecType.NEW));
-        assertThat(newOrder.getOrderId(), Is.is(123L));
+        assertThat(newOrder.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.NEW));
         assertThat(newOrder.getSymbol(), Is.is(3));
+        assertThat(newOrder.getBaseScaleK(), Is.is(1000L));
+        assertThat(newOrder.getQuoteScaleK(), Is.is(1000L));
         assertThat(newOrder.getAccountId(), Is.is(29851L));
-        assertThat(newOrder.commissionAsset, Is.is(2));
-        assertThat(newOrder.getSymbol(), Is.is(3));
-        assertThat(newOrder.price, Is.is(52200L));
+        assertThat(newOrder.getClOrdId(), Is.is(44188L));
+        assertThat(newOrder.getOrderId(), Is.is(123L));
+        assertThat(newOrder.getOrderType(), Is.is(OrderType.IOC));
+        assertThat(newOrder.getSide(), Is.is(OrderAction.BID));
         assertThat(newOrder.qty, Is.is(3200L));
+        assertThat(newOrder.price, Is.is(52200L));
+        assertThat(newOrder.quoteOrderQty, Is.is(0L));
+        assertThat(newOrder.orderCreationTime, Is.is(1578930983745201L));
+        assertThat(newOrder.lastQty, Is.is(0L));
+        assertThat(newOrder.lastPrice, Is.is(0L));
         assertThat(newOrder.cumulativeQty, Is.is(0L));
         assertThat(newOrder.cumulativeQuoteQty, Is.is(0L));
+        assertThat(newOrder.commission, Is.is(0L));
         assertThat(newOrder.commissionAsset, Is.is(2));
         assertThat(newOrder.isMaker, Is.is(false));
+        assertThat(newOrder.workingIndicator, Is.is(false));
 
         ITradeEventsHandler.SpotExecutionReport reject = reports.get(1);
         assertThat(reject.executionType, Is.is(ITradeEventsHandler.ExecType.REJECT));
         assertThat(reject.orderStatus, Is.is(ITradeEventsHandler.OrderStatus.REJECTED));
-        assertThat(reject.getOrderId(), Is.is(123L));
         assertThat(reject.getSymbol(), Is.is(3));
+        assertThat(reject.getBaseScaleK(), Is.is(1000L));
+        assertThat(reject.getQuoteScaleK(), Is.is(1000L));
         assertThat(reject.getAccountId(), Is.is(29851L));
-        assertThat(reject.commissionAsset, Is.is(2));
-        assertThat(reject.getSymbol(), Is.is(3));
-        assertThat(reject.price, Is.is(52200L));
+        assertThat(reject.getClOrdId(), Is.is(44188L));
+        assertThat(reject.getOrderId(), Is.is(123L));
+        assertThat(reject.getOrderType(), Is.is(OrderType.IOC));
+        assertThat(reject.getSide(), Is.is(OrderAction.BID));
         assertThat(reject.qty, Is.is(3200L));
+        assertThat(reject.price, Is.is(52200L));
+        assertThat(reject.quoteOrderQty, Is.is(0L));
+        assertThat(reject.orderCreationTime, Is.is(1578930983745201L));
+        assertThat(reject.lastQty, Is.is(0L));
+        assertThat(reject.lastPrice, Is.is(0L));
         assertThat(reject.cumulativeQty, Is.is(0L));
         assertThat(reject.cumulativeQuoteQty, Is.is(0L));
+        assertThat(reject.commission, Is.is(0L));
         assertThat(reject.commissionAsset, Is.is(2));
         assertThat(reject.isMaker, Is.is(false));
+        assertThat(reject.workingIndicator, Is.is(false));
     }
 
     private OrderCommand sampleCancelCommand() {

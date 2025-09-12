@@ -7,6 +7,7 @@ import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.tests.util.EventCheck;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
@@ -60,17 +61,13 @@ public abstract class ITFutureBase {
     }
 
     public void checkEvent(IFundEventsHandler.FundEventReport evt) {
-        assertThat(0L, Is.is(evt.getPositions().getUnrealizedProfit()));
-        assertThat(0L, Is.is(evt.getPositions().getLiquidationPrice()));
-        assertThat(0L, Is.is(evt.getPositions().getMarginRatioScaleK()));
+        EventCheck.checkEvent(evt);
     }
 
     public void checkEventPending(IFundEventsHandler.FundEventReport evt) {
-        assertThat(0L, Is.is(evt.getPositions().getBidsNotional()));
-        assertThat(0L, Is.is(evt.getPositions().getAsksNotional()));
-        assertThat(0L, Is.is(evt.getPositions().getBidsQty()));
-        assertThat(0L, Is.is(evt.getPositions().getAsksQty()));
+        EventCheck.checkEventPending(evt);
     }
+    
     public void doCheckEvtCnt(final CoreSymbolSpecification symbolSpec, final OrderType orderType, final ITFutureCross.RejectionCause rejectionCause) {
         // 如果是budget订单，且不成交的话只有下单
         if (orderType == FOK_BUDGET && rejectionCause != ITFutureCross.RejectionCause.NO_REJECTION) {

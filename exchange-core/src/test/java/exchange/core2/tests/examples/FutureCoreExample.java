@@ -12,6 +12,7 @@ import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.core.processors.LiquidationEngine;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.After;
@@ -621,7 +622,7 @@ public class FutureCoreExample {
         updateCurrentPriceTo(8000);
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
         // should raise Margin call warning
     }
 
@@ -646,14 +647,14 @@ public class FutureCoreExample {
         updateCurrentPriceTo(11000);
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
         // should raise Margin call warning
     }
 
     // 做多被强制平仓
 //    @Test
     public void testLongPostionForcedLiquadate() throws ExecutionException, InterruptedException {
-        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::stop);
         long userId1 = createRandomUserWithMoney(1000);
         createBid(userId1, 1, 10000L);
 
@@ -677,7 +678,7 @@ public class FutureCoreExample {
         }
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
         // should trigger liquidate
         // search log Liquidated: uid=
 //        SingleUserReportResult userStatus3 = getUserStatus(userId1);
@@ -717,7 +718,7 @@ public class FutureCoreExample {
     // 做空被强制平仓
 //    @Test
     public void testShortPositionForcedLiquidate() throws ExecutionException, InterruptedException {
-        exchangeCore.liquidationScanner.stop(1, TimeUnit.MINUTES);
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::stop);
         long userId1 = createRandomUserWithMoney(1000);
         createAsk(userId1, 1, 10000L);
 
@@ -741,7 +742,7 @@ public class FutureCoreExample {
         }
 
         // trigger强平逻辑
-        exchangeCore.liquidationScanner.triggerOnce();
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
         // should trigger liquidate
         // search log Liquidated: uid=
         // SingleUserReportResult userStatus3 = getUserStatus(userId1);

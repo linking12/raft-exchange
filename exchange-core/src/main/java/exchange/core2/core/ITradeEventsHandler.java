@@ -268,7 +268,7 @@ public interface ITradeEventsHandler {
                     ev.matchedOrderFilledNotional,
                     0L,
                     spec.quoteCurrency,
-                    false,
+                    true,
                     ev.matchedOrderType == OrderType.GTC && !ev.matchedOrderCompleted);
         }
     }

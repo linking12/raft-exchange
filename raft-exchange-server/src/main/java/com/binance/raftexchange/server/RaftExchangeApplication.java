@@ -20,6 +20,7 @@ import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
 import com.binance.platform.common.autoconfigure.AlarmAutoConfiguration;
 import com.binance.platform.common.autoconfigure.OldMasterCommonConfig;
 import com.binance.platform.common.shutdown.GracefulShutdownHook;
+import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
 import com.binance.raftexchange.server.exchange.events.IEventsHandlerByKafka;
 import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
@@ -155,6 +156,11 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
             } catch (Exception e) {
                 LOGGER.error(e.getMessage(), e);
             }
+        }
+        try {
+            ExchangeApiInstance.exchangeCore().shutdown();
+        } catch (Exception e) {
+            LOGGER.error(e.getMessage(), e);
         }
         for (KafkaProducer<Long, byte[]> producer : producers.values()) {
             try {

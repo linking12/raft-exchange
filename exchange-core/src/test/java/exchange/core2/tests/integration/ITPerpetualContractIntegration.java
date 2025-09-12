@@ -1,15 +1,18 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.tests.util.EventCheck;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
+import org.hamcrest.core.Is;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,7 +27,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static exchange.core2.tests.util.TestConstants.*;
@@ -50,7 +52,7 @@ class ITPerpetualContractIntegration {
 
     @BeforeEach
     public void before() {
-        processor = new SimpleEventsProcessor4Test(handler);
+        processor = new SimpleEventsProcessor4Test(handler, true);
     }
 
     @AfterEach()
@@ -189,7 +191,7 @@ class ITPerpetualContractIntegration {
     public void testDeliveryScenario0() throws Exception {
         long deposit = 20000L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
             // 0. 充钱
@@ -243,8 +245,8 @@ class ITPerpetualContractIntegration {
         long deposit = 20000L;
         int makerFee = 100;
         int takerFee = 200;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
 
             // 0. 充钱
@@ -299,6 +301,68 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getPositions().size(), is(0));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+        } finally {
+            verify(handler, atLeast(19)).fundEventReport(fundEventCaptor.capture());
+            // check fund event
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+            IFundEventsHandler.FundEventReport pnl1 = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.PNL_SETTLEMENT) && report.getAccountId() == UID_1) {
+                    pnl1 = report;
+                    break;
+                }
+            }
+            assertThat(UID_1, is(pnl1.getAccountId()));
+            assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl1.getEventType()));
+            assertThat(quoteId, is(pnl1.getBalances().getCurrency()));
+            assertThat(1L, is(pnl1.getBalances().getCurrencyScakeK()));
+            assertThat(24900L, is(pnl1.getBalances().getFree()));
+            assertThat(0L, is(pnl1.getBalances().getLocked()));
+            assertThat(10100, is(pnl1.getPositions().getSymbolId()));
+            assertThat(1L, is(pnl1.getPositions().getBaseScaleK()));
+            assertThat(1L, is(pnl1.getPositions().getQuoteScaleK()));
+            assertThat(PositionDirection.LONG, is(pnl1.getPositions().getDirection()));
+            assertThat(0L, is(pnl1.getPositions().getQuantity()));
+            assertThat(0L, is(pnl1.getPositions().getOpenPriceSum()));
+            assertThat(5000L, is(pnl1.getPositions().getCumRealized()));
+            assertThat(false, is(pnl1.getPositions().isIsolated()));
+            assertThat(0L, is(pnl1.getPositions().getIsolatedWallet()));
+            assertThat(1, is(pnl1.getPositions().getLeverage()));
+            assertThat(0L, is(pnl1.getPositions().getOpenPriceSum()));
+            assertThat(1000L, is(pnl1.getPositions().getMarkPrice()));
+            EventCheck.checkEvent(pnl1);
+            EventCheck.checkEventPending(pnl1);
+
+            IFundEventsHandler.FundEventReport pnl2 = null;
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.PNL_SETTLEMENT) && report.getAccountId() == UID_2) {
+                    pnl2 = report;
+                    break;
+                }
+            }
+            assertThat(UID_2, is(pnl2.getAccountId()));
+            assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl2.getEventType()));
+            assertThat(quoteId, is(pnl2.getBalances().getCurrency()));
+            assertThat(1L, is(pnl2.getBalances().getCurrencyScakeK()));
+            assertThat(14800L, is(pnl2.getBalances().getFree()));
+            assertThat(0L, is(pnl2.getBalances().getLocked()));
+            assertThat(10100, is(pnl2.getPositions().getSymbolId()));
+            assertThat(1L, is(pnl2.getPositions().getBaseScaleK()));
+            assertThat(1L, is(pnl2.getPositions().getQuoteScaleK()));
+            assertThat(PositionDirection.SHORT, is(pnl2.getPositions().getDirection()));
+            assertThat(0L, is(pnl2.getPositions().getQuantity()));
+            assertThat(0L, is(pnl2.getPositions().getOpenPriceSum()));
+            assertThat(-5000L, is(pnl2.getPositions().getCumRealized()));
+            assertThat(false, is(pnl2.getPositions().isIsolated()));
+            assertThat(0L, is(pnl2.getPositions().getIsolatedWallet()));
+            assertThat(1, is(pnl2.getPositions().getLeverage()));
+            assertThat(0L, is(pnl2.getPositions().getOpenPriceSum()));
+            assertThat(1000L, is(pnl2.getPositions().getMarkPrice()));
+            EventCheck.checkEvent(pnl2);
+            EventCheck.checkEventPending(pnl2);
         }
     }
 
@@ -307,7 +371,7 @@ class ITPerpetualContractIntegration {
     public void testPerpetualScenario0() throws Exception {
         long deposit = 20000L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
@@ -378,7 +442,7 @@ class ITPerpetualContractIntegration {
         int rateScale = 100;
         int updatedPrice = 1500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
@@ -548,7 +612,7 @@ class ITPerpetualContractIntegration {
         int rateScale = 100;
         int updatedPrice = 1500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
 
             // 0. 充钱
@@ -659,7 +723,7 @@ class ITPerpetualContractIntegration {
         int updatedPrice = 1100;
         int price = 1000;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
-            container.getExchangeCore().liquidationScanner.stop(5, TimeUnit.MINUTES);
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(10000)
                     .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
@@ -712,7 +776,7 @@ class ITPerpetualContractIntegration {
                     .build();
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
             // 第一次触发强平uid_1 position不会被强平
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
@@ -747,7 +811,7 @@ class ITPerpetualContractIntegration {
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 11000 * 5 / 10 = 5500
             // equity = balance + profit = 4900 + 1000 = 5900 > maintenance
             // 此时不会触发强平
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             // openPriceSum = 10 * 1000 - 6 * 1100 = 3400
             // openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110
@@ -770,7 +834,7 @@ class ITPerpetualContractIntegration {
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
             // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
             // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             //  openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 4/10 = 66L
             // openPriceSum = 10 * 1000 - 4 * 600 = 7600L
@@ -785,7 +849,7 @@ class ITPerpetualContractIntegration {
             });
 
             // 再次触发强平, 此时期待当前持仓不再被强平
-            container.getExchangeCore().getLiquidationScanner().triggerOnce();
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
