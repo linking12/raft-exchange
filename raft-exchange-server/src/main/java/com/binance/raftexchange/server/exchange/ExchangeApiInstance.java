@@ -12,6 +12,7 @@ import com.binance.raftexchange.server.exchange.snapshot.MemorySerializationProc
 public class ExchangeApiInstance {
 
     private final ExchangeApi exchangeApi;
+    private final ExchangeCore exchangeCore;
 
     private static final ExchangeApiInstance INSTANCE = new ExchangeApiInstance();
 
@@ -20,13 +21,17 @@ public class ExchangeApiInstance {
         SerializationConfiguration serializationCfg =
             SerializationConfiguration.builder().enableJournaling(false).serializationProcessorFactory(MemorySerializationProcessor::new).build();
         ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().serializationCfg(serializationCfg).build();
-        ExchangeCore exchangeCore = ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
+        exchangeCore = ExchangeCore.builder().resultsConsumer(eventsProcessor).exchangeConfiguration(conf).build();
         exchangeCore.startup();
         exchangeApi = exchangeCore.getApi();
     }
 
     public static ExchangeApi exchangeApi() {
         return INSTANCE.exchangeApi;
+    }
+
+    public static ExchangeCore exchangeCore() {
+        return INSTANCE.exchangeCore;
     }
 
 }
