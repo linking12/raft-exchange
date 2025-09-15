@@ -288,13 +288,13 @@ public final class LiquidationEngine {
                             handleLiquidationFailure(position, cmd2.matcherEvent.size);
                         }
                     });
-                FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position, bankruptcyPrice, remainSize);
+                FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position);
                 exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
                 log.debug("Liquidated(p2): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, bankruptcyPrice);
             }
         });
         // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
-        FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position, price, size);
+        FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position);
         exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
         log.debug("Liquidated(p1): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }

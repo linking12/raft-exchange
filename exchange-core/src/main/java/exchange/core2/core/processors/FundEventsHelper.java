@@ -167,22 +167,14 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked,
-        long sizeClosed, long price, long fee) {
+    public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
-        event.tradeSize = sizeClosed;
-        event.tradePrice = price;
-        event.fee = fee;
         addFundEvent(cmd, orderId, event);
         return event;
     }
 
-    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked, long sizeOpened, long price,
-        long fee) {
+    public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
-        event.tradeSize = sizeOpened;
-        event.tradePrice = price;
-        event.fee = fee;
         addFundEvent(cmd, orderId, event);
         return event;
     }
@@ -193,10 +185,8 @@ public class FundEventsHelper {
     }
 
     // 通知强平
-    public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position, long markPrice, long sizeToLiquidate) {
+    public FundEvent sendLiquidationAlertEvent(long orderId, SymbolPositionRecord position) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_ALERT, position, 0, 0);
-        event.tradeSize = sizeToLiquidate;
-        event.tradePrice = markPrice;
         return event;
     }
 
@@ -212,17 +202,15 @@ public class FundEventsHelper {
         return event;
     }
 
-    public FundEvent sendFundingFeeEvent(OrderCommand cmd, SymbolPositionRecord position, long fee) {
-        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.FUNDINGFEE_SETTLEMENT, position, 0, 0);
-        event.fee = fee; // 资金费用
+    public FundEvent sendFundingFeeEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.FUNDINGFEE_SETTLEMENT, position, free, locked);
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     // 生成盈亏结算事件 (PNL_SETTLEMENT)。
-    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked, long settledPrice) {
+    public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
-        event.tradePrice = settledPrice; // 结算价格
         addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
@@ -289,9 +277,6 @@ public class FundEventsHelper {
             event.unrealizedProfit = 0;
             event.liquidationPrice = 0;
             event.marginRatioScaleK = 0;
-            event.tradeSize = 0;
-            event.tradePrice = 0;
-            event.fee = 0;
             event.markPrice = 0;
             return event;
         } else {
