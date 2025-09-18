@@ -420,7 +420,7 @@ public interface ITradeEventsHandler {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             long sizeToOpen;
             SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
-            if (pos.openVolume == 0 || pos.direction == PositionDirection.of(cmd.action)) {
+            if (pos == null || pos.openVolume == 0 || pos.direction == PositionDirection.of(cmd.action)) {
                 // 仓位为空，或者方向相同 → 全部开仓
                 sizeToOpen = event.size;
             } else {
@@ -460,7 +460,7 @@ public interface ITradeEventsHandler {
             final boolean budgetOrder = event.matchedOrderType == OrderType.FOK_BUDGET || event.matchedOrderType == OrderType.IOC_BUDGET;
             long sizeToOpen;
             SymbolPositionRecord pos = makerProfile.positions.get(makerProfile.createPositionsKey(spec.symbolId, cmd.action.opposite(), event.matchedOrderCommandType));
-            if (pos.openVolume == 0 || pos.direction == PositionDirection.of(cmd.action.opposite())) {
+            if (pos == null || pos.openVolume == 0 || pos.direction == PositionDirection.of(cmd.action.opposite())) {
                 // 仓位为空，或者方向相同 → 全部开仓
                 sizeToOpen = event.size;
             } else {
