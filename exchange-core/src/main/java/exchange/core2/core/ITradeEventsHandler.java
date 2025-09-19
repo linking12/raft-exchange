@@ -420,12 +420,12 @@ public interface ITradeEventsHandler {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
             long sizeToOpen;
             SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
-            if (pos == null || pos.openVolume == 0 || pos.direction == PositionDirection.of(cmd.action)) {
+            if (pos == null || pos.direction == PositionDirection.of(cmd.action)) {
                 // 仓位为空，或者方向相同 → 全部开仓
                 sizeToOpen = event.size;
             } else {
                 // 方向相反 → 先平仓，再看是否有剩余开仓
-                sizeToOpen = event.size > pos.openVolume ? event.size - pos.openVolume : 0;
+                sizeToOpen = calcSizeToOpen(event.size, cmd.action, pos);
             }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, false),
                     ExecType.TRADE,
@@ -455,17 +455,34 @@ public interface ITradeEventsHandler {
                     false);
         }
 
+        private static long calcSizeToOpen(long tradeSize, OrderAction action, SymbolPositionRecord pos) {
+            // 去掉本次成交对同向 pending 的影响，得到成交前的 pending
+            long pbPre = pos.pendingBuySize - (action == OrderAction.BID ? tradeSize : 0);//10
+            long psPre = pos.pendingSellSize - (action == OrderAction.ASK ? tradeSize : 0);//20
+
+            // 计算成交前净仓位（多为正，空为负）：
+            long netPre = pos.direction.getMultiplier() * pos.openVolume + (pbPre - psPre); // 成交前净仓位（含此前pending）
+
+            long maxClosable = (action == OrderAction.BID)
+                    ? Math.max(0, -netPre)   // 只有净空才可被买单平
+                    : Math.max(0, netPre);  // 只有净多才可被卖单平
+
+            long closeSize = Math.min(tradeSize, maxClosable);
+            long sizeToOpen = tradeSize - closeSize;
+            return sizeToOpen;
+        }
+
         public static FuturesExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile makerProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = event.matchedOrderType == OrderType.FOK_BUDGET || event.matchedOrderType == OrderType.IOC_BUDGET;
             long sizeToOpen;
             SymbolPositionRecord pos = makerProfile.positions.get(makerProfile.createPositionsKey(spec.symbolId, cmd.action.opposite(), event.matchedOrderCommandType));
-            if (pos == null || pos.openVolume == 0 || pos.direction == PositionDirection.of(cmd.action.opposite())) {
+            if (pos == null || pos.direction == PositionDirection.of(cmd.action.opposite())) {
                 // 仓位为空，或者方向相同 → 全部开仓
                 sizeToOpen = event.size;
             } else {
                 // 方向相反 → 先平仓，再看是否有剩余开仓
-                sizeToOpen = event.size > pos.openVolume ? event.size - pos.openVolume : 0;
+                sizeToOpen = calcSizeToOpen(event.size, cmd.action.opposite(), pos);
             }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,

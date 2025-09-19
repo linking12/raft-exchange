@@ -88,7 +88,7 @@ class ITFuturesTradingFeeCalculationTest {
 
     @BeforeEach
     public void before() {
-        processor = new SimpleEventsProcessor4Test(handler);
+        processor = new SimpleEventsProcessor4Test(handler, true);
     }
 
     private PerformanceConfiguration getPerformanceConfiguration() {
