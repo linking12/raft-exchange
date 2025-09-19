@@ -1,8 +1,10 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.ITradeEventsHandler;
+import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.Order;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.SymbolType;
@@ -462,10 +464,11 @@ class ITSpotTradingFeeCalculationTest {
         long price = 17789L; // Non-round price
         long globalFeesCollected = 0;
 
+        CoreCurrencySpecification quoteCurrency = null;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
             container.addSymbol(TEST_SYMBOL);
             container.addCurrency(TEST_SYMBOL.baseCurrency, 8);
-            container.addCurrency(TEST_SYMBOL.quoteCurrency, 8);
+            quoteCurrency = container.addCurrency(TEST_SYMBOL.quoteCurrency, 8);
 
             long quoteCurrencyAmount = 100_000_000L * 100_000_000L;
             long baseCurrencyAmount = 100_000_000L * 100_000_000L;
@@ -502,7 +505,8 @@ class ITSpotTradingFeeCalculationTest {
             }
 
             log.info("Fee calculation parameters verified for size={}, price={}", size, price);
-            assertThat(globalFeesCollected == sumFees, is(true));
+            long scaledSumFees = CoreArithmeticUtils.sizePriceToCurrencyScale(sumFees, TEST_SYMBOL, quoteCurrency);
+            assertThat(globalFeesCollected == scaledSumFees, is(true));
         }
     }
 
@@ -540,7 +544,7 @@ class ITSpotTradingFeeCalculationTest {
             container.createUserWithMoney(taker3Uid, TEST_SYMBOL.baseCurrency, baseCurrencyAmount);
 
             // Get initial balance report
-            var initialBalance = container.totalBalanceReport();
+            TotalCurrencyBalanceReportResult initialBalance = container.totalBalanceReport();
             long initialTotalFees = initialBalance.getFees().get(TEST_SYMBOL.quoteCurrency);
 
             // Place large maker order (BID) - will be partially filled
@@ -685,7 +689,7 @@ class ITSpotTradingFeeCalculationTest {
             container.createUserWithMoney(takerUid, TEST_SYMBOL.quoteCurrency, quoteCurrencyAmount);
 
             // Get initial balance report
-            var initialBalance = container.totalBalanceReport();
+            TotalCurrencyBalanceReportResult initialBalance = container.totalBalanceReport();
             long initialTotalFees = initialBalance.getFees().get(TEST_SYMBOL.quoteCurrency);
 
             // Place multiple small maker orders (ASK) at different prices
@@ -731,14 +735,14 @@ class ITSpotTradingFeeCalculationTest {
             );
 
             // Get final balance report
-            var finalBalance = container.totalBalanceReport();
+            TotalCurrencyBalanceReportResult finalBalance = container.totalBalanceReport();
             long finalTotalFees = finalBalance.getFees().get(TEST_SYMBOL.quoteCurrency);
             globalFeesCollected = finalTotalFees - initialTotalFees;
 
             // Verify that trades happened by checking that makers are filled
             // Note: The taker order remaining size may not update correctly due to exchange core behavior
             container.validateUserState(takerUid, profile -> {
-                var order = profile.fetchIndexedOrders().get(9004L);
+                Order order = profile.fetchIndexedOrders().get(9004L);
                 if (order != null) {
                     // Taker order still exists, but trades may have occurred
                     log.info("Taker order exists with size={}, original={}", order.size, takerTotalSize);

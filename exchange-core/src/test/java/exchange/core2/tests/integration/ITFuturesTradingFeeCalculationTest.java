@@ -3,11 +3,14 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.Order;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
+import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -120,13 +123,13 @@ class ITFuturesTradingFeeCalculationTest {
 
             // Verify positions opened correctly
             container.validateUserState(makerUid, profile -> {
-                var position = profile.getPositions().get(symbols.get(0).symbolId).get(0);
+                SingleUserReportResult.Position position = profile.getPositions().get(symbols.get(0).symbolId).get(0);
                 assertThat("Maker should have LONG position", position.getDirection(), is(PositionDirection.LONG));
                 assertThat("Maker position size should match", position.getOpenVolume(), is(size));
             });
 
             container.validateUserState(takerUid, profile -> {
-                var position = profile.getPositions().get(symbols.get(0).symbolId).get(0);
+                SingleUserReportResult.Position position = profile.getPositions().get(symbols.get(0).symbolId).get(0);
                 assertThat("Taker should have SHORT position", position.getDirection(), is(PositionDirection.SHORT));
                 assertThat("Taker position size should match", position.getOpenVolume(), is(size));
             });
@@ -810,7 +813,7 @@ class ITFuturesTradingFeeCalculationTest {
             container.createUserWithSpecificMoney(taker3Uid, deposit, CURRENECY_USD);
 
             // Get initial balance report
-            var initialBalance = container.totalBalanceReport();
+            TotalCurrencyBalanceReportResult initialBalance = container.totalBalanceReport();
             long initialTotalFees = initialBalance.getFees().get(CURRENECY_USD);
 
             // Place large maker order (BID) - will be partially filled
@@ -934,7 +937,7 @@ class ITFuturesTradingFeeCalculationTest {
             container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
 
             // Get initial balance report
-            var initialBalance = container.totalBalanceReport();
+            TotalCurrencyBalanceReportResult initialBalance = container.totalBalanceReport();
             long initialTotalFees = initialBalance.getFees().get(CURRENECY_USD);
 
             // Place multiple small maker orders (ASK) at different prices
@@ -946,13 +949,13 @@ class ITFuturesTradingFeeCalculationTest {
             container.createBidWithOrderId(10004L, takerUid, (int) takerTotalSize, price3, symbols.get(0).symbolId, MarginMode.CROSS);
 
             // Get final balance report
-            var finalBalance = container.totalBalanceReport();
+            TotalCurrencyBalanceReportResult finalBalance = container.totalBalanceReport();
             long finalTotalFees = finalBalance.getFees().get(CURRENECY_USD);
             globalFeesCollected = finalTotalFees - initialTotalFees;
 
             // Verify that trades happened by checking that makers are filled
             container.validateUserState(takerUid, profile -> {
-                var order = profile.fetchIndexedOrders().get(10004L);
+                Order order = profile.fetchIndexedOrders().get(10004L);
                 if (order != null) {
                     log.info("Taker order exists with size={}, original={}", order.size, takerTotalSize);
                 } else {
