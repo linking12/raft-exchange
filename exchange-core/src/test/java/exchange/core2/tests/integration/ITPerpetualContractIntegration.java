@@ -552,8 +552,8 @@ class ITPerpetualContractIntegration {
             assertThat(10000, is(event1.getPositions().getSymbolId()));
             assertThat(PositionDirection.LONG, is(event1.getPositions().getDirection()));
             assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event1.getEventType()));
-            assertThat(0L, is(event1.getBalances().getFree()));
-            assertThat(0L, is(event1.getBalances().getLocked()));
+            assertThat(19750L, is(event1.getBalances().getFree()));
+            assertThat(150L, is(event1.getBalances().getLocked()));
             assertThat(-150L, is(event1.getPositions().getCumRealized()));
             assertThat(10000L, is(event1.getPositions().getOpenPriceSum()));
             assertThat(10L, is(event1.getPositions().getQuantity()));
@@ -576,8 +576,8 @@ class ITPerpetualContractIntegration {
             // assertThat(takerOrderId, is(event2.orderId));
             assertThat(PositionDirection.SHORT, is(event2.getPositions().getDirection()));
             assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event2.getEventType()));
-            assertThat(0L, is(event2.getBalances().getFree()));
-            assertThat(0L, is(event2.getBalances().getLocked()));
+            assertThat(19650L, is(event2.getBalances().getFree()));
+            assertThat(150L, is(event2.getBalances().getLocked()));
             assertThat(150L, is(event2.getPositions().getCumRealized()));
             assertThat(10000L, is(event2.getPositions().getOpenPriceSum()));
             assertThat(10L, is(event2.getPositions().getQuantity()));

@@ -906,7 +906,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.cumQty, Is.is(1L));
             assertThat(event2.cumQuoteQty, Is.is(10000L));
             assertThat(event2.avgPx, Is.is(10000L));
-            assertThat(event2.fee, Is.is(0L));
+            assertThat(event2.fee, Is.is(20L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
 
@@ -931,7 +931,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.cumQty, Is.is(1L));
             assertThat(event3.cumQuoteQty, Is.is(10000L));
             assertThat(event3.avgPx, Is.is(10000L));
-            assertThat(event3.fee, Is.is(0L));
+            assertThat(event3.fee, Is.is(10L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
 
@@ -1202,7 +1202,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.cumQty, Is.is(1L));
             assertThat(event2.cumQuoteQty, Is.is(10000L));
             assertThat(event2.avgPx, Is.is(10000L));
-            assertThat(event2.fee, Is.is(0L));
+            assertThat(event2.fee, Is.is(20L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
 
@@ -1227,7 +1227,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.cumQty, Is.is(1L));
             assertThat(event3.cumQuoteQty, Is.is(10000L));
             assertThat(event3.avgPx, Is.is(10000L));
-            assertThat(event3.fee, Is.is(0L));
+            assertThat(event3.fee, Is.is(10L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
 
@@ -1496,7 +1496,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.cumQty, Is.is(txSize + 0L));
             assertThat(event2.cumQuoteQty, Is.is(10000L * txSize));
             assertThat(event2.avgPx, Is.is(10000L));
-            assertThat(event2.fee, Is.is(0L));
+            assertThat(event2.fee, Is.is(40L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
 
@@ -1521,7 +1521,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.cumQty, Is.is(txSize + 0L));
             assertThat(event3.cumQuoteQty, Is.is(10000L * txSize));
             assertThat(event3.avgPx, Is.is(10000L));
-            assertThat(event3.fee, Is.is(0L));
+            assertThat(event3.fee, Is.is(20L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
 
@@ -1810,7 +1810,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.cumQty, Is.is(txSize + 0L));
             assertThat(event2.cumQuoteQty, Is.is(10000L * txSize));
             assertThat(event2.avgPx, Is.is(10000L));
-            assertThat(event2.fee, Is.is(0L));
+            assertThat(event2.fee, Is.is(40L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
 
@@ -1835,7 +1835,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.cumQty, Is.is(txSize + 0L));
             assertThat(event3.cumQuoteQty, Is.is(10000L * txSize));
             assertThat(event3.avgPx, Is.is(10000L));
-            assertThat(event3.fee, Is.is(0L));
+            assertThat(event3.fee, Is.is(20L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
 
@@ -2110,7 +2110,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.cumQty, Is.is(1L));
             assertThat(event2.cumQuoteQty, Is.is(10000L));
             assertThat(event2.avgPx, Is.is(10000L));
-            assertThat(event2.fee, Is.is(0L));
+            assertThat(event2.fee, Is.is(20L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
 
@@ -2136,7 +2136,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.cumQty, Is.is(1L));
             assertThat(event3.cumQuoteQty, Is.is(10000L));
             assertThat(event3.avgPx, Is.is(10000L));
-            assertThat(event3.fee, Is.is(0L));
+            assertThat(event3.fee, Is.is(10L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
 
@@ -2216,7 +2216,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event6.cumQty, Is.is(1L));
             assertThat(event6.cumQuoteQty, Is.is(10500L));
             assertThat(event6.avgPx, Is.is(10500L));
-            assertThat(event6.fee, Is.is(0L));
+            assertThat(event6.fee, Is.is(20L));
             assertThat(event6.feeAssetId, Is.is(840));
             assertThat(event6.isMaker, Is.is(false));
 
@@ -2242,7 +2242,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.cumQty, Is.is(1L));
             assertThat(event7.cumQuoteQty, Is.is(10500L));
             assertThat(event7.avgPx, Is.is(10500L));
-            assertThat(event7.fee, Is.is(0L));
+            assertThat(event7.fee, Is.is(10L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
 
@@ -2418,7 +2418,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event2.cumQty, Is.is(10L));
             assertThat(event2.cumQuoteQty, Is.is(100000L));
             assertThat(event2.avgPx, Is.is(10000L));
-            assertThat(event2.fee, Is.is(0L));
+            assertThat(event2.fee, Is.is(200L));
             assertThat(event2.feeAssetId, Is.is(840));
             assertThat(event2.isMaker, Is.is(false));
 
@@ -2444,7 +2444,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event3.cumQty, Is.is(10L));
             assertThat(event3.cumQuoteQty, Is.is(100000L));
             assertThat(event3.avgPx, Is.is(10000L));
-            assertThat(event3.fee, Is.is(0L));
+            assertThat(event3.fee, Is.is(100L));
             assertThat(event3.feeAssetId, Is.is(840));
             assertThat(event3.isMaker, Is.is(true));
 
@@ -2524,7 +2524,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event6.cumQty, Is.is(1L));
             assertThat(event6.cumQuoteQty, Is.is(10500L));
             assertThat(event6.avgPx, Is.is(10500L));
-            assertThat(event6.fee, Is.is(0L));
+            assertThat(event6.fee, Is.is(20L));
             assertThat(event6.feeAssetId, Is.is(840));
             assertThat(event6.isMaker, Is.is(false));
 
@@ -2550,7 +2550,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.cumQty, Is.is(1L));
             assertThat(event7.cumQuoteQty, Is.is(10500L));
             assertThat(event7.avgPx, Is.is(10500L));
-            assertThat(event7.fee, Is.is(0L));
+            assertThat(event7.fee, Is.is(10L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
 
