@@ -48,10 +48,6 @@ public class FundEvent {
     public long marginRatioScaleK; // 保证金率，维持保证金/资金占用*缩放系数。全仓下资金占用=当前币种余额+该币种总体未实现盈亏；逐仓下资金占用=开仓保证金+extraMargin
     // 额外字段
     public long markPrice; // 标记价格
-    // 变化字段
-    public long tradeSize; // 本次交易数量
-    public long tradePrice; // 本次交易价格
-    public long fee; // 本次手续费
 
     public FundEvent nextEvent;
 
@@ -115,7 +111,7 @@ public class FundEvent {
         return Objects.hash(processed, eventType, orderId, uid, currency, currencyScakeK, free, locked, symbol, baseScaleK,
                 quoteScaleK, direction, openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize,
                 pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice,
-                marginRatioScaleK, markPrice, tradeSize, tradePrice, fee, nextEvent);
+                marginRatioScaleK, markPrice, nextEvent);
     }
 
     @Override
@@ -133,7 +129,6 @@ public class FundEvent {
             && pendingBuySize == other.pendingBuySize && pendingSellAvgPrice == other.pendingSellAvgPrice && pendingBuyAvgPrice == other.pendingBuyAvgPrice
             && leverage == other.leverage && marginMode == other.marginMode && extraMargin == other.extraMargin && unrealizedProfit == other.unrealizedProfit
             && liquidationPrice == other.liquidationPrice && marginRatioScaleK == other.marginRatioScaleK && markPrice == other.markPrice
-            && tradeSize == other.tradeSize && tradePrice == other.tradePrice && fee == other.fee
             && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
 
@@ -147,7 +142,6 @@ public class FundEvent {
             + ", pendingBuySize=" + pendingBuySize + ", pendingSellAvgPrice=" + pendingSellAvgPrice + ", pendingBuyAvgPrice=" + pendingBuyAvgPrice
             + ", leverage=" + leverage + ", marginMode=" + marginMode + ", extraMargin=" + extraMargin + ", unrealizedProfit=" + unrealizedProfit
             + ", liquidationPrice=" + liquidationPrice + ", marginRatioScaleK=" + marginRatioScaleK + ", markPrice=" + markPrice
-            + ", tradeSize=" + tradeSize + ", tradePrice=" + tradePrice + ", fee=" + fee
             + ", nextEvent=" + (nextEvent != null) + "]";
     }
 

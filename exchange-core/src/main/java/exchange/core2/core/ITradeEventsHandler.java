@@ -6,11 +6,14 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.PositionMode;
+import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.Data;
 
 import static exchange.core2.core.ITradeEventsHandler.ExecutionIdGenerator.buildReduceExecId;
@@ -236,7 +239,7 @@ public interface ITradeEventsHandler {
                     ev.size * ev.price,
                     ev.filled,
                     ev.filledNotional,
-                    0L,
+                    CoreArithmeticUtils.calculateTakerFee(ev.size, ev.price, spec),
                     spec.quoteCurrency,
                     false,
                     cmd.orderType == OrderType.GTC && !ev.activeOrderCompleted);
@@ -244,7 +247,7 @@ public interface ITradeEventsHandler {
 
         public static SpotExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                      MatcherTradeEvent ev, int tradeIndex) {
-            boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            boolean budgetOrder = ev.matchedOrderType == OrderType.FOK_BUDGET || ev.matchedOrderType == OrderType.IOC_BUDGET;
             return new SpotExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,
                     ev.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -266,7 +269,7 @@ public interface ITradeEventsHandler {
                     ev.size * ev.price,
                     ev.matchedOrderFilled,
                     ev.matchedOrderFilledNotional,
-                    0L,
+                    CoreArithmeticUtils.calculateMakerFee(ev.size, ev.price, spec),
                     spec.quoteCurrency,
                     true,
                     ev.matchedOrderType == OrderType.GTC && !ev.matchedOrderCompleted);
@@ -415,6 +418,15 @@ public interface ITradeEventsHandler {
         public static FuturesExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile userProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            long sizeToOpen;
+            SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
+            if (pos == null || pos.direction == PositionDirection.of(cmd.action)) {
+                // 仓位为空，或者方向相同 → 全部开仓
+                sizeToOpen = event.size;
+            } else {
+                // 方向相反 → 先平仓，再看是否有剩余开仓
+                sizeToOpen = calcSizeToOpen(event.size, cmd.action, pos);
+            }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, false),
                     ExecType.TRADE,
                     event.activeOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -438,14 +450,40 @@ public interface ITradeEventsHandler {
                     event.filled,
                     event.filledNotional,
                     event.filled == 0 ? 0L : event.filledNotional / event.filled,
-                    0L,
+                    CoreArithmeticUtils.calculateTakerFee(sizeToOpen, event.price, spec),
                     spec.quoteCurrency,
                     false);
         }
 
+        private static long calcSizeToOpen(long tradeSize, OrderAction action, SymbolPositionRecord pos) {
+            // 去掉本次成交对同向 pending 的影响，得到成交前的 pending
+            long pbPre = pos.pendingBuySize - (action == OrderAction.BID ? tradeSize : 0);//10
+            long psPre = pos.pendingSellSize - (action == OrderAction.ASK ? tradeSize : 0);//20
+
+            // 计算成交前净仓位（多为正，空为负）：
+            long netPre = pos.direction.getMultiplier() * pos.openVolume + (pbPre - psPre); // 成交前净仓位（含此前pending）
+
+            long maxClosable = (action == OrderAction.BID)
+                    ? Math.max(0, -netPre)   // 只有净空才可被买单平
+                    : Math.max(0, netPre);  // 只有净多才可被卖单平
+
+            long closeSize = Math.min(tradeSize, maxClosable);
+            long sizeToOpen = tradeSize - closeSize;
+            return sizeToOpen;
+        }
+
         public static FuturesExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile makerProfile, MatcherTradeEvent event, int tradeIndex) {
-            final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
+            final boolean budgetOrder = event.matchedOrderType == OrderType.FOK_BUDGET || event.matchedOrderType == OrderType.IOC_BUDGET;
+            long sizeToOpen;
+            SymbolPositionRecord pos = makerProfile.positions.get(makerProfile.createPositionsKey(spec.symbolId, cmd.action.opposite(), event.matchedOrderCommandType));
+            if (pos == null || pos.direction == PositionDirection.of(cmd.action.opposite())) {
+                // 仓位为空，或者方向相同 → 全部开仓
+                sizeToOpen = event.size;
+            } else {
+                // 方向相反 → 先平仓，再看是否有剩余开仓
+                sizeToOpen = calcSizeToOpen(event.size, cmd.action.opposite(), pos);
+            }
             return new FuturesExecutionReport(buildTradeExecId(seq, tradeIndex, true),
                     ExecType.TRADE,
                     event.matchedOrderCompleted ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED,
@@ -469,7 +507,7 @@ public interface ITradeEventsHandler {
                     event.matchedOrderFilled,
                     event.matchedOrderFilledNotional,
                     event.matchedOrderFilled == 0 ? 0L : event.matchedOrderFilledNotional / event.matchedOrderFilled,
-                    0L,
+                    CoreArithmeticUtils.calculateMakerFee(sizeToOpen, event.price, spec),
                     spec.quoteCurrency,
                     true);
         }
