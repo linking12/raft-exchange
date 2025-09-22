@@ -15,20 +15,23 @@ import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.core.processors.LiquidationEngine;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
 @Slf4j
+@ExtendWith(MockitoExtension.class)
 public class FutureCoreExample {
 
     private ExchangeCore exchangeCore;
@@ -45,36 +48,18 @@ public class FutureCoreExample {
 
     int MAX_VALUE = 4000000;
 
+    @Mock
+    IEventsHandler4Test handler;
+
     private AtomicLong uniqueIdCounterLong = new AtomicLong();
 
     private long getRandomTransactionId() {
         return uniqueIdCounterLong.incrementAndGet();
     }
 
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
-        SimpleEventsProcessor4Test eventsProcessor = new SimpleEventsProcessor4Test(new IEventsHandler4Test() {
-
-            @Override
-            public void spotExecutionReport(SpotExecutionReport executionReport) {
-                log.debug("SpotExecutionReport: {}", executionReport);
-            }
-
-            @Override
-            public void futuresExecutionReport(FuturesExecutionReport executionReport) {
-                log.debug("FuturesExecutionReport: {}", executionReport);
-            }
-
-            @Override
-            public void fundEventReport(FundEventReport fundEventReport) {
-                log.debug("PositionOutReport: {}", fundEventReport);
-            }
-
-            @Override
-            public void orderBook(OrderBook orderBook) {
-                log.debug("OrderBook event: {}", orderBook);
-            }
-        });
+        SimpleEventsProcessor4Test eventsProcessor = new SimpleEventsProcessor4Test(handler, true);
 
         // 配置交易所
         ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder()
@@ -98,7 +83,7 @@ public class FutureCoreExample {
         doMarkPrice(symbolId, 10000L);
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         exchangeCore.shutdown();
     }
