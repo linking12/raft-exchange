@@ -41,6 +41,7 @@ import java.util.stream.StreamSupport;
 
 @Slf4j
 public final class OrderBookDirectImpl implements IOrderBook {
+    private static final long[] EMPTY_LONGS = new long[0];
 
     // buckets
     private final LongAdaptiveRadixTreeMap<Bucket> askPriceBuckets;
@@ -126,8 +127,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         // check if order is marketable there are matching orders
         final long[] matchResult = tryMatchInstantly(cmd, cmd);
-        final long filledSize = matchResult[0];
-        final long filledNotional = matchResult[1];
+        final long filledSize = matchResult.length == 0 ? cmd.getFilled() : matchResult[0];
+        final long filledNotional = matchResult.length == 0 ? cmd.getFilledNotional() : matchResult[1];
         if (filledSize == size) {
             // completed before being placed - can just return
             return;
@@ -167,7 +168,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
     private void newOrderMatchIoc(final OrderCommand cmd) {
 
         final long[] matchResult = tryMatchInstantly(cmd, cmd);
-        final long filledSize = matchResult[0];
+        final long filledSize = matchResult.length == 0 ? cmd.getFilled() : matchResult[0];
 
         final long rejectedSize = cmd.size - filledSize;
 
@@ -235,25 +236,23 @@ public final class OrderBookDirectImpl implements IOrderBook {
                 ? 0L
                 : takerOrder.getPrice();
 
-        long takerFilled = takerOrder.getFilled();
-        long takerFilledNotional = takerOrder.getFilledNotional();
         DirectOrder makerOrder;
         if (isBidAction) {
             makerOrder = bestAskOrder;
             if (makerOrder == null || makerOrder.price > limitPrice) {
-                return new long[]{takerFilled, takerFilledNotional};
+                return EMPTY_LONGS;
             }
         } else {
             makerOrder = bestBidOrder;
             if (makerOrder == null || makerOrder.price < limitPrice) {
-                return new long[]{takerFilled, takerFilledNotional};
+                return EMPTY_LONGS;
             }
         }
 
         long remainingSize = takerOrder.getSize() - takerOrder.getFilled();
 
         if (remainingSize == 0) {
-            return new long[]{takerFilled, takerFilledNotional};
+            return EMPTY_LONGS;
         }
 
         DirectOrder priceBucketTail = makerOrder.parent.tail;
@@ -263,6 +262,8 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
 //        log.debug("MATCHING taker: {} remainingSize={}", takerOrder, remainingSize);
 
+        long takerFilled = takerOrder.getFilled();
+        long takerFilledNotional = takerOrder.getFilledNotional();
         MatcherTradeEvent eventsTail = null;
         // iterate through all orders
         do {
@@ -437,7 +438,7 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         // try match with new price as a taker order
         final long[] matchResult = tryMatchInstantly(orderToMove, cmd);
-        final long filled = matchResult[0];
+        final long filled = matchResult.length == 0 ? orderToMove.getFilled() : matchResult[0];
         if (filled == orderToMove.size) {
             // order was fully matched - removing
             orderIdIndex.remove(cmd.orderId);
