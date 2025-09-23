@@ -317,7 +317,7 @@ class ITPerpetualContractIntegration {
             assertThat(UID_1, is(pnl1.getAccountId()));
             assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl1.getEventType()));
             assertThat(quoteId, is(pnl1.getBalances().getCurrency()));
-            assertThat(1L, is(pnl1.getBalances().getCurrencyScakeK()));
+            assertThat(1L, is(pnl1.getBalances().getCurrencyScaleK()));
             assertThat(24900L, is(pnl1.getBalances().getFree()));
             assertThat(0L, is(pnl1.getBalances().getLocked()));
             assertThat(10100, is(pnl1.getPositions().getSymbolId()));
@@ -346,7 +346,7 @@ class ITPerpetualContractIntegration {
             assertThat(UID_2, is(pnl2.getAccountId()));
             assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl2.getEventType()));
             assertThat(quoteId, is(pnl2.getBalances().getCurrency()));
-            assertThat(1L, is(pnl2.getBalances().getCurrencyScakeK()));
+            assertThat(1L, is(pnl2.getBalances().getCurrencyScaleK()));
             assertThat(14800L, is(pnl2.getBalances().getFree()));
             assertThat(0L, is(pnl2.getBalances().getLocked()));
             assertThat(10100, is(pnl2.getPositions().getSymbolId()));

@@ -65,7 +65,7 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(UID_1, Is.is(fundEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(fundEvent.getEventType()));
             assertThat(SYMBOL_MARGIN, Is.is(fundEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(fundEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(fundEvent.getBalances().getCurrencyScaleK()));
             assertThat(delta, Is.is(fundEvent.getBalances().getFree()));
             assertThat(0L, Is.is(fundEvent.getBalances().getLocked()));
             assertThat(0, Is.is(fundEvent.getPositions().getSymbolId()));
@@ -117,7 +117,7 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(UID_1, Is.is(depositEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.getEventType()));
             assertThat(SYMBOL_MARGIN, Is.is(depositEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(depositEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(depositEvent.getBalances().getCurrencyScaleK()));
             assertThat(deposit, Is.is(depositEvent.getBalances().getFree()));
             assertThat(0L, Is.is(depositEvent.getBalances().getLocked()));
             assertThat(0, Is.is(depositEvent.getPositions().getSymbolId()));
@@ -138,7 +138,7 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(UID_1, Is.is(withdrawEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.WITHDRAW, Is.is(withdrawEvent.getEventType()));
             assertThat(SYMBOL_MARGIN, Is.is(withdrawEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(withdrawEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(withdrawEvent.getBalances().getCurrencyScaleK()));
             assertThat(deposit + withdraw, Is.is(withdrawEvent.getBalances().getFree()));
             assertThat(0L, Is.is(withdrawEvent.getBalances().getLocked()));
             assertThat(0, Is.is(withdrawEvent.getPositions().getSymbolId()));
@@ -248,7 +248,7 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(userId1, Is.is(depositEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.DEPOSIT, Is.is(depositEvent.getEventType()));
             assertThat(quoteId, Is.is(depositEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(depositEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(depositEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(deposit, Is.is(depositEvent.getBalances().getFree()));
             assertThat(0L, Is.is(depositEvent.getBalances().getLocked()));
@@ -272,7 +272,7 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(userId1, Is.is(lockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(lockEvent.getEventType()));
             assertThat(quoteId, Is.is(lockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(lockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(lockEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(deposit - 100L - size * 20L, Is.is(lockEvent.getBalances().getFree()));
             assertThat(100L + size * 20L, Is.is(lockEvent.getBalances().getLocked()));
@@ -296,7 +296,7 @@ class ITFutureBasic extends ITFutureBase {
             assertThat(userId1, Is.is(unLockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(unLockEvent.getEventType()));
             assertThat(quoteId, Is.is(unLockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(unLockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(unLockEvent.getBalances().getCurrencyScaleK()));
             assertThat(deposit, Is.is(unLockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(unLockEvent.getBalances().getLocked()));
             // position check

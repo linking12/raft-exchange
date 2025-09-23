@@ -151,7 +151,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setAccountId(fundEventReport.getAccountId()).setEventTypeValue(fundEventReport.getEventType().getCode());
         FundEventReport.BalanceSnapshot balance = fundEventReport.getBalances();
         builder.setBalances(builderPool.get(BalanceSnapshot.Builder.class).setCurrency(balance.getCurrency())
-                .setCurrencyScakeK(balance.getCurrencyScakeK()).setFree(balance.getFree()).setLocked(balance.getLocked()));
+                .setCurrencyScaleK(balance.getCurrencyScaleK()).setFree(balance.getFree()).setLocked(balance.getLocked()));
         FundEventReport.PositionSnapshot position = fundEventReport.getPositions();
         if (fundEventReport.getEventType().getCode() >= FundEvent.FundEventType.LOCK_PENDING.getCode()) {
             builder.setPositions(builderPool.get(PositionSnapshot.Builder.class).setSymbolId(position.getSymbolId())

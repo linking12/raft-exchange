@@ -954,7 +954,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(takerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.getEventType()));
             assertThat(quoteId, Is.is(takerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(deposit - 100L - size * 20L, Is.is(takerEvent.getBalances().getFree()));
             assertThat(100L + size * 20L, Is.is(takerEvent.getBalances().getLocked()));
@@ -978,7 +978,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(makerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.getEventType()));
             assertThat(quoteId, Is.is(makerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(MAX_VALUE - 100L - size * 20L, Is.is(makerEvent.getBalances().getFree()));
             assertThat(100L + size * 20L, Is.is(makerEvent.getBalances().getLocked()));
@@ -1002,7 +1002,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(takerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(takerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(takerUnlockEvent.getBalances().getLocked()));
@@ -1026,7 +1026,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(takerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(takerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(MAX_VALUE - 100 - 20, Is.is(takerOpenPositionEvent.getBalances().getFree()));
             assertThat(100L, Is.is(takerOpenPositionEvent.getBalances().getLocked()));
@@ -1056,7 +1056,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(makerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(1000L, Is.is(makerUnlockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(makerUnlockEvent.getBalances().getLocked()));
@@ -1080,7 +1080,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(makerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 10(maker fee) = 890
             assertThat(890L, Is.is(makerOpenPositionEvent.getBalances().getFree()));
             assertThat(100L, Is.is(makerOpenPositionEvent.getBalances().getLocked()));
@@ -1250,7 +1250,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(takerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.getEventType()));
             assertThat(quoteId, Is.is(takerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(deposit - 100L - size * 20L, Is.is(takerEvent.getBalances().getFree()));
             assertThat(100L + size * 20L, Is.is(takerEvent.getBalances().getLocked()));
@@ -1274,7 +1274,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(makerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.getEventType()));
             assertThat(quoteId, Is.is(makerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(MAX_VALUE - 100L - size * 20L, Is.is(makerEvent.getBalances().getFree()));
             assertThat(100L + size * 20L, Is.is(makerEvent.getBalances().getLocked()));
@@ -1298,7 +1298,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(takerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(takerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(takerUnlockEvent.getBalances().getLocked()));
@@ -1322,7 +1322,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(takerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(takerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(MAX_VALUE - 100 - 20, Is.is(takerOpenPositionEvent.getBalances().getFree()));
             assertThat(100L, Is.is(takerOpenPositionEvent.getBalances().getLocked()));
@@ -1350,7 +1350,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(makerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 20(maker fee) = 880
             assertThat(1000L, Is.is(makerUnlockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(makerUnlockEvent.getBalances().getLocked()));
@@ -1374,7 +1374,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(makerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // 1000(balance) - 100(open position) - 10(maker fee) = 890
             assertThat(890L, Is.is(makerOpenPositionEvent.getBalances().getFree()));
             assertThat(100L, Is.is(makerOpenPositionEvent.getBalances().getLocked()));
@@ -1544,7 +1544,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(takerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.getEventType()));
             assertThat(quoteId, Is.is(takerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScaleK()));
             // free = deposit - size * 100 (required margin) - size * 20 (taker fee)
             assertThat(deposit - size * 100L - size * 20L, Is.is(takerEvent.getBalances().getFree()));
             assertThat(size * 100L + size * 20L, Is.is(takerEvent.getBalances().getLocked()));
@@ -1576,7 +1576,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(makerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.getEventType()));
             assertThat(quoteId, Is.is(makerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScaleK()));
             // free = MAX_VALUE - txSize * 100 (required margin) - txSize * 20 (taker fee)
             assertThat(MAX_VALUE - txSize * 100L - txSize * 20L, Is.is(makerEvent.getBalances().getFree()));
             assertThat(txSize * 100L + txSize * 20L, Is.is(makerEvent.getBalances().getLocked()));
@@ -1604,7 +1604,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(takerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(takerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScaleK()));
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(takerUnlockEvent.getBalances().getLocked()));
             // position check
@@ -1628,7 +1628,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(takerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(takerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // free = MAX_VALUE - cost - fee
             assertThat(MAX_VALUE - txSize * 100L - txSize * 20L, Is.is(takerOpenPositionEvent.getBalances().getFree()));
             assertThat(txSize * 100L, Is.is(takerOpenPositionEvent.getBalances().getLocked()));
@@ -1657,7 +1657,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(makerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScaleK()));
             // free = deposit - (size - txSize) * 100 (remaining margin) - (size - txSize) * 20 (taker fee)
             assertThat(deposit - (size - txSize) * 100L - (size - txSize) * 20L, Is.is(makerUnlockEvent.getBalances().getFree()));
             assertThat((size - txSize) * 100L + (size - txSize) * 20L, Is.is(makerUnlockEvent.getBalances().getLocked()));
@@ -1685,7 +1685,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(makerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // free = deposit - size * 100 (current position) - (size - txSize) * 20 (taker fee in advance) - txSize * 10 (maker fee)
             assertThat(deposit - size * 100L - (size - txSize) * 20L - txSize * 10L, Is.is(makerOpenPositionEvent.getBalances().getFree()));
             assertThat(size * 100L + (size - txSize) * 20L, Is.is(makerOpenPositionEvent.getBalances().getLocked()));
@@ -1858,7 +1858,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(takerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(takerEvent.getEventType()));
             assertThat(quoteId, Is.is(takerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerEvent.getBalances().getCurrencyScaleK()));
             // free = deposit - size * 100 (required margin) - size * 20 (taker fee)
             assertThat(deposit - size * 100L - size * 20L, Is.is(takerEvent.getBalances().getFree()));
             assertThat(size * 100L + size * 20L, Is.is(takerEvent.getBalances().getLocked()));
@@ -1882,7 +1882,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(makerEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.LOCK_PENDING, Is.is(makerEvent.getEventType()));
             assertThat(quoteId, Is.is(makerEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerEvent.getBalances().getCurrencyScaleK()));
             // free = MAX_VALUE - txSize * 100 (required margin) - txSize * 20 (taker fee)
             assertThat(MAX_VALUE - txSize * 100L - txSize * 20L, Is.is(makerEvent.getBalances().getFree()));
             assertThat(txSize * 100L + txSize * 20L, Is.is(makerEvent.getBalances().getLocked()));
@@ -1906,7 +1906,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(takerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(takerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerUnlockEvent.getBalances().getCurrencyScaleK()));
             assertThat(MAX_VALUE, Is.is(takerUnlockEvent.getBalances().getFree()));
             assertThat(0L, Is.is(takerUnlockEvent.getBalances().getLocked()));
             // position check
@@ -1929,7 +1929,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(takerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(takerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // free = MAX_VALUE - cost - fee
             assertThat(MAX_VALUE - txSize * 100L - txSize * 20L, Is.is(takerOpenPositionEvent.getBalances().getFree()));
             assertThat(txSize * 100L, Is.is(takerOpenPositionEvent.getBalances().getLocked()));
@@ -1956,7 +1956,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerUnlockEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.UNLOCK_PENDING, Is.is(makerUnlockEvent.getEventType()));
             assertThat(quoteId, Is.is(makerUnlockEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerUnlockEvent.getBalances().getCurrencyScaleK()));
             // free = deposit - (size - txSize) * 100 (remaining margin) - (size - txSize) * 20 (taker fee)
             assertThat(deposit - (size - txSize) * 100L - (size - txSize) * 20L, Is.is(makerUnlockEvent.getBalances().getFree()));
             assertThat((size - txSize) * 100L + (size - txSize) * 20L, Is.is(makerUnlockEvent.getBalances().getLocked()));
@@ -1980,7 +1980,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerOpenPositionEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.OPEN_POSITION, Is.is(makerOpenPositionEvent.getEventType()));
             assertThat(quoteId, Is.is(makerOpenPositionEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerOpenPositionEvent.getBalances().getCurrencyScaleK()));
             // free = deposit - size * 100 (current position) - (size - txSize) * 20 (taker fee in advance) - txSize * 10 (maker fee)
             assertThat(deposit - size * 100L - (size - txSize) * 20L - txSize * 10L, Is.is(makerOpenPositionEvent.getBalances().getFree()));
             assertThat(size * 100L + (size - txSize) * 20L, Is.is(makerOpenPositionEvent.getBalances().getLocked()));
@@ -2268,7 +2268,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerCloseEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.getEventType()));
             assertThat(quoteId, Is.is(takerCloseEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerCloseEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerCloseEvent.getBalances().getCurrencyScaleK()));
             // free = MAX_VALUE - 20 (taker fee) - 500 (loss)
             assertThat(3999980L, Is.is(takerCloseEvent.getBalances().getFree()));
             assertThat(0L, Is.is(takerCloseEvent.getBalances().getLocked()));
@@ -2292,7 +2292,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId1, Is.is(makerCloseEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(makerCloseEvent.getEventType()));
             assertThat(quoteId, Is.is(makerCloseEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(makerCloseEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(makerCloseEvent.getBalances().getCurrencyScaleK()));
             assertThat(deposit - 10 * 1L, Is.is(makerCloseEvent.getBalances().getFree()));
             assertThat(0L, Is.is(makerCloseEvent.getBalances().getLocked()));
             // position check
@@ -2576,7 +2576,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(userId2, Is.is(takerCloseEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.getEventType()));
             assertThat(quoteId, Is.is(takerCloseEvent.getBalances().getCurrency()));
-            assertThat(1L, Is.is(takerCloseEvent.getBalances().getCurrencyScakeK()));
+            assertThat(1L, Is.is(takerCloseEvent.getBalances().getCurrencyScaleK()));
             assertThat(3998900L, Is.is(takerCloseEvent.getBalances().getFree()));
             assertThat(900L, Is.is(takerCloseEvent.getBalances().getLocked()));
             // position check
