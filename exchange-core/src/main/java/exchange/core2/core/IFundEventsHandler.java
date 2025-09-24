@@ -103,7 +103,7 @@ public interface IFundEventsHandler {
 
             private BalanceSnapshot fill(FundEvent fundEvent) {
                 this.currency = fundEvent.currency;
-                this.currencyScaleK = fundEvent.currencyScakeK;
+                this.currencyScaleK = fundEvent.currencyScaleK;
                 this.free = fundEvent.free;
                 this.locked = fundEvent.locked;
                 return this;
