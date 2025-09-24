@@ -42,6 +42,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             ByteBuffer data = iter.getData();
             Closure closure = iter.done();
             CompletableFuture<byte[]> result = null;
+            long startTime = System.nanoTime();
             try {
                 result = apply(data);
             } catch (Throwable e) {
@@ -49,7 +50,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             }
             if (closure != null) {
                 if (closure instanceof ReturnableClosure) {
-                    ((ReturnableClosure)closure).setResult(result);
+                    ((ReturnableClosure)closure).setResult(startTime, result);
                 }
                 closure.run(Status.OK());
             }

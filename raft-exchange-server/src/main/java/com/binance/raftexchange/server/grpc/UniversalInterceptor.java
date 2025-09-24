@@ -6,6 +6,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -70,28 +71,34 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     public void onMessage(ReqT message) {
         serverQPS.increment();
         try (InputStream stream = (InputStream)message) {
+            long start = System.nanoTime();
             /**
              * @formatter off
              */
             @SuppressWarnings("unchecked")
             CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
-                commandOnTheWay.remove(message);
-                if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
-                    maybeRequestMore();
+                try {
+                    commandOnTheWay.remove(message);
+                    if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
+                        maybeRequestMore();
+                    }
+                    if (call.isCancelled() || halfClose.get()) {
+                        cancelAll();
+                        return;
+                    }
+                    if (result != null) {
+                        call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
+                        return;
+                    }
+                    if (err instanceof CancellationException) {
+                        return;
+                    }
+                    LOGGER.error("exchange core error!", err);
+                    call.close(Status.INTERNAL.withCause(err), new Metadata());
+                } finally {
+                    long latency = System.nanoTime() - start;
+                    Metrics.timer("grpc.latency").record(latency, TimeUnit.NANOSECONDS);
                 }
-                if (call.isCancelled() || halfClose.get()) {
-                    cancelAll();
-                    return;
-                }
-                if (result != null) {
-                    call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
-                    return;
-                }
-                if (err instanceof CancellationException) {
-                    return;
-                }
-                LOGGER.error("exchange core error!", err);
-                call.close(Status.INTERNAL.withCause(err), new Metadata());
             }, offloadWorker);
             /**
              * @formatter on
