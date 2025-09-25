@@ -44,7 +44,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
-    protected final ExecutorService offloadWorker;
 
     protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
 
@@ -54,11 +53,10 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private final AtomicInteger inflight = new AtomicInteger(0);
 
-    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ExecutorService offloadWorker, ServerCall.Listener<ReqT> delegate,
+    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate,
         ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
-        this.offloadWorker = offloadWorker;
         this.call = call;
         this.halfClose = new AtomicBoolean(false);
     }
@@ -78,7 +76,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
              * @formatter off
              */
             @SuppressWarnings("unchecked")
-            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
+            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenComplete((result, err) -> {
                 try {
                     commandOnTheWay.remove(message);
                     if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
@@ -101,7 +99,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                     long latency = System.nanoTime() - start;
                     latencyTimer.record(latency, TimeUnit.NANOSECONDS);
                 }
-            }, offloadWorker);
+            });
             /**
              * @formatter on
              */
