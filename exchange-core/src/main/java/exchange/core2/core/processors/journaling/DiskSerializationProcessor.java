@@ -232,7 +232,7 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
 
         @Override
         public void close() {
-            bytes.release();
+            bytes.releaseLast();
         }
     }
 

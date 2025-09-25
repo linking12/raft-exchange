@@ -52,7 +52,7 @@
 		<dependency>
 			<groupId>net.openhft</groupId>
 			<artifactId>chronicle-wire</artifactId>
-			<version>2.19.1</version>
+			<version>2.27ea12</version>
 			<exclusions>
 				<exclusion>
 					<artifactId>slf4j-api</artifactId>
@@ -60,6 +60,11 @@
 				</exclusion>
 			</exclusions>
 		</dependency>
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>26.0.2-1</version>
+        </dependency>
 		<!-- Real Logic Agrona -->
 		<dependency>
 			<groupId>org.agrona</groupId>
@@ -70,12 +75,12 @@
 		<dependency>
 			<groupId>org.eclipse.collections</groupId>
 			<artifactId>eclipse-collections-api</artifactId>
-			<version>11.0.0</version>
+			<version>13.0.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.eclipse.collections</groupId>
 			<artifactId>eclipse-collections</artifactId>
-			<version>11.0.0</version>
+			<version>13.0.0</version>
 		</dependency>
 		<!-- lz4-java -->
 		<dependency>
