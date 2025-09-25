@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.grpc;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +30,7 @@ public class GrpcServerContainer {
             .withOption(ChannelOption.SO_BACKLOG, 8192).addService(new ApiService(raftClusterContainer).transform())
             .addService(new SevererNodeService(raftClusterContainer))//
             .addService(new QueryService(raftClusterContainer))//
-            .build();
+            .executor(MoreExecutors.directExecutor()).build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
     }
