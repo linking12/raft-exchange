@@ -9,6 +9,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -145,6 +146,8 @@ public class RaftClusterContainer {
     }
 
     public static class ReturnableClosure implements Closure {
+        private static final Timer raftTimer = Metrics.timer("raft.latency");
+        private static final Timer exchangeTimer = Metrics.timer("exchange.latency");
         private final CompletableFuture<byte[]> future;
         private final long submitTime = System.nanoTime();
 
@@ -160,8 +163,8 @@ public class RaftClusterContainer {
                     future.completeExceptionally(ex);
                 }
                 long now = System.nanoTime();
-                Metrics.timer("raft.latency").record(now - submitTime, TimeUnit.NANOSECONDS);
-                Metrics.timer("exchange.latency").record(now - beginTime, TimeUnit.NANOSECONDS);
+                raftTimer.record(now - submitTime, TimeUnit.NANOSECONDS);
+                exchangeTimer.record(now - beginTime, TimeUnit.NANOSECONDS);
             });
         }
 

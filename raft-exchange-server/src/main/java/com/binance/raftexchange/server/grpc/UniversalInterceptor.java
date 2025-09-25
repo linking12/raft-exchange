@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,6 +34,7 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     private static final Counter serverQPS = Metrics.counter("raft.exchange.grpc.server.counter");
+    private static final Timer latencyTimer = Metrics.timer("grpc.latency");
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      * 
@@ -97,7 +99,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                     call.close(Status.INTERNAL.withCause(err), new Metadata());
                 } finally {
                     long latency = System.nanoTime() - start;
-                    Metrics.timer("grpc.latency").record(latency, TimeUnit.NANOSECONDS);
+                    latencyTimer.record(latency, TimeUnit.NANOSECONDS);
                 }
             }, offloadWorker);
             /**
