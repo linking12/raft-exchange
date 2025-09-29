@@ -2,6 +2,7 @@ package com.binance.raftexchange.server.raft;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -146,8 +147,12 @@ public class RaftClusterContainer {
     }
 
     public static class ReturnableClosure implements Closure {
-        private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.9, 0.99).publishPercentileHistogram().register(Metrics.globalRegistry);
-        private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.9, 0.99).publishPercentileHistogram().register(Metrics.globalRegistry);
+        private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.99)
+                .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+                .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+        private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.99)
+                .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+                .publishPercentileHistogram(false).register(Metrics.globalRegistry);
         private final CompletableFuture<byte[]> future;
         private final long submitTime = System.nanoTime();
 
