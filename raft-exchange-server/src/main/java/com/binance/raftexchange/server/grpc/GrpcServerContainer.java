@@ -1,14 +1,6 @@
 package com.binance.raftexchange.server.grpc;
 
 import com.google.common.util.concurrent.MoreExecutors;
-import io.grpc.netty.InternalProtocolNegotiator;
-import io.grpc.netty.GrpcHttp2ConnectionHandler;
-import io.grpc.netty.InternalProtocolNegotiators;
-import io.netty.channel.ChannelDuplexHandler;
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.flush.FlushConsolidationHandler;
-import io.netty.util.AsciiString;
 import io.netty.channel.WriteBufferWaterMark;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,32 +33,6 @@ public class GrpcServerContainer {
             .addService(new SevererNodeService(raftClusterContainer))//
             .addService(new QueryService(raftClusterContainer))//
             .executor(MoreExecutors.directExecutor())
-            .protocolNegotiator(new InternalProtocolNegotiator.ProtocolNegotiator() {
-                private final InternalProtocolNegotiator.ProtocolNegotiator base = InternalProtocolNegotiators.serverPlaintext();
-
-                @Override
-                public AsciiString scheme() {
-                    return base.scheme();
-                }
-
-                @Override
-                public ChannelHandler newHandler(GrpcHttp2ConnectionHandler http2Handler) {
-                    ChannelHandler delegate = base.newHandler(http2Handler);
-                    return new ChannelDuplexHandler() {
-                        @Override
-                        public void handlerAdded(ChannelHandlerContext ctx) {
-                            ctx.pipeline().addFirst("flushConsolidation", new FlushConsolidationHandler(256, true));
-                            // 把自己替换为真正的 negotiator handler
-                            ctx.pipeline().replace(this, "negotiator", delegate);
-                        }
-                    };
-                }
-
-                @Override
-                public void close() {
-                    base.close();
-                }
-            })
             .build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
