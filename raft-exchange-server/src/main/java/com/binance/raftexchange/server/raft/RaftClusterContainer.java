@@ -146,8 +146,8 @@ public class RaftClusterContainer {
     }
 
     public static class ReturnableClosure implements Closure {
-        private static final Timer raftTimer = Metrics.timer("raft.latency");
-        private static final Timer exchangeTimer = Metrics.timer("exchange.latency");
+        private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.9, 0.99).publishPercentileHistogram().register(Metrics.globalRegistry);
+        private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.9, 0.99).publishPercentileHistogram().register(Metrics.globalRegistry);
         private final CompletableFuture<byte[]> future;
         private final long submitTime = System.nanoTime();
 

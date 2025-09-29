@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,7 +33,7 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     private static final Counter serverQPS = Metrics.counter("raft.exchange.grpc.server.counter");
-    private static final Timer latencyTimer = Metrics.timer("grpc.latency");
+    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.9, 0.99).publishPercentileHistogram().register(Metrics.globalRegistry);
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      * 
