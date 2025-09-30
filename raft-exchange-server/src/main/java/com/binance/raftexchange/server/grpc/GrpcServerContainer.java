@@ -27,13 +27,13 @@ public class GrpcServerContainer {
             .withChildOption(ChannelOption.SO_KEEPALIVE, Boolean.TRUE)//
             .withChildOption(ChannelOption.TCP_NODELAY, Boolean.FALSE)//
             .withChildOption(ChannelOption.SO_REUSEADDR, Boolean.TRUE)//
-            .withChildOption(ChannelOption.WRITE_BUFFER_WATER_MARK, WriteBufferWaterMark.DEFAULT)
+            .withChildOption(ChannelOption.WRITE_BUFFER_WATER_MARK, WriteBufferWaterMark.DEFAULT)//
             .withOption(ChannelOption.SO_REUSEADDR, true)//
-            .withOption(ChannelOption.SO_BACKLOG, 8192).addService(new ApiService(raftClusterContainer).transform())
+            .withOption(ChannelOption.SO_BACKLOG, 8192)//
+            .addService(new ApiService(raftClusterContainer).transform())//
             .addService(new SevererNodeService(raftClusterContainer))//
             .addService(new QueryService(raftClusterContainer))//
-            .executor(MoreExecutors.directExecutor())
-            .build();
+            .executor(MoreExecutors.directExecutor()).build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
     }
