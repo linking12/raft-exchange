@@ -52,7 +52,7 @@ public class LatencyTestsModule {
 
         final ExchangeTestContainer.TestDataFutures testDataFutures = ExchangeTestContainer.prepareTestDataAsync(testDataParameters, 1);
 
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(exchangeClient,  true)) {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(exchangeClient)) {
 
             final SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
 

@@ -175,7 +175,7 @@ public class MemorySerializationProcessor implements ISerializationProcessor {
 
         @Override
         public void close() {
-            bytes.release();
+            bytes.releaseLast();
         }
     }
 }

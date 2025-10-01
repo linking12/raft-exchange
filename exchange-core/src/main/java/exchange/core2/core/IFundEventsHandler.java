@@ -4,69 +4,201 @@ import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.PositionDirection;
-import lombok.AllArgsConstructor;
-import lombok.Data;
+import lombok.Getter;
+
+import java.util.ArrayDeque;
 
 public interface IFundEventsHandler {
 
     void fundEventReport(FundEventReport fundEventReport);
 
-    @Data
-    class FundEventReport {
-        private final long uniId;
-        private final long accountId;
-        private final FundEventType eventType;
-        private final BalanceSnapshot balances;
-        private final PositionSnapshot positions;
+    default void process(FundEventReport fundEventReport) {
+        fundEventReport(fundEventReport);
+        fundEventReport.recycle();
+    }
 
-        @Data
-        public static class BalanceSnapshot {
-            private final int currency;
-            private final long currencyScakeK;
-            private final long free;
-            private final long locked;
+    @Getter
+    class FundEventReport {
+        private static final int POOL_SIZE = 1024;
+        private static final ThreadLocal<ArrayDeque<FundEventReport>> POOL =
+                ThreadLocal.withInitial(() -> new ArrayDeque<>(POOL_SIZE));
+
+        private long uniId;
+        private long accountId;
+        private FundEventType eventType;
+        private BalanceSnapshot balances;
+        private PositionSnapshot positions;
+
+        private FundEventReport() {
         }
 
-        @AllArgsConstructor
-        @Data
+        private static FundEventReport borrow() {
+            FundEventReport obj = POOL.get().pollFirst();
+            return (obj != null) ? obj : new FundEventReport();
+        }
+
+        private void recycle() {
+            clear();
+            ArrayDeque<FundEventReport> pool = POOL.get();
+            if (pool.size() < POOL_SIZE) {
+                pool.addFirst(this);
+            }
+        }
+
+        private void clear() {
+            uniId = 0L;
+            accountId = 0L;
+            eventType = null;
+            if (balances != null) {
+                balances.recycle();
+                balances = null;
+            }
+            if (positions != null) {
+                positions.recycle();
+                positions = null;
+            }
+        }
+
+        private FundEventReport fill(FundEvent fundEvent, long uniId) {
+            this.uniId = uniId;
+            this.accountId = fundEvent.uid;
+            this.eventType = fundEvent.eventType;
+            this.balances = BalanceSnapshot.borrow().fill(fundEvent);
+            this.positions = PositionSnapshot.borrow().fill(fundEvent);
+            return this;
+        }
+
+        @Getter
+        public static class BalanceSnapshot {
+            private static final ThreadLocal<ArrayDeque<BalanceSnapshot>> POOL =
+                    ThreadLocal.withInitial(() -> new ArrayDeque<>(POOL_SIZE));
+
+            private int currency;
+            private long currencyScaleK;
+            private long free;
+            private long locked;
+
+            private BalanceSnapshot() {
+            }
+
+            private static BalanceSnapshot borrow() {
+                BalanceSnapshot obj = POOL.get().pollFirst();
+                return (obj != null) ? obj : new BalanceSnapshot();
+            }
+
+            private void recycle() {
+                clear();
+                ArrayDeque<BalanceSnapshot> pool = POOL.get();
+                if (pool.size() < POOL_SIZE) {
+                    pool.addFirst(this);
+                }
+            }
+
+            private void clear() {
+                currency = 0;
+                currencyScaleK = 0;
+                free = 0L;
+                locked = 0L;
+            }
+
+            private BalanceSnapshot fill(FundEvent fundEvent) {
+                this.currency = fundEvent.currency;
+                this.currencyScaleK = fundEvent.currencyScaleK;
+                this.free = fundEvent.free;
+                this.locked = fundEvent.locked;
+                return this;
+            }
+        }
+
+        @Getter
         public static class PositionSnapshot {
-            private final int symbolId;
-            private final long baseScaleK;
-            private final long quoteScaleK;
-            private final PositionDirection direction;
-            private final long quantity;          // openVolume
-            private final long openPriceSum;
-            private final long cumRealized;       // position.profit
-            private final boolean isolated;       // 是否逐仓
-            private final long isolatedWallet;    // 逐仓保证金
-            private final int leverage;
-            private final long openInitMarginSum;
-            private final long markPrice;
-            private final long unrealizedProfit;
-            private final long liquidationPrice;
-            private final long marginRatioScaleK;
-            private final long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
-            private final long asksNotional;
-            private final long bidsQty;  // 剩余买单数量，pendingBuySize
-            private final long asksQty;
+            private static final ThreadLocal<ArrayDeque<PositionSnapshot>> POOL =
+                    ThreadLocal.withInitial(() -> new ArrayDeque<>(POOL_SIZE));
+
+            private int symbolId;
+            private long baseScaleK;
+            private long quoteScaleK;
+            private PositionDirection direction;
+            private long quantity;          // openVolume
+            private long openPriceSum;
+            private long cumRealized;       // position.profit
+            private boolean isolated;       // 是否逐仓
+            private long isolatedWallet;    // 逐仓保证金
+            private int leverage;
+            private long openInitMarginSum;
+            private long markPrice;
+            private long unrealizedProfit;
+            private long liquidationPrice;
+            private long marginRatioScaleK;
+            private long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
+            private long asksNotional;
+            private long bidsQty;  // 剩余买单数量，pendingBuySize
+            private long asksQty;
+
+            private PositionSnapshot() {
+            }
+
+            private static PositionSnapshot borrow() {
+                PositionSnapshot obj = POOL.get().pollFirst();
+                return (obj != null) ? obj : new PositionSnapshot();
+            }
+
+            private void recycle() {
+                clear();
+                ArrayDeque<PositionSnapshot> pool = POOL.get();
+                if (pool.size() < POOL_SIZE) {
+                    pool.addFirst(this);
+                }
+            }
+
+            private void clear() {
+                symbolId = 0;
+                baseScaleK = 0L;
+                quoteScaleK = 0L;
+                direction = null;
+                quantity = 0L;
+                openPriceSum = 0L;
+                cumRealized = 0L;
+                isolated = false;
+                isolatedWallet = 0L;
+                leverage = 0;
+                openInitMarginSum = 0L;
+                markPrice = 0L;
+                unrealizedProfit = 0L;
+                liquidationPrice = 0L;
+                marginRatioScaleK = 0L;
+                bidsNotional = 0L;
+                asksNotional = 0L;
+                bidsQty = 0L;
+                asksQty = 0L;
+            }
+
+            private PositionSnapshot fill(FundEvent fundEvent) {
+                this.symbolId = fundEvent.symbol;
+                this.baseScaleK = fundEvent.baseScaleK;
+                this.quoteScaleK = fundEvent.quoteScaleK;
+                this.direction = fundEvent.direction;
+                this.quantity = fundEvent.openVolume;
+                this.openPriceSum = fundEvent.openPriceSum;
+                this.cumRealized = fundEvent.profit;
+                this.isolated = (fundEvent.marginMode == MarginMode.ISOLATED);
+                this.isolatedWallet = fundEvent.extraMargin;
+                this.leverage = fundEvent.leverage;
+                this.openInitMarginSum = fundEvent.openInitMarginSum;
+                this.markPrice = fundEvent.markPrice;
+                this.unrealizedProfit = fundEvent.unrealizedProfit;
+                this.liquidationPrice = fundEvent.liquidationPrice;
+                this.marginRatioScaleK = fundEvent.marginRatioScaleK;
+                this.bidsNotional = fundEvent.pendingBuySize * fundEvent.pendingBuyAvgPrice;
+                this.asksNotional = fundEvent.pendingSellSize * fundEvent.pendingSellAvgPrice;
+                this.bidsQty = fundEvent.pendingBuySize;
+                this.asksQty = fundEvent.pendingSellSize;
+                return this;
+            }
         }
 
         public static FundEventReport fromFundEvent(FundEvent fundEvent, long uniId) {
-            return new FundEventReport(uniId, fundEvent.uid, fundEvent.eventType,
-                    new BalanceSnapshot(fundEvent.currency, fundEvent.currencyScakeK, fundEvent.free, fundEvent.locked),
-                    new PositionSnapshot(fundEvent.symbol, fundEvent.baseScaleK, fundEvent.quoteScaleK, fundEvent.direction,
-                            fundEvent.openVolume, fundEvent.openPriceSum, fundEvent.profit,
-                            fundEvent.marginMode == MarginMode.ISOLATED, fundEvent.extraMargin,
-                            fundEvent.leverage,
-                            fundEvent.openInitMarginSum,
-                            fundEvent.markPrice,
-                            fundEvent.unrealizedProfit,
-                            fundEvent.liquidationPrice,
-                            fundEvent.marginRatioScaleK,
-                            fundEvent.pendingBuySize * fundEvent.pendingBuyAvgPrice,
-                            fundEvent.pendingSellSize * fundEvent.pendingSellAvgPrice,
-                            fundEvent.pendingBuySize,
-                            fundEvent.pendingSellSize));
+            return FundEventReport.borrow().fill(fundEvent, uniId);
         }
     }
 }

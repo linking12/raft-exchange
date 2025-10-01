@@ -73,7 +73,8 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setExecutionTypeValue(executionReport.getExecutionType().ordinal()).setOrderStatusValue(executionReport.getOrderStatus().ordinal())
                 .setSymbol(executionReport.getSymbol()).setBaseScaleK(executionReport.getBaseScaleK()).setQuoteScaleK(executionReport.getQuoteScaleK())
                 .setAccountId(executionReport.getAccountId()).setClOrdId(executionReport.getClOrdId()).setOrderId(executionReport.getOrderId())
-                .setOrderTypeValue(executionReport.getOrderType().getCode()).setSideValue(executionReport.getSide().getCode())
+                .setOrderTypeValue(executionReport.getOrderType() == null ? 0 : executionReport.getOrderType().getCode())
+                .setSideValue(executionReport.getSide() == null ? 0 : executionReport.getSide().getCode())
                 .setQty(executionReport.getQty()).setPrice(executionReport.getPrice()).setQuoteOrderQty(executionReport.getQuoteOrderQty())
                 .setOrderCreationTime(executionReport.getOrderCreationTime()).setTradeId(executionReport.getTradeId())
                 .setLastQty(executionReport.getLastQty()).setLastPrice(executionReport.getLastPrice()).setLastQuoteQty(executionReport.getLastQuoteQty())
@@ -97,7 +98,8 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setExecutionTypeValue(executionReport.getExecutionType().ordinal()).setOrderStatusValue(executionReport.getOrderStatus().ordinal())
                 .setSymbol(executionReport.getSymbolId()).setOrderQtyScale(executionReport.getOrderQtyScale()).setPriceScale(executionReport.getPriceScale())
                 .setUserId(executionReport.getUserId()).setClOrdId(executionReport.getClOrderId()).setOrderId(executionReport.getOrderId())
-                .setOrderTypeValue(executionReport.getOrderType().getCode()).setSideValue(executionReport.getSide().getCode())
+                .setOrderTypeValue(executionReport.getOrderType() == null ? 0 : executionReport.getOrderType().getCode())
+                .setSideValue(executionReport.getSide() == null ? 0 : executionReport.getSide().getCode())
                 .setCounterpartyId(executionReport.getCounterpartyId()).setPrice(executionReport.getPrice())
                 .setOrderQty(executionReport.getOrderQty()).setCreateTime(executionReport.getCreateTime())
                 .setExecId(executionReport.getExecId()).setContractTypeValue(executionReport.getContractType().getCode())
@@ -151,7 +153,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setAccountId(fundEventReport.getAccountId()).setEventTypeValue(fundEventReport.getEventType().getCode());
         FundEventReport.BalanceSnapshot balance = fundEventReport.getBalances();
         builder.setBalances(builderPool.get(BalanceSnapshot.Builder.class).setCurrency(balance.getCurrency())
-                .setCurrencyScakeK(balance.getCurrencyScakeK()).setFree(balance.getFree()).setLocked(balance.getLocked()));
+                .setCurrencyScaleK(balance.getCurrencyScaleK()).setFree(balance.getFree()).setLocked(balance.getLocked()));
         FundEventReport.PositionSnapshot position = fundEventReport.getPositions();
         if (fundEventReport.getEventType().getCode() >= FundEvent.FundEventType.LOCK_PENDING.getCode()) {
             builder.setPositions(builderPool.get(PositionSnapshot.Builder.class).setSymbolId(position.getSymbolId())

@@ -44,7 +44,7 @@ public class FundEventsHelper {
         event.uid = uid;
         event.eventType = type;
         event.currency = currency;
-        event.currencyScakeK = currencySpec.getCurrencyScaleK();
+        event.currencyScaleK = currencySpec.getCurrencyScaleK();
         event.free = free;
         event.locked = locked;
         return event;
@@ -59,7 +59,7 @@ public class FundEventsHelper {
         event.eventType = type;
         event.uid = position.uid;
         event.currency = position.currency;
-        event.currencyScakeK = currencySpec.getCurrencyScaleK();
+        event.currencyScaleK = currencySpec.getCurrencyScaleK();
         event.symbol = position.symbol;
         event.baseScaleK = spec.baseScaleK;
         event.quoteScaleK = spec.quoteScaleK;
@@ -256,7 +256,7 @@ public class FundEventsHelper {
             event.orderId = 0;
             event.uid = 0;
             event.currency = 0;
-            event.currencyScakeK = 0;
+            event.currencyScaleK = 0;
             event.free = 0;
             event.locked = 0;
             event.symbol = 0;

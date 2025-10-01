@@ -2,12 +2,15 @@ package com.binance.raftexchange.server.raft;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -144,19 +147,29 @@ public class RaftClusterContainer {
     }
 
     public static class ReturnableClosure implements Closure {
+        private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.99)
+                .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+                .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+        private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.99)
+                .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+                .publishPercentileHistogram(false).register(Metrics.globalRegistry);
         private final CompletableFuture<byte[]> future;
+        private final long submitTime = System.nanoTime();
 
         public ReturnableClosure(CompletableFuture<byte[]> future) {
             this.future = future;
         }
 
-        public void setResult(CompletableFuture<byte[]> result) {
+        public void setResult(long beginTime, CompletableFuture<byte[]> result) {
             result.whenComplete((res, ex) -> {
                 if (ex == null) {
                     future.complete(res);
                 } else {
                     future.completeExceptionally(ex);
                 }
+                long now = System.nanoTime();
+                raftTimer.record(now - submitTime, TimeUnit.NANOSECONDS);
+                exchangeTimer.record(now - beginTime, TimeUnit.NANOSECONDS);
             });
         }
 

@@ -2,14 +2,17 @@ package com.binance.raftexchange.client.tests.util;
 
 import com.binance.raftexchange.client.grpc.ApiStream;
 import com.binance.raftexchange.client.grpc.ExchangeClient;
+import com.binance.raftexchange.stubs.CoreCurrencySpecification;
 import com.binance.raftexchange.stubs.SymbolType;
 import com.binance.raftexchange.stubs.report.SingleUserReportResult;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
 import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
 import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.ApiNop;
+import com.binance.raftexchange.stubs.request.BatchAddCurrenciesCommand;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
 import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.binance.raftexchange.stubs.CoreSymbolSpecification;
@@ -18,6 +21,7 @@ import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.L2MarketData;
 import com.binance.raftexchange.stubs.response.OrderCommand;
 import com.google.common.collect.Lists;
+import exchange.core2.core.common.TenPowers;
 import io.grpc.stub.StreamObserver;
 import lombok.Builder;
 import lombok.Data;
@@ -56,11 +60,10 @@ import static org.junit.Assert.assertEquals;
 @Slf4j
 public final class ExchangeTestContainer implements AutoCloseable {
 
-    private AtomicLong uniqueIdCounterLong = new AtomicLong();
-    private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
+    private final AtomicLong uniqueIdCounterLong = new AtomicLong();
+    private final AtomicInteger uniqueIdCounterInt = new AtomicInteger();
 
     private final ExchangeClient exchangeClient;
-    private final boolean waitAllResponse; // 是否等待所有rpc响应
 
     @Setter
     private ObjLongConsumer<OrderCommand> consumer = (cmd, seq) -> {
@@ -72,8 +75,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return String.format("%012X", System.currentTimeMillis());
     }
 
-    public static ExchangeTestContainer create(ExchangeClient exchangeClient, boolean waitAllResponse) {
-        return new ExchangeTestContainer(exchangeClient, waitAllResponse);
+    public static ExchangeTestContainer create(ExchangeClient exchangeClient) {
+        return new ExchangeTestContainer(exchangeClient);
     }
 
 
@@ -113,9 +116,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         final CompletableFuture<TestOrdersGenerator.MultiSymbolGenResult> genResult;
     }
 
-    private ExchangeTestContainer(ExchangeClient exchangeClient, boolean waitAllResponse) {
+    private ExchangeTestContainer(ExchangeClient exchangeClient) {
         this.exchangeClient = exchangeClient;
-        this.waitAllResponse = waitAllResponse;
     }
 
     public void initBasicSymbols() {
@@ -149,6 +151,22 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     }
 
+    private void initPerfCurrencies(List<CoreSymbolSpecification> coreSymbolSpecifications) {
+        // init currencies，保证currency精度比交易对size*price精度高
+        coreSymbolSpecifications.forEach(symbol -> {
+            int digit = TenPowers.log10(symbol.getBaseScaleK() * symbol.getQuoteScaleK());
+            addCurrency(symbol.getBaseCurrency(), digit);
+            addCurrency(symbol.getQuoteCurrency(), digit);
+        });
+    }
+
+    public void addCurrency(int id, int digit) {
+        BinaryDataCommand batchAddSymbolsCommand = BinaryDataCommand.newBuilder().setAddCurrencies(
+                BatchAddCurrenciesCommand.newBuilder().putCurrencies(id,
+                        CoreCurrencySpecification.newBuilder().setId(id).setDigit(digit).build())).build();
+        sendBinaryDataCommandSync(batchAddSymbolsCommand, 10_000);
+    }
+
     public void addSymbols(final List<CoreSymbolSpecification> symbols) {
         // split by chunks
         Lists.partition(symbols, 10000).forEach(partition -> {
@@ -158,7 +176,21 @@ public final class ExchangeTestContainer implements AutoCloseable {
         });
     }
 
-    // waitAllResponse=false时用这个，性能好
+    public void initMarkPrice(int symbol, long price) {
+        CompletableFuture<CommandResult> future = new CompletableFuture<>();
+        try (ApiStream apiStream = newApiStream(exchangeClient, future)) {
+            apiStream.onNext(ApiCommand.newBuilder().setAdjustMarkprice(ApiAdjustMarkPrice.newBuilder()
+                    .setTransactionId(getRandomTransactionId())
+                    .setMarkPrice(price)
+                    .setSymbol(symbol)).build());
+            CommandResult result = future.get(10_000, TimeUnit.MILLISECONDS);
+            assertThat(result.getOrderCommand().getResultCode(), Is.is(CommandResultCode.SUCCESS));
+        } catch (final Exception ex) {
+            log.error("Failed sending binary data command", ex);
+            throw new RuntimeException(ex);
+        }
+    }
+
     public static ApiStream newApiStream(ExchangeClient exchangeClient, CompletableFuture<CommandResult> futures) {
         return exchangeClient.createStream(new StreamObserver<CommandResult>() {
 
@@ -198,25 +230,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void sendBinaryDataCommandSync(final BinaryDataCommand data, final int timeOutMs) {
-        if (waitAllResponse) {
-            BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                apiStream.onNext(ApiCommand.newBuilder().setBinaryData(ApiBinaryDataCommand.newBuilder().setData(data)).build());
-                CommandResult result = futures.poll(timeOutMs, TimeUnit.MILLISECONDS);
-                assertThat(result.getResultCode(), Is.is(CommandResultCode.SUCCESS));
-            } catch (final Exception ex) {
-                log.error("Failed sending binary data command", ex);
-                throw new RuntimeException(ex);
-            }
-        } else {
-            CompletableFuture<CommandResult> futures = new CompletableFuture<>();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                apiStream.onNext(ApiCommand.newBuilder().setBinaryData(ApiBinaryDataCommand.newBuilder().setData(data)).build());
-                assertThat(futures.get(timeOutMs, TimeUnit.MILLISECONDS).getResultCode(), Is.is(CommandResultCode.SUCCESS));
-            } catch (final Exception ex) {
-                log.error("Failed sending binary data command", ex);
-                throw new RuntimeException(ex);
-            }
+        CompletableFuture<CommandResult> future = new CompletableFuture<>();
+        try (ApiStream apiStream = newApiStream(exchangeClient, future)) {
+            apiStream.onNext(ApiCommand.newBuilder().setBinaryData(ApiBinaryDataCommand.newBuilder().setData(data)).build());
+            CommandResult result = future.get(timeOutMs, TimeUnit.MILLISECONDS);
+            assertThat(result.getResultCode(), Is.is(CommandResultCode.SUCCESS));
+        } catch (final Exception ex) {
+            log.error("Failed sending binary data command", ex);
+            throw new RuntimeException(ex);
         }
     }
 
@@ -228,7 +249,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return uniqueIdCounterLong.incrementAndGet();
     }
 
-    public final void userAccountsInit(List<BitSet> userCurrencies) {
+    public void userAccountsInit(List<BitSet> userCurrencies) {
 
         // calculate max amount can transfer to each account so that it is not possible to get long overflow
         final Map<Integer, Long> accountsNumPerCurrency = new HashMap<>();
@@ -243,54 +264,35 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     private void createUserAccountsRegular(List<BitSet> userCurrencies, Map<Integer, Long> amountPerAccount) {
         final int numUsers = userCurrencies.size() - 1;
-        if (waitAllResponse) {
-            BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
-            final int BATCH_SIZE = 2000;
-            AtomicInteger reqCount = new AtomicInteger();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                IntStream.rangeClosed(1, numUsers).forEach(uid -> {
-                    int actualUid = TestConstants.UID_AUTOGENERATED_RANGE_START + uid;
-                    apiStream.onNext(ApiCommand.newBuilder().setAddUser(ApiAddUser.newBuilder().setUid(actualUid)).build());
-                    reqCount.getAndIncrement();
-                    userCurrencies.get(uid).stream().forEach(currency -> {
-                        apiStream.onNext(ApiCommand.newBuilder().setAdjustBalance(ApiAdjustUserBalance.newBuilder()
-                                .setUid(actualUid)
-                                .setTransactionId(getRandomTransactionId())
-                                .setAmount(amountPerAccount.get(currency))
-                                .setCurrency(currency)
-                        ).build());
-                        if (reqCount.incrementAndGet() >= BATCH_SIZE) {
-                            try {
-                                waitResult(futures, reqCount.getAndSet(0));
-                            } catch (InterruptedException e) {
-                                throw new RuntimeException(e);
-                            }
-                        }
-                    });
-                });
-                apiStream.onNext(ApiCommand.newBuilder().setNop(ApiNop.newBuilder()).build());
+        BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
+        final int BATCH_SIZE = 2000;
+        AtomicInteger reqCount = new AtomicInteger();
+        try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
+            IntStream.rangeClosed(1, numUsers).forEach(uid -> {
+                int actualUid = TestConstants.UID_AUTOGENERATED_RANGE_START + uid;
+                apiStream.onNext(ApiCommand.newBuilder().setAddUser(ApiAddUser.newBuilder().setUid(actualUid)).build());
                 reqCount.getAndIncrement();
-                waitResult(futures, reqCount.get());
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            CompletableFuture<CommandResult> futures = new CompletableFuture<>();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                IntStream.rangeClosed(1, numUsers).forEach(uid -> {
-                    apiStream.onNext(ApiCommand.newBuilder().setAddUser(ApiAddUser.newBuilder().setUid(uid)).build());
-                    userCurrencies.get(uid).stream().forEach(currency -> apiStream.onNext(ApiCommand.newBuilder().setAdjustBalance(ApiAdjustUserBalance.newBuilder()
-                            .setUid(uid)
+                userCurrencies.get(uid).stream().forEach(currency -> {
+                    apiStream.onNext(ApiCommand.newBuilder().setAdjustBalance(ApiAdjustUserBalance.newBuilder()
+                            .setUid(actualUid)
                             .setTransactionId(getRandomTransactionId())
                             .setAmount(amountPerAccount.get(currency))
                             .setCurrency(currency)
-                    ).build()));
+                    ).build());
+                    if (reqCount.incrementAndGet() >= BATCH_SIZE) {
+                        try {
+                            waitResult(futures, reqCount.getAndSet(0));
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
                 });
-                apiStream.onNext(ApiCommand.newBuilder().setNop(ApiNop.newBuilder()).build());
-                futures.get();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
+            });
+            apiStream.onNext(ApiCommand.newBuilder().setNop(ApiNop.newBuilder()).build());
+            reqCount.getAndIncrement();
+            waitResult(futures, reqCount.get());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -403,30 +405,29 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
     public void loadSymbolsUsersAndPrefillOrdersNoLog(TestDataFutures testDataFutures) {
 
+        final List<CoreSymbolSpecification> coreSymbolSpecifications = testDataFutures.coreSymbolSpecifications.join();
+
+        initPerfCurrencies(coreSymbolSpecifications);
         // load symbols
-        addSymbols(testDataFutures.coreSymbolSpecifications.join());
+        addSymbols(coreSymbolSpecifications);
+
+        // init markPrice
+        coreSymbolSpecifications.forEach(symbol -> {
+            if (symbol.getType() == SymbolType.FUTURES_CONTRACT_PERPETUAL) {
+                initMarkPrice(symbol.getSymbolId(), 100);
+            }
+        });
 
         // create accounts and deposit initial funds
         userAccountsInit(testDataFutures.usersAccounts.join());
 
-        if (waitAllResponse) {
-            BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                List<ApiCommand> apiCommands = testDataFutures.genResult.join().getApiCommandsFill().join();
-                apiCommands.forEach(apiStream::onNext);
-                waitResult(futures, apiCommands.size());
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            CompletableFuture<CommandResult> futures = new CompletableFuture<>();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                List<ApiCommand> apiCommands = testDataFutures.genResult.join().getApiCommandsFill().join();
-                apiCommands.forEach(apiStream::onNext);
-                futures.get();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
+        BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
+        try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
+            List<ApiCommand> apiCommands = testDataFutures.genResult.join().getApiCommandsFill().join();
+            apiCommands.forEach(apiStream::onNext);
+            waitResult(futures, apiCommands.size());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
 
     }
@@ -446,58 +447,63 @@ public final class ExchangeTestContainer implements AutoCloseable {
     public float benchmarkMtps(final TestDataFutures testDataFutures) {
         List<ApiCommand> apiCommandsBenchmark = testDataFutures.getGenResult().join().apiCommandsBenchmark.join();
 
-        long tStart = System.currentTimeMillis();
-        final int BATCH_SIZE = 20000;
-        if (waitAllResponse) {
+        final int BATCH_SIZE = 10000;
 //            int userCount = testDataFutures.getUsersAccounts().join().size();
-            int userCount = 50; //创建太多也不好
-            List<ExchangeClient> clients = IntStream.range(0, userCount).mapToObj(i -> new ExchangeClient("localhost", 5001)).collect(Collectors.toList());
-            List<List<ApiCommand>> groupCmds = Lists.partition(apiCommandsBenchmark, apiCommandsBenchmark.size() / userCount);
-            CountDownLatch countDownLatch = new CountDownLatch(userCount);
+        int userCount = 100; //创建太多也不好
+        List<ExchangeClient> clients = IntStream.range(0, userCount).mapToObj(i -> new ExchangeClient("localhost", 5001)).collect(Collectors.toList());
+        List<List<ApiCommand>> groupCmds = Lists.partition(apiCommandsBenchmark, apiCommandsBenchmark.size() / userCount);
+        CountDownLatch countDownLatch = new CountDownLatch(userCount);
 
-            tStart = System.currentTimeMillis();
+        long tStart = System.currentTimeMillis();
 
-            ExecutorService executor = Executors.newFixedThreadPool(userCount);
+        ExecutorService executor = Executors.newFixedThreadPool(userCount);
 
-            IntStream.range(0, userCount).forEach(i -> {
-                executor.submit(() -> {
-                    BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
-                    ExchangeClient client = clients.get(i);
-                    List<ApiCommand> cmdOnEachClient = groupCmds.get(i);
-                    try (ApiStream apiStream = newApiStream(client, futures)) {
-                        AtomicInteger count = new AtomicInteger();
-                        for (ApiCommand cmd : cmdOnEachClient) {
-                            apiStream.onNext(cmd);
-                            if (count.incrementAndGet() >= BATCH_SIZE) {
-                                waitResult(futures, count.getAndSet(0));
-                            }
-                        }
-                        waitResult(futures, count.get());
-                        countDownLatch.countDown();
-                        client.close();
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
+        IntStream.range(0, userCount).forEach(i -> executor.submit(() -> {
+            BlockingQueue<CommandResult> futures = new LinkedBlockingQueue<>();
+            ExchangeClient client = clients.get(i);
+            List<ApiCommand> cmdOnEachClient = groupCmds.get(i);
+            try (ApiStream apiStream = newApiStream(client, futures)) {
+                AtomicInteger sent = new AtomicInteger();
+                Thread receiver = createReceiver(i, futures, cmdOnEachClient);
+
+                for (ApiCommand cmd : cmdOnEachClient) {
+                    apiStream.onNext(cmd);
+                    sent.incrementAndGet();
+                    if (sent.get() % BATCH_SIZE == 0) {
+                        log.info("Client {} sent {} commands", i, sent.get());
                     }
-                });
-            });
-            try {
-                countDownLatch.await();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            // 只等一个的版本
-            CompletableFuture<CommandResult> futures = new CompletableFuture<>();
-            try (ApiStream apiStream = newApiStream(exchangeClient, futures)) {
-                apiCommandsBenchmark.forEach(apiStream::onNext);
-                futures.get();
+                }
+
+                receiver.join(); // 等结果收完
+                countDownLatch.countDown();
+                client.close();
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
+        }));
+        try {
+            countDownLatch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
 
         final long tDuration = System.currentTimeMillis() - tStart;
         return apiCommandsBenchmark.size() / (float) tDuration / 1000.0f;
+    }
+
+    private static Thread createReceiver(int receiverIdx, BlockingQueue<CommandResult> futures, List<ApiCommand> cmds) {
+        AtomicInteger received = new AtomicInteger();
+        Thread receiver = new Thread(() -> {
+            try {
+                do {
+                    futures.take();
+                } while (received.incrementAndGet() < cmds.size());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "receiver-" + receiverIdx);
+        receiver.start();
+        return receiver;
     }
 
     @Override

@@ -245,7 +245,7 @@ public final class SimpleEventsProcessorTest {
         assertThat(locked.getBalances().getLocked(), Is.is(10L));
         assertThat(locked.getBalances().getFree(), Is.is(0L));
         assertThat(locked.getBalances().getCurrency(), Is.is(10));
-        assertThat(locked.getBalances().getCurrencyScakeK(), Is.is(1000L));
+        assertThat(locked.getBalances().getCurrencyScaleK(), Is.is(1000L));
 
         IFundEventsHandler.FundEventReport unlocked = fundEvents.get(1);
         assertThat(unlocked.getEventType(), Is.is(FundEvent.FundEventType.UNLOCKED));

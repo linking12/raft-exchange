@@ -22,7 +22,7 @@ public class FundEvent {
     public long orderId; // 订单 ID
     public long uid; // 用户 ID
     public int currency; // 变动货币
-    public long currencyScakeK; // currency缩放系数（用于还原金额）
+    public long currencyScaleK; // currency缩放系数（用于还原金额）
     public long free; // 该currency可用余额
     public long locked; // 该currency所有期货仓位的冻结金额（初始保证金+pending部分+pending部分产生的fee）
 
@@ -108,7 +108,7 @@ public class FundEvent {
 
     @Override
     public int hashCode() {
-        return Objects.hash(processed, eventType, orderId, uid, currency, currencyScakeK, free, locked, symbol, baseScaleK,
+        return Objects.hash(processed, eventType, orderId, uid, currency, currencyScaleK, free, locked, symbol, baseScaleK,
                 quoteScaleK, direction, openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize,
                 pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice,
                 marginRatioScaleK, markPrice, nextEvent);
@@ -122,7 +122,7 @@ public class FundEvent {
             return false;
         FundEvent other = (FundEvent)obj;
         return processed == other.processed && eventType == other.eventType && orderId == other.orderId
-            && uid == other.uid && currency == other.currency && currencyScakeK == other.currencyScakeK && free == other.free
+            && uid == other.uid && currency == other.currency && currencyScaleK == other.currencyScaleK && free == other.free
             && locked == other.locked && symbol == other.symbol && baseScaleK == other.baseScaleK && quoteScaleK == other.quoteScaleK
             && direction == other.direction && openVolume == other.openVolume && openInitMarginSum == other.openInitMarginSum
             && openPriceSum == other.openPriceSum && profit == other.profit && pendingSellSize == other.pendingSellSize
@@ -135,7 +135,7 @@ public class FundEvent {
     @Override
     public String toString() {
         return "FundEvent [processed=" + processed + ", eventType=" + eventType + ", orderId=" + orderId + ", uid=" + uid
-            + ", currency=" + currency + ", currencyScakeK=" + currencyScakeK + ", free=" + free + ", locked=" + locked
+            + ", currency=" + currency + ", currencyScaleK=" + currencyScaleK + ", free=" + free + ", locked=" + locked
             + ", symbol=" + symbol + ", baseScaleK=" + baseScaleK + ", quoteScaleK=" + quoteScaleK
             + ", direction=" + direction + ", openVolume=" + openVolume + ", openInitMarginSum=" + openInitMarginSum
             + ", openPriceSum=" + openPriceSum + ", profit=" + profit + ", pendingSellSize=" + pendingSellSize

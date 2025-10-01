@@ -33,6 +33,8 @@ import com.binance.raftexchange.stubs.request.BinaryDataCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.binance.raftexchange.stubs.response.CommandResultCode;
 import io.grpc.stub.StreamObserver;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import lombok.Getter;
 
 import java.time.Duration;
@@ -45,6 +47,8 @@ import static com.binance.raftexchange.client.ExchangeApiHelper.doubleToLong;
 import static com.binance.raftexchange.client.ExchangeApiHelper.getFloorValue;
 
 public class ExchangeApi implements AutoCloseable {
+
+    private static final Timer latencyTimer = Timer.builder("client.latency").publishPercentiles(0.9, 0.99).publishPercentileHistogram().register(Metrics.globalRegistry);
 
     private final ExchangeClient client;
     @Getter
@@ -63,9 +67,11 @@ public class ExchangeApi implements AutoCloseable {
     public CompletableFuture<CommandResultView> sendAsync(ApiCommand cmd) {
         CompletableFuture<CommandResult> f = new CompletableFuture<>();
         ApiStream commandStream = client.createStream(new StreamObserver<CommandResult>() {
+            private final long start = System.nanoTime();
 
             @Override
             public void onNext(CommandResult result) {
+                latencyTimer.record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
                 f.complete(result);
             }
 

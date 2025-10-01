@@ -72,16 +72,16 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         final MatcherTradeEvent first = cmd.matcherEvent;
         // -------- 1) NEW（下单入口） --------
         if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.placeOrder(cmd, seq, spec));
+            tradeEventsHandler.process(SpotExecutionReport.placeOrder(cmd, seq, spec));
         }
         // ------------REJECT（下单拒绝）----------
         if (first != null && first.eventType == MatcherEventType.REJECT) {
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.rejectOrder(cmd, seq, spec));
+            tradeEventsHandler.process(SpotExecutionReport.rejectOrder(cmd, seq, spec));
         }
         // -------- 2) CANCELED（主动撤单/减少） --------
         if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER) && cmd.resultCode == CommandResultCode.SUCCESS
             && first != null && first.eventType == MatcherEventType.REDUCE) {
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.reduceOrder(cmd, seq, spec, first));
+            tradeEventsHandler.process(SpotExecutionReport.reduceOrder(cmd, seq, spec, first));
             return; // 取消类指令处理完毕
         }
         // 没有成交事件直接返回
@@ -92,8 +92,8 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
             if (ev.eventType != MatcherEventType.TRADE)
                 continue;
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeTaker(cmd, seq, spec, ev, tradeIndex));
-            tradeEventsHandler.spotExecutionReport(SpotExecutionReport.tradeMaker(cmd, seq, spec, ev, tradeIndex));
+            tradeEventsHandler.process(SpotExecutionReport.tradeTaker(cmd, seq, spec, ev, tradeIndex));
+            tradeEventsHandler.process(SpotExecutionReport.tradeMaker(cmd, seq, spec, ev, tradeIndex));
             tradeIndex++;
         }
     }
@@ -102,14 +102,14 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         final MatcherTradeEvent first = cmd.matcherEvent;
         UserProfile userProfile = userProfileServices.get(shardIdOfUid(cmd.uid)).getUserProfile(cmd.uid);
         if (cmd.command == OrderCommandType.PLACE_ORDER && cmd.resultCode == CommandResultCode.SUCCESS) {
-            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.placeOrder(cmd, seq, spec, userProfile));
+            tradeEventsHandler.process(FuturesExecutionReport.placeOrder(cmd, seq, spec, userProfile));
         }
         if (first != null && first.eventType == MatcherEventType.REJECT) {
-            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.rejectOrder(cmd, seq, spec, userProfile));
+            tradeEventsHandler.process(FuturesExecutionReport.rejectOrder(cmd, seq, spec, userProfile));
         }
         if ((cmd.command == OrderCommandType.CANCEL_ORDER || cmd.command == OrderCommandType.REDUCE_ORDER) && cmd.resultCode == CommandResultCode.SUCCESS
             && first != null && first.eventType == MatcherEventType.REDUCE) {
-            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.reduceOrder(cmd, seq, spec, userProfile, first));
+            tradeEventsHandler.process(FuturesExecutionReport.reduceOrder(cmd, seq, spec, userProfile, first));
             return;
         }
         // 没有成交事件直接返回
@@ -120,9 +120,9 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         for (MatcherTradeEvent ev = first; ev != null; ev = ev.nextEvent) {
             if (ev.eventType != MatcherEventType.TRADE)
                 continue;
-            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeTaker(cmd, seq, spec, userProfile, ev, tradeIndex));
+            tradeEventsHandler.process(FuturesExecutionReport.tradeTaker(cmd, seq, spec, userProfile, ev, tradeIndex));
             UserProfile makerProfile = userProfileServices.get(shardIdOfUid(ev.matchedOrderUid)).getUserProfile(ev.matchedOrderUid);
-            tradeEventsHandler.futuresExecutionReport(FuturesExecutionReport.tradeMaker(cmd, seq, spec, makerProfile, ev, tradeIndex));
+            tradeEventsHandler.process(FuturesExecutionReport.tradeMaker(cmd, seq, spec, makerProfile, ev, tradeIndex));
             tradeIndex++;
         }
     }
@@ -150,7 +150,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             if (!event.processed) {
                 event.processed = true;
                 long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, false);
-                fundEventsHandler.fundEventReport(FundEventReport.fromFundEvent(event, uniId));
+                fundEventsHandler.process(FundEventReport.fromFundEvent(event, uniId));
             }
             event = event.nextEvent;
             index++;
@@ -162,7 +162,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
                     if (!e.processed) {
                         e.processed = true;
                         long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, true);
-                        fundEventsHandler.fundEventReport(FundEventReport.fromFundEvent(e, uniId));
+                        fundEventsHandler.process(FundEventReport.fromFundEvent(e, uniId));
                     }
                     e = e.nextEvent;
                 }

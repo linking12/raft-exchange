@@ -2,15 +2,17 @@ package com.binance.raftexchange.server.grpc;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.Duration;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +34,9 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     private static final Counter serverQPS = Metrics.counter("raft.exchange.grpc.server.counter");
+    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      * 
@@ -41,7 +46,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
-    protected final ExecutorService offloadWorker;
 
     protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
 
@@ -51,11 +55,10 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private final AtomicInteger inflight = new AtomicInteger(0);
 
-    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ExecutorService offloadWorker, ServerCall.Listener<ReqT> delegate,
+    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate,
         ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
-        this.offloadWorker = offloadWorker;
         this.call = call;
         this.halfClose = new AtomicBoolean(false);
     }
@@ -70,29 +73,35 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     public void onMessage(ReqT message) {
         serverQPS.increment();
         try (InputStream stream = (InputStream)message) {
+            long start = System.nanoTime();
             /**
              * @formatter off
              */
             @SuppressWarnings("unchecked")
-            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
-                commandOnTheWay.remove(message);
-                if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
-                    maybeRequestMore();
+            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenComplete((result, err) -> {
+                try {
+                    commandOnTheWay.remove(message);
+                    if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
+                        maybeRequestMore();
+                    }
+                    if (call.isCancelled() || halfClose.get()) {
+                        cancelAll();
+                        return;
+                    }
+                    if (result != null) {
+                        call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
+                        return;
+                    }
+                    if (err instanceof CancellationException) {
+                        return;
+                    }
+                    LOGGER.error("exchange core error!", err);
+                    call.close(Status.INTERNAL.withCause(err), new Metadata());
+                } finally {
+                    long latency = System.nanoTime() - start;
+                    latencyTimer.record(latency, TimeUnit.NANOSECONDS);
                 }
-                if (call.isCancelled() || halfClose.get()) {
-                    cancelAll();
-                    return;
-                }
-                if (result != null) {
-                    call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
-                    return;
-                }
-                if (err instanceof CancellationException) {
-                    return;
-                }
-                LOGGER.error("exchange core error!", err);
-                call.close(Status.INTERNAL.withCause(err), new Metadata());
-            }, offloadWorker);
+            });
             /**
              * @formatter on
              */
