@@ -47,7 +47,9 @@ public final class StateHashReportResult implements ReportResult {
 
     public static StateHashReportResult merge(final Stream<BytesIn> pieces) {
 
-        return pieces.map(StateHashReportResult::new)
+        return pieces
+                .sequential() // 强制串行流，不用ForkJoinPool
+                .map(StateHashReportResult::new)
                 .reduce(EMPTY, (r1, r2) -> {
                     SortedMap<SubmoduleKey, Integer> hashcodes = new TreeMap<>(r1.hashCodes);
                     hashcodes.putAll(r2.hashCodes);
