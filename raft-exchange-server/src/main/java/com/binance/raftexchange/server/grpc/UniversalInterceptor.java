@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Timer;
+import io.netty.util.internal.ThreadExecutorMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +48,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
+    protected final Executor offloadWorker;
 
     protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
 
@@ -59,6 +62,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
+        this.offloadWorker = ThreadExecutorMap.currentExecutor();
         this.call = call;
         this.halfClose = new AtomicBoolean(false);
     }
@@ -78,7 +82,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
              * @formatter off
              */
             @SuppressWarnings("unchecked")
-            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenComplete((result, err) -> {
+            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
                 try {
                     commandOnTheWay.remove(message);
                     if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
@@ -101,7 +105,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                     long latency = System.nanoTime() - start;
                     latencyTimer.record(latency, TimeUnit.NANOSECONDS);
                 }
-            });
+            }, offloadWorker);
             /**
              * @formatter on
              */

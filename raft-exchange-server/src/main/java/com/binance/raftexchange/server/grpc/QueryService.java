@@ -1,7 +1,9 @@
 package com.binance.raftexchange.server.grpc;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
+import io.netty.util.internal.ThreadExecutorMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,9 +26,11 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryService.class);
 
     private final RaftClusterContainer raftClusterContainer;
+    protected final Executor offloadWorker;
 
     public QueryService(RaftClusterContainer raftClusterContainer) {
         this.raftClusterContainer = raftClusterContainer;
+        this.offloadWorker = ThreadExecutorMap.currentExecutor();
     }
 
     @Override
@@ -58,7 +62,7 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
 
     private <Request, Response> void searchTemplate(Request request, StreamObserver<Response> responseObserver,
         ThrowableFunction<Request, CompletableFuture<Response>> asyncOp) {
-        raftClusterContainer.readFromQuorum().thenCompose((_index) -> asyncOp.toFunction().apply(request)).whenComplete((result, t) -> {
+        raftClusterContainer.readFromQuorum().thenCompose((_index) -> asyncOp.toFunction().apply(request)).whenCompleteAsync((result, t) -> {
             if (t != null) {
                 LOGGER.warn("searchTemplate fail!", t);
                 responseObserver.onError(t);
@@ -66,7 +70,7 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
                 responseObserver.onNext(result);
                 responseObserver.onCompleted();
             }
-        });
+        }, offloadWorker);
 
     }
 }
