@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -50,8 +49,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     protected final RaftClusterContainer raftClusterContainer;
     protected final Executor offloadWorker;
 
-    protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
-
     private final AtomicBoolean halfClose;
 
     private final int READ_TYPE_COMMAND_NUMBER = ApiCommand.ORDER_BOOK_REQUEST_FIELD_NUMBER;
@@ -75,21 +72,18 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onMessage(ReqT message) {
-        serverQPS.increment();
         try (InputStream stream = (InputStream)message) {
             long start = System.nanoTime();
             /**
              * @formatter off
              */
-            @SuppressWarnings("unchecked")
-            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenCompleteAsync((result, err) -> {
+            handle(readAll(stream)).whenCompleteAsync((result, err) -> {
+                serverQPS.increment();
                 try {
-                    commandOnTheWay.remove(message);
                     if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
                         maybeRequestMore();
                     }
                     if (call.isCancelled() || halfClose.get()) {
-                        cancelAll();
                         return;
                     }
                     if (result != null) {
@@ -109,11 +103,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter on
              */
-            // 某些情况下实际上并不是异步操作 所以上面会立刻执行回调然后才到这里
-            // 比如说no leader这种
-            if (!complete.isDone()) {
-                commandOnTheWay.put(message, complete);
-            }
         } catch (Exception e) {
             // 不应该到这里
             throw new RuntimeException(e);
@@ -145,19 +134,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onHalfClose() {
-        // grpc stream是保序的
-        if (commandOnTheWay.isEmpty()) {
-            cancelAll();
-        } else {
-            halfClose.set(true);
-        }
-    }
-
-    private void cancelAll() {
-        for (CompletableFuture<byte[]> future : commandOnTheWay.values()) {
-            future.cancel(false);
-        }
-        call.close(Status.OK, new Metadata());
+        halfClose.set(true);
     }
 
     /**
