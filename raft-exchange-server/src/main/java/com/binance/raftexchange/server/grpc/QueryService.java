@@ -1,7 +1,6 @@
 package com.binance.raftexchange.server.grpc;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 
 import io.netty.util.internal.ThreadExecutorMap;
 import org.slf4j.Logger;
@@ -26,11 +25,9 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryService.class);
 
     private final RaftClusterContainer raftClusterContainer;
-    protected final Executor offloadWorker;
 
     public QueryService(RaftClusterContainer raftClusterContainer) {
         this.raftClusterContainer = raftClusterContainer;
-        this.offloadWorker = ThreadExecutorMap.currentExecutor();
     }
 
     @Override
@@ -70,7 +67,7 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
                 responseObserver.onNext(result);
                 responseObserver.onCompleted();
             }
-        }, offloadWorker);
+        }, ThreadExecutorMap.currentExecutor());
 
     }
 }
