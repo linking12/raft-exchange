@@ -9,6 +9,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
@@ -40,7 +41,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             .publishPercentileHistogram(false).register(Metrics.globalRegistry);
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
-     * 
+     *
      * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
      */
     private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "4096"));
@@ -77,35 +78,45 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter off
              */
-            handle(readAll(stream)).whenCompleteAsync((result, err) -> {
-                serverQPS.increment();
-                try {
-                    if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
-                        maybeRequestMore();
-                    }
-                    if (call.isCancelled() || halfClose.get()) {
-                        return;
-                    }
-                    if (result != null) {
-                        call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
-                        return;
-                    }
-                    if (err instanceof CancellationException) {
-                        return;
-                    }
-                    LOGGER.error("exchange core error!", err);
-                    call.close(Status.INTERNAL.withCause(err), new Metadata());
-                } finally {
-                    long latency = System.nanoTime() - start;
-                    latencyTimer.record(latency, TimeUnit.NANOSECONDS);
-                }
-            }, offloadWorker);
+            handle(readAll(stream)).whenCompleteAsync(new TimedHandler(this, start), offloadWorker);
             /**
              * @formatter on
              */
         } catch (Exception e) {
             // 不应该到这里
             throw new RuntimeException(e);
+        }
+    }
+
+    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<byte[], Throwable> {
+
+        @Override
+        public void accept(byte[] result, Throwable err) {
+            parent.handleComplete(result, start, err);
+        }
+    }
+
+    private void handleComplete(byte[] result, long start, Throwable err) {
+        serverQPS.increment();
+        try {
+            if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
+                maybeRequestMore();
+            }
+            if (call.isCancelled() || halfClose.get()) {
+                return;
+            }
+            if (result != null) {
+                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
+                return;
+            }
+            if (err instanceof CancellationException) {
+                return;
+            }
+            LOGGER.error("exchange core error!", err);
+            call.close(Status.INTERNAL.withCause(err), new Metadata());
+        } finally {
+            long latency = System.nanoTime() - start;
+            latencyTimer.record(latency, TimeUnit.NANOSECONDS);
         }
     }
 
@@ -139,7 +150,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     /**
      * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换 这样可以节约一次序列化和反序列化开销 grpc直通exchange-core
-     * 
+     *
      * @param apiCommand
      * @return
      */
