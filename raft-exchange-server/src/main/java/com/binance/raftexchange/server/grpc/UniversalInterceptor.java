@@ -44,7 +44,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
      *
      * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
      */
-    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "4096"));
+    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "32"));
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
@@ -73,6 +73,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onMessage(ReqT message) {
+        serverQPS.increment();
         try (InputStream stream = (InputStream)message) {
             long start = System.nanoTime();
             /**
@@ -97,7 +98,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     private void handleComplete(byte[] result, long start, Throwable err) {
-        serverQPS.increment();
         try {
             if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
                 maybeRequestMore();
