@@ -467,6 +467,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
             }
+            case RESET_FEE: {
+                fees.forEachKeyValue((currency, amount) -> {
+                    fees.addToValue(currency, -amount);
+                    adjustments.addToValue(currency, +amount);
+                    eventsHelper.sendResetFeeEvent(cmd, currency, amount);
+                });
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
+            }
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
                 binaryCommandsProcessor.acceptBinaryFrame(cmd); // ignore return result, because it should be set by MatchingEngineRouter

@@ -133,6 +133,9 @@ message ApiSettlePNL {
   int64 settlePrice = 3;
 }
 
+message ApiResetFee {
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -155,6 +158,7 @@ message ApiCommand {
     ApiAdjustMarkPrice adjust_markprice = 17;
     ApiSettleFundingFees settle_funding_fees = 18;
     ApiSettlePNL settle_pnl = 19;
+    ApiResetFee reset_fee = 20;
   }
 }
 

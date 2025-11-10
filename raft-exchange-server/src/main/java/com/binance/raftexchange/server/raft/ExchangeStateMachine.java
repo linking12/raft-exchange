@@ -19,6 +19,7 @@ import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
+import com.binance.raftexchange.server.exchange.SyncTradeMiscApiController;
 import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
 import com.binance.raftexchange.server.raft.RaftClusterContainer.ReturnableClosure;
 import com.binance.raftexchange.server.util.SerializeHelper;
@@ -116,6 +117,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                     break;
                 case SETTLE_PNL:
                     result = SyncAdminApiSymbolsController.settlePNL(apiCommand);
+                    break;
+                case RESET_FEE:
+                    result = SyncTradeMiscApiController.resetFee(apiCommand);
                     break;
                 case NOP:
                     LOG.info("NOP Command received, no action taken.");

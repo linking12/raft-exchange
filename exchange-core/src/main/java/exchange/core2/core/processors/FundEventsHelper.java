@@ -215,6 +215,12 @@ public class FundEventsHelper {
         return event;
     }
 
+    public FundEvent sendResetFeeEvent(OrderCommand cmd, int currency, long amount) {
+        FundEvent event = buildSpotEvent(0, 0, FundEventType.RESET_FEE, currency, amount, 0);
+        addFundEvent(cmd, cmd.orderId, event);
+        return event;
+    }
+
     private void addFundEvent(OrderCommand cmd, long orderId, FundEvent event) {
         if (orderId == cmd.orderId) {
             if (cmd.takerFundEvents == null) {

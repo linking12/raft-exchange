@@ -135,6 +135,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees)cmd);
         } else if (cmd instanceof ApiSettlePNL) {
             ringBuffer.publishEvent(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL)cmd);
+        } else if (cmd instanceof ApiResetFee) {
+            ringBuffer.publishEvent(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
         } else if (cmd instanceof ApiReset) {
             ringBuffer.publishEvent(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -192,6 +194,8 @@ public final class ExchangeApi {
             return submitCommandAsync(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees)cmd);
         } else if (cmd instanceof ApiSettlePNL) {
             return submitCommandAsync(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL)cmd);
+        } else if (cmd instanceof ApiResetFee) {
+            return submitCommandAsync(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataAsync(((ApiBinaryDataCommand)cmd).data);
         } else if (cmd instanceof ApiPersistState) {
@@ -245,6 +249,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(SETTLE_FUNDINGFEES_TRANSLATOR, (ApiSettleFundingFees)cmd);
         } else if (cmd instanceof ApiSettlePNL) {
             return submitCommandAsyncFullResponse(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL)cmd);
+        } else if (cmd instanceof ApiResetFee) {
+            return submitCommandAsyncFullResponse(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             return submitBinaryDataCommandAsync(((ApiBinaryDataCommand)cmd).data);
         } else if (cmd instanceof ApiReset) {
@@ -629,6 +635,12 @@ public final class ExchangeApi {
         cmd.orderId = api.transactionId;
         cmd.symbol = api.symbol;
         cmd.price = api.settlePrice;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiResetFee> RESET_FEE_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.RESET_FEE;
+        cmd.timestamp = api.timestamp;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

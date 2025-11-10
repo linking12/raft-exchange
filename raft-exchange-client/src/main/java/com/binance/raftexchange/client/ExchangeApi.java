@@ -20,6 +20,7 @@ import com.binance.raftexchange.stubs.request.ApiBinaryDataCommand;
 import com.binance.raftexchange.stubs.request.ApiCancelOrder;
 import com.binance.raftexchange.stubs.request.ApiClosePosition;
 import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiFeeReset;
 import com.binance.raftexchange.stubs.request.ApiMoveOrder;
 import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
 import com.binance.raftexchange.stubs.request.ApiReduceOrder;
@@ -501,6 +502,25 @@ public class ExchangeApi implements AutoCloseable {
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
                 .setSettlePnl(ApiSettlePNL.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
                         .setSymbol(symbol).setSettlePrice(scaledPrice)).build();
+    }
+
+    public CommandResultView resetFee() {
+        return send(buildFeeResetCommand());
+    }
+
+    public CompletableFuture<CommandResultView> resetFeeAsync() {
+        final ApiCommand cmd;
+        try {
+            cmd = buildFeeResetCommand();
+        } catch (Exception ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
+        return sendAsync(cmd);
+    }
+
+    public ApiCommand buildFeeResetCommand() {
+        return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
+                .setFeeReset(ApiFeeReset.newBuilder()).build();
     }
 
     // ———————— 只读查询接口  ————————
