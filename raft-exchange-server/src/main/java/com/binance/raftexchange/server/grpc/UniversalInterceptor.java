@@ -5,14 +5,16 @@ import java.io.InputStream;
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Timer;
+import io.netty.util.internal.ThreadExecutorMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,15 +41,14 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             .publishPercentileHistogram(false).register(Metrics.globalRegistry);
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
-     * 
+     *
      * @see com.alipay.sofa.jraft.option.RaftOptions#disruptorBufferSize
      */
-    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "4096"));
+    private static final int WINDOW_SIZE = Integer.parseInt(System.getProperty("raft-exchange.grpc.windowSize", "32"));
 
     protected final ServerCall<ReqT, RespT> call;
     protected final RaftClusterContainer raftClusterContainer;
-
-    protected final ConcurrentHashMap<ReqT, CompletableFuture<byte[]>> commandOnTheWay = new ConcurrentHashMap<>();
+    protected final Executor offloadWorker;
 
     private final AtomicBoolean halfClose;
 
@@ -59,6 +60,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
+        this.offloadWorker = ThreadExecutorMap.currentExecutor();
         this.call = call;
         this.halfClose = new AtomicBoolean(false);
     }
@@ -77,42 +79,44 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
             /**
              * @formatter off
              */
-            @SuppressWarnings("unchecked")
-            CompletableFuture<byte[]> complete = handle(readAll(stream)).whenComplete((result, err) -> {
-                try {
-                    commandOnTheWay.remove(message);
-                    if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
-                        maybeRequestMore();
-                    }
-                    if (call.isCancelled() || halfClose.get()) {
-                        cancelAll();
-                        return;
-                    }
-                    if (result != null) {
-                        call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
-                        return;
-                    }
-                    if (err instanceof CancellationException) {
-                        return;
-                    }
-                    LOGGER.error("exchange core error!", err);
-                    call.close(Status.INTERNAL.withCause(err), new Metadata());
-                } finally {
-                    long latency = System.nanoTime() - start;
-                    latencyTimer.record(latency, TimeUnit.NANOSECONDS);
-                }
-            });
+            handle(readAll(stream)).whenCompleteAsync(new TimedHandler(this, start), offloadWorker);
             /**
              * @formatter on
              */
-            // 某些情况下实际上并不是异步操作 所以上面会立刻执行回调然后才到这里
-            // 比如说no leader这种
-            if (!complete.isDone()) {
-                commandOnTheWay.put(message, complete);
-            }
         } catch (Exception e) {
             // 不应该到这里
             throw new RuntimeException(e);
+        }
+    }
+
+    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<byte[], Throwable> {
+
+        @Override
+        public void accept(byte[] result, Throwable err) {
+            parent.handleComplete(result, start, err);
+        }
+    }
+
+    private void handleComplete(byte[] result, long start, Throwable err) {
+        try {
+            if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
+                maybeRequestMore();
+            }
+            if (call.isCancelled() || halfClose.get()) {
+                return;
+            }
+            if (result != null) {
+                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
+                return;
+            }
+            if (err instanceof CancellationException) {
+                return;
+            }
+            LOGGER.error("exchange core error!", err);
+            call.close(Status.INTERNAL.withCause(err), new Metadata());
+        } finally {
+            long latency = System.nanoTime() - start;
+            latencyTimer.record(latency, TimeUnit.NANOSECONDS);
         }
     }
 
@@ -141,24 +145,12 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onHalfClose() {
-        // grpc stream是保序的
-        if (commandOnTheWay.isEmpty()) {
-            cancelAll();
-        } else {
-            halfClose.set(true);
-        }
-    }
-
-    private void cancelAll() {
-        for (CompletableFuture<byte[]> future : commandOnTheWay.values()) {
-            future.cancel(false);
-        }
-        call.close(Status.OK, new Metadata());
+        halfClose.set(true);
     }
 
     /**
      * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换 这样可以节约一次序列化和反序列化开销 grpc直通exchange-core
-     * 
+     *
      * @param apiCommand
      * @return
      */

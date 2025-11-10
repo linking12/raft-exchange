@@ -94,6 +94,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
 
     public static TotalCurrencyBalanceReportResult merge(final Stream<BytesIn> pieces) {
         return pieces
+                .sequential() // 强制串行流，不用ForkJoinPool
                 .map(TotalCurrencyBalanceReportResult::new)
                 .reduce(
                         TotalCurrencyBalanceReportResult.createEmpty(),
