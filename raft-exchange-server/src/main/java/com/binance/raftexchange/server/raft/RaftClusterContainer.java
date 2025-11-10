@@ -66,6 +66,11 @@ public class RaftClusterContainer {
         RaftOptions raftOptions = new RaftOptions();
         raftOptions.setDisruptorBufferSize(8 * 1024 * 1024); // 撮合5MT/s，buffer给到8M条，每条log(用户数据[ApiCommand]+元数据[idx term
                                                              // type])大概是128字节，大约1G内存
+        raftOptions.setReadOnlyOptions(ReadOnlyOption.ReadOnlySafe); // 先使用最保守的readIndex优化
+        raftOptions.setApplyBatch(128); // 逻辑聚合，默认32
+        raftOptions.setMaxAppendBufferSize(256 * 1024); // 物理聚合，默认256k。我们的指令比较小，128的ApplyBatch配256k比较好。
+        raftOptions.setSync(false); // 多副本模式下，log已经广播确认了，不需要同步落盘。只有所有节点都断电才会丢失log。
+        raftOptions.setOpenStatistics(false); // 关闭 rocksdb statistics，这个要用Kill -s SIGUSR2才能触发。
         raftOptions.setReadOnlyOptions(ReadOnlyOption.ReadOnlyLeaseBased);
         nodeOptions.setRaftOptions(raftOptions);
         nodeOptions.setInitialConf(conf);

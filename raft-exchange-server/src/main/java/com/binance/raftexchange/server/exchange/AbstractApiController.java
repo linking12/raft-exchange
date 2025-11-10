@@ -23,6 +23,7 @@ public abstract class AbstractApiController {
             return callExchange((ApiPersistState)apiCommand);
         }
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        // 这里序列化不offload反而性能更好
         return api.submitCommandAsyncFullResponse(apiCommand).thenApply(SerializeHelper::serializeToCommandResult);
     }
 

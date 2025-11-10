@@ -39,6 +39,7 @@ public class SymbolCurrencyReportResult implements ReportResult {
 
     public static SymbolCurrencyReportResult merge(final Stream<BytesIn> pieces) {
         return pieces
+                .sequential() // 强制串行流，不用ForkJoinPool
                 .map(SymbolCurrencyReportResult::new)
                 .reduce(
                         SymbolCurrencyReportResult.createEmpty(),
