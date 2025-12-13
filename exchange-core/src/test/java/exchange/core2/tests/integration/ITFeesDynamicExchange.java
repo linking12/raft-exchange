@@ -19,6 +19,7 @@ import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiCancelOrder;
+import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -215,6 +216,10 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            container.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+            assertThat(container.totalBalanceReport().getFees().get(CURRENECY_LTC), is(0L));
+            assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
         }
 
     }
