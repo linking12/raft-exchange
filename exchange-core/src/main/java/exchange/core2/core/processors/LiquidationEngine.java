@@ -3,8 +3,6 @@ package exchange.core2.core.processors;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -32,6 +30,7 @@ import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.support.SimpleScheduledService;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -40,10 +39,7 @@ import lombok.extern.slf4j.Slf4j;
  * Liquidation Engine for checking user profiles and triggering liquidations.
  */
 @Slf4j
-public final class LiquidationEngine {
-    private final AffinityThreadFactory threadFactory =
-        new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-");
-    private final long scanIntervalSec = Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2"));
+public final class LiquidationEngine extends SimpleScheduledService {
     private final int shardId;
     private final FundEventsHelper eventsHelper;
     @Setter
@@ -52,9 +48,10 @@ public final class LiquidationEngine {
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
-    private ScheduledExecutorService scheduler;
 
     public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
+        super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
+            new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-"));
         this.shardId = shardId;
         this.eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
     }
@@ -71,38 +68,14 @@ public final class LiquidationEngine {
         eventsHelper.setLastPriceCache(lastPriceCache);
     }
 
-    public void start() {
-        if (scheduler != null) {
-            return;
-        }
-        scheduler = Executors.newSingleThreadScheduledExecutor(threadFactory);
-        scheduler.scheduleWithFixedDelay(() -> {
-            log.debug("Checking liquidation for shard {}", shardId);
-            try {
-                checkLiquidations();
-            } catch (Throwable e) {
-                log.error("Error during liquidation check for shard {}", shardId, e);
-            }
-        }, scanIntervalSec, scanIntervalSec, TimeUnit.SECONDS);
-    }
-
-    public void stop() {
-        stop(1, TimeUnit.MINUTES);
-    }
-
-    public void stop(long timeout, TimeUnit timeUnit) {
-        if (scheduler == null) {
-            return;
-        }
-        scheduler.shutdown();
+    @Override
+    protected void runOneIteration() throws Exception {
+        log.debug("Checking liquidation for shard {}", shardId);
         try {
-            if (!scheduler.awaitTermination(timeout, timeUnit)) {
-                scheduler.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            scheduler.shutdownNow();
+            checkLiquidations();
+        } catch (Throwable e) {
+            log.error("Error during liquidation check for shard {}", shardId, e);
         }
-        scheduler = null;
     }
 
     public void triggerOnce() {

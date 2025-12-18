@@ -110,7 +110,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
 
         riskEngine.getUserProfileService().getUserProfiles().forEach(userProfile -> {
             userProfile.accounts.forEachKeyValue(currencyBalance::addToValue);
-            userProfile.positions.forEachKeyValue((symbolId, positionRecord) -> {
+            userProfile.positions.forEachValue(positionRecord -> {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(positionRecord.symbol);
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(positionRecord.currency);
                 final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(positionRecord.symbol, RiskEngine.LastPriceCacheRecord.dummy);
