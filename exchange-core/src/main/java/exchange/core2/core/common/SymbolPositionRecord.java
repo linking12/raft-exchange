@@ -169,6 +169,33 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
 
     /**
+     * 计算破产价格
+     */
+    public long calculateBankruptcyPrice(CoreSymbolSpecification spec) {
+        long totalMargin = openInitMarginSum + extraMargin;
+        long liquidationFee = 0; // 暂时先不考虑强平费
+        long maxLoss = totalMargin - liquidationFee;
+        int sign = direction.getMultiplier();
+        if (spec.isFixedFee()) {
+            /**
+             * 固定手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerFee
+             * bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee - takerFee) / openVolume
+             */
+            maxLoss -= spec.takerFee * openVolume;
+            return CoreArithmeticUtils.ceilDivide(openPriceSum - sign * maxLoss, openVolume);
+        } else {
+            /**
+             * 动态手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerRate ×
+             * bankruptcyPrice × openVolume bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee) /
+             * (openVolume * (1 - takerFee / feeScaleK)) = (openPriceSum - sign * maxLoss) * feeScaleK / (openVolume *
+             * feeScaleK - openVolume * takerFee)
+             */
+            return CoreArithmeticUtils.ceilDivide((openPriceSum - sign * maxLoss) * spec.feeScaleK,
+                    openVolume * (spec.feeScaleK - spec.takerFee));
+        }
+    }
+
+    /**
      * 计算强平价格，基于标记价格。
      * 强平触发条件为：账户权益 == 维持保证金
      * 逐仓：

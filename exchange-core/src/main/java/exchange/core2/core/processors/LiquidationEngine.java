@@ -248,7 +248,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 // 如果按市价单强平失败，再按照破产价强平
                 long remainSize = firstEvent.size;
                 long bankruptcyOrderId = generateLiquidationOrderId(position.symbol, position.uid);
-                long bankruptcyPrice = calculateBankruptcyPrice(position, spec);
+                long bankruptcyPrice = position.calculateBankruptcyPrice(spec);
                 exchangeApi.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.FOK_BUDGET).symbol(position.symbol)
                     .orderId(bankruptcyOrderId).uid(position.uid).price(bankruptcyPrice * remainSize).size(remainSize).action(action).build())
                     .whenCompleteAsync((cmd2, err2) -> {
@@ -258,7 +258,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                              *
                              * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchFokBudget
                              */
-                            handleLiquidationFailure(position, cmd2.matcherEvent.size);
+                            handleLiquidationFailure(position, cmd2.matcherEvent.size, bankruptcyPrice);
                         }
                     });
                 FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position);
