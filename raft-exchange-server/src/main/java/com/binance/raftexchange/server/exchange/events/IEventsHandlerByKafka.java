@@ -171,7 +171,7 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             LOG.debug("PositionOutReportPB: {}", formateString);
         }
         byte[] pbData = pbObject.toByteArray();
-        if (fundEventReport.getEventType().getCode() >= FundEvent.FundEventType.MARGIN_ALERT.getCode()) {
+        if (fundEventReport.getEventType() == FundEvent.FundEventType.MARGIN_ALERT || fundEventReport.getEventType() == FundEvent.FundEventType.LIQUIDATION_ALERT) {
             producers.get(TopicGroup.OTHER).send(new ProducerRecord<>(topics.get(TopicGroup.OTHER), fundEventReport.getAccountId(), pbData));
         } else {
             producers.get(TopicGroup.FUND).send(new ProducerRecord<>(topics.get(TopicGroup.FUND), fundEventReport.getAccountId(), pbData));
