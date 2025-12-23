@@ -256,34 +256,7 @@ public class FundEventsHelper {
             }
             final FundEvent event = eventsChainHead;
             eventsChainHead = eventsChainHead.nextEvent;
-            event.nextEvent = null; // 断掉链表，借出的对象应该和下面new的对象等价
-            event.processed = false;
-            event.eventType = null;
-            event.orderId = 0;
-            event.uid = 0;
-            event.currency = 0;
-            event.currencyScaleK = 0;
-            event.free = 0;
-            event.locked = 0;
-            event.symbol = 0;
-            event.baseScaleK = 0;
-            event.quoteScaleK = 0;
-            event.direction = PositionDirection.EMPTY;
-            event.openVolume = 0;
-            event.openInitMarginSum = 0;
-            event.openPriceSum = 0;
-            event.profit = 0;
-            event.pendingSellSize = 0;
-            event.pendingBuySize = 0;
-            event.pendingSellAvgPrice = 0;
-            event.pendingBuyAvgPrice = 0;
-            event.leverage = 0;
-            event.marginMode = MarginMode.ISOLATED;
-            event.extraMargin = 0;
-            event.unrealizedProfit = 0;
-            event.liquidationPrice = 0;
-            event.marginRatioScaleK = 0;
-            event.markPrice = 0;
+            event.reset(); // 会断掉链表，借出的对象应该和下面new的对象等价
             return event;
         } else {
             return new FundEvent();

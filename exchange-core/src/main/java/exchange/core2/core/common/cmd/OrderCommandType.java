@@ -47,6 +47,8 @@ public enum OrderCommandType {
 
     SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
 
+    AUTO_DELEVERAGING((byte) 41, true),
+
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
 

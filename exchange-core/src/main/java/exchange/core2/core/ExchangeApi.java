@@ -143,6 +143,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(NOP_TRANSLATOR, (ApiNop)cmd);
         } else if (cmd instanceof ApiSystemLiquidationNotify) {
             ringBuffer.publishEvent(SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR, (ApiSystemLiquidationNotify)cmd);
+        } else if (cmd instanceof ApiAutoDeleveraging) {
+            ringBuffer.publishEvent(ADL_TRANSLATOR, (ApiAutoDeleveraging)cmd);
         } else if (cmd instanceof ApiBinaryDataCommand) {
             publishBinaryData((ApiBinaryDataCommand)cmd, seq -> {
             });
@@ -208,6 +210,8 @@ public final class ExchangeApi {
             return submitCommandAsync(NOP_TRANSLATOR, (ApiNop)cmd);
         } else if (cmd instanceof ApiSystemLiquidationNotify) {
             return submitCommandAsync(SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR, (ApiSystemLiquidationNotify)cmd);
+        } else if (cmd instanceof ApiAutoDeleveraging) {
+            return submitCommandAsync(ADL_TRANSLATOR, (ApiAutoDeleveraging)cmd);
         } else {
             throw new IllegalArgumentException("Unsupported command type: " + cmd.getClass().getSimpleName());
         }
@@ -259,6 +263,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(NOP_TRANSLATOR, (ApiNop)cmd);
         } else if (cmd instanceof ApiSystemLiquidationNotify) {
             return submitCommandAsyncFullResponse(SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR, (ApiSystemLiquidationNotify)cmd);
+        } else if (cmd instanceof ApiAutoDeleveraging) {
+            return submitCommandAsyncFullResponse(ADL_TRANSLATOR, (ApiAutoDeleveraging)cmd);
         } else {
             throw new IllegalArgumentException("Unsupported command type: " + cmd.getClass().getSimpleName());
         }
@@ -743,6 +749,18 @@ public final class ExchangeApi {
         cmd.command = OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY;
         cmd.timestamp = api.timestamp;
         cmd.takerFundEvents = api.fundEvent;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
+    private static final EventTranslatorOneArg<OrderCommand, ApiAutoDeleveraging> ADL_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.AUTO_DELEVERAGING;
+        cmd.timestamp = api.timestamp;
+        cmd.orderId = api.orderId;
+        cmd.uid = api.uid;
+        cmd.symbol = api.symbol;
+        cmd.action = api.action;
+        cmd.size = api.size;
+        cmd.price = api.price;
         cmd.resultCode = CommandResultCode.NEW;
     };
 

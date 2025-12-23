@@ -72,11 +72,16 @@ public class FundEvent {
         // 补充保证金事件
         MARGIN_ADJUST(13),      // 逐仓追加补充保证金
         MARGIN_REFUND(14),      // 逐仓平仓返还补充保证金
-        // 其他事件
-        RESET_FEE(15),          // 重置手续费
+        // ADL
+        ADL_ORIGIN_CLOSE(15),    // ADL 中破产仓位平仓
+        ADL_POSITION_CLOSE(16),  // ADL 中盈利仓位被减仓
+
         // 通知类事件
         MARGIN_ALERT(20),       // 通知追加保证金
-        LIQUIDATION_ALERT(21);  // 通知强平单创建
+        LIQUIDATION_ALERT(21),  // 通知强平单创建
+
+        // 其他事件
+        RESET_FEE(30);          // 重置手续费
 
         private final int code;
 
@@ -106,6 +111,37 @@ public class FundEvent {
             current = next;
         }
         return head;
+    }
+
+    public void reset() {
+        processed = false;
+        eventType = null;
+        orderId = 0;
+        uid = 0;
+        currency = 0;
+        currencyScaleK = 0;
+        free = 0;
+        locked = 0;
+        symbol = 0;
+        baseScaleK = 0;
+        quoteScaleK = 0;
+        direction = PositionDirection.EMPTY;
+        openVolume = 0;
+        openInitMarginSum = 0;
+        openPriceSum = 0;
+        profit = 0;
+        pendingSellSize = 0;
+        pendingBuySize = 0;
+        pendingSellAvgPrice = 0;
+        pendingBuyAvgPrice = 0;
+        leverage = 0;
+        marginMode = MarginMode.ISOLATED;
+        extraMargin = 0;
+        unrealizedProfit = 0;
+        liquidationPrice = 0;
+        marginRatioScaleK = 0;
+        markPrice = 0;
+        nextEvent = null;
     }
 
     @Override
