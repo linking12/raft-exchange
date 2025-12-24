@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
 import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.api.tuple.primitive.FloatObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -571,14 +572,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
-        MutableList<SymbolPositionRecord> candidates = adlService.getShardCandidates(shardId, symbol)
-                .select(pos -> {
+        MutableList<FloatObjectPair<SymbolPositionRecord>> candidates = adlService.getShardCandidates(shardId, symbol)
+                .select(pair -> {
+                    SymbolPositionRecord pos = pair.getTwo();
                     if (pos.openVolume <= 0) return false;
                     if (pos.direction.isSameAsAction(cmd.action)) return false;
                     long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
                     return unrealizedPnl > 0;
                 })
-                .sortThisByLong(pos -> GlobalADLService.riskScore(pos, bankruptcyPrice))
+                .sortThisByFloat(pair -> pair.getOne() * GlobalADLService.riskScore(pair.getTwo(), bankruptcyPrice))
                 .reverseThis(); // score 从大到小
         if (candidates.isEmpty()) {
             return;
@@ -586,9 +588,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
         /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
         ADLCandidate head = null;
         ADLCandidate tail = null;
-        for (SymbolPositionRecord pos : candidates) {
+        for (FloatObjectPair<SymbolPositionRecord> pair : candidates) {
             if (remaining <= 0) break;
 
+            SymbolPositionRecord pos = pair.getTwo();
             long canTake = Math.min(pos.openVolume, remaining);
 
             ADLCandidate c = adlCandidateHelper.newAdlCandidate();
