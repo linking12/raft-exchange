@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class LiquidationScannerTest {
     int SYMBOL_ID = 100001;
-    GlobalADLService adlService = new GlobalADLService();
 
     // 辅助方法：创建持仓记录
     private SymbolPositionRecord createPosition(
@@ -75,7 +74,7 @@ class LiquidationScannerTest {
     }
 
     private LiquidationEngine getScanner() {
-        LiquidationEngine scanner = new LiquidationEngine(null, 2, 2, adlService);
+        LiquidationEngine scanner = new LiquidationEngine(null, 2, 2, new GlobalADLService(2));
         return scanner;
     }
 

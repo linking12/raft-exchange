@@ -159,7 +159,7 @@ public final class ExchangeCore {
         // TODO create processors in same thread we will execute it??
 
         // start creating risk engines
-        GlobalADLService adlService = new GlobalADLService();
+        GlobalADLService adlService = new GlobalADLService(riskEnginesNum);
         final Map<Integer, CompletableFuture<RiskEngine>> riskEngineFutures = IntStream.range(0, riskEnginesNum)
                 .boxed()
                 .collect(Collectors.toMap(
