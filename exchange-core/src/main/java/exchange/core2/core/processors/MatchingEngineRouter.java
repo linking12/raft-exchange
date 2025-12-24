@@ -62,6 +62,8 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     // local objects pool for order books
     private final ObjectsPool objectsPool;
 
+    private final ADLResolveEngine adlResolveEngine;
+
     // sharding by symbolId
     private final int shardId;
     private final long shardMask;
@@ -109,6 +111,8 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         objectsPoolConfig.put(ObjectsPool.ART_NODE_256, 1024 * 4);
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.sharedPool = sharedPool;
+
+        this.adlResolveEngine = new ADLResolveEngine(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
@@ -162,7 +166,13 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
 
         final OrderCommandType command = cmd.command;
 
-        if (command == OrderCommandType.MOVE_ORDER
+        if (command == OrderCommandType.AUTO_DELEVERAGING) {
+            // only process ADL cmd on the symbol shard
+            if (symbolForThisHandler(cmd.symbol)) {
+                cmd.resultCode = adlResolveEngine.processADLCommand(cmd);
+            }
+
+        } else if (command == OrderCommandType.MOVE_ORDER
                 || command == OrderCommandType.CANCEL_ORDER
                 || command == OrderCommandType.PLACE_ORDER
                 || command == OrderCommandType.FORCE_LIQUIDATION

@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import lombok.Setter;
+import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
 import org.eclipse.collections.api.tuple.primitive.DoubleObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
@@ -26,6 +27,7 @@ import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
+import exchange.core2.core.common.api.ApiAutoDeleveraging;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -42,6 +44,8 @@ import lombok.extern.slf4j.Slf4j;
 public final class LiquidationEngine extends SimpleScheduledService {
     private final int shardId;
     private final FundEventsHelper eventsHelper;
+    private final GlobalADLService adlService;
+
     @Setter
     private ExchangeApi exchangeApi;
     private SymbolSpecificationProvider symbolSpecificationProvider;
@@ -49,11 +53,12 @@ public final class LiquidationEngine extends SimpleScheduledService {
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
 
-    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
+    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards, GlobalADLService adlService) {
         super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
             new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-"));
         this.shardId = shardId;
         this.eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
+        this.adlService = adlService;
     }
 
     public void updateProvider(SymbolSpecificationProvider symbolSpecProvider, CurrencySpecificationProvider currencySpecProvider,
@@ -88,6 +93,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     private void checkLiquidations() {
+        IntObjectHashMap<MutableList<SymbolPositionRecord>> symbolADLCandidates = IntObjectHashMap.newMap();
+
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             if (userProfile == null)
                 return;
@@ -109,6 +116,11 @@ public final class LiquidationEngine extends SimpleScheduledService {
                     log.debug("No price record for symbol={}", symbol);
                     return;
                 }
+                // -------- ADL --------
+                long unrealizedPnl = position.estimateUnrealizedProfit(priceRecord);
+                if (unrealizedPnl > 0) {
+                    symbolADLCandidates.getIfAbsentPut(symbol, FastList::new).add(position);
+                }
                 // 逐仓模式下，直接检查强平状态
                 if (position.marginMode == MarginMode.ISOLATED) {
                     checkLiquidationIsolated(userProfile, spec, priceRecord, position, eventsHelper);
@@ -122,6 +134,9 @@ public final class LiquidationEngine extends SimpleScheduledService {
             checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, currencySpecificationProvider, lastPriceCache,
                 eventsHelper);
         });
+
+        // -------- ADL------------
+        adlService.updateShardSnapshot(shardId, symbolADLCandidates);
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
@@ -272,36 +287,18 @@ public final class LiquidationEngine extends SimpleScheduledService {
         log.debug("Liquidated(p1): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }
 
-    /**
-     * 计算破产价格
-     */
-    public long calculateBankruptcyPrice(SymbolPositionRecord position, CoreSymbolSpecification spec) {
-        long totalMargin = position.openInitMarginSum + position.extraMargin;
-        long liquidationFee = 0; // 暂时先不考虑强平费
-        long maxLoss = totalMargin - liquidationFee;
-        int sign = position.direction.getMultiplier();
-        if (spec.isFixedFee()) {
-            /**
-             * 固定手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerFee
-             * bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee - takerFee) / openVolume
-             */
-            maxLoss -= spec.takerFee * position.openVolume;
-            return CoreArithmeticUtils.ceilDivide(position.openPriceSum - sign * maxLoss, position.openVolume);
-        } else {
-            /**
-             * 动态手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerRate ×
-             * bankruptcyPrice × openVolume bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee) /
-             * (openVolume * (1 - takerFee / feeScaleK)) = (openPriceSum - sign * maxLoss) * feeScaleK / (openVolume *
-             * feeScaleK - openVolume * takerFee)
-             */
-            return CoreArithmeticUtils.ceilDivide((position.openPriceSum - sign * maxLoss) * spec.feeScaleK,
-                position.openVolume * (spec.feeScaleK - spec.takerFee));
-        }
-    }
-
-    private void handleLiquidationFailure(SymbolPositionRecord position, long remainSize) {
-        // TODO: 降级为 IFC / ADL 等处理逻辑
+    private void handleLiquidationFailure(SymbolPositionRecord position, long remainSize, long bankruptcyPrice) {
+        // 降级为 IF / ADL 处理
         log.warn("Liquidation REJECTED: uid={} symbol={} remainSize={}", position.uid, position.symbol, remainSize);
+        if (false) {
+            // todo IF
+        } else {
+            exchangeApi.submitCommand(ApiAutoDeleveraging.builder()
+                    .orderId(GlobalADLService.generateADLOrderId(position))
+                    .uid(position.uid).symbol(position.symbol)
+                    .action(position.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
+                    .size(remainSize).price(bankruptcyPrice).build());
+        }
     }
 
     private static long generateLiquidationOrderId(int symbol, long uid) {

@@ -21,12 +21,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
+import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.SimpleEventsProcessor;
+import exchange.core2.core.common.ADLCandidate;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -84,7 +86,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private IntLongHashMap fees;
     private IntLongHashMap adjustments;
     private IntLongHashMap suspends;
-    private FundEventsHelper eventsHelper;
 
     // 无状态的配置字段
     private final SharedPool sharedPool;
@@ -100,13 +101,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final ReportsQueriesConfiguration reportsQueriesConfiguration;
     private final ObjLongConsumer<OrderCommand> resultsConsumer;
     private final LiquidationEngine liquidationEngine;
+    private final FundEventsHelper eventsHelper;
+    private final GlobalADLService adlService;
+    private final ADLCandidateHelper adlCandidateHelper;
 
     public RiskEngine(final int shardId,
                       final int numShards,
                       final ISerializationProcessor serializationProcessor,
                       final SharedPool sharedPool,
                       final ExchangeConfiguration exchangeConfiguration,
-                      final ObjLongConsumer<OrderCommand> resultsConsumer) {
+                      final ObjLongConsumer<OrderCommand> resultsConsumer,
+                      final GlobalADLService adlService) {
         if (Long.bitCount(numShards) != 1) {
             throw new IllegalArgumentException("Invalid number of shards " + numShards + " - must be power of 2");
         }
@@ -125,7 +130,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
-        this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards);
+        this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards, adlService);
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
+        this.adlService = adlService;
+        this.adlCandidateHelper = new ADLCandidateHelper(sharedPool::getAdlCandidateChain);
         this.initState(numShards);
     }
     
@@ -143,7 +151,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.fees = new IntLongHashMap();
         this.adjustments = new IntLongHashMap();
         this.suspends = new IntLongHashMap();
-        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
         this.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
         this.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
         this.eventsHelper.setUserProfileService(this.userProfileService);
@@ -276,7 +283,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             case CANCEL_ORDER:
             case REDUCE_ORDER:
             case ORDER_BOOK_REQUEST:
-            case FORCE_LIQUIDATION:
                 return false;
 
             case CLOSE_POSITION:
@@ -411,6 +417,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
+            case FORCE_LIQUIDATION:
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = normalizeCmdPositionSize(cmd);
+                }
+                return false;
             case LEVERAGE_ADJUSTMENT:
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = adjustLeverage(cmd);
@@ -525,8 +536,86 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
             }
+            case AUTO_DELEVERAGING: {
+                collectAdlCandidates(cmd);
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = normalizeCmdPositionSize(cmd);
+                }
+                return false;
+            }
         }
         return false;
+    }
+
+    // 对于强平或者adl命令，下单时候的仓位可能和真实仓位不一样了，需要重新校准一下size
+    private CommandResultCode normalizeCmdPositionSize(final OrderCommand cmd) {
+        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (userProfile == null) {
+            return CommandResultCode.AUTH_INVALID_USER;
+        }
+        int positionRecordKey = userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command);
+        SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
+        if (position == null) {
+            return CommandResultCode.SUCCESS;
+        }
+        // 再校准一次size，这样ME那边用的时候size一定是准的
+        cmd.size = Math.min(position.openVolume, cmd.size);
+        return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+    }
+
+    private void collectAdlCandidates(final OrderCommand cmd) {
+        final int symbol = cmd.symbol;
+        final long bankruptcyPrice = cmd.price;
+        long remaining = cmd.size;
+        if (remaining <= 0) {
+            return;
+        }
+        /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
+        MutableList<SymbolPositionRecord> candidates = adlService.getShardCandidates(shardId, symbol)
+                .select(pos -> {
+                    if (pos.openVolume <= 0) return false;
+                    if (pos.direction.isSameAsAction(cmd.action)) return false;
+                    long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
+                    return unrealizedPnl > 0;
+                })
+                .sortThisByLong(pos -> GlobalADLService.riskScore(pos, bankruptcyPrice))
+                .reverseThis(); // score 从大到小
+        if (candidates.isEmpty()) {
+            return;
+        }
+        /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
+        ADLCandidate head = null;
+        ADLCandidate tail = null;
+        for (SymbolPositionRecord pos : candidates) {
+            if (remaining <= 0) break;
+
+            long canTake = Math.min(pos.openVolume, remaining);
+
+            ADLCandidate c = adlCandidateHelper.newAdlCandidate();
+            c.uid = pos.uid;
+            c.symbol = symbol;
+            c.direction = pos.direction;
+            c.volume = canTake;
+            c.score = GlobalADLService.riskScore(pos, bankruptcyPrice);
+
+            // 尾插，保证正序
+            if (head == null) {
+                head = c;
+            } else {
+                tail.nextCandidate = c;
+            }
+            tail = c;
+
+            remaining -= canTake;
+        }
+        /* ====== 3. 写入固定槽位（只写自己的shard） ====== */
+        if (head != null) {
+            if (cmd.adlCandidatesByShard == null) {
+                int numShards = (int) (shardMask + 1);
+                cmd.adlCandidatesByShard = new ADLCandidate[numShards];
+            }
+            cmd.adlCandidatesByShard[shardId] = head;
+        }
     }
 
     /**
@@ -1016,8 +1105,26 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
+                // 在 ADL 命令下，先关原始仓位
+                if (cmd.command == OrderCommandType.AUTO_DELEVERAGING && takerSpr != null) {
+                    takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
+                    // ADL 平仓事件
+                    long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+                    long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
+                    eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
+                    if (takerSpr.isEmpty()) {
+                        refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                        removePositionRecord(spec, takerSpr, takerUp, currencySpec);
+                    }
+                }
+
+                // 循环处理其他 event
                 do {
-                    handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
+                    if (mte.eventType == MatcherEventType.ADL_EVENT) {
+                        handleADLRelease(cmd, mte, spec, currencySpec);
+                    } else {
+                        handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
+                    }
                     mte = mte.nextEvent;
                 } while (mte != null);
             }
@@ -1113,6 +1220,33 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked);
             })
         );
+    }
+
+    private void handleADLRelease(final OrderCommand cmd,
+                                  final MatcherTradeEvent ev,
+                                  final CoreSymbolSpecification spec,
+                                  final CoreCurrencySpecification currencySpec) {
+        // 1. 取 ADL 目标用户
+        final long uid = ev.matchedOrderUid;
+        if (!uidForThisHandler(uid)) {
+            return; // 不是本 shard 的用户，直接跳过
+        }
+        final UserProfile up = userProfileService.getUserProfile(uid);
+
+        // 2. 找到被 ADL 的仓位（与cmd方向相反）
+        OrderAction adlPosSide = cmd.action.opposite();
+        final SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(cmd.symbol, adlPosSide, cmd.command));
+
+        // 3. 更新仓位信息
+        pos.closeCurrentPositionFutures(adlPosSide.opposite(), ev.size, cmd.price);
+        // ADL 平仓事件
+        long locked = calculateLockedMargin(up, spec.quoteCurrency);
+        long free = up.accounts.get(spec.quoteCurrency) - locked;
+        eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, pos, free, locked);
+        if (pos.isEmpty()) {
+            refundExtraMargin(cmd, cmd.orderId, spec, pos, up, currencySpec);
+            removePositionRecord(spec, pos, up, currencySpec);
+        }
     }
 
     private void handleMatcherEventMargin(final OrderCommand cmd,

@@ -16,6 +16,7 @@
 package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
+import exchange.core2.core.common.ADLCandidate;
 import exchange.core2.core.common.CoreWaitStrategy;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
@@ -130,6 +131,9 @@ public final class GroupingProcessor implements EventProcessor {
         FundEvent fundEventHead = null;
         FundEvent fundEventTail = null;
         int fundEventCounter = 0;
+        ADLCandidate adlCandidateHead = null;
+        ADLCandidate adlCandidateTail = null;
+        int adlCandidateCounter = 0;
 
         boolean groupingEnabled = true;
 
@@ -258,7 +262,45 @@ public final class GroupingProcessor implements EventProcessor {
                             }
                         }
 
+                        /**
+                         * @modify 回收当前orderCommand下面的adlCandidate
+                         */
+                        if (EVENTS_POOLING) {
+                            // 回收每个 adlCandidate shard 的链
+                            if (cmd.adlCandidatesByShard != null) {
+                                for (int i = 0; i < cmd.adlCandidatesByShard.length; i++) {
+                                    ADLCandidate shardHead = cmd.adlCandidatesByShard[i];
+                                    if (shardHead != null) {
+                                        if (adlCandidateTail == null) {
+                                            adlCandidateHead = shardHead;
+                                        } else {
+                                            adlCandidateTail.nextCandidate = shardHead;
+                                        }
+                                        adlCandidateTail = shardHead;
+                                        adlCandidateCounter++;
+
+                                        while (adlCandidateTail.nextCandidate != null) {
+                                            adlCandidateTail = adlCandidateTail.nextCandidate;
+                                            adlCandidateCounter++;
+                                        }
+
+                                        cmd.adlCandidatesByShard[i] = null;
+                                    }
+                                }
+                            }
+
+                            if (adlCandidateCounter >= tradeEventChainLengthTarget) {
+                                sharedPool.putAdlCandidateChain(adlCandidateHead);
+                                adlCandidateHead = null;
+                                adlCandidateTail = null;
+                                adlCandidateCounter = 0;
+                            }
+                        }
+
                         cmd.matcherEvent = null;
+                        cmd.takerFundEvents = null;
+                        cmd.makerFundEventsByShard = null;
+                        cmd.adlCandidatesByShard = null;
                         // TODO collect to shared buffer
                         cmd.marketData = null;
 

@@ -46,6 +46,7 @@ import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.processors.DisruptorExceptionHandler;
+import exchange.core2.core.processors.GlobalADLService;
 import exchange.core2.core.processors.GroupingProcessor;
 import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.processors.MatchingEngineRouter;
@@ -158,12 +159,13 @@ public final class ExchangeCore {
         // TODO create processors in same thread we will execute it??
 
         // start creating risk engines
+        GlobalADLService adlService = new GlobalADLService();
         final Map<Integer, CompletableFuture<RiskEngine>> riskEngineFutures = IntStream.range(0, riskEnginesNum)
                 .boxed()
                 .collect(Collectors.toMap(
                         shardId -> shardId,
                         shardId -> CompletableFuture.supplyAsync(
-                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer),
+                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer, adlService),
                                 loaderExecutor)));
 
         final EventHandler<OrderCommand>[] matchingEngineHandlers = matchingEngineFutures.values().stream()

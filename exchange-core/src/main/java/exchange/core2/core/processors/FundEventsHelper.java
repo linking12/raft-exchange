@@ -215,6 +215,13 @@ public class FundEventsHelper {
         return event;
     }
 
+    public FundEvent sendADLClosePositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        boolean isOrigin = cmd.uid == position.uid;
+        FundEvent event = buildFuturesEvent(orderId, isOrigin ? FundEventType.ADL_ORIGIN_CLOSE : FundEventType.ADL_POSITION_CLOSE, position, free, locked);
+        addFundEvent(cmd, orderId, event);
+        return event;
+    }
+
     public FundEvent sendResetFeeEvent(OrderCommand cmd, int currency, long amount) {
         FundEvent event = buildSpotEvent(0, 0, FundEventType.RESET_FEE, currency, amount, 0);
         addFundEvent(cmd, cmd.orderId, event);

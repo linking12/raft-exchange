@@ -1,5 +1,6 @@
 package exchange.core2.tests.unit;
 
+import exchange.core2.core.processors.GlobalADLService;
 import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.PositionDirection;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class LiquidationScannerTest {
     int SYMBOL_ID = 100001;
+    GlobalADLService adlService = new GlobalADLService();
 
     // 辅助方法：创建持仓记录
     private SymbolPositionRecord createPosition(
@@ -73,7 +75,7 @@ class LiquidationScannerTest {
     }
 
     private LiquidationEngine getScanner() {
-        LiquidationEngine scanner = new LiquidationEngine(null, 2, 2);
+        LiquidationEngine scanner = new LiquidationEngine(null, 2, 2, adlService);
         return scanner;
     }
 

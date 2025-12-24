@@ -1,5 +1,6 @@
 package exchange.core2.tests.unit;
 
+import exchange.core2.core.processors.GlobalADLService;
 import exchange.core2.core.processors.LiquidationEngine;
 import exchange.core2.core.common.FundEvent;
 
@@ -24,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class LiquidationEngineShardingTest {
 
     private Supplier<FundEvent> eventSupplier;
+    private GlobalADLService adlService;
     
     private static final int NUM_SHARDS = 4;
     private static final int TOTAL_USERS = 1000;
@@ -32,6 +34,7 @@ class LiquidationEngineShardingTest {
     void setUp() {
         // Event supplier
         eventSupplier = () -> new FundEvent();
+        adlService = new GlobalADLService();
     }
 
     /**
@@ -43,7 +46,7 @@ class LiquidationEngineShardingTest {
         
         // 创建多个 LiquidationEngine 实例
         for (int shardId = 0; shardId < NUM_SHARDS; shardId++) {
-            LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, NUM_SHARDS);
+            LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, NUM_SHARDS, adlService);
             engines.add(engine);
             
             // 验证构造成功
@@ -106,7 +109,7 @@ class LiquidationEngineShardingTest {
             final int currentShardId = shardId;
             executor.submit(() -> {
                 try {
-                    LiquidationEngine engine = new LiquidationEngine(eventSupplier, currentShardId, NUM_SHARDS);
+                    LiquidationEngine engine = new LiquidationEngine(eventSupplier, currentShardId, NUM_SHARDS, adlService);
                     synchronized (engines) {
                         engines.add(engine);
                     }
@@ -136,7 +139,7 @@ class LiquidationEngineShardingTest {
         
         // 创建引擎
         for (int shardId = 0; shardId < NUM_SHARDS; shardId++) {
-            LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, NUM_SHARDS);
+            LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, NUM_SHARDS, adlService);
             engines.add(engine);
         }
         
@@ -165,7 +168,7 @@ class LiquidationEngineShardingTest {
     @Test
     void testDifferentShardIds() {
         for (int shardId = 0; shardId < NUM_SHARDS; shardId++) {
-            LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, NUM_SHARDS);
+            LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, NUM_SHARDS, adlService);
             assertNotNull(engine);
         }
     }
@@ -175,7 +178,7 @@ class LiquidationEngineShardingTest {
      */
     @Test
     void testSingleShardScenario() {
-        LiquidationEngine engine = new LiquidationEngine(eventSupplier, 0, 1);
+        LiquidationEngine engine = new LiquidationEngine(eventSupplier, 0, 1, adlService);
         assertNotNull(engine);
         
         // 测试生命周期
