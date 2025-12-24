@@ -9,7 +9,7 @@ import java.util.function.Supplier;
 import lombok.Setter;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
-import org.eclipse.collections.api.tuple.primitive.FloatObjectPair;
+import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.tuple.primitive.PrimitiveTuples;
@@ -93,7 +93,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     private void checkLiquidations() {
-        IntObjectHashMap<MutableList<FloatObjectPair<SymbolPositionRecord>>> symbolADLCandidates = IntObjectHashMap.newMap();
+        IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates = IntObjectHashMap.newMap();
 
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             if (userProfile == null)
@@ -119,7 +119,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 // 逐仓模式下
                 if (position.marginMode == MarginMode.ISOLATED) {
                     // 检查 ADL 候选
-                    tryAddAdlCandidate(position, priceRecord, 1, symbolADLCandidates);
+                    tryAddAdlCandidate(position, priceRecord, 100, symbolADLCandidates);
                     // 检查强平状态
                     checkLiquidationIsolated(userProfile, spec, priceRecord, position, eventsHelper);
                 }
@@ -168,12 +168,12 @@ public final class LiquidationEngine extends SimpleScheduledService {
     private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency,
                                        SymbolSpecificationProvider symbolSpecificationProvider, CurrencySpecificationProvider currencySpecificationProvider,
                                        MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper,
-                                       IntObjectHashMap<MutableList<FloatObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
+                                       IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
             // 计算总盈亏和维持保证金
             long totalProfit = 0;
             long totalMaintenanceMargin = 0;
-            List<FloatObjectPair<SymbolPositionRecord>> riskPairs = FastList.newList(records.size());
+            List<LongObjectPair<SymbolPositionRecord>> riskPairs = FastList.newList(records.size());
             for (SymbolPositionRecord position : records) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
@@ -185,7 +185,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
                 // 每个仓位的风险系数：risk = (profit - maintenance) / maintenance
-                float risk = (profit - maintenance) * 1.0f / maintenance;
+                long risk = (profit - maintenance) * 100 / maintenance;
                 riskPairs.add(PrimitiveTuples.pair(risk, position));
             }
             long balance = userProfile.accounts.get(currency);
@@ -193,8 +193,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
             long warningThreshold = totalMaintenanceMargin * 6 / 5;
             // ===== ADL（cross） gating：必须足够安全 =====
             if (equity >= warningThreshold && totalProfit > 0) {
-                float factor = (equity - totalMaintenanceMargin) * 1.0f / totalMaintenanceMargin;
-                factor = Math.max(0, Math.min(factor, 1.0f));
+                long factor = (equity - totalMaintenanceMargin) * 100 / totalMaintenanceMargin;
+                factor = Math.max(0, Math.min(factor, 100));
                 for (SymbolPositionRecord position : records) {
                     LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
                     tryAddAdlCandidate(position, priceRecord, factor, symbolADLCandidates);
@@ -203,7 +203,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
             // 强平检查
             if (equity >= warningThreshold)
                 return;
-            riskPairs.sort(Comparator.comparingDouble(FloatObjectPair::getOne));// 升序排序 risk值越小风险越大
+            riskPairs.sort(Comparator.comparingLong(LongObjectPair::getOne));// 升序排序 risk值越小风险越大
             if (equity < totalMaintenanceMargin) {
                 long deficit = totalMaintenanceMargin - equity;
                 forceCrossLiquidation(userProfile, riskPairs, deficit, eventsHelper, symbolSpecificationProvider, lastPriceCache);
@@ -213,8 +213,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
         });
     }
 
-    private void tryAddAdlCandidate(SymbolPositionRecord position, LastPriceCacheRecord priceRecord, float factor,
-                                    IntObjectHashMap<MutableList<FloatObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
+    private void tryAddAdlCandidate(SymbolPositionRecord position, LastPriceCacheRecord priceRecord, long factor,
+                                    IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
         if (priceRecord == null) {
             return;
         }
@@ -231,10 +231,10 @@ public final class LiquidationEngine extends SimpleScheduledService {
         log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
     }
 
-    private void forceCrossLiquidation(UserProfile userProfile, List<FloatObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
+    private void forceCrossLiquidation(UserProfile userProfile, List<LongObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
         FundEventsHelper eventsHelper, SymbolSpecificationProvider symbolSpecificationProvider, MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache) {
         long marginReleased = 0;
-        for (FloatObjectPair<SymbolPositionRecord> pair : positionPairs) {
+        for (LongObjectPair<SymbolPositionRecord> pair : positionPairs) {
             if (marginReleased >= deficit)
                 break;
             SymbolPositionRecord position = pair.getTwo();

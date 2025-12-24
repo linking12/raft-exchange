@@ -22,7 +22,7 @@ import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
 import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.api.tuple.primitive.FloatObjectPair;
+import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -572,7 +572,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
-        MutableList<FloatObjectPair<SymbolPositionRecord>> candidates = adlService.getShardCandidates(shardId, symbol)
+        MutableList<LongObjectPair<SymbolPositionRecord>> candidates = adlService.getShardCandidates(shardId, symbol)
                 .select(pair -> {
                     SymbolPositionRecord pos = pair.getTwo();
                     if (pos.openVolume <= 0) return false;
@@ -580,7 +580,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
                     return unrealizedPnl > 0;
                 })
-                .sortThisByFloat(pair -> pair.getOne() * GlobalADLService.riskScore(pair.getTwo(), bankruptcyPrice))
+                .sortThisByLong(pair -> pair.getOne() * GlobalADLService.riskScore(pair.getTwo(), bankruptcyPrice))
                 .reverseThis(); // score 从大到小
         if (candidates.isEmpty()) {
             return;
@@ -588,7 +588,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
         ADLCandidate head = null;
         ADLCandidate tail = null;
-        for (FloatObjectPair<SymbolPositionRecord> pair : candidates) {
+        for (LongObjectPair<SymbolPositionRecord> pair : candidates) {
             if (remaining <= 0) break;
 
             SymbolPositionRecord pos = pair.getTwo();
@@ -599,7 +599,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             c.symbol = symbol;
             c.direction = pos.direction;
             c.volume = canTake;
-            c.score = GlobalADLService.riskScore(pos, bankruptcyPrice);
+            c.score = pair.getOne() * GlobalADLService.riskScore(pos, bankruptcyPrice);
 
             // 尾插，保证正序
             if (head == null) {

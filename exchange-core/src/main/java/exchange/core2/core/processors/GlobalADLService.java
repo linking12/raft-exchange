@@ -3,7 +3,7 @@ package exchange.core2.core.processors;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.api.tuple.primitive.FloatObjectPair;
+import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.ConcurrentHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -15,20 +15,20 @@ public class GlobalADLService {
      * shardId -> symbol -> [(factor,position)...]
      * 用于“候选提示”
      */
-    private final ConcurrentHashMap<Integer, IntObjectHashMap<MutableList<FloatObjectPair<SymbolPositionRecord>>>> snapshots = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>>> snapshots = new ConcurrentHashMap<>();
 
     /**
      * 强平扫描线程调用：整体替换某 shard 的仓位列表
      */
-    public void updateShardSnapshot(int shardId, IntObjectHashMap<MutableList<FloatObjectPair<SymbolPositionRecord>>> snapshot) {
+    public void updateShardSnapshot(int shardId, IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> snapshot) {
         snapshots.put(shardId, snapshot);
     }
 
     /**
      * R1 调用：获取本 shard、某 symbol 下的候选仓位列表
      */
-    public MutableList<FloatObjectPair<SymbolPositionRecord>> getShardCandidates(int shardId, int symbol) {
-        IntObjectHashMap<MutableList<FloatObjectPair<SymbolPositionRecord>>> m = snapshots.get(shardId);
+    public MutableList<LongObjectPair<SymbolPositionRecord>> getShardCandidates(int shardId, int symbol) {
+        IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> m = snapshots.get(shardId);
         return m == null ? FastList.newList() : m.getIfAbsent(symbol, FastList::new);
     }
 
