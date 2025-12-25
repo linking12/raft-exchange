@@ -17,7 +17,7 @@ public class GlobalADLService {
     private final IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>>[] snapshots;
 
     public GlobalADLService(int numShards) {
-        this.snapshots = new IntObjectHashMap[numShards];
+        snapshots = new IntObjectHashMap[numShards];
     }
 
     /**

@@ -29,7 +29,7 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.SimpleEventsProcessor;
-import exchange.core2.core.common.ADLCandidate;
+import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -93,6 +93,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final ObjectsPool objectsPool;
     // sharding by symbolId
     private final int shardId;
+    private final int numShards;
     private final long shardMask;
     private final String exchangeId; // TODO validate
     private final boolean cfgIgnoreRiskProcessing;
@@ -104,7 +105,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final LiquidationEngine liquidationEngine;
     private final FundEventsHelper eventsHelper;
     private final GlobalADLService adlService;
-    private final ADLCandidateHelper adlCandidateHelper;
+    private final ADLUserPositionHelper adlUserPositionHelper;
 
     public RiskEngine(final int shardId,
                       final int numShards,
@@ -118,6 +119,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         this.exchangeId = exchangeConfiguration.getInitStateCfg().getExchangeId();
         this.shardId = shardId;
+        this.numShards = numShards;
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
@@ -134,11 +136,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards, adlService);
         this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
         this.adlService = adlService;
-        this.adlCandidateHelper = new ADLCandidateHelper(sharedPool::getAdlCandidateChain);
-        this.initState(numShards);
+        this.adlUserPositionHelper = new ADLUserPositionHelper(sharedPool::getADLCandidateChain);
+        this.initState();
     }
     
-    private void initState(int numShards) {
+    private void initState() {
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
         this.currencySpecificationProvider = new CurrencySpecificationProvider();
         this.userProfileService = new UserProfileService();
@@ -586,38 +588,37 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
-        ADLCandidate head = null;
-        ADLCandidate tail = null;
+        ADLUserPosition head = null;
+        ADLUserPosition tail = null;
         for (LongObjectPair<SymbolPositionRecord> pair : candidates) {
             if (remaining <= 0) break;
 
             SymbolPositionRecord pos = pair.getTwo();
             long canTake = Math.min(pos.openVolume, remaining);
 
-            ADLCandidate c = adlCandidateHelper.newAdlCandidate();
-            c.uid = pos.uid;
-            c.symbol = symbol;
-            c.direction = pos.direction;
-            c.volume = canTake;
-            c.score = pair.getOne() * GlobalADLService.riskScore(pos, bankruptcyPrice);
+            ADLUserPosition adlPos = adlUserPositionHelper.newADLUserPosition();
+            adlPos.uid = pos.uid;
+            adlPos.symbol = symbol;
+            adlPos.direction = pos.direction;
+            adlPos.volume = canTake;
+            adlPos.score = pair.getOne() * GlobalADLService.riskScore(pos, bankruptcyPrice);
 
             // 尾插，保证正序
             if (head == null) {
-                head = c;
+                head = adlPos;
             } else {
-                tail.nextCandidate = c;
+                tail.next = adlPos;
             }
-            tail = c;
+            tail = adlPos;
 
             remaining -= canTake;
         }
         /* ====== 3. 写入固定槽位（只写自己的shard） ====== */
         if (head != null) {
-            if (cmd.adlCandidatesByShard == null) {
-                int numShards = (int) (shardMask + 1);
-                cmd.adlCandidatesByShard = new ADLCandidate[numShards];
+            if (cmd.adlUserPositionsByShard == null) {
+                cmd.adlUserPositionsByShard = new ADLUserPosition[numShards];
             }
-            cmd.adlCandidatesByShard[shardId] = head;
+            cmd.adlUserPositionsByShard[shardId] = head;
         }
     }
 

@@ -16,7 +16,7 @@
 package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
-import exchange.core2.core.common.ADLCandidate;
+import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.CoreWaitStrategy;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
@@ -131,9 +131,9 @@ public final class GroupingProcessor implements EventProcessor {
         FundEvent fundEventHead = null;
         FundEvent fundEventTail = null;
         int fundEventCounter = 0;
-        ADLCandidate adlCandidateHead = null;
-        ADLCandidate adlCandidateTail = null;
-        int adlCandidateCounter = 0;
+        ADLUserPosition adlUserPositionHead = null;
+        ADLUserPosition adlUserPositionTail = null;
+        int adlUserPositionCounter = 0;
 
         boolean groupingEnabled = true;
 
@@ -263,44 +263,44 @@ public final class GroupingProcessor implements EventProcessor {
                         }
 
                         /**
-                         * @modify 回收当前orderCommand下面的adlCandidate
+                         * @modify 回收当前orderCommand下面的adlUserPosition
                          */
                         if (EVENTS_POOLING) {
-                            // 回收每个 adlCandidate shard 的链
-                            if (cmd.adlCandidatesByShard != null) {
-                                for (int i = 0; i < cmd.adlCandidatesByShard.length; i++) {
-                                    ADLCandidate shardHead = cmd.adlCandidatesByShard[i];
+                            // 回收每个 adlUserPosition shard 的链
+                            if (cmd.adlUserPositionsByShard != null) {
+                                for (int i = 0; i < cmd.adlUserPositionsByShard.length; i++) {
+                                    ADLUserPosition shardHead = cmd.adlUserPositionsByShard[i];
                                     if (shardHead != null) {
-                                        if (adlCandidateTail == null) {
-                                            adlCandidateHead = shardHead;
+                                        if (adlUserPositionTail == null) {
+                                            adlUserPositionHead = shardHead;
                                         } else {
-                                            adlCandidateTail.nextCandidate = shardHead;
+                                            adlUserPositionTail.next = shardHead;
                                         }
-                                        adlCandidateTail = shardHead;
-                                        adlCandidateCounter++;
+                                        adlUserPositionTail = shardHead;
+                                        adlUserPositionCounter++;
 
-                                        while (adlCandidateTail.nextCandidate != null) {
-                                            adlCandidateTail = adlCandidateTail.nextCandidate;
-                                            adlCandidateCounter++;
+                                        while (adlUserPositionTail.next != null) {
+                                            adlUserPositionTail = adlUserPositionTail.next;
+                                            adlUserPositionCounter++;
                                         }
 
-                                        cmd.adlCandidatesByShard[i] = null;
+                                        cmd.adlUserPositionsByShard[i] = null;
                                     }
                                 }
                             }
 
-                            if (adlCandidateCounter >= tradeEventChainLengthTarget) {
-                                sharedPool.putAdlCandidateChain(adlCandidateHead);
-                                adlCandidateHead = null;
-                                adlCandidateTail = null;
-                                adlCandidateCounter = 0;
+                            if (adlUserPositionCounter >= tradeEventChainLengthTarget) {
+                                sharedPool.putADLCandidateChain(adlUserPositionHead);
+                                adlUserPositionHead = null;
+                                adlUserPositionTail = null;
+                                adlUserPositionCounter = 0;
                             }
                         }
 
                         cmd.matcherEvent = null;
                         cmd.takerFundEvents = null;
                         cmd.makerFundEventsByShard = null;
-                        cmd.adlCandidatesByShard = null;
+                        cmd.adlUserPositionsByShard = null;
                         // TODO collect to shared buffer
                         cmd.marketData = null;
 

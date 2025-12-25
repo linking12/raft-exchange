@@ -19,7 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
-import exchange.core2.core.common.AdlUserPosition;
+import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.IOrder;
 import exchange.core2.core.common.L2MarketData;
@@ -107,7 +107,7 @@ public final class OrderCommand implements IOrder {
     /**
      * 【注意并发】ADL候选列表，按shard分组；用数组维护，下标是shardId。
      */
-    public AdlUserPosition[] adlCandidatesByShard;
+    public ADLUserPosition[] adlUserPositionsByShard;
 
     // optional market data
     public L2MarketData marketData;

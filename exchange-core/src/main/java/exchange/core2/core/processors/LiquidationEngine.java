@@ -119,7 +119,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 // 逐仓模式下
                 if (position.marginMode == MarginMode.ISOLATED) {
                     // 检查 ADL 候选
-                    tryAddAdlCandidate(position, priceRecord, 100, symbolADLCandidates);
+                    tryAddADLCandidate(position, priceRecord, 100, symbolADLCandidates);
                     // 检查强平状态
                     checkLiquidationIsolated(userProfile, spec, priceRecord, position, eventsHelper);
                 }
@@ -197,7 +197,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 factor = Math.max(0, Math.min(factor, 100));
                 for (SymbolPositionRecord position : records) {
                     LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                    tryAddAdlCandidate(position, priceRecord, factor, symbolADLCandidates);
+                    tryAddADLCandidate(position, priceRecord, factor, symbolADLCandidates);
                 }
             }
             // 强平检查
@@ -213,7 +213,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         });
     }
 
-    private void tryAddAdlCandidate(SymbolPositionRecord position, LastPriceCacheRecord priceRecord, long factor,
+    private void tryAddADLCandidate(SymbolPositionRecord position, LastPriceCacheRecord priceRecord, long factor,
                                     IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
         if (priceRecord == null) {
             return;
