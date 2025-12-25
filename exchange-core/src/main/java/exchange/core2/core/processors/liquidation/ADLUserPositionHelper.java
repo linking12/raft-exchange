@@ -32,7 +32,7 @@ public class ADLUserPositionHelper {
     public static long riskScore(SymbolPositionRecord pos, long bankruptcyPrice) {
         int sign = pos.direction.getMultiplier();
         long unrealizedPnl = sign * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
-        return pos.getLeverage() * unrealizedPnl;
+        return pos.getLeverage() * unrealizedPnl * pos.adlEligibility;
     }
 
     /**

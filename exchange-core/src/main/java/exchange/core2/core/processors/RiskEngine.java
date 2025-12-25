@@ -22,7 +22,6 @@ import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
 import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -573,15 +572,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
-        MutableList<LongObjectPair<SymbolPositionRecord>> candidates = userProfileService.getProfitablePositionsBySymbol(symbol)
-                .select(pair -> {
-                    SymbolPositionRecord pos = pair.getTwo();
+        MutableList<SymbolPositionRecord> candidates = userProfileService.getProfitablePositionsBySymbol(symbol)
+                .select(pos -> {
                     if (pos.openVolume <= 0) return false;
                     if (pos.direction.isSameAsAction(cmd.action)) return false;
                     long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
                     return unrealizedPnl > 0;
                 })
-                .sortThisByLong(pair -> pair.getOne() * ADLUserPositionHelper.riskScore(pair.getTwo(), bankruptcyPrice))
+                .sortThisByLong(pos -> ADLUserPositionHelper.riskScore(pos, bankruptcyPrice))
                 .reverseThis(); // score 从大到小
         if (candidates.isEmpty()) {
             return;
@@ -589,10 +587,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
         ADLUserPosition head = null;
         ADLUserPosition tail = null;
-        for (LongObjectPair<SymbolPositionRecord> pair : candidates) {
+        for (SymbolPositionRecord pos : candidates) {
             if (remaining <= 0) break;
 
-            SymbolPositionRecord pos = pair.getTwo();
             long canTake = Math.min(pos.openVolume, remaining);
 
             ADLUserPosition adlPos = adlUserPositionHelper.newADLUserPosition();
@@ -600,7 +597,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             adlPos.symbol = symbol;
             adlPos.direction = pos.direction;
             adlPos.volume = canTake;
-            adlPos.score = pair.getOne() * ADLUserPositionHelper.riskScore(pos, bankruptcyPrice);
+            adlPos.score = ADLUserPositionHelper.riskScore(pos, bankruptcyPrice);
 
             // 尾插，保证正序
             if (head == null) {
@@ -1633,7 +1630,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             userProfile.accounts.addToValue(record.currency, profit);
         }
         userProfile.positions.removeKey(userProfile.createPositionsKey(record));
-        userProfileService.getProfitablePositionsBySymbol(record.symbol).removeIf(pair -> pair.getTwo() == record);
+        userProfileService.getProfitablePositionsBySymbol(record.symbol).removeIf(pos -> pos == record);
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
 

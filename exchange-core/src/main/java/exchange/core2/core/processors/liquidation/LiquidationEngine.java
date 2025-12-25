@@ -94,7 +94,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     private void checkLiquidations() {
-        IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates = IntObjectHashMap.newMap();
+        IntObjectHashMap<MutableList<SymbolPositionRecord>> profitablePositionsBySymbol = IntObjectHashMap.newMap();
 
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             if (userProfile == null)
@@ -119,8 +119,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 }
                 // 逐仓模式下
                 if (position.marginMode == MarginMode.ISOLATED) {
-                    // 检查 ADL 候选
-                    tryAddADLCandidate(position, priceRecord, 100, symbolADLCandidates);
+                    // 加入盈利仓位集合
+                    tryAddProfitablePosition(position, priceRecord, profitablePositionsBySymbol);
                     // 检查强平状态
                     checkLiquidationIsolated(userProfile, spec, priceRecord, position, eventsHelper);
                 }
@@ -131,11 +131,11 @@ public final class LiquidationEngine extends SimpleScheduledService {
             });
             // 检查用户全仓模式下的强平状态
             checkLiquidationCross(userProfile, crossPositionsByCurrency, symbolSpecificationProvider, currencySpecificationProvider,
-                    lastPriceCache, eventsHelper, symbolADLCandidates);
+                    lastPriceCache, eventsHelper, profitablePositionsBySymbol);
         });
 
         // -------- ADL------------
-        userProfileService.setProfitablePositionsBySymbol(symbolADLCandidates);
+        userProfileService.setProfitablePositionsBySymbol(profitablePositionsBySymbol);
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
@@ -169,7 +169,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
     private void checkLiquidationCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency,
                                        SymbolSpecificationProvider symbolSpecificationProvider, CurrencySpecificationProvider currencySpecificationProvider,
                                        MutableIntObjectMap<LastPriceCacheRecord> lastPriceCache, FundEventsHelper eventsHelper,
-                                       IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
+                                       IntObjectHashMap<MutableList<SymbolPositionRecord>> profitablePositionsBySymbol) {
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
             // 计算总盈亏和维持保证金
             long totalProfit = 0;
@@ -198,7 +198,9 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 factor = Math.max(0, Math.min(factor, 100));
                 for (SymbolPositionRecord position : records) {
                     LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                    tryAddADLCandidate(position, priceRecord, factor, symbolADLCandidates);
+                    if (tryAddProfitablePosition(position, priceRecord, profitablePositionsBySymbol)) {
+                        position.adlEligibility = factor;
+                    }
                 }
             }
             // 强平检查
@@ -214,16 +216,17 @@ public final class LiquidationEngine extends SimpleScheduledService {
         });
     }
 
-    private void tryAddADLCandidate(SymbolPositionRecord position, LastPriceCacheRecord priceRecord, long factor,
-                                    IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> symbolADLCandidates) {
+    private boolean tryAddProfitablePosition(SymbolPositionRecord position, LastPriceCacheRecord priceRecord,
+                                             IntObjectHashMap<MutableList<SymbolPositionRecord>> profitablePositionsBySymbol) {
         if (priceRecord == null) {
-            return;
+            return false;
         }
         long unrealizedPnl = position.estimateUnrealizedProfit(priceRecord);
         if (unrealizedPnl <= 0) {
-            return;
+            return false;
         }
-        symbolADLCandidates.getIfAbsentPut(position.symbol, FastList::new).add(PrimitiveTuples.pair(factor, position));
+        profitablePositionsBySymbol.getIfAbsentPut(position.symbol, FastList::new).add(position);
+        return true;
     }
 
     private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, FundEventsHelper eventsHelper, long equity, long warningThreshold) {

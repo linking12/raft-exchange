@@ -56,6 +56,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
     public long extraMargin = 0; // 补充保证金，默认 0
 
+    // 强平扫描时动态计算，不持久化，不序列化
+    public long adlEligibility = 100; // adl可兑现性，默认 逐仓100 全仓0
+
     public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
@@ -74,6 +77,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         updateLeverage(leverage);
         this.marginMode = marginMode == null ? MarginMode.ISOLATED : marginMode; // 默认为逐仓
         this.extraMargin = 0;
+        this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
     }
 
     public void updateLeverage(int leverage) {
@@ -104,6 +108,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         updateLeverage(bytes.readInt());
         this.marginMode = MarginMode.values()[bytes.readInt()];
         this.extraMargin = bytes.readLong();
+        this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
     }
 
 
@@ -432,6 +437,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         updateLeverage(0);
         marginMode = MarginMode.ISOLATED;
         extraMargin = 0;
+        adlEligibility = 100;
     }
 
     public void validateInternalState() {
@@ -470,6 +476,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " lev=" + leverage +
                 " mode=" + marginMode +
                 " exM=" + extraMargin +
+                " adlF=" + adlEligibility +
                 '}';
     }
 }

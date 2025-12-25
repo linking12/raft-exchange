@@ -16,7 +16,6 @@
 package exchange.core2.core.processors;
 
 import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
@@ -50,11 +49,11 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
     private final LongObjectHashMap<UserProfile> userProfiles;
 
     /**
-     * symbol -> [(factor,position)...]
+     * symbol -> [position...]
      * 本分片的盈利仓位
      */
     @Setter
-    private volatile IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> profitablePositionsBySymbol = IntObjectHashMap.newMap();
+    private volatile IntObjectHashMap<MutableList<SymbolPositionRecord>> profitablePositionsBySymbol = IntObjectHashMap.newMap();
 
     public UserProfileService() {
         this.userProfiles = new LongObjectHashMap<>(1024);
@@ -64,7 +63,7 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
         this.userProfiles = SerializationUtils.readLongHashMap(bytes, UserProfile::new);
     }
 
-    public MutableList<LongObjectPair<SymbolPositionRecord>> getProfitablePositionsBySymbol(int symbol) {
+    public MutableList<SymbolPositionRecord> getProfitablePositionsBySymbol(int symbol) {
         return profitablePositionsBySymbol.getIfAbsent(symbol, FastList::new);
     }
 
