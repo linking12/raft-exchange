@@ -54,7 +54,6 @@ import exchange.core2.core.processors.SharedPool;
 import exchange.core2.core.processors.TwoStepMasterProcessor;
 import exchange.core2.core.processors.TwoStepSlaveProcessor;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
-import exchange.core2.core.processors.liquidation.GlobalADLService;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import lombok.Builder;
 import lombok.Getter;
@@ -159,13 +158,12 @@ public final class ExchangeCore {
         // TODO create processors in same thread we will execute it??
 
         // start creating risk engines
-        GlobalADLService adlService = new GlobalADLService(riskEnginesNum);
         final Map<Integer, CompletableFuture<RiskEngine>> riskEngineFutures = IntStream.range(0, riskEnginesNum)
                 .boxed()
                 .collect(Collectors.toMap(
                         shardId -> shardId,
                         shardId -> CompletableFuture.supplyAsync(
-                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer, adlService),
+                                () -> new RiskEngine(shardId, riskEnginesNum, serializationProcessor, sharedPool, exchangeConfiguration, resultsConsumer),
                                 loaderExecutor)));
 
         final EventHandler<OrderCommand>[] matchingEngineHandlers = matchingEngineFutures.values().stream()

@@ -15,15 +15,21 @@
  */
 package exchange.core2.core.processors;
 
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
+import org.eclipse.collections.impl.list.mutable.FastList;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 import exchange.core2.core.common.StateHash;
+import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
@@ -43,12 +49,24 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
     @Getter
     private final LongObjectHashMap<UserProfile> userProfiles;
 
+    /**
+     * symbol -> [(factor,position)...]
+     * 本分片的盈利仓位 <p>
+     * 强平扫描时add; RE关仓时remove; 在adl时R1阶段read
+     */
+    @Setter
+    private volatile IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> profitablePositionsBySymbol = IntObjectHashMap.newMap();
+
     public UserProfileService() {
         this.userProfiles = new LongObjectHashMap<>(1024);
     }
 
     public UserProfileService(BytesIn bytes) {
         this.userProfiles = SerializationUtils.readLongHashMap(bytes, UserProfile::new);
+    }
+
+    public MutableList<LongObjectPair<SymbolPositionRecord>> getProfitablePositionsBySymbol(int symbol) {
+        return profitablePositionsBySymbol.getIfAbsent(symbol, FastList::new);
     }
 
     /**
@@ -179,6 +197,7 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
      */
     public void reset() {
         userProfiles.clear();
+        profitablePositionsBySymbol.clear();
     }
 
     @Override

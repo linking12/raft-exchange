@@ -1,6 +1,8 @@
 package exchange.core2.core.processors.liquidation;
 
 import exchange.core2.core.common.ADLUserPosition;
+import exchange.core2.core.common.PositionDirection;
+import exchange.core2.core.common.SymbolPositionRecord;
 import lombok.RequiredArgsConstructor;
 
 import java.util.function.Supplier;
@@ -26,4 +28,22 @@ public class ADLUserPositionHelper {
             return new ADLUserPosition();
         }
     }
+
+    public static long riskScore(SymbolPositionRecord pos, long bankruptcyPrice) {
+        int sign = pos.direction.getMultiplier();
+        long unrealizedPnl = sign * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
+        return pos.getLeverage() * unrealizedPnl;
+    }
+
+    /**
+     * | 63........32 | 31......12 | 11 | 10......0 |
+     * |    symbol    |  uidHash   | s  |  tsPart   |
+     */
+    public static long generateADLOrderId(SymbolPositionRecord pos) {
+        long uidHash = (pos.uid * 31 + 17) & 0xFFFFF; // 取前 20 bit
+        long sideBit = (pos.direction == PositionDirection.SHORT) ? 1L : 0L;
+        long tsPart = (System.currentTimeMillis() / 1000) & 0xFFF; // 取后11bit，支持2048秒 ≈ 34分钟内不重复
+        return ((long) pos.symbol << 32) | (uidHash << 12) | (sideBit << 11) | tsPart;
+    }
+
 }

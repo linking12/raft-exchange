@@ -47,7 +47,6 @@ import lombok.extern.slf4j.Slf4j;
 public final class LiquidationEngine extends SimpleScheduledService {
     private final int shardId;
     private final FundEventsHelper eventsHelper;
-    private final GlobalADLService adlService;
 
     @Setter
     private ExchangeApi exchangeApi;
@@ -56,12 +55,11 @@ public final class LiquidationEngine extends SimpleScheduledService {
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
 
-    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards, GlobalADLService adlService) {
+    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
         super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
             new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "LiquidationEngine-"));
         this.shardId = shardId;
         this.eventsHelper = new FundEventsHelper(eventSupplier, shardId, numShards);
-        this.adlService = adlService;
     }
 
     public void updateProvider(SymbolSpecificationProvider symbolSpecProvider, CurrencySpecificationProvider currencySpecProvider,
@@ -137,7 +135,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         });
 
         // -------- ADL------------
-        adlService.updateShardSnapshot(shardId, symbolADLCandidates);
+        userProfileService.setProfitablePositionsBySymbol(symbolADLCandidates);
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
@@ -318,7 +316,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
             // todo IF
         } else {
             exchangeApi.submitCommand(ApiAutoDeleveraging.builder()
-                    .orderId(GlobalADLService.generateADLOrderId(position))
+                    .orderId(ADLUserPositionHelper.generateADLOrderId(position))
                     .uid(position.uid).symbol(position.symbol)
                     .action(position.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
                     .size(remainSize).price(bankruptcyPrice).build());

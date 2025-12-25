@@ -1,6 +1,5 @@
 package exchange.core2.tests.unit;
 
-import exchange.core2.core.processors.liquidation.GlobalADLService;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.PositionDirection;
@@ -74,7 +73,7 @@ class LiquidationScannerTest {
     }
 
     private LiquidationEngine getScanner() {
-        LiquidationEngine scanner = new LiquidationEngine(null, 2, 2, new GlobalADLService(2));
+        LiquidationEngine scanner = new LiquidationEngine(null, 2, 2);
         return scanner;
     }
 

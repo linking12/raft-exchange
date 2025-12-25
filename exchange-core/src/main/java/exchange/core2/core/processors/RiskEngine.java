@@ -60,7 +60,6 @@ import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.ADLUserPositionHelper;
-import exchange.core2.core.processors.liquidation.GlobalADLService;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
@@ -107,7 +106,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final ObjLongConsumer<OrderCommand> resultsConsumer;
     private final LiquidationEngine liquidationEngine;
     private final FundEventsHelper eventsHelper;
-    private final GlobalADLService adlService;
     private final ADLUserPositionHelper adlUserPositionHelper;
 
     public RiskEngine(final int shardId,
@@ -115,8 +113,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                       final ISerializationProcessor serializationProcessor,
                       final SharedPool sharedPool,
                       final ExchangeConfiguration exchangeConfiguration,
-                      final ObjLongConsumer<OrderCommand> resultsConsumer,
-                      final GlobalADLService adlService) {
+                      final ObjLongConsumer<OrderCommand> resultsConsumer) {
         if (Long.bitCount(numShards) != 1) {
             throw new IllegalArgumentException("Invalid number of shards " + numShards + " - must be power of 2");
         }
@@ -136,9 +133,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
-        this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards, adlService);
+        this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards);
         this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
-        this.adlService = adlService;
         this.adlUserPositionHelper = new ADLUserPositionHelper(sharedPool::getADLCandidateChain);
         this.initState();
     }
@@ -577,7 +573,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
-        MutableList<LongObjectPair<SymbolPositionRecord>> candidates = adlService.getShardCandidates(shardId, symbol)
+        MutableList<LongObjectPair<SymbolPositionRecord>> candidates = userProfileService.getProfitablePositionsBySymbol(symbol)
                 .select(pair -> {
                     SymbolPositionRecord pos = pair.getTwo();
                     if (pos.openVolume <= 0) return false;
@@ -585,7 +581,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
                     return unrealizedPnl > 0;
                 })
-                .sortThisByLong(pair -> pair.getOne() * GlobalADLService.riskScore(pair.getTwo(), bankruptcyPrice))
+                .sortThisByLong(pair -> pair.getOne() * ADLUserPositionHelper.riskScore(pair.getTwo(), bankruptcyPrice))
                 .reverseThis(); // score 从大到小
         if (candidates.isEmpty()) {
             return;
@@ -604,7 +600,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             adlPos.symbol = symbol;
             adlPos.direction = pos.direction;
             adlPos.volume = canTake;
-            adlPos.score = pair.getOne() * GlobalADLService.riskScore(pos, bankruptcyPrice);
+            adlPos.score = pair.getOne() * ADLUserPositionHelper.riskScore(pos, bankruptcyPrice);
 
             // 尾插，保证正序
             if (head == null) {
@@ -1637,6 +1633,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             userProfile.accounts.addToValue(record.currency, profit);
         }
         userProfile.positions.removeKey(userProfile.createPositionsKey(record));
+        userProfileService.getProfitablePositionsBySymbol(record.symbol).removeIf(pair -> pair.getTwo() == record);
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
 
