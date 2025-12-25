@@ -7,7 +7,8 @@ import exchange.core2.core.ExchangeCore;
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
-import exchange.core2.core.processors.support.SimpleScheduledService;
+import exchange.core2.core.processors.liquidation.SimpleScheduledService;
+
 import com.binance.raftexchange.server.exchange.snapshot.MemorySerializationProcessor;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.raft.RoleChangeEventbus;

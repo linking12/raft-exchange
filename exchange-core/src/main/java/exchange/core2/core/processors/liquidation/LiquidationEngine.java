@@ -36,7 +36,6 @@ import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
-import exchange.core2.core.processors.support.SimpleScheduledService;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;

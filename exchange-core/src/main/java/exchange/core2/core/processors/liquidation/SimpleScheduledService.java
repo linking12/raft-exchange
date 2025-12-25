@@ -1,4 +1,4 @@
-package exchange.core2.core.processors.support;
+package exchange.core2.core.processors.liquidation;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
