@@ -476,7 +476,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " lev=" + leverage +
                 " mode=" + marginMode +
                 " exM=" + extraMargin +
-                " adlF=" + adlEligibility +
+                " adl%=" + adlEligibility +
                 '}';
     }
 }

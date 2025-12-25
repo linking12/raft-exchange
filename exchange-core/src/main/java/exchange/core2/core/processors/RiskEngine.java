@@ -538,7 +538,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 return false;
             }
             case AUTO_DELEVERAGING: {
-                collectAdlCandidates(cmd);
+                collectADLProfitablePositions(cmd);
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = normalizeCmdPositionSize(cmd);
                 }
@@ -564,7 +564,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
     }
 
-    private void collectAdlCandidates(final OrderCommand cmd) {
+    private void collectADLProfitablePositions(final OrderCommand cmd) {
         final int symbol = cmd.symbol;
         final long bankruptcyPrice = cmd.price;
         long remaining = cmd.size;
@@ -572,7 +572,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
-        MutableList<SymbolPositionRecord> candidates = userProfileService.getProfitablePositionsBySymbol(symbol)
+        MutableList<SymbolPositionRecord> profitablePositions = userProfileService.getProfitablePositionsBySymbol(symbol)
                 .select(pos -> {
                     if (pos.openVolume <= 0) return false;
                     if (pos.direction.isSameAsAction(cmd.action)) return false;
@@ -581,13 +581,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 })
                 .sortThisByLong(pos -> ADLUserPositionHelper.riskScore(pos, bankruptcyPrice))
                 .reverseThis(); // score 从大到小
-        if (candidates.isEmpty()) {
+        if (profitablePositions.isEmpty()) {
             return;
         }
         /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
         ADLUserPosition head = null;
         ADLUserPosition tail = null;
-        for (SymbolPositionRecord pos : candidates) {
+        for (SymbolPositionRecord pos : profitablePositions) {
             if (remaining <= 0) break;
 
             long canTake = Math.min(pos.openVolume, remaining);
