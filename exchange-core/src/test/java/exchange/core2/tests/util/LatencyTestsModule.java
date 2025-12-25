@@ -18,7 +18,7 @@ package exchange.core2.tests.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiCommand;

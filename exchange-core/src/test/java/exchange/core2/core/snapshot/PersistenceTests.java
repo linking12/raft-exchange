@@ -18,7 +18,7 @@ package exchange.core2.core.snapshot;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;

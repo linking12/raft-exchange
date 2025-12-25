@@ -1,7 +1,7 @@
 package exchange.core2.tests.unit;
 
-import exchange.core2.core.processors.GlobalADLService;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.GlobalADLService;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.FundEvent;
 
 import org.junit.jupiter.api.Test;

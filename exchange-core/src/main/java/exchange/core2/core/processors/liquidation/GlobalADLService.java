@@ -1,4 +1,4 @@
-package exchange.core2.core.processors;
+package exchange.core2.core.processors.liquidation;
 
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;

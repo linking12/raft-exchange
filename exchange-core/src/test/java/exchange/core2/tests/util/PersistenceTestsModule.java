@@ -15,7 +15,7 @@
  */
 package exchange.core2.tests.util;
 
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiRecoverState;

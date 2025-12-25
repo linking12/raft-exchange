@@ -2,7 +2,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MarginMode;

@@ -1,7 +1,7 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -12,7 +12,6 @@ import exchange.core2.tests.util.EventCheck;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
-import org.hamcrest.core.Is;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

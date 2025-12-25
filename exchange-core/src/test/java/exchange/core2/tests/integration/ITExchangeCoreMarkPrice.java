@@ -1,6 +1,6 @@
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;

@@ -16,7 +16,7 @@
 package exchange.core2.tests.integration;
 
 import exchange.core2.core.ExchangeApi;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.api.ApiCommand;

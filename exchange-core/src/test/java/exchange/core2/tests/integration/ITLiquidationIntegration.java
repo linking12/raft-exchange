@@ -5,7 +5,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.core.orderbook.OrderBookDirectImpl;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.config.PerformanceConfiguration;

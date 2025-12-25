@@ -1,4 +1,4 @@
-package exchange.core2.core.processors;
+package exchange.core2.core.processors.liquidation;
 
 import java.util.Comparator;
 import java.util.List;
@@ -6,6 +6,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.FundEventsHelper;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
 import lombok.Setter;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
