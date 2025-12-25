@@ -51,8 +51,7 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
 
     /**
      * symbol -> [(factor,position)...]
-     * 本分片的盈利仓位 <p>
-     * 强平扫描时add; RE关仓时remove; 在adl时R1阶段read
+     * 本分片的盈利仓位
      */
     @Setter
     private volatile IntObjectHashMap<MutableList<LongObjectPair<SymbolPositionRecord>>> profitablePositionsBySymbol = IntObjectHashMap.newMap();
