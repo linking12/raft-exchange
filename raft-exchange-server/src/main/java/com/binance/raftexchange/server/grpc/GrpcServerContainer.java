@@ -1,6 +1,7 @@
 package com.binance.raftexchange.server.grpc;
 
 import com.google.common.util.concurrent.MoreExecutors;
+import io.grpc.netty.InternalNettyServerBuilder;
 import io.netty.channel.WriteBufferWaterMark;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +23,7 @@ public class GrpcServerContainer {
 
     public void doStart() throws Exception {
         String grpcPort = System.getProperty("grpc.port", "5001");
-        this.server = NettyServerBuilder.forPort(Integer.parseInt(grpcPort)).withChildOption(ChannelOption.TCP_NODELAY, true)//
+        NettyServerBuilder builder = NettyServerBuilder.forPort(Integer.parseInt(grpcPort)).withChildOption(ChannelOption.TCP_NODELAY, true)//
             .withChildOption(ChannelOption.SO_LINGER, -1)//
             .withChildOption(ChannelOption.SO_KEEPALIVE, Boolean.TRUE)//
             .withChildOption(ChannelOption.TCP_NODELAY, Boolean.FALSE)//
@@ -33,7 +34,9 @@ public class GrpcServerContainer {
             .addService(new ApiService(raftClusterContainer).transform())//
             .addService(new SevererNodeService(raftClusterContainer))//
             .addService(new QueryService(raftClusterContainer))//
-            .executor(MoreExecutors.directExecutor()).build();
+            .executor(MoreExecutors.directExecutor());
+        InternalNettyServerBuilder.setTracingEnabled(builder, false);
+        this.server = builder.build();
         server.start();
         LOGGER.info("grpc server start {}", grpcPort);
     }
