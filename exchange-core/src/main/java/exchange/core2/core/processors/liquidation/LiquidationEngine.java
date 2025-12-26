@@ -157,7 +157,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
             long x = CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord);
             long sizeToLiquidate = Math.min(position.openVolume, x);
             if (sizeToLiquidate > 0) {
-                executeLiquidationOrder(userProfile, position, spec, price, sizeToLiquidate, eventsHelper);
+                executeLiquidationOrder(userProfile, position, price, sizeToLiquidate, eventsHelper);
             }
         }
         // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
@@ -252,7 +252,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 long estimatedReleasedMargin = CoreArithmeticUtils.calculateDeficitAfterLiquidate(sizeToLiquidate, position, spec, priceRecord);
                 marginReleased += estimatedReleasedMargin;
                 // 提交强平单
-                executeLiquidationOrder(userProfile, position, spec, price, sizeToLiquidate, eventsHelper);
+                executeLiquidationOrder(userProfile, position, price, sizeToLiquidate, eventsHelper);
             }
         }
     }
@@ -270,8 +270,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         return price;
     }
 
-    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, CoreSymbolSpecification spec, long price, long size,
-        FundEventsHelper eventsHelper) {
+    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, long price, long size, FundEventsHelper eventsHelper) {
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
@@ -288,9 +287,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 // 如果按市价单强平失败，再按照破产价强平
                 long remainSize = firstEvent.size;
                 long bankruptcyOrderId = generateLiquidationOrderId(position.symbol, position.uid);
-                long bankruptcyPrice = position.calculateBankruptcyPrice(spec);
                 exchangeApi.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.FOK_BUDGET).symbol(position.symbol)
-                    .orderId(bankruptcyOrderId).uid(position.uid).price(bankruptcyPrice * remainSize).size(remainSize).action(action).build())
+                    .orderId(bankruptcyOrderId).uid(position.uid).price(price * remainSize).size(remainSize).action(action).build())
                     .whenCompleteAsync((cmd2, err2) -> {
                         if (cmd2.matcherEvent.eventType == MatcherEventType.REJECT) {
                             /**
@@ -298,12 +296,12 @@ public final class LiquidationEngine extends SimpleScheduledService {
                              *
                              * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchFokBudget
                              */
-                            handleLiquidationFailure(position, cmd2.matcherEvent.size, bankruptcyPrice);
+                            handleLiquidationFailure(position, cmd2.matcherEvent.size, price);
                         }
                     });
                 FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position);
                 exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
-                log.debug("Liquidated(p2): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, bankruptcyPrice);
+                log.debug("Liquidated(p2): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, price);
             }
         });
         // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
@@ -312,17 +310,18 @@ public final class LiquidationEngine extends SimpleScheduledService {
         log.debug("Liquidated(p1): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }
 
-    private void handleLiquidationFailure(SymbolPositionRecord position, long remainSize, long bankruptcyPrice) {
+    private void handleLiquidationFailure(SymbolPositionRecord position, long remainSize, long price) {
         // 降级为 IF / ADL 处理
-        log.warn("Liquidation REJECTED: uid={} symbol={} remainSize={}", position.uid, position.symbol, remainSize);
         if (false) {
             // todo IF
         } else {
-            exchangeApi.submitCommand(ApiAutoDeleveraging.builder()
+            ApiAutoDeleveraging adlCmd = ApiAutoDeleveraging.builder()
                     .orderId(ADLUserPositionHelper.generateADLOrderId(position))
                     .uid(position.uid).symbol(position.symbol)
                     .action(position.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
-                    .size(remainSize).price(bankruptcyPrice).build());
+                    .size(remainSize).price(price).build();
+            exchangeApi.submitCommandAsync(adlCmd);
+            log.warn("adlCmd={}", adlCmd);
         }
     }
 
