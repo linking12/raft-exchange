@@ -28,11 +28,12 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Stateful (!) User profile service
@@ -52,8 +53,7 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
      * symbol -> [position...]
      * 本分片的盈利仓位
      */
-    @Setter
-    private volatile IntObjectHashMap<MutableList<SymbolPositionRecord>> profitablePositionsBySymbol = IntObjectHashMap.newMap();
+    private AtomicReference<IntObjectHashMap<MutableList<SymbolPositionRecord>>> profitablePositionsBySymbol = new AtomicReference<>(IntObjectHashMap.newMap());
 
     public UserProfileService() {
         this.userProfiles = new LongObjectHashMap<>(1024);
@@ -64,7 +64,11 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
     }
 
     public MutableList<SymbolPositionRecord> getProfitablePositionsBySymbol(int symbol) {
-        return profitablePositionsBySymbol.getIfAbsent(symbol, FastList::new);
+        return profitablePositionsBySymbol.get().getIfAbsent(symbol, FastList::new);
+    }
+
+    public void setProfitablePositionsBySymbol(IntObjectHashMap<MutableList<SymbolPositionRecord>> snapshot) {
+        profitablePositionsBySymbol.set(snapshot);
     }
 
     /**
@@ -195,7 +199,7 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
      */
     public void reset() {
         userProfiles.clear();
-        profitablePositionsBySymbol.clear();
+        profitablePositionsBySymbol.get().clear();
     }
 
     @Override
