@@ -284,30 +284,14 @@ public final class LiquidationEngine extends SimpleScheduledService {
              */
             MatcherTradeEvent firstEvent = cmd.matcherEvent;
             if (firstEvent.eventType == MatcherEventType.REJECT) {
-                // 如果按市价单强平失败，再按照破产价强平
                 long remainSize = firstEvent.size;
-                long bankruptcyOrderId = generateLiquidationOrderId(position.symbol, position.uid);
-                exchangeApi.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.FOK_BUDGET).symbol(position.symbol)
-                    .orderId(bankruptcyOrderId).uid(position.uid).price(price * remainSize).size(remainSize).action(action).build())
-                    .whenCompleteAsync((cmd2, err2) -> {
-                        if (cmd2.matcherEvent.eventType == MatcherEventType.REJECT) {
-                            /**
-                             * FOK的reject，是全额reject
-                             *
-                             * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchFokBudget
-                             */
-                            handleLiquidationFailure(position, cmd2.matcherEvent.size, price);
-                        }
-                    });
-                FundEvent event = eventsHelper.sendLiquidationAlertEvent(bankruptcyOrderId, position);
-                exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
-                log.debug("Liquidated(p2): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, remainSize, price);
+                handleLiquidationFailure(position, remainSize, price);
             }
         });
         // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
         FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position);
         exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
-        log.debug("Liquidated(p1): uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
+        log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }
 
     private void handleLiquidationFailure(SymbolPositionRecord position, long remainSize, long price) {
