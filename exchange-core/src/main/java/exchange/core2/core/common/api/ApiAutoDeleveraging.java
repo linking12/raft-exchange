@@ -16,7 +16,7 @@ public final class ApiAutoDeleveraging extends ApiCommand {
     public final int symbol;
     public final OrderAction action; // 仓位方向
     public final long size;
-    public final long price; // 破产价
+    public final long price;
 
     @Override
     public String toString() {
