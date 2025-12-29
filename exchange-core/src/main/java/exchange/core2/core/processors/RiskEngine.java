@@ -575,6 +575,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         MutableList<SymbolPositionRecord> profitablePositions = userProfileService.getProfitablePositionsBySymbol(symbol)
                 .select(pos -> {
                     if (pos.openVolume <= 0) return false;
+                    if (pos.openVolume <= pos.pendingADLSize) return false;
                     if (pos.direction.isSameAsAction(cmd.action)) return false;
                     long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
                     return unrealizedPnl > 0;
@@ -590,7 +591,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
         for (SymbolPositionRecord pos : profitablePositions) {
             if (remaining <= 0) break;
 
-            long canTake = Math.min(pos.openVolume, remaining);
+            long available = pos.openVolume - pos.pendingADLSize;
+            long canTake = Math.min(available, remaining);
+            // 冻结待处理的仓位数量（防止重复触发）
+            pos.pendingADLSize += canTake;
 
             ADLUserPosition adlPos = adlUserPositionHelper.newADLUserPosition();
             adlPos.uid = pos.uid;
@@ -1239,6 +1243,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         // 3. 更新仓位信息
         pos.closeCurrentPositionFutures(adlPosSide.opposite(), ev.size, cmd.price);
+        // 释放 ADL pending
+        pos.pendingADLSize -= ev.size;
+
         // ADL 平仓事件
         long locked = calculateLockedMargin(up, spec.quoteCurrency);
         long free = up.accounts.get(spec.quoteCurrency) - locked;

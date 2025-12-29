@@ -58,6 +58,12 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     // 强平扫描时动态计算，不持久化，不序列化
     public long adlEligibility = 100; // adl可兑现性，默认 逐仓100 全仓0
+    /**
+     * ADL 冻结量：语义与下单 pending 类似。
+     * R1 冻结本次 ADL 可用的仓位数量，R2 按 matcherEvent 执行并释放，
+     * 防止相邻 cmd 在 R1 阶段看到相同 openVolume 导致重复分配。
+     **/
+    public long pendingADLSize = 0;
 
     public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage, MarginMode marginMode) {
         this.uid = uid;
@@ -78,6 +84,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.marginMode = marginMode == null ? MarginMode.ISOLATED : marginMode; // 默认为逐仓
         this.extraMargin = 0;
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
+        this.pendingADLSize = 0;
     }
 
     public void updateLeverage(int leverage) {
@@ -109,6 +116,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.marginMode = MarginMode.values()[bytes.readInt()];
         this.extraMargin = bytes.readLong();
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
+        this.pendingADLSize = 0;
     }
 
 
@@ -438,6 +446,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         marginMode = MarginMode.ISOLATED;
         extraMargin = 0;
         adlEligibility = 100;
+        pendingADLSize = 0;
     }
 
     public void validateInternalState() {
@@ -455,7 +464,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     @Override
     public int stateHash() {
         return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openInitMarginSum, openPriceSum, profit,
-            pendingSellSize, pendingBuySize, pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin);
+            pendingSellSize, pendingBuySize, pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin,
+            adlEligibility, pendingADLSize);
     }
 
     @Override
@@ -477,6 +487,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " mode=" + marginMode +
                 " exM=" + extraMargin +
                 " adl%=" + adlEligibility +
+                " pendingADL=" + pendingADLSize +
                 '}';
     }
 }
