@@ -1109,20 +1109,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
-                // 在 ADL 命令下，先关原始仓位
-                if (cmd.command == OrderCommandType.AUTO_DELEVERAGING && takerSpr != null) {
-                    takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
-                    // ADL 平仓事件
-                    long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
-                    long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
-                    eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
-                    if (takerSpr.isEmpty()) {
-                        refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
-                        removePositionRecord(spec, takerSpr, takerUp, currencySpec);
-                    }
-                }
-
-                // 循环处理其他 event
+                // ===== 1. 处理 matcherEvent 链 =====
                 do {
                     if (mte.eventType == MatcherEventType.ADL_EVENT) {
                         handleADLRelease(cmd, mte, spec, currencySpec);
@@ -1131,6 +1118,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     }
                     mte = mte.nextEvent;
                 } while (mte != null);
+
+                // ===== 2. cmd 结束后的收尾 =====
+                if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
+                    finalizeADL(cmd, takerUp, takerSpr, spec, currencySpec);
+                }
             }
         }
 
@@ -1253,6 +1245,35 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (pos.isEmpty()) {
             refundExtraMargin(cmd, cmd.orderId, spec, pos, up, currencySpec);
             removePositionRecord(spec, pos, up, currencySpec);
+        }
+    }
+
+    private void finalizeADL(final OrderCommand cmd,
+                             final UserProfile takerUp,
+                             final SymbolPositionRecord takerSpr,
+                             final CoreSymbolSpecification spec,
+                             final CoreCurrencySpecification currencySpec) {
+        // 1. 关闭原始仓位（只做一次）
+        if (takerSpr != null) {
+            takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
+            // ADL 平仓事件
+            long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+            long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
+            eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
+            if (takerSpr.isEmpty()) {
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                removePositionRecord(spec, takerSpr, takerUp, currencySpec);
+            }
+        }
+        // 2. 释放所有未使用的 pendingADLSize
+        ADLUserPosition head = cmd.adlUserPositionsByShard[shardId];
+        while (head != null) {
+            UserProfile up = userProfileService.getUserProfile(head.uid);
+            SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(head.symbol, cmd.action.opposite(), cmd.command));
+            if (pos != null && pos.pendingADLSize > 0) {
+                pos.pendingADLSize = 0;
+            }
+            head = head.next;
         }
     }
 
