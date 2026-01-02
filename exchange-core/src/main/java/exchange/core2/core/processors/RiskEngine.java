@@ -1271,7 +1271,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             UserProfile up = userProfileService.getUserProfile(head.uid);
             SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(head.symbol, cmd.action.opposite(), cmd.command));
             if (pos != null && pos.pendingADLSize > 0) {
-                pos.pendingADLSize = 0;
+                pos.pendingADLSize -= head.volume;
             }
             head = head.next;
         }
