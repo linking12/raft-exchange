@@ -17,6 +17,7 @@ package exchange.core2.core.common;
 
 
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.liquidation.LiquidationContext;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -65,6 +66,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      **/
     public long pendingADLSize = 0;
 
+    // ===== 强平流程上下文（仅在强平期间存在）=====
+    public transient LiquidationContext liquidationCtx;
+
     public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
@@ -85,6 +89,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.extraMargin = 0;
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
         this.pendingADLSize = 0;
+        this.liquidationCtx = null;
     }
 
     public void updateLeverage(int leverage) {
@@ -117,6 +122,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.extraMargin = bytes.readLong();
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
         this.pendingADLSize = 0;
+        this.liquidationCtx = null;
     }
 
 
@@ -447,6 +453,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         extraMargin = 0;
         adlEligibility = 100;
         pendingADLSize = 0;
+        liquidationCtx = null;
     }
 
     public void validateInternalState() {
@@ -464,8 +471,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     @Override
     public int stateHash() {
         return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openInitMarginSum, openPriceSum, profit,
-            pendingSellSize, pendingBuySize, pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin,
-            adlEligibility, pendingADLSize);
+            pendingSellSize, pendingBuySize, pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin);
     }
 
     @Override
@@ -488,6 +494,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " exM=" + extraMargin +
                 " adl%=" + adlEligibility +
                 " pendingADL=" + pendingADLSize +
+                " Lctx=" + liquidationCtx +
                 '}';
     }
 }
