@@ -55,7 +55,6 @@ import exchange.core2.core.processors.TwoStepMasterProcessor;
 import exchange.core2.core.processors.TwoStepSlaveProcessor;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
-import exchange.core2.core.processors.liquidation.LiquidationStateMachine;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -159,7 +158,6 @@ public final class ExchangeCore {
         // TODO create processors in same thread we will execute it??
 
         // start creating risk engines
-        LiquidationStateMachine.init(api);
         final Map<Integer, CompletableFuture<RiskEngine>> riskEngineFutures = IntStream.range(0, riskEnginesNum)
                 .boxed()
                 .collect(Collectors.toMap(

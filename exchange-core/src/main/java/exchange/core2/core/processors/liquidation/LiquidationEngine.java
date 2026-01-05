@@ -5,10 +5,6 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-import exchange.core2.core.processors.CurrencySpecificationProvider;
-import exchange.core2.core.processors.FundEventsHelper;
-import exchange.core2.core.processors.SymbolSpecificationProvider;
-import exchange.core2.core.processors.UserProfileService;
 import lombok.Setter;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
@@ -22,6 +18,10 @@ import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.MatcherEventType;
+import exchange.core2.core.common.MatcherTradeEvent;
+import exchange.core2.core.common.api.ApiAutoDeleveraging;
+import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
@@ -30,7 +30,12 @@ import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
+import exchange.core2.core.processors.liquidation.LiquidationContext.LiquidationState;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -299,5 +304,62 @@ public final class LiquidationEngine extends SimpleScheduledService {
         long expectedUidHash = (uid * 31 + 17) & 0xFFFFF; // 计算 uidHash
         long actualUidHash = (orderId >>> 12) & 0xFFFFF; // 中间 20 位
         return expectedUidHash == actualUidHash;
+    }
+
+
+    // ======== 强平状态机 ===========
+    public void next(OrderCommand cmd, SymbolPositionRecord pos) {
+        switch (cmd.command) {
+            case FORCE_LIQUIDATION -> onMarketDone(cmd, pos);
+
+//            case IF_JUDGED -> onIfJudged(pos);
+//
+//            case IF_SETTLED -> onIfSettled(pos);
+
+            case AUTO_DELEVERAGING -> onADLDone(pos);
+        }
+    }
+
+
+    private void onMarketDone(OrderCommand cmd, SymbolPositionRecord pos) {
+        LiquidationContext ctx = pos.liquidationCtx;
+        assert ctx.state == LiquidationState.LIQUIDATING;
+        /**
+         * 如果第一个事件是reject，说明没有完全成交。
+         *
+         * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
+         */
+        MatcherTradeEvent firstEvent = cmd.matcherEvent;
+        // 市场完全吃完，直接关闭
+        if (firstEvent.eventType != MatcherEventType.REJECT) {
+            ctx.size = 0;
+            ctx.state = LiquidationState.CLOSED;
+            return;
+        }
+        // 还有剩余
+        ctx.size = firstEvent.size;
+        if (shouldTryIF()) {
+            ctx.state = LiquidationState.WAIT_IF_JUDGEMENT;
+            exchangeApi.submitCommand(null); //todo submit IF cmd
+        } else {
+            ctx.state = LiquidationState.WAIT_ADL_EXECUTION;
+            ApiAutoDeleveraging adlCmd = ApiAutoDeleveraging.builder()
+                    .orderId(ADLUserPositionHelper.generateADLOrderId(pos))
+                    .uid(pos.uid).symbol(pos.symbol)
+                    .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
+                    .size(ctx.size).price(ctx.price).build();
+            log.warn("adlCmd={}", adlCmd);
+            exchangeApi.submitCommand(adlCmd);
+        }
+    }
+
+    private boolean shouldTryIF() {
+        return false; // todo
+    }
+
+    private void onADLDone(SymbolPositionRecord pos) {
+        LiquidationContext ctx = pos.liquidationCtx;
+        assert ctx.state == LiquidationState.WAIT_ADL_EXECUTION;
+        ctx.state = LiquidationState.CLOSED;
     }
 }

@@ -60,7 +60,6 @@ import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.ADLUserPositionHelper;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
-import exchange.core2.core.processors.liquidation.LiquidationStateMachine;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
@@ -1127,7 +1126,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 // ===== 3.推进 liquidation 状态机 =====
                 if (takerSpr != null) {
-                    LiquidationStateMachine.getInstance().next(cmd, takerSpr);
+                    liquidationEngine.next(cmd, takerSpr);
                 }
             }
         }

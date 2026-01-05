@@ -15,4 +15,11 @@ public final class LiquidationContext {
         this.size = size;
     }
 
+    public enum LiquidationState {
+        LIQUIDATING,
+        WAIT_IF_JUDGEMENT,
+        WAIT_ADL_EXECUTION,
+        CLOSED
+    }
+
 }
