@@ -399,7 +399,7 @@ class ITMixedIntegration {
 
             for (int i = 0; i < fundEvents.size(); i++) {
                 IFundEventsHandler.FundEventReport evt = fundEvents.get(i);
-                if (evt.getEventType().equals(FundEvent.FundEventType.LIQUIDATION)) {
+                if (evt.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_CLOSE)) {
                     event = evt;
                     break;
                 }
@@ -409,7 +409,7 @@ class ITMixedIntegration {
             assertThat(quoteId, Is.is(event.getBalances().getCurrency()));
             assertThat(10000, Is.is(event.getPositions().getSymbolId()));
             assertThat(PositionDirection.LONG, Is.is(event.getPositions().getDirection()));
-            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(event.getEventType()));
+            assertThat(FundEvent.FundEventType.LIQUIDATION_CLOSE, Is.is(event.getEventType()));
             assertThat(9900L, Is.is(event.getBalances().getFree()));
             assertThat(-800L, Is.is(event.getPositions().getCumRealized()));
             assertThat(0L, Is.is(event.getBalances().getLocked()));

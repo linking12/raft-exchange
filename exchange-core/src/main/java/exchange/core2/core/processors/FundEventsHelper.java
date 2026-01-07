@@ -168,13 +168,19 @@ public class FundEventsHelper {
     }
 
     public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked) {
-        FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
+        FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION_CLOSE : FundEventType.CLOSE_POSITION, position, free, locked);
         addFundEvent(cmd, orderId, event);
         return event;
     }
 
     public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
+        addFundEvent(cmd, orderId, event);
+        return event;
+    }
+
+    public FundEvent sendLiquidationFeeEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_FEE, position, free, locked);
         addFundEvent(cmd, orderId, event);
         return event;
     }

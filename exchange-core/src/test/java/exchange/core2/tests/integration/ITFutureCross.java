@@ -702,7 +702,7 @@ class ITFutureCross extends ITFutureBase {
 
             for (int i = 0; i < fundEvents.size(); i++) {
                 IFundEventsHandler.FundEventReport report = fundEvents.get(i);
-                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION) && report.getAccountId() == userId3) {
+                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_CLOSE) && report.getAccountId() == userId3) {
                     liquidationEvt = report;
                     break;
                 }
@@ -713,7 +713,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(10000, Is.is(liquidationEvt.getPositions().getSymbolId()));
 //            assertThat(takerOrderId, Is.is(liquidationEvt.orderId));
             assertThat(PositionDirection.LONG, Is.is(liquidationEvt.getPositions().getDirection()));
-            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(liquidationEvt.getEventType()));
+            assertThat(FundEvent.FundEventType.LIQUIDATION_CLOSE, Is.is(liquidationEvt.getEventType()));
             assertThat(9740L, Is.is(liquidationEvt.getBalances().getFree()));
             assertThat(100L, Is.is(liquidationEvt.getBalances().getLocked()));
             assertThat(0L, Is.is(liquidationEvt.getPositions().getOpenPriceSum()));

@@ -66,15 +66,18 @@ public class FundEvent {
         UNLOCK_PENDING(7),   // 未成交释放初始保证金（pendingHold 释放，locked -> free）
         OPEN_POSITION(8),    // 新增持仓记录（仅标记持仓信息）
         CLOSE_POSITION(9),   // 平仓：释放保证金 + 盈亏落地 + 手续费
-        LIQUIDATION(10),     // 强平（与 CLOSE_POSITION 类似，但来源特殊）
-        FUNDINGFEE_SETTLEMENT(11),// 资金费率结算
-        PNL_SETTLEMENT(12),       // 交割合约结算
+        LIQUIDATION_CLOSE(10),     // 强平关仓
+        LIQUIDATION_FEE(11),       // 强平费
+        FUNDINGFEE_SETTLEMENT(12),// 资金费率结算
+        PNL_SETTLEMENT(13),       // 交割合约结算
         // 补充保证金事件
-        MARGIN_ADJUST(13),      // 逐仓追加补充保证金
-        MARGIN_REFUND(14),      // 逐仓平仓返还补充保证金
+        MARGIN_ADJUST(14),      // 逐仓追加补充保证金
+        MARGIN_REFUND(15),      // 逐仓平仓返还补充保证金
+        // IF
+        IF_POSITION_CLOSE(16),    // IF 接管仓位平仓
         // ADL
-        ADL_ORIGIN_CLOSE(15),    // ADL 中破产仓位平仓
-        ADL_POSITION_CLOSE(16),  // ADL 中盈利仓位被减仓
+        ADL_ORIGIN_CLOSE(17),    // ADL 中破产仓位平仓
+        ADL_POSITION_CLOSE(18),  // ADL 中盈利仓位被减仓
 
         // 通知类事件
         MARGIN_ALERT(20),       // 通知追加保证金
