@@ -1123,6 +1123,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
                     finalizeADL(cmd, takerUp, takerSpr, spec, currencySpec);
                 }
+
+                // ===== 3.推进 liquidation 状态机 =====
+                if (takerSpr != null) {
+                    liquidationEngine.next(cmd, takerSpr);
+                }
             }
         }
 

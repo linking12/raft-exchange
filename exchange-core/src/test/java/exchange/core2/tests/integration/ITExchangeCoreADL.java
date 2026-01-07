@@ -75,7 +75,8 @@ public final class ITExchangeCoreADL {
             container.getApi().groupingControl(0, 1);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             // 等强平触发完成
-            Thread.sleep(1_000);
+            container.getApi().groupingControl(0, 1);
+            Thread.sleep(100);
 
             // 4. 校验loser仓位清仓
             container.validateUserState(UID_LOSER, profile -> {

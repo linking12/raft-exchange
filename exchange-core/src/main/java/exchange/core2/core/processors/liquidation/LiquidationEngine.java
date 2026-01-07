@@ -2,14 +2,9 @@ package exchange.core2.core.processors.liquidation;
 
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-import exchange.core2.core.processors.CurrencySpecificationProvider;
-import exchange.core2.core.processors.FundEventsHelper;
-import exchange.core2.core.processors.SymbolSpecificationProvider;
-import exchange.core2.core.processors.UserProfileService;
 import lombok.Setter;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
@@ -35,7 +30,12 @@ import exchange.core2.core.common.api.ApiAutoDeleveraging;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
+import exchange.core2.core.processors.liquidation.LiquidationContext.LiquidationState;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -157,7 +157,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
             long x = CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord);
             long sizeToLiquidate = Math.min(position.openVolume, x);
             if (sizeToLiquidate > 0) {
-                executeLiquidationOrder(userProfile, position, price, sizeToLiquidate, eventsHelper);
+                startLiquidationFlow(userProfile, position, price, sizeToLiquidate, eventsHelper);
             }
         }
         // 权益低于预警阈值但高于维持保证金，发送 Margin Call 提醒用户追加资金
@@ -252,7 +252,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 long estimatedReleasedMargin = CoreArithmeticUtils.calculateDeficitAfterLiquidate(sizeToLiquidate, position, spec, priceRecord);
                 marginReleased += estimatedReleasedMargin;
                 // 提交强平单
-                executeLiquidationOrder(userProfile, position, price, sizeToLiquidate, eventsHelper);
+                startLiquidationFlow(userProfile, position, price, sizeToLiquidate, eventsHelper);
             }
         }
     }
@@ -270,43 +270,24 @@ public final class LiquidationEngine extends SimpleScheduledService {
         return price;
     }
 
-    private void executeLiquidationOrder(UserProfile userProfile, SymbolPositionRecord position, long price, long size, FundEventsHelper eventsHelper) {
+    private void startLiquidationFlow(UserProfile userProfile, SymbolPositionRecord position, long price, long size, FundEventsHelper eventsHelper) {
+        // 初始化强平上下文（流程启动点）
+        LiquidationContext ctx = position.liquidationCtx;
+        if (ctx == null || ctx.state == LiquidationState.CLOSED) {
+            position.liquidationCtx = new LiquidationContext(price, size);
+        } else {
+            // 已在强平流程中，避免重复启动
+            return;
+        }
         // 确定强平方向：多头卖出（ASK）清算，空头买入（BID）清算
         OrderAction action = position.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
         long orderId = generateLiquidationOrderId(position.symbol, position.uid); // IOC的单子不插入orderBook的
-        CompletableFuture<OrderCommand> liquidationFuture = exchangeApi.submitCommandAsyncFullResponse(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
+        exchangeApi.submitCommand(ApiLiquidationOrder.builder().orderType(OrderType.IOC) // 目前是限价IOC，不过price是按市场价算的，只要深度足够就能成交
             .orderId(orderId).uid(position.uid).symbol(position.symbol).price(price).size(size).action(action).build());
-        liquidationFuture.whenCompleteAsync((cmd, err) -> {
-            /**
-             * 如果第一个事件是reject，说明没有完全成交。
-             *
-             * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
-             */
-            MatcherTradeEvent firstEvent = cmd.matcherEvent;
-            if (firstEvent.eventType == MatcherEventType.REJECT) {
-                long remainSize = firstEvent.size;
-                handleLiquidationFailure(position, remainSize, price);
-            }
-        });
         // 生成强平事件，记录用户、仓位和交易细节，便于审计和通知
         FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position);
         exchangeApi.submitCommand(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
         log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
-    }
-
-    private void handleLiquidationFailure(SymbolPositionRecord position, long remainSize, long price) {
-        // 降级为 IF / ADL 处理
-        if (false) {
-            // todo IF
-        } else {
-            ApiAutoDeleveraging adlCmd = ApiAutoDeleveraging.builder()
-                    .orderId(ADLUserPositionHelper.generateADLOrderId(position))
-                    .uid(position.uid).symbol(position.symbol)
-                    .action(position.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
-                    .size(remainSize).price(price).build();
-            exchangeApi.submitCommandAsync(adlCmd);
-            log.warn("adlCmd={}", adlCmd);
-        }
     }
 
     private static long generateLiquidationOrderId(int symbol, long uid) {
@@ -323,5 +304,62 @@ public final class LiquidationEngine extends SimpleScheduledService {
         long expectedUidHash = (uid * 31 + 17) & 0xFFFFF; // 计算 uidHash
         long actualUidHash = (orderId >>> 12) & 0xFFFFF; // 中间 20 位
         return expectedUidHash == actualUidHash;
+    }
+
+
+    // ======== 强平状态机 ===========
+    public void next(OrderCommand cmd, SymbolPositionRecord pos) {
+        switch (cmd.command) {
+            case FORCE_LIQUIDATION -> onMarketDone(cmd, pos);
+
+//            case IF_JUDGED -> onIfJudged(pos);
+//
+//            case IF_SETTLED -> onIfSettled(pos);
+
+            case AUTO_DELEVERAGING -> onADLDone(pos);
+        }
+    }
+
+
+    private void onMarketDone(OrderCommand cmd, SymbolPositionRecord pos) {
+        LiquidationContext ctx = pos.liquidationCtx;
+        assert ctx.state == LiquidationState.LIQUIDATING;
+        /**
+         * 如果第一个事件是reject，说明没有完全成交。
+         *
+         * @see exchange.core2.core.orderbook.OrderBookDirectImpl#newOrderMatchIoc
+         */
+        MatcherTradeEvent firstEvent = cmd.matcherEvent;
+        // 市场完全吃完，直接关闭
+        if (firstEvent.eventType != MatcherEventType.REJECT) {
+            ctx.size = 0;
+            ctx.state = LiquidationState.CLOSED;
+            return;
+        }
+        // 还有剩余
+        ctx.size = firstEvent.size;
+        if (shouldTryIF()) {
+            ctx.state = LiquidationState.WAIT_IF_JUDGEMENT;
+            exchangeApi.submitCommand(null); //todo submit IF cmd
+        } else {
+            ctx.state = LiquidationState.WAIT_ADL_EXECUTION;
+            ApiAutoDeleveraging adlCmd = ApiAutoDeleveraging.builder()
+                    .orderId(ADLUserPositionHelper.generateADLOrderId(pos))
+                    .uid(pos.uid).symbol(pos.symbol)
+                    .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
+                    .size(ctx.size).price(ctx.price).build();
+            log.warn("adlCmd={}", adlCmd);
+            exchangeApi.submitCommand(adlCmd);
+        }
+    }
+
+    private boolean shouldTryIF() {
+        return false; // todo
+    }
+
+    private void onADLDone(SymbolPositionRecord pos) {
+        LiquidationContext ctx = pos.liquidationCtx;
+        assert ctx.state == LiquidationState.WAIT_ADL_EXECUTION;
+        ctx.state = LiquidationState.CLOSED;
     }
 }
