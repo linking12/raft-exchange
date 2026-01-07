@@ -1122,6 +1122,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // ===== 2. cmd 结束后的收尾 =====
                 if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
                     finalizeADL(cmd, takerUp, takerSpr, spec, currencySpec);
+                } else if (cmd.command == OrderCommandType.FORCE_LIQUIDATION) {
+                    collectLiquidationFee(cmd, takerUp, takerSpr, spec, currencySpec);
                 }
 
                 // ===== 3.推进 liquidation 状态机 =====
@@ -1221,6 +1223,33 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked);
             })
         );
+    }
+
+    private void collectLiquidationFee(final OrderCommand cmd,
+                                       final UserProfile takerUp,
+                                       final SymbolPositionRecord takerSpr,
+                                       final CoreSymbolSpecification spec,
+                                       final CoreCurrencySpecification currencySpec) {
+        if (takerUp != null) {
+            long takerSizeForThisHandler = 0L;
+            long takerSizePriceForThisHandler = 0L;
+            MatcherTradeEvent ev = cmd.matcherEvent;
+            while (ev != null) {
+                if (ev.eventType == MatcherEventType.TRADE) {
+                    takerSizeForThisHandler += ev.size;
+                    takerSizePriceForThisHandler += ev.size * ev.price;
+                }
+                ev = ev.nextEvent;
+            }
+            if (takerSizeForThisHandler == 0) {
+                return;
+            }
+            long notional = CoreArithmeticUtils.calculateLiquidationFee(takerSizeForThisHandler, takerSizePriceForThisHandler, spec);
+            long fee = CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, currencySpec);
+            takerUp.accounts.addToValue(takerSpr.currency, -fee);
+//            ifService.addFee(takerSpr.symbol, takerSpr.currency, notional);
+//            eventsHelper.sendEvent(cmd, cmd.orderId, takerSpr, free, lockedMargin);
+        }
     }
 
     private void handleADLRelease(final OrderCommand cmd,

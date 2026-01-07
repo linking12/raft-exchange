@@ -60,12 +60,13 @@ message CoreSymbolSpecification {
   int64 quote_scale_k = 6;
   int64 taker_fee = 7;
   int64 maker_fee = 8;
-  int64 fee_scale_k = 9;
-  int64 init_margin = 10;
-  int64 init_margin_scale_k = 11;
-  map<int64, int64> maintenance_margin = 12;
-  int64 maintenance_margin_scale_k = 13;
-  map<int64, int64> max_leverage = 14;
+  int64 liquidation_fee = 9;
+  int64 fee_scale_k = 10;
+  int64 init_margin = 11;
+  int64 init_margin_scale_k = 12;
+  map<int64, int64> maintenance_margin = 13;
+  int64 maintenance_margin_scale_k = 14;
+  map<int64, int64> max_leverage = 15;
 }
 
 message CoreCurrencySpecification {

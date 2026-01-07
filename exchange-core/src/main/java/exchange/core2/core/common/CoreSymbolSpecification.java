@@ -48,6 +48,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     // fees per lot in quote? currency units
     public final long takerFee; // TODO check invariant: taker fee is not less than maker fee
     public final long makerFee;
+    public final long liquidationFee;
     public final long feeScaleK; // 0表示固定费用; >0表示按比例费用, rate=fee/feeScaleK
 
     // margin settings (for type=FUTURES_CONTRACT only)
@@ -68,6 +69,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         this.quoteScaleK = bytes.readLong();
         this.takerFee = bytes.readLong();
         this.makerFee = bytes.readLong();
+        this.liquidationFee = bytes.readLong();
         this.feeScaleK = bytes.readLong();
         this.initMargin = bytes.readLong();
         this.initMarginScaleK = bytes.readLong();
@@ -172,6 +174,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         bytes.writeLong(quoteScaleK);
         bytes.writeLong(takerFee);
         bytes.writeLong(makerFee);
+        bytes.writeLong(liquidationFee);
         bytes.writeLong(feeScaleK);
         bytes.writeLong(initMargin);
         bytes.writeLong(initMarginScaleK);
@@ -182,8 +185,8 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
 
     @Override
     public int stateHash() {
-        return Objects.hash(symbolId, type.getCode(), baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, maintenanceMargin,
-            maintenanceMarginScaleK, maxLeverage);
+        return Objects.hash(symbolId, type.getCode(), baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee, makerFee,
+            liquidationFee, feeScaleK, maintenanceMargin, maintenanceMarginScaleK, maxLeverage);
     }
 
     @Override
@@ -194,7 +197,7 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
             return false;
         CoreSymbolSpecification that = (CoreSymbolSpecification)o;
         return symbolId == that.symbolId && baseCurrency == that.baseCurrency && quoteCurrency == that.quoteCurrency && baseScaleK == that.baseScaleK
-            && quoteScaleK == that.quoteScaleK && takerFee == that.takerFee && makerFee == that.makerFee && feeScaleK == that.feeScaleK
+            && quoteScaleK == that.quoteScaleK && takerFee == that.takerFee && makerFee == that.makerFee && liquidationFee == that.liquidationFee && feeScaleK == that.feeScaleK
             && maintenanceMargin == that.maintenanceMargin && maintenanceMarginScaleK == that.maintenanceMarginScaleK && maxLeverage == that.maxLeverage
             && type == that.type;
     }
