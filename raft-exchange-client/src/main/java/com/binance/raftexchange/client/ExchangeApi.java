@@ -157,11 +157,11 @@ public class ExchangeApi implements AutoCloseable {
     }
 
     public CommandResultView addSymbol(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
-                                   long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long feeScaleK,
+                                   long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long liquidationFee, long feeScaleK,
                                    long initMargin, long initMarginScaleK, Map<Long, Long> maintenanceMargin,
                                    long maintenanceMarginScaleK, Map<Long, Long> maxLeverage) {
         ApiCommand cmd = buildAddSymbolCommand(id, symbolType, baseCurrency, quoteCurrency,
-                baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, initMargin, initMarginScaleK,
+                baseScaleK, quoteScaleK, takerFee, makerFee, liquidationFee, feeScaleK, initMargin, initMarginScaleK,
                 maintenanceMargin, maintenanceMarginScaleK, maxLeverage);
         CommandResultView result = send(cmd);
         if (result.getResultCode() == CommandResultCode.SUCCESS) {
@@ -172,13 +172,13 @@ public class ExchangeApi implements AutoCloseable {
     }
 
     public CompletableFuture<CommandResultView> addSymbolAsync(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
-                                                           long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long feeScaleK,
+                                                           long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long liquidationFee, long feeScaleK,
                                                            long initMargin, long initMarginScaleK, Map<Long, Long> maintenanceMargin,
                                                            long maintenanceMarginScaleK, Map<Long, Long> maxLeverage) {
         final ApiCommand cmd;
         try {
             cmd = buildAddSymbolCommand(id, symbolType, baseCurrency, quoteCurrency,
-                    baseScaleK, quoteScaleK, takerFee, makerFee, feeScaleK, initMargin, initMarginScaleK,
+                    baseScaleK, quoteScaleK, takerFee, makerFee, liquidationFee, feeScaleK, initMargin, initMarginScaleK,
                     maintenanceMargin, maintenanceMarginScaleK, maxLeverage);
         } catch (Exception ex) {
             return CompletableFuture.failedFuture(ex);
@@ -193,7 +193,7 @@ public class ExchangeApi implements AutoCloseable {
     }
 
     private ApiCommand buildAddSymbolCommand(int id, SymbolType symbolType, int baseCurrency, int quoteCurrency,
-                                             long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long feeScaleK,
+                                             long baseScaleK, long quoteScaleK, long takerFee, long makerFee, long liquidationFee, long feeScaleK,
                                              long initMargin, long initMarginScaleK, Map<Long, Long> maintenanceMargin,
                                              long maintenanceMarginScaleK, Map<Long, Long> maxLeverage) {
         if (metadataManager.symbolExists(id)) {
@@ -209,7 +209,7 @@ public class ExchangeApi implements AutoCloseable {
                 .setSymbolId(id).setType(symbolType)
                 .setBaseCurrency(baseCurrency).setQuoteCurrency(quoteCurrency)
                 .setBaseScaleK(baseScaleK).setQuoteScaleK(quoteScaleK)
-                .setTakerFee(takerFee).setMakerFee(makerFee).setFeeScaleK(feeScaleK);
+                .setTakerFee(takerFee).setMakerFee(makerFee).setLiquidationFee(liquidationFee).setFeeScaleK(feeScaleK);
         if (symbolType != SymbolType.CURRENCY_EXCHANGE_PAIR) {
             symbolToAdd.setInitMargin(initMargin).setInitMarginScaleK(initMarginScaleK)
                     .putAllMaintenanceMargin(maintenanceMargin).setMaintenanceMarginScaleK(maintenanceMarginScaleK)

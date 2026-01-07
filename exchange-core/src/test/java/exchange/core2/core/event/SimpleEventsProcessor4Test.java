@@ -71,7 +71,7 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
     public CoreSymbolSpecification fakeSpotSymbol(int symbol) {
         return new CoreSymbolSpecification(symbol, SymbolType.CURRENCY_EXCHANGE_PAIR, 1, 2, 1000, 1000,
-                0, 0, 0, 0, 0, null, 0, null);
+                0, 0, 0, 0, 0, 0, null, 0, null);
     }
 
 }

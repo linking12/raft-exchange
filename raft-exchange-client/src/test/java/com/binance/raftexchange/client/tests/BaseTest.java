@@ -66,10 +66,10 @@ public class BaseTest {
         exchangeApi.addCurrency(USDT_ID, "USDT", 6);
 
         exchangeApi.addSymbol(BNB_USDT_SPOT, SymbolType.CURRENCY_EXCHANGE_PAIR, BNB_ID, USDT_ID, 1000, 100000,
-                15, 10, 1000, 0, 0, null, 0, null);
+                15, 10, 1000, 0, 0, 0, null, 0, null);
 
         exchangeApi.addSymbol(BNB_USDT_FU, SymbolType.FUTURES_CONTRACT_PERPETUAL, BNB_ID, USDT_ID, 1000, 100000,
-                15, 10, 1000, 10, 100,
+                15, 10, 1000, 0, 10, 100,
                 buildSlotValueMap(100L, 10L, 200L, 20L, 300L, 30L), 100,
                 buildSlotValueMap(1000L, 75L, 2000L, 50L, 3000L, 10L));
 
