@@ -17,7 +17,7 @@ public final class LiquidationContext {
 
     public enum LiquidationState {
         LIQUIDATING,
-        WAIT_IF_JUDGEMENT,
+        WAIT_IF_EXECUTION,
         WAIT_ADL_EXECUTION,
         CLOSED
     }

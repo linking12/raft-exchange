@@ -27,6 +27,7 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiAutoDeleveraging;
+import exchange.core2.core.common.api.ApiIFTakeOver;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -308,13 +309,11 @@ public final class LiquidationEngine extends SimpleScheduledService {
 
 
     // ======== 强平状态机 ===========
-    public void next(OrderCommand cmd, SymbolPositionRecord pos) {
+    public void nextLiquidationState(OrderCommand cmd, SymbolPositionRecord pos) {
         switch (cmd.command) {
             case FORCE_LIQUIDATION -> onMarketDone(cmd, pos);
 
-//            case IF_JUDGED -> onIfJudged(pos);
-//
-//            case IF_SETTLED -> onIfSettled(pos);
+            case IF_TAKEOVER -> onIFTakeoverDone(cmd, pos);
 
             case AUTO_DELEVERAGING -> onADLDone(pos);
         }
@@ -332,29 +331,50 @@ public final class LiquidationEngine extends SimpleScheduledService {
         MatcherTradeEvent firstEvent = cmd.matcherEvent;
         // 市场完全吃完，直接关闭
         if (firstEvent.eventType != MatcherEventType.REJECT) {
-            ctx.size = 0;
             ctx.state = LiquidationState.CLOSED;
             return;
         }
         // 还有剩余
         ctx.size = firstEvent.size;
         if (shouldTryIF()) {
-            ctx.state = LiquidationState.WAIT_IF_JUDGEMENT;
-            exchangeApi.submitCommand(null); //todo submit IF cmd
-        } else {
-            ctx.state = LiquidationState.WAIT_ADL_EXECUTION;
-            ApiAutoDeleveraging adlCmd = ApiAutoDeleveraging.builder()
-                    .orderId(ADLUserPositionHelper.generateADLOrderId(pos))
+            ctx.state = LiquidationState.WAIT_IF_EXECUTION;
+            ApiIFTakeOver ifCmd = ApiIFTakeOver.builder()
+                    .orderId(IFService.generateIFOrderId(cmd.orderId))
                     .uid(pos.uid).symbol(pos.symbol)
                     .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
                     .size(ctx.size).price(ctx.price).build();
-            log.warn("adlCmd={}", adlCmd);
-            exchangeApi.submitCommand(adlCmd);
+            log.warn("ifCmd={}", ifCmd);
+            exchangeApi.submitCommand(ifCmd);
+        } else {
+            submitADL(pos, ctx);
         }
     }
 
     private boolean shouldTryIF() {
         return false; // todo
+    }
+
+    private void onIFTakeoverDone(OrderCommand cmd, SymbolPositionRecord pos) {
+        LiquidationContext ctx = pos.liquidationCtx;
+        assert ctx.state == LiquidationState.WAIT_IF_EXECUTION;
+        MatcherTradeEvent firstEvent = cmd.matcherEvent;
+        // IF接仓，直接关闭
+        if (firstEvent.eventType != MatcherEventType.REJECT) {
+            ctx.state = LiquidationState.CLOSED;
+            return;
+        }
+        submitADL(pos, ctx);
+    }
+
+    private void submitADL(SymbolPositionRecord pos, LiquidationContext ctx) {
+        ctx.state = LiquidationState.WAIT_ADL_EXECUTION;
+        ApiAutoDeleveraging adlCmd = ApiAutoDeleveraging.builder()
+                .orderId(ADLUserPositionHelper.generateADLOrderId(pos))
+                .uid(pos.uid).symbol(pos.symbol)
+                .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
+                .size(ctx.size).price(ctx.price).build();
+        log.warn("adlCmd={}", adlCmd);
+        exchangeApi.submitCommand(adlCmd);
     }
 
     private void onADLDone(SymbolPositionRecord pos) {

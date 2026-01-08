@@ -81,6 +81,15 @@ public class IFService implements WriteBytesMarshallable, StateHash {
         SerializationUtils.marshallIntHashMap(positions, bytes);
     }
 
+    /**
+     * | 63........56 | 55..................0 |
+     * |   'I' tag    | liquidation tail     |
+     */
+    public static long generateIFOrderId(long liquidationOrderId) {
+        long ifOrderTag = 0x49L; // 'I'
+        return (ifOrderTag << 56) | (liquidationOrderId & 0x00FFFFFFFFFFFFFFL);
+    }
+
     @AllArgsConstructor
     public static final class IFNotional implements WriteBytesMarshallable, StateHash {
         public int currency;

@@ -1133,7 +1133,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 // ===== 3.推进 liquidation 状态机 =====
                 if (takerSpr != null) {
-                    liquidationEngine.next(cmd, takerSpr);
+                    liquidationEngine.nextLiquidationState(cmd, takerSpr);
                 }
             }
         }
