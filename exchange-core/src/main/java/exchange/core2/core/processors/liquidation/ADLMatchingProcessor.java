@@ -32,10 +32,12 @@ public class ADLMatchingProcessor {
     private void matchADLPositions(OrderCommand cmd) {
         long remaining = cmd.size;
         if (remaining <= 0) {
+            cmd.matcherEvent = buildRejectEvent();
             return;
         }
         final ADLUserPosition[] positionsByShard = cmd.adlUserPositionsByShard;
         if (positionsByShard == null || positionsByShard.length == 0) {
+            cmd.matcherEvent = buildRejectEvent();
             return;
         }
 
@@ -92,5 +94,11 @@ public class ADLMatchingProcessor {
 
         cmd.size -= remaining; // 更新真实平仓数量，即R2阶段原始仓位关仓数量
         cmd.matcherEvent = head;
+    }
+
+    private MatcherTradeEvent buildRejectEvent() {
+        MatcherTradeEvent ev = eventsHelper.newMatcherEvent();
+        ev.eventType = MatcherEventType.REJECT;
+        return ev;
     }
 }
