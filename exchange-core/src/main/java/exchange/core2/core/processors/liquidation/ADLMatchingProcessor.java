@@ -55,6 +55,11 @@ public class ADLMatchingProcessor {
                 if (c == null) {
                     continue;
                 }
+                if (c.volume <= 0) {
+                    // 跳过无效节点，并推进 cursor
+                    cursors[i] = c.next;
+                    continue;
+                }
                 if (best == null || c.score > best.score) {
                     best = c;
                     bestShard = i;
@@ -92,6 +97,11 @@ public class ADLMatchingProcessor {
             remaining -= execSize;
         }
 
+        if (head == null) {
+            // 没有执行出任何 ADL event，视为 reject（保证 matcherEvent 非空）
+            cmd.matcherEvent = buildRejectEvent();
+            return;
+        }
         cmd.size -= remaining; // 更新真实平仓数量，即R2阶段原始仓位关仓数量
         cmd.matcherEvent = head;
     }
