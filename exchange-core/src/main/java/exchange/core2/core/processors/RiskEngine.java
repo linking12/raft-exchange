@@ -1243,8 +1243,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         // 3. 更新仓位信息
         pos.closeCurrentPositionFutures(adlPosSide.opposite(), ev.size, cmd.price);
-        // 释放 ADL pending
-        pos.pendingADLSize -= ev.size;
 
         // ADL 平仓事件
         long locked = calculateLockedMargin(up, spec.quoteCurrency);
@@ -1273,7 +1271,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 removePositionRecord(spec, takerSpr, takerUp, currencySpec);
             }
         }
-        // 2. 释放所有未使用的 pendingADLSize
+        // 2. 释放所有 pendingADLSize
         ADLUserPosition head = cmd.adlUserPositionsByShard[shardId];
         while (head != null) {
             UserProfile up = userProfileService.getUserProfile(head.uid);
