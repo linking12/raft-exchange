@@ -1235,7 +1235,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                        final SymbolPositionRecord takerSpr,
                                        final CoreSymbolSpecification spec,
                                        final CoreCurrencySpecification currencySpec) {
-        if (takerUp != null) {
+        if (takerSpr != null && cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
             long takerSizeForThisHandler = 0L;
             long takerSizePriceForThisHandler = 0L;
             MatcherTradeEvent ev = cmd.matcherEvent;
@@ -1299,7 +1299,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                              final CoreSymbolSpecification spec,
                              final CoreCurrencySpecification currencySpec) {
         // 1. 关闭原始仓位（只做一次）
-        if (takerSpr != null && cmd.matcherEvent.eventType == MatcherEventType.ADL_EVENT) {
+        if (takerSpr != null && cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
             takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
             // ADL 平仓事件
             long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
