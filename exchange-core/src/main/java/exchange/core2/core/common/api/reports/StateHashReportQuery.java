@@ -112,6 +112,10 @@ public final class StateHashReportQuery implements ReportQuery<StateHashReportRe
                 StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_SHARD_MASK),
                 Long.hashCode(riskEngine.getShardMask()));
 
+        hashCodes.put(
+                StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_IF_SERVICE),
+                riskEngine.getIfService().stateHash());
+
         return Optional.of(
                 new StateHashReportResult(hashCodes));
     }

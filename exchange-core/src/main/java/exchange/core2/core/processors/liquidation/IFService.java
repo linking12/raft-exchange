@@ -54,7 +54,7 @@ public class IFService implements WriteBytesMarshallable, StateHash {
         notional.pending -= pendingNotional;
     }
 
-    // R2：真正接仓（在 IF_ACCEPTED 后）
+    // R2：真正接仓
     public void acceptPosition(SymbolPositionRecord pos, long size, long price) {
         IFNotional notional = notionals.get(pos.symbol);
         long spend = size * price;
@@ -64,16 +64,6 @@ public class IFService implements WriteBytesMarshallable, StateHash {
         position.openVolume += size;
         position.openPriceSum += spend;
     }
-
-//    // ME/R2 释放：失败回滚
-//    void releasePending(int symbol, long debit) {
-//
-//    }
-//
-//    // R2 执行：目标 shard 真正消耗（takeOver 时）
-//    void consumeAvailable(int symbol, long amount) {
-//
-//    }
 
     public void reset() {
         notionals.clear();
