@@ -2,7 +2,6 @@ package exchange.core2.core.processors.liquidation;
 
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.StateHash;
-import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.AllArgsConstructor;
@@ -32,14 +31,14 @@ public class IFService implements WriteBytesMarshallable, StateHash {
         positions = SerializationUtils.readIntHashMap(bytes, IFPositionRecord::new);
     }
 
-    public void addFee(int symbol, int currency, long notionalFee) {
-        IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(currency, 0, 0));
+    public void addFee(int symbol, long notionalFee) {
+        IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
         notional.available += notionalFee;
     }
 
     // R1 ：本 shard 最多能贡献多少
     public long previewCover(int symbol, long requestSize, long price) {
-        IFNotional notional = notionals.get(symbol);
+        IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
         long available = notional.available - notional.pending;
         long needed = requestSize * price;
         long canCover = Math.min(available, needed);
@@ -55,12 +54,12 @@ public class IFService implements WriteBytesMarshallable, StateHash {
     }
 
     // R2：真正接仓
-    public void acceptPosition(SymbolPositionRecord pos, long size, long price) {
-        IFNotional notional = notionals.get(pos.symbol);
+    public void acceptPosition(int symbol, PositionDirection direction, long size, long price) {
+        IFNotional notional = notionals.get(symbol);
         long spend = size * price;
         notional.available -= spend;
-        IFPositionRecord position = positions.getIfAbsentPut(pos.direction.getMultiplier() * pos.symbol,
-            () -> new IFPositionRecord(pos.symbol, pos.currency, pos.direction, 0, 0));
+        IFPositionRecord position = positions.getIfAbsentPut(direction.getMultiplier() * symbol,
+                () -> new IFPositionRecord(symbol, direction, 0, 0));
         position.openVolume += size;
         position.openPriceSum += spend;
     }
@@ -92,24 +91,21 @@ public class IFService implements WriteBytesMarshallable, StateHash {
 
     @AllArgsConstructor
     public static final class IFNotional implements WriteBytesMarshallable, StateHash {
-        public int currency;
         public long available;
         public long pending;
 
         public IFNotional(BytesIn bytes) {
-            currency = bytes.readInt();
             available = bytes.readLong();
             pending = bytes.readLong();
         }
 
         @Override
         public int stateHash() {
-            return Objects.hash(currency, available, pending);
+            return Objects.hash(available, pending);
         }
 
         @Override
         public void writeMarshallable(BytesOut bytes) {
-            bytes.writeInt(currency);
             bytes.writeLong(available);
             bytes.writeLong(pending);
         }
@@ -118,36 +114,25 @@ public class IFService implements WriteBytesMarshallable, StateHash {
     @AllArgsConstructor
     public static final class IFPositionRecord implements WriteBytesMarshallable, StateHash {
         public int symbol;
-        public int currency;
         public PositionDirection direction;
         public long openVolume;
         public long openPriceSum;
 
         public IFPositionRecord(BytesIn bytes) {
             symbol = bytes.readInt();
-            currency = bytes.readInt();
             direction = PositionDirection.of(bytes.readByte());
             openVolume = bytes.readLong();
             openPriceSum = bytes.readLong();
         }
 
-        public boolean isEmpty() {
-            return openVolume == 0 || direction == PositionDirection.EMPTY;
-        }
-
-        public long avgOpenPrice() {
-            return openVolume == 0 ? 0 : openPriceSum / openVolume;
-        }
-
         @Override
         public int stateHash() {
-            return Objects.hash(symbol, currency, direction, openVolume, openPriceSum);
+            return Objects.hash(symbol, direction, openVolume, openPriceSum);
         }
 
         @Override
         public void writeMarshallable(BytesOut bytes) {
             bytes.writeInt(symbol);
-            bytes.writeInt(currency);
             bytes.writeByte((byte) direction.getMultiplier());
             bytes.writeLong(openVolume);
             bytes.writeLong(openPriceSum);

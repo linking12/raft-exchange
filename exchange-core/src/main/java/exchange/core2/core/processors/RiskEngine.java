@@ -1131,7 +1131,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 // ===== 1. 处理 matcherEvent 链 =====
                 do {
-                    if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
+                    if (cmd.command == OrderCommandType.IF_TAKEOVER) {
+                        handleIFTakeover(cmd, mte);
+                    } else if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
                         handleADLRelease(cmd, mte, spec, currencySpec);
                     } else {
                         handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
@@ -1140,7 +1142,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 } while (mte != null);
 
                 // ===== 2. cmd 结束后的收尾 =====
-                if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
+                if (cmd.command == OrderCommandType.IF_TAKEOVER) {
+                    finalizeIF(cmd, takerUp, takerSpr, spec, currencySpec);
+                } else if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
                     finalizeADL(cmd, takerUp, takerSpr, spec, currencySpec);
                 } else if (cmd.command == OrderCommandType.FORCE_LIQUIDATION) {
                     collectLiquidationFee(cmd, takerUp, takerSpr, spec, currencySpec);
@@ -1267,12 +1271,21 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long notional = CoreArithmeticUtils.calculateLiquidationFee(takerSizeForThisHandler, takerSizePriceForThisHandler, spec);
             long fee = CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, currencySpec);
             takerUp.accounts.addToValue(takerSpr.currency, -fee);
-            ifService.addFee(takerSpr.symbol, takerSpr.currency, notional);
+            ifService.addFee(takerSpr.symbol, notional);
             // 强平费事件
             long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
             long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
             eventsHelper.sendLiquidationFeeEvent(cmd, cmd.orderId, takerSpr, free, locked);
         }
+    }
+
+    private void handleIFTakeover(final OrderCommand cmd,
+                                  final MatcherTradeEvent ev) {
+        if (ev.eventType != MatcherEventType.IF_EVENT) {
+            return;
+        }
+        PositionDirection direction = cmd.action == OrderAction.BID ? PositionDirection.LONG : PositionDirection.SHORT;
+        ifService.acceptPosition(cmd.symbol, direction, ev.size, cmd.price);
     }
 
     private void handleADLRelease(final OrderCommand cmd,
@@ -1304,6 +1317,28 @@ public final class RiskEngine implements WriteBytesMarshallable {
             refundExtraMargin(cmd, cmd.orderId, spec, pos, up, currencySpec);
             removePositionRecord(spec, pos, up, currencySpec);
         }
+    }
+
+    private void finalizeIF(final OrderCommand cmd,
+                             final UserProfile takerUp,
+                             final SymbolPositionRecord takerSpr,
+                             final CoreSymbolSpecification spec,
+                             final CoreCurrencySpecification currencySpec) {
+        // 1. 关闭原始仓位（只做一次）
+        if (takerSpr != null && cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
+            takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
+            // IF 平仓事件
+            long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+            long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
+            eventsHelper.sendIFClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
+            if (takerSpr.isEmpty()) {
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                removePositionRecord(spec, takerSpr, takerUp, currencySpec);
+            }
+        }
+        // 2. 释放 previewCover
+        long previewCover = cmd.ifPreviewCoverByShard[shardId];
+        ifService.releasePending(cmd.symbol, previewCover);
     }
 
     private void finalizeADL(final OrderCommand cmd,

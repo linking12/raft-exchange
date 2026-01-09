@@ -221,6 +221,12 @@ public class FundEventsHelper {
         return event;
     }
 
+    public FundEvent sendIFClosePositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.IF_POSITION_CLOSE, position, free, locked);
+        addFundEvent(cmd, orderId, event);
+        return event;
+    }
+
     public FundEvent sendADLClosePositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
         boolean isOrigin = cmd.uid == position.uid;
         FundEvent event = buildFuturesEvent(orderId, isOrigin ? FundEventType.ADL_ORIGIN_CLOSE : FundEventType.ADL_POSITION_CLOSE, position, free, locked);
