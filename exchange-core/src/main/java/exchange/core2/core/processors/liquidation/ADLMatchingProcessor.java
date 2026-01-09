@@ -3,10 +3,8 @@ package exchange.core2.core.processors.liquidation;
 import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
-import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import lombok.RequiredArgsConstructor;
 
 /**
  * ADLMatchingProcessor is responsible for resolving auto-deleveraging execution
@@ -15,21 +13,14 @@ import lombok.RequiredArgsConstructor;
  * It DOES NOT modify positions or accounts.
  * It DOES NOT perform order matching.
  */
-@RequiredArgsConstructor
-public class ADLMatchingProcessor {
+public class ADLMatchingProcessor extends AbstractLiquidationMatchingProcessor {
 
-    private final OrderBookEventsHelper eventsHelper;
-
-    public CommandResultCode processADLCommand(OrderCommand cmd) {
-        if (cmd.resultCode == CommandResultCode.VALID_FOR_MATCHING_ENGINE) {
-            matchADLPositions(cmd);
-            return CommandResultCode.SUCCESS;
-        } else {
-            return cmd.resultCode;
-        }
+    public ADLMatchingProcessor(OrderBookEventsHelper eventsHelper) {
+        super(eventsHelper);
     }
 
-    private void matchADLPositions(OrderCommand cmd) {
+    @Override
+    protected void buildMatcherEvents(OrderCommand cmd) {
         long remaining = cmd.size;
         if (remaining <= 0) {
             cmd.matcherEvent = buildRejectEvent();
@@ -53,11 +44,6 @@ public class ADLMatchingProcessor {
             for (int i = 0; i < cursors.length; i++) {
                 final ADLUserPosition c = cursors[i];
                 if (c == null) {
-                    continue;
-                }
-                if (c.volume <= 0) {
-                    // 跳过无效节点，并推进 cursor
-                    cursors[i] = c.next;
                     continue;
                 }
                 if (best == null || c.score > best.score) {
@@ -106,9 +92,4 @@ public class ADLMatchingProcessor {
         cmd.matcherEvent = head;
     }
 
-    private MatcherTradeEvent buildRejectEvent() {
-        MatcherTradeEvent ev = eventsHelper.newMatcherEvent();
-        ev.eventType = MatcherEventType.REJECT;
-        return ev;
-    }
 }

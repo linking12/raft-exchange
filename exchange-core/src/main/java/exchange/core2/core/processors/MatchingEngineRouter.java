@@ -170,7 +170,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         if (command == OrderCommandType.AUTO_DELEVERAGING) {
             // only process ADL cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
-                cmd.resultCode = adlMatchingProcessor.processADLCommand(cmd);
+                cmd.resultCode = adlMatchingProcessor.process(cmd);
             }
 
         } else if (command == OrderCommandType.MOVE_ORDER

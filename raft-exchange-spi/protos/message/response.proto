@@ -124,7 +124,8 @@ enum MatcherEventType {
     REJECT = 1;
     REDUCE = 2;
     BINARY_EVENT = 3;
-    ADL_EVENT = 4;
+    IF_EVENT = 4;
+    ADL_EVENT = 5;
 }
 
 // Message for MatcherTradeEvent
