@@ -25,20 +25,22 @@ public class IFMatchingProcessor extends AbstractLiquidationMatchingProcessor {
     @Override
     protected void buildMatcherEvents(OrderCommand cmd) {
         long remainingSize = cmd.size;
-        if (remainingSize <= 0) {
+        final long price = cmd.price;
+        if (remainingSize <= 0 || price <= 0) {
             cmd.matcherEvent = buildRejectEvent();
             return;
         }
-        final long price = cmd.price;
         final long[] reservedByShard = cmd.ifPreviewCoverByShard;
         if (reservedByShard == null || reservedByShard.length == 0) {
             cmd.matcherEvent = buildRejectEvent();
             return;
         }
 
-        long neededNotional = remainingSize * price;
-        long previewCoveredNotional = Arrays.stream(reservedByShard).sum();
-        if (previewCoveredNotional < neededNotional) {
+        // 注意：IF 接管能力不能用名义价值总和判断。
+        // 各分片只能按 floor(reservedNotional / price) 提供合约数量，
+        // 名义价值的碎片无法跨分片合并，否则会出现“名义上够、实际接不满”的情况。
+        long totalCoverSize = Arrays.stream(reservedByShard).map(n -> n / price).sum();
+        if (totalCoverSize < remainingSize) {
             cmd.matcherEvent = buildRejectEvent();
             return;
         }
@@ -72,14 +74,6 @@ public class IFMatchingProcessor extends AbstractLiquidationMatchingProcessor {
 
             remainingSize -= takeSize;
         }
-
-        if (head == null) {
-            // 没有执行出任何 ADL event，视为 reject（保证 matcherEvent 非空）
-            cmd.matcherEvent = buildRejectEvent();
-            return;
-        }
-        // 更新真实被 IF 接管的 size
-        cmd.size -= remainingSize;
         cmd.matcherEvent = head;
     }
 

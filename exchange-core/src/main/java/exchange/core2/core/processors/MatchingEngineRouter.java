@@ -33,6 +33,7 @@ import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.ADLMatchingProcessor;
+import exchange.core2.core.processors.liquidation.IFMatchingProcessor;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
 import lombok.Builder;
@@ -63,6 +64,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     // local objects pool for order books
     private final ObjectsPool objectsPool;
 
+    private final IFMatchingProcessor ifMatchingProcessor;
     private final ADLMatchingProcessor adlMatchingProcessor;
 
     // sharding by symbolId
@@ -113,6 +115,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.sharedPool = sharedPool;
 
+        this.ifMatchingProcessor = new IFMatchingProcessor(eventsHelper);
         this.adlMatchingProcessor = new ADLMatchingProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
@@ -167,7 +170,13 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
 
         final OrderCommandType command = cmd.command;
 
-        if (command == OrderCommandType.AUTO_DELEVERAGING) {
+        if (command == OrderCommandType.IF_TAKEOVER) {
+            // only process IF cmd on the symbol shard
+            if (symbolForThisHandler(cmd.symbol)) {
+                cmd.resultCode = ifMatchingProcessor.process(cmd);
+            }
+
+        } else if (command == OrderCommandType.AUTO_DELEVERAGING) {
             // only process ADL cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
                 cmd.resultCode = adlMatchingProcessor.process(cmd);
