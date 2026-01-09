@@ -105,6 +105,11 @@ public final class OrderCommand implements IOrder {
     public FundEvent[] makerFundEventsByShard;
 
     /**
+     * 【注意并发】IF 最大可覆盖名义价值，按shard分组；用数组维护，下标是shardId。
+     */
+    public long[] ifPreviewCoverByShard;
+
+    /**
      * 【注意并发】ADL候选列表，按shard分组；用数组维护，下标是shardId。
      */
     public ADLUserPosition[] adlUserPositionsByShard;

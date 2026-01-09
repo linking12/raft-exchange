@@ -542,6 +542,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
             }
+            case IF_TAKEOVER: {
+                collectIFPreviewData(cmd);
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = normalizeCmdPositionSize(cmd);
+                }
+                return false;
+            }
             case AUTO_DELEVERAGING: {
                 collectADLProfitablePositions(cmd);
                 if (uidForThisHandler(cmd.uid)) {
@@ -567,6 +574,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // 再校准一次size，这样ME那边用的时候size一定是准的
         cmd.size = Math.min(position.openVolume, cmd.size);
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+    }
+
+    private void collectIFPreviewData(final OrderCommand cmd) {
+        long previewCover = ifService.previewCover(cmd.symbol, cmd.size, cmd.price);
+        if (cmd.ifPreviewCoverByShard == null) {
+            cmd.ifPreviewCoverByShard = new long[numShards];
+        }
+        cmd.ifPreviewCoverByShard[shardId] = previewCover;
     }
 
     private void collectADLProfitablePositions(final OrderCommand cmd) {
