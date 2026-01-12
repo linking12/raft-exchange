@@ -72,6 +72,10 @@ public enum OrderCommandType {
     private byte code;
     private boolean mutate;
 
+    public boolean isLiquidationFlowCommand() {
+        return this == FORCE_LIQUIDATION || this == IF_TAKEOVER || this == AUTO_DELEVERAGING;
+    }
+
     public static OrderCommandType fromCode(byte code) {
         // TODO try if-else
         final OrderCommandType result = codes.get(code);

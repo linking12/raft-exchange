@@ -1359,14 +1359,16 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
         }
         // 2. 释放所有 pendingADLSize
-        ADLUserPosition head = cmd.adlUserPositionsByShard[shardId];
-        while (head != null) {
-            UserProfile up = userProfileService.getUserProfile(head.uid);
-            SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(head.symbol, cmd.action.opposite(), cmd.command));
-            if (pos != null && pos.pendingADLSize > 0) {
-                pos.pendingADLSize -= head.volume;
+        if (cmd.adlUserPositionsByShard != null) {
+            ADLUserPosition head = cmd.adlUserPositionsByShard[shardId];
+            while (head != null) {
+                UserProfile up = userProfileService.getUserProfile(head.uid);
+                SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(head.symbol, cmd.action.opposite(), cmd.command));
+                if (pos != null && pos.pendingADLSize > 0) {
+                    pos.pendingADLSize -= head.volume;
+                }
+                head = head.next;
             }
-            head = head.next;
         }
     }
 

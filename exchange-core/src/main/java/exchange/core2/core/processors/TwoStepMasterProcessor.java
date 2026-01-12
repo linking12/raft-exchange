@@ -124,13 +124,16 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                             currentSequenceGroup = cmd.eventsGroup;
                         }
-
                         /**
-                         * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在调整杠杆率和标记价格前，需要让R2先执行完
+                         * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在这些cmd执行前，需要让R2先执行完
                          */
-                        if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT
-                                || cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
+                        else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT
+                                || cmd.command.isLiquidationFlowCommand()) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
+                            // 强平相关的cmd之后的下一个cmd，也需要等待R2执行结果。因此这里重置group
+                            if (cmd.command.isLiquidationFlowCommand()) {
+                                currentSequenceGroup = -1;
+                            }
                         }
 
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
