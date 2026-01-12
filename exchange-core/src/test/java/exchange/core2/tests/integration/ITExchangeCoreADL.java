@@ -36,6 +36,7 @@ public final class ITExchangeCoreADL {
     public void testADL() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+            container.getExchangeCore().getLiquidationEngines().forEach(le -> le.setIfEnabled(false));
 
             container.addSymbol(symbol);
             container.addCurrency(symbol.baseCurrency, 0);

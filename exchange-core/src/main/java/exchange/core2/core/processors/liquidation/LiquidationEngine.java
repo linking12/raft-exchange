@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import lombok.Getter;
 import lombok.Setter;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
@@ -55,6 +56,9 @@ public final class LiquidationEngine extends SimpleScheduledService {
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
+    @Getter
+    @Setter
+    private boolean ifEnabled = true;
 
     public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, int numShards) {
         super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
@@ -336,7 +340,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         }
         // 还有剩余
         ctx.size = firstEvent.size;
-        if (shouldTryIF()) {
+        if (isIfEnabled()) {
             ctx.state = LiquidationState.WAIT_IF_EXECUTION;
             ApiIFTakeOver ifCmd = ApiIFTakeOver.builder()
                     .orderId(IFService.generateIFOrderId(cmd.orderId))
@@ -348,10 +352,6 @@ public final class LiquidationEngine extends SimpleScheduledService {
         } else {
             submitADL(pos, ctx);
         }
-    }
-
-    private boolean shouldTryIF() {
-        return false; // todo
     }
 
     private void onIFTakeoverDone(OrderCommand cmd, SymbolPositionRecord pos) {
