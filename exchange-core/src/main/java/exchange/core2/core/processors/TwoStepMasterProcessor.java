@@ -130,10 +130,10 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                         else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT
                                 || cmd.command.isLiquidationFlowCommand()) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
-                            // 强平相关的cmd之后的下一个cmd，也需要等待R2执行结果。因此这里重置group
-                            if (cmd.command.isLiquidationFlowCommand()) {
-                                currentSequenceGroup = -1;
-                            }
+                        }
+                        // 强平相关的cmd之后的下一个cmd，也需要等待R2执行结果。因此这里重置group
+                        if (cmd.command.isLiquidationFlowCommand()) {
+                            currentSequenceGroup = -1;
                         }
 
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
