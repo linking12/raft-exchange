@@ -9,7 +9,6 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
 import exchange.core2.core.common.MarginMode;
-import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
