@@ -56,6 +56,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
+    private LiquidationService liquidationService;
     @Getter
     @Setter
     private boolean ifEnabled = true;
@@ -68,7 +69,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     public void updateProvider(SymbolSpecificationProvider symbolSpecProvider, CurrencySpecificationProvider currencySpecProvider,
-        UserProfileService userService, IntObjectHashMap<LastPriceCacheRecord> lastPriceService) {
+                               UserProfileService userService, IntObjectHashMap<LastPriceCacheRecord> lastPriceService, LiquidationService liquidationFlow) {
         symbolSpecificationProvider = symbolSpecProvider;
         currencySpecificationProvider = currencySpecProvider;
         userProfileService = userService;
@@ -77,6 +78,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         eventsHelper.setCurrencySpecificationProvider(currencySpecificationProvider);
         eventsHelper.setUserProfileService(userProfileService);
         eventsHelper.setLastPriceCache(lastPriceCache);
+        liquidationService = liquidationFlow;
     }
 
     @Override
@@ -140,7 +142,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         });
 
         // -------- ADL------------
-        userProfileService.setProfitablePositionsBySymbol(profitablePositionsBySymbol);
+        liquidationService.setProfitablePositionsBySymbol(profitablePositionsBySymbol);
     }
 
     private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
@@ -343,7 +345,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         if (isIfEnabled()) {
             ctx.state = LiquidationState.WAIT_IF_EXECUTION;
             ApiIFTakeOver ifCmd = ApiIFTakeOver.builder()
-                    .orderId(IFService.generateIFOrderId(cmd.orderId))
+                    .orderId(LiquidationService.generateIFOrderId(cmd.orderId))
                     .uid(pos.uid).symbol(pos.symbol)
                     .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
                     .size(ctx.size).price(ctx.price).build();

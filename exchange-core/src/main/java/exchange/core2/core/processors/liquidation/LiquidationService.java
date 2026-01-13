@@ -2,17 +2,21 @@ package exchange.core2.core.processors.liquidation;
 
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.StateHash;
+import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.AllArgsConstructor;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
+import org.eclipse.collections.api.list.MutableList;
+import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 
-public class IFService implements WriteBytesMarshallable, StateHash {
+public class LiquidationService implements WriteBytesMarshallable, StateHash {
 
     // symbol -> IFNotional
     private final IntObjectHashMap<IFNotional> notionals;
@@ -21,12 +25,18 @@ public class IFService implements WriteBytesMarshallable, StateHash {
     // +symbol -> long; -symbol -> short
     private final IntObjectHashMap<IFPositionRecord> positions;
 
-    public IFService() {
+    /**
+     * symbol -> [position...]
+     * 本分片的盈利仓位
+     */
+    private final AtomicReference<IntObjectHashMap<MutableList<SymbolPositionRecord>>> profitablePositionsBySymbol = new AtomicReference<>(IntObjectHashMap.newMap());
+
+    public LiquidationService() {
         notionals = new IntObjectHashMap<>(1024);
         positions = new IntObjectHashMap<>(1024);
     }
 
-    public IFService(BytesIn bytes) {
+    public LiquidationService(BytesIn bytes) {
         notionals = SerializationUtils.readIntHashMap(bytes, IFNotional::new);
         positions = SerializationUtils.readIntHashMap(bytes, IFPositionRecord::new);
     }
@@ -64,9 +74,18 @@ public class IFService implements WriteBytesMarshallable, StateHash {
         position.openPriceSum += spend;
     }
 
+    public MutableList<SymbolPositionRecord> getProfitablePositionsBySymbol(int symbol) {
+        return profitablePositionsBySymbol.get().getIfAbsent(symbol, FastList::new);
+    }
+
+    public void setProfitablePositionsBySymbol(IntObjectHashMap<MutableList<SymbolPositionRecord>> snapshot) {
+        profitablePositionsBySymbol.set(snapshot);
+    }
+
     public void reset() {
         notionals.clear();
         positions.clear();
+        profitablePositionsBySymbol.get().clear();
     }
 
     @Override

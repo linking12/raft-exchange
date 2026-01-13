@@ -15,13 +15,9 @@
  */
 package exchange.core2.core.processors;
 
-import org.eclipse.collections.api.list.MutableList;
-import org.eclipse.collections.impl.list.mutable.FastList;
-import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 import exchange.core2.core.common.StateHash;
-import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -32,8 +28,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Stateful (!) User profile service
@@ -49,26 +43,12 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
     @Getter
     private final LongObjectHashMap<UserProfile> userProfiles;
 
-    /**
-     * symbol -> [position...]
-     * 本分片的盈利仓位
-     */
-    private AtomicReference<IntObjectHashMap<MutableList<SymbolPositionRecord>>> profitablePositionsBySymbol = new AtomicReference<>(IntObjectHashMap.newMap());
-
     public UserProfileService() {
         this.userProfiles = new LongObjectHashMap<>(1024);
     }
 
     public UserProfileService(BytesIn bytes) {
         this.userProfiles = SerializationUtils.readLongHashMap(bytes, UserProfile::new);
-    }
-
-    public MutableList<SymbolPositionRecord> getProfitablePositionsBySymbol(int symbol) {
-        return profitablePositionsBySymbol.get().getIfAbsent(symbol, FastList::new);
-    }
-
-    public void setProfitablePositionsBySymbol(IntObjectHashMap<MutableList<SymbolPositionRecord>> snapshot) {
-        profitablePositionsBySymbol.set(snapshot);
     }
 
     /**
@@ -199,7 +179,6 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
      */
     public void reset() {
         userProfiles.clear();
-        profitablePositionsBySymbol.get().clear();
     }
 
     @Override

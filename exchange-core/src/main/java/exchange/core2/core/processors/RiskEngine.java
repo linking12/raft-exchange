@@ -59,8 +59,8 @@ import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.ADLUserPositionHelper;
-import exchange.core2.core.processors.liquidation.IFService;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationService;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
@@ -84,7 +84,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
-    private IFService ifService;
+    private LiquidationService liquidationService;
     private BinaryCommandsProcessor binaryCommandsProcessor;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private IntLongHashMap fees;
@@ -144,7 +144,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
         this.currencySpecificationProvider = new CurrencySpecificationProvider();
         this.userProfileService = new UserProfileService();
-        this.ifService = new IFService();
+        this.liquidationService = new LiquidationService();
         this.binaryCommandsProcessor = new BinaryCommandsProcessor(
             this::handleBinaryMessage,
             this::handleReportQuery,
@@ -165,7 +165,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
             simpleEventsProcessor.saveUserProfileService(shardId, this.userProfileService);
         }
-        this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache);
+        this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache, liquidationService);
     }
 
     
@@ -183,7 +183,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final CurrencySpecificationProvider currencySpecificationProvider =
                     new CurrencySpecificationProvider(bytesIn);
                 final UserProfileService userProfileService = new UserProfileService(bytesIn);
-                final IFService ifService = new IFService(bytesIn);
+                final LiquidationService liquidationService = new LiquidationService(bytesIn);
                 final BinaryCommandsProcessor binaryCommandsProcessor =
                     new BinaryCommandsProcessor(
                         this::handleBinaryMessage, 
@@ -198,7 +198,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
                 final IntLongHashMap suspends = SerializationUtils.readIntLongHashMap(bytesIn);
                 return new State(symbolSpecificationProvider, currencySpecificationProvider, userProfileService,
-                    ifService, binaryCommandsProcessor, lastPriceCache, fees, adjustments, suspends);
+                        liquidationService, binaryCommandsProcessor, lastPriceCache, fees, adjustments, suspends);
             });
         if (state.lastPriceCache == null || state.fees == null) {
             throw new IllegalStateException("Invalid recovered state: missing critical fields");
@@ -207,7 +207,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             this.symbolSpecificationProvider = state.symbolSpecificationProvider;
             this.currencySpecificationProvider = state.currencySpecificationProvider;
             this.userProfileService = state.userProfileService;
-            this.ifService = state.ifService;
+            this.liquidationService = state.liquidationService;
             this.binaryCommandsProcessor = state.binaryCommandsProcessor;
             this.lastPriceCache = state.lastPriceCache;
             this.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
@@ -219,7 +219,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
                 simpleEventsProcessor.saveUserProfileService(shardId, this.userProfileService);
             }
-            this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache);
+            this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache, liquidationService);
             this.fees = state.fees;
             this.adjustments = state.adjustments;
             this.suspends = state.suspends;
@@ -577,7 +577,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     private void collectIFPreviewData(final OrderCommand cmd) {
-        long previewCover = ifService.previewCover(cmd.symbol, cmd.size, cmd.price);
+        long previewCover = liquidationService.previewCover(cmd.symbol, cmd.size, cmd.price);
         if (cmd.ifPreviewCoverByShard == null) {
             cmd.ifPreviewCoverByShard = new long[numShards];
         }
@@ -592,7 +592,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
-        MutableList<SymbolPositionRecord> profitablePositions = userProfileService.getProfitablePositionsBySymbol(symbol)
+        MutableList<SymbolPositionRecord> profitablePositions = liquidationService.getProfitablePositionsBySymbol(symbol)
                 .select(pos -> {
                     if (pos.openVolume <= 0) return false;
                     if (pos.openVolume <= pos.pendingADLSize) return false;
@@ -1271,7 +1271,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long notional = CoreArithmeticUtils.calculateLiquidationFee(takerSizeForThisHandler, takerSizePriceForThisHandler, spec);
             long fee = CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, currencySpec);
             takerUp.accounts.addToValue(takerSpr.currency, -fee);
-            ifService.addFee(takerSpr.symbol, notional);
+            liquidationService.addFee(takerSpr.symbol, notional);
             // 强平费事件
             long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
             long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
@@ -1285,7 +1285,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         PositionDirection direction = cmd.action == OrderAction.BID ? PositionDirection.LONG : PositionDirection.SHORT;
-        ifService.acceptPosition(cmd.symbol, direction, ev.size, cmd.price);
+        liquidationService.acceptPosition(cmd.symbol, direction, ev.size, cmd.price);
     }
 
     private void handleADLRelease(final OrderCommand cmd,
@@ -1338,7 +1338,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         // 2. 释放 previewCover
         long previewCover = cmd.ifPreviewCoverByShard[shardId];
-        ifService.releasePending(cmd.symbol, previewCover);
+        liquidationService.releasePending(cmd.symbol, previewCover);
     }
 
     private void finalizeADL(final OrderCommand cmd,
@@ -1753,7 +1753,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             userProfile.accounts.addToValue(record.currency, profit);
         }
         userProfile.positions.removeKey(userProfile.createPositionsKey(record));
-        userProfileService.getProfitablePositionsBySymbol(record.symbol).removeIf(pos -> pos == record);
+        liquidationService.getProfitablePositionsBySymbol(record.symbol).removeIf(pos -> pos == record);
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
 
@@ -1765,7 +1765,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         symbolSpecificationProvider.writeMarshallable(bytes);
         currencySpecificationProvider.writeMarshallable(bytes);
         userProfileService.writeMarshallable(bytes);
-        ifService.writeMarshallable(bytes);
+        liquidationService.writeMarshallable(bytes);
         binaryCommandsProcessor.writeMarshallable(bytes);
         SerializationUtils.marshallIntHashMap(lastPriceCache, bytes);
         SerializationUtils.marshallIntLongHashMap(fees, bytes);
@@ -1775,7 +1775,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     public void reset() {
         userProfileService.reset();
-        ifService.reset();
+        liquidationService.reset();
         symbolSpecificationProvider.reset();
         currencySpecificationProvider.reset();
         binaryCommandsProcessor.reset();
@@ -1791,7 +1791,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         private final SymbolSpecificationProvider symbolSpecificationProvider;
         private final CurrencySpecificationProvider currencySpecificationProvider;
         private final UserProfileService userProfileService;
-        private final IFService ifService;
+        private final LiquidationService liquidationService;
         private final BinaryCommandsProcessor binaryCommandsProcessor;
         private final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
         private final IntLongHashMap fees;

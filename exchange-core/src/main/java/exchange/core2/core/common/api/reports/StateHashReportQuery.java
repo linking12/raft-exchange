@@ -114,7 +114,7 @@ public final class StateHashReportQuery implements ReportQuery<StateHashReportRe
 
         hashCodes.put(
                 StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_IF_SERVICE),
-                riskEngine.getIfService().stateHash());
+                riskEngine.getLiquidationService().stateHash());
 
         return Optional.of(
                 new StateHashReportResult(hashCodes));
