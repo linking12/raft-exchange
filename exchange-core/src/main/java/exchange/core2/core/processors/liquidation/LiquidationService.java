@@ -41,30 +41,31 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         positions = SerializationUtils.readIntHashMap(bytes, IFPositionRecord::new);
     }
 
-    public void addFee(int symbol, long notionalFee) {
+    // 将强平手续费计入 IF 可用资金池
+    public void creditLiquidationFee(int symbol, long notionalFee) {
         IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
         notional.available += notionalFee;
     }
 
-    // R1 ：本 shard 最多能贡献多少
-    public long previewCover(int symbol, long requestSize, long price) {
+    // R1：预冻结 IF 可用名义金额
+    public long reserveIFNotional(int symbol, long requestSize, long price) {
         IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
-        long available = notional.available - notional.pending;
+        long available = notional.available - notional.reserved;
         long needed = requestSize * price;
         long canCover = Math.min(available, needed);
         // 冻结待处理的额度，防止超卖
-        notional.pending += canCover;
+        notional.reserved += canCover;
         return canCover;
     }
 
-    // R2：释放pending
-    public void releasePending(int symbol, long pendingNotional) {
+    // R2：释放 R1 预冻结的名义金额
+    public void releaseReservedIFNotional(int symbol, long reservedNotional) {
         IFNotional notional = notionals.get(symbol);
-        notional.pending -= pendingNotional;
+        notional.reserved -= reservedNotional;
     }
 
-    // R2：真正接仓
-    public void acceptPosition(int symbol, PositionDirection direction, long size, long price) {
+    // R2：IF 接管仓位
+    public void acceptIFPosition(int symbol, PositionDirection direction, long size, long price) {
         IFNotional notional = notionals.get(symbol);
         long spend = size * price;
         notional.available -= spend;
@@ -111,22 +112,22 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     @AllArgsConstructor
     public static final class IFNotional implements WriteBytesMarshallable, StateHash {
         public long available;
-        public long pending;
+        public long reserved;
 
         public IFNotional(BytesIn bytes) {
             available = bytes.readLong();
-            pending = bytes.readLong();
+            reserved = bytes.readLong();
         }
 
         @Override
         public int stateHash() {
-            return Objects.hash(available, pending);
+            return Objects.hash(available, reserved);
         }
 
         @Override
         public void writeMarshallable(BytesOut bytes) {
             bytes.writeLong(available);
-            bytes.writeLong(pending);
+            bytes.writeLong(reserved);
         }
     }
 

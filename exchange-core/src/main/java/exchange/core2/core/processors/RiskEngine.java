@@ -577,7 +577,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     private void collectIFPreviewData(final OrderCommand cmd) {
-        long previewCover = liquidationService.previewCover(cmd.symbol, cmd.size, cmd.price);
+        long previewCover = liquidationService.reserveIFNotional(cmd.symbol, cmd.size, cmd.price);
         if (cmd.ifPreviewCoverByShard == null) {
             cmd.ifPreviewCoverByShard = new long[numShards];
         }
@@ -1271,7 +1271,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long notional = CoreArithmeticUtils.calculateLiquidationFee(takerSizeForThisHandler, takerSizePriceForThisHandler, spec);
             long fee = CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, currencySpec);
             takerUp.accounts.addToValue(takerSpr.currency, -fee);
-            liquidationService.addFee(takerSpr.symbol, notional);
+            liquidationService.creditLiquidationFee(takerSpr.symbol, notional);
             // 强平费事件
             long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
             long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
@@ -1285,7 +1285,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return;
         }
         PositionDirection direction = cmd.action == OrderAction.BID ? PositionDirection.LONG : PositionDirection.SHORT;
-        liquidationService.acceptPosition(cmd.symbol, direction, ev.size, cmd.price);
+        liquidationService.acceptIFPosition(cmd.symbol, direction, ev.size, cmd.price);
     }
 
     private void handleADLRelease(final OrderCommand cmd,
@@ -1338,7 +1338,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         // 2. 释放 previewCover
         long previewCover = cmd.ifPreviewCoverByShard[shardId];
-        liquidationService.releasePending(cmd.symbol, previewCover);
+        liquidationService.releaseReservedIFNotional(cmd.symbol, previewCover);
     }
 
     private void finalizeADL(final OrderCommand cmd,
