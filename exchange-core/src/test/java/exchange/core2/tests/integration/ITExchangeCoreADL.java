@@ -10,6 +10,8 @@ import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.Test;
 
+import java.util.function.BooleanSupplier;
+
 import static exchange.core2.tests.util.TestConstants.MAX_VALUE;
 import static exchange.core2.tests.util.TestConstants.UID_1;
 import static exchange.core2.tests.util.TestConstants.UID_2;
@@ -73,11 +75,15 @@ public final class ITExchangeCoreADL {
             container.updateCurrentPriceTo(600, symbol.symbolId, symbol.quoteCurrency);
 
             // 强制触发一次清算
-            container.getApi().groupingControl(0, 1);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             // 等强平触发完成
-            container.getApi().groupingControl(0, 1);
-            Thread.sleep(100);
+            waitForCondition(100, () -> {
+                try {
+                    return container.getUserProfile(UID_LOSER).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
 
             // 4. 校验loser仓位清仓
             container.validateUserState(UID_LOSER, profile -> {
@@ -93,4 +99,19 @@ public final class ITExchangeCoreADL {
         }
     }
 
+    public static void waitForCondition(long timeoutMillis, BooleanSupplier condition) {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for condition", e);
+            }
+        }
+        throw new AssertionError("Condition not met within " + timeoutMillis + " ms");
+    }
 }
