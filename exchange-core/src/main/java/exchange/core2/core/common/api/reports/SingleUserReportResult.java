@@ -50,6 +50,11 @@ public final class SingleUserReportResult implements ReportResult {
 
     private final UserStatus userStatus;
     private final IntLongHashMap accounts;
+    /**
+     * symbol -> positions list:
+     * [LONG] always comes before [SHORT] if both exist;
+     * if only one position exists, it can be either LONG or SHORT.
+     */
     private final IntObjectHashMap<List<Position>> positions;
 
     // matching engine: orders placed by user

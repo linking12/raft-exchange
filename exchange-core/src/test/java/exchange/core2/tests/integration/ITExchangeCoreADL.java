@@ -2,11 +2,16 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationService;
+import exchange.core2.core.processors.liquidation.LiquidationService.IFPositionRecord;
+import exchange.core2.core.utils.ReflectionUtils;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.Test;
 
@@ -113,5 +118,69 @@ public final class ITExchangeCoreADL {
             }
         }
         throw new AssertionError("Condition not met within " + timeoutMillis + " ms");
+    }
+
+    @Test
+    public void testIFTakeover() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            // 停止自动调度，手动触发
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+            LiquidationService liquidationServiceShard0 = ReflectionUtils.extractField(LiquidationEngine.class, container.getExchangeCore().getLiquidationEngines().get(0), "liquidationService");
+
+            container.addSymbol(symbol);
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
+
+            long UID_LOSER  = UID_1;
+            long UID_MAKER  = UID_2;
+
+            container.createUserWithMoney(UID_LOSER, symbol.quoteCurrency, 5_000);
+            container.createUserWithMoney(UID_MAKER, symbol.quoteCurrency, MAX_VALUE);
+
+            // === 初始 mark price ===
+            long markPrice = 1000;
+            container.initMarkPrice(symbol.symbolId, markPrice);
+
+            // 1. LOSER 建仓（多头）
+            container.createBidWithOrderId(1, UID_LOSER, 5, 1000, symbol.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(2, UID_MAKER, 5, 1000, symbol.symbolId, MarginMode.CROSS);
+
+            container.validateUserState(UID_LOSER, profile -> {
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenVolume(), is(5L));
+            });
+
+            // 2. IF充值
+            liquidationServiceShard0.creditLiquidationFee(symbol.symbolId, 5 * 1000);
+
+            // 3. 价格暴跌，触发强平
+            container.updateCurrentPriceTo(600, symbol.symbolId, symbol.quoteCurrency);
+
+            // 手动触发清算
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+
+            // 等待 LOSER 清仓
+            waitForCondition(200, () -> {
+                try {
+                    return container.getUserProfile(UID_LOSER).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            // === 断言：LOSER 清仓 ===
+            container.validateUserState(UID_LOSER, profile -> {
+                assertThat(profile.getPositions().isEmpty(), is(true));
+            });
+
+            // === 断言：没有 ADL 发生（系统内只有 IF）===
+            container.validateUserState(UID_MAKER, profile -> {
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).openVolume, is(5L));
+            });
+
+            // === 断言：IF 内部仓位 ===
+            IntObjectHashMap<IFPositionRecord> positions = ReflectionUtils.extractField(LiquidationService.class, liquidationServiceShard0, "positions");
+            IFPositionRecord ifPos = positions.get(symbol.symbolId * PositionDirection.LONG.getMultiplier());
+            assertThat(ifPos.openVolume, is(5L));
+        }
     }
 }
