@@ -15,6 +15,7 @@ import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.Test;
 
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 import static exchange.core2.tests.util.TestConstants.MAX_VALUE;
@@ -181,6 +182,68 @@ public final class ITExchangeCoreADL {
             IntObjectHashMap<IFPositionRecord> positions = ReflectionUtils.extractField(LiquidationService.class, liquidationServiceShard0, "positions");
             IFPositionRecord ifPos = positions.get(symbol.symbolId * PositionDirection.LONG.getMultiplier());
             assertThat(ifPos.openVolume, is(5L));
+        }
+    }
+
+    @Test
+    public void testIFMultiShardBoundary() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            // 关闭自动调度，手动触发
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+
+            container.addSymbol(symbol);
+            container.addCurrency(symbol.baseCurrency, 0);
+            container.addCurrency(symbol.quoteCurrency, 0);
+
+            long UID_LOSER = UID_1;
+            long UID_MAKER = UID_2;
+
+            container.createUserWithMoney(UID_LOSER, symbol.quoteCurrency, 5_000);
+            container.createUserWithMoney(UID_MAKER, symbol.quoteCurrency, MAX_VALUE);
+
+            // 初始价格
+            container.initMarkPrice(symbol.symbolId, 1000);
+
+            // LOSER 建 5 张多仓
+            container.createBidWithOrderId(1, UID_LOSER, 5, 1000, symbol.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(2, UID_MAKER, 5, 1000, symbol.symbolId, MarginMode.CROSS);
+
+            // === 给每个 shard 注入有限 IF 余额（价格600时能接3张）===
+            List<LiquidationEngine> engines = container.getExchangeCore().getLiquidationEngines();
+
+            for (LiquidationEngine engine : engines) {
+                LiquidationService svc = ReflectionUtils.extractField(LiquidationEngine.class, engine, "liquidationService");
+                svc.creditLiquidationFee(symbol.symbolId, 2 * 1000);
+            }
+
+            // 价格暴跌，触发强平
+            container.updateCurrentPriceTo(600, symbol.symbolId, symbol.quoteCurrency);
+            engines.forEach(LiquidationEngine::triggerOnce);
+
+            // 等待强平完成
+            waitForCondition(300, () -> {
+                try {
+                    return container.getUserProfile(UID_LOSER).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            // === 断言：LOSER 清仓 ===
+            container.validateUserState(UID_LOSER, p -> {
+                assertThat(p.getPositions().isEmpty(), is(true));
+            });
+
+            // === 断言：单一 shard 无法接满5 （一个接3 一个接2） ===
+            for (LiquidationEngine engine : engines) {
+                LiquidationService svc = ReflectionUtils.extractField(LiquidationEngine.class, engine, "liquidationService");
+                IntObjectHashMap<LiquidationService.IFPositionRecord> pos = ReflectionUtils.extractField(LiquidationService.class, svc, "positions");
+                // IF 不应接 5
+                LiquidationService.IFPositionRecord ifPos = pos.get(symbol.symbolId * PositionDirection.LONG.getMultiplier());
+                if (ifPos != null) {
+                    assertThat(ifPos.openVolume < 5, is(true));
+                }
+            }
         }
     }
 }

@@ -1284,6 +1284,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (ev.eventType != MatcherEventType.IF_EVENT) {
             return;
         }
+        if (ev.matchedOrderUid != shardId) {
+            return;
+        }
         PositionDirection direction = cmd.action == OrderAction.BID ? PositionDirection.LONG : PositionDirection.SHORT;
         liquidationService.acceptIFPosition(cmd.symbol, direction, ev.size, cmd.price);
     }

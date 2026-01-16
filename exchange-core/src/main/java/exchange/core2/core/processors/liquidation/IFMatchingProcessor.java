@@ -62,7 +62,7 @@ public class IFMatchingProcessor extends AbstractLiquidationMatchingProcessor {
             MatcherTradeEvent ev = eventsHelper.newMatcherEvent();
             ev.eventType = MatcherEventType.IF_EVENT;
             ev.size = takeSize;
-            ev.matchedOrderUid = 0L; // IF 是系统行为，无真实 uid
+            ev.matchedOrderUid = shardId; // 记录R2时，由哪个分片处理
 
             // 尾插
             if (head == null) {
