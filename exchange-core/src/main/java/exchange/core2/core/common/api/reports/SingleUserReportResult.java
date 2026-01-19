@@ -146,6 +146,7 @@ public final class SingleUserReportResult implements ReportResult {
 
     public static SingleUserReportResult merge(final Stream<BytesIn> pieces) {
         return pieces
+                .sequential() // 强制串行流，不用ForkJoinPool
                 .map(SingleUserReportResult::new)
                 .reduce(
                         IDENTITY,

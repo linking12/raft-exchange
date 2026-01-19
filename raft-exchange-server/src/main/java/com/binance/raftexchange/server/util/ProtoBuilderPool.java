@@ -1,9 +1,10 @@
 package com.binance.raftexchange.server.util;
 
 import com.google.protobuf.Message.Builder;
+import io.netty.util.concurrent.FastThreadLocal;
 
+import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
@@ -11,20 +12,25 @@ import java.util.function.Supplier;
  */
 public class ProtoBuilderPool {
 
-    private final Map<Class<?>, ThreadLocal<? extends Builder>> pools = new ConcurrentHashMap<>();
+    private final Map<Class<?>, FastThreadLocal<? extends Builder>> pools = new HashMap<>();
 
     /**
      * 注册一个类型的Builder缓存池（必须提前注册）
      */
     public <T extends Builder> void register(Class<T> builderClass, Supplier<T> supplier) {
-        pools.putIfAbsent(builderClass, ThreadLocal.withInitial(supplier));
+        pools.putIfAbsent(builderClass, new  FastThreadLocal<>() {
+            @Override
+            protected T initialValue() {
+                return supplier.get();
+            }
+        });
     }
 
     /**
      * 获取已注册的Builder
      */
     public <T extends Builder> T get(Class<T> builderClass) {
-        ThreadLocal<T> local = (ThreadLocal<T>) pools.get(builderClass);
+        FastThreadLocal<T> local = (FastThreadLocal<T>) pools.get(builderClass);
         if (local == null) {
             throw new IllegalStateException("Builder not registered for: " + builderClass.getName());
         }
