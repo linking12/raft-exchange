@@ -18,6 +18,7 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -60,6 +61,14 @@ public abstract class ITFeesExchange {
             .takerFee(1900)                 // taker fee 1900 litoshi per 1 lot
             .makerFee(700)                  // maker fee 700 litoshi per 1 lot
             .build();
+
+
+    private void checkFeeAfterResetFee(ExchangeTestContainer container) {
+        container.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_LTC), is(0L));
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_XBT), is(0L));
+        assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
+    }
 
     @Test
     @Timeout(10)
@@ -131,6 +140,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -223,6 +234,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(xbtAmount));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -323,6 +336,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -416,6 +431,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -512,6 +529,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -606,6 +625,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -688,6 +709,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -782,6 +805,8 @@ public abstract class ITFeesExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 

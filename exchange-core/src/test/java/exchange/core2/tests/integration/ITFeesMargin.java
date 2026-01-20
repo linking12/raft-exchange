@@ -21,6 +21,7 @@ import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -50,6 +51,14 @@ public abstract class ITFeesMargin {
 
     // configuration provided by child class
     public abstract PerformanceConfiguration getPerformanceConfiguration();
+
+
+    private void checkFeeAfterResetFee(ExchangeTestContainer container) {
+        container.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_USD), is(0L));
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_JPY), is(0L));
+        assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
+    }
 
     @Test
     @Timeout(10)
@@ -143,6 +152,8 @@ public abstract class ITFeesMargin {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_JPY), is(jpyAmount1 + jpyAmount2 - jpyFees));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(30L));
             assertThat(totalBal2.getOpenInterestShort().get(symbolId), is(30L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -238,6 +249,8 @@ public abstract class ITFeesMargin {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_JPY), is(jpyAmount1 + jpyAmount2 - jpyFees));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(30L));
             assertThat(totalBal2.getOpenInterestShort().get(symbolId), is(30L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -310,6 +323,8 @@ public abstract class ITFeesMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_JPY), is(0L));
             assertThat(totalBal2.getOpenInterestLong().get(symbolId), is(0L));
             assertThat(totalBal2.getOpenInterestShort().get(symbolId), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -364,6 +379,8 @@ public abstract class ITFeesMargin {
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_USD), is(deposit));
             });
+
+            checkFeeAfterResetFee(container);
         }
     }
 
