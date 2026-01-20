@@ -21,6 +21,7 @@ import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -54,6 +55,13 @@ public abstract class ITFeesDynamicMargin {
 
     private long calculateMarginFee(long price, long size) {
         return price * size * SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMargin / SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.initMarginScaleK;
+    }
+
+    private void checkFeeAfterResetFee(ExchangeTestContainer container) {
+        container.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_USD), is(0L));
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_XBT), is(0L));
+        assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
     }
 
     @Test
@@ -127,6 +135,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -227,6 +237,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -328,6 +340,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -425,6 +439,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -526,6 +542,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -628,6 +646,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -729,6 +749,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -829,6 +851,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -929,6 +953,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -1024,6 +1050,8 @@ public abstract class ITFeesDynamicMargin {
             assertThat(totalBal2.getFees().get(CURRENECY_USD), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_USD), is(usdtAmount + MAX_VALUE - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
