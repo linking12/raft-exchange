@@ -43,6 +43,7 @@ public enum OrderCommandType {
     MARKPRICE_ADJUSTMENT((byte) 24, true),
     SETTLE_FUNDINGFEES((byte) 25, true),
     SETTLE_PNL((byte) 26, true),
+    RESET_FEE((byte) 27, true),
 
     SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
 

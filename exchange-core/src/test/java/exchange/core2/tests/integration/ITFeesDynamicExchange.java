@@ -19,6 +19,7 @@ import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.api.ApiCancelOrder;
+import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -47,6 +48,12 @@ public abstract class ITFeesDynamicExchange {
     // configuration provided by child class
     public abstract PerformanceConfiguration getPerformanceConfiguration();
 
+    private void checkFeeAfterResetFee(ExchangeTestContainer container) {
+        container.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_LTC), is(0L));
+        assertThat(container.totalBalanceReport().getFees().get(CURRENECY_XBT), is(0L));
+        assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
+    }
 
     @Test
     @Timeout(10)
@@ -117,6 +124,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(0L));
             assertThat(totalBal2.getFees().get(CURRENECY_XBT), is(0L));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -215,6 +224,12 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            container.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+            assertThat(container.totalBalanceReport().getFees().get(CURRENECY_LTC), is(0L));
+            assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -311,6 +326,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -401,6 +418,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -492,6 +511,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
+
+            checkFeeAfterResetFee(container);
         }
 
     }
@@ -583,6 +604,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -673,6 +696,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -767,6 +792,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -858,6 +885,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 
@@ -946,6 +975,8 @@ public abstract class ITFeesDynamicExchange {
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_LTC), is(ltcAmount - ltcFees));
             assertThat(totalBal2.getClientsBalancesSum().get(CURRENECY_XBT), is(btcAmount));
             assertThat(totalBal2.getFees().get(CURRENECY_LTC), is(ltcFees));
+
+            checkFeeAfterResetFee(container);
         }
     }
 

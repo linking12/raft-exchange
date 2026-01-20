@@ -34,8 +34,38 @@ public abstract class ITFutureBase {
 
     SimpleEventsProcessor4Test processor;
 
-    @Mock
-    IEventsHandler4Test handler;
+    IEventsHandler4Test handler = spy(new IEventsHandler4Test() {
+
+        @Override
+        public void process(FundEventReport fundEventReport) {
+            fundEventReport(fundEventReport);
+        }
+
+        @Override
+        public void process(SpotExecutionReport executionReport) {
+            spotExecutionReport(executionReport);
+        }
+
+        @Override
+        public void orderBook(ITradeEventsHandler.OrderBook orderBook) {
+
+        }
+
+        @Override
+        public void spotExecutionReport(ITradeEventsHandler.SpotExecutionReport executionReport) {
+
+        }
+
+        @Override
+        public void futuresExecutionReport(ITradeEventsHandler.FuturesExecutionReport executionReport) {
+
+        }
+
+        @Override
+        public void fundEventReport(IFundEventsHandler.FundEventReport fundEventReport) {
+
+        }
+    });
 
     @Captor
     ArgumentCaptor<ITradeEventsHandler.SpotExecutionReport> spotEventCaptor;

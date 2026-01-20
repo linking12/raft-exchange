@@ -149,11 +149,10 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
         while (event != null) {
             if (!event.processed) {
                 event.processed = true;
-                long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, false);
+                long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index++, false);
                 fundEventsHandler.process(FundEventReport.fromFundEvent(event, uniId));
             }
             event = event.nextEvent;
-            index++;
         }
         if (cmd.makerFundEventsByShard != null) {
             for (FundEvent shardHead : cmd.makerFundEventsByShard) {
@@ -161,7 +160,7 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
                 while (e != null) {
                     if (!e.processed) {
                         e.processed = true;
-                        long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index, true);
+                        long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index++, true);
                         fundEventsHandler.process(FundEventReport.fromFundEvent(e, uniId));
                     }
                     e = e.nextEvent;
