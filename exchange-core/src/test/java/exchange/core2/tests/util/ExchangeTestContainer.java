@@ -874,6 +874,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         final IntLongHashMap openInterestShort = res.getOpenInterestShort();
         final IntLongHashMap openInterestDiff = new IntLongHashMap(openInterestLong);
         openInterestShort.forEachKeyValue((k, v) -> openInterestDiff.addToValue(k, -v));
+        res.getIfOpenInterestLong().forEachKeyValue(openInterestDiff::addToValue);
+        res.getIfOpenInterestShort().forEachKeyValue((k, v) -> openInterestDiff.addToValue(k, -v));
         if (openInterestDiff.anySatisfy(vol -> vol != 0)) {
             throw new IllegalStateException("Open Interest balance check failed");
         }
