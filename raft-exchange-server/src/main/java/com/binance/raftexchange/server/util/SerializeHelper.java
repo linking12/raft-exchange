@@ -281,6 +281,9 @@ public class SerializeHelper {
                 .putAllOrdersBalances(convertToHashMap(totalCurrencyBalanceReportResult.getOrdersBalances()))
                 .putAllOpenInterestLong(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestLong()))
                 .putAllOpenInterestShort(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestShort()))
+                .putAllIfBalances(convertToHashMap(totalCurrencyBalanceReportResult.getIfBalances()))
+                .putAllIfOpenInterestLong(convertToHashMap(totalCurrencyBalanceReportResult.getIfOpenInterestLong()))
+                .putAllIfOpenInterestShort(convertToHashMap(totalCurrencyBalanceReportResult.getIfOpenInterestShort()))
                 .build();
         return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
                 .setTotalCurrencyBalance(result)

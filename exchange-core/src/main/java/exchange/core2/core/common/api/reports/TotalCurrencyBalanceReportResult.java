@@ -47,14 +47,18 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
     final private IntLongHashMap openInterestLong;
     final private IntLongHashMap openInterestShort;
 
+    private final IntLongHashMap ifBalances;
+    private final IntLongHashMap ifOpenInterestLong;
+    private final IntLongHashMap ifOpenInterestShort;
+
     public static TotalCurrencyBalanceReportResult createEmpty() {
         return new TotalCurrencyBalanceReportResult(
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null);
     }
 
     public static TotalCurrencyBalanceReportResult ofOrderBalances(final IntLongHashMap currencyBalance) {
         return new TotalCurrencyBalanceReportResult(
-                null, null, null, null, null, currencyBalance, null, null);
+                null, null, null, null, null, currencyBalance, null, null, null, null, null);
     }
 
     private TotalCurrencyBalanceReportResult(final BytesIn bytesIn) {
@@ -66,6 +70,9 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
         this.ordersBalances = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.openInterestLong = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.openInterestShort = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
+        this.ifBalances = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
+        this.ifOpenInterestLong = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
+        this.ifOpenInterestShort = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
     }
 
     @Override
@@ -78,10 +85,13 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
         SerializationUtils.marshallNullable(ordersBalances, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(openInterestLong, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(openInterestShort, bytes, SerializationUtils::marshallIntLongHashMap);
+        SerializationUtils.marshallNullable(ifBalances, bytes, SerializationUtils::marshallIntLongHashMap);
+        SerializationUtils.marshallNullable(ifOpenInterestLong, bytes, SerializationUtils::marshallIntLongHashMap);
+        SerializationUtils.marshallNullable(ifOpenInterestShort, bytes, SerializationUtils::marshallIntLongHashMap);
     }
 
     public IntLongHashMap getGlobalBalancesSum() {
-        return SerializationUtils.mergeSum(accountBalances, extraMargin, ordersBalances, fees, adjustments, suspends);
+        return SerializationUtils.mergeSum(accountBalances, extraMargin, ordersBalances, fees, adjustments, suspends, ifBalances);
     }
 
     public IntLongHashMap getClientsBalancesSum() {
@@ -106,7 +116,10 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
                                 SerializationUtils.mergeSum(a.suspends, b.suspends),
                                 SerializationUtils.mergeSum(a.ordersBalances, b.ordersBalances),
                                 SerializationUtils.mergeSum(a.openInterestLong, b.openInterestLong),
-                                SerializationUtils.mergeSum(a.openInterestShort, b.openInterestShort)));
+                                SerializationUtils.mergeSum(a.openInterestShort, b.openInterestShort),
+                                SerializationUtils.mergeSum(a.ifBalances, b.ifBalances),
+                                SerializationUtils.mergeSum(a.ifOpenInterestLong, b.ifOpenInterestLong),
+                                SerializationUtils.mergeSum(a.ifOpenInterestShort, b.ifOpenInterestShort)));
     }
 
 }

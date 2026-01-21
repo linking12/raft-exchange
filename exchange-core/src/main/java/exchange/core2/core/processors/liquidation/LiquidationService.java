@@ -6,6 +6,7 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.AllArgsConstructor;
+import lombok.Getter;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
@@ -19,10 +20,12 @@ import java.util.concurrent.atomic.AtomicReference;
 public class LiquidationService implements WriteBytesMarshallable, StateHash {
 
     // symbol -> IFNotional
+    @Getter
     private final IntObjectHashMap<IFNotional> notionals;
 
     // symbol -> IFPosition
     // +symbol -> long; -symbol -> short
+    @Getter
     private final IntObjectHashMap<IFPositionRecord> positions;
 
     /**
