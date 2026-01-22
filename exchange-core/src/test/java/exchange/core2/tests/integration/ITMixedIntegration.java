@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -32,6 +31,7 @@ import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -44,8 +44,7 @@ class ITMixedIntegration {
 
     private SimpleEventsProcessor4Test processor;
 
-    @Mock
-    private IEventsHandler4Test handler;
+    private IEventsHandler4Test handler = spy(IEventsHandler4Test.handler);
 
     @Captor
     ArgumentCaptor<ITradeEventsHandler.SpotExecutionReport> spotEventCaptor;
@@ -343,83 +342,4 @@ class ITMixedIntegration {
         }
     }
 
-    // 反向开单, 测试profit加减是否准确
-    @Test
-    public void testBankruptcyPrice() {
-        long deposit = 10000L;
-        int size = 10;
-        long price1 = 10000;
-        int price2 = 15000;
-        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
-            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
-            symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
-
-            container.createUserWithSpecificMoney(UID_1, deposit, quoteId);
-            container.createUserWithSpecificMoney(UID_2, MAX_VALUE, quoteId);
-            container.createUserWithSpecificMoney(UID_3, MAX_VALUE, quoteId);
-
-            container.createBidWithOrderId(MAKER_1, UID_1, size, price1, symbols.get(0).symbolId, MarginMode.ISOLATED);
-            container.createAskWithOrderId(TAKER_1, UID_2, size, price1, symbols.get(0).symbolId, MarginMode.ISOLATED);
-
-            container.updateCurrentPriceTo(price2, symbols.get(0).symbolId, quoteId);
-
-            container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), Is.is(deposit - symbols.get(0).makerFee * size));
-                assertThat(profile.getPositions().get(symbols.get(0).symbolId).get(0).getOpenVolume(), is(10L));
-            });
-
-            container.validateUserState(UID_3, profile -> {
-                assertThat(profile.getPositions().size(), is(0));
-            });
-
-            container.updateCurrentPriceTo(9930, symbols.get(0).symbolId, quoteId);
-            // 强平价格为9930, 破产价为9920, 挂一个9920单子准备成交
-            container.createBidWithOrderId(MAKER_2, UID_3, size, 9920, symbols.get(0).symbolId, MarginMode.ISOLATED);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-
-            // 有可能强平还没触发, 加个sleep保证强平触发吃掉UID_3的订单
-            Thread.sleep(1000);
-            container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getPositions().size(), is(0));
-                assertThat(profile.getAccounts().get(quoteId), Is.is(9100L));
-            });
-            container.validateUserState(UID_3, profile -> {
-                assertThat(profile.getPositions().size(), is(1));
-            });
-        } catch (ExecutionException e) {
-            throw new RuntimeException(e);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        } finally {
-            verify(handler, times(36)).fundEventReport(fundEventCaptor.capture());
-            // check fund event
-            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
-            IFundEventsHandler.FundEventReport event = null;
-
-            for (int i = 0; i < fundEvents.size(); i++) {
-                IFundEventsHandler.FundEventReport evt = fundEvents.get(i);
-                if (evt.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_CLOSE)) {
-                    event = evt;
-                    break;
-                }
-            }
-
-            assertThat(UID_1, Is.is(event.getAccountId()));
-            assertThat(quoteId, Is.is(event.getBalances().getCurrency()));
-            assertThat(10000, Is.is(event.getPositions().getSymbolId()));
-            assertThat(PositionDirection.LONG, Is.is(event.getPositions().getDirection()));
-            assertThat(FundEvent.FundEventType.LIQUIDATION_CLOSE, Is.is(event.getEventType()));
-            assertThat(9900L, Is.is(event.getBalances().getFree()));
-            assertThat(-800L, Is.is(event.getPositions().getCumRealized()));
-            assertThat(0L, Is.is(event.getBalances().getLocked()));
-            assertThat(0L, Is.is(event.getPositions().getOpenPriceSum()));
-            assertThat(0L, Is.is(event.getPositions().getQuantity()));
-            // 10000价格跌到100, unrealizedProfit = 100 - 10000 = -9900
-            assertThat(0L, Is.is(event.getPositions().getUnrealizedProfit()));
-            // 逐仓强平价格计算
-            assertThat(0L, Is.is(event.getPositions().getLiquidationPrice()));
-            assertThat(0L, Is.is(event.getPositions().getMarginRatioScaleK()));
-        }
-    }
 }

@@ -34,7 +34,6 @@ import org.hamcrest.core.Is;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -46,6 +45,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.spy;
 
 @Slf4j
 @ExtendWith(MockitoExtension.class)
@@ -56,8 +56,7 @@ public class PersistenceTests {
 
     private SimpleEventsProcessor4Test processor;
 
-    @Mock
-    private IEventsHandler4Test handler;
+    private IEventsHandler4Test handler = spy(IEventsHandler4Test.handler);
 
     @BeforeEach
     public void before() {

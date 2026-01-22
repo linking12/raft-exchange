@@ -32,38 +32,7 @@ public final class SimpleEventsProcessorTest {
     // private IEventsHandler4Test handler;
     // 上面这种写法不行，@Mock不能verify接口default方法内部的调用。verify的对象，必须是被测代码“直接调用”的方法。
     // 需要用实现类覆盖默认的process方法，这样又需要spy包装才能被verify。
-    private IEventsHandler4Test handler = spy(new IEventsHandler4Test() {
-
-        @Override
-        public void process(FundEventReport fundEventReport) {
-            fundEventReport(fundEventReport);
-        }
-
-        @Override
-        public void process(SpotExecutionReport executionReport) {
-            spotExecutionReport(executionReport);
-        }
-
-        @Override
-        public void orderBook(ITradeEventsHandler.OrderBook orderBook) {
-
-        }
-
-        @Override
-        public void spotExecutionReport(ITradeEventsHandler.SpotExecutionReport executionReport) {
-
-        }
-
-        @Override
-        public void futuresExecutionReport(ITradeEventsHandler.FuturesExecutionReport executionReport) {
-
-        }
-
-        @Override
-        public void fundEventReport(IFundEventsHandler.FundEventReport fundEventReport) {
-
-        }
-    });
+    private IEventsHandler4Test handler = spy(IEventsHandler4Test.handler);
 
     @Captor
     private ArgumentCaptor<ITradeEventsHandler.SpotExecutionReport> tradeEventCaptor;

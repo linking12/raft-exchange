@@ -23,7 +23,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -53,8 +52,7 @@ class ITSpotTradingFeeCalculationTest {
 
     private SimpleEventsProcessor4Test processor;
 
-    @Mock
-    private IEventsHandler4Test handler;
+    private IEventsHandler4Test handler = spy(IEventsHandler4Test.handler);
 
     @Captor
     ArgumentCaptor<ITradeEventsHandler.SpotExecutionReport> spotExecutionReportCaptor;
