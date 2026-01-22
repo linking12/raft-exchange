@@ -298,7 +298,10 @@ public final class GroupingProcessor implements EventProcessor {
                         }
 
                         cmd.matcherEvent = null;
-                        cmd.takerFundEvents = null;
+                        // ApiSystemLiquidationNotify的通知事件直接挂在这里了，不能置空
+                        if (cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
+                            cmd.takerFundEvents = null;
+                        }
                         cmd.makerFundEventsByShard = null;
                         cmd.adlUserPositionsByShard = null;
                         // TODO collect to shared buffer
