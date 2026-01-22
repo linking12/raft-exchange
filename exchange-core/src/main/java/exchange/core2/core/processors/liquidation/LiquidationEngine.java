@@ -186,8 +186,11 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
                 LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                long profit = position.estimatePnl(priceRecord);
                 long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
+                if (maintenance == 0) {
+                    continue;
+                }
+                long profit = position.estimatePnl(priceRecord);
                 profit = CoreArithmeticUtils.sizePriceToCurrencyScale(profit, spec, currencySpec);
                 maintenance = CoreArithmeticUtils.sizePriceToCurrencyScale(maintenance, spec, currencySpec);
                 totalProfit += profit;
