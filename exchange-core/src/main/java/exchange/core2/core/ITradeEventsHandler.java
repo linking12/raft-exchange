@@ -353,7 +353,10 @@ public interface ITradeEventsHandler {
         public int feeAssetId;
         public boolean isMaker;
 
-        private FuturesExecutionReport() {}
+        private FuturesExecutionReport() {
+            counterpartyId = -1L;
+            execId = -1L;
+        }
 
         private static FuturesExecutionReport borrow() {
             FuturesExecutionReport obj = POOL.pollFirst();
