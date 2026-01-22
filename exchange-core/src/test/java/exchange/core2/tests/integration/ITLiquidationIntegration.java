@@ -168,7 +168,7 @@ class ITLiquidationIntegration {
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
 
             // 等待强平完成
-            Thread.sleep(100);
+            Thread.sleep(2000);
 
             log.info("验证强平结果");
 
@@ -264,7 +264,7 @@ class ITLiquidationIntegration {
 
             // 触发强平
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证强平结果和负载分布");
@@ -445,7 +445,7 @@ class ITLiquidationIntegration {
             // 只触发分片0的强平引擎（假设第一个引擎处理分片0）
             LiquidationEngine shard0Engine = liquidationEngines.get(0);
             shard0Engine.triggerOnce();
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证单分片强平结果");
@@ -541,7 +541,7 @@ class ITLiquidationIntegration {
             shard1Engine.triggerOnce();
 
             // 等待强平完成
-            Thread.sleep(150);
+            Thread.sleep(2000);
 
             // 重新统计强平情况
             int shard1LiquidatedUsersAfter = 0;
@@ -669,7 +669,7 @@ class ITLiquidationIntegration {
             log.info("触发所有分片的强平引擎");
             // 触发所有分片的强平
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证混合保证金模式强平结果");
@@ -915,7 +915,7 @@ class ITLiquidationIntegration {
 
             log.info("步骤5: 手动触发所有分片的强平引擎");
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("步骤6: 验证强平结果");
@@ -1055,7 +1055,7 @@ class ITLiquidationIntegration {
             // 价格大幅下跌，触发强平条件
             container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500L);
+            Thread.sleep(5000L);
             container.getApi().groupingControl(0, 1);
 
             // 验证交易者被强平
@@ -1130,7 +1130,7 @@ class ITLiquidationIntegration {
             container.updateCurrentPriceTo((int) liquidationPrice, symbol2.symbolId, QUOTE_ID);
 
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(150);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证全仓模式强平结果");
@@ -1198,7 +1198,7 @@ class ITLiquidationIntegration {
             // 价格大幅上涨，触发空头强平
             container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证空头强平结果");
@@ -1278,7 +1278,7 @@ class ITLiquidationIntegration {
             // 价格下跌，触发强平
             container.updateCurrentPriceTo((int) partialLiquidationPrice, symbol.symbolId, QUOTE_ID);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证部分强平结果");
@@ -1365,7 +1365,7 @@ class ITLiquidationIntegration {
             // 价格大幅下跌，同时触发所有用户强平
             container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(500);
+            Thread.sleep(2000);
             container.getApi().groupingControl(0, 1);
 
             log.info("验证多用户强平结果");

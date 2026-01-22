@@ -839,7 +839,18 @@ class ITExtraMarginIntegration {
             verify(handler, times(41)).fundEventReport(fundEventCaptor.capture());
             // check fund event, 因为已经补充过保证金了所以只会发一次补充保证金事件
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
-            IFundEventsHandler.FundEventReport alertEvent = fundEvents.get(33);
+
+            IFundEventsHandler.FundEventReport alertEvent = null;
+            int index = 0;
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.MARGIN_ALERT) && report.getAccountId() == userId1) {
+                    alertEvent = report;
+                    index = i;
+                    break;
+                }
+            }
+
             assertThat(userId1, Is.is(alertEvent.getAccountId()));
             assertThat(quoteId, Is.is(alertEvent.getBalances().getCurrency()));
             assertThat(10001, Is.is(alertEvent.getPositions().getSymbolId()));
@@ -855,7 +866,16 @@ class ITExtraMarginIntegration {
             assertThat(7L, Is.is(alertEvent.getPositions().getMarginRatioScaleK()));
             checkEventPending(alertEvent);
 
-            IFundEventsHandler.FundEventReport alertEvent2 = fundEvents.get(38);
+            IFundEventsHandler.FundEventReport alertEvent2 = null;
+
+            for (int i = index + 1; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.MARGIN_ALERT) && report.getAccountId() == userId1) {
+                    alertEvent2 = report;
+                    break;
+                }
+            }
+
             assertThat(userId1, Is.is(alertEvent2.getAccountId()));
             assertThat(quoteId, Is.is(alertEvent2.getBalances().getCurrency()));
             assertThat(10001, Is.is(alertEvent2.getPositions().getSymbolId()));
@@ -964,7 +984,7 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(47)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(49)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport refund1 = null;
@@ -990,19 +1010,27 @@ class ITExtraMarginIntegration {
             checkEvent(refund1);
             checkEventPending(refund1);
 
-            IFundEventsHandler.FundEventReport refund2 = fundEvents.get(44);
-            assertThat(userId1, Is.is(refund2.getAccountId()));
-            assertThat(quoteId, Is.is(refund2.getBalances().getCurrency()));
-            assertThat(10001, Is.is(refund2.getPositions().getSymbolId()));
-            assertThat(PositionDirection.SHORT, Is.is(refund2.getPositions().getDirection()));
-            assertThat(FundEvent.FundEventType.MARGIN_REFUND, Is.is(refund2.getEventType()));
-            assertThat(8840L, Is.is(refund2.getBalances().getFree()));
-            assertThat(0L, Is.is(refund2.getBalances().getLocked()));
-            assertThat(-3000L, Is.is(refund2.getPositions().getCumRealized()));
-            assertThat(0L, Is.is(refund2.getPositions().getOpenPriceSum()));
-            assertThat(0L, Is.is(refund2.getPositions().getQuantity()));
-            checkEvent(refund2);
-            checkEventPending(refund2);
+            IFundEventsHandler.FundEventReport liqudationFeeEvt1 = null;
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_FEE)) {
+                    liqudationFeeEvt1 = report;
+                    break;
+                }
+            }
+
+            assertThat(userId1, Is.is(liqudationFeeEvt1.getAccountId()));
+            assertThat(quoteId, Is.is(liqudationFeeEvt1.getBalances().getCurrency()));
+            assertThat(10000, Is.is(liqudationFeeEvt1.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, Is.is(liqudationFeeEvt1.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.LIQUIDATION_FEE, Is.is(liqudationFeeEvt1.getEventType()));
+            assertThat(5840L, Is.is(liqudationFeeEvt1.getBalances().getFree()));
+            assertThat(100L, Is.is(liqudationFeeEvt1.getBalances().getLocked()));
+            assertThat(-1000L, Is.is(liqudationFeeEvt1.getPositions().getCumRealized()));
+            assertThat(0L, Is.is(liqudationFeeEvt1.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(liqudationFeeEvt1.getPositions().getQuantity()));
+            checkEvent(liqudationFeeEvt1);
+            checkEventPending(liqudationFeeEvt1);
         }
     }
 
