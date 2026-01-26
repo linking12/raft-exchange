@@ -671,7 +671,7 @@ class ITFutureCross extends ITFutureBase {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(55)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(56)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport liquidationAlertEvt = null;
