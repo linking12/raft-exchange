@@ -825,9 +825,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (position == null) {
             return CommandResultCode.SUCCESS;
         }
-        long pendingClose = (cmd.action == OrderAction.ASK) ? position.pendingSellSize : position.pendingBuySize;
-        long closable = Math.max(0, position.openVolume - pendingClose);
-        long closeSize = Math.min(cmd.size, closable);
+        long closeSize = maxClosableSize(position, cmd.action, cmd.size);
         if (closeSize <= 0) {
             return CommandResultCode.SUCCESS;
         }
@@ -842,6 +840,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
         eventsHelper.sendLockPendingEvent(cmd, position, free, lockedMargin);
 
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+    }
+
+    private long maxClosableSize(SymbolPositionRecord pos, OrderAction action, long requestedSize) {
+        long pendingClose = (action == OrderAction.ASK) ? pos.pendingSellSize : pos.pendingBuySize;
+        long closable = Math.max(0, pos.openVolume - pendingClose);
+        return Math.min(requestedSize, closable);
     }
 
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
@@ -912,6 +916,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 position = objectsPool.get(ObjectsPool.SYMBOL_POSITION_RECORD, SymbolPositionRecord::new);
                 position.initialize(userProfile.uid, spec.symbolId, spec.quoteCurrency, cmd.action, cmd.leverage, cmd.marginMode);
                 userProfile.positions.put(positionRecordKey, position);
+            }
+            // 单向持仓，依据“只减仓”标记，裁剪size
+            if (userProfile.positionMode == PositionMode.ONEWAY && cmd.isReduceOnly()) {
+                cmd.size = maxClosableSize(position, cmd.action, cmd.size);
+                if (cmd.size <= 0) {
+                    return CommandResultCode.SUCCESS;
+                }
             }
             // 检查用户杠杆是否超过symbol的杠杆限制
             long notional = position.estimateNotionalForOrder(cmd.action, cmd.size, priceRecord.markPrice);

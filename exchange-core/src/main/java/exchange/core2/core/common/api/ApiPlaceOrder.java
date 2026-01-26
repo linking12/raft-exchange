@@ -39,13 +39,16 @@ public final class ApiPlaceOrder extends ApiCommand {
     public final int leverage;
     public final MarginMode marginMode;
     public final long reservePrice;
+    public final boolean reduceOnly;
 
     @Override
     public String toString() {
         return "[ADD o" + orderId + " s" + symbol + " l" + leverage + " m" + marginMode + " u" + uid
                 + " " + (action == OrderAction.ASK ? 'A' : 'B')
                 + ":" + (orderType == OrderType.IOC ? "IOC" : "GTC")
-                + ":" + price + ":" + size + "]";
+                + ":" + price + ":" + size
+                + (reduceOnly ? ":RO" : "")
+                + "]";
         //(reservePrice != 0 ? ("(R" + reservePrice + ")") : "") +
     }
 }

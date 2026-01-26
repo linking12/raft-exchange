@@ -38,6 +38,7 @@ import lombok.ToString;
 @AllArgsConstructor
 @ToString
 public final class OrderCommand implements IOrder {
+    public static final int FLAG_REDUCE_ONLY = 1;
 
     @Getter
     public OrderCommandType command;
@@ -80,6 +81,8 @@ public final class OrderCommand implements IOrder {
     // 新增字段：仓位类型（默认 逐仓）
     @Builder.Default
     public MarginMode marginMode = MarginMode.ISOLATED;
+    // 新增字段：订单flag 目前仅在PLACE_ORDER中表示只减仓
+    public int orderFlags;
 
     // filled by grouping processor:
 
@@ -120,6 +123,10 @@ public final class OrderCommand implements IOrder {
     // sequence of last available for this command
     //public long matcherEventSequence;
     // ---- potential false sharing section ------
+
+    public boolean isReduceOnly() {
+        return (orderFlags & FLAG_REDUCE_ONLY) != 0;
+    }
 
     public static OrderCommand newOrder(OrderType orderType, long orderId, long uid, long price, long reserveBidPrice, long size, OrderAction action) {
         OrderCommand cmd = new OrderCommand();
@@ -211,16 +218,16 @@ public final class OrderCommand implements IOrder {
         cmd2.command = this.command;
         cmd2.orderId = this.orderId;
         cmd2.symbol = this.symbol;
+        cmd2.price = this.price;
+        cmd2.size = this.size;
+        cmd2.reserveBidPrice = this.reserveBidPrice;
+        cmd2.action = this.action;
+        cmd2.orderType = this.orderType;
         cmd2.uid = this.uid;
         cmd2.timestamp = this.timestamp;
         cmd2.leverage = this.leverage;
         cmd2.marginMode = this.marginMode;
-
-        cmd2.reserveBidPrice = this.reserveBidPrice;
-        cmd2.price = this.price;
-        cmd2.size = this.size;
-        cmd2.action = this.action;
-        cmd2.orderType = this.orderType;
+        cmd2.orderFlags = this.orderFlags;
     }
 
     // slow - testing only

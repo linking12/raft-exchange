@@ -577,6 +577,10 @@ public final class ExchangeApi {
         cmd.marginMode = api.marginMode;
         cmd.uid = api.uid;
         cmd.userCookie = api.userCookie;
+        cmd.orderFlags = 0;
+        if (api.reduceOnly) {
+            cmd.orderFlags |= OrderCommand.FLAG_REDUCE_ONLY;
+        }
         cmd.resultCode = CommandResultCode.NEW;
     };
 
@@ -962,7 +966,7 @@ public final class ExchangeApi {
         return future;
     }
 
-    public long placeNewOrder(int userCookie, int leverage, MarginMode marginMode, long price, long reservedBidPrice, long size, OrderAction action,
+    public long placeNewOrder(int userCookie, int leverage, MarginMode marginMode, int orderFlags, long price, long reservedBidPrice, long size, OrderAction action,
         OrderType orderType, int symbol, long uid, Consumer<OrderCommand> callback) {
 
         final long seq = ringBuffer.next();
@@ -983,6 +987,7 @@ public final class ExchangeApi {
             cmd.userCookie = userCookie;
             cmd.leverage = leverage;
             cmd.marginMode = marginMode;
+            cmd.orderFlags = orderFlags;
             promises.put(seq, callback);
 
         } finally {
@@ -991,7 +996,7 @@ public final class ExchangeApi {
         return seq;
     }
 
-    public void placeNewOrder(int serviceFlags, long eventsGroup, long timestampNs, long orderId, int userCookie, int leverage, MarginMode marginMode,
+    public void placeNewOrder(int serviceFlags, long eventsGroup, long timestampNs, long orderId, int userCookie, int leverage, MarginMode marginMode, int orderFlags,
         long price, long reservedBidPrice, long size, OrderAction action, OrderType orderType, int symbol, long uid) {
 
         ringBuffer.publishEvent((cmd, seq) -> {
@@ -1013,6 +1018,7 @@ public final class ExchangeApi {
             cmd.userCookie = userCookie;
             cmd.leverage = leverage;
             cmd.marginMode = marginMode;
+            cmd.orderFlags = orderFlags;
         });
     }
 
