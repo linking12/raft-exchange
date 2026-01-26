@@ -33,8 +33,8 @@ public class ExchangeApiFutureTest extends BaseTest {
         double usdtBalance2 = queryU2.getAccounts().get(USDT_ID);
 
         // 提交订单应该成功
-        CommandResultView result1 = exchangeApi.placeOrder(UID_11, orderId, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1);
-        CommandResultView result2 = exchangeApi.placeOrder(UID_12, orderId + 1, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 852, 0, 1, MarginMode.ISOLATED, 1);
+        CommandResultView result1 = exchangeApi.placeOrder(UID_11, orderId, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1, false);
+        CommandResultView result2 = exchangeApi.placeOrder(UID_12, orderId + 1, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 852, 0, 1, MarginMode.ISOLATED, 1, false);
 
         assertThat(result1.getResultCode(), is(CommandResultCode.SUCCESS));
         assertThat(result2.getResultCode(), is(CommandResultCode.SUCCESS));
@@ -65,7 +65,7 @@ public class ExchangeApiFutureTest extends BaseTest {
         int orderId = getInitOrderId(Integer.class);
 
         double price = 250.2;
-        CommandResultView view1 = exchangeApi.placeOrder(UID_13, orderId, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, price, price, 0.5, MarginMode.CROSS, 1);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_13, orderId, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, price, price, 0.5, MarginMode.CROSS, 1, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
 
         List<SingleUserReportResultView.PositionView> position1 = getPosition(UID_13, BNB_USDT_FU);
@@ -85,7 +85,7 @@ public class ExchangeApiFutureTest extends BaseTest {
         int orderId = getInitOrderId(Integer.class);
 
         double price = 850.2;
-        CommandResultView view1 = exchangeApi.placeOrder(UID_15, orderId, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, price, price, 0.5, MarginMode.ISOLATED, 5);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_15, orderId, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, price, price, 0.5, MarginMode.ISOLATED, 5, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
 
         List<SingleUserReportResultView.PositionView> position1 = getPosition(UID_15, BNB_USDT_FU);
@@ -115,8 +115,8 @@ public class ExchangeApiFutureTest extends BaseTest {
         long openVolume2 = position2 != null && position2.size() > 0 ? position2.get(0).getOpenVolume() : 0;
 
         // 下单
-        CommandResultView view1 = exchangeApi.placeOrder(UID_16, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1);
-        CommandResultView view2 = exchangeApi.placeOrder(UID_17, orderId2, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 850, 850, 0.5, MarginMode.ISOLATED, 1);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_16, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1, false);
+        CommandResultView view2 = exchangeApi.placeOrder(UID_17, orderId2, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 850, 850, 0.5, MarginMode.ISOLATED, 1, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
         assertThat(view2.getResultCode(), is(CommandResultCode.SUCCESS));
         Thread.sleep(1000L);
@@ -141,8 +141,8 @@ public class ExchangeApiFutureTest extends BaseTest {
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
 
         // 下单
-        CommandResultView view2 = exchangeApi.placeOrder(UID_18, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 850.2, 0.5, MarginMode.ISOLATED, 1);
-        CommandResultView view3 = exchangeApi.placeOrder(UID_18, orderId2, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 900.4, 900.4, 0.5, MarginMode.ISOLATED, 1);
+        CommandResultView view2 = exchangeApi.placeOrder(UID_18, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 850.2, 0.5, MarginMode.ISOLATED, 1, false);
+        CommandResultView view3 = exchangeApi.placeOrder(UID_18, orderId2, BNB_USDT_FU, OrderAction.ASK, OrderType.GTC, 900.4, 900.4, 0.5, MarginMode.ISOLATED, 1, false);
         assertThat(view2.getResultCode(), is(CommandResultCode.SUCCESS));
         assertThat(view3.getResultCode(), is(CommandResultCode.SUCCESS));
         Thread.sleep(1000L);
@@ -165,7 +165,7 @@ public class ExchangeApiFutureTest extends BaseTest {
         double extraMargin = position1 != null && position1.get(0) != null ? position1.get(0).getExtraMargin() : 0;
 
         // 下单
-        CommandResultView view1 = exchangeApi.placeOrder(UID_20, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_20, orderId1, BNB_USDT_FU, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, MarginMode.ISOLATED, 1, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
 
         CommandResultView view2 = exchangeApi.adjustMargin(UID_20, MarginMode.ISOLATED, BNB_USDT_FU, 500);

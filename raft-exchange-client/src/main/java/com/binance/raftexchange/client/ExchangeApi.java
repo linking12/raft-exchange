@@ -247,15 +247,17 @@ public class ExchangeApi implements AutoCloseable {
     }
 
     public CommandResultView placeOrder(long uid, long orderId, int symbol, OrderAction action, OrderType type,
-                                    double price, double reversePrice, double size, MarginMode marginMode, int leverage) {
-        return send(buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage));
+                                        double price, double reversePrice, double size, MarginMode marginMode,
+                                        int leverage, boolean reduceOnly) {
+        return send(buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage, reduceOnly));
     }
 
     public CompletableFuture<CommandResultView> placeOrderAsync(long uid, long orderId, int symbol, OrderAction action, OrderType type,
-                                                            double price, double reversePrice, double size, MarginMode marginMode, int leverage) {
+                                                                double price, double reversePrice, double size, MarginMode marginMode,
+                                                                int leverage, boolean reduceOnly) {
         final ApiCommand cmd;
         try {
-            cmd = buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage);
+            cmd = buildPlaceOrderCommand(uid, orderId, symbol, action, type, price, reversePrice, size, marginMode, leverage, reduceOnly);
         } catch (Exception ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -263,7 +265,8 @@ public class ExchangeApi implements AutoCloseable {
     }
 
     public ApiCommand buildPlaceOrderCommand(long uid, long orderId, int symbol, OrderAction action, OrderType type,
-                                             double price, double reversePrice, double size, MarginMode marginMode, int leverage) {
+                                             double price, double reversePrice, double size, MarginMode marginMode,
+                                             int leverage, boolean reduceOnly) {
         CoreSymbolSpecification spec = metadataManager.getSymbolSpec(symbol);
         boolean exchangeSymbol = spec.getType() == SymbolType.CURRENCY_EXCHANGE_PAIR;
         if (!exchangeSymbol && marginMode == null) {
@@ -282,7 +285,7 @@ public class ExchangeApi implements AutoCloseable {
         ApiPlaceOrder.Builder builder = ApiPlaceOrder.newBuilder().setUid(uid).setOrderId(orderId).setSymbol(symbol)
                 .setAction(action).setOrderType(type).setPrice(scaledPrice).setReservePrice(scaledReversePrice).setSize(scaledSize);
         if (!exchangeSymbol) {
-            builder.setMarginMode(marginMode).setLeverage(leverage);
+            builder.setMarginMode(marginMode).setLeverage(leverage).setReduceOnly(reduceOnly);
         }
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis()).setPlaceOrder(builder).build();
     }
