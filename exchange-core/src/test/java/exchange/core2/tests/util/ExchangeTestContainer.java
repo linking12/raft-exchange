@@ -552,6 +552,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
         return createBidWithOrderId(orderId, userId, size, price, symbolId, marginMode);
     }
 
+    public long createAsk(long userId, int size, long price, int symbolId, MarginMode marginMode) {
+        long orderId = getRandomTransactionId();
+        return createAskWithOrderId(orderId, userId, size, price, symbolId, marginMode);
+    }
+
     public long createBidWithOrderId(long orderId, long userId, int size, long price, int symbolId) {
         return createBidWithOrderId(orderId, userId, size, price, symbolId, MarginMode.ISOLATED);
     }
@@ -641,8 +646,8 @@ public final class ExchangeTestContainer implements AutoCloseable {
         // update bid/ask price
         createUserWithMoney(UPDATE_PRICE_USER1, quoteId, TestConstants.MAX_VALUE);
         createUserWithMoney(UPDATE_PRICE_USER2, quoteId, TestConstants.MAX_VALUE);
-        createBid(UPDATE_PRICE_USER1, 10, price, symbolId);
-        createAsk(UPDATE_PRICE_USER2, 10, price, symbolId);
+        createBid(UPDATE_PRICE_USER1, 10, price, symbolId, MarginMode.CROSS);
+        createAsk(UPDATE_PRICE_USER2, 10, price, symbolId, MarginMode.CROSS);
         // 触发让R2做完
         api.groupingControl(0, 1);
     }

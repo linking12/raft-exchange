@@ -13,6 +13,7 @@ import exchange.core2.core.processors.liquidation.LiquidationService;
 import exchange.core2.core.utils.ReflectionUtils;
 import exchange.core2.tests.util.EventCheck;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
@@ -68,6 +69,10 @@ class ITMixedIntegration {
 
     private PerformanceConfiguration getPerformanceConfiguration() {
         return PerformanceConfiguration.baseBuilder().build();
+    }
+
+    private PerformanceConfiguration getHignPerformanceConfiguration() {
+        return PerformanceConfiguration.throughputPerformanceBuilder().build();
     }
 
     // userId1既有现货又有期货, 资产free, lock check正确 -- 期货没有开仓
@@ -433,7 +438,7 @@ class ITMixedIntegration {
             throw new RuntimeException(e);
         } finally {
             // 验证发送了强平事件
-            verify(handler, times(29)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(23)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
             IFundEventsHandler.FundEventReport liquidationAlertEvt = null;
@@ -598,7 +603,7 @@ class ITMixedIntegration {
             throw new RuntimeException(e);
         } finally {
             // 验证发送了强平事件
-            verify(handler, times(29)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(23)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
             IFundEventsHandler.FundEventReport liquidationAlertEvt = null;
@@ -769,7 +774,11 @@ class ITMixedIntegration {
             log.info("步骤5: 验证强平结果");
             container.validateUserState(loser, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
-                assertThat(profile.getAccounts().get(quoteId), is(userDeposit - makerFee - liquidationFee - 500));
+                // 10手强平单, 5个被市场UID_3吃掉了, 剩余走了IF。被市场吃掉的部分要收强平fee
+                long liqFee = liquidationFee / 2;
+                //  市场价格从10000 -> 9900 10手, profit = -100 * 10 = -10000
+                long profit = -1000L;
+                assertThat(profile.getAccounts().get(quoteId), is(userDeposit - makerFee - liqFee + profit ));
             });
 
             // 验证用户余额变化
@@ -779,10 +788,255 @@ class ITMixedIntegration {
             // 验证IF余额增加（收到强平费）
             long ifBalanceAfterLiquidation = container.getIFBalance(spec.symbolId, quoteId);
             log.info("强平后IF余额: {}", ifBalanceAfterLiquidation);
+            // IF吃掉了5手UID_1的强平(5 * 9900), 又收取了5手强平手续费(5 * 50)
+            assertThat(ifBalanceAfterLiquidation, is(amountPerShard - 5 * liquidationTriggerPrice + 5 * 50L));
 
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
+        } finally {
+            verify(handler, times(25)).fundEventReport(fundEventCaptor.capture());
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+
+            IFundEventsHandler.FundEventReport ifCloseEvt = null;
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.IF_POSITION_CLOSE) && report.getAccountId() == UID_1) {
+                    ifCloseEvt = report;
+                    break;
+                }
+            }
+
+            assertThat(UID_1, Is.is(ifCloseEvt.getAccountId()));
+            assertThat(quoteId, Is.is(ifCloseEvt.getBalances().getCurrency()));
+            assertThat(10000, Is.is(ifCloseEvt.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, Is.is(ifCloseEvt.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.IF_POSITION_CLOSE, Is.is(ifCloseEvt.getEventType()));
+            assertThat(1650L, Is.is(ifCloseEvt.getBalances().getFree()));
+            assertThat(0L, Is.is(ifCloseEvt.getBalances().getLocked()));
+            assertThat(-1000L, Is.is(ifCloseEvt.getPositions().getCumRealized()));
+            assertThat(0L, Is.is(ifCloseEvt.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(ifCloseEvt.getPositions().getQuantity()));
+            EventCheck.checkEvent(ifCloseEvt);
+            EventCheck.checkEventPending(ifCloseEvt);
         }
     }
+
+    /**
+     * 测试4: 逐仓爆仓后被强平，市场部分吃掉，IF资金不够, 走到ADL
+     * 场景：用户逐仓模式下爆仓，市场只能部分吃掉强平单，IF资金不够接管管剩余部分, 最终由ADL兜底
+     * 验证：1) 市场部分成交 2) ADL接管剩余部分 3) 强平费用正确
+     */
+    @Test
+    public void testIsolatedLiquidationPartialMatchedWithAdlTakeover() {
+        long userDeposit = 2000L;
+        long makerDeposit = 100000L;
+        int userSize = 10;
+        int makerFee = userSize * 10;
+        int takerFee = userSize * 20;
+        int liquidationFee = userSize * 50;
+        long openPrice = 10000;
+        long liquidationTriggerPrice = 9900;
+        long amountPerShard = 45000L; // IF资金不够UID_1剩余的5手强平
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
+            // 停止自动强平，手动触发
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+
+            CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                    .symbolId(10000)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                    .baseCurrency(CURRENECY_XBT)
+                    .quoteCurrency(CURRENECY_USD)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .makerFee(10)
+                    .takerFee(20)
+                    .liquidationFee(50)
+                    .feeScaleK(0)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(10)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .build();
+            container.addSymbol(spec);
+            container.addCurrency(spec.baseCurrency, 0);
+            container.addCurrency(spec.quoteCurrency, 0);
+            container.initMarkPrice(spec.symbolId, (int) openPrice);
+
+            // 创建用户
+            long loser = UID_1;  // 将被强平的用户
+            long maker = UID_2;  // 提供流动性的用户
+
+            container.createUserWithSpecificMoney(loser, userDeposit, quoteId);
+            container.createUserWithSpecificMoney(maker, makerDeposit, quoteId);
+            container.createUserWithSpecificMoney(UID_3, makerDeposit, quoteId);
+            // 模拟市场上其他订单准备ADL
+            container.createUserWithSpecificMoney(UID_5, makerDeposit, quoteId);
+            container.createUserWithSpecificMoney(UID_6, makerDeposit, quoteId);
+            container.createUserWithSpecificMoney(UID_7, makerDeposit, quoteId);
+            container.createUserWithSpecificMoney(UID_8, makerDeposit, quoteId);
+
+            // 给IF注入初始资金，用于接管
+            // 给每个分片的IF注入资金
+            List<LiquidationEngine> engines = container.getExchangeCore().getLiquidationEngines();
+            for (LiquidationEngine engine : engines) {
+                LiquidationService service = ReflectionUtils.extractField(
+                        LiquidationEngine.class,
+                        engine,
+                        "liquidationService"
+                );
+                // 平均分配资金到各分片
+                service.creditLiquidationFee(spec.symbolId, amountPerShard);
+                log.debug("Added {} to IF balance for symbol {} in shard", amountPerShard, quoteId);
+            }
+
+            container.createBidWithOrderId(30001L, loser, userSize, openPrice, spec.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(30002L, maker, userSize, openPrice, spec.symbolId, MarginMode.CROSS);
+
+//            // UID_5和UID_6开仓成功
+//            container.createBidWithOrderId(50001L, UID_5, userSize, 9000L, spec.symbolId, MarginMode.ISOLATED);
+//            container.createAskWithOrderId(60002L, UID_6, userSize, 9000L, spec.symbolId, MarginMode.CROSS);
+//
+//            // UID_7和UID_8开仓成功, UID_7因为市场波动赚的最多, 为candidate ADL对象
+//            container.createBidWithOrderId(70001L, UID_7, userSize, 8000L, spec.symbolId, MarginMode.ISOLATED);
+//            container.createAskWithOrderId(80002L, UID_8, userSize, 8000L, spec.symbolId, MarginMode.CROSS);
+
+            // 验证开仓成功
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is((long) userSize));
+            });
+
+            long loserBalanceBeforeLiquidation = container.getUserProfile(loser).getAccounts().get(quoteId);
+            log.info("强平前用户余额: {}", loserBalanceBeforeLiquidation);
+
+            // 获取IF强平前余额
+            long ifBalanceBeforeLiquidation = container.getIFBalance(spec.symbolId, quoteId);
+            assertThat(ifBalanceBeforeLiquidation, is(amountPerShard));
+            log.info("强平前IF余额: {}", ifBalanceBeforeLiquidation);
+
+            log.info("步骤2: 价格下跌到触发强平");
+            container.updateCurrentPriceTo((int) liquidationTriggerPrice, spec.symbolId, quoteId);
+
+            int marketCanTake = 4;
+            log.info("步骤3: Maker 只挂部分买单 (只能吃掉{}张)", marketCanTake);
+            container.createBidWithOrderId(30003L, UID_3, marketCanTake, liquidationTriggerPrice, spec.symbolId, MarginMode.CROSS);
+
+            // 验证ADL候选人仓位在强平前的数值
+            container.validateUserState(maker, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getAccounts().get(quoteId), is(makerDeposit - takerFee));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is((long) userSize));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenInitMarginSum(), is(1000L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenPriceSum(), is(100000L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getUnrealizedProfit(), is(userSize * (openPrice - liquidationTriggerPrice)));
+            });
+
+            log.info("步骤4: 手动触发强平");
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+
+            // 等待强平和IF接管完成 - 需要更长时间
+            LatencyTools.waitForCondition(200, () -> {
+                try {
+                    return container.getUserProfile(loser).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            log.info("步骤5: 验证强平结果");
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                // 10手强平单, 4手被市场UID_3吃掉了, 剩余走了ADL。被市场吃掉的部分(4手)要收强平fee
+                long liqFee = liquidationFee * 4 / 10;
+                //  市场价格从10000 -> 9900 10手, profit = -100 * 10 = -10000
+                long profit = -1000L;
+                assertThat(profile.getAccounts().get(quoteId), is(userDeposit - makerFee - liqFee + profit ));
+            });
+
+            // 验证ADL候选人仓位在强平后的数值
+            container.validateUserState(maker, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getAccounts().get(quoteId), is(makerDeposit - takerFee));
+                // 10手强平单, UID_3吃掉4手, 剩余6手走了ADL, 被UID_2吃掉了
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(userSize - 6L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenInitMarginSum(), is(400L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenPriceSum(), is(40600L));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getUnrealizedProfit(), is(userSize * (openPrice - liquidationTriggerPrice)));
+            });
+
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                // 10手强平单, 4手被市场UID_3吃掉了, 剩余走了ADL。被市场吃掉的部分(4手)要收强平fee
+                long liqFee = liquidationFee * 4 / 10;
+                //  市场价格从10000 -> 9900 10手, profit = -100 * 10 = -10000
+                long profit = -1000L;
+                assertThat(profile.getAccounts().get(quoteId), is(userDeposit - makerFee - liqFee + profit ));
+            });
+
+            // 验证用户余额变化
+            long loserBalanceAfterLiquidation = container.getUserProfile(loser).getAccounts().get(quoteId);
+            log.info("强平后用户余额: {}", loserBalanceAfterLiquidation);
+
+            // 验证IF余额会增加, 因为IF金额不够覆盖剩余的强平后订单(6手), 又收取了4手强平手续费(4 * 50)
+            long ifBalanceAfterLiquidation = container.getIFBalance(spec.symbolId, quoteId);
+            log.info("强平后IF余额: {}", ifBalanceAfterLiquidation);
+            assertThat(ifBalanceAfterLiquidation, is(amountPerShard + 4 * 50L));
+
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            verify(handler, times(30)).fundEventReport(fundEventCaptor.capture());
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+
+            IFundEventsHandler.FundEventReport adlCloseEvt = null;
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.ADL_POSITION_CLOSE) && report.getAccountId() == UID_2) {
+                    adlCloseEvt = report;
+                    break;
+                }
+            }
+
+            assertThat(UID_2, Is.is(adlCloseEvt.getAccountId()));
+            assertThat(quoteId, Is.is(adlCloseEvt.getBalances().getCurrency()));
+            assertThat(10000, Is.is(adlCloseEvt.getPositions().getSymbolId()));
+            assertThat(PositionDirection.SHORT, Is.is(adlCloseEvt.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.ADL_POSITION_CLOSE, Is.is(adlCloseEvt.getEventType()));
+            assertThat(99400L, Is.is(adlCloseEvt.getBalances().getFree()));
+            assertThat(400L, Is.is(adlCloseEvt.getBalances().getLocked()));
+            assertThat(0L, Is.is(adlCloseEvt.getPositions().getCumRealized()));
+            assertThat(40600L, Is.is(adlCloseEvt.getPositions().getOpenPriceSum()));
+            assertThat(4L, Is.is(adlCloseEvt.getPositions().getQuantity()));
+            assertThat(1000L, Is.is(adlCloseEvt.getPositions().getUnrealizedProfit()));
+            assertThat(23400L, Is.is(adlCloseEvt.getPositions().getLiquidationPrice()));
+            assertThat(1L, Is.is(adlCloseEvt.getPositions().getMarginRatioScaleK()));
+            EventCheck.checkEventPending(adlCloseEvt);
+
+            IFundEventsHandler.FundEventReport adlOriginCloseEvt = null;
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.ADL_ORIGIN_CLOSE) && report.getAccountId() == UID_1) {
+                    adlOriginCloseEvt = report;
+                    break;
+                }
+            }
+
+            assertThat(UID_1, Is.is(adlOriginCloseEvt.getAccountId()));
+            assertThat(quoteId, Is.is(adlOriginCloseEvt.getBalances().getCurrency()));
+            assertThat(10000, Is.is(adlOriginCloseEvt.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, Is.is(adlOriginCloseEvt.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.ADL_ORIGIN_CLOSE, Is.is(adlOriginCloseEvt.getEventType()));
+            assertThat(1700L, Is.is(adlOriginCloseEvt.getBalances().getFree()));
+            assertThat(0L, Is.is(adlOriginCloseEvt.getBalances().getLocked()));
+            assertThat(-1000L, Is.is(adlOriginCloseEvt.getPositions().getCumRealized()));
+            assertThat(0L, Is.is(adlOriginCloseEvt.getPositions().getOpenPriceSum()));
+            assertThat(0L, Is.is(adlOriginCloseEvt.getPositions().getQuantity()));
+            EventCheck.checkEvent(adlOriginCloseEvt);
+            EventCheck.checkEventPending(adlOriginCloseEvt);
+        }
+    }
+
 
 }
