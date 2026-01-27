@@ -16,6 +16,7 @@
 package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
+import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.CoreWaitStrategy;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
@@ -130,6 +131,9 @@ public final class GroupingProcessor implements EventProcessor {
         FundEvent fundEventHead = null;
         FundEvent fundEventTail = null;
         int fundEventCounter = 0;
+        ADLUserPosition adlUserPositionHead = null;
+        ADLUserPosition adlUserPositionTail = null;
+        int adlUserPositionCounter = 0;
 
         boolean groupingEnabled = true;
 
@@ -258,7 +262,48 @@ public final class GroupingProcessor implements EventProcessor {
                             }
                         }
 
+                        /**
+                         * @modify 回收当前orderCommand下面的adlUserPosition
+                         */
+                        if (EVENTS_POOLING) {
+                            // 回收每个 adlUserPosition shard 的链
+                            if (cmd.adlUserPositionsByShard != null) {
+                                for (int i = 0; i < cmd.adlUserPositionsByShard.length; i++) {
+                                    ADLUserPosition shardHead = cmd.adlUserPositionsByShard[i];
+                                    if (shardHead != null) {
+                                        if (adlUserPositionTail == null) {
+                                            adlUserPositionHead = shardHead;
+                                        } else {
+                                            adlUserPositionTail.next = shardHead;
+                                        }
+                                        adlUserPositionTail = shardHead;
+                                        adlUserPositionCounter++;
+
+                                        while (adlUserPositionTail.next != null) {
+                                            adlUserPositionTail = adlUserPositionTail.next;
+                                            adlUserPositionCounter++;
+                                        }
+
+                                        cmd.adlUserPositionsByShard[i] = null;
+                                    }
+                                }
+                            }
+
+                            if (adlUserPositionCounter >= tradeEventChainLengthTarget) {
+                                sharedPool.putADLCandidateChain(adlUserPositionHead);
+                                adlUserPositionHead = null;
+                                adlUserPositionTail = null;
+                                adlUserPositionCounter = 0;
+                            }
+                        }
+
                         cmd.matcherEvent = null;
+                        // ApiSystemLiquidationNotify的通知事件直接挂在这里了，不能置空
+                        if (cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
+                            cmd.takerFundEvents = null;
+                        }
+                        cmd.makerFundEventsByShard = null;
+                        cmd.adlUserPositionsByShard = null;
                         // TODO collect to shared buffer
                         cmd.marketData = null;
 

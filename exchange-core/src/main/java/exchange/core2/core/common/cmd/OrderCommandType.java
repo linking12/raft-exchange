@@ -47,6 +47,9 @@ public enum OrderCommandType {
 
     SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
 
+    IF_TAKEOVER((byte) 40, true),
+    AUTO_DELEVERAGING((byte) 41, true),
+
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
 
@@ -68,6 +71,10 @@ public enum OrderCommandType {
 
     private byte code;
     private boolean mutate;
+
+    public boolean isLiquidationFlowCommand() {
+        return this == FORCE_LIQUIDATION || this == IF_TAKEOVER || this == AUTO_DELEVERAGING;
+    }
 
     public static OrderCommandType fromCode(byte code) {
         // TODO try if-else

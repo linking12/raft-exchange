@@ -17,6 +17,7 @@ package exchange.core2.core.common;
 
 
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.liquidation.LiquidationContext;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -56,6 +57,18 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public MarginMode marginMode = MarginMode.ISOLATED; // 默认为逐仓
     public long extraMargin = 0; // 补充保证金，默认 0
 
+    // 强平扫描时动态计算，不持久化，不序列化
+    public long adlEligibility = 100; // adl可兑现性，默认 逐仓100 全仓0
+    /**
+     * ADL 冻结量：语义与下单 pending 类似。
+     * R1 冻结本次 ADL 可用的仓位数量，R2 按 matcherEvent 执行并释放，
+     * 防止相邻 cmd 在 R1 阶段看到相同 openVolume 导致重复分配。
+     **/
+    public long pendingADLSize = 0;
+
+    // ===== 强平流程上下文（仅在强平期间存在）=====
+    public transient LiquidationContext liquidationCtx;
+
     public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage, MarginMode marginMode) {
         this.uid = uid;
 
@@ -74,6 +87,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         updateLeverage(leverage);
         this.marginMode = marginMode == null ? MarginMode.ISOLATED : marginMode; // 默认为逐仓
         this.extraMargin = 0;
+        this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
+        this.pendingADLSize = 0;
+        this.liquidationCtx = null;
     }
 
     public void updateLeverage(int leverage) {
@@ -104,6 +120,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         updateLeverage(bytes.readInt());
         this.marginMode = MarginMode.values()[bytes.readInt()];
         this.extraMargin = bytes.readLong();
+        this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
+        this.pendingADLSize = 0;
+        this.liquidationCtx = null;
     }
 
 
@@ -166,6 +185,33 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      */
     public long estimateUnrealizedProfit(final LastPriceCacheRecord priceRecord) {
         return direction.getMultiplier() * (openVolume * priceRecord.markPrice - openPriceSum);
+    }
+
+    /**
+     * 计算破产价格
+     */
+    public long calculateBankruptcyPrice(CoreSymbolSpecification spec) {
+        long totalMargin = openInitMarginSum + extraMargin;
+        long liquidationFee = 0; // 暂时先不考虑强平费
+        long maxLoss = totalMargin - liquidationFee;
+        int sign = direction.getMultiplier();
+        if (spec.isFixedFee()) {
+            /**
+             * 固定手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerFee
+             * bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee - takerFee) / openVolume
+             */
+            maxLoss -= spec.takerFee * openVolume;
+            return CoreArithmeticUtils.ceilDivide(openPriceSum - sign * maxLoss, openVolume);
+        } else {
+            /**
+             * 动态手续费的情况下： 总亏损 = openPriceSum - bankruptcyPrice × openVolume = totalMargin - liquidationFee - takerRate ×
+             * bankruptcyPrice × openVolume bankruptcyPrice = openPriceSum - sign * (totalMargin - liquidationFee) /
+             * (openVolume * (1 - takerFee / feeScaleK)) = (openPriceSum - sign * maxLoss) * feeScaleK / (openVolume *
+             * feeScaleK - openVolume * takerFee)
+             */
+            return CoreArithmeticUtils.ceilDivide((openPriceSum - sign * maxLoss) * spec.feeScaleK,
+                    openVolume * (spec.feeScaleK - spec.takerFee));
+        }
     }
 
     /**
@@ -405,6 +451,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         updateLeverage(0);
         marginMode = MarginMode.ISOLATED;
         extraMargin = 0;
+        adlEligibility = 100;
+        pendingADLSize = 0;
+        liquidationCtx = null;
     }
 
     public void validateInternalState() {
@@ -443,6 +492,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
                 " lev=" + leverage +
                 " mode=" + marginMode +
                 " exM=" + extraMargin +
+                " adl%=" + adlEligibility +
+                " pendingADL=" + pendingADLSize +
+                " Lctx=" + liquidationCtx +
                 '}';
     }
 }

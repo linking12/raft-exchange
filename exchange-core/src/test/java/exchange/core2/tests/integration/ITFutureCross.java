@@ -17,7 +17,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.ITradeEventsHandler;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiPlaceOrder;
@@ -492,10 +492,12 @@ class ITFutureCross extends ITFutureBase {
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
 
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Thread.sleep(1000);
             // 期待结果makerOrderId5可以被吃掉, position数量为1
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
             });
+            Thread.sleep(1000);
 
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
@@ -669,7 +671,7 @@ class ITFutureCross extends ITFutureBase {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(55)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(56)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport liquidationAlertEvt = null;
@@ -702,7 +704,7 @@ class ITFutureCross extends ITFutureBase {
 
             for (int i = 0; i < fundEvents.size(); i++) {
                 IFundEventsHandler.FundEventReport report = fundEvents.get(i);
-                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION) && report.getAccountId() == userId3) {
+                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_CLOSE) && report.getAccountId() == userId3) {
                     liquidationEvt = report;
                     break;
                 }
@@ -713,7 +715,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(10000, Is.is(liquidationEvt.getPositions().getSymbolId()));
 //            assertThat(takerOrderId, Is.is(liquidationEvt.orderId));
             assertThat(PositionDirection.LONG, Is.is(liquidationEvt.getPositions().getDirection()));
-            assertThat(FundEvent.FundEventType.LIQUIDATION, Is.is(liquidationEvt.getEventType()));
+            assertThat(FundEvent.FundEventType.LIQUIDATION_CLOSE, Is.is(liquidationEvt.getEventType()));
             assertThat(9740L, Is.is(liquidationEvt.getBalances().getFree()));
             assertThat(100L, Is.is(liquidationEvt.getBalances().getLocked()));
             assertThat(0L, Is.is(liquidationEvt.getPositions().getOpenPriceSum()));
@@ -730,7 +732,6 @@ class ITFutureCross extends ITFutureBase {
         long deposit = 10000L;
         long userId1 = UID_1;
         long userId2 = UID_2;
-        long userId3 = UID_3;
         int size = 1;
         long price1 = 10000;
         long price2 = 15000;
@@ -745,7 +746,6 @@ class ITFutureCross extends ITFutureBase {
             symbols.forEach(s -> container.initMarkPrice(s.symbolId, 10000));
             container.createUserWithSpecificMoney(userId1, deposit, quoteId);
             container.createUserWithSpecificMoney(userId2, MAX_VALUE, quoteId);
-            container.createUserWithSpecificMoney(userId3, deposit, quoteId);
 
             // userId1 and userId2 match
             container.createBidWithOrderId(makerOrderId1, userId1, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
@@ -758,7 +758,7 @@ class ITFutureCross extends ITFutureBase {
                 assertThat(profile.getPositions().size(), is(2));
             });
 
-            // 价格降到时, userId3因为是isolated开始触发强平, 但是此时userId1因为开的是cross margin(symbol1做多)所以没达到强平
+            // 价格降到时, userId1因为开的是cross margin(symbol1做多)所以没达到强平
             // userId1 symbol0: 10000 - 5300 = 4700
             //         symbol1: 15000 - 2000 = 5000
             //         total profit = -9700
@@ -784,7 +784,7 @@ class ITFutureCross extends ITFutureBase {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(34)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(33)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport event1 = null;

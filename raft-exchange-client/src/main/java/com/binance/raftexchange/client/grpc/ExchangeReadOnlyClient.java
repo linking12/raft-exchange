@@ -15,6 +15,7 @@ import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.MoreExecutors;
 import io.grpc.ManagedChannel;
 import io.grpc.NameResolverRegistry;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
@@ -46,7 +47,7 @@ class ExchangeReadOnlyClient implements AutoCloseable {
             public void onFailure(Throwable throwable) {
                 future.completeExceptionally(throwable);
             }
-        });
+        }, MoreExecutors.directExecutor());
         return future;
     }
 
@@ -80,7 +81,7 @@ class ExchangeReadOnlyClient implements AutoCloseable {
             public void onFailure(Throwable throwable) {
                 future.completeExceptionally(throwable);
             }
-        });
+        }, MoreExecutors.directExecutor());
         return future;
     }
 

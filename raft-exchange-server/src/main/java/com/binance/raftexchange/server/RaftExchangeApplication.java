@@ -15,7 +15,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
 
 import com.binance.platform.common.autoconfigure.AlarmAutoConfiguration;
 import com.binance.platform.common.autoconfigure.OldMasterCommonConfig;
@@ -28,12 +27,13 @@ import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
 import com.netflix.discovery.EurekaClient;
 import com.vip.vjtools.vjkit.net.NetUtil;
 
-@EnableEurekaClient
 @SpringBootApplication(exclude = {AlarmAutoConfiguration.class, OldMasterCommonConfig.class})
 public class RaftExchangeApplication implements CommandLineRunner, GracefulShutdownHook {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftExchangeApplication.class);
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        System.setProperty("localhost.default.nic.list", "bond0,eth0,em0,br0,en0,gpd0");
+        System.setProperty("local-ip", NetUtil.getLocalHost());
         SpringApplication.run(RaftExchangeApplication.class, args);
     }
 
@@ -74,8 +74,6 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
 
     @Override
     public void run(String... arg0) throws Exception {
-        System.setProperty("localhost.default.nic.list", "bond0,eth0,em0,br0,en0,gpd0");
-        System.setProperty("local-ip", NetUtil.getLocalHost());
         this.doStart();
     }
 

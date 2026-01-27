@@ -221,7 +221,7 @@ public class SerializeHelper {
     private static final Function<exchange.core2.core.common.CoreSymbolSpecification, CoreSymbolSpecification> symbolSpecMapping = s ->
             CoreSymbolSpecification.newBuilder().setSymbolId(s.getSymbolId()).setTypeValue(s.getType().ordinal())
                     .setBaseCurrency(s.getBaseCurrency()).setQuoteCurrency(s.getQuoteCurrency()).setBaseScaleK(s.getBaseScaleK())
-                    .setQuoteScaleK(s.getQuoteScaleK()).setTakerFee(s.getTakerFee()).setMakerFee(s.getMakerFee())
+                    .setQuoteScaleK(s.getQuoteScaleK()).setTakerFee(s.getTakerFee()).setMakerFee(s.getMakerFee()).setLiquidationFee(s.getLiquidationFee())
                     .setFeeScaleK(s.getFeeScaleK()).setInitMargin(s.getInitMargin()).setInitMarginScaleK(s.getInitMarginScaleK())
                     .putAllMaintenanceMargin(s.getMaintenanceMargin()).setMaintenanceMarginScaleK(s.getMaintenanceMarginScaleK())
                     .putAllMaxLeverage(s.getMaxLeverage()).build();
@@ -281,6 +281,9 @@ public class SerializeHelper {
                 .putAllOrdersBalances(convertToHashMap(totalCurrencyBalanceReportResult.getOrdersBalances()))
                 .putAllOpenInterestLong(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestLong()))
                 .putAllOpenInterestShort(convertToHashMap(totalCurrencyBalanceReportResult.getOpenInterestShort()))
+                .putAllIfBalances(convertToHashMap(totalCurrencyBalanceReportResult.getIfBalances()))
+                .putAllIfOpenInterestLong(convertToHashMap(totalCurrencyBalanceReportResult.getIfOpenInterestLong()))
+                .putAllIfOpenInterestShort(convertToHashMap(totalCurrencyBalanceReportResult.getIfOpenInterestShort()))
                 .build();
         return com.binance.raftexchange.stubs.report.ReportResult.newBuilder()
                 .setTotalCurrencyBalance(result)

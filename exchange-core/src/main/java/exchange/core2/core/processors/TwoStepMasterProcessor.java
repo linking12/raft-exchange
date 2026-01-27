@@ -103,6 +103,8 @@ public final class TwoStepMasterProcessor implements EventProcessor {
 
         long currentSequenceGroup = 0;
 
+        boolean prevLiquidationCmd = false;
+
         // wait until slave processor has instructed to run
         while (!slaveProcessor.isRunning()) {
             Thread.yield();
@@ -124,13 +126,18 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                             currentSequenceGroup = cmd.eventsGroup;
                         }
-
                         /**
-                         * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在调整杠杆率和标记价格前，需要让R2先执行完
+                         * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在这些cmd执行前，需要让R2先执行完
                          */
-                        if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT) {
+                        else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT
+                                // 上一个是普通，这一个是强平流
+                                || (!prevLiquidationCmd && cmd.command.isLiquidationFlowCommand())
+                                // 上一个是强平流，这一个是普通
+                                || (prevLiquidationCmd && !cmd.command.isLiquidationFlowCommand())) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                         }
+                        // 更新“上一条是否是强平流”
+                        prevLiquidationCmd = cmd.command.isLiquidationFlowCommand();
 
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
                         nextSequence++;

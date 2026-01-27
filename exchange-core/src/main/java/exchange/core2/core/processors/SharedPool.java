@@ -13,6 +13,7 @@
 package exchange.core2.core.processors;
 
 import exchange.core2.collections.queue.DisruptorBlockingQueue;
+import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.MatcherTradeEvent;
 import lombok.Getter;
@@ -24,6 +25,8 @@ public final class SharedPool {
     private final DisruptorBlockingQueue<MatcherTradeEvent> tradeEventChainsBuffer;
 
     private final DisruptorBlockingQueue<FundEvent> fundEventChainsBuffer;
+
+    private final DisruptorBlockingQueue<ADLUserPosition> adlUserPositionChainsBuffer;
 
     @Getter
     private final int chainLength;
@@ -47,12 +50,12 @@ public final class SharedPool {
         }
         this.tradeEventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.fundEventChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
+        this.adlUserPositionChainsBuffer = new DisruptorBlockingQueue<>(poolMaxSize);
         this.chainLength = chainLength;
         for (int i = 0; i < poolInitialSize; i++) {
             this.tradeEventChainsBuffer.add(MatcherTradeEvent.createEventChain(chainLength));
-        }
-        for (int i = 0; i < poolInitialSize; i++) {
             this.fundEventChainsBuffer.add(FundEvent.createEventChain(chainLength));
+            this.adlUserPositionChainsBuffer.add(ADLUserPosition.createChain(chainLength));
         }
 
     }
@@ -82,4 +85,15 @@ public final class SharedPool {
         fundEventChainsBuffer.offer(head);
     }
 
+    public ADLUserPosition getADLCandidateChain() {
+        ADLUserPosition poll = adlUserPositionChainsBuffer.poll();
+        if (poll == null) {
+            poll = ADLUserPosition.createChain(chainLength);
+        }
+        return poll;
+    }
+
+    public void putADLCandidateChain(ADLUserPosition head) {
+        adlUserPositionChainsBuffer.offer(head);
+    }
 }

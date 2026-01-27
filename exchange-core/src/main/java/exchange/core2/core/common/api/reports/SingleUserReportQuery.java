@@ -98,7 +98,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
         if (userProfile != null) {
             final IntObjectHashMap<List<SingleUserReportResult.Position>> positions = new IntObjectHashMap<>(userProfile.positions.size());
             IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
-            userProfile.positions.forEachKeyValue((symbol, pos) -> {
+            userProfile.positions.forEachValue(pos -> {
                 if (pos.marginMode == MarginMode.CROSS) {
                     crossPositionsByCurrency.getIfAbsentPut(pos.currency, FastList.newList()).add(pos);
                 } else {

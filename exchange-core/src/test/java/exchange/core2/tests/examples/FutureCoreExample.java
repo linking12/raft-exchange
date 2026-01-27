@@ -12,7 +12,7 @@ import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.jupiter.api.Test;

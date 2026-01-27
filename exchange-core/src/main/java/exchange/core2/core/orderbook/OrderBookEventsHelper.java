@@ -213,7 +213,7 @@ public final class OrderBookEventsHelper {
         return result;
     }
 
-    private MatcherTradeEvent newMatcherEvent() {
+    public MatcherTradeEvent newMatcherEvent() {
 
         if (pooling) {
             if (eventsChainHead == null) {

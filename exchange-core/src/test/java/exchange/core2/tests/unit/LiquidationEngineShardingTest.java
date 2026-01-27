@@ -1,6 +1,6 @@
 package exchange.core2.tests.unit;
 
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.FundEvent;
 
 import org.junit.jupiter.api.Test;
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class LiquidationEngineShardingTest {
 
     private Supplier<FundEvent> eventSupplier;
-    
+
     private static final int NUM_SHARDS = 4;
     private static final int TOTAL_USERS = 1000;
     

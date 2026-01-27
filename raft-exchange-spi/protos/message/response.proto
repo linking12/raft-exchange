@@ -106,6 +106,8 @@ enum OrderCommandType {
     SETTLE_PNL = 26;
     RESET_FEE = 27;
     SYSTEM_LIQUIDATION_NOTIFY = 31;
+    IF_TAKEOVER = 40;
+    AUTO_DELEVERAGING = 41;
     BINARY_DATA_QUERY = 90;
     BINARY_DATA_COMMAND = 91;
     PERSIST_STATE_MATCHING = 110;
@@ -122,6 +124,8 @@ enum MatcherEventType {
     REJECT = 1;
     REDUCE = 2;
     BINARY_EVENT = 3;
+    IF_EVENT = 4;
+    ADL_EVENT = 5;
 }
 
 // Message for MatcherTradeEvent

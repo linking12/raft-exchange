@@ -9,7 +9,6 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
 import exchange.core2.core.common.FundEvent.FundEventType;
 import exchange.core2.core.common.MarginMode;
-import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -168,13 +167,19 @@ public class FundEventsHelper {
     }
 
     public FundEvent sendClosePositionEvent(OrderCommand cmd, long orderId, boolean isLiquidation, SymbolPositionRecord position, long free, long locked) {
-        FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION : FundEventType.CLOSE_POSITION, position, free, locked);
+        FundEvent event = buildFuturesEvent(orderId, isLiquidation ? FundEventType.LIQUIDATION_CLOSE : FundEventType.CLOSE_POSITION, position, free, locked);
         addFundEvent(cmd, orderId, event);
         return event;
     }
 
     public FundEvent sendOpenPositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(orderId, FundEventType.OPEN_POSITION, position, free, locked);
+        addFundEvent(cmd, orderId, event);
+        return event;
+    }
+
+    public FundEvent sendLiquidationFeeEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.LIQUIDATION_FEE, position, free, locked);
         addFundEvent(cmd, orderId, event);
         return event;
     }
@@ -212,6 +217,19 @@ public class FundEventsHelper {
     public FundEvent sendPnlSettlementEvent(OrderCommand cmd, SymbolPositionRecord position, long free, long locked) {
         FundEvent event = buildFuturesEvent(cmd.orderId, FundEventType.PNL_SETTLEMENT, position, free, locked);
         addFundEvent(cmd, 0, event);
+        return event;
+    }
+
+    public FundEvent sendIFClosePositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        FundEvent event = buildFuturesEvent(orderId, FundEventType.IF_POSITION_CLOSE, position, free, locked);
+        addFundEvent(cmd, orderId, event);
+        return event;
+    }
+
+    public FundEvent sendADLClosePositionEvent(OrderCommand cmd, long orderId, SymbolPositionRecord position, long free, long locked) {
+        boolean isOrigin = cmd.uid == position.uid;
+        FundEvent event = buildFuturesEvent(orderId, isOrigin ? FundEventType.ADL_ORIGIN_CLOSE : FundEventType.ADL_POSITION_CLOSE, position, free, locked);
+        addFundEvent(cmd, orderId, event);
         return event;
     }
 
@@ -256,34 +274,7 @@ public class FundEventsHelper {
             }
             final FundEvent event = eventsChainHead;
             eventsChainHead = eventsChainHead.nextEvent;
-            event.nextEvent = null; // 断掉链表，借出的对象应该和下面new的对象等价
-            event.processed = false;
-            event.eventType = null;
-            event.orderId = 0;
-            event.uid = 0;
-            event.currency = 0;
-            event.currencyScaleK = 0;
-            event.free = 0;
-            event.locked = 0;
-            event.symbol = 0;
-            event.baseScaleK = 0;
-            event.quoteScaleK = 0;
-            event.direction = PositionDirection.EMPTY;
-            event.openVolume = 0;
-            event.openInitMarginSum = 0;
-            event.openPriceSum = 0;
-            event.profit = 0;
-            event.pendingSellSize = 0;
-            event.pendingBuySize = 0;
-            event.pendingSellAvgPrice = 0;
-            event.pendingBuyAvgPrice = 0;
-            event.leverage = 0;
-            event.marginMode = MarginMode.ISOLATED;
-            event.extraMargin = 0;
-            event.unrealizedProfit = 0;
-            event.liquidationPrice = 0;
-            event.marginRatioScaleK = 0;
-            event.markPrice = 0;
+            event.reset(); // 会断掉链表，借出的对象应该和下面new的对象等价
             return event;
         } else {
             return new FundEvent();

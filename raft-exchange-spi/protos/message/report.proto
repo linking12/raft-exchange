@@ -122,6 +122,7 @@ enum SubmoduleType {
   RISK_ADJUSTMENTS = 5;
   RISK_SUSPENDS = 6;
   RISK_SHARD_MASK = 7;
+  RISK_IF_SERVICE = 8;
   MATCHING_BINARY_CMD_PROCESSOR = 64;
   MATCHING_ORDER_BOOKS = 65;
   MATCHING_SHARD_MASK = 66;
@@ -151,6 +152,9 @@ message TotalCurrencyBalanceReportResult {
   map<int32, int64> orders_balances = 5;
   map<int32, int64> open_interest_long = 6;
   map<int32, int64> open_interest_short = 7;
+  map<int32, int64> if_balances = 8;
+  map<int32, int64> if_open_interest_long = 9;
+  map<int32, int64> if_open_interest_short = 10;
 }
 
 message SymbolCurrencyReportResult {

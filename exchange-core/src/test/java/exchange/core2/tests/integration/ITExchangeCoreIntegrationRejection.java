@@ -34,7 +34,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
-import org.mockito.Mock;
 
 import java.util.List;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -55,8 +54,7 @@ public abstract class ITExchangeCoreIntegrationRejection {
 
     private SimpleEventsProcessor4Test processor;
 
-    @Mock
-    private IEventsHandler4Test handler;
+    private IEventsHandler4Test handler = spy(IEventsHandler4Test.handler);
 
     @BeforeEach
     public void before() {

@@ -89,6 +89,7 @@ public final class StateHashReportResult implements ReportResult {
         RISK_ADJUSTMENTS(5, ModuleType.RISK_ENGINE),
         RISK_SUSPENDS(6, ModuleType.RISK_ENGINE),
         RISK_SHARD_MASK(7, ModuleType.RISK_ENGINE),
+        RISK_IF_SERVICE(8, ModuleType.RISK_ENGINE),
 
         MATCHING_BINARY_CMD_PROCESSOR(64, ModuleType.MATCHING_ENGINE),
         MATCHING_ORDER_BOOKS(65, ModuleType.MATCHING_ENGINE),

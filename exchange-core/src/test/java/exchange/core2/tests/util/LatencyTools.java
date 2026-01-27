@@ -20,6 +20,7 @@ import org.HdrHistogram.Histogram;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 public final class LatencyTools {
 
@@ -52,5 +53,21 @@ public final class LatencyTools {
         } else {
             return Math.round(value) + timeUnit;
         }
+    }
+
+    public static void waitForCondition(long timeoutMillis, BooleanSupplier condition) {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for condition", e);
+            }
+        }
+        throw new AssertionError("Condition not met within " + timeoutMillis + " ms");
     }
 }

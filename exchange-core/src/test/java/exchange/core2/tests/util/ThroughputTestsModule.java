@@ -18,7 +18,7 @@ package exchange.core2.tests.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;

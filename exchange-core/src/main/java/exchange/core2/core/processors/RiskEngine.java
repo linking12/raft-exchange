@@ -21,12 +21,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
+import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.SimpleEventsProcessor;
+import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.BalanceAdjustmentType;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -56,6 +58,9 @@ import exchange.core2.core.common.config.LoggingConfiguration;
 import exchange.core2.core.common.config.OrdersProcessingConfiguration;
 import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
+import exchange.core2.core.processors.liquidation.ADLUserPositionHelper;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationService;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
@@ -79,18 +84,19 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
+    private LiquidationService liquidationService;
     private BinaryCommandsProcessor binaryCommandsProcessor;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private IntLongHashMap fees;
     private IntLongHashMap adjustments;
     private IntLongHashMap suspends;
-    private FundEventsHelper eventsHelper;
 
     // 无状态的配置字段
     private final SharedPool sharedPool;
     private final ObjectsPool objectsPool;
     // sharding by symbolId
     private final int shardId;
+    private final int numShards;
     private final long shardMask;
     private final String exchangeId; // TODO validate
     private final boolean cfgIgnoreRiskProcessing;
@@ -100,6 +106,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final ReportsQueriesConfiguration reportsQueriesConfiguration;
     private final ObjLongConsumer<OrderCommand> resultsConsumer;
     private final LiquidationEngine liquidationEngine;
+    private final FundEventsHelper eventsHelper;
+    private final ADLUserPositionHelper adlUserPositionHelper;
 
     public RiskEngine(final int shardId,
                       final int numShards,
@@ -112,6 +120,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         this.exchangeId = exchangeConfiguration.getInitStateCfg().getExchangeId();
         this.shardId = shardId;
+        this.numShards = numShards;
         this.shardMask = numShards - 1;
         this.serializationProcessor = serializationProcessor;
         this.sharedPool = sharedPool;
@@ -126,13 +135,16 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.reportsQueriesConfiguration = exchangeConfiguration.getReportsQueriesCfg();
         this.resultsConsumer = resultsConsumer;
         this.liquidationEngine = new LiquidationEngine(sharedPool::getFundEventChain, shardId, numShards);
-        this.initState(numShards);
+        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
+        this.adlUserPositionHelper = new ADLUserPositionHelper(sharedPool::getADLCandidateChain);
+        this.initState();
     }
     
-    private void initState(int numShards) {
+    private void initState() {
         this.symbolSpecificationProvider = new SymbolSpecificationProvider();
         this.currencySpecificationProvider = new CurrencySpecificationProvider();
         this.userProfileService = new UserProfileService();
+        this.liquidationService = new LiquidationService();
         this.binaryCommandsProcessor = new BinaryCommandsProcessor(
             this::handleBinaryMessage,
             this::handleReportQuery,
@@ -143,7 +155,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.fees = new IntLongHashMap();
         this.adjustments = new IntLongHashMap();
         this.suspends = new IntLongHashMap();
-        this.eventsHelper = new FundEventsHelper(sharedPool::getFundEventChain, shardId, numShards);
         this.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
         this.eventsHelper.setCurrencySpecificationProvider(this.currencySpecificationProvider);
         this.eventsHelper.setUserProfileService(this.userProfileService);
@@ -154,7 +165,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
             simpleEventsProcessor.saveUserProfileService(shardId, this.userProfileService);
         }
-        this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache);
+        this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache, liquidationService);
     }
 
     
@@ -172,6 +183,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final CurrencySpecificationProvider currencySpecificationProvider =
                     new CurrencySpecificationProvider(bytesIn);
                 final UserProfileService userProfileService = new UserProfileService(bytesIn);
+                final LiquidationService liquidationService = new LiquidationService(bytesIn);
                 final BinaryCommandsProcessor binaryCommandsProcessor =
                     new BinaryCommandsProcessor(
                         this::handleBinaryMessage, 
@@ -186,7 +198,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
                 final IntLongHashMap suspends = SerializationUtils.readIntLongHashMap(bytesIn);
                 return new State(symbolSpecificationProvider, currencySpecificationProvider, userProfileService,
-                    binaryCommandsProcessor, lastPriceCache, fees, adjustments, suspends);
+                        liquidationService, binaryCommandsProcessor, lastPriceCache, fees, adjustments, suspends);
             });
         if (state.lastPriceCache == null || state.fees == null) {
             throw new IllegalStateException("Invalid recovered state: missing critical fields");
@@ -195,6 +207,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             this.symbolSpecificationProvider = state.symbolSpecificationProvider;
             this.currencySpecificationProvider = state.currencySpecificationProvider;
             this.userProfileService = state.userProfileService;
+            this.liquidationService = state.liquidationService;
             this.binaryCommandsProcessor = state.binaryCommandsProcessor;
             this.lastPriceCache = state.lastPriceCache;
             this.eventsHelper.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
@@ -206,7 +219,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 simpleEventsProcessor.setSymbolSpecificationProvider(this.symbolSpecificationProvider);
                 simpleEventsProcessor.saveUserProfileService(shardId, this.userProfileService);
             }
-            this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache);
+            this.liquidationEngine.updateProvider(symbolSpecificationProvider, currencySpecificationProvider, userProfileService, lastPriceCache, liquidationService);
             this.fees = state.fees;
             this.adjustments = state.adjustments;
             this.suspends = state.suspends;
@@ -276,7 +289,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
             case CANCEL_ORDER:
             case REDUCE_ORDER:
             case ORDER_BOOK_REQUEST:
-            case FORCE_LIQUIDATION:
                 return false;
 
             case CLOSE_POSITION:
@@ -411,6 +423,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
 
+            case FORCE_LIQUIDATION:
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = normalizeCmdPositionSize(cmd);
+                }
+                return false;
             case LEVERAGE_ADJUSTMENT:
                 if (uidForThisHandler(cmd.uid)) {
                     cmd.resultCode = adjustLeverage(cmd);
@@ -525,8 +542,104 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
             }
+            case IF_TAKEOVER: {
+                collectIFPreviewData(cmd);
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = normalizeCmdPositionSize(cmd);
+                }
+                return false;
+            }
+            case AUTO_DELEVERAGING: {
+                collectADLProfitablePositions(cmd);
+                if (uidForThisHandler(cmd.uid)) {
+                    cmd.resultCode = normalizeCmdPositionSize(cmd);
+                }
+                return false;
+            }
         }
         return false;
+    }
+
+    // 对于强平或者adl命令，下单时候的仓位可能和真实仓位不一样了，需要重新校准一下size
+    private CommandResultCode normalizeCmdPositionSize(final OrderCommand cmd) {
+        final UserProfile userProfile = userProfileService.getUserProfile(cmd.uid);
+        if (userProfile == null) {
+            return CommandResultCode.AUTH_INVALID_USER;
+        }
+        int positionRecordKey = userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command);
+        SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
+        if (position == null) {
+            return CommandResultCode.SUCCESS;
+        }
+        // 再校准一次size，这样ME那边用的时候size一定是准的
+        cmd.size = Math.min(position.openVolume, cmd.size);
+        return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+    }
+
+    private void collectIFPreviewData(final OrderCommand cmd) {
+        long previewCover = liquidationService.reserveIFNotional(cmd.symbol, cmd.size, cmd.price);
+        if (cmd.ifPreviewCoverByShard == null) {
+            cmd.ifPreviewCoverByShard = new long[numShards];
+        }
+        cmd.ifPreviewCoverByShard[shardId] = previewCover;
+    }
+
+    private void collectADLProfitablePositions(final OrderCommand cmd) {
+        final int symbol = cmd.symbol;
+        final long bankruptcyPrice = cmd.price;
+        long remaining = cmd.size;
+        if (remaining <= 0) {
+            return;
+        }
+        /* ====== 1. 快照过滤 + 排序（R1 决定 score） ====== */
+        MutableList<SymbolPositionRecord> profitablePositions = liquidationService.getProfitablePositionsBySymbol(symbol)
+                .select(pos -> {
+                    if (pos.openVolume <= 0) return false;
+                    if (pos.openVolume <= pos.pendingADLSize) return false;
+                    if (pos.direction.isSameAsAction(cmd.action)) return false;
+                    long unrealizedPnl = pos.direction.getMultiplier() * (bankruptcyPrice * pos.openVolume - pos.openPriceSum);
+                    return unrealizedPnl > 0;
+                })
+                .sortThisByLong(pos -> ADLUserPositionHelper.riskScore(pos, bankruptcyPrice))
+                .reverseThis(); // score 从大到小
+        if (profitablePositions.isEmpty()) {
+            return;
+        }
+        /* ====== 2. 正序挂到 cmd（尾插，保持排序结果） ====== */
+        ADLUserPosition head = null;
+        ADLUserPosition tail = null;
+        for (SymbolPositionRecord pos : profitablePositions) {
+            if (remaining <= 0) break;
+
+            long available = pos.openVolume - pos.pendingADLSize;
+            long canTake = Math.min(available, remaining);
+            // 冻结待处理的仓位数量（防止重复触发）
+            pos.pendingADLSize += canTake;
+
+            ADLUserPosition adlPos = adlUserPositionHelper.newADLUserPosition();
+            adlPos.uid = pos.uid;
+            adlPos.symbol = symbol;
+            adlPos.direction = pos.direction;
+            adlPos.volume = canTake;
+            adlPos.score = ADLUserPositionHelper.riskScore(pos, bankruptcyPrice);
+
+            // 尾插，保证正序
+            if (head == null) {
+                head = adlPos;
+            } else {
+                tail.next = adlPos;
+            }
+            tail = adlPos;
+
+            remaining -= canTake;
+        }
+        /* ====== 3. 写入固定槽位（只写自己的shard） ====== */
+        if (head != null) {
+            if (cmd.adlUserPositionsByShard == null) {
+                cmd.adlUserPositionsByShard = new ADLUserPosition[numShards];
+            }
+            cmd.adlUserPositionsByShard[shardId] = head;
+        }
     }
 
     /**
@@ -1016,10 +1129,30 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
+                // ===== 1. 处理 matcherEvent 链 =====
                 do {
-                    handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
+                    if (cmd.command == OrderCommandType.IF_TAKEOVER) {
+                        handleIFTakeover(cmd, mte);
+                    } else if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
+                        handleADLRelease(cmd, mte, spec, currencySpec);
+                    } else {
+                        handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
+                    }
                     mte = mte.nextEvent;
                 } while (mte != null);
+
+                // ===== 2. cmd 结束后的收尾 =====
+                if (cmd.command == OrderCommandType.IF_TAKEOVER) {
+                    finalizeIF(cmd, takerUp, takerSpr, spec, currencySpec);
+                } else if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
+                    finalizeADL(cmd, takerUp, takerSpr, spec, currencySpec);
+                } else if (cmd.command == OrderCommandType.FORCE_LIQUIDATION) {
+                    collectLiquidationFee(cmd, takerUp, takerSpr, spec, currencySpec);
+                }
+                // ===== 3.推进 liquidation 状态机 =====
+                if (takerSpr != null) {
+                    liquidationEngine.nextLiquidationState(cmd, takerSpr);
+                }
             }
         }
 
@@ -1113,6 +1246,132 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked);
             })
         );
+    }
+
+    private void collectLiquidationFee(final OrderCommand cmd,
+                                       final UserProfile takerUp,
+                                       final SymbolPositionRecord takerSpr,
+                                       final CoreSymbolSpecification spec,
+                                       final CoreCurrencySpecification currencySpec) {
+        if (takerSpr != null) {
+            long takerSizeForThisHandler = 0L;
+            long takerSizePriceForThisHandler = 0L;
+            MatcherTradeEvent ev = cmd.matcherEvent;
+            while (ev != null) {
+                if (ev.eventType == MatcherEventType.TRADE) {
+                    takerSizeForThisHandler += ev.size;
+                    takerSizePriceForThisHandler += ev.size * ev.price;
+                }
+                ev = ev.nextEvent;
+            }
+            if (takerSizeForThisHandler == 0) {
+                return;
+            }
+            long notional = CoreArithmeticUtils.calculateLiquidationFee(takerSizeForThisHandler, takerSizePriceForThisHandler, spec);
+            long fee = CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, currencySpec);
+            takerUp.accounts.addToValue(takerSpr.currency, -fee);
+            liquidationService.creditLiquidationFee(takerSpr.symbol, notional);
+            // 强平费事件
+            long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+            long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
+            eventsHelper.sendLiquidationFeeEvent(cmd, cmd.orderId, takerSpr, free, locked);
+        }
+    }
+
+    private void handleIFTakeover(final OrderCommand cmd,
+                                  final MatcherTradeEvent ev) {
+        if (ev.eventType != MatcherEventType.IF_EVENT) {
+            return;
+        }
+        if (ev.matchedOrderUid != shardId) {
+            return;
+        }
+        PositionDirection direction = cmd.action == OrderAction.BID ? PositionDirection.LONG : PositionDirection.SHORT;
+        liquidationService.acceptIFPosition(cmd.symbol, direction, ev.size, cmd.price);
+    }
+
+    private void handleADLRelease(final OrderCommand cmd,
+                                  final MatcherTradeEvent ev,
+                                  final CoreSymbolSpecification spec,
+                                  final CoreCurrencySpecification currencySpec) {
+        if (ev.eventType != MatcherEventType.ADL_EVENT) {
+            return;
+        }
+        // 1. 取 ADL 目标用户
+        final long uid = ev.matchedOrderUid;
+        if (!uidForThisHandler(uid)) {
+            return; // 不是本 shard 的用户，直接跳过
+        }
+        final UserProfile up = userProfileService.getUserProfile(uid);
+
+        // 2. 找到被 ADL 的仓位（与cmd方向相反）
+        OrderAction adlPosSide = cmd.action.opposite();
+        final SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(cmd.symbol, adlPosSide, cmd.command));
+
+        // 3. 更新仓位信息
+        pos.closeCurrentPositionFutures(adlPosSide.opposite(), ev.size, cmd.price);
+
+        // ADL 平仓事件
+        long locked = calculateLockedMargin(up, spec.quoteCurrency);
+        long free = up.accounts.get(spec.quoteCurrency) - locked;
+        eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, pos, free, locked);
+        if (pos.isEmpty()) {
+            refundExtraMargin(cmd, cmd.orderId, spec, pos, up, currencySpec);
+            removePositionRecord(spec, pos, up, currencySpec);
+        }
+    }
+
+    private void finalizeIF(final OrderCommand cmd,
+                             final UserProfile takerUp,
+                             final SymbolPositionRecord takerSpr,
+                             final CoreSymbolSpecification spec,
+                             final CoreCurrencySpecification currencySpec) {
+        // 1. 关闭原始仓位（只做一次）
+        if (takerSpr != null && cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
+            takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
+            // IF 平仓事件
+            long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+            long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
+            eventsHelper.sendIFClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
+            if (takerSpr.isEmpty()) {
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                removePositionRecord(spec, takerSpr, takerUp, currencySpec);
+            }
+        }
+        // 2. 释放 previewCover
+        long previewCover = cmd.ifPreviewCoverByShard[shardId];
+        liquidationService.releaseReservedIFNotional(cmd.symbol, previewCover);
+    }
+
+    private void finalizeADL(final OrderCommand cmd,
+                             final UserProfile takerUp,
+                             final SymbolPositionRecord takerSpr,
+                             final CoreSymbolSpecification spec,
+                             final CoreCurrencySpecification currencySpec) {
+        // 1. 关闭原始仓位（只做一次）
+        if (takerSpr != null && cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
+            takerSpr.closeCurrentPositionFutures(cmd.action.opposite(), cmd.size, cmd.price);
+            // ADL 平仓事件
+            long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+            long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
+            eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
+            if (takerSpr.isEmpty()) {
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                removePositionRecord(spec, takerSpr, takerUp, currencySpec);
+            }
+        }
+        // 2. 释放所有 pendingADLSize
+        if (cmd.adlUserPositionsByShard != null) {
+            ADLUserPosition head = cmd.adlUserPositionsByShard[shardId];
+            while (head != null) {
+                UserProfile up = userProfileService.getUserProfile(head.uid);
+                SymbolPositionRecord pos = up.positions.get(up.createPositionsKey(head.symbol, cmd.action.opposite(), cmd.command));
+                if (pos != null && pos.pendingADLSize > 0) {
+                    pos.pendingADLSize -= head.volume;
+                }
+                head = head.next;
+            }
+        }
     }
 
     private void handleMatcherEventMargin(final OrderCommand cmd,
@@ -1496,6 +1755,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             userProfile.accounts.addToValue(record.currency, profit);
         }
         userProfile.positions.removeKey(userProfile.createPositionsKey(record));
+        liquidationService.getProfitablePositionsBySymbol(record.symbol).removeIf(pos -> pos == record);
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }
 
@@ -1507,6 +1767,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         symbolSpecificationProvider.writeMarshallable(bytes);
         currencySpecificationProvider.writeMarshallable(bytes);
         userProfileService.writeMarshallable(bytes);
+        liquidationService.writeMarshallable(bytes);
         binaryCommandsProcessor.writeMarshallable(bytes);
         SerializationUtils.marshallIntHashMap(lastPriceCache, bytes);
         SerializationUtils.marshallIntLongHashMap(fees, bytes);
@@ -1516,6 +1777,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     public void reset() {
         userProfileService.reset();
+        liquidationService.reset();
         symbolSpecificationProvider.reset();
         currencySpecificationProvider.reset();
         binaryCommandsProcessor.reset();
@@ -1531,6 +1793,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         private final SymbolSpecificationProvider symbolSpecificationProvider;
         private final CurrencySpecificationProvider currencySpecificationProvider;
         private final UserProfileService userProfileService;
+        private final LiquidationService liquidationService;
         private final BinaryCommandsProcessor binaryCommandsProcessor;
         private final IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
         private final IntLongHashMap fees;

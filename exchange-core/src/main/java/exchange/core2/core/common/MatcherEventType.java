@@ -31,5 +31,9 @@ public enum MatcherEventType {
     REDUCE,
 
     // Custom binary data attached
-    BINARY_EVENT
+    BINARY_EVENT,
+
+    IF_EVENT,
+
+    ADL_EVENT;
 }

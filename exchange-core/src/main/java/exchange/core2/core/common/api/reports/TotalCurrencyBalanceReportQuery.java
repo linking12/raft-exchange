@@ -110,7 +110,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
 
         riskEngine.getUserProfileService().getUserProfiles().forEach(userProfile -> {
             userProfile.accounts.forEachKeyValue(currencyBalance::addToValue);
-            userProfile.positions.forEachKeyValue((symbolId, positionRecord) -> {
+            userProfile.positions.forEachValue(positionRecord -> {
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(positionRecord.symbol);
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(positionRecord.currency);
                 final RiskEngine.LastPriceCacheRecord avgPrice = dummyLastPriceCache.getIfAbsentPut(positionRecord.symbol, RiskEngine.LastPriceCacheRecord.dummy);
@@ -131,6 +131,20 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
             });
         });
 
+        final IntLongHashMap ifBalance = new IntLongHashMap();
+        final IntLongHashMap ifOpenInterestLong = new IntLongHashMap();
+        final IntLongHashMap ifOpenInterestShort = new IntLongHashMap();
+        riskEngine.getLiquidationService().getNotionals().forEachKeyValue((symbol, notional) -> {
+            ifBalance.addToValue(symbol, notional.available);
+        });
+        riskEngine.getLiquidationService().getPositions().forEachValue(position -> {
+            if (position.direction == PositionDirection.LONG) {
+                ifOpenInterestLong.addToValue(position.symbol, position.openVolume);
+            } else if (position.direction == PositionDirection.SHORT) {
+                ifOpenInterestShort.addToValue(position.symbol, position.openVolume);
+            }
+        });
+
         return Optional.of(
                 new TotalCurrencyBalanceReportResult(
                         currencyBalance,
@@ -140,7 +154,10 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
                         new IntLongHashMap(riskEngine.getSuspends()),
                         null,
                         symbolOpenInterestLong,
-                        symbolOpenInterestShort));
+                        symbolOpenInterestShort,
+                        ifBalance,
+                        ifOpenInterestLong,
+                        ifOpenInterestShort));
     }
 
     @Override

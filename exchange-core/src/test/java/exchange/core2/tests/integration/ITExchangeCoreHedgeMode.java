@@ -1,6 +1,6 @@
 package exchange.core2.tests.integration;
 
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.*;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;

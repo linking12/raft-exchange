@@ -114,6 +114,15 @@ public final class CoreArithmeticUtils {
         }
     }
 
+    public static long calculateLiquidationFee(long size, long price, CoreSymbolSpecification spec) {
+        if (spec.isFixedFee()) {
+            return size * spec.liquidationFee;
+        } else {
+            long tradeAmount = size * price;
+            return ceilDivide(tradeAmount * spec.liquidationFee, spec.feeScaleK);
+        }
+    }
+
     /**
      * 计算强平数量x
      * 原权益：E = openInitMarginSum + unrealizedPnl

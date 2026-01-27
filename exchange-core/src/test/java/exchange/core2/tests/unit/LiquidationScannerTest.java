@@ -1,6 +1,6 @@
 package exchange.core2.tests.unit;
 
-import exchange.core2.core.processors.LiquidationEngine;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
@@ -91,7 +91,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(true, 2, 0);
 
         // 执行计算
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
 
         // 验证结果
         assertEquals(952, result);
@@ -111,7 +111,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(true, 3, 0);
 
         // 执行计算
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
 
         // 验证结果
         assertEquals(857, result);
@@ -133,7 +133,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(false, 1_000, 1_000_000);
 
         // 执行计算
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
 
         // 验证结果
         assertEquals(1127, result);
@@ -155,7 +155,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(false, 500, 1_000_000);
 
         // 执行计算
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
 
         // 验证结果
         assertEquals(534, result);
@@ -175,7 +175,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(true, 1, 0);
 
         // 执行计算
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
 
         // 验证结果
         assertEquals(1001, result);
@@ -195,7 +195,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(true, 1, 0);
 
         // 执行计算（预期会抛出算术异常）
-        assertThrows(ArithmeticException.class, () -> getScanner().calculateBankruptcyPrice(position, spec));
+        assertThrows(ArithmeticException.class, () -> position.calculateBankruptcyPrice(spec));
     }
 
     /**
@@ -212,7 +212,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(false, 1_000, 1_000); // feeScaleK = takerFee
 
         // 执行计算（预期会抛出算术异常）
-        assertThrows(ArithmeticException.class, () -> getScanner().calculateBankruptcyPrice(position, spec));
+        assertThrows(ArithmeticException.class, () -> position.calculateBankruptcyPrice(spec));
     }
 
     /**
@@ -228,7 +228,7 @@ class LiquidationScannerTest {
         );
         CoreSymbolSpecification spec = createSpec(true, 2, 0);
 
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
         assertEquals(1012, result);
     }
 
@@ -244,7 +244,7 @@ class LiquidationScannerTest {
         );
         CoreSymbolSpecification spec = createSpec(true, 3, 0);
 
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
         assertEquals(-743, result);  // 预期负值，视实现是否需添加正值检查
     }
 
@@ -265,7 +265,7 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(true, 100, 0);
 
         // 预期不抛异常，如果实现有溢出保护
-        Assertions.assertDoesNotThrow(() -> getScanner().calculateBankruptcyPrice(position, spec));
+        Assertions.assertDoesNotThrow(() -> position.calculateBankruptcyPrice(spec));
     }
 
     /**
@@ -280,7 +280,7 @@ class LiquidationScannerTest {
         );
         CoreSymbolSpecification spec = createSpec(false, 1, 100);  // 小规模测试向上取整
 
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
         // 手动计算：maxLoss=100, numerator=(1000-100)*100=90000, denominator=1*(100-1)=99, 90000/99≈909.09 -> ceil=910
         assertEquals(910, result);
     }
@@ -307,7 +307,7 @@ class LiquidationScannerTest {
             final int idx = i;
             executor.submit(() -> {
                 try {
-                    results[idx] = scanner.calculateBankruptcyPrice(position, spec);
+                    results[idx] = position.calculateBankruptcyPrice(spec);
                 } finally {
                     latch.countDown();
                 }
@@ -335,7 +335,7 @@ class LiquidationScannerTest {
         );
         CoreSymbolSpecification spec = createSpec(true, 0, 0);
 
-        long result = getScanner().calculateBankruptcyPrice(position, spec);
+        long result = position.calculateBankruptcyPrice(spec);
         assertEquals(950, result);  // 无费，maxLoss=500, (10000 - 500)/10=950
     }
 
@@ -351,6 +351,6 @@ class LiquidationScannerTest {
         );
         CoreSymbolSpecification spec = createSpec(false, Long.MAX_VALUE / 2, Long.MAX_VALUE);
 
-        Assertions.assertDoesNotThrow(() -> getScanner().calculateBankruptcyPrice(position, spec));
+        Assertions.assertDoesNotThrow(() -> position.calculateBankruptcyPrice(spec));
     }
 }
