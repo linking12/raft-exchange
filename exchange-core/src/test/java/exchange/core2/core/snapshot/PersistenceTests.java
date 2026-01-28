@@ -168,12 +168,14 @@ public class PersistenceTests {
         container.validateUserState(UID_1, profile -> {
             SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
-            assertEquals(50L, pos.openVolume); // 仓位保持不变
+            assertEquals(40L, pos.openVolume);
+            assertEquals(0L, pos.pendingSellSize);
+            assertEquals(50L, pos.pendingBuySize);
             assertEquals(50, pos.leverage);
             assertEquals(50000000L, pos.extraMargin);
-            assertEquals(1050000L, pos.unrealizedProfit);
-            assertEquals(-989785L, pos.liquidationPrice);
-            assertEquals(212, pos.marginRatioScaleK);
+            assertEquals(850000L, pos.unrealizedProfit);
+            assertEquals(-1240035L, pos.liquidationPrice);
+            assertEquals(170, pos.marginRatioScaleK);
         });
         container.validateUserState(UID_2, profile -> {
             // 仓位应被部分或全部平仓
@@ -267,6 +269,29 @@ public class PersistenceTests {
             assertEquals(50L, pos.pendingBuySize);
         });
 
+        final ApiPlaceOrder reduceOnlyOrder = ApiPlaceOrder.builder()
+                .uid(UID_ISOLATED)
+                .orderId(5011L)
+                .price(11_000L)          // 价格: 10,000 FUT
+                .size(10L)              // 100手 (100 * 0.01 BTC = 1 BTC)
+                .action(OrderAction.ASK) // 买入开多
+                .orderType(OrderType.GTC)
+                .symbol(SYMBOL_FUTURES)
+                .leverage(50)            // 50倍杠杆
+                .reduceOnly(true)
+                .marginMode(MarginMode.ISOLATED) // 逐仓模式
+                .build();
+
+        container.submitCommandSync(reduceOnlyOrder, cmd ->
+                assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS)));
+
+        container.validateUserState(UID_ISOLATED, profile -> {
+            SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
+            assertNotNull(pos);
+            assertEquals(10L, pos.pendingSellSize); // 100手
+            assertEquals(50L, pos.pendingBuySize); // 100手
+        });
+
         container.validateUserState(UID_CROSS, profile -> {
             SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
@@ -344,12 +369,14 @@ public class PersistenceTests {
         container.validateUserState(UID_ISOLATED, profile -> {
             SingleUserReportResult.Position pos = profile.getPositions().get(SYMBOL_FUTURES).get(0);
             assertNotNull(pos);
-            assertEquals(50L, pos.openVolume); // 仓位保持不变
+            assertEquals(40L, pos.openVolume);
+            assertEquals(0L, pos.pendingSellSize);
+            assertEquals(50L, pos.pendingBuySize);
             assertEquals(50, pos.leverage);
             assertEquals(50000000L, pos.extraMargin);
-            assertEquals(1050000L, pos.unrealizedProfit);
-            assertEquals(-989785L, pos.liquidationPrice);
-            assertEquals(212, pos.marginRatioScaleK);
+            assertEquals(850000L, pos.unrealizedProfit);
+            assertEquals(-1240035L, pos.liquidationPrice);
+            assertEquals(170, pos.marginRatioScaleK);
         });
 
         container.validateUserState(UID_HEDGE, profile -> {
