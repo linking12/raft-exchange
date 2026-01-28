@@ -128,6 +128,41 @@ public final class OrderCommand implements IOrder {
         return (orderFlags & FLAG_REDUCE_ONLY) != 0;
     }
 
+    /**
+     * 是否会在 R2 产生延迟副作用
+     *（只要能进入 ME 的指令，都会有 R2 后处理）
+     * @return
+     */
+    public boolean hasDelayedEffectOnR2() {
+        return command == OrderCommandType.PLACE_ORDER || command == OrderCommandType.CANCEL_ORDER ||
+                command == OrderCommandType.REDUCE_ORDER || command == OrderCommandType.CLOSE_POSITION ||
+                command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
+                command == OrderCommandType.AUTO_DELEVERAGING;
+    }
+
+    /**
+     * 执行前是否必须看到最终 R2（用户级别指令）
+     * @return
+     */
+    public boolean userLevelCmdNeedSyncR2() {
+        return (command == OrderCommandType.PLACE_ORDER && isReduceOnly()) ||
+                command == OrderCommandType.CLOSE_POSITION ||
+                command == OrderCommandType.LEVERAGE_ADJUSTMENT ||
+                command == OrderCommandType.MARGIN_ADJUSTMENT ||
+                command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
+                command == OrderCommandType.AUTO_DELEVERAGING;
+    }
+
+    /**
+     * 执行前是否必须看到最终 R2（symbol 级别指令）
+     * @return
+     */
+    public boolean symbolLevelCmdNeedSyncR2() {
+        return command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
+                command == OrderCommandType.SETTLE_FUNDINGFEES ||
+                command == OrderCommandType.SETTLE_PNL;
+    }
+
     public static OrderCommand newOrder(OrderType orderType, long orderId, long uid, long price, long reserveBidPrice, long size, OrderAction action) {
         OrderCommand cmd = new OrderCommand();
         cmd.command = OrderCommandType.PLACE_ORDER;

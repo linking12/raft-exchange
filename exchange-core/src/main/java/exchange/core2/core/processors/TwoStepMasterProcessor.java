@@ -21,6 +21,8 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.set.mutable.primitive.IntHashSet;
+import org.eclipse.collections.impl.set.mutable.primitive.LongHashSet;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -103,7 +105,8 @@ public final class TwoStepMasterProcessor implements EventProcessor {
 
         long currentSequenceGroup = 0;
 
-        boolean prevLiquidationCmd = false;
+        LongHashSet sideEffectUids = new LongHashSet();
+        IntHashSet sideEffectSymbols = new IntHashSet();
 
         // wait until slave processor has instructed to run
         while (!slaveProcessor.isRunning()) {
@@ -125,23 +128,29 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                         if (cmd.eventsGroup != currentSequenceGroup) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                             currentSequenceGroup = cmd.eventsGroup;
+                            sideEffectUids.clear();
+                            sideEffectSymbols.clear();
                         }
                         /**
                          * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在这些cmd执行前，需要让R2先执行完
                          */
-                        else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
-                                cmd.command == OrderCommandType.CLOSE_POSITION
-                                // 上一个是普通，这一个是强平流
-                                || (!prevLiquidationCmd && cmd.command.isLiquidationFlowCommand())
-                                // 上一个是强平流，这一个是普通
-                                || (prevLiquidationCmd && !cmd.command.isLiquidationFlowCommand())) {
+                        if (cmd.symbolLevelCmdNeedSyncR2() && sideEffectSymbols.contains(cmd.symbol)) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
+                            sideEffectSymbols.remove(cmd.symbol);
                         }
-                        // 更新“上一条是否是强平流”
-                        prevLiquidationCmd = cmd.command.isLiquidationFlowCommand();
+                        if (cmd.userLevelCmdNeedSyncR2() && sideEffectUids.contains(cmd.uid)) {
+                            publishProgressAndTriggerSlaveProcessor(nextSequence);
+                            sideEffectUids.remove(cmd.uid);
+                        }
 
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
                         nextSequence++;
+
+                        //  标记 R2 sideEffect
+                        if (cmd.hasDelayedEffectOnR2()) {
+                            sideEffectUids.add(cmd.uid);
+                            sideEffectSymbols.add(cmd.symbol);
+                        }
 
                         if (forcedPublish) {
                             sequence.set(nextSequence - 1);
