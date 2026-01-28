@@ -572,7 +572,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.SUCCESS;
         }
         // 再校准一次size，这样ME那边用的时候size一定是准的
-        cmd.size = Math.min(position.openVolume, cmd.size);
+        cmd.size = maxClosableSize(position, cmd.size);
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
     }
 
@@ -825,7 +825,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         if (position == null) {
             return CommandResultCode.SUCCESS;
         }
-        long closeSize = maxClosableSize(position, cmd.action, cmd.size);
+        long closeSize = maxClosableSize(position, cmd.size);
         if (closeSize <= 0) {
             return CommandResultCode.SUCCESS;
         }
@@ -842,10 +842,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
     }
 
-    private long maxClosableSize(SymbolPositionRecord pos, OrderAction action, long requestedSize) {
-        long pendingClose = (action == OrderAction.ASK) ? pos.pendingSellSize : pos.pendingBuySize;
-        long closable = Math.max(0, pos.openVolume - pendingClose);
-        return Math.min(requestedSize, closable);
+    private long maxClosableSize(SymbolPositionRecord pos, long requestedSize) {
+        return Math.min(requestedSize, pos.openVolume);
     }
 
     private CommandResultCode placeOrderRiskCheck(final OrderCommand cmd) {
@@ -919,7 +917,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
             // 单向持仓，依据“只减仓”标记，裁剪size
             if (userProfile.positionMode == PositionMode.ONEWAY && cmd.isReduceOnly()) {
-                cmd.size = maxClosableSize(position, cmd.action, cmd.size);
+                cmd.size = maxClosableSize(position, cmd.size);
                 if (cmd.size <= 0) {
                     return CommandResultCode.SUCCESS;
                 }
