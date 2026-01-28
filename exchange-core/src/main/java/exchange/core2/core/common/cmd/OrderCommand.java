@@ -130,10 +130,9 @@ public final class OrderCommand implements IOrder {
 
     /**
      * 是否会在 R2 产生延迟副作用
-     *（只要能进入 ME 的指令，都会有 R2 后处理）
      * @return
      */
-    public boolean hasDelayedEffectOnR2() {
+    public boolean hasR2SideEffect() {
         return command == OrderCommandType.PLACE_ORDER || command == OrderCommandType.CANCEL_ORDER ||
                 command == OrderCommandType.REDUCE_ORDER || command == OrderCommandType.CLOSE_POSITION ||
                 command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
@@ -141,10 +140,10 @@ public final class OrderCommand implements IOrder {
     }
 
     /**
-     * 执行前是否必须看到最终 R2（用户级别指令）
+     * 执行前是否必须看到最终 R2（uid,symbol 级别指令）
      * @return
      */
-    public boolean userLevelCmdNeedSyncR2() {
+    public boolean needSyncR2ForUidSymbol() {
         return (command == OrderCommandType.PLACE_ORDER && isReduceOnly()) ||
                 command == OrderCommandType.CLOSE_POSITION ||
                 command == OrderCommandType.LEVERAGE_ADJUSTMENT ||
@@ -157,7 +156,7 @@ public final class OrderCommand implements IOrder {
      * 执行前是否必须看到最终 R2（symbol 级别指令）
      * @return
      */
-    public boolean symbolLevelCmdNeedSyncR2() {
+    public boolean needSyncR2ForSymbol() {
         return command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
                 command == OrderCommandType.SETTLE_FUNDINGFEES ||
                 command == OrderCommandType.SETTLE_PNL;
