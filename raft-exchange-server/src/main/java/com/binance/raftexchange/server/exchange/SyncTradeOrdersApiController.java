@@ -45,7 +45,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
                 .orderType(exchange.core2.core.common.OrderType.of((byte)grpcApiPlaceOrder.getOrderType().getNumber())).uid(grpcApiPlaceOrder.getUid())
                 .symbol(grpcApiPlaceOrder.getSymbol()).userCookie(grpcApiPlaceOrder.getUserCookie()).leverage(grpcApiPlaceOrder.getLeverage())
                 .marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiPlaceOrder.getMarginMode().getNumber()]) // grpc enum 默认是0 就是isolated
-                .reservePrice(grpcApiPlaceOrder.getReservePrice()).build();
+                .reservePrice(grpcApiPlaceOrder.getReservePrice()).reduceOnly(grpcApiPlaceOrder.getReduceOnly()).build();
         apiPlaceOrder.updateTimestamp(apiCommand.getTimestamp());
         return callExchange(apiPlaceOrder);
     }

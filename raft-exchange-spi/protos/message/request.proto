@@ -26,6 +26,7 @@ message ApiPlaceOrder {
   int32 leverage = 9;
   MarginMode marginMode = 10;
   int64 reservePrice = 11;
+  bool reduceOnly = 12;
 }
 
 // Adjust User Balance Command

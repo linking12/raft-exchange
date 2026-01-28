@@ -325,8 +325,9 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
             byte actionAndType1 = (byte) actionAndType;
             buffer.put(actionAndType1); // 1 byte
 
-            if (debug) log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} leverage={} marginMode={} {}/{} actionAndType={}",
-                    baseSeq + dSeq, cmd.timestamp, cmd.orderId, cmd.symbol, cmd.uid, cmd.price, cmd.reserveBidPrice, cmd.size, cmd.userCookie, cmd.leverage, cmd.action, cmd.marginMode, cmd.orderType, actionAndType1);
+            buffer.putInt(cmd.orderFlags);
+            if (debug) log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} leverage={} marginMode={} {}/{} actionAndType={} orderFlags={}",
+                    baseSeq + dSeq, cmd.timestamp, cmd.orderId, cmd.symbol, cmd.uid, cmd.price, cmd.reserveBidPrice, cmd.size, cmd.userCookie, cmd.leverage, cmd.action, cmd.marginMode, cmd.orderType, actionAndType1, cmd.orderFlags);
 
         } else if (cmdType == OrderCommandType.BALANCE_ADJUSTMENT) {
 
@@ -559,10 +560,11 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
                     final OrderAction orderAction = OrderAction.of((byte) (actionAndType & 0b1));
                     final OrderType orderType = OrderType.of((byte) ((actionAndType >> 1) & 0b1111));
 
+                    final int orderFlags = jr.readInt();
                     if (debug)
-                        log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} leverage={} marginMode={} {}/{} actionAndType={}", lastSeq, timestampNs, orderId, symbol, uid, price, reservedBidPrice, size, userCookie, leverage, marginMode, orderAction, orderType, actionAndType);
+                        log.debug("place order seq={} t={} orderId={} symbol={} uid={} price={} reserveBidPrice={} size={} userCookie={} leverage={} marginMode={} {}/{} actionAndType={} orderFlags={}", lastSeq, timestampNs, orderId, symbol, uid, price, reservedBidPrice, size, userCookie, leverage, marginMode, orderAction, orderType, actionAndType, orderFlags);
 
-                    api.placeNewOrder(serviceFlags, eventsGroup, timestampNs, orderId, userCookie, leverage, marginMode, price, reservedBidPrice, size, orderAction, orderType, symbol, uid);
+                    api.placeNewOrder(serviceFlags, eventsGroup, timestampNs, orderId, userCookie, leverage, marginMode, orderFlags, price, reservedBidPrice, size, orderAction, orderType, symbol, uid);
 
                 } else if (cmdType == OrderCommandType.BALANCE_ADJUSTMENT) {
 

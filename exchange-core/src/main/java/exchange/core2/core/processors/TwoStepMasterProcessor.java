@@ -129,7 +129,8 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                         /**
                          * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在这些cmd执行前，需要让R2先执行完
                          */
-                        else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT
+                        else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
+                                cmd.command == OrderCommandType.CLOSE_POSITION
                                 // 上一个是普通，这一个是强平流
                                 || (!prevLiquidationCmd && cmd.command.isLiquidationFlowCommand())
                                 // 上一个是强平流，这一个是普通

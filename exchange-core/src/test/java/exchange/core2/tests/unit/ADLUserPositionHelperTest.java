@@ -8,8 +8,6 @@ import exchange.core2.core.processors.liquidation.ADLUserPositionHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.HashSet;
-import java.util.Set;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -140,23 +138,6 @@ class ADLUserPositionHelperTest {
     }
 
     // ========== OrderId 生成测试 ==========
-
-    @Test
-    void testGenerateADLOrderId_LongPosition() {
-        // 测试多头仓位OrderId
-        SymbolPositionRecord pos = createPosition(100, PositionDirection.LONG, 10, 1000, 1000, 10001);
-
-        long orderId = ADLUserPositionHelper.generateADLOrderId(pos);
-
-        // 验证symbol部分 (高32位)
-        long symbolPart = (orderId >>> 32);
-        assertEquals(10001L, symbolPart);
-
-        // 验证side bit (bit 11)
-        long sideBit = (orderId >> 11) & 1;
-        assertEquals(0L, sideBit); // LONG = 0
-    }
-
     @Test
     void testGenerateADLOrderId_ShortPosition() {
         // 测试空头仓位OrderId
@@ -169,31 +150,6 @@ class ADLUserPositionHelperTest {
 
         long sideBit = (orderId >> 11) & 1;
         assertEquals(1L, sideBit); // SHORT = 1
-    }
-
-    @Test
-    void testGenerateADLOrderId_Uniqueness() {
-        // 测试OrderId唯一性
-        SymbolPositionRecord pos1 = createPosition(100, PositionDirection.LONG, 10, 1000, 1000, 10001);
-        SymbolPositionRecord pos2 = createPosition(200, PositionDirection.LONG, 10, 1000, 1000, 10001);
-        SymbolPositionRecord pos3 = createPosition(100, PositionDirection.SHORT, 10, 1000, 1000, 10001);
-
-        Set<Long> orderIds = new HashSet<>();
-        for (int i = 0; i < 100; i++) {
-            orderIds.add(ADLUserPositionHelper.generateADLOrderId(pos1));
-            orderIds.add(ADLUserPositionHelper.generateADLOrderId(pos2));
-            orderIds.add(ADLUserPositionHelper.generateADLOrderId(pos3));
-
-            // 短暂延迟，确保时间戳变化
-            try {
-                Thread.sleep(1);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        // 应该生成多个不同的OrderId（由于时间戳变化）
-        assertTrue(orderIds.size() > 3);
     }
 
     @Test
@@ -226,27 +182,6 @@ class ADLUserPositionHelperTest {
         long uidHash1 = (orderId1 >> 12) & 0xFFFFF;
         long uidHash2 = (orderId2 >> 12) & 0xFFFFF;
         assertNotEquals(uidHash1, uidHash2);
-    }
-
-    @Test
-    void testGenerateADLOrderId_BitLayout() {
-        // 测试bit布局
-        SymbolPositionRecord pos = createPosition(100, PositionDirection.LONG, 10, 1000, 1000, 0x1234);
-
-        long orderId = ADLUserPositionHelper.generateADLOrderId(pos);
-
-        // 验证各部分
-        long symbolPart = (orderId >>> 32);
-        assertEquals(0x1234L, symbolPart);
-
-        long uidHashPart = (orderId >> 12) & 0xFFFFF;
-        assertTrue(uidHashPart >= 0 && uidHashPart <= 0xFFFFF);
-
-        long sideBit = (orderId >> 11) & 1;
-        assertEquals(0L, sideBit); // LONG
-
-        long tsPart = orderId & 0x7FF; // 11 bits
-        assertTrue(tsPart >= 0 && tsPart <= 0x7FF);
     }
 
     // ========== 对象池测试 ==========

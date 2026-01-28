@@ -51,8 +51,8 @@ public class ExchangeApiSpotTest extends BaseTest {
         int initU2OrderNum = queryU2.getOrders() != null && queryU2.getOrders().get(BNB_USDT_SPOT) != null ? queryU2.getOrders().get(BNB_USDT_SPOT).size() : 0;
 
         // 提交订单应该成功
-        CommandResultView result1 = exchangeApi.placeOrder(UID_1, orderId++, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, null, 0);
-        CommandResultView result2 = exchangeApi.placeOrder(UID_2, orderId++, BNB_USDT_SPOT, OrderAction.ASK, OrderType.GTC, 852, 0, 1, null, 0);
+        CommandResultView result1 = exchangeApi.placeOrder(UID_1, orderId++, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, null, 0, false);
+        CommandResultView result2 = exchangeApi.placeOrder(UID_2, orderId++, BNB_USDT_SPOT, OrderAction.ASK, OrderType.GTC, 852, 0, 1, null, 0, false);
 
         assertThat(result1.getResultCode(), is(CommandResultCode.SUCCESS));
         assertThat(result2.getResultCode(), is(CommandResultCode.SUCCESS));
@@ -84,7 +84,7 @@ public class ExchangeApiSpotTest extends BaseTest {
         int orderId = getInitOrderId(Integer.class);
 
         double price = 100.2;
-        CommandResultView view1 = exchangeApi.placeOrder(UID_5, orderId, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, price, 1100, 0.5, null, 0);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_5, orderId, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, price, 1100, 0.5, null, 0, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
 
         SingleUserReportResultView.OrderView order1 = getOrder(UID_5, BNB_USDT_SPOT, orderId);
@@ -105,7 +105,7 @@ public class ExchangeApiSpotTest extends BaseTest {
 
         double price1 = 850.2;
         double price2 = 851;
-        CommandResultView view1 = exchangeApi.placeOrder(UID_5, orderId, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, price1, 855, 0.5, null, 0);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_5, orderId, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, price1, 855, 0.5, null, 0, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
 
         SingleUserReportResultView.OrderView order1 = getOrder(UID_5, BNB_USDT_SPOT, orderId);
@@ -133,8 +133,8 @@ public class ExchangeApiSpotTest extends BaseTest {
         double bnb2 = getBalance(UID_4, BNB_ID);
 
         // 下单
-        CommandResultView view1 = exchangeApi.placeOrder(UID_3, orderId1, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, null, 0);
-        CommandResultView view2 = exchangeApi.placeOrder(UID_4, orderId2, BNB_USDT_SPOT, OrderAction.ASK, OrderType.GTC, 850, 0, 0.5, null, 0);
+        CommandResultView view1 = exchangeApi.placeOrder(UID_3, orderId1, BNB_USDT_SPOT, OrderAction.BID, OrderType.GTC, 850.2, 855, 0.5, null, 0, false);
+        CommandResultView view2 = exchangeApi.placeOrder(UID_4, orderId2, BNB_USDT_SPOT, OrderAction.ASK, OrderType.GTC, 850, 0, 0.5, null, 0, false);
         assertThat(view1.getResultCode(), is(CommandResultCode.SUCCESS));
         assertThat(view2.getResultCode(), is(CommandResultCode.SUCCESS));
 
