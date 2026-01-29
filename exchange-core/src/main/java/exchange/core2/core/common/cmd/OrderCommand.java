@@ -117,6 +117,16 @@ public final class OrderCommand implements IOrder {
      */
     public ADLUserPosition[] adlUserPositionsByShard;
 
+    /**
+     * 【注意并发】资金费率支付方收取的总金额，按shard分组；用数组维护，下标是shardId。
+     */
+    public long[] fundingPayAmountByShard;
+
+    /**
+     * 【注意并发】资金费率接收方的总名义价值，按shard分组；用数组维护，下标是shardId。
+     */
+    public long[] fundingRecvNotionalByShard;
+
     // optional market data
     public L2MarketData marketData;
 
@@ -136,7 +146,7 @@ public final class OrderCommand implements IOrder {
         return command == OrderCommandType.PLACE_ORDER || command == OrderCommandType.CANCEL_ORDER ||
                 command == OrderCommandType.REDUCE_ORDER || command == OrderCommandType.CLOSE_POSITION ||
                 command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
-                command == OrderCommandType.AUTO_DELEVERAGING;
+                command == OrderCommandType.AUTO_DELEVERAGING || command == OrderCommandType.SETTLE_FUNDINGFEES;
     }
 
     /**

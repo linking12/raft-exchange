@@ -35,5 +35,7 @@ public enum MatcherEventType {
 
     IF_EVENT,
 
-    ADL_EVENT;
+    ADL_EVENT,
+
+    FUNDING_EVENT;
 }

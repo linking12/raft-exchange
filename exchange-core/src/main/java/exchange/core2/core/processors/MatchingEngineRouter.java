@@ -33,6 +33,7 @@ import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.ADLMatchingProcessor;
+import exchange.core2.core.processors.liquidation.FundingFeeMatchingProcessor;
 import exchange.core2.core.processors.liquidation.IFMatchingProcessor;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
@@ -66,6 +67,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
 
     private final IFMatchingProcessor ifMatchingProcessor;
     private final ADLMatchingProcessor adlMatchingProcessor;
+    private final FundingFeeMatchingProcessor fundingFeeMatchingProcessor;
 
     // sharding by symbolId
     private final int shardId;
@@ -117,6 +119,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
 
         this.ifMatchingProcessor = new IFMatchingProcessor(eventsHelper);
         this.adlMatchingProcessor = new ADLMatchingProcessor(eventsHelper);
+        this.fundingFeeMatchingProcessor = new FundingFeeMatchingProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
@@ -180,6 +183,11 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
             // only process ADL cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
                 cmd.resultCode = adlMatchingProcessor.process(cmd);
+            }
+
+        } else if (command == OrderCommandType.SETTLE_FUNDINGFEES) {
+            if (symbolForThisHandler(cmd.symbol)) {
+                cmd.resultCode = fundingFeeMatchingProcessor.process(cmd);
             }
 
         } else if (command == OrderCommandType.MOVE_ORDER
