@@ -72,6 +72,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         ApiSettleFundingFees grpcSettleFundingFees = apiCommand.getSettleFundingFees();
         exchange.core2.core.common.api.ApiSettleFundingFees apiSettleFundingFees = exchange.core2.core.common.api.ApiSettleFundingFees.builder()
             .transactionId(grpcSettleFundingFees.getTransactionId()).symbol(grpcSettleFundingFees.getSymbol())
+            .action(exchange.core2.core.common.OrderAction.of((byte) grpcSettleFundingFees.getAction().getNumber()))
             .fundingRate(grpcSettleFundingFees.getFundingRate()).rateScaleK(grpcSettleFundingFees.getRateScaleK()).build();
         apiSettleFundingFees.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("apiSettleFundingFees applied, msg: {}", apiSettleFundingFees);

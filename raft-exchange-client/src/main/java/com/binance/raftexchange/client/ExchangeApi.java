@@ -471,18 +471,18 @@ public class ExchangeApi implements AutoCloseable {
                         .setSymbol(symbol).setMarkPrice(scaledMarkPrice)).build();
     }
 
-    public CommandResultView settleFundingFees(int symbol, long fundingRate, long rateScaleK) {
-        return send(buildSettleFundingFeesCommand(symbol, fundingRate, rateScaleK));
+    public CommandResultView settleFundingFees(int symbol, OrderAction action, long fundingRate, long rateScaleK) {
+        return send(buildSettleFundingFeesCommand(symbol, action, fundingRate, rateScaleK));
     }
 
-    public CompletableFuture<CommandResultView> settleFundingFeesAsync(int symbol, long fundingRate, long rateScaleK) {
-        return sendAsync(buildSettleFundingFeesCommand(symbol, fundingRate, rateScaleK));
+    public CompletableFuture<CommandResultView> settleFundingFeesAsync(int symbol, OrderAction action, long fundingRate, long rateScaleK) {
+        return sendAsync(buildSettleFundingFeesCommand(symbol, action, fundingRate, rateScaleK));
     }
 
-    public ApiCommand buildSettleFundingFeesCommand(int symbol, long fundingRate, long rateScaleK) {
+    public ApiCommand buildSettleFundingFeesCommand(int symbol, OrderAction action, long fundingRate, long rateScaleK) {
         return ApiCommand.newBuilder().setTimestamp(System.currentTimeMillis())
                 .setSettleFundingFees(ApiSettleFundingFees.newBuilder().setTransactionId(reqIdGen.getAndIncrement())
-                        .setSymbol(symbol).setFundingRate(fundingRate).setRateScaleK(rateScaleK)).build();
+                        .setSymbol(symbol).setAction(action).setFundingRate(fundingRate).setRateScaleK(rateScaleK)).build();
     }
 
     public CommandResultView settlePnl(int symbol, double price) {
