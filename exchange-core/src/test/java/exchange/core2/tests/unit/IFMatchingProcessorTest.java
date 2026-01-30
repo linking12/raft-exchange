@@ -7,7 +7,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.liquidation.IFMatchingProcessor;
+import exchange.core2.core.processors.liquidation.IFSettlementProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,13 +19,13 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class IFMatchingProcessorTest {
 
-    private IFMatchingProcessor processor;
+    private IFSettlementProcessor processor;
     private OrderBookEventsHelper eventsHelper;
 
     @BeforeEach
     void setUp() {
         eventsHelper = new OrderBookEventsHelper(() -> new MatcherTradeEvent());
-        processor = new IFMatchingProcessor(eventsHelper);
+        processor = new IFSettlementProcessor(eventsHelper);
     }
 
     // ========== 基本功能测试 ==========

@@ -16,9 +16,9 @@ import java.util.Arrays;
  * It DOES NOT modify user positions.
  * It ONLY produces matcher events for R2 execution.
  */
-public class IFMatchingProcessor extends AbstractLiquidationMatchingProcessor {
+public class IFSettlementProcessor extends AbstractSettlementProcessor {
 
-    public IFMatchingProcessor(OrderBookEventsHelper eventsHelper) {
+    public IFSettlementProcessor(OrderBookEventsHelper eventsHelper) {
         super(eventsHelper);
     }
 

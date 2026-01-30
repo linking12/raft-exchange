@@ -9,10 +9,10 @@ import exchange.core2.core.orderbook.OrderBookEventsHelper;
 /**
  * Base class for liquidation-related matching planners (ADL / IF).
  */
-public abstract class AbstractLiquidationMatchingProcessor {
+public abstract class AbstractSettlementProcessor {
     protected final OrderBookEventsHelper eventsHelper;
 
-    protected AbstractLiquidationMatchingProcessor(OrderBookEventsHelper eventsHelper) {
+    protected AbstractSettlementProcessor(OrderBookEventsHelper eventsHelper) {
         this.eventsHelper = eventsHelper;
     }
 

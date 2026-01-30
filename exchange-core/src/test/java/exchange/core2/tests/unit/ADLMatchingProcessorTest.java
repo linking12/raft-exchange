@@ -5,7 +5,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.liquidation.ADLMatchingProcessor;
+import exchange.core2.core.processors.liquidation.ADLSettlementProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -17,13 +17,13 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ADLMatchingProcessorTest {
 
-    private ADLMatchingProcessor processor;
+    private ADLSettlementProcessor processor;
     private OrderBookEventsHelper eventsHelper;
 
     @BeforeEach
     void setUp() {
         eventsHelper = new OrderBookEventsHelper(() -> new MatcherTradeEvent());
-        processor = new ADLMatchingProcessor(eventsHelper);
+        processor = new ADLSettlementProcessor(eventsHelper);
     }
 
     // ========== 基本功能测试 ==========

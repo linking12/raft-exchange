@@ -7,9 +7,9 @@ import exchange.core2.core.orderbook.OrderBookEventsHelper;
 
 import java.util.Arrays;
 
-public class FundingFeeMatchingProcessor extends AbstractLiquidationMatchingProcessor {
+public class FundingFeeSettlementProcessor extends AbstractSettlementProcessor {
 
-    public FundingFeeMatchingProcessor(OrderBookEventsHelper eventsHelper) {
+    public FundingFeeSettlementProcessor(OrderBookEventsHelper eventsHelper) {
         super(eventsHelper);
     }
 

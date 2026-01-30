@@ -13,9 +13,9 @@ import exchange.core2.core.orderbook.OrderBookEventsHelper;
  * It DOES NOT modify positions or accounts.
  * It DOES NOT perform order matching.
  */
-public class ADLMatchingProcessor extends AbstractLiquidationMatchingProcessor {
+public class ADLSettlementProcessor extends AbstractSettlementProcessor {
 
-    public ADLMatchingProcessor(OrderBookEventsHelper eventsHelper) {
+    public ADLSettlementProcessor(OrderBookEventsHelper eventsHelper) {
         super(eventsHelper);
     }
 

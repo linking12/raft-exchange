@@ -32,9 +32,9 @@ import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
-import exchange.core2.core.processors.liquidation.ADLMatchingProcessor;
-import exchange.core2.core.processors.liquidation.FundingFeeMatchingProcessor;
-import exchange.core2.core.processors.liquidation.IFMatchingProcessor;
+import exchange.core2.core.processors.liquidation.ADLSettlementProcessor;
+import exchange.core2.core.processors.liquidation.FundingFeeSettlementProcessor;
+import exchange.core2.core.processors.liquidation.IFSettlementProcessor;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
 import lombok.Builder;
@@ -65,9 +65,9 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     // local objects pool for order books
     private final ObjectsPool objectsPool;
 
-    private final IFMatchingProcessor ifMatchingProcessor;
-    private final ADLMatchingProcessor adlMatchingProcessor;
-    private final FundingFeeMatchingProcessor fundingFeeMatchingProcessor;
+    private final IFSettlementProcessor ifMatchingProcessor;
+    private final ADLSettlementProcessor adlMatchingProcessor;
+    private final FundingFeeSettlementProcessor fundingFeeMatchingProcessor;
 
     // sharding by symbolId
     private final int shardId;
@@ -117,9 +117,9 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.sharedPool = sharedPool;
 
-        this.ifMatchingProcessor = new IFMatchingProcessor(eventsHelper);
-        this.adlMatchingProcessor = new ADLMatchingProcessor(eventsHelper);
-        this.fundingFeeMatchingProcessor = new FundingFeeMatchingProcessor(eventsHelper);
+        this.ifMatchingProcessor = new IFSettlementProcessor(eventsHelper);
+        this.adlMatchingProcessor = new ADLSettlementProcessor(eventsHelper);
+        this.fundingFeeMatchingProcessor = new FundingFeeSettlementProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
