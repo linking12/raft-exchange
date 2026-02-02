@@ -1,4 +1,4 @@
-package exchange.core2.core.processors.liquidation;
+package exchange.core2.core.processors.settlement;
 
 import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.MatcherEventType;
