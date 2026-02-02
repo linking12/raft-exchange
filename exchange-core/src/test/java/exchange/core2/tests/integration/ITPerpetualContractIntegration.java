@@ -10,6 +10,7 @@ import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.tests.util.EventCheck;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.jupiter.api.AfterEach;
@@ -493,6 +494,7 @@ class ITPerpetualContractIntegration {
             // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
             ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
                     .transactionId(1345L)
+                    .action(OrderAction.BID)
                     .symbol(perpetualSymbols.get(0).symbolId)
                     .rateScaleK(rateScale)
                     .fundingRate(fundingRate)
@@ -543,7 +545,16 @@ class ITPerpetualContractIntegration {
             verify(handler, times(33)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
-            IFundEventsHandler.FundEventReport event1 = fundEvents.get(17);
+            IFundEventsHandler.FundEventReport event1 = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT) && report.getAccountId() == UID_1) {
+                    event1 = report;
+                    break;
+                }
+            }
+
             assertThat(UID_1, is(event1.getAccountId()));
             assertThat(quoteId, is(event1.getBalances().getCurrency()));
             assertThat(10000, is(event1.getPositions().getSymbolId()));
@@ -566,7 +577,16 @@ class ITPerpetualContractIntegration {
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 24750) = 3
             assertThat(3L, is(event1.getPositions().getMarginRatioScaleK()));
 
-            IFundEventsHandler.FundEventReport event2 = fundEvents.get(18);
+            IFundEventsHandler.FundEventReport event2 = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT) && report.getAccountId() == UID_2) {
+                    event2 = report;
+                    break;
+                }
+            }
+
             assertThat(UID_2, is(event2.getAccountId()));
             assertThat(quoteId, is(event2.getBalances().getCurrency()));
             assertThat(10000, is(event2.getPositions().getSymbolId()));
@@ -605,7 +625,7 @@ class ITPerpetualContractIntegration {
         int makerFee = 100;
         int takerFee = 200;
         int size = 10;
-        int fundingRate = -1;
+        int fundingRate = 1;
         int rateScale = 100;
         int updatedPrice = 1500;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
@@ -627,7 +647,7 @@ class ITPerpetualContractIntegration {
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
 
             container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(1001).symbol(perpetualSymbols.get(0).symbolId).markPrice(updatedPrice).build(), CommandResultCode.SUCCESS);
-
+            // UID_1做多, UID_2做空, settlement_funding_fee是空给多钱, 所以UID_1 profit会增加, UID_2 profit会减少
             container.createBidWithOrderId(MAKER_1, UID_1, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.createAskWithOrderId(TAKER_1, UID_2, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
 
@@ -658,23 +678,32 @@ class ITPerpetualContractIntegration {
             // 永续cmd请求发起后, 合约价格低于现货价格时设置资金费率 < 0(fundingRate/rateScale=-1%), 此时做空用户按比例减钱给做多用户, 鼓励做多
             ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
                     .transactionId(1345L)
+                    .action(OrderAction.ASK)
                     .symbol(perpetualSymbols.get(0).symbolId)
                     .rateScaleK(rateScale)
                     .fundingRate(fundingRate)
                     .build();
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
 
+            LatencyTools.waitForCondition(150, () -> {
+                try {
+                    return container.getUserProfile(UID_1).getPositions().getFirst().get(0).profit > 0;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().getFirst().get(0).profit > 0, is(true));
-                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(1L * size * fundingRate * updatedPrice / rateScale));
             });
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().getFirst().get(0).profit < 0, is(true));
-                assertThat(profile.getPositions().getFirst().get(0).profit, is(1L * size * fundingRate * updatedPrice / rateScale));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
 
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
@@ -770,6 +799,7 @@ class ITPerpetualContractIntegration {
             // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
             ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
                     .transactionId(1345L)
+                    .action(OrderAction.BID)
                     .symbol(spec.symbolId)
                     .rateScaleK(rateScale)
                     .fundingRate(fundingRate)

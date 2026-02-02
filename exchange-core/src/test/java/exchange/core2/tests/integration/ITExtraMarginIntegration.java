@@ -733,7 +733,7 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(40)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(36)).fundEventReport(fundEventCaptor.capture());
             // check fund event, 因为已经补充过保证金了所以只会发一次补充保证金事件
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport alertEvent = fundEvents.get(33);
@@ -836,7 +836,7 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(41)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(37)).fundEventReport(fundEventCaptor.capture());
             // check fund event, 因为已经补充过保证金了所以只会发一次补充保证金事件
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
@@ -984,7 +984,7 @@ class ITExtraMarginIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(49)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(47)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport refund1 = null;

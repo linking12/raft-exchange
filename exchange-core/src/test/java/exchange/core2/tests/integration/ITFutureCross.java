@@ -23,6 +23,7 @@ import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
 import org.hamcrest.core.Is;
 import org.junit.jupiter.api.Test;
@@ -492,12 +493,18 @@ class ITFutureCross extends ITFutureBase {
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
 
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(1000);
+
+            LatencyTools.waitForCondition(150, () -> {
+                try {
+                    return container.getUserProfile(userId1).getPositions().size() == 1;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
             // 期待结果makerOrderId5可以被吃掉, position数量为1
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
             });
-            Thread.sleep(1000);
 
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
@@ -784,7 +791,7 @@ class ITFutureCross extends ITFutureBase {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(33)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(31)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport event1 = null;

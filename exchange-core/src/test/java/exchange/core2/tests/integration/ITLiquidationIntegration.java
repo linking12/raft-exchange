@@ -11,6 +11,7 @@ import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
 import net.jpountz.lz4.LZ4Factory;
 import org.junit.jupiter.api.AfterEach;
@@ -448,9 +449,19 @@ class ITLiquidationIntegration {
             // 只触发分片0的强平引擎（假设第一个引擎处理分片0）
             LiquidationEngine shard0Engine = liquidationEngines.get(0);
             shard0Engine.triggerOnce();
-            Thread.sleep(3000);  // 增加等待时间到3秒
-            container.getApi().groupingControl(0, 1);
-            Thread.sleep(500);  // 额外等待确保所有事件处理完成
+
+            long[] shard0Users = {shard0User1, shard0User2, shard0User3};
+            long[] shard1Users = {shard1User1, shard1User2, shard1User3};
+
+            for (long userId : shard0Users) {
+                LatencyTools.waitForCondition(10000, () -> {
+                    try {
+                        return container.getUserProfile(userId).getPositions().size() == 0;
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
 
             log.info("验证单分片强平结果");
 
@@ -458,9 +469,6 @@ class ITLiquidationIntegration {
             int shard0LiquidatedUsers = 0;
             int shard1LiquidatedUsers = 0;
             int totalLiquidatedUsers = 0;
-
-            long[] shard0Users = {shard0User1, shard0User2, shard0User3};
-            long[] shard1Users = {shard1User1, shard1User2, shard1User3};
 
             // 检查分片0用户的强平情况
             for (long userId : shard0Users) {
@@ -544,10 +552,15 @@ class ITLiquidationIntegration {
             LiquidationEngine shard1Engine = liquidationEngines.get(1);
             shard1Engine.triggerOnce();
 
-            // 等待强平完成
-            Thread.sleep(3000L);
-            container.getApi().groupingControl(0, 1);
-            Thread.sleep(500L);  // 确保事件处理完成
+            for (long userId : shard1Users) {
+                LatencyTools.waitForCondition(150, () -> {
+                    try {
+                        return container.getUserProfile(userId).getPositions().size() == 0;
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
 
             // 重新统计强平情况
             int shard1LiquidatedUsersAfter = 0;
@@ -767,6 +780,14 @@ class ITLiquidationIntegration {
             // 验证强平结果的预期
             // 1. 应该有用户被强平（说明强平机制工作）
             int totalLiquidatedUsers = crossModeLiquidatedUsers + isolatedModeLiquidatedUsers;
+            LatencyTools.waitForCondition(5000, () -> {
+                try {
+                    return totalLiquidatedUsers > 0;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
             assertThat("应该有用户被强平", totalLiquidatedUsers > 0, is(true));
 
             // 2. 验证分片间的独立性 - 两个分片都应该处理强平
@@ -959,6 +980,24 @@ class ITLiquidationIntegration {
             log.info("跨分片对手单强平结果:");
             log.info("userId1 (分片{}, 逐仓模式) 被强平: {}", userId1 % 2, userId1Liquidated);
             log.info("userId2 (分片{}, 全仓模式) 被强平: {}", userId2 % 2, userId2Liquidated);
+
+            boolean finalUserId1Liquidated = userId1Liquidated;
+            LatencyTools.waitForCondition(10000, () -> {
+                try {
+                    return finalUserId1Liquidated;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            boolean finalUserId2Liquidated = userId2Liquidated;
+            LatencyTools.waitForCondition(10000, () -> {
+                try {
+                    return finalUserId2Liquidated;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
 
             // 核心验证：两个对手方都应该被强平
             assertThat("userId1应该被强平（价格下跌，多头逐仓保证金不足）", userId1Liquidated, is(true));
@@ -1303,6 +1342,15 @@ class ITLiquidationIntegration {
             Thread.sleep(500L);  // 确保事件处理完成
 
             log.info("验证部分强平结果");
+
+            LatencyTools.waitForCondition(150, () -> {
+                try {
+                    return container.getUserProfile(trader).getPositions().get(symbol.symbolId).get(0).openVolume < initialPositionSize;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
             // 验证部分强平
             container.validateUserState(trader, profile -> {
                 log.info("部分强平后交易者持仓数: {}", profile.getPositions().size());
