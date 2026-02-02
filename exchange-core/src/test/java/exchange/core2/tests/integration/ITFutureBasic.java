@@ -18,6 +18,7 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.IFundEventsHandler;
 import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.tests.util.ExchangeTestContainer;
@@ -36,6 +37,7 @@ import static exchange.core2.core.common.OrderAction.BID;
 import static exchange.core2.core.common.OrderType.*;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -676,6 +678,319 @@ class ITFutureBasic extends ITFutureBase {
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
         doCheckEvtCnt(symbolSpec, orderType, rejectionCause);
+    }
+
+    // -------------------------- reduce-only tests ----------------------------------------
+
+    // 测试场景1: 无仓位时，reduce-only订单应该被忽略（size被调整为0）
+    @Test
+    public void testReduceOnlyWithoutPosition() {
+        int deposit = 10000;
+        long userId1 = UID_1;
+        long orderId = 2001L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+
+            // 无仓位时提交 reduce-only 订单
+            ApiPlaceOrder reduceOnlyOrder = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(orderId)
+                    .action(OrderAction.ASK)
+                    .size(1)
+                    .price(10000)
+                    .symbol(symbolId)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder, CommandResultCode.SUCCESS);
+
+            // 验证无仓位被创建
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is((long) deposit));
+                // reduce-only订单被忽略，仓位应该是空的或openVolume为0
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is(0L));
+            });
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 测试场景2: 持有多头仓位，ASK reduce-only订单部分平仓
+    @Test
+    public void testReduceOnlyPartialCloseLongPosition() {
+        int deposit = 100000;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        long makerFee = 100;
+        int positionSize = 10;
+        int closeSize = 6;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, deposit, quoteId);
+            container.createUserWithSpecificMoney(UID_3, deposit, quoteId);
+
+            // 用户1开多头仓位
+            container.createBidWithOrderId(1001L, userId1, positionSize, 10000, symbolId);
+            container.createAskWithOrderId(1002L, userId2, positionSize, 10000, symbolId);
+
+            // 用户2先挂买单，等待平仓订单
+            container.createBidWithOrderId(3001L, UID_3, 2 * positionSize, 10100, symbolId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is((long) deposit - makerFee));
+            });
+
+            // 用户1提交 reduce-only ASK 订单平仓, 总共开出10手, 卖掉6手
+            ApiPlaceOrder reduceOnlyOrder1 = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(2002L)
+                    .action(OrderAction.ASK)
+                    .size(closeSize)
+                    .price(10100)
+                    .symbol(symbolId)
+                    .orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(1)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder1, CommandResultCode.SUCCESS);
+
+            // 验证用户1仓位减少
+            container.validateUserState(userId1, profile -> {
+                var positions = profile.getPositions().get(symbolId);
+                assertThat(positions.get(0).openVolume, Is.is((long) (positionSize - closeSize)));
+                assertThat(positions.get(0).direction, Is.is(PositionDirection.LONG));
+            });
+
+            // 用户1提交 reduce-only ASK 订单平仓,剩余4手, 下单卖掉6手, 其实只会卖掉4手
+            ApiPlaceOrder reduceOnlyOrder2 = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(2003L)
+                    .action(OrderAction.ASK)
+                    .size(closeSize)
+                    .price(10100)
+                    .symbol(symbolId)
+                    .orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(1)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder2, CommandResultCode.SUCCESS);
+
+            // 验证用户1仓位减少为0, 证明没有反向开单
+            container.validateUserState(userId1, profile -> {
+                assertNull(profile.getPositions().get(symbolId));
+            });
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 测试场景3: 持有空头仓位，BID reduce-only订单完全平仓
+    @Test
+    public void testReduceOnlyFullCloseShortPosition() {
+        int deposit = 100000;
+        long makerFee = 100;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        int positionSize = 10;
+        int closeSize = 6;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, deposit, quoteId);
+            container.createUserWithSpecificMoney(UID_3, deposit, quoteId);
+
+            // 用户1开空头仓位
+            container.createAskWithOrderId(1001L, userId1, positionSize, 10000, symbolId);
+            container.createBidWithOrderId(1002L, userId2, positionSize, 10000, symbolId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is((long) deposit - makerFee));
+            });
+
+            // 用户2先挂卖单，等待平仓订单
+            container.createAskWithOrderId(2001L, UID_3, 2 * positionSize, 9900, symbolId);
+
+            // 用户1提交 reduce-only BID 订单完全平仓（IOC立即成交）
+            ApiPlaceOrder reduceOnlyOrder1 = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(2002L)
+                    .action(OrderAction.BID)
+                    .size(closeSize)
+                    .price(9900)
+                    .symbol(symbolId)
+                    .orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(1)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder1, CommandResultCode.SUCCESS);
+
+            // 验证用户1仓位完全平仓
+            container.validateUserState(userId1, profile -> {
+                var positions = profile.getPositions().get(symbolId);
+                assertThat(positions.get(0).openVolume, Is.is((long) (positionSize - closeSize)));
+                assertThat(positions.get(0).direction, Is.is(PositionDirection.SHORT));
+            });
+
+            // 用户1提交 reduce-only BID 订单完全平仓（IOC立即成交）
+            ApiPlaceOrder reduceOnlyOrder2 = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(2003L)
+                    .action(OrderAction.BID)
+                    .size(closeSize)
+                    .price(9900)
+                    .symbol(symbolId)
+                    .orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(1)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder2, CommandResultCode.SUCCESS);
+
+            // 验证用户1仓位完全平仓
+            container.validateUserState(userId1, profile -> {
+                assertNull(profile.getPositions().get(symbolId));
+            });
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 测试场景4: reduce-only订单数量超过持仓数量，应被截断
+    @Test
+    public void testReduceOnlyExceedPositionSize() {
+        int deposit = 100000;
+        long makerFee = 50;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        int positionSize = 5;
+        int largeCloseSize = 10; // 超过持仓数量
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, deposit, quoteId);
+            container.createUserWithSpecificMoney(UID_3, deposit, quoteId);
+
+            // 用户1开多头仓位
+            container.createBidWithOrderId(1001L, userId1, positionSize, 10000, symbolId);
+            container.createAskWithOrderId(1002L, userId2, positionSize, 10000, symbolId);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is((long) deposit - makerFee));
+            });
+
+            // 用户3先挂买单，数量超过仓位
+            container.createBidWithOrderId(2001L, UID_3, largeCloseSize, 10100, symbolId);
+
+            // 用户1提交超过持仓数量的 reduce-only 订单（IOC立即成交）
+            ApiPlaceOrder reduceOnlyOrder = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(2002L)
+                    .action(OrderAction.ASK)
+                    .size(largeCloseSize)
+                    .price(10100)
+                    .symbol(symbolId)
+                    .orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .leverage(1)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder, CommandResultCode.SUCCESS);
+
+            // 验证用户1仓位完全平仓（不会超卖）
+            container.validateUserState(userId1, profile -> {
+                assertNull(profile.getPositions().get(symbolId));
+            });
+
+            // 验证用户3只获得了positionSize的仓位（不是largeCloseSize）
+            container.validateUserState(UID_3, profile -> {
+                var positions = profile.getPositions().get(symbolId);
+                assertTrue(positions.get(0).openVolume == positionSize);
+            });
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 测试场景5: 反向 reduce-only 订单应该被忽略（多头仓位提交BID reduce-only）
+    @Test
+    public void testReduceOnlyWrongDirection() {
+        int deposit = 100000;
+        long makerFee = 50;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        int positionSize = 5;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, deposit, quoteId);
+
+            // 用户1开多头仓位
+            container.createBidWithOrderId(1001L, userId1, positionSize, 10000, symbolId);
+            container.createAskWithOrderId(1002L, userId2, positionSize, 10000, symbolId);
+
+            container.validateUserState(userId1, profile -> {
+                var positions = profile.getPositions().get(symbolId);
+                assertThat(positions.get(0).openVolume, Is.is((long) positionSize));
+                assertThat(positions.get(0).pendingBuySize, Is.is(0L));
+                assertThat(positions.get(0).direction, Is.is(PositionDirection.LONG));
+            });
+
+            // 用户1提交错误方向的 reduce-only BID 订单（应该用ASK平多）
+            long size = 3;
+            ApiPlaceOrder reduceOnlyOrder = ApiPlaceOrder.builder()
+                    .uid(userId1)
+                    .orderId(2001L)
+                    .action(OrderAction.BID)  // 错误方向
+                    .size(size)
+                    .price(10100)
+                    .symbol(symbolId)
+                    .orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED)
+                    .reduceOnly(true)
+                    .build();
+            container.submitCommandSync(reduceOnlyOrder, CommandResultCode.SUCCESS);
+
+            // 验证用户1仓位未改变（订单被忽略）
+            container.validateUserState(userId1, profile -> {
+                var positions = profile.getPositions().get(symbolId);
+                assertThat(positions.get(0).openVolume, Is.is((long) positionSize));
+                assertThat(positions.get(0).pendingBuySize, Is.is(size));
+                assertThat(positions.get(0).direction, Is.is(PositionDirection.LONG));
+            });
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
 }

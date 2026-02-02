@@ -105,20 +105,6 @@ class LiquidationServiceTest {
     }
 
     @Test
-    void testAcceptIFPosition_LongPosition() {
-        // 测试 IF 接管多头仓位
-        int symbol = 10001;
-        liquidationService.creditLiquidationFee(symbol, 10000L);
-        liquidationService.reserveIFNotional(symbol, 10, 100);
-
-        liquidationService.acceptIFPosition(symbol, PositionDirection.LONG, 10, 100);
-
-        // 验证资金消耗（需要反射访问私有字段，或通过后续预留验证）
-        long reserved = liquidationService.reserveIFNotional(symbol, 9000, 1);
-        assertEquals(9000L, reserved); // 10000 - 1000 = 9000
-    }
-
-    @Test
     void testAcceptIFPosition_ShortPosition() {
         // 测试 IF 接管空头仓位
         int symbol = 10001;

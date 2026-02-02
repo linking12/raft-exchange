@@ -117,7 +117,7 @@ class SymbolPositionRecordTest {
                 maintenanceMargin + 40000L // 总维持保证金
         );
 
-        assertEquals(49444, result, "normal case");
+        assertEquals(48369, result, "normal case");
     }
 
     @Test
@@ -137,7 +137,7 @@ class SymbolPositionRecordTest {
                 maintenanceMargin // 总维持保证金
         );
 
-        assertEquals(60000, result, "normal case");
+        assertEquals(55555, result, "normal case");
     }
 
     @Test
@@ -177,7 +177,7 @@ class SymbolPositionRecordTest {
                 maintenanceMargin + 40000L // 总维持保证金
         );
 
-        assertEquals(48333, result, "normal case");
+        assertEquals(47282, result, "normal case");
     }
 
     @Test

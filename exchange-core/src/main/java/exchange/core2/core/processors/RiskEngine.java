@@ -1161,7 +1161,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 } else if (cmd.command == OrderCommandType.FORCE_LIQUIDATION) {
                     collectLiquidationFee(cmd, takerUp, takerSpr, spec, currencySpec);
                 }
-
                 // ===== 3.推进 liquidation 状态机 =====
                 if (takerSpr != null) {
                     liquidationEngine.nextLiquidationState(cmd, takerSpr);
@@ -1275,7 +1274,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                        final SymbolPositionRecord takerSpr,
                                        final CoreSymbolSpecification spec,
                                        final CoreCurrencySpecification currencySpec) {
-        if (takerSpr != null && cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
+        if (takerSpr != null) {
             long takerSizeForThisHandler = 0L;
             long takerSizePriceForThisHandler = 0L;
             MatcherTradeEvent ev = cmd.matcherEvent;
