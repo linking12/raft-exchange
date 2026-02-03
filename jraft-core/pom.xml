@@ -3,13 +3,29 @@
 
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <artifactId>jraft-parent</artifactId>
-        <groupId>com.alipay.sofa</groupId>
-        <version>1.4.0</version>
+        <groupId>com.binance.raft-exchange</groupId>
+        <artifactId>raft-exchange</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
     </parent>
     <artifactId>jraft-core</artifactId>
-    <packaging>jar</packaging>
-    <name>jraft-core ${project.version}</name>
+
+    <properties>
+        <!-- baseline versions (from sofa-jraft 1.4.0) -->
+        <junit.dep.version>4.8.2</junit.dep.version>
+        <jsr305.version>3.0.2</jsr305.version>
+        <jna.version>5.14.0</jna.version><!-- 5.14.0 -> 5.12.1 -->
+        <mockito.version>1.9.5</mockito.version>
+        <powermock.version>1.6.0</powermock.version>
+        <disruptor.version>3.4.2</disruptor.version><!-- 3.3.7 -> 3.4.2 -->
+        <protobuf.version>3.25.8</protobuf.version><!-- 3.25.5 -> 3.25.8 -->
+        <commons.lang.version>2.6</commons.lang.version>
+        <bolt.version>1.6.7</bolt.version>
+        <hessian.version>3.3.6</hessian.version>
+        <metrics.version>4.0.2</metrics.version>
+        <jmh.version>1.20</jmh.version>
+        <rocksdb.version>6.29.5</rocksdb.version><!-- 8.8.1 -> 6.29.5 -->
+        <sofa.common.tools>2.1.1</sofa.common.tools><!-- 1.0.2 -> 2.1.1 -->
+    </properties>
 
     <dependencies>
         <!-- junit -->
@@ -110,6 +126,10 @@
             <artifactId>bolt</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.alipay.sofa.common</groupId>
+            <artifactId>sofa-common-tools</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.alipay.sofa</groupId>
             <artifactId>hessian</artifactId>
         </dependency>
@@ -128,4 +148,116 @@
             <artifactId>jmh-generator-annprocess</artifactId>
         </dependency>
     </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit-dep</artifactId>
+                <version>${junit.dep.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.google.code.findbugs</groupId>
+                <artifactId>jsr305</artifactId>
+                <version>${jsr305.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.rocksdb</groupId>
+                <artifactId>rocksdbjni</artifactId>
+                <version>${rocksdb.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna</artifactId>
+                <version>${jna.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-all</artifactId>
+                <version>${mockito.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.powermock</groupId>
+                <artifactId>powermock-api-mockito</artifactId>
+                <version>${powermock.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.powermock</groupId>
+                <artifactId>powermock-module-junit4</artifactId>
+                <version>${powermock.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.lmax</groupId>
+                <artifactId>disruptor</artifactId>
+                <version>${disruptor.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>commons-lang</groupId>
+                <artifactId>commons-lang</artifactId>
+                <version>${commons.lang.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alipay.sofa</groupId>
+                <artifactId>bolt</artifactId>
+                <version>${bolt.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.alipay.sofa.common</groupId>
+                        <artifactId>sofa-common-tools</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alipay.sofa.common</groupId>
+                <artifactId>sofa-common-tools</artifactId>
+                <version>${sofa.common.tools}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alipay.sofa</groupId>
+                <artifactId>hessian</artifactId>
+                <version>${hessian.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.dropwizard.metrics</groupId>
+                <artifactId>metrics-core</artifactId>
+                <version>${metrics.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.openjdk.jmh</groupId>
+                <artifactId>jmh-core</artifactId>
+                <version>${jmh.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.openjdk.jmh</groupId>
+                <artifactId>jmh-generator-annprocess</artifactId>
+                <version>${jmh.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 </project>

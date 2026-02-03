@@ -50,10 +50,10 @@
 			<groupId>io.grpc</groupId>
 			<artifactId>grpc-all</artifactId>
 		</dependency>
-		<dependency>
-			<groupId>com.alipay.sofa</groupId>
-			<artifactId>jraft-core</artifactId>
-		</dependency>
+        <dependency>
+            <groupId>com.binance.raft-exchange</groupId>
+            <artifactId>jraft-core</artifactId>
+        </dependency>
 		<dependency>
 			<groupId>org.apache.kafka</groupId>
 			<artifactId>kafka-clients</artifactId>
