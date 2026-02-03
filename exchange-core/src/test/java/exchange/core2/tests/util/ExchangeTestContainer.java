@@ -1061,7 +1061,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
 
             // 从结果中获取IF余额
             if (result.getIfBalances() != null) {
-                long balance = result.getIfBalances().get(symbol);
+                long balance = result.getIfBalances().get(currency);
                 log.debug("IF balance for symbol {} currency {}: {}", symbol, currency, balance);
                 return balance;
             }
