@@ -769,7 +769,13 @@ class ITMixedIntegration {
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
             // 等待强平和IF接管完成 - 需要更长时间
-            Thread.sleep(1000);
+            LatencyTools.waitForCondition(150, () -> {
+                try {
+                    return container.getUserProfile(loser).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
 
             log.info("步骤5: 验证强平结果");
             container.validateUserState(loser, profile -> {
@@ -790,7 +796,7 @@ class ITMixedIntegration {
             log.info("强平后IF余额: {}", ifBalanceAfterLiquidation);
             // IF吃掉了5手UID_1的强平(5 * 9900), 又收取了5手强平手续费(5 * 50)
             assertThat(ifBalanceAfterLiquidation, is(amountPerShard - 5 * liquidationTriggerPrice + 5 * 50L));
-
+//            assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(),  is(true));
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
@@ -818,6 +824,196 @@ class ITMixedIntegration {
             assertThat(0L, Is.is(ifCloseEvt.getPositions().getQuantity()));
             EventCheck.checkEvent(ifCloseEvt);
             EventCheck.checkEventPending(ifCloseEvt);
+        }
+    }
+
+    /**
+     * 测试3: 逐仓爆仓后被强平，市场部分吃掉，IF接管剩余, 随后开启settlement funding fee, 测试不平衡的场景
+     * 场景：用户逐仓模式下爆仓，市场只能部分吃掉强平单，IF接管剩余部分
+     * 验证：1) 市场部分成交 2) IF接管剩余部分 3) 强平费用正确
+     */
+    @Test
+    public void testIsolatedLiquidationPartialMatchedWithIFTakeover_FundingFee() {
+        long userDeposit = 2000L;
+        long makerDeposit = 100000L;
+        int userSize = 10;
+        int makerFee = userSize * 10;
+        int takerFee = userSize * 20;
+        int liquidationFee = userSize * 50;
+        long openPrice = 10000;
+        long liquidationTriggerPrice = 9900;
+        long amountPerShard = 500000L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getHignPerformanceConfiguration(), processor);) {
+            // 停止自动强平，手动触发
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+
+            CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                    .symbolId(10000)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                    .baseCurrency(CURRENECY_XBT)
+                    .quoteCurrency(CURRENECY_USD)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .makerFee(10)
+                    .takerFee(20)
+                    .liquidationFee(50)
+                    .feeScaleK(0)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(10)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .build();
+            container.addSymbol(spec);
+            container.addCurrency(spec.baseCurrency, 0);
+            container.addCurrency(spec.quoteCurrency, 0);
+            container.initMarkPrice(spec.symbolId, (int) openPrice);
+
+            // 创建用户
+            long loser = UID_1;  // 将被强平的用户
+            long maker = UID_2;  // 提供流动性的用户
+
+            container.createUserWithSpecificMoney(loser, userDeposit, quoteId);
+            container.createUserWithSpecificMoney(maker, makerDeposit, quoteId);
+            container.createUserWithSpecificMoney(UID_3, makerDeposit, quoteId);
+
+            // 给IF注入初始资金，用于接管
+            // 给每个分片的IF注入资金
+            List<LiquidationEngine> engines = container.getExchangeCore().getLiquidationEngines();
+            for (LiquidationEngine engine : engines) {
+                LiquidationService service = ReflectionUtils.extractField(
+                        LiquidationEngine.class,
+                        engine,
+                        "liquidationService"
+                );
+                // 平均分配资金到各分片
+                service.creditLiquidationFee(spec.symbolId, amountPerShard);
+                log.debug("Added {} to IF balance for symbol {} in shard", amountPerShard, quoteId);
+            }
+
+            container.createBidWithOrderId(30001L, loser, userSize, openPrice, spec.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(30002L, maker, userSize, openPrice, spec.symbolId, MarginMode.CROSS);
+
+            // 验证开仓成功
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is((long) userSize));
+            });
+
+            long loserBalanceBeforeLiquidation = container.getUserProfile(loser).getAccounts().get(quoteId);
+            log.info("强平前用户余额: {}", loserBalanceBeforeLiquidation);
+
+            // 获取IF强平前余额
+            long ifBalanceBeforeLiquidation = container.getIFBalance(spec.symbolId, quoteId);
+            assertThat(ifBalanceBeforeLiquidation, is(amountPerShard * 2));
+            log.info("强平前IF余额: {}", ifBalanceBeforeLiquidation);
+
+            log.info("步骤2: 价格下跌到触发强平");
+            container.updateCurrentPriceTo((int) liquidationTriggerPrice, spec.symbolId, quoteId);
+
+            int marketCanTake = 5;
+            log.info("步骤3: Maker 只挂部分买单 (只能吃掉{}张)", marketCanTake);
+            container.createBidWithOrderId(30003L, UID_3, marketCanTake, liquidationTriggerPrice, spec.symbolId, MarginMode.CROSS);
+
+            log.info("步骤4: 手动触发强平");
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+
+            // 等待强平和IF接管完成 - 需要更长时间
+            LatencyTools.waitForCondition(150, () -> {
+                try {
+                    return container.getUserProfile(loser).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            log.info("步骤5: 验证强平结果");
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                // 10手强平单, 5个被市场UID_3吃掉了, 剩余走了IF。被市场吃掉的部分要收强平fee
+                long liqFee = liquidationFee / 2;
+                //  市场价格从10000 -> 9900 10手, profit = -100 * 10 = -10000
+                long profit = -1000L;
+                assertThat(profile.getAccounts().get(quoteId), is(userDeposit - makerFee - liqFee + profit ));
+            });
+
+            // 验证用户余额变化
+            long loserBalanceAfterLiquidation = container.getUserProfile(loser).getAccounts().get(quoteId);
+            log.info("强平后用户余额: {}", loserBalanceAfterLiquidation);
+
+            // 验证IF余额增加（收到强平费）
+            long ifBalanceAfterLiquidation = container.getIFBalance(spec.symbolId, quoteId);
+            log.info("强平后IF余额: {}", ifBalanceAfterLiquidation);
+            // IF吃掉了5手UID_1的强平(5 * 9900), 又收取了5手强平手续费(5 * 50)
+            assertThat(ifBalanceAfterLiquidation, is(amountPerShard * 2 - 5 * liquidationTriggerPrice + 5 * 50L));
+//            assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(),  is(true));
+
+            // loser被IF接管, 仓位为0, funding settlement对其无影响
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            // loser1的对手方maker此时仓位为1, 为做空, funding settlement后profit应增加
+            container.validateUserState(maker, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(0L));
+            });
+
+            container.validateUserState(UID_3, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(0L));
+            });
+
+            // 做多用户19000L, funding settlement后profit应该减少
+            container.validateUserState(UPDATE_PRICE_USER1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(0L));
+            });
+            // 做空用户19001L, funding settlement后profit应该增多
+            container.validateUserState(UPDATE_PRICE_USER2, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(0L));
+            });
+
+            // 发送settlement命令
+            // 执行资金费率: 0.01% = 1 / 10000
+            long fundingRate = 1;
+            long rateScale = 10000;
+            container.submitCommandSync(ApiSettleFundingFees.builder()
+                    .symbol(spec.symbolId)
+                    .action(OrderAction.BID)
+                    .fundingRate(fundingRate)
+                    .rateScaleK(rateScale)
+                    .transactionId(9999)
+                    .build(), CommandResultCode.SUCCESS);
+
+            // check profit
+            container.validateUserState(loser, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+            });
+
+            container.validateUserState(maker, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(7L));
+            });
+
+            container.validateUserState(UID_3, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-4L));
+            });
+
+            container.validateUserState(UPDATE_PRICE_USER1, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-9L));
+            });
+
+            container.validateUserState(UPDATE_PRICE_USER2, profile -> {
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(6L));
+            });
+
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 

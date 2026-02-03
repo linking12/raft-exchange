@@ -117,6 +117,16 @@ public final class OrderCommand implements IOrder {
      */
     public ADLUserPosition[] adlUserPositionsByShard;
 
+    /**
+     * 【注意并发】资金费率支付方收取的总金额，按shard分组；用数组维护，下标是shardId。
+     */
+    public long[] fundingPayAmountByShard;
+
+    /**
+     * 【注意并发】资金费率接收方的总名义价值，按shard分组；用数组维护，下标是shardId。
+     */
+    public long[] fundingRecvNotionalByShard;
+
     // optional market data
     public L2MarketData marketData;
 
@@ -126,6 +136,40 @@ public final class OrderCommand implements IOrder {
 
     public boolean isReduceOnly() {
         return (orderFlags & FLAG_REDUCE_ONLY) != 0;
+    }
+
+    /**
+     * 是否会在 R2 产生延迟副作用
+     * @return
+     */
+    public boolean hasR2SideEffect() {
+        return command == OrderCommandType.PLACE_ORDER || command == OrderCommandType.CANCEL_ORDER ||
+                command == OrderCommandType.REDUCE_ORDER || command == OrderCommandType.CLOSE_POSITION ||
+                command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
+                command == OrderCommandType.AUTO_DELEVERAGING || command == OrderCommandType.SETTLE_FUNDINGFEES;
+    }
+
+    /**
+     * 执行前是否必须看到最终 R2（uid,symbol 级别指令）
+     * @return
+     */
+    public boolean needSyncR2ForUidSymbol() {
+        return (command == OrderCommandType.PLACE_ORDER && isReduceOnly()) ||
+                command == OrderCommandType.CLOSE_POSITION ||
+                command == OrderCommandType.LEVERAGE_ADJUSTMENT ||
+                command == OrderCommandType.MARGIN_ADJUSTMENT ||
+                command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
+                command == OrderCommandType.AUTO_DELEVERAGING;
+    }
+
+    /**
+     * 执行前是否必须看到最终 R2（symbol 级别指令）
+     * @return
+     */
+    public boolean needSyncR2ForSymbol() {
+        return command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
+                command == OrderCommandType.SETTLE_FUNDINGFEES ||
+                command == OrderCommandType.SETTLE_PNL;
     }
 
     public static OrderCommand newOrder(OrderType orderType, long orderId, long uid, long price, long reserveBidPrice, long size, OrderAction action) {

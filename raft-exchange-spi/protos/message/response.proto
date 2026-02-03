@@ -126,6 +126,7 @@ enum MatcherEventType {
     BINARY_EVENT = 3;
     IF_EVENT = 4;
     ADL_EVENT = 5;
+    FUNDING_EVENT = 6;
 }
 
 // Message for MatcherTradeEvent

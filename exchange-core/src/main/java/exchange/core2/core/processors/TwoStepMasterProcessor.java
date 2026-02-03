@@ -21,6 +21,7 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.set.mutable.primitive.LongHashSet;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -103,7 +104,8 @@ public final class TwoStepMasterProcessor implements EventProcessor {
 
         long currentSequenceGroup = 0;
 
-        boolean prevLiquidationCmd = false;
+        LongHashSet pendingR2Symbols = new LongHashSet();
+        LongHashSet pendingR2UidSymbols = new LongHashSet(); // (uid, symbol)
 
         // wait until slave processor has instructed to run
         while (!slaveProcessor.isRunning()) {
@@ -125,23 +127,27 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                         if (cmd.eventsGroup != currentSequenceGroup) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                             currentSequenceGroup = cmd.eventsGroup;
+                            pendingR2Symbols.clear();
+                            pendingR2UidSymbols.clear();
                         }
                         /**
                          * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在这些cmd执行前，需要让R2先执行完
                          */
-                        else if (cmd.command == OrderCommandType.LEVERAGE_ADJUSTMENT || cmd.command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
-                                cmd.command == OrderCommandType.CLOSE_POSITION
-                                // 上一个是普通，这一个是强平流
-                                || (!prevLiquidationCmd && cmd.command.isLiquidationFlowCommand())
-                                // 上一个是强平流，这一个是普通
-                                || (prevLiquidationCmd && !cmd.command.isLiquidationFlowCommand())) {
+                        if (cmd.needSyncR2ForSymbol() && pendingR2Symbols.remove(cmd.symbol)) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                         }
-                        // 更新“上一条是否是强平流”
-                        prevLiquidationCmd = cmd.command.isLiquidationFlowCommand();
+                        if (cmd.needSyncR2ForUidSymbol() && pendingR2UidSymbols.remove(uidSymbolKey(cmd.uid, cmd.symbol))) {
+                            publishProgressAndTriggerSlaveProcessor(nextSequence);
+                        }
 
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
                         nextSequence++;
+
+                        //  标记 R2 sideEffect
+                        if (cmd.hasR2SideEffect()) {
+                            pendingR2Symbols.add(cmd.symbol);
+                            pendingR2UidSymbols.add(uidSymbolKey(cmd.uid, cmd.symbol));
+                        }
 
                         if (forcedPublish) {
                             sequence.set(nextSequence - 1);
@@ -169,6 +175,10 @@ public final class TwoStepMasterProcessor implements EventProcessor {
             }
 
         }
+    }
+
+    private long uidSymbolKey(long uid, int symbol) {
+        return (uid << 32) | (symbol & 0xffffffffL);
     }
 
     private void publishProgressAndTriggerSlaveProcessor(final long nextSequence) {

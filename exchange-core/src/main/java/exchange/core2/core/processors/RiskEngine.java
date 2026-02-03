@@ -72,6 +72,7 @@ import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesMarshallable;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
+import org.eclipse.collections.impl.map.mutable.primitive.ObjectLongHashMap;
 
 /**
  * Stateful risk engine
@@ -466,9 +467,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     cmd.resultCode = CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE;
                     return false;
                 }
-                settleFundingFees(cmd);
+                collectFundingFees(cmd);
                 if (shardId == 0) {
-                    cmd.resultCode = CommandResultCode.SUCCESS;
+                    cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
                 }
                 return false;
             }
@@ -1134,7 +1135,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final UserProfile takerUp = uidForThisHandler(cmd.uid) ? userProfileService.getUserProfileOrAddSuspended(cmd.uid) : null;
 
                 // for margin-mode symbols also resolve position record
-                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.getPositionRecordOrThrowEx(takerUp.createPositionsKey(symbol, cmd.action, cmd.command)) : null;
+                final SymbolPositionRecord takerSpr = (takerUp != null) ? takerUp.positions.get(takerUp.createPositionsKey(symbol, cmd.action, cmd.command)) : null;
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
@@ -1144,6 +1145,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         handleIFTakeover(cmd, mte);
                     } else if (cmd.command == OrderCommandType.AUTO_DELEVERAGING) {
                         handleADLRelease(cmd, mte, spec, currencySpec);
+                    } else if (cmd.command == OrderCommandType.SETTLE_FUNDINGFEES) {
+                        handleSettleFundingFees(cmd, mte);
                     } else {
                         handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
                     }
@@ -1206,28 +1209,37 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     /**
      * 永续合约计算fundingFee，多头给空头或者空头给多头
-     * 无需跨分片协调：因为多空仓位总是对等，每个分片按自己视角加减同一金额，整体上是对称操作，系统资金不失衡。
-     * 无精度尾差：资金费率都是整数，不存在浮点精度误差；long的向下取整，对称场景下（多空相等）是彼此抵消的。
      */
-    private void settleFundingFees(OrderCommand cmd) {
+    private void collectFundingFees(OrderCommand cmd) {
         final int symbol = cmd.symbol;
         final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
+        final long[] payAmountAndRecvNotional = new long[2];
         userProfileService.getUserProfiles().forEachValue(userProfile ->
             userProfile.processPositionRecord(symbol, position -> {
                 if (position.openVolume == 0) {
                     return; // 跳过空仓位
                 }
-                long fundingFee = position.openVolume * markPrice * cmd.price / cmd.size;
-                if (position.direction == PositionDirection.LONG) {
+                long notional = position.openVolume * markPrice;
+                long fundingFee = notional * cmd.price / cmd.size;
+                if (position.direction.isSameAsAction(cmd.action)) {
+                    payAmountAndRecvNotional[0] += fundingFee;
                     position.profit -= fundingFee;
+                    long balance = userProfile.accounts.get(position.currency);
+                    long locked = calculateLockedMargin(userProfile, position.currency);
+                    eventsHelper.sendFundingFeeEvent(cmd, position, balance - locked, locked);
                 } else {
-                    position.profit += fundingFee;
+                    payAmountAndRecvNotional[1] += notional;
                 }
-                long balance = userProfile.accounts.get(position.currency);
-                long locked = calculateLockedMargin(userProfile, position.currency);
-                eventsHelper.sendFundingFeeEvent(cmd, position, balance - locked, locked);
             })
         );
+        if (cmd.fundingPayAmountByShard == null) {
+            cmd.fundingPayAmountByShard = new long[numShards];
+        }
+        cmd.fundingPayAmountByShard[shardId] = payAmountAndRecvNotional[0];
+        if (cmd.fundingRecvNotionalByShard == null) {
+            cmd.fundingRecvNotionalByShard = new long[numShards];
+        }
+        cmd.fundingRecvNotionalByShard[shardId] = payAmountAndRecvNotional[1];
     }
 
     /**
@@ -1381,6 +1393,57 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 head = head.next;
             }
         }
+    }
+
+    private void handleSettleFundingFees(final OrderCommand cmd, final MatcherTradeEvent ev) {
+        if (ev.eventType != MatcherEventType.FUNDING_EVENT) {
+            return;
+        }
+        if (ev.matchedOrderUid != shardId) {
+            return;
+        }
+        final int symbol = cmd.symbol;
+        final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
+        final long shardRecvAmount = ev.price;
+        final long shardRecvNotional = cmd.fundingRecvNotionalByShard[shardId];
+
+        List<SymbolPositionRecord> receivers = FastList.newList();
+        userProfileService.getUserProfiles().forEachValue(userProfile ->
+                userProfile.processPositionRecord(symbol, position -> {
+                    if (position.openVolume == 0) return;
+                    if (position.direction.isSameAsAction(cmd.action)) return;
+                    receivers.add(position);
+                })
+        );
+
+        ObjectLongHashMap<SymbolPositionRecord> fundingFeesByPosition = ObjectLongHashMap.newMap();
+        long remain = shardRecvAmount;
+
+        for (SymbolPositionRecord pos : receivers) {
+            long notional = pos.openVolume * markPrice;
+            long fee = shardRecvAmount * notional / shardRecvNotional; // floor
+            if (fee > remain) {
+                fee = remain;
+            }
+            fundingFeesByPosition.put(pos, fee);
+            remain -= fee;
+        }
+        // 处理尾差
+        if (remain > 0) {
+            for (SymbolPositionRecord pos : receivers) {
+                if (remain <= 0) break;
+                fundingFeesByPosition.updateValue(pos, 0, fee -> fee + 1);
+                remain--;
+            }
+        }
+
+        fundingFeesByPosition.forEachKeyValue((pos, fee) -> {
+            pos.profit += fee;
+            UserProfile user = userProfileService.getUserProfile(pos.uid);
+            long balance = user.accounts.get(pos.currency);
+            long locked = calculateLockedMargin(user, pos.currency);
+            eventsHelper.sendFundingFeeEvent(cmd, pos, balance - locked, locked);
+        });
     }
 
     private void handleMatcherEventMargin(final OrderCommand cmd,

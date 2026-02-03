@@ -3,19 +3,16 @@ package exchange.core2.tests.unit;
 import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
-import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.liquidation.IFMatchingProcessor;
+import exchange.core2.core.processors.settlement.IFSettlementProcessor;
 import exchange.core2.core.processors.liquidation.LiquidationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,13 +28,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class IFMultiShardTest {
 
     private static final int SYMBOL = 10001;
-    private IFMatchingProcessor processor;
+    private IFSettlementProcessor processor;
     private OrderBookEventsHelper eventsHelper;
 
     @BeforeEach
     void setUp() {
         eventsHelper = new OrderBookEventsHelper(() -> new MatcherTradeEvent());
-        processor = new IFMatchingProcessor(eventsHelper);
+        processor = new IFSettlementProcessor(eventsHelper);
     }
 
     // ========== 多分片均衡分配测试 ==========

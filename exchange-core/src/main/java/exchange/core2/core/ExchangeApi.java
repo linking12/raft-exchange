@@ -640,6 +640,7 @@ public final class ExchangeApi {
         cmd.timestamp = api.timestamp;
         cmd.orderId = api.transactionId;
         cmd.symbol = api.symbol;
+        cmd.action = api.action;
         cmd.price = api.fundingRate;
         cmd.size = api.rateScaleK;
         cmd.resultCode = CommandResultCode.NEW;

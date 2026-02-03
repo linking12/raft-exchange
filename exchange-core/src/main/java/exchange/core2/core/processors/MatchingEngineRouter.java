@@ -32,8 +32,9 @@ import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
-import exchange.core2.core.processors.liquidation.ADLMatchingProcessor;
-import exchange.core2.core.processors.liquidation.IFMatchingProcessor;
+import exchange.core2.core.processors.settlement.ADLSettlementProcessor;
+import exchange.core2.core.processors.settlement.FundingFeeSettlementProcessor;
+import exchange.core2.core.processors.settlement.IFSettlementProcessor;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
 import lombok.Builder;
@@ -64,8 +65,9 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     // local objects pool for order books
     private final ObjectsPool objectsPool;
 
-    private final IFMatchingProcessor ifMatchingProcessor;
-    private final ADLMatchingProcessor adlMatchingProcessor;
+    private final IFSettlementProcessor ifSettlementProcessor;
+    private final ADLSettlementProcessor adlSettlementProcessor;
+    private final FundingFeeSettlementProcessor fundingFeeSettlementProcessor;
 
     // sharding by symbolId
     private final int shardId;
@@ -115,8 +117,9 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.sharedPool = sharedPool;
 
-        this.ifMatchingProcessor = new IFMatchingProcessor(eventsHelper);
-        this.adlMatchingProcessor = new ADLMatchingProcessor(eventsHelper);
+        this.ifSettlementProcessor = new IFSettlementProcessor(eventsHelper);
+        this.adlSettlementProcessor = new ADLSettlementProcessor(eventsHelper);
+        this.fundingFeeSettlementProcessor = new FundingFeeSettlementProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
@@ -173,13 +176,18 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         if (command == OrderCommandType.IF_TAKEOVER) {
             // only process IF cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
-                cmd.resultCode = ifMatchingProcessor.process(cmd);
+                cmd.resultCode = ifSettlementProcessor.process(cmd);
             }
 
         } else if (command == OrderCommandType.AUTO_DELEVERAGING) {
             // only process ADL cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
-                cmd.resultCode = adlMatchingProcessor.process(cmd);
+                cmd.resultCode = adlSettlementProcessor.process(cmd);
+            }
+
+        } else if (command == OrderCommandType.SETTLE_FUNDINGFEES) {
+            if (symbolForThisHandler(cmd.symbol)) {
+                cmd.resultCode = fundingFeeSettlementProcessor.process(cmd);
             }
 
         } else if (command == OrderCommandType.MOVE_ORDER

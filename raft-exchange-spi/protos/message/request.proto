@@ -124,8 +124,9 @@ message ApiAdjustMarkPrice {
 message ApiSettleFundingFees {
   int64 transactionId = 1;
   int32 symbol = 2;
-  int64 fundingRate = 3;
-  int64 rateScaleK = 4;
+  OrderAction action = 3;
+  int64 fundingRate = 4;
+  int64 rateScaleK = 5;
 }
 
 message ApiSettlePNL {
