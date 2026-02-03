@@ -47,7 +47,9 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
     final private IntLongHashMap openInterestLong;
     final private IntLongHashMap openInterestShort;
 
+    // currency -> balance
     private final IntLongHashMap ifBalances;
+    // symbol -> volume
     private final IntLongHashMap ifOpenInterestLong;
     private final IntLongHashMap ifOpenInterestShort;
 

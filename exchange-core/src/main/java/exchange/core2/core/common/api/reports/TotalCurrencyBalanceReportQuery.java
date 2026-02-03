@@ -135,7 +135,10 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         final IntLongHashMap ifOpenInterestLong = new IntLongHashMap();
         final IntLongHashMap ifOpenInterestShort = new IntLongHashMap();
         riskEngine.getLiquidationService().getNotionals().forEachKeyValue((symbol, notional) -> {
-            ifBalance.addToValue(symbol, notional.available);
+            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
+            CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
+            long fee = CoreArithmeticUtils.sizePriceToCurrencyScale(notional.available, spec, currencySpec);
+            ifBalance.addToValue(spec.quoteCurrency, fee);
         });
         riskEngine.getLiquidationService().getPositions().forEachValue(position -> {
             if (position.direction == PositionDirection.LONG) {
