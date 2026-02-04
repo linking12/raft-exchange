@@ -23,7 +23,7 @@
         <hessian.version>3.3.6</hessian.version>
         <metrics.version>4.0.2</metrics.version>
         <jmh.version>1.20</jmh.version>
-        <rocksdb.version>6.29.5</rocksdb.version><!-- 8.8.1 -> 6.29.5 -->
+        <rocksdb.version>8.8.1</rocksdb.version>
         <sofa.common.tools>2.1.1</sofa.common.tools><!-- 1.0.2 -> 2.1.1 -->
     </properties>
 
