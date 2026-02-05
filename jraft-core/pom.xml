@@ -25,6 +25,7 @@
         <jmh.version>1.20</jmh.version>
         <rocksdb.version>8.8.1</rocksdb.version>
         <sofa.common.tools>2.1.1</sofa.common.tools><!-- 1.0.2 -> 2.1.1 -->
+        <affinity.version>3.27ea1</affinity.version>
     </properties>
 
     <dependencies>
@@ -147,6 +148,11 @@
             <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-generator-annprocess</artifactId>
         </dependency>
+        <!-- affinity -->
+        <dependency>
+            <groupId>net.openhft</groupId>
+            <artifactId>affinity</artifactId>
+        </dependency>
     </dependencies>
 
     <dependencyManagement>
@@ -257,6 +263,12 @@
                 <artifactId>jmh-generator-annprocess</artifactId>
                 <version>${jmh.version}</version>
                 <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>net.openhft</groupId>
+                <artifactId>affinity</artifactId>
+                <version>${affinity.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

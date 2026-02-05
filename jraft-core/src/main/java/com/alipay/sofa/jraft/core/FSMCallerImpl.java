@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
@@ -48,7 +49,7 @@ import com.alipay.sofa.jraft.option.FSMCallerOptions;
 import com.alipay.sofa.jraft.storage.LogManager;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
-import com.alipay.sofa.jraft.util.NamedThreadFactory;
+import com.alipay.sofa.jraft.util.AffinityThreadFactory;
 import com.alipay.sofa.jraft.util.OnlyForTest;
 import com.alipay.sofa.jraft.util.Requires;
 import com.alipay.sofa.jraft.util.ThreadPoolsFactory;
@@ -173,9 +174,19 @@ public class FSMCallerImpl implements FSMCaller {
         notifyLastAppliedIndexUpdated(this.lastAppliedIndex.get());
         this.lastAppliedTerm = opts.getBootstrapId().getTerm();
 
+        /**
+         * @Modified 修改apply的线程为绑核线程 匹配原有的：
+         * new NamedThreadFactory("JRaft-FSMCaller-EventBus-", true)
+         */
+        AffinityThreadFactory affinityThreadFactory = new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "JRaft-FSMCaller-EventBus-");
+        ThreadFactory applyThreadFactory = r -> {
+            Thread thread = affinityThreadFactory.newThread(r);
+            thread.setDaemon(true);
+            return thread;
+        };
         final EventBusOptions eventBusOpts = new EventBusOptions().setMode(opts.getEventBusMode())
             .setName("JRaft-FSMCaller-EventBus").setBufferSize(opts.getDisruptorBufferSize())
-            .setThreadFactory(new NamedThreadFactory("JRaft-FSMCaller-EventBus-", true));
+            .setThreadFactory(applyThreadFactory);
         this.taskEventBus = opts.getEventBusFactory().create(eventBusOpts, new ApplyTaskHandler());
 
         this.error = new RaftException(EnumOutter.ErrorType.ERROR_TYPE_NONE);

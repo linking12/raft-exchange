@@ -1,0 +1,83 @@
+package com.alipay.sofa.jraft.util;
+
+import net.openhft.affinity.AffinityLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class AffinityThreadFactory implements ThreadFactory {
+
+    private static final Logger LOG = LoggerFactory.getLogger(AffinityThreadFactory.class);
+
+
+    // There is a bug it LMAX Disruptor, when configuring dependency graph as processors, not handlers.
+    // We have to track all threads requested from the factory to avoid duplicate reservations.
+    private final Set<Object> affinityReservations = new HashSet<>();
+
+    private final ThreadAffinityMode threadAffinityMode;
+
+    private static final AtomicInteger threadsCounter = new AtomicInteger();
+
+    private final String prefix;
+
+
+    public AffinityThreadFactory(ThreadAffinityMode threadAffinityMode, String prefix) {
+        this.threadAffinityMode = threadAffinityMode;
+        this.prefix = prefix;
+    }
+
+    @Override
+    public synchronized Thread newThread(Runnable runnable) {
+
+        // log.info("---- Requesting thread for {}", runnable);
+
+        if (threadAffinityMode == ThreadAffinityMode.THREAD_AFFINITY_DISABLE) {
+            return Executors.defaultThreadFactory().newThread(runnable);
+        }
+
+        if (affinityReservations.contains(runnable)) {
+            LOG.warn("Task {} was already pinned", runnable);
+//            return Executors.defaultThreadFactory().newThread(runnable);
+        }
+
+        affinityReservations.add(runnable);
+
+        return new Thread(() -> executePinned(runnable));
+
+    }
+
+    private void executePinned(Runnable runnable) {
+
+        try (final AffinityLock lock = getAffinityLockSync()) {
+
+            final int threadId = threadsCounter.incrementAndGet();
+            Thread.currentThread().setName(String.format(prefix + "Thread-AF-%d-cpu%d", threadId, lock.cpuId()));
+            LOG.debug("{} will be running on thread={} pinned to cpu {}",
+                    runnable, Thread.currentThread().getName(), lock.cpuId());
+            runnable.run();
+        } finally {
+            LOG.debug("Removing cpu lock/reservation from {}", runnable);
+            synchronized (this) {
+                affinityReservations.remove(runnable);
+            }
+        }
+    }
+
+    private synchronized AffinityLock getAffinityLockSync() {
+        return threadAffinityMode == ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_PHYSICAL_CORE
+                ? AffinityLock.acquireCore()
+                : AffinityLock.acquireLock();
+    }
+
+    public enum ThreadAffinityMode {
+        THREAD_AFFINITY_ENABLE_PER_PHYSICAL_CORE,
+        THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE,
+        THREAD_AFFINITY_DISABLE
+    }
+
+}
