@@ -9,7 +9,7 @@
 
 	<modules>
 		<module>exchange-core</module>
-        <module>jraft-core</module>
+		<module>jraft-core</module>
 		<module>raft-exchange-server</module>
 		<module>raft-exchange-client</module>
 		<module>raft-exchange-spi</module>
@@ -20,7 +20,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<exchange-core.version>1.0.0-SNAPSHOT</exchange-core.version>
-        <jraft-core.version>1.0.0-SNAPSHOT</jraft-core.version>
+		<jraft-core.version>1.4.0-fork-SNAPSHOT</jraft-core.version>
 		<exchange-spi.version>1.0.0-SNAPSHOT</exchange-spi.version>
 		<binance-infra.version>2.0.0-ALPHA-SNAPSHOT</binance-infra.version>
 		<grpc.version>1.78.0</grpc.version>
@@ -34,11 +34,11 @@
 				<artifactId>exchange-core</artifactId>
 				<version>${exchange-core.version}</version>
 			</dependency>
-            <dependency>
-                <groupId>com.binance.raft-exchange</groupId>
-                <artifactId>jraft-core</artifactId>
-                <version>${jraft-core.version}</version>
-            </dependency>
+			<dependency>
+				<groupId>com.alipay.sofa</groupId>
+				<artifactId>jraft-core</artifactId>
+				<version>${jraft-core.version}</version>
+			</dependency>
 			<dependency>
 				<groupId>com.binance.raft-exchange</groupId>
 				<artifactId>raft-exchange-spi</artifactId>
@@ -77,23 +77,23 @@
 		</repository>
 	</distributionManagement>
 
-    <build>
-        <plugins>
-            <plugin>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <configuration>
-                    <source>${java.version}</source>
-                    <target>${java.version}</target>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                            <version>1.18.38</version>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
+	<build>
+		<plugins>
+			<plugin>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.11.0</version>
+				<configuration>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+							<version>1.18.38</version>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
 </project>
