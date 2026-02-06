@@ -36,9 +36,8 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     private static final Counter serverQPS = Metrics.counter("raft.exchange.grpc.server.counter");
-    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99)
-            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
-            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99).minimumExpectedValue(Duration.ofMillis(1L))
+        .maximumExpectedValue(Duration.ofSeconds(3L)).publishPercentileHistogram(false).register(Metrics.globalRegistry);
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      *
@@ -56,8 +55,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private final AtomicInteger inflight = new AtomicInteger(0);
 
-    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate,
-        ServerCall<ReqT, RespT> call) {
+    public UniversalInterceptor(RaftClusterContainer raftClusterContainer, ServerCall.Listener<ReqT> delegate, ServerCall<ReqT, RespT> call) {
         super(delegate);
         this.raftClusterContainer = raftClusterContainer;
         this.offloadWorker = ThreadExecutorMap.currentExecutor();

@@ -113,7 +113,7 @@ public class RaftExchangeApplication implements CommandLineRunner, GracefulShutd
         properties.put("delivery.timeout.ms", 20 * 1000);
         properties.put("auto.include.jmx.reporter", false);
         properties.put("max.in.flight.requests.per.connection", 5); // 控制并发inflight请求数量
-        properties.put("enable.idempotence", false);  // 禁止幂等（重试/leader切换/broker挂掉导致重复，以及局部乱序）
+        properties.put("enable.idempotence", false); // 禁止幂等（重试/leader切换/broker挂掉导致重复，以及局部乱序）
         properties.put("connections.max.idle.ms", 60000); // 保持连接活跃1分钟
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
