@@ -20,8 +20,8 @@ public abstract class AbstractApiController {
     protected static final Logger LOG = LoggerFactory.getLogger(AbstractApiController.class);
 
     public static CompletableFuture<Supplier<byte[]>> callExchange(ApiCommand apiCommand) {
-        if (apiCommand instanceof ApiPersistState) {
-            return callExchange((ApiPersistState)apiCommand);
+        if (apiCommand instanceof ApiPersistState apiPersistState) {
+            return callExchange(apiPersistState);
         }
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
         // 序列化延迟到外部 gRPC 线程执行，exchange-core 线程只捕获 lambda 引用
