@@ -10,6 +10,7 @@ import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 public class SyncTradeMiscApiController extends AbstractApiController {
 
@@ -43,7 +44,7 @@ public class SyncTradeMiscApiController extends AbstractApiController {
         return callExchange(symbolCurrencyReportQuery, transferId);
     }
 
-    public static CompletableFuture<byte[]> resetFee(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> resetFee(ApiCommand apiCommand) {
         ApiResetFee apiResetFee = ApiResetFee.builder().build();
         apiResetFee.updateTimestamp(apiCommand.getTimestamp());
         LOG.debug("apiFeeReset applied, msg: {}", apiResetFee);

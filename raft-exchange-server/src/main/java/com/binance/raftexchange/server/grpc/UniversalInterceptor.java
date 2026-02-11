@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
@@ -87,15 +88,15 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         }
     }
 
-    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<byte[], Throwable> {
+    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<Supplier<byte[]>, Throwable> {
 
         @Override
-        public void accept(byte[] result, Throwable err) {
+        public void accept(Supplier<byte[]> result, Throwable err) {
             parent.handleComplete(result, start, err);
         }
     }
 
-    private void handleComplete(byte[] result, long start, Throwable err) {
+    private void handleComplete(Supplier<byte[]> result, long start, Throwable err) {
         try {
             if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
                 maybeRequestMore();
@@ -104,7 +105,8 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                 return;
             }
             if (result != null) {
-                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
+                // 序列化在 gRPC offloadWorker 线程执行
+                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result.get()));
                 return;
             }
             if (err instanceof CancellationException) {
@@ -152,15 +154,16 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
      * @param apiCommand
      * @return
      */
-    private CompletableFuture<byte[]> handle(byte[] apiCommand) {
+    private CompletableFuture<Supplier<byte[]>> handle(byte[] apiCommand) {
         if (!RoleChangeEventbus.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
-                return CompletableFuture.completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
+                byte[] noLeader = CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray();
+                return CompletableFuture.completedFuture(() -> noLeader);
             }
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
-            return CompletableFuture
-                .completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray());
+            byte[] needMove = CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray();
+            return CompletableFuture.completedFuture(() -> needMove);
         }
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
         return raftClusterContainer.requestConsensus(raftLog);

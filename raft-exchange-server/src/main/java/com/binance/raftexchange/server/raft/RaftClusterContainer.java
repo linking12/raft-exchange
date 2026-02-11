@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Timer;
@@ -96,8 +97,8 @@ public class RaftClusterContainer {
         return raftGroupService != null && raftGroupService.isStarted();
     }
 
-    public CompletableFuture<byte[]> requestConsensus(byte[] log) {
-        CompletableFuture<byte[]> future = new CompletableFuture<>();
+    public CompletableFuture<Supplier<byte[]>> requestConsensus(byte[] log) {
+        CompletableFuture<Supplier<byte[]>> future = new CompletableFuture<>();
         raftGroupService.getRaftNode().apply(new Task(ByteBuffer.wrap(log), new ReturnableClosure(future)));
         return future;
     }
@@ -159,14 +160,14 @@ public class RaftClusterContainer {
         private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.99)
                 .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
                 .publishPercentileHistogram(false).register(Metrics.globalRegistry);
-        private final CompletableFuture<byte[]> future;
+        private final CompletableFuture<Supplier<byte[]>> future;
         private final long submitTime = System.nanoTime();
 
-        public ReturnableClosure(CompletableFuture<byte[]> future) {
+        public ReturnableClosure(CompletableFuture<Supplier<byte[]>> future) {
             this.future = future;
         }
 
-        public void setResult(long beginTime, CompletableFuture<byte[]> result) {
+        public void setResult(long beginTime, CompletableFuture<Supplier<byte[]>> result) {
             result.whenComplete((res, ex) -> {
                 if (ex == null) {
                     future.complete(res);

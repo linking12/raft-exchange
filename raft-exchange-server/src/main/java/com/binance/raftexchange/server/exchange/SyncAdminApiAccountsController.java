@@ -14,13 +14,14 @@ import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 public class SyncAdminApiAccountsController extends AbstractApiController {
 
     /**
      * 创建用户
      */
-    public static CompletableFuture<byte[]> createUser(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> createUser(ApiCommand apiCommand) {
         ApiAddUser grpcApiAddUser = apiCommand.getAddUser();
         exchange.core2.core.common.api.ApiAddUser apiAddUser = exchange.core2.core.common.api.ApiAddUser.builder().uid(grpcApiAddUser.getUid()).build();
         apiAddUser.updateTimestamp(apiCommand.getTimestamp());
@@ -31,7 +32,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 增加资金
      */
-    public static CompletableFuture<byte[]> adjustBalance(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> adjustBalance(ApiCommand apiCommand) {
         ApiAdjustUserBalance grpcApiAdjustUserBalance = apiCommand.getAdjustBalance();
         exchange.core2.core.common.api.ApiAdjustUserBalance apiAdjustUserBalance = exchange.core2.core.common.api.ApiAdjustUserBalance.builder()
             .uid(grpcApiAdjustUserBalance.getUid()).currency(grpcApiAdjustUserBalance.getCurrency()).amount(grpcApiAdjustUserBalance.getAmount())
@@ -44,7 +45,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 禁用用户
      */
-    public static CompletableFuture<byte[]> suspendUser(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> suspendUser(ApiCommand apiCommand) {
         ApiSuspendUser grpcApiSuspendUser = apiCommand.getSuspendUser();
         exchange.core2.core.common.api.ApiSuspendUser apiSuspendUser =
             exchange.core2.core.common.api.ApiSuspendUser.builder().uid(grpcApiSuspendUser.getUid()).build();
@@ -56,7 +57,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 解禁用户
      */
-    public static CompletableFuture<byte[]> resumeUser(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> resumeUser(ApiCommand apiCommand) {
         ApiResumeUser grpcApiResumeUser = apiCommand.getResumeUser();
         exchange.core2.core.common.api.ApiResumeUser apiResumeUser =
             exchange.core2.core.common.api.ApiResumeUser.builder().uid(grpcApiResumeUser.getUid()).build();
@@ -68,7 +69,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 批量创建账户
      */
-    public static CompletableFuture<byte[]> batchAddAccounts(BatchAddAccountsCommand grpcBatchAddAccountsCommand) {
+    public static CompletableFuture<Supplier<byte[]>> batchAddAccounts(BatchAddAccountsCommand grpcBatchAddAccountsCommand) {
         Map<Long, AccountBalanceMap> usersMap = grpcBatchAddAccountsCommand.getUsersMap();
         LongObjectHashMap<IntLongHashMap> users = new LongObjectHashMap<>(usersMap.size());
         for (Map.Entry<Long, AccountBalanceMap> entry : usersMap.entrySet()) {
@@ -90,7 +91,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 调整持仓模式
      */
-    public static CompletableFuture<byte[]> adjustPositionMode(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> adjustPositionMode(ApiCommand apiCommand) {
         ApiAdjustPositionMode grpcApiAdjustPositionMode = apiCommand.getAdjustPositionMode();
         exchange.core2.core.common.api.ApiAdjustPositionMode apiAdjustPositionMode = exchange.core2.core.common.api.ApiAdjustPositionMode.builder()
             .uid(grpcApiAdjustPositionMode.getUid()).positionMode(exchange.core2.core.common.PositionMode.values()[grpcApiAdjustPositionMode.getPositionMode().getNumber()]).build();
@@ -102,7 +103,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     /**
      * 增加补充保证金
      */
-    public static CompletableFuture<byte[]> adjustMargin(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> adjustMargin(ApiCommand apiCommand) {
         ApiAdjustMargin grpcApiAdjustMargin = apiCommand.getAdjustMargin();
         exchange.core2.core.common.api.ApiAdjustMargin apiAdjustMargin = exchange.core2.core.common.api.ApiAdjustMargin.builder()
             .transactionId(grpcApiAdjustMargin.getTransactionId()).uid(grpcApiAdjustMargin.getUid()).symbol(grpcApiAdjustMargin.getSymbol())

@@ -32,6 +32,8 @@ import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiRecoverState;
 
+import java.util.function.Supplier;
+
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
@@ -42,7 +44,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         while (iter.hasNext()) {
             ByteBuffer data = iter.getData();
             Closure closure = iter.done();
-            CompletableFuture<byte[]> result = null;
+            CompletableFuture<Supplier<byte[]>> result = null;
             long startTime = System.nanoTime();
             try {
                 result = apply(data);
@@ -59,9 +61,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         }
     }
 
-    private CompletableFuture<byte[]> apply(ByteBuffer data) throws Exception {
+    private CompletableFuture<Supplier<byte[]>> apply(ByteBuffer data) throws Exception {
         GeneratedMessageV3 grpcMessage = SerializeHelper.deserializeWithType(data);
-        CompletableFuture<byte[]> result = null;
+        CompletableFuture<Supplier<byte[]>> result = null;
         if (grpcMessage instanceof ApiCommand) {
             ApiCommand apiCommand = (ApiCommand)grpcMessage;
             ApiCommand.CommandCase commandCase = apiCommand.getCommandCase();
@@ -132,8 +134,8 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         return result;
     }
 
-    private CompletableFuture<byte[]> processBinaryDataCommand(BinaryDataCommand binaryDataCommand) {
-        CompletableFuture<byte[]> result = null;
+    private CompletableFuture<Supplier<byte[]>> processBinaryDataCommand(BinaryDataCommand binaryDataCommand) {
+        CompletableFuture<Supplier<byte[]>> result = null;
         BinaryDataCommand.CommandCase commandCase = binaryDataCommand.getCommandCase();
         switch (commandCase) {
             case ADD_ACCOUNTS:

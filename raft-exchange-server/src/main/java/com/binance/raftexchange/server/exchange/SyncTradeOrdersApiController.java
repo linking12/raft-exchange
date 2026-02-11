@@ -12,13 +12,14 @@ import com.binance.raftexchange.stubs.request.ApiReduceOrder;
 import com.binance.raftexchange.stubs.response.CommandResult;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 public class SyncTradeOrdersApiController extends AbstractApiController {
 
     /**
      * 获取OrderBook
      */
-    public static CompletableFuture<byte[]> getOrderBook(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> getOrderBook(ApiCommand apiCommand) {
         ApiOrderBookRequest grpcApiOrderBookRequest = apiCommand.getOrderBookRequest();
         exchange.core2.core.common.api.ApiOrderBookRequest apiOrderBookRequest = exchange.core2.core.common.api.ApiOrderBookRequest.builder()
             .symbol(grpcApiOrderBookRequest.getSymbol()).size(grpcApiOrderBookRequest.getSize()).build();
@@ -37,7 +38,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 下单
      */
-    public static CompletableFuture<byte[]> placeOrder(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> placeOrder(ApiCommand apiCommand) {
         ApiPlaceOrder grpcApiPlaceOrder = apiCommand.getPlaceOrder();
         exchange.core2.core.common.api.ApiPlaceOrder apiPlaceOrder =
             exchange.core2.core.common.api.ApiPlaceOrder.builder().price(grpcApiPlaceOrder.getPrice()).size(grpcApiPlaceOrder.getSize())
@@ -53,7 +54,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 修改订单
      */
-    public static CompletableFuture<byte[]> moveOrder(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> moveOrder(ApiCommand apiCommand) {
         ApiMoveOrder grpcApiMoveOrder = apiCommand.getMoveOrder();
         exchange.core2.core.common.api.ApiMoveOrder apiMoveOrder = exchange.core2.core.common.api.ApiMoveOrder.builder().orderId(grpcApiMoveOrder.getOrderId())
             .newPrice(grpcApiMoveOrder.getNewPrice()).uid(grpcApiMoveOrder.getUid()).symbol(grpcApiMoveOrder.getSymbol()).build();
@@ -64,7 +65,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 撤单
      */
-    public static CompletableFuture<byte[]> cancelOrder(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> cancelOrder(ApiCommand apiCommand) {
         ApiCancelOrder grpcApiCancelOrder = apiCommand.getCancelOrder();
         exchange.core2.core.common.api.ApiCancelOrder apiCancelOrder = exchange.core2.core.common.api.ApiCancelOrder.builder()
             .orderId(grpcApiCancelOrder.getOrderId()).uid(grpcApiCancelOrder.getUid()).symbol(grpcApiCancelOrder.getSymbol()).build();
@@ -75,7 +76,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 改单
      */
-    public static CompletableFuture<byte[]> reduceOrder(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> reduceOrder(ApiCommand apiCommand) {
         ApiReduceOrder grpcApiReduceOrder = apiCommand.getReduceOrder();
         exchange.core2.core.common.api.ApiReduceOrder apiReduceOrder =
             exchange.core2.core.common.api.ApiReduceOrder.builder().orderId(grpcApiReduceOrder.getOrderId()).uid(grpcApiReduceOrder.getUid())
@@ -87,7 +88,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 调整杠杆
      */
-    public static CompletableFuture<byte[]> adjustLeverage(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> adjustLeverage(ApiCommand apiCommand) {
         ApiAdjustLeverage grpcApiAdjustLeverage = apiCommand.getAdjustLeverage();
         exchange.core2.core.common.api.ApiAdjustLeverage apiAdjustLeverage =
             exchange.core2.core.common.api.ApiAdjustLeverage.builder().uid(grpcApiAdjustLeverage.getUid())
@@ -99,7 +100,7 @@ public class SyncTradeOrdersApiController extends AbstractApiController {
     /**
      * 关仓
      */
-    public static CompletableFuture<byte[]> closePosition(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> closePosition(ApiCommand apiCommand) {
         ApiClosePosition grpcApiClosePosition = apiCommand.getClosePosition();
         exchange.core2.core.common.api.ApiClosePosition apiClosePosition =
                 exchange.core2.core.common.api.ApiClosePosition.builder().price(grpcApiClosePosition.getPrice()).size(grpcApiClosePosition.getSize())
