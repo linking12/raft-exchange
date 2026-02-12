@@ -10,7 +10,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
-import java.util.function.Supplier;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
@@ -20,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
+import com.binance.raftexchange.server.raft.RaftClusterContainer.RaftResponse;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.util.SerializeHelper;
@@ -37,8 +37,16 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     private static final Counter serverQPS = Metrics.counter("raft.exchange.grpc.server.counter");
-    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99).minimumExpectedValue(Duration.ofMillis(1L))
-        .maximumExpectedValue(Duration.ofSeconds(3L)).publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      *
@@ -73,30 +81,30 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     @Override
     public void onMessage(ReqT message) {
         serverQPS.increment();
+        byte[] bytes = null;
         try (InputStream stream = (InputStream)message) {
+            bytes = readAll(stream);
             long start = System.nanoTime();
-            /**
-             * @formatter off
-             */
-            handle(readAll(stream)).whenCompleteAsync(new TimedHandler(this, start), offloadWorker);
-            /**
-             * @formatter on
-             */
+            handle(bytes).whenCompleteAsync(new TimedHandler(this, start), offloadWorker);
         } catch (Exception e) {
             // 不应该到这里
-            throw new RuntimeException(e);
+            LOGGER.error("Unexpected error in onMessage, closing stream, commandFieldNumber={}, payloadSize={}",
+                    bytes != null ? commandFieldNumber(bytes) : -1,
+                    bytes != null ? bytes.length : -1, e);
+            halfClose.set(true);
+            call.close(Status.INTERNAL.withDescription(e.getMessage()).withCause(e), new Metadata());
         }
     }
 
-    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<Supplier<byte[]>, Throwable> {
+    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<RaftResponse, Throwable> {
 
         @Override
-        public void accept(Supplier<byte[]> result, Throwable err) {
+        public void accept(RaftResponse result, Throwable err) {
             parent.handleComplete(result, start, err);
         }
     }
 
-    private void handleComplete(Supplier<byte[]> result, long start, Throwable err) {
+    private void handleComplete(RaftResponse result, long start, Throwable err) {
         try {
             if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
                 maybeRequestMore();
@@ -105,8 +113,13 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                 return;
             }
             if (result != null) {
+                // raft/exchange metric 集中在此记录
+                if (result.raftLatencyNanos() > 0) {
+                    raftTimer.record(result.raftLatencyNanos(), TimeUnit.NANOSECONDS);
+                    exchangeTimer.record(result.exchangeLatencyNanos(), TimeUnit.NANOSECONDS);
+                }
                 // 序列化在 gRPC offloadWorker 线程执行
-                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result.get()));
+                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result.serializer().get()));
                 return;
             }
             if (err instanceof CancellationException) {
@@ -154,16 +167,16 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
      * @param apiCommand
      * @return
      */
-    private CompletableFuture<Supplier<byte[]>> handle(byte[] apiCommand) {
+    private CompletableFuture<RaftResponse> handle(byte[] apiCommand) {
         if (!RoleChangeEventbus.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
                 byte[] noLeader = CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray();
-                return CompletableFuture.completedFuture(() -> noLeader);
+                return CompletableFuture.completedFuture(new RaftResponse(() -> noLeader, 0, 0));
             }
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
             byte[] needMove = CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray();
-            return CompletableFuture.completedFuture(() -> needMove);
+            return CompletableFuture.completedFuture(new RaftResponse(() -> needMove, 0, 0));
         }
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
         return raftClusterContainer.requestConsensus(raftLog);

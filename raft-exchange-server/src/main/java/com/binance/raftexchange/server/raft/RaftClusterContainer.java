@@ -2,7 +2,6 @@ package com.binance.raftexchange.server.raft;
 
 import java.io.File;
 import java.nio.ByteBuffer;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -10,8 +9,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-import io.micrometer.core.instrument.Metrics;
-import io.micrometer.core.instrument.Timer;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,8 +94,8 @@ public class RaftClusterContainer {
         return raftGroupService != null && raftGroupService.isStarted();
     }
 
-    public CompletableFuture<Supplier<byte[]>> requestConsensus(byte[] log) {
-        CompletableFuture<Supplier<byte[]>> future = new CompletableFuture<>();
+    public CompletableFuture<RaftResponse> requestConsensus(byte[] log) {
+        CompletableFuture<RaftResponse> future = new CompletableFuture<>();
         raftGroupService.getRaftNode().apply(new Task(ByteBuffer.wrap(log), new ReturnableClosure(future)));
         return future;
     }
@@ -153,30 +150,27 @@ public class RaftClusterContainer {
         return new RaftNode(leaderId.getIp(), getGrpcPort(leaderId.getIp()), RaftNode.NodeType.LEADER);
     }
 
+    /**
+     * 携带 Supplier（延迟序列化）和预计算的 raft/exchange 耗时，传递到 gRPC 层统一记录 metric
+     */
+    public record RaftResponse(Supplier<byte[]> serializer, long raftLatencyNanos, long exchangeLatencyNanos) {}
+
     public static class ReturnableClosure implements Closure {
-        private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.99)
-                .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
-                .publishPercentileHistogram(false).register(Metrics.globalRegistry);
-        private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.99)
-                .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
-                .publishPercentileHistogram(false).register(Metrics.globalRegistry);
-        private final CompletableFuture<Supplier<byte[]>> future;
+        private final CompletableFuture<RaftResponse> future;
         private final long submitTime = System.nanoTime();
 
-        public ReturnableClosure(CompletableFuture<Supplier<byte[]>> future) {
+        public ReturnableClosure(CompletableFuture<RaftResponse> future) {
             this.future = future;
         }
 
         public void setResult(long beginTime, CompletableFuture<Supplier<byte[]>> result) {
-            result.whenComplete((res, ex) -> {
+            result.whenComplete((supplier, ex) -> {
                 if (ex == null) {
-                    future.complete(res);
+                    long now = System.nanoTime();
+                    future.complete(new RaftResponse(supplier, now - submitTime, now - beginTime));
                 } else {
                     future.completeExceptionally(ex);
                 }
-                long now = System.nanoTime();
-                raftTimer.record(now - submitTime, TimeUnit.NANOSECONDS);
-                exchangeTimer.record(now - beginTime, TimeUnit.NANOSECONDS);
             });
         }
 
