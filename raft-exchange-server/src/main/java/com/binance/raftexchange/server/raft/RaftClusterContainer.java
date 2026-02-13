@@ -29,6 +29,7 @@ import com.alipay.sofa.jraft.option.NodeOptions;
 import com.alipay.sofa.jraft.option.RaftOptions;
 import com.alipay.sofa.jraft.option.ReadOnlyOption;
 import com.alipay.sofa.jraft.util.Utils;
+import com.alipay.sofa.jraft.util.concurrent.EventBusMode;
 import com.binance.platform.common.EnvUtil;
 
 public class RaftClusterContainer {
@@ -71,6 +72,7 @@ public class RaftClusterContainer {
         raftOptions.setMaxAppendBufferSize(256 * 1024); // 物理聚合，默认256k。我们的指令比较小，128的ApplyBatch配256k比较好。
         raftOptions.setSync(false); // 多副本模式下，log已经广播确认了，不需要同步落盘。只有所有节点都断电才会丢失log。
         raftOptions.setOpenStatistics(false); // 关闭 rocksdb statistics，这个要用Kill -s SIGUSR2才能触发。
+        raftOptions.setEventBusMode(EventBusMode.MPSC);
         nodeOptions.setRaftOptions(raftOptions);
         nodeOptions.setInitialConf(conf);
         int snapshotIntervalSecs = Integer.parseInt(System.getProperty("raft-exchange.snapshot.interval", "28800")); // 8h
