@@ -80,7 +80,6 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onMessage(ReqT message) {
-        serverQPS.increment();
         byte[] bytes = null;
         try (InputStream stream = (InputStream)message) {
             bytes = readAll(stream);
@@ -106,6 +105,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     private void handleComplete(RaftResponse result, long start, Throwable err) {
         try {
+            serverQPS.increment();
             if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
                 maybeRequestMore();
             }
