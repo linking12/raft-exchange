@@ -38,7 +38,7 @@ import java.util.function.Supplier;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
-    private static final int PARALLEL_THRESHOLD = 32;
+    private static final int PARALLEL_THRESHOLD = 128;
 
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
     private final SnapshotHelper snapshotHelper = new SnapshotHelper();
