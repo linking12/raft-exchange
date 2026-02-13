@@ -29,6 +29,8 @@ import com.alipay.sofa.jraft.option.ReadOnlyOption;
 import com.alipay.sofa.jraft.util.Utils;
 import com.alipay.sofa.jraft.util.concurrent.EventBusMode;
 import com.binance.platform.common.EnvUtil;
+import com.binance.raftexchange.server.util.SerializeHelper;
+import com.google.protobuf.GeneratedMessageV3;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
@@ -58,8 +60,7 @@ public class RaftClusterContainer {
         PeerId selfPeer = JRaftUtils.getPeerId(raftCurrentMember);
         Configuration conf = JRaftUtils.getConfiguration(raftMemberCluster);
         NodeOptions nodeOptions = new NodeOptions();
-        int applyBatch = 128;
-        nodeOptions.setFsm(new ExchangeStateMachine(applyBatch));
+        nodeOptions.setFsm(new ExchangeStateMachine());
         nodeOptions.setLogUri(dataPath + File.separator + "log");
         nodeOptions.setSnapshotUri(dataPath + File.separator + "snapshot");
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "meta");
@@ -67,7 +68,7 @@ public class RaftClusterContainer {
         raftOptions.setDisruptorBufferSize(8 * 1024 * 1024); // 撮合5MT/s，buffer给到8M条，每条log(用户数据[ApiCommand]+元数据[idx term
                                                              // type])大概是128字节，大约1G内存
         raftOptions.setReadOnlyOptions(ReadOnlyOption.ReadOnlyLeaseBased);
-        raftOptions.setApplyBatch(applyBatch); // 逻辑聚合，默认32
+        raftOptions.setApplyBatch(128); // 逻辑聚合，默认32
         raftOptions.setMaxAppendBufferSize(256 * 1024); // 物理聚合，默认256k。我们的指令比较小，128的ApplyBatch配256k比较好。
         raftOptions.setSync(false); // 多副本模式下，log已经广播确认了，不需要同步落盘。只有所有节点都断电才会丢失log。
         raftOptions.setOpenStatistics(false); // 关闭 rocksdb statistics，这个要用Kill -s SIGUSR2才能触发。
@@ -97,7 +98,17 @@ public class RaftClusterContainer {
 
     public CompletableFuture<RaftResponse> requestConsensus(byte[] log) {
         CompletableFuture<RaftResponse> future = new CompletableFuture<>();
-        raftGroupService.getRaftNode().apply(new Task(ByteBuffer.wrap(log), new ReturnableClosure(future)));
+        ByteBuffer data = ByteBuffer.wrap(log);
+        // Leader 提前反序列化, 传入 ReturnableClosure, onApply 时直接使用
+        GeneratedMessageV3 msg;
+        try {
+            msg = SerializeHelper.deserializeWithType(data);
+        } catch (Exception e) {
+            LOGGER.warn("Failed to pre-parse for leader fast path", e);
+            future.completeExceptionally(e);
+            return future;
+        }
+        raftGroupService.getRaftNode().apply(new Task(data, new ReturnableClosure(future, msg)));
         return future;
     }
 
@@ -158,11 +169,16 @@ public class RaftClusterContainer {
 
     public static class ReturnableClosure implements Closure {
         private final CompletableFuture<RaftResponse> future;
-        private final long submitTime = System.nanoTime();
+        private final long submitTime;
+        private final GeneratedMessageV3 message;
 
-        public ReturnableClosure(CompletableFuture<RaftResponse> future) {
+        public ReturnableClosure(CompletableFuture<RaftResponse> future, GeneratedMessageV3 message) {
             this.future = future;
+            this.submitTime = System.nanoTime();
+            this.message = message;
         }
+
+        public GeneratedMessageV3 message() { return message; }
 
         public void setResult(long beginTime, CompletableFuture<Supplier<byte[]>> result) {
             result.whenComplete((supplier, ex) -> {

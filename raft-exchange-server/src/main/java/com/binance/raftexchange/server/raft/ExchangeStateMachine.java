@@ -1,11 +1,8 @@
 package com.binance.raftexchange.server.raft;
 
-import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,85 +35,33 @@ import java.util.function.Supplier;
 
 public class ExchangeStateMachine extends StateMachineAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(ExchangeStateMachine.class);
-    private static final int PARALLEL_THRESHOLD = 128;
 
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
     private final SnapshotHelper snapshotHelper = new SnapshotHelper();
 
-    private ByteBuffer[] dataArr;
-    private Closure[] closureArr;
-    private GeneratedMessageV3[] msgArr;
-
-    public ExchangeStateMachine(int applyBatch) {
-        dataArr = new ByteBuffer[applyBatch];
-        closureArr = new Closure[applyBatch];
-        msgArr = new GeneratedMessageV3[applyBatch];
-    }
-
     @Override
     public void onApply(Iterator iter) {
-        // Phase 1: collect all entries into pre-allocated arrays
-        int size = 0;
         while (iter.hasNext()) {
-            if (size == dataArr.length) {
-                // Extremely rare: grow once (1.5x), keep arrays in sync
-                final int newCap = dataArr.length + (dataArr.length >> 1);
-                dataArr = Arrays.copyOf(dataArr, newCap);
-                closureArr = Arrays.copyOf(closureArr, newCap);
-                msgArr = Arrays.copyOf(msgArr, newCap);
-                LOG.warn("onApply batch size exceeded {}, grew to {}", size, newCap);
+            Closure done = iter.done();
+            ReturnableClosure rc = (done instanceof ReturnableClosure) ? (ReturnableClosure) done : null;
+            long startTime = (rc != null) ? System.nanoTime() : 0L;
+            CompletableFuture<Supplier<byte[]>> result;
+            try {
+                GeneratedMessageV3 msg = (rc != null) ?
+                        rc.message() : // Leader fast path: 已解析 protobuf
+                        SerializeHelper.deserializeWithType(iter.getData()); // Follower path: 解析 ByteBuffer
+                result = apply(msg);
+            } catch (Throwable e) {
+                LOG.error("Fail to apply", e);
+                result = CompletableFuture.failedFuture(e);
             }
-            dataArr[size] = iter.getData();
-            closureArr[size] = iter.done();
-            size++;
+            if (done != null) {
+                if (rc != null) {
+                    rc.setResult(startTime, result);
+                }
+                done.run(Status.OK());
+            }
             iter.next();
-        }
-        if (size == 0) {
-            return;
-        }
-
-        // Phase 2: deserialize (parallel if batch is large enough)
-        if (size >= PARALLEL_THRESHOLD) {
-            IntStream.range(0, size).parallel().forEach(i -> msgArr[i] = deserialize(dataArr[i]));
-        } else {
-            for (int i = 0; i < size; i++) {
-                msgArr[i] = deserialize(dataArr[i]);
-            }
-        }
-
-        // Phase 3: sequential apply + setResult
-        for (int i = 0; i < size; i++) {
-            Closure closure = closureArr[i];
-            GeneratedMessageV3 msg = msgArr[i];
-            long startTime = System.nanoTime();
-            CompletableFuture<Supplier<byte[]>> result = null;
-            if (msg != null) {
-                try {
-                    result = apply(msg);
-                } catch (Throwable e) {
-                    LOG.error("Fail to apply", e);
-                }
-            }
-            if (closure != null) {
-                if (result != null && closure instanceof ReturnableClosure returnableClosure) {
-                    returnableClosure.setResult(startTime, result);
-                }
-                closure.run(Status.OK());
-            }
-        }
-
-        // Clear references to help GC
-        Arrays.fill(dataArr, 0, size, null);
-        Arrays.fill(closureArr, 0, size, null);
-        Arrays.fill(msgArr, 0, size, null);
-    }
-
-    private GeneratedMessageV3 deserialize(ByteBuffer data) {
-        try {
-            return SerializeHelper.deserializeWithType(data);
-        } catch (Exception e) {
-            LOG.error("Fail to deserialize", e);
-            return null;
         }
     }
 
@@ -243,6 +188,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
             if (!writer.addFile(fileName)) {
                 SnapshotHelper.cleanSnapshots(root, snapshotId);
                 done.run(new Status(RaftError.EIO, "Fail to save snapshot"));
+                return;
             }
         }
         done.run(Status.OK());
