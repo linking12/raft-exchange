@@ -1,5 +1,6 @@
 package com.binance.raftexchange.server.raft;
 
+import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -15,6 +16,7 @@ import com.alipay.sofa.jraft.error.RaftError;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
 import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
+import com.binance.raftexchange.server.exchange.GrpcCommandConverter;
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
@@ -30,6 +32,7 @@ import com.google.protobuf.GeneratedMessageV3;
 import exchange.core2.core.ExchangeApi;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiRecoverState;
+import exchange.core2.core.common.cmd.OrderCommand;
 
 import java.util.function.Supplier;
 
@@ -39,30 +42,100 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     private final AtomicLong leaderTerm = new AtomicLong(-1L);
     private final SnapshotHelper snapshotHelper = new SnapshotHelper();
 
+    // ---- batch apply pre-allocated arrays (FSMCaller is single-threaded, safe to reuse) ----
+    private static final int BATCH_CAPACITY = 1024;
+
+    private final exchange.core2.core.common.api.ApiCommand[] batchCommands = new exchange.core2.core.common.api.ApiCommand[BATCH_CAPACITY];
+    private final CompletableFuture<OrderCommand>[] batchFutures = new CompletableFuture[BATCH_CAPACITY];
+    private final ReturnableClosure[] batchClosures = new ReturnableClosure[BATCH_CAPACITY];
+    private final long[] startTimes = new long[BATCH_CAPACITY];
+
     @Override
     public void onApply(Iterator iter) {
+        int batchSize = 0;
+
         while (iter.hasNext()) {
             Closure done = iter.done();
             ReturnableClosure rc = (done instanceof ReturnableClosure) ? (ReturnableClosure) done : null;
             long startTime = (rc != null) ? System.nanoTime() : 0L;
-            CompletableFuture<Supplier<byte[]>> result;
+
             try {
                 GeneratedMessageV3 msg = (rc != null) ?
                         rc.message() : // Leader fast path: 已解析 protobuf
                         SerializeHelper.deserializeWithType(iter.getData()); // Follower path: 解析 ByteBuffer
-                result = apply(msg);
+
+                // Try to resolve as a batchable command
+                exchange.core2.core.common.api.ApiCommand exchangeCmd = GrpcCommandConverter.convert(msg);
+                if (exchangeCmd != null) {
+                    // Batchable: accumulate
+                    batchCommands[batchSize] = exchangeCmd;
+                    batchFutures[batchSize] = new CompletableFuture<>();
+                    batchClosures[batchSize] = rc;
+                    startTimes[batchSize] = startTime;
+                    batchSize++;
+                    // Flush if batch is full
+                    if (batchSize >= BATCH_CAPACITY) {
+                        flushBatch(batchSize);
+                        batchSize = 0;
+                    }
+                    iter.next();
+                    continue;
+                }
+
+                // Non-batchable: flush pending batch first, then process individually
+                if (batchSize > 0) {
+                    flushBatch(batchSize);
+                    batchSize = 0;
+                }
+                CompletableFuture<Supplier<byte[]>> result = apply(msg);
+                if (done != null) {
+                    if (rc != null) {
+                        rc.setResult(startTime, result);
+                    }
+                    done.run(Status.OK());
+                }
             } catch (Throwable e) {
                 LOG.error("Fail to apply", e);
-                result = CompletableFuture.failedFuture(e);
-            }
-            if (done != null) {
-                if (rc != null) {
-                    rc.setResult(startTime, result);
+                // Flush pending batch before handling error
+                if (batchSize > 0) {
+                    flushBatch(batchSize);
+                    batchSize = 0;
                 }
-                done.run(Status.OK());
+                if (done != null) {
+                    if (rc != null) {
+                        rc.setResult(startTime, CompletableFuture.failedFuture(e));
+                    }
+                    done.run(Status.OK());
+                }
             }
             iter.next();
         }
+
+        // ---- Flush remaining batch ----
+        if (batchSize > 0) {
+            flushBatch(batchSize);
+        }
+    }
+
+    private void flushBatch(int size) {
+        ExchangeApi api = ExchangeApiInstance.exchangeApi();
+        api.submitBatchAsync(batchCommands, batchFutures, size);
+
+        // Wire up futures to ReturnableClosures
+        for (int i = 0; i < size; i++) {
+            ReturnableClosure rc = batchClosures[i];
+            if (rc != null) {
+                long startTime = startTimes[i];
+                CompletableFuture<OrderCommand> future = batchFutures[i];
+                rc.setResult(startTime, future.thenApply(cmd -> () -> SerializeHelper.serializeToCommandResult(cmd)));
+                rc.run(Status.OK());
+            }
+        }
+
+        // Clear references for GC
+        Arrays.fill(batchCommands, 0, size, null);
+        Arrays.fill(batchFutures, 0, size, null);
+        Arrays.fill(batchClosures, 0, size, null);
     }
 
     private CompletableFuture<Supplier<byte[]>> apply(GeneratedMessageV3 grpcMessage) {
