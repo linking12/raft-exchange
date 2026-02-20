@@ -47,7 +47,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
     private final exchange.core2.core.common.api.ApiCommand[] batchCommands = new exchange.core2.core.common.api.ApiCommand[BATCH_CAPACITY];
     private final CompletableFuture<OrderCommand>[] batchFutures = new CompletableFuture[BATCH_CAPACITY];
-    private final ReturnableClosure[] batchClosures = new ReturnableClosure[BATCH_CAPACITY];
+    private final Closure[] batchClosures = new Closure[BATCH_CAPACITY];
     private final long[] startTimes = new long[BATCH_CAPACITY];
 
     @Override
@@ -70,7 +70,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                     // Batchable: accumulate
                     batchCommands[batchSize] = exchangeCmd;
                     batchFutures[batchSize] = new CompletableFuture<>();
-                    batchClosures[batchSize] = rc;
+                    batchClosures[batchSize] = done;
                     startTimes[batchSize] = startTime;
                     batchSize++;
                     // Flush if batch is full
@@ -123,12 +123,14 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
         // Wire up futures to ReturnableClosures
         for (int i = 0; i < size; i++) {
-            ReturnableClosure rc = batchClosures[i];
-            if (rc != null) {
-                long startTime = startTimes[i];
-                CompletableFuture<OrderCommand> future = batchFutures[i];
-                rc.setResult(startTime, future.thenApply(cmd -> () -> SerializeHelper.serializeToCommandResult(cmd)));
-                rc.run(Status.OK());
+            Closure done = batchClosures[i];
+            if (done != null) {
+                if (done instanceof ReturnableClosure rc) {
+                    long startTime = startTimes[i];
+                    CompletableFuture<OrderCommand> future = batchFutures[i];
+                    rc.setResult(startTime, future.thenApply(cmd -> () -> SerializeHelper.serializeToCommandResult(cmd)));
+                }
+                done.run(Status.OK());
             }
         }
 
@@ -139,7 +141,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
     }
 
     private CompletableFuture<Supplier<byte[]>> apply(GeneratedMessageV3 grpcMessage) {
-        CompletableFuture<Supplier<byte[]>> result = null;
+        CompletableFuture<Supplier<byte[]>> result;
         if (grpcMessage instanceof ApiCommand apiCommand) {
             ApiCommand.CommandCase commandCase = apiCommand.getCommandCase();
             switch (commandCase) {
@@ -203,14 +205,17 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                     result = SyncNoOpApiController.handleNoOp();
                     break;
                 default:
-                    LOG.warn("Unsupported ApiCommand: {}", commandCase);
+                    result = CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported ApiCommand: " + commandCase));
             }
+        } else {
+            result = CompletableFuture.failedFuture(
+                    new IllegalArgumentException("Unsupported grpcMessage: " + (grpcMessage == null ? "null" : grpcMessage.getClass().getName())));
         }
         return result;
     }
 
     private CompletableFuture<Supplier<byte[]>> processBinaryDataCommand(BinaryDataCommand binaryDataCommand) {
-        CompletableFuture<Supplier<byte[]>> result = null;
+        CompletableFuture<Supplier<byte[]>> result;
         BinaryDataCommand.CommandCase commandCase = binaryDataCommand.getCommandCase();
         switch (commandCase) {
             case ADD_ACCOUNTS:
@@ -223,7 +228,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 result = SyncAdminApiSymbolsController.batchAddCurrencies(binaryDataCommand.getAddCurrencies());
                 break;
             default:
-                LOG.warn("Unsupported BinaryDataCommand: {}", commandCase);
+                result = CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported BinaryDataCommand: " + commandCase));
         }
         return result;
     }

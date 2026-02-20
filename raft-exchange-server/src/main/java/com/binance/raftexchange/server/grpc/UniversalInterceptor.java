@@ -126,7 +126,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                 return;
             }
             LOGGER.error("exchange core error!", err);
-            call.close(Status.INTERNAL.withCause(err), new Metadata());
+            call.close(Status.INTERNAL.withDescription(err.getMessage()).withCause(err), new Metadata());
         } finally {
             long latency = System.nanoTime() - start;
             latencyTimer.record(latency, TimeUnit.NANOSECONDS);
