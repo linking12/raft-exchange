@@ -4,6 +4,7 @@ import com.binance.raftexchange.stubs.report.StateHashReportQuery;
 import com.binance.raftexchange.stubs.report.SymbolCurrencyReportQuery;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
 import com.binance.raftexchange.stubs.request.ApiCommand;
+import exchange.core2.core.common.api.ApiNop;
 import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.reports.StateHashReportResult;
 import exchange.core2.core.common.api.reports.SymbolCurrencyReportResult;
@@ -45,9 +46,19 @@ public class SyncTradeMiscApiController extends AbstractApiController {
     }
 
     public static CompletableFuture<Supplier<byte[]>> resetFee(ApiCommand apiCommand) {
+        LOG.debug("apiFeeReset applied");
+        return callExchange(convertResetFee(apiCommand));
+    }
+
+    public static exchange.core2.core.common.api.ApiResetFee convertResetFee(ApiCommand apiCommand) {
         ApiResetFee apiResetFee = ApiResetFee.builder().build();
         apiResetFee.updateTimestamp(apiCommand.getTimestamp());
-        LOG.debug("apiFeeReset applied, msg: {}", apiResetFee);
-        return callExchange(apiResetFee);
+        return apiResetFee;
+    }
+
+    public static exchange.core2.core.common.api.ApiNop convertNop(ApiCommand apiCommand) {
+        ApiNop apiNop = exchange.core2.core.common.api.ApiNop.builder().build();
+        apiNop.updateTimestamp(apiCommand.getTimestamp());
+        return apiNop;
     }
 }

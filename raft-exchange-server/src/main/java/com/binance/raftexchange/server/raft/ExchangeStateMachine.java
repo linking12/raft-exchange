@@ -16,7 +16,6 @@ import com.alipay.sofa.jraft.error.RaftError;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
 import com.binance.raftexchange.server.exchange.ExchangeApiInstance;
-import com.binance.raftexchange.server.exchange.GrpcCommandConverter;
 import com.binance.raftexchange.server.exchange.SyncAdminApiAccountsController;
 import com.binance.raftexchange.server.exchange.SyncAdminApiSymbolsController;
 import com.binance.raftexchange.server.exchange.SyncNoOpApiController;
@@ -65,7 +64,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                         SerializeHelper.deserializeWithType(iter.getData()); // Follower path: 解析 ByteBuffer
 
                 // Try to resolve as a batchable command
-                exchange.core2.core.common.api.ApiCommand exchangeCmd = GrpcCommandConverter.convert(msg);
+                exchange.core2.core.common.api.ApiCommand exchangeCmd = convertToExchangeCommand(msg);
                 if (exchangeCmd != null) {
                     // Batchable: accumulate
                     batchCommands[batchSize] = exchangeCmd;
@@ -138,6 +137,37 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         Arrays.fill(batchCommands, 0, size, null);
         Arrays.fill(batchFutures, 0, size, null);
         Arrays.fill(batchClosures, 0, size, null);
+    }
+
+    /**
+     * grpc对象转成exchange对象，方便批量提交；返回null则不走批量提交
+     * 对BINARY_DATA类型，因为它每次的slot都是动态的，不适合批量
+     */
+    private static exchange.core2.core.common.api.ApiCommand convertToExchangeCommand(GeneratedMessageV3 grpcMessage) {
+        if (!(grpcMessage instanceof ApiCommand apiCommand)) {
+            return null;
+        }
+        return switch (apiCommand.getCommandCase()) {
+            case PLACE_ORDER -> SyncTradeOrdersApiController.convertPlaceOrder(apiCommand);
+            case MOVE_ORDER -> SyncTradeOrdersApiController.convertMoveOrder(apiCommand);
+            case CANCEL_ORDER -> SyncTradeOrdersApiController.convertCancelOrder(apiCommand);
+            case REDUCE_ORDER -> SyncTradeOrdersApiController.convertReduceOrder(apiCommand);
+            case CLOSE_POSITION -> SyncTradeOrdersApiController.convertClosePosition(apiCommand);
+            case ORDER_BOOK_REQUEST -> SyncTradeOrdersApiController.convertOrderBookRequest(apiCommand);
+            case ADJUST_LEVERAGE -> SyncTradeOrdersApiController.convertAdjustLeverage(apiCommand);
+            case ADJUST_BALANCE -> SyncAdminApiAccountsController.convertAdjustBalance(apiCommand);
+            case ADD_USER -> SyncAdminApiAccountsController.convertAddUser(apiCommand);
+            case SUSPEND_USER -> SyncAdminApiAccountsController.convertSuspendUser(apiCommand);
+            case RESUME_USER -> SyncAdminApiAccountsController.convertResumeUser(apiCommand);
+            case ADJUST_POSITION_MODE -> SyncAdminApiAccountsController.convertAdjustPositionMode(apiCommand);
+            case ADJUST_MARGIN -> SyncAdminApiAccountsController.convertAdjustMargin(apiCommand);
+            case ADJUST_MARKPRICE -> SyncAdminApiSymbolsController.convertAdjustMarkPrice(apiCommand);
+            case SETTLE_FUNDING_FEES -> SyncAdminApiSymbolsController.convertSettleFundingFees(apiCommand);
+            case SETTLE_PNL -> SyncAdminApiSymbolsController.convertSettlePNL(apiCommand);
+            case RESET_FEE -> SyncTradeMiscApiController.convertResetFee(apiCommand);
+            case NOP -> SyncTradeMiscApiController.convertNop(apiCommand);
+            default -> null;
+        };
     }
 
     private CompletableFuture<Supplier<byte[]>> apply(GeneratedMessageV3 grpcMessage) {
