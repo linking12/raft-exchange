@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -84,7 +83,7 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         try (InputStream stream = (InputStream)message) {
             bytes = readAll(stream);
             long start = System.nanoTime();
-            handle(bytes).whenCompleteAsync(new TimedHandler(this, start), offloadWorker);
+            handle(bytes, new OffloadCallback(this, start));
         } catch (Exception e) {
             // 不应该到这里
             LOGGER.error("Unexpected error in onMessage, closing stream, commandFieldNumber={}, payloadSize={}",
@@ -95,11 +94,35 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
         }
     }
 
-    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<RaftResponse, Throwable> {
+    /**
+     * Single object that serves as both BiConsumer (callback from ResultsHandler thread)
+     * and Runnable (task posted to gRPC offloadWorker), eliminating extra allocations.
+     */
+    private static final class OffloadCallback implements BiConsumer<RaftResponse, Throwable>, Runnable {
 
+        private final UniversalInterceptor<?, ?> parent;
+        private final long start;
+        private RaftResponse result;
+        private Throwable err;
+
+        OffloadCallback(UniversalInterceptor<?, ?> parent, long start) {
+            this.parent = parent;
+            this.start = start;
+        }
+
+        // Called on ResultsHandler thread (or synchronously for non-leader redirect)
         @Override
         public void accept(RaftResponse result, Throwable err) {
+            this.result = result;
+            this.err = err;
+            parent.offloadWorker.execute(this); // this IS the Runnable — 0 extra alloc
+        }
+
+        // Executed on gRPC offloadWorker thread
+        @Override
+        public void run() {
             parent.handleComplete(result, start, err);
+            result = null; // help GC
         }
     }
 
@@ -162,24 +185,24 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     /**
-     * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换 这样可以节约一次序列化和反序列化开销 grpc直通exchange-core
-     *
-     * @param apiCommand
-     * @return
+     * Callback-based request handling — no CompletableFuture allocation.
+     * Non-leader redirect fires callback synchronously; leader path goes through raft consensus.
      */
-    private CompletableFuture<RaftResponse> handle(byte[] apiCommand) {
+    private void handle(byte[] apiCommand, BiConsumer<RaftResponse, Throwable> callback) {
         if (!RoleChangeEventbus.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
                 byte[] noLeader = CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray();
-                return CompletableFuture.completedFuture(new RaftResponse(() -> noLeader, 0, 0));
+                callback.accept(new RaftResponse(() -> noLeader, 0, 0), null);
+                return;
             }
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
             byte[] needMove = CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray();
-            return CompletableFuture.completedFuture(new RaftResponse(() -> needMove, 0, 0));
+            callback.accept(new RaftResponse(() -> needMove, 0, 0), null);
+            return;
         }
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
-        return raftClusterContainer.requestConsensus(raftLog);
+        raftClusterContainer.requestConsensus(raftLog, callback);
     }
 
     protected boolean allowFollowExecute(byte[] command) {

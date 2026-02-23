@@ -7,6 +7,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.apache.commons.io.FileUtils;
@@ -31,6 +33,8 @@ import com.alipay.sofa.jraft.util.concurrent.EventBusMode;
 import com.binance.platform.common.EnvUtil;
 import com.binance.raftexchange.server.util.SerializeHelper;
 import com.google.protobuf.GeneratedMessageV3;
+
+import exchange.core2.core.common.cmd.OrderCommand;
 
 public class RaftClusterContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RaftClusterContainer.class);
@@ -96,8 +100,7 @@ public class RaftClusterContainer {
         return raftGroupService != null && raftGroupService.isStarted();
     }
 
-    public CompletableFuture<RaftResponse> requestConsensus(byte[] log) {
-        CompletableFuture<RaftResponse> future = new CompletableFuture<>();
+    public void requestConsensus(byte[] log, BiConsumer<RaftResponse, Throwable> callback) {
         ByteBuffer data = ByteBuffer.wrap(log);
         // Leader 提前反序列化, 传入 ReturnableClosure, onApply 时直接使用
         GeneratedMessageV3 msg;
@@ -105,11 +108,10 @@ public class RaftClusterContainer {
             msg = SerializeHelper.deserializeWithType(data);
         } catch (Exception e) {
             LOGGER.warn("Failed to pre-parse for leader fast path", e);
-            future.completeExceptionally(e);
-            return future;
+            callback.accept(null, e);
+            return;
         }
-        raftGroupService.getRaftNode().apply(new Task(data, new ReturnableClosure(future, msg)));
-        return future;
+        raftGroupService.getRaftNode().apply(new Task(data, new ReturnableClosure(callback, msg)));
     }
 
     public List<RaftNode> listNodes() {
@@ -167,34 +169,68 @@ public class RaftClusterContainer {
      */
     public record RaftResponse(Supplier<byte[]> serializer, long raftLatencyNanos, long exchangeLatencyNanos) {}
 
-    public static class ReturnableClosure implements Closure {
-        private final CompletableFuture<RaftResponse> future;
+    /**
+     * Closure that doubles as a direct Consumer&lt;OrderCommand&gt; callback for the batch path,
+     * eliminating all intermediate CompletableFuture allocations.
+     * <p>
+     * Batch path: registered directly in PromiseBuffer as Consumer&lt;OrderCommand&gt;,
+     * ResultsHandler calls {@link #accept(OrderCommand)} which fires the BiConsumer callback.
+     * <p>
+     * Non-batch path (BINARY_DATA): uses {@link #accept} with CompletableFuture based wiring.
+     */
+    public static class ReturnableClosure implements Closure, Consumer<OrderCommand> {
+        private final BiConsumer<RaftResponse, Throwable> callback;
         private final long submitTime;
         private final GeneratedMessageV3 message;
+        private long applyTime; // set during onApply, before registering in PromiseBuffer
 
-        public ReturnableClosure(CompletableFuture<RaftResponse> future, GeneratedMessageV3 message) {
-            this.future = future;
+        public ReturnableClosure(BiConsumer<RaftResponse, Throwable> callback, GeneratedMessageV3 message) {
+            this.callback = callback;
             this.submitTime = System.nanoTime();
             this.message = message;
         }
 
         public GeneratedMessageV3 message() { return message; }
 
-        public void setResult(long beginTime, CompletableFuture<Supplier<byte[]>> result) {
+        public void setApplyTime(long applyTime) { this.applyTime = applyTime; }
+
+        /**
+         * Batch path: called by ResultsHandler via PromiseBuffer — zero-alloc except the Supplier lambda.
+         */
+        @Override
+        public void accept(OrderCommand cmd) {
+            long now = System.nanoTime();
+            callback.accept(new RaftResponse(() -> SerializeHelper.serializeToCommandResult(cmd), now - submitTime, now - applyTime), null);
+        }
+
+        /**
+         * Non-batch path (BINARY_DATA): Future based wiring
+         */
+        public void accept(CompletableFuture<Supplier<byte[]>> result) {
             result.whenComplete((supplier, ex) -> {
                 if (ex == null) {
                     long now = System.nanoTime();
-                    future.complete(new RaftResponse(supplier, now - submitTime, now - beginTime));
+                    callback.accept(new RaftResponse(supplier, now - submitTime, now - applyTime), null);
                 } else {
-                    future.completeExceptionally(ex);
+                    callback.accept(null, ex);
                 }
             });
         }
 
+        /**
+         * Error path in onApply: propagate exception directly to gRPC layer.
+         */
+        public void completeExceptionally(Throwable ex) {
+            callback.accept(null, ex);
+        }
+
+        /**
+         * Raft-level callback: only fires on consensus failure (e.g. leader change).
+         */
         @Override
         public void run(Status status) {
             if (!status.isOk()) {
-                future.completeExceptionally(new RuntimeException(status.getErrorMsg()));
+                callback.accept(null, new RuntimeException(status.getErrorMsg()));
             }
         }
     }

@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,11 +44,13 @@ public class ExchangeStateMachine extends StateMachineAdapter {
 
     // ---- batch apply pre-allocated arrays (FSMCaller is single-threaded, safe to reuse) ----
     private static final int BATCH_CAPACITY = 1024;
+    private static final Consumer<OrderCommand> NOOP_CALLBACK = cmd -> {};
+    private static final Status STATUS_OK = Status.OK();
 
     private final exchange.core2.core.common.api.ApiCommand[] batchCommands = new exchange.core2.core.common.api.ApiCommand[BATCH_CAPACITY];
-    private final CompletableFuture<OrderCommand>[] batchFutures = new CompletableFuture[BATCH_CAPACITY];
+    @SuppressWarnings("unchecked")
+    private final Consumer<OrderCommand>[] batchCallbacks = new Consumer[BATCH_CAPACITY];
     private final Closure[] batchClosures = new Closure[BATCH_CAPACITY];
-    private final long[] startTimes = new long[BATCH_CAPACITY];
 
     @Override
     public void onApply(Iterator iter) {
@@ -56,7 +59,7 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         while (iter.hasNext()) {
             Closure done = iter.done();
             ReturnableClosure rc = (done instanceof ReturnableClosure) ? (ReturnableClosure) done : null;
-            long startTime = (rc != null) ? System.nanoTime() : 0L;
+            long applyTime = (rc != null) ? System.nanoTime() : 0L;
 
             try {
                 GeneratedMessageV3 msg = (rc != null) ?
@@ -68,9 +71,13 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 if (exchangeCmd != null) {
                     // Batchable: accumulate
                     batchCommands[batchSize] = exchangeCmd;
-                    batchFutures[batchSize] = new CompletableFuture<>();
+                    if (rc != null) {
+                        rc.setApplyTime(applyTime);
+                        batchCallbacks[batchSize] = rc; // ReturnableClosure IS the Consumer<OrderCommand>
+                    } else {
+                        batchCallbacks[batchSize] = NOOP_CALLBACK; // Follower: discard result
+                    }
                     batchClosures[batchSize] = done;
-                    startTimes[batchSize] = startTime;
                     batchSize++;
                     // Flush if batch is full
                     if (batchSize >= BATCH_CAPACITY) {
@@ -89,9 +96,10 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 CompletableFuture<Supplier<byte[]>> result = apply(msg);
                 if (done != null) {
                     if (rc != null) {
-                        rc.setResult(startTime, result);
+                        rc.setApplyTime(applyTime);
+                        rc.accept(result);
                     }
-                    done.run(Status.OK());
+                    done.run(STATUS_OK);
                 }
             } catch (Throwable e) {
                 LOG.error("Fail to apply", e);
@@ -102,9 +110,9 @@ public class ExchangeStateMachine extends StateMachineAdapter {
                 }
                 if (done != null) {
                     if (rc != null) {
-                        rc.setResult(startTime, CompletableFuture.failedFuture(e));
+                        rc.completeExceptionally(e);
                     }
-                    done.run(Status.OK());
+                    done.run(STATUS_OK);
                 }
             }
             iter.next();
@@ -116,26 +124,23 @@ public class ExchangeStateMachine extends StateMachineAdapter {
         }
     }
 
+    /**
+     * Zero-alloc batch flush: ReturnableClosure objects (already allocated per-request) are registered
+     * directly in PromiseBuffer as Consumer&lt;OrderCommand&gt; — no intermediate Futures.
+     */
     private void flushBatch(int size) {
         ExchangeApi api = ExchangeApiInstance.exchangeApi();
-        api.submitBatchAsync(batchCommands, batchFutures, size);
+        api.submitBatchAsync(batchCommands, batchCallbacks, size);
 
-        // Wire up futures to ReturnableClosures
         for (int i = 0; i < size; i++) {
-            Closure done = batchClosures[i];
-            if (done != null) {
-                if (done instanceof ReturnableClosure rc) {
-                    long startTime = startTimes[i];
-                    CompletableFuture<OrderCommand> future = batchFutures[i];
-                    rc.setResult(startTime, future.thenApply(cmd -> () -> SerializeHelper.serializeToCommandResult(cmd)));
-                }
-                done.run(Status.OK());
+            if (batchClosures[i] != null) {
+                batchClosures[i].run(STATUS_OK);
             }
         }
 
         // Clear references for GC
         Arrays.fill(batchCommands, 0, size, null);
-        Arrays.fill(batchFutures, 0, size, null);
+        Arrays.fill(batchCallbacks, 0, size, null);
         Arrays.fill(batchClosures, 0, size, null);
     }
 

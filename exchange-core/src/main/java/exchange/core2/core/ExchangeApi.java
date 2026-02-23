@@ -818,12 +818,13 @@ public final class ExchangeApi {
 
     /**
      * Batch publish multiple ApiCommands to the ring buffer using a single next(n) claim.
+     * Each callback is registered directly in PromiseBuffer — no CompletableFuture overhead.
      *
-     * @param commands exchange-core ApiCommand array
-     * @param futures  pre-created CompletableFutures, results will be completed on them
-     * @param size     number of valid entries
+     * @param commands  exchange-core ApiCommand array
+     * @param callbacks pre-set Consumer callbacks, invoked with the result OrderCommand
+     * @param size      number of valid entries
      */
-    public void submitBatchAsync(ApiCommand[] commands, CompletableFuture<OrderCommand>[] futures, int size) {
+    public void submitBatchAsync(ApiCommand[] commands, Consumer<OrderCommand>[] callbacks, int size) {
         if (size <= 0) return;
 
         final long hiSeq = ringBuffer.next(size);
@@ -833,8 +834,7 @@ public final class ExchangeApi {
                 final long seq = loSeq + i;
                 final OrderCommand cmd = ringBuffer.get(seq);
                 resolveTranslator(commands[i]).translateTo(cmd, seq, commands[i]);
-                final CompletableFuture<OrderCommand> future = futures[i];
-                promises.put(seq, future::complete);
+                promises.put(seq, callbacks[i]);
             }
         } finally {
             ringBuffer.publish(loSeq, hiSeq);
