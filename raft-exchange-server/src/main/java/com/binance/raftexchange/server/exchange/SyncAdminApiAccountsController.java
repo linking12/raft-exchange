@@ -115,7 +115,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
     public static exchange.core2.core.common.api.ApiAdjustPositionMode convertAdjustPositionMode(ApiCommand apiCommand) {
         ApiAdjustPositionMode grpcApiAdjustPositionMode = apiCommand.getAdjustPositionMode();
         exchange.core2.core.common.api.ApiAdjustPositionMode apiAdjustPositionMode = exchange.core2.core.common.api.ApiAdjustPositionMode.builder()
-            .uid(grpcApiAdjustPositionMode.getUid()).positionMode(exchange.core2.core.common.PositionMode.values()[grpcApiAdjustPositionMode.getPositionMode().getNumber()]).build();
+            .uid(grpcApiAdjustPositionMode.getUid()).positionMode(exchange.core2.core.common.PositionMode.of((byte) grpcApiAdjustPositionMode.getPositionMode().getNumber())).build();
         apiAdjustPositionMode.updateTimestamp(apiCommand.getTimestamp());
         return apiAdjustPositionMode;
     }
@@ -133,7 +133,7 @@ public class SyncAdminApiAccountsController extends AbstractApiController {
         exchange.core2.core.common.api.ApiAdjustMargin apiAdjustMargin = exchange.core2.core.common.api.ApiAdjustMargin.builder()
             .transactionId(grpcApiAdjustMargin.getTransactionId()).uid(grpcApiAdjustMargin.getUid()).symbol(grpcApiAdjustMargin.getSymbol())
             .currency(grpcApiAdjustMargin.getCurrency()).amount(grpcApiAdjustMargin.getAmount())
-            .marginMode(exchange.core2.core.common.MarginMode.values()[grpcApiAdjustMargin.getMarginMode().getNumber()]).build();
+            .marginMode(exchange.core2.core.common.MarginMode.of((byte) grpcApiAdjustMargin.getMarginMode().getNumber())).build();
         apiAdjustMargin.updateTimestamp(apiCommand.getTimestamp());
         return apiAdjustMargin;
     }

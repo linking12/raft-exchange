@@ -118,7 +118,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.pendingBuyAvgPrice = bytes.readLong();
 
         updateLeverage(bytes.readInt());
-        this.marginMode = MarginMode.values()[bytes.readInt()];
+        this.marginMode = MarginMode.of(bytes.readByte());
         this.extraMargin = bytes.readLong();
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
         this.pendingADLSize = 0;
@@ -430,7 +430,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         bytes.writeLong(pendingSellAvgPrice);
         bytes.writeLong(pendingBuyAvgPrice);
         bytes.writeInt(leverage);
-        bytes.writeInt(marginMode.ordinal());
+        bytes.writeByte(marginMode.getCode());
         bytes.writeLong(extraMargin);
     }
 
