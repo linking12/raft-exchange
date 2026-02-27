@@ -677,7 +677,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                         // 逐仓的未实现盈亏只能参与当前symbol的分摊
                         totalUnrealizedPnl += position.estimateUnrealizedProfit(lastPrice);
                     }
-                    totalIsolateRequire += CoreArithmeticUtils.sizePriceToCurrencyScale(position.calculateRequiredMarginForFutures(spec), spec, currencySpec);
+                    totalIsolateRequire += calculateLockedMargin(position, spec, currencySpec);
                 }
                 totalRealizedPnl += CoreArithmeticUtils.sizePriceToCurrencyScale(position.profit, spec, currencySpec);
             }
@@ -1139,6 +1139,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
+                // takerBaseLocked = 全量locked - takerSpr自身贡献，循环内只需实时算takerSpr自身贡献再加回来
+                long takerBaseLocked = 0;
+                if (takerUp != null) {
+                    takerBaseLocked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+                }
+                if (takerSpr != null) {
+                    takerBaseLocked -= calculateLockedMargin(takerSpr, spec, currencySpec);
+                }
+
                 // ===== 1. 处理 matcherEvent 链 =====
                 do {
                     if (cmd.command == OrderCommandType.IF_TAKEOVER) {
@@ -1148,7 +1157,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     } else if (cmd.command == OrderCommandType.SETTLE_FUNDINGFEES) {
                         handleSettleFundingFees(cmd, mte);
                     } else {
-                        handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec);
+                        handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec, takerBaseLocked);
                     }
                     mte = mte.nextEvent;
                 } while (mte != null);
@@ -1200,11 +1209,19 @@ public final class RiskEngine implements WriteBytesMarshallable {
         for (SymbolPositionRecord position : userProfile.positions) {
             if (position.currency == currency) {
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                long required = position.calculateRequiredMarginForFutures(spec);
-                locked += CoreArithmeticUtils.sizePriceToCurrencyScale(required, spec, currencySpec);
+                locked += calculateLockedMargin(position, spec, currencySpec);
             }
         }
         return locked;
+    }
+
+    /**
+     * 计算当前仓位的冻结保证金总额（包含pending部分，隐式锁定）。
+     * 结果会缩放到currency精度。
+     */
+    private long calculateLockedMargin(SymbolPositionRecord position, CoreSymbolSpecification spec, CoreCurrencySpecification currencySpec) {
+        long required = position.calculateRequiredMarginForFutures(spec);
+        return CoreArithmeticUtils.sizePriceToCurrencyScale(required, spec, currencySpec);
     }
 
     /**
@@ -1259,11 +1276,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // 2.清算盈亏到账户余额
                 CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
                 CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(position.currency);
-                refundExtraMargin(cmd, userProfile.uid, spec, position, userProfile, currencySpec);
+                long locked = calculateLockedMargin(userProfile, position.currency);
+                refundExtraMargin(cmd, userProfile.uid, spec, position, userProfile, currencySpec, locked);
                 removePositionRecord(spec, position, userProfile, currencySpec);
                 // 3.发送结算事件
                 long balance = userProfile.accounts.get(position.currency);
-                long locked = calculateLockedMargin(userProfile, position.currency);
                 eventsHelper.sendPnlSettlementEvent(cmd, position, balance - locked, locked);
             })
         );
@@ -1337,7 +1354,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         long free = up.accounts.get(spec.quoteCurrency) - locked;
         eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, pos, free, locked);
         if (pos.isEmpty()) {
-            refundExtraMargin(cmd, cmd.orderId, spec, pos, up, currencySpec);
+            refundExtraMargin(cmd, cmd.orderId, spec, pos, up, currencySpec, locked);
             removePositionRecord(spec, pos, up, currencySpec);
         }
     }
@@ -1355,7 +1372,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
             eventsHelper.sendIFClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
             if (takerSpr.isEmpty()) {
-                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec, locked);
                 removePositionRecord(spec, takerSpr, takerUp, currencySpec);
             }
         }
@@ -1377,7 +1394,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
             eventsHelper.sendADLClosePositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
             if (takerSpr.isEmpty()) {
-                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec, locked);
                 removePositionRecord(spec, takerSpr, takerUp, currencySpec);
             }
         }
@@ -1452,7 +1469,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                                           final OrderAction takerAction,
                                           final UserProfile takerUp,
                                           final SymbolPositionRecord takerSpr,
-                                          final CoreCurrencySpecification currencySpec) {
+                                          final CoreCurrencySpecification currencySpec,
+                                          final long takerBaseLocked) {
         if (takerUp != null) {
             if (ev.eventType == MatcherEventType.TRADE) {
                 // update taker's position
@@ -1462,7 +1480,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 long pendingReleasedSize = takerSpr.pendingRelease(takerAction, ev.size);
                 if (pendingReleasedSize > 0) {
                     long totalBalance = takerUp.accounts.get(takerSpr.currency);
-                    long lockedMargin = calculateLockedMargin(takerUp, takerSpr.currency);
+                    long lockedMargin = takerBaseLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
                     long free = totalBalance - lockedMargin;
                     eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerSpr, free, lockedMargin);
                 }
@@ -1473,7 +1491,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
                 // 平仓事件
                 if (closedSize > 0) {
-                    long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
+                    long locked = takerBaseLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
                     long free = takerUp.accounts.get(spec.quoteCurrency) - locked;
                     boolean isLiquidation = LiquidationEngine.isLiquidationOrderId(cmd.orderId, takerSpr.symbol, takerSpr.uid);
                     eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, isLiquidation, takerSpr, free, locked);
@@ -1489,9 +1507,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     fee = CoreArithmeticUtils.sizePriceToCurrencyScale(fee, spec, currencySpec);
                     long balance = takerUp.accounts.addToValue(spec.quoteCurrency, -fee);
                     fees.addToValue(spec.quoteCurrency, fee);
-                    long locked = calculateLockedMargin(takerUp, spec.quoteCurrency);
-                    long free = balance - locked;
-                    eventsHelper.sendOpenPositionEvent(cmd, cmd.orderId, takerSpr, free, locked);
+                    long locked = takerBaseLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
+                    eventsHelper.sendOpenPositionEvent(cmd, cmd.orderId, takerSpr, balance - locked, locked);
                 }
             } else if (ev.eventType == MatcherEventType.REJECT || ev.eventType == MatcherEventType.REDUCE) {
                 // for cancel/rejection only one party is involved
@@ -1500,13 +1517,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                  */
                 takerSpr.pendingRelease(takerAction, ev.size);
 
+                long locked = takerBaseLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
                 long totalBalance = takerUp.accounts.get(takerSpr.currency);
-                long lockedMargin = calculateLockedMargin(takerUp, takerSpr.currency);
-                long free = totalBalance - lockedMargin;
-                eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerSpr, free, lockedMargin);
+                eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerSpr, totalBalance - locked, locked);
             }
             if (takerSpr.isEmpty()) {
-                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec);
+                // takerSpr 已清零，贡献为 0，locked == takerBaseLocked
+                refundExtraMargin(cmd, cmd.orderId, spec, takerSpr, takerUp, currencySpec, takerBaseLocked);
                 removePositionRecord(spec, takerSpr, takerUp, currencySpec);
             }
         }
@@ -1517,12 +1534,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
             SymbolPositionRecord makerSpr = maker.getPositionRecordOrThrowEx(maker.createPositionsKey(spec.symbolId, takerAction.opposite(), ev.matchedOrderCommandType));
             long preVolume = makerSpr.openVolume;
 
+            // makerBaseLocked = 全量 - makerSpr自身
+            long makerBaseLocked = calculateLockedMargin(maker, makerSpr.currency) - calculateLockedMargin(makerSpr, spec, currencySpec);
+
             long pendingReleasedSize = makerSpr.pendingRelease(takerAction.opposite(), ev.size);
             if (pendingReleasedSize > 0) {
+                long locked = makerBaseLocked + calculateLockedMargin(makerSpr, spec, currencySpec);
                 long totalBalance = maker.accounts.get(makerSpr.currency);
-                long lockedMargin = calculateLockedMargin(maker, makerSpr.currency);
-                long free = totalBalance - lockedMargin;
-                eventsHelper.sendUnlockPendingEvent(cmd, ev.matchedOrderId, makerSpr, free, lockedMargin);
+                eventsHelper.sendUnlockPendingEvent(cmd, ev.matchedOrderId, makerSpr, totalBalance - locked, locked);
             }
 
             // 先平仓
@@ -1531,7 +1550,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
             // 计算平仓信息
             if (sizeClosed > 0) {
-                long locked = calculateLockedMargin(maker, spec.quoteCurrency);
+                long locked = makerBaseLocked + calculateLockedMargin(makerSpr, spec, currencySpec);
                 long free = maker.accounts.get(spec.quoteCurrency) - locked;
                 // Maker是被动成交者，不属于liquidation
                 eventsHelper.sendClosePositionEvent(cmd, ev.matchedOrderId, false, makerSpr, free, locked);
@@ -1544,12 +1563,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 fee = CoreArithmeticUtils.sizePriceToCurrencyScale(fee, spec, currencySpec);
                 long balance = maker.accounts.addToValue(spec.quoteCurrency, -fee);
                 fees.addToValue(spec.quoteCurrency, fee);
-                long locked = calculateLockedMargin(maker, spec.quoteCurrency);
-                long free = balance - locked;
-                eventsHelper.sendOpenPositionEvent(cmd, ev.matchedOrderId, makerSpr, free, locked);
+                long locked = makerBaseLocked + calculateLockedMargin(makerSpr, spec, currencySpec);
+                eventsHelper.sendOpenPositionEvent(cmd, ev.matchedOrderId, makerSpr, balance - locked, locked);
             }
             if (makerSpr.isEmpty()) {
-                refundExtraMargin(cmd, ev.matchedOrderId, spec, makerSpr, maker, currencySpec);
+                // makerSpr 清零，贡献为 0，locked == makerBaseLocked
+                refundExtraMargin(cmd, ev.matchedOrderId, spec, makerSpr, maker, currencySpec, makerBaseLocked);
                 removePositionRecord(spec, makerSpr, maker, currencySpec);
             }
         }
@@ -1810,13 +1829,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     private void refundExtraMargin(OrderCommand cmd, long orderId, CoreSymbolSpecification spec, SymbolPositionRecord record,
-                                   UserProfile userProfile, CoreCurrencySpecification currencySpec) {
+                                   UserProfile userProfile, CoreCurrencySpecification currencySpec, long locked) {
         if (record.extraMargin > 0) {
             long refund = CoreArithmeticUtils.symbolToCurrencyScale(record.extraMargin, spec, currencySpec);
             long balance = userProfile.accounts.addToValue(record.currency, refund);
-            long locked = calculateLockedMargin(userProfile, record.currency);
-            long free = balance - locked;
-            eventsHelper.sendMarginRefundEvent(cmd, orderId, record, free, locked);
+            eventsHelper.sendMarginRefundEvent(cmd, orderId, record, balance - locked, locked);
         }
     }
 

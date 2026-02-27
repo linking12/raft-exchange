@@ -787,6 +787,60 @@ public final class ExchangeApi {
         cmd.resultCode = CommandResultCode.NEW;
     };
 
+    // ---- batch publish support ----
+    @SuppressWarnings("unchecked")
+    private static EventTranslatorOneArg<OrderCommand, ApiCommand> resolveTranslator(ApiCommand cmd) {
+        if (cmd instanceof ApiPlaceOrder) return (EventTranslatorOneArg) NEW_ORDER_TRANSLATOR;
+        if (cmd instanceof ApiMoveOrder) return (EventTranslatorOneArg) MOVE_ORDER_TRANSLATOR;
+        if (cmd instanceof ApiCancelOrder) return (EventTranslatorOneArg) CANCEL_ORDER_TRANSLATOR;
+        if (cmd instanceof ApiReduceOrder) return (EventTranslatorOneArg) REDUCE_ORDER_TRANSLATOR;
+        if (cmd instanceof ApiClosePosition) return (EventTranslatorOneArg) CLOSE_POSITION_TRANSLATOR;
+        if (cmd instanceof ApiOrderBookRequest) return (EventTranslatorOneArg) ORDER_BOOK_REQUEST_TRANSLATOR;
+        if (cmd instanceof ApiAddUser) return (EventTranslatorOneArg) ADD_USER_TRANSLATOR;
+        if (cmd instanceof ApiAdjustUserBalance) return (EventTranslatorOneArg) ADJUST_USER_BALANCE_TRANSLATOR;
+        if (cmd instanceof ApiResumeUser) return (EventTranslatorOneArg) RESUME_USER_TRANSLATOR;
+        if (cmd instanceof ApiSuspendUser) return (EventTranslatorOneArg) SUSPEND_USER_TRANSLATOR;
+        if (cmd instanceof ApiAdjustLeverage) return (EventTranslatorOneArg) ADJUST_LEVERAGE_TRANSLATOR;
+        if (cmd instanceof ApiAdjustPositionMode) return (EventTranslatorOneArg) ADJUST_POSITION_MODE_TRANSLATOR;
+        if (cmd instanceof ApiAdjustMargin) return (EventTranslatorOneArg) ADJUST_MARGIN_TRANSLATOR;
+        if (cmd instanceof ApiAdjustMarkPrice) return (EventTranslatorOneArg) ADJUST_PRICE_TRANSLATOR;
+        if (cmd instanceof ApiSettleFundingFees) return (EventTranslatorOneArg) SETTLE_FUNDINGFEES_TRANSLATOR;
+        if (cmd instanceof ApiSettlePNL) return (EventTranslatorOneArg) SETTLE_PNL_TRANSLATOR;
+        if (cmd instanceof ApiResetFee) return (EventTranslatorOneArg) RESET_FEE_TRANSLATOR;
+        if (cmd instanceof ApiLiquidationOrder) return (EventTranslatorOneArg) LIQUIDATION_ORDER_TRANSLATOR;
+        if (cmd instanceof ApiNop) return (EventTranslatorOneArg) NOP_TRANSLATOR;
+        if (cmd instanceof ApiReset) return (EventTranslatorOneArg) RESET_TRANSLATOR;
+        if (cmd instanceof ApiSystemLiquidationNotify) return (EventTranslatorOneArg) SYSTEM_LIQUIDATION_NOTIFY_TRANSLATOR;
+        if (cmd instanceof ApiIFTakeOver) return (EventTranslatorOneArg) IF_TRANSLATOR;
+        if (cmd instanceof ApiAutoDeleveraging) return (EventTranslatorOneArg) ADL_TRANSLATOR;
+        throw new IllegalArgumentException("Unsupported command type for batch: " + cmd.getClass().getSimpleName());
+    }
+
+    /**
+     * Batch publish multiple ApiCommands to the ring buffer using a single next(n) claim.
+     * Each callback is registered directly in PromiseBuffer — no CompletableFuture overhead.
+     *
+     * @param commands  exchange-core ApiCommand array
+     * @param callbacks pre-set Consumer callbacks, invoked with the result OrderCommand
+     * @param size      number of valid entries
+     */
+    public void submitBatchAsync(ApiCommand[] commands, Consumer<OrderCommand>[] callbacks, int size) {
+        if (size <= 0) return;
+
+        final long hiSeq = ringBuffer.next(size);
+        final long loSeq = hiSeq - size + 1;
+        try {
+            for (int i = 0; i < size; i++) {
+                final long seq = loSeq + i;
+                final OrderCommand cmd = ringBuffer.get(seq);
+                resolveTranslator(commands[i]).translateTo(cmd, seq, commands[i]);
+                promises.put(seq, callbacks[i]);
+            }
+        } finally {
+            ringBuffer.publish(loSeq, hiSeq);
+        }
+    }
+
     public void binaryData(int serviceFlags, long eventsGroup, long timestampNs, byte lastFlag, long word0, long word1, long word2, long word3, long word4) {
         ringBuffer.publishEvent(((cmd, seq) -> {
 

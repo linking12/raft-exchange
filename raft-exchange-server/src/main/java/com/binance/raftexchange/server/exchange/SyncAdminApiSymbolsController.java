@@ -16,13 +16,14 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 public class SyncAdminApiSymbolsController extends AbstractApiController {
 
     /**
      * 
      */
-    public static CompletableFuture<byte[]> batchAddSymbols(BatchAddSymbolsCommand grpcBatchAddSymbolsCommand) {
+    public static CompletableFuture<Supplier<byte[]>> batchAddSymbols(BatchAddSymbolsCommand grpcBatchAddSymbolsCommand) {
         Map<Integer, CoreSymbolSpecification> symbolsMap = grpcBatchAddSymbolsCommand.getSymbolsMap();
         Collection<exchange.core2.core.common.CoreSymbolSpecification> coreSymbols = new ArrayList<>(symbolsMap.size());
         for (CoreSymbolSpecification grpcSymbol : symbolsMap.values()) {
@@ -44,7 +45,7 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         return callExchange(batchAddSymbolsCommand);
     }
 
-    public static CompletableFuture<byte[]> batchAddCurrencies(BatchAddCurrenciesCommand grpcBatchAddCurrenciesCommand) {
+    public static CompletableFuture<Supplier<byte[]>> batchAddCurrencies(BatchAddCurrenciesCommand grpcBatchAddCurrenciesCommand) {
         Map<Integer, CoreCurrencySpecification> currenciesMap = grpcBatchAddCurrenciesCommand.getCurrenciesMap();
         Collection<exchange.core2.core.common.CoreCurrencySpecification> currencies = new ArrayList<>(currenciesMap.size());
         for (CoreCurrencySpecification grpcCurrency : currenciesMap.values()) {
@@ -59,32 +60,44 @@ public class SyncAdminApiSymbolsController extends AbstractApiController {
         return callExchange(batchAddCurrenciesCommand);
     }
 
-    public static CompletableFuture<byte[]> adjustMarkPrice(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> adjustMarkPrice(ApiCommand apiCommand) {
+        LOG.debug("apiAdjustPrice applied, msg: {}", apiCommand.getAdjustMarkprice());
+        return callExchange(convertAdjustMarkPrice(apiCommand));
+    }
+
+    public static exchange.core2.core.common.api.ApiAdjustMarkPrice convertAdjustMarkPrice(ApiCommand apiCommand) {
         ApiAdjustMarkPrice grpcAdjustPrice = apiCommand.getAdjustMarkprice();
         exchange.core2.core.common.api.ApiAdjustMarkPrice apiAdjustMarkPrice = exchange.core2.core.common.api.ApiAdjustMarkPrice.builder()
             .transactionId(grpcAdjustPrice.getTransactionId()).symbol(grpcAdjustPrice.getSymbol()).markPrice(grpcAdjustPrice.getMarkPrice()).build();
         apiAdjustMarkPrice.updateTimestamp(apiCommand.getTimestamp());
-        LOG.debug("apiAdjustPrice applied, msg: {}", apiAdjustMarkPrice);
-        return callExchange(apiAdjustMarkPrice);
+        return apiAdjustMarkPrice;
     }
 
-    public static CompletableFuture<byte[]> settleFundingFees(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> settleFundingFees(ApiCommand apiCommand) {
+        LOG.debug("apiSettleFundingFees applied, msg: {}", apiCommand.getSettleFundingFees());
+        return callExchange(convertSettleFundingFees(apiCommand));
+    }
+
+    public static exchange.core2.core.common.api.ApiSettleFundingFees convertSettleFundingFees(ApiCommand apiCommand) {
         ApiSettleFundingFees grpcSettleFundingFees = apiCommand.getSettleFundingFees();
         exchange.core2.core.common.api.ApiSettleFundingFees apiSettleFundingFees = exchange.core2.core.common.api.ApiSettleFundingFees.builder()
             .transactionId(grpcSettleFundingFees.getTransactionId()).symbol(grpcSettleFundingFees.getSymbol())
             .action(exchange.core2.core.common.OrderAction.of((byte) grpcSettleFundingFees.getAction().getNumber()))
             .fundingRate(grpcSettleFundingFees.getFundingRate()).rateScaleK(grpcSettleFundingFees.getRateScaleK()).build();
         apiSettleFundingFees.updateTimestamp(apiCommand.getTimestamp());
-        LOG.debug("apiSettleFundingFees applied, msg: {}", apiSettleFundingFees);
-        return callExchange(apiSettleFundingFees);
+        return apiSettleFundingFees;
     }
 
-    public static CompletableFuture<byte[]> settlePNL(ApiCommand apiCommand) {
+    public static CompletableFuture<Supplier<byte[]>> settlePNL(ApiCommand apiCommand) {
+        LOG.debug("apiSettlePNL applied, msg: {}", apiCommand.getSettlePnl());
+        return callExchange(convertSettlePNL(apiCommand));
+    }
+
+    public static exchange.core2.core.common.api.ApiSettlePNL convertSettlePNL(ApiCommand apiCommand) {
         ApiSettlePNL grpcSettlePnl = apiCommand.getSettlePnl();
         exchange.core2.core.common.api.ApiSettlePNL apiSettlePNL = exchange.core2.core.common.api.ApiSettlePNL.builder()
             .transactionId(grpcSettlePnl.getTransactionId()).symbol(grpcSettlePnl.getSymbol()).settlePrice(grpcSettlePnl.getSettlePrice()).build();
         apiSettlePNL.updateTimestamp(apiCommand.getTimestamp());
-        LOG.debug("apiSettlePNL applied, msg: {}", apiSettlePNL);
-        return callExchange(apiSettlePNL);
+        return apiSettlePNL;
     }
 }

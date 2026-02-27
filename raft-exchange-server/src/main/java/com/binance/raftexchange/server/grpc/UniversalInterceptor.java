@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
+import com.binance.raftexchange.server.raft.RaftClusterContainer.RaftResponse;
 import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.raft.RoleChangeEventbus;
 import com.binance.raftexchange.server.util.SerializeHelper;
@@ -36,8 +36,16 @@ import io.grpc.Status;
 class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT> {
     private static final Logger LOGGER = LoggerFactory.getLogger(UniversalInterceptor.class);
     private static final Counter serverQPS = Metrics.counter("raft.exchange.grpc.server.counter");
-    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99).minimumExpectedValue(Duration.ofMillis(1L))
-        .maximumExpectedValue(Duration.ofSeconds(3L)).publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer latencyTimer = Timer.builder("grpc.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer raftTimer = Timer.builder("raft.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+    private static final Timer exchangeTimer = Timer.builder("exchange.latency").publishPercentiles(0.99)
+            .minimumExpectedValue(Duration.ofMillis(1L)).maximumExpectedValue(Duration.ofSeconds(3L))
+            .publishPercentileHistogram(false).register(Metrics.globalRegistry);
+
     /**
      * jraft处理buffer是8M 如果一次拉取4k个，同一时刻可以支持2k个client的并发
      *
@@ -71,32 +79,56 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
 
     @Override
     public void onMessage(ReqT message) {
-        serverQPS.increment();
+        byte[] bytes = null;
         try (InputStream stream = (InputStream)message) {
+            bytes = readAll(stream);
             long start = System.nanoTime();
-            /**
-             * @formatter off
-             */
-            handle(readAll(stream)).whenCompleteAsync(new TimedHandler(this, start), offloadWorker);
-            /**
-             * @formatter on
-             */
+            handle(bytes, new OffloadCallback(this, start));
         } catch (Exception e) {
             // 不应该到这里
-            throw new RuntimeException(e);
+            LOGGER.error("Unexpected error in onMessage, closing stream, commandFieldNumber={}, payloadSize={}",
+                    bytes != null ? commandFieldNumber(bytes) : -1,
+                    bytes != null ? bytes.length : -1, e);
+            halfClose.set(true);
+            call.close(Status.INTERNAL.withDescription(e.getMessage()).withCause(e), new Metadata());
         }
     }
 
-    private record TimedHandler(UniversalInterceptor parent, long start) implements BiConsumer<byte[], Throwable> {
+    /**
+     * Single object that serves as both BiConsumer (callback from ResultsHandler thread)
+     * and Runnable (task posted to gRPC offloadWorker), eliminating extra allocations.
+     */
+    private static final class OffloadCallback implements BiConsumer<RaftResponse, Throwable>, Runnable {
 
+        private final UniversalInterceptor<?, ?> parent;
+        private final long start;
+        private RaftResponse result;
+        private Throwable err;
+
+        OffloadCallback(UniversalInterceptor<?, ?> parent, long start) {
+            this.parent = parent;
+            this.start = start;
+        }
+
+        // Called on ResultsHandler thread (or synchronously for non-leader redirect)
         @Override
-        public void accept(byte[] result, Throwable err) {
+        public void accept(RaftResponse result, Throwable err) {
+            this.result = result;
+            this.err = err;
+            parent.offloadWorker.execute(this); // this IS the Runnable — 0 extra alloc
+        }
+
+        // Executed on gRPC offloadWorker thread
+        @Override
+        public void run() {
             parent.handleComplete(result, start, err);
+            result = null; // help GC
         }
     }
 
-    private void handleComplete(byte[] result, long start, Throwable err) {
+    private void handleComplete(RaftResponse result, long start, Throwable err) {
         try {
+            serverQPS.increment();
             if (inflight.decrementAndGet() <= WINDOW_SIZE / 2) {
                 maybeRequestMore();
             }
@@ -104,14 +136,20 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
                 return;
             }
             if (result != null) {
-                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result));
+                // raft/exchange metric 集中在此记录
+                if (result.raftLatencyNanos() > 0) {
+                    raftTimer.record(result.raftLatencyNanos(), TimeUnit.NANOSECONDS);
+                    exchangeTimer.record(result.exchangeLatencyNanos(), TimeUnit.NANOSECONDS);
+                }
+                // 序列化在 gRPC offloadWorker 线程执行
+                call.sendMessage((RespT)SerializeHelper.wrapKnownBytes(result.serializer().get()));
                 return;
             }
             if (err instanceof CancellationException) {
                 return;
             }
             LOGGER.error("exchange core error!", err);
-            call.close(Status.INTERNAL.withCause(err), new Metadata());
+            call.close(Status.INTERNAL.withDescription(err.getMessage()).withCause(err), new Metadata());
         } finally {
             long latency = System.nanoTime() - start;
             latencyTimer.record(latency, TimeUnit.NANOSECONDS);
@@ -147,23 +185,24 @@ class UniversalInterceptor<ReqT, RespT> extends ForwardingServerCallListener.Sim
     }
 
     /**
-     * 这里返回的结果就是撮合后的结果 请看AbstractApiController::callExchange中的序列化转换 这样可以节约一次序列化和反序列化开销 grpc直通exchange-core
-     *
-     * @param apiCommand
-     * @return
+     * Callback-based request handling — no CompletableFuture allocation.
+     * Non-leader redirect fires callback synchronously; leader path goes through raft consensus.
      */
-    private CompletableFuture<byte[]> handle(byte[] apiCommand) {
+    private void handle(byte[] apiCommand, BiConsumer<RaftResponse, Throwable> callback) {
         if (!RoleChangeEventbus.isLeader() && !allowFollowExecute(apiCommand)) {
             RaftNode raftNode = raftClusterContainer.leaderNode();
             if (raftNode == null) {
-                return CompletableFuture.completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray());
+                byte[] noLeader = CommandResult.newBuilder().setResultCode(CommandResultCode.NO_LEADER).build().toByteArray();
+                callback.accept(new RaftResponse(() -> noLeader, 0, 0), null);
+                return;
             }
             ServerNode leaderNode = Transformer.raftNodeTransform(raftNode);
-            return CompletableFuture
-                .completedFuture(CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray());
+            byte[] needMove = CommandResult.newBuilder().setResultCode(CommandResultCode.NEED_MOVE).setLeaderNode(leaderNode).build().toByteArray();
+            callback.accept(new RaftResponse(() -> needMove, 0, 0), null);
+            return;
         }
         byte[] raftLog = SerializeHelper.serializeWithType(ApiCommand.class, apiCommand);
-        return raftClusterContainer.requestConsensus(raftLog);
+        raftClusterContainer.requestConsensus(raftLog, callback);
     }
 
     protected boolean allowFollowExecute(byte[] command) {

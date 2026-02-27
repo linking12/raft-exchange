@@ -213,7 +213,7 @@ public final class SingleUserReportResult implements ReportResult {
             this.pendingBuyAvgPrice = bytes.readLong();
 
             this.leverage = bytes.readInt();
-            this.marginMode = MarginMode.values()[bytes.readInt()];
+            this.marginMode = MarginMode.of(bytes.readByte());
             this.extraMargin = bytes.readLong();
 
             this.unrealizedProfit = bytes.readLong();
@@ -235,7 +235,7 @@ public final class SingleUserReportResult implements ReportResult {
             bytes.writeLong(pendingSellAvgPrice);
             bytes.writeLong(pendingBuyAvgPrice);
             bytes.writeInt(leverage);
-            bytes.writeInt(marginMode.ordinal());
+            bytes.writeByte(marginMode.getCode());
             bytes.writeLong(extraMargin);
             bytes.writeLong(unrealizedProfit);
             bytes.writeLong(liquidationPrice);

@@ -319,7 +319,7 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
             buffer.putLong(cmd.size); // 8 bytes - can be compressed
             buffer.putInt(cmd.userCookie); // 4 bytes can be log-compressed
             buffer.putInt(cmd.leverage);
-            buffer.putInt(cmd.marginMode.ordinal());
+            buffer.put(cmd.marginMode.getCode());
 
             final int actionAndType = (cmd.orderType.getCode() << 1) | cmd.action.getCode();
             byte actionAndType1 = (byte) actionAndType;
@@ -554,7 +554,7 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
                     final long size = jr.readLong(); // 8 bytes - can be compressed
                     final int userCookie = jr.readInt(); // 4 bytes can be compressed as a optional low value
                     final int leverage = jr.readInt();
-                    final MarginMode marginMode = MarginMode.values()[jr.readInt()];
+                    final MarginMode marginMode = MarginMode.of(jr.readByte());
 
                     final byte actionAndType = jr.readByte(); // 1 byte
                     final OrderAction orderAction = OrderAction.of((byte) (actionAndType & 0b1));
