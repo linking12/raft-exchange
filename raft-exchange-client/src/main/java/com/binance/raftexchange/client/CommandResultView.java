@@ -8,13 +8,16 @@ import com.binance.raftexchange.stubs.response.MatcherEventType;
 import com.binance.raftexchange.stubs.response.MatcherTradeEvent;
 import com.binance.raftexchange.stubs.response.OrderCommand;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static com.binance.raftexchange.client.ExchangeApiHelper.longToDouble;
+import static com.binance.raftexchange.client.ExchangeApiHelper.longToBigDecimal;
 
 @Getter
+@Slf4j
 public class CommandResultView {
 
     private final CommandResultCode resultCode;
@@ -35,11 +38,16 @@ public class CommandResultView {
             OrderCommand orderCommand = commandResult.getOrderCommand();
             CommandResultView view = new CommandResultView(orderCommand.getResultCode());
             if (orderCommand.hasMatcherEvent()) {
+                // matcherEvent 的 scale 由 server 写进 PB，不查 metadataManager
                 view.matcherEvent = toMatcherEventView(orderCommand.getMatcherEvent());
             }
             if (orderCommand.hasMarketData()) {
-                CoreSymbolSpecification spec = metadataManager.getSymbolSpec(orderCommand.getSymbol());
-                view.marketData = toMarketDataView(orderCommand.getMarketData(), spec);
+                try {
+                    CoreSymbolSpecification spec = metadataManager.getSymbolSpec(orderCommand.getSymbol());
+                    view.marketData = toMarketDataView(orderCommand.getMarketData(), spec);
+                } catch (RuntimeException ex) {
+                    log.warn("skip marketData restore: symbol={}, err={}", orderCommand.getSymbol(), ex.toString());
+                }
             }
             return view;
         }
@@ -62,9 +70,9 @@ public class CommandResultView {
             view.matchedOrderCompleted = cur.getMatchedOrderCompleted();
             long baseScaleK = cur.getBaseScaleK();
             long quoteScaleK = cur.getQuoteScaleK();
-            view.price = longToDouble(cur.getPrice(), quoteScaleK);
-            view.size = longToDouble(cur.getSize(), baseScaleK);
-            view.bidderHoldPrice = longToDouble(cur.getBidderHoldPrice(), quoteScaleK);
+            view.price = longToBigDecimal(cur.getPrice(), quoteScaleK);
+            view.size = longToBigDecimal(cur.getSize(), baseScaleK);
+            view.bidderHoldPrice = longToBigDecimal(cur.getBidderHoldPrice(), quoteScaleK);
 
             if (headView == null) {
                 headView = view;
@@ -84,11 +92,15 @@ public class CommandResultView {
         view.bidSize = marketData.getBidSizes();
         long baseScaleK = spec.getBaseScaleK();
         long quoteScaleK = spec.getQuoteScaleK();
-        view.askPrices = marketData.getAskPricesList().stream().map(a -> longToDouble(a, quoteScaleK)).collect(Collectors.toList());
-        view.askVolumes = marketData.getAskVolumesList().stream().map(a -> longToDouble(a, baseScaleK)).collect(Collectors.toList());
+        view.askPrices = marketData.getAskPricesList().stream().map(a -> longToBigDecimal(a, quoteScaleK))
+            .collect(Collectors.toList());
+        view.askVolumes = marketData.getAskVolumesList().stream().map(a -> longToBigDecimal(a, baseScaleK))
+            .collect(Collectors.toList());
         view.askOrders = marketData.getAskOrdersList();
-        view.bidPrices = marketData.getBidPricesList().stream().map(b -> longToDouble(b, quoteScaleK)).collect(Collectors.toList());
-        view.bidVolumes = marketData.getBidVolumesList().stream().map(b ->longToDouble(b, baseScaleK)).collect(Collectors.toList());
+        view.bidPrices = marketData.getBidPricesList().stream().map(b -> longToBigDecimal(b, quoteScaleK))
+            .collect(Collectors.toList());
+        view.bidVolumes = marketData.getBidVolumesList().stream().map(b -> longToBigDecimal(b, baseScaleK))
+            .collect(Collectors.toList());
         view.bidOrders = marketData.getBidOrdersList();
         return view;
     }
@@ -100,9 +112,9 @@ public class CommandResultView {
         private long matchedOrderId;
         private long matchedOrderUid;
         private boolean matchedOrderCompleted;
-        private double price;
-        private double size;
-        private double bidderHoldPrice;
+        private BigDecimal price = BigDecimal.ZERO;
+        private BigDecimal size = BigDecimal.ZERO;
+        private BigDecimal bidderHoldPrice = BigDecimal.ZERO;
         private MatcherTradeEventView nextEvent;
     }
 
@@ -110,11 +122,11 @@ public class CommandResultView {
     public static class L2MarketDataView {
         private int askSize;
         private int bidSize;
-        private List<Double> askPrices;
-        private List<Double> askVolumes;
+        private List<BigDecimal> askPrices;
+        private List<BigDecimal> askVolumes;
         private List<Long> askOrders;
-        private List<Double> bidPrices;
-        private List<Double> bidVolumes;
+        private List<BigDecimal> bidPrices;
+        private List<BigDecimal> bidVolumes;
         private List<Long> bidOrders;
     }
 

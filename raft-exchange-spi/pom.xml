@@ -12,10 +12,41 @@
 	<artifactId>raft-exchange-spi</artifactId>
 	<version>1.0.0-SNAPSHOT</version>
 
+	<properties>
+	    <java.version>11</java.version>
+		<protoc.classifier>${os.detected.classifier}</protoc.classifier>
+	</properties>
+
+	<profiles>
+		<profile>
+			<id>mac</id>
+			<activation>
+				<os>
+					<family>mac</family>
+				</os>
+			</activation>
+			<properties>
+				<protoc.classifier>osx-x86_64</protoc.classifier>
+			</properties>
+		</profile>
+	</profiles>
+
 	<dependencies>
 		<dependency>
 			<groupId>io.grpc</groupId>
 			<artifactId>grpc-all</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<version>5.12.2</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<version>5.12.2</version>
+			<scope>test</scope>
 		</dependency>
 	</dependencies>
 	<build>
@@ -26,18 +57,15 @@
 				<version>1.7.1</version>
 			</extension>
 		</extensions>
-
 		<plugins>
 			<plugin>
 				<groupId>org.xolstice.maven.plugins</groupId>
 				<artifactId>protobuf-maven-plugin</artifactId>
 				<version>0.6.1</version>
 				<configuration>
-					<protocArtifact>
-						com.google.protobuf:protoc:3.25.8:exe:${os.detected.classifier}</protocArtifact>
+					<protocArtifact>com.google.protobuf:protoc:3.25.8:exe:${protoc.classifier}</protocArtifact>
 					<pluginId>grpc-java</pluginId>
-					<pluginArtifact>
-						io.grpc:protoc-gen-grpc-java:1.78.0:exe:${os.detected.classifier}</pluginArtifact>
+					<pluginArtifact>io.grpc:protoc-gen-grpc-java:1.81.0:exe:${protoc.classifier}</pluginArtifact>
 					<protoSourceRoot>protos</protoSourceRoot>
 				</configuration>
 				<executions>

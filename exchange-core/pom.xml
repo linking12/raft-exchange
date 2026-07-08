@@ -219,6 +219,67 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>2.22.2</version>
+				<configuration>
+					<argLine>--add-exports java.base/sun.nio.ch=ALL-UNNAMED --add-exports java.base/jdk.internal.ref=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED</argLine>
+				</configuration>
+				<!--
+					Surefire 按声明顺序串行执行 2 段 execution：
+
+					1) unit-shared-jvm   纯逻辑单测；单 fork + reuseForks=true 共享 JVM，最快
+					2) isolated-jvm      功能 IT（含 ITLiquidation/ITPerpetual）；3 fork 并行 + 每类独立 JVM，跨类零污染；rerun=2 兜底
+
+					perf micro-benchmark 太慢（NaiveImpl ~100s / DirectImpl ~32s）默认排除，
+					需要时单独 `-Dtest='perf/**/IT*'` 跑。
+				-->
+				<executions>
+					<execution>
+						<id>default-test</id>
+						<configuration>
+							<skip>true</skip>
+						</configuration>
+					</execution>
+
+					<execution>
+						<id>unit-shared-jvm</id>
+						<phase>test</phase>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<forkCount>1</forkCount>
+							<reuseForks>true</reuseForks>
+							<includes>
+								<include>**/unit/*Test.java</include>
+								<include>**/unit/*Tests.java</include>
+								<include>**/orderbook/*Test.java</include>
+								<include>**/event/*Test.java</include>
+								<include>**/RunCukeNaiveTests.java</include>
+							</includes>
+						</configuration>
+					</execution>
+
+					<execution>
+						<id>isolated-jvm</id>
+						<phase>test</phase>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<forkCount>3</forkCount>
+							<reuseForks>false</reuseForks>
+							<includes>
+								<include>**/IT*.java</include>
+								<include>**/PersistenceTests.java</include>
+								<include>**/RunCukesDirectLatencyTests.java</include>
+								<include>**/RunCukesDirectThroughputTests.java</include>
+							</includes>
+							<excludes>
+								<exclude>**/perf/**</exclude>
+							</excludes>
+							<rerunFailingTestsCount>2</rerunFailingTestsCount>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>

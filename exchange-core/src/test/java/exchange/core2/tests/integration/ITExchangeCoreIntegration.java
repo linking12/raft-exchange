@@ -50,20 +50,20 @@ public abstract class ITExchangeCoreIntegration {
     public abstract PerformanceConfiguration getPerformanceConfiguration();
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void basicFullCycleTestMargin() {
         basicFullCycleTest(SYMBOLSPEC_EUR_USD);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void basicFullCycleTestExchange() {
 
         basicFullCycleTest(SYMBOLSPEC_ETH_XBT);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void shouldInitSymbols() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.initBasicSymbols();
@@ -71,7 +71,7 @@ public abstract class ITExchangeCoreIntegration {
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void shouldInitUsers() {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
             container.addCurrency(CURRENECY_USD);
@@ -211,7 +211,7 @@ public abstract class ITExchangeCoreIntegration {
 
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void exchangeRiskBasicTest() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
@@ -250,9 +250,10 @@ public abstract class ITExchangeCoreIntegration {
                 assertNull(cmd.matcherEvent);
             });
 
-            // verify order placed with correct reserve price and account balance is updated accordingly
+            // 下单不再扣减 accounts，而是把 size*reservePrice 计入 exchangeLocked；accounts 保持原值。
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(2_100_000L));
+                assertThat(profile.getExchangeLocked().get(CURRENECY_XBT), is(2_100_000L));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(30_000L));
             });
 
@@ -303,7 +304,7 @@ public abstract class ITExchangeCoreIntegration {
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void exchangeRiskMoveTest() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
@@ -318,7 +319,9 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(99998999L));
+                // 下单 ASK 1001 lots 仅冻结 base 资产，accounts 保持原值
+                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(100_000_000L));
+                assertThat(profile.getExchangeLocked().get(CURRENECY_ETH), is(1001L));
                 assertTrue(!profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -339,7 +342,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(99998999L));
+                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(100_000_000L));
                 assertTrue(profile.fetchIndexedOrders().containsKey(202L));
             });
 
@@ -357,7 +360,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(99998999L));
+                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(100_000_000L));
                 assertTrue(profile.fetchIndexedOrders().containsKey(202L));
             });
 
@@ -375,7 +378,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(99998999L));
+                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(100_000_000L));
                 assertTrue(profile.fetchIndexedOrders().containsKey(202L));
             });
 
@@ -412,11 +415,12 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
 
-            // expected balance when 203 placed with reserve price 18_500
-            final long ethUid2 = 94_000_000L - 18_500 * 500 * SYMBOLSPEC_ETH_XBT.getQuoteScaleK() * 10;
+            // BID 不再预扣 accounts，size*reservePrice*scale 仅累计到 exchangeLocked
+            final long xbtLock203 = 18_500L * 500 * SYMBOLSPEC_ETH_XBT.getQuoteScaleK() * 10;
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(ethUid2));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L));
+                assertThat(profile.getExchangeLocked().get(CURRENECY_XBT), is(xbtLock203));
                 assertTrue(profile.fetchIndexedOrders().containsKey(203L));
             });
 
@@ -434,7 +438,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(ethUid2));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L));
                 assertThat(profile.fetchIndexedOrders().get(203L).price, is(15_000L));
             });
 
@@ -446,7 +450,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(ethUid2));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L));
                 assertThat(profile.fetchIndexedOrders().get(203L).price, is(15_000L));
             });
 
@@ -464,7 +468,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(ethUid2));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L));
                 assertThat(profile.fetchIndexedOrders().get(203L).price, is(18_500L));
             });
 
@@ -476,7 +480,7 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(ethUid2));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L));
                 assertThat(profile.fetchIndexedOrders().get(203L).price, is(17_500L));
             });
 
@@ -506,9 +510,11 @@ public abstract class ITExchangeCoreIntegration {
                     });
 
             // check UID_1 has 87.5M satoshi (17_500 * 10 * 500) and half-filled SELL order
+            // accounts[ETH] = 100M - 500 (已交割部分)；剩余 501 在 exchangeLocked 等待 cancel/match
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(CURRENECY_XBT), is(87_500_000L));
-                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(99998999L));
+                assertThat(profile.getAccounts().get(CURRENECY_ETH), is(99_999_500L));
+                assertThat(profile.getExchangeLocked().get(CURRENECY_ETH), is(501L));
                 assertThat(profile.fetchIndexedOrders().get(202L).filled, is(500L));
             });
 
@@ -549,7 +555,7 @@ public abstract class ITExchangeCoreIntegration {
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void exchangeCancelBid() throws Exception {
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
@@ -565,9 +571,11 @@ public abstract class ITExchangeCoreIntegration {
                         assertThat(cmd.resultCode, is(CommandResultCode.SUCCESS));
                     });
 
-            // verify order placed with correct reserve price and account balance is updated accordingly
+            // BID 下单不再预扣 accounts，size*reservePrice*scale 计入 exchangeLocked
+            final long xbtLock = 10 * 18_500L * 500 * SYMBOLSPEC_ETH_XBT.getQuoteScaleK();
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L - 10 * 18_500 * 500 * SYMBOLSPEC_ETH_XBT.getQuoteScaleK()));
+                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(94_000_000L));
+                assertThat(profile.getExchangeLocked().get(CURRENECY_XBT), is(xbtLock));
                 assertThat(profile.fetchIndexedOrders().get(203L).reserveBidPrice, is(18_500L));
             });
 

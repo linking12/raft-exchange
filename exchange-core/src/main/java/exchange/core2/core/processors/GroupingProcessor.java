@@ -16,9 +16,12 @@
 package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
+import java.util.Arrays;
 import exchange.core2.core.common.ADLUserPosition;
 import exchange.core2.core.common.CoreWaitStrategy;
 import exchange.core2.core.common.FundEvent;
+import exchange.core2.core.common.CommonByShard;
+import exchange.core2.core.common.FundingPaymentAndRecvNotional;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -156,7 +159,6 @@ public final class GroupingProcessor implements EventProcessor {
                         }
 
                         if (!groupingEnabled) {
-                            // TODO pooling
                             cmd.matcherEvent = null;
                             cmd.marketData = null;
                             continue;
@@ -210,10 +212,6 @@ public final class GroupingProcessor implements EventProcessor {
                                 tradeEventHead = null;
                             }
                         }
-
-                        /**
-                         * @modify 回收当前orderCommand下面的fundEvent
-                         */
                         if (EVENTS_POOLING) {
                             if (cmd.takerFundEvents != null && cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
                                 if (fundEventTail == null) {
@@ -232,25 +230,23 @@ public final class GroupingProcessor implements EventProcessor {
                             }
 
                             // 回收每个 maker shard 的链
-                            if (cmd.makerFundEventsByShard != null) {
-                                for (int i = 0; i < cmd.makerFundEventsByShard.length; i++) {
-                                    FundEvent shardHead = cmd.makerFundEventsByShard[i];
-                                    if (shardHead != null) {
-                                        if (fundEventTail == null) {
-                                            fundEventHead = shardHead;
-                                        } else {
-                                            fundEventTail.nextEvent = shardHead;
-                                        }
-                                        fundEventTail = shardHead;
-                                        fundEventCounter++;
-
-                                        while (fundEventTail.nextEvent != null) {
-                                            fundEventTail = fundEventTail.nextEvent;
-                                            fundEventCounter++;
-                                        }
-
-                                        cmd.makerFundEventsByShard[i] = null;
+                            for (int i = 0; i < cmd.makerFundEventsByShard.length; i++) {
+                                FundEvent shardHead = cmd.makerFundEventsByShard[i];
+                                if (shardHead != null) {
+                                    if (fundEventTail == null) {
+                                        fundEventHead = shardHead;
+                                    } else {
+                                        fundEventTail.nextEvent = shardHead;
                                     }
+                                    fundEventTail = shardHead;
+                                    fundEventCounter++;
+
+                                    while (fundEventTail.nextEvent != null) {
+                                        fundEventTail = fundEventTail.nextEvent;
+                                        fundEventCounter++;
+                                    }
+
+                                    cmd.makerFundEventsByShard[i] = null;
                                 }
                             }
 
@@ -261,31 +257,24 @@ public final class GroupingProcessor implements EventProcessor {
                                 fundEventCounter = 0;
                             }
                         }
-
-                        /**
-                         * @modify 回收当前orderCommand下面的adlUserPosition
-                         */
                         if (EVENTS_POOLING) {
-                            // 回收每个 adlUserPosition shard 的链
-                            if (cmd.adlUserPositionsByShard != null) {
-                                for (int i = 0; i < cmd.adlUserPositionsByShard.length; i++) {
-                                    ADLUserPosition shardHead = cmd.adlUserPositionsByShard[i];
-                                    if (shardHead != null) {
-                                        if (adlUserPositionTail == null) {
-                                            adlUserPositionHead = shardHead;
-                                        } else {
-                                            adlUserPositionTail.next = shardHead;
-                                        }
-                                        adlUserPositionTail = shardHead;
-                                        adlUserPositionCounter++;
-
-                                        while (adlUserPositionTail.next != null) {
-                                            adlUserPositionTail = adlUserPositionTail.next;
-                                            adlUserPositionCounter++;
-                                        }
-
-                                        cmd.adlUserPositionsByShard[i] = null;
+                            for (int i = 0; i < cmd.adlUserPositionsByShard.length; i++) {
+                                ADLUserPosition shardHead = cmd.adlUserPositionsByShard[i];
+                                if (shardHead != null) {
+                                    if (adlUserPositionTail == null) {
+                                        adlUserPositionHead = shardHead;
+                                    } else {
+                                        adlUserPositionTail.next = shardHead;
                                     }
+                                    adlUserPositionTail = shardHead;
+                                    adlUserPositionCounter++;
+
+                                    while (adlUserPositionTail.next != null) {
+                                        adlUserPositionTail = adlUserPositionTail.next;
+                                        adlUserPositionCounter++;
+                                    }
+
+                                    cmd.adlUserPositionsByShard[i] = null;
                                 }
                             }
 
@@ -298,19 +287,15 @@ public final class GroupingProcessor implements EventProcessor {
                         }
 
                         cmd.matcherEvent = null;
-                        // ApiSystemLiquidationNotify的通知事件直接挂在这里了，不能置空
                         if (cmd.command != OrderCommandType.SYSTEM_LIQUIDATION_NOTIFY) {
                             cmd.takerFundEvents = null;
                         }
-                        cmd.makerFundEventsByShard = null;
-                        cmd.adlUserPositionsByShard = null;
-                        // TODO collect to shared buffer
+                        Arrays.fill(cmd.makerFundEventsByShard, null);
+                        Arrays.fill(cmd.adlUserPositionsByShard, null);
+                        FundingPaymentAndRecvNotional.reset(cmd.fundingPaymentAndRecvNotionalByShard);
+                        CommonByShard.reset(cmd.commonByShard);
                         cmd.marketData = null;
-
                         msgsInGroup++;
-
-                        // switch group after each N messages
-                        // avoid changing groups when PERSIST_STATE_MATCHING is already executing
                         if (msgsInGroup >= msgsInGroupLimit && cmd.command != OrderCommandType.PERSIST_STATE_RISK) {
                             groupCounter++;
                             msgsInGroup = 0;

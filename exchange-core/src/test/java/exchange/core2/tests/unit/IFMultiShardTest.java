@@ -7,7 +7,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.settlement.IFSettlementProcessor;
+import exchange.core2.core.processors.IFCommandProcessor;
 import exchange.core2.core.processors.liquidation.LiquidationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,13 +28,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class IFMultiShardTest {
 
     private static final int SYMBOL = 10001;
-    private IFSettlementProcessor processor;
+    private IFCommandProcessor processor;
     private OrderBookEventsHelper eventsHelper;
 
     @BeforeEach
     void setUp() {
         eventsHelper = new OrderBookEventsHelper(() -> new MatcherTradeEvent());
-        processor = new IFSettlementProcessor(eventsHelper);
+        processor = new IFCommandProcessor(eventsHelper);
     }
 
     // ========== 多分片均衡分配测试 ==========
@@ -560,7 +560,7 @@ class IFMultiShardTest {
     // ========== 辅助方法 ==========
 
     private OrderCommand createIFCommand(int symbol, long size, long price) {
-        OrderCommand cmd = new OrderCommand();
+        OrderCommand cmd = new OrderCommand(1);
         cmd.command = OrderCommandType.IF_TAKEOVER;
         cmd.symbol = symbol;
         cmd.action = OrderAction.ASK;

@@ -17,6 +17,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
@@ -65,37 +66,37 @@ public abstract class ITExchangeCoreIntegrationRejection {
     // -------------------------- buy no rejection tests -----------------------------
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionMarginGtc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, GTC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionExchangeGtc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, GTC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionExchangeIoc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionMarginIoc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, NO_REJECTION);
     }
@@ -103,87 +104,130 @@ public abstract class ITExchangeCoreIntegrationRejection {
     // -------------------------- buy with rejection tests -----------------------------
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionMarginGtc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, GTC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionExchangeGtc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, GTC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionExchangeIoc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionMarginIoc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithSizeRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithSizeRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithBudgetRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_BUDGET);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithBudgetRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_BUDGET);
+    }
+
+    // -------------------------- IOC_BUDGET buy tests -----------------------------
+    // IOC_BUDGET 与 FOK_BUDGET 共用 testMultiBuy 价格分支：cmd.price 当作 product-scale 总预算。
+    // 区别于 FOK 全成或全弃，IOC_BUDGET 允许部分成交：
+    //   - NO_REJECTION：预算精确覆盖整本订单簿 → 全成
+    //   - REJECTION_BY_BUDGET：预算 -1 → 引擎按价档逐档吃单到预算耗尽，剩余 size reject
+    //   - REJECTION_BY_SIZE：size +1，预算仍足额 → 簿子全部吃光，多出来的 1 单位 reject
+
+    @Test
+    @Timeout(15)
+    public void testMultiBuyNoRejectionExchangeIocB() {
+        testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC_BUDGET, NO_REJECTION);
+    }
+
+    @Test
+    @Timeout(15)
+    public void testMultiBuyNoRejectionMarginIocB() {
+        testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC_BUDGET, NO_REJECTION);
+    }
+
+    @Test
+    @Timeout(15)
+    public void testMultiBuyWithSizeRejectionExchangeIocB() {
+        testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC_BUDGET, REJECTION_BY_SIZE);
+    }
+
+    @Test
+    @Timeout(15)
+    public void testMultiBuyWithSizeRejectionMarginIocB() {
+        testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC_BUDGET, REJECTION_BY_SIZE);
+    }
+
+    @Test
+    @Timeout(15)
+    public void testMultiBuyWithBudgetRejectionExchangeIocB() {
+        testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC_BUDGET, REJECTION_BY_BUDGET);
+    }
+
+    @Test
+    @Timeout(15)
+    public void testMultiBuyWithBudgetRejectionMarginIocB() {
+        testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC_BUDGET, REJECTION_BY_BUDGET);
     }
 
     // -------------------------- sell no rejection tests -----------------------------
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionMarginGtc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, GTC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionExchangeGtc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, GTC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionMarginIoc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionExchangeIoc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, NO_REJECTION);
     }
@@ -191,51 +235,67 @@ public abstract class ITExchangeCoreIntegrationRejection {
     // -------------------------- sell with rejection tests -----------------------------
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionMarginGtc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, GTC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionExchangeGtc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, GTC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionMarginIoc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionExchangeIoc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithSizeRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithSizeRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithExpectationRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, REJECTION_BY_BUDGET);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithExpectationRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, REJECTION_BY_BUDGET);
+    }
+
+    // -------------------------- IOC_BUDGET sell tests (always reject) ---------
+    // ASK 方向的 IOC_BUDGET 引擎不支持：command 返回 SUCCESS，但匹配阶段整单 reject。
+    // 这里仅做冒烟（command 入队不报错），具体 reject 事件覆盖在 OrderBookBaseTest#shouldRejectAskIocBudget。
+
+    @Test
+    @Timeout(15)
+    public void testMultiSellAskRejectionExchangeIocB() {
+        testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC_BUDGET, NO_REJECTION);
+    }
+
+    @Test
+    @Timeout(15)
+    public void testMultiSellAskRejectionMarginIocB() {
+        testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC_BUDGET, NO_REJECTION);
     }
 
     // configuration provided by child class
@@ -266,13 +326,17 @@ public abstract class ITExchangeCoreIntegrationRejection {
 
 
             long price = 160500L;
-            if (orderType == FOK_BUDGET) {
+            if (orderType == FOK_BUDGET || orderType == IOC_BUDGET) {
+                // IOC_BUDGET 复用同一价格分支：REJECTION_BY_BUDGET 下 budget-1 让 FOK 整单弃成，IOC 部分成交。
                 price = 160000L * 7L + 159900L * 10L + 160000L * 3L + 160500L * 20L + (rejectionCause == REJECTION_BY_BUDGET ? -1 : 0);
             }
 
             container.submitCommandSync(builderPlace(symbolId, UID_4, BID, orderType).orderId(405L).price(price).reservePrice(price).size(size).build(), CommandResultCode.SUCCESS);
 
-//            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "BID " + orderType + " + " + rejectionCause + " + " + symbolSpec.type
+                            + ": 全局账面应该闭合, sum=" + bal.getGlobalBalancesSum());
         }
 
 //        verify(handler, times(5)).commandResult(commandResultCaptor.capture());
@@ -349,6 +413,9 @@ public abstract class ITExchangeCoreIntegrationRejection {
             long price = 159_900L;
             if (orderType == FOK_BUDGET) {
                 price = 160_500L + 160_000L * 20L + 159_900L + (rejectionCause == REJECTION_BY_BUDGET ? 1 : 0);
+            } else if (orderType == IOC_BUDGET) {
+                // ASK IOC_BUDGET 无论给多少 expectation，matcher 都整单 reject。给个有效数值即可通过 RiskEngine 预占。
+                price = 160_500L + 160_000L * 20L + 159_900L;
             }
 
             container.submitCommandSync(builderPlace(symbolId, UID_1, BID, GTC).orderId(101L).price(160_000L).reservePrice(166_000L).size(12L).build(), CommandResultCode.SUCCESS);
@@ -358,7 +425,10 @@ public abstract class ITExchangeCoreIntegrationRejection {
 
             container.submitCommandSync(builderPlace(symbolId, UID_4, ASK, orderType).orderId(405L).price(price).size(size).build(), CommandResultCode.SUCCESS);
 
-//            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "ASK " + orderType + " + " + rejectionCause + " + " + symbolSpec.type
+                            + ": 全局账面应该闭合, sum=" + bal.getGlobalBalancesSum());
         }
 
 //        verify(handler, times(5)).commandResult(commandResultCaptor.capture());

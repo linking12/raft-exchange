@@ -1,0 +1,211 @@
+package com.binance.raftexchange.server.raft;
+
+import com.binance.raftexchange.stubs.MarginMode;
+import com.binance.raftexchange.stubs.OrderAction;
+import com.binance.raftexchange.stubs.OrderType;
+import com.binance.raftexchange.stubs.PositionMode;
+import com.binance.raftexchange.stubs.request.ApiAddUser;
+import com.binance.raftexchange.stubs.request.ApiAdjustLeverage;
+import com.binance.raftexchange.stubs.request.ApiAutoDeleveraging;
+import com.binance.raftexchange.stubs.request.ApiIFTakeOver;
+import com.binance.raftexchange.stubs.request.ApiLiquidationOrder;
+import com.binance.raftexchange.stubs.request.ApiLoanAddCollateral;
+import com.binance.raftexchange.stubs.request.ApiLoanCreate;
+import com.binance.raftexchange.stubs.request.ApiLoanCrossAddCollateral;
+import com.binance.raftexchange.stubs.request.ApiLoanCrossBorrow;
+import com.binance.raftexchange.stubs.request.ApiLoanCrossRepay;
+import com.binance.raftexchange.stubs.request.ApiLoanCrossWithdrawCollateral;
+import com.binance.raftexchange.stubs.request.ApiLoanReleaseCollateral;
+import com.binance.raftexchange.stubs.request.ApiLoanRepay;
+import com.binance.raftexchange.stubs.request.ApiAdjustMargin;
+import com.binance.raftexchange.stubs.request.ApiAdjustMarkPrice;
+import com.binance.raftexchange.stubs.request.ApiAdjustPositionMode;
+import com.binance.raftexchange.stubs.request.ApiAdjustUserBalance;
+import com.binance.raftexchange.stubs.request.ApiCancelOrder;
+import com.binance.raftexchange.stubs.request.ApiClosePosition;
+import com.binance.raftexchange.stubs.request.ApiCommand;
+import com.binance.raftexchange.stubs.request.ApiMoveOrder;
+import com.binance.raftexchange.stubs.request.ApiNop;
+import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
+import com.binance.raftexchange.stubs.request.ApiPlaceOrder;
+import com.binance.raftexchange.stubs.request.ApiPoolDeposit;
+import com.binance.raftexchange.stubs.request.ApiPoolWithdraw;
+import com.binance.raftexchange.stubs.request.ApiReduceOrder;
+import com.binance.raftexchange.stubs.request.ApiResetFee;
+import com.binance.raftexchange.stubs.request.ApiResumeUser;
+import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
+import com.binance.raftexchange.stubs.request.ApiSettlePNL;
+import com.binance.raftexchange.stubs.request.ApiSuspendUser;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
+/**
+ * CommandRegistry 所有 case 一对一 dispatch 全覆盖：每个 gRPC oneof case 都映射到正确的 exchange-core ApiCommand 子类。 防止重构时漏掉某条注册或者注册到错的
+ * convert 函数。
+ */
+class CommandRegistryAllCasesTest {
+
+    static Stream<Arguments> allCases() {
+        return Stream.of(
+            Arguments.of(ApiCommand.newBuilder()
+                .setPlaceOrder(ApiPlaceOrder.newBuilder().setOrderId(1L).setUid(7L).setSymbol(1)
+                    .setAction(OrderAction.BID).setOrderType(OrderType.GTC).setMarginMode(MarginMode.ISOLATED))
+                .build(), exchange.core2.core.common.api.ApiPlaceOrder.class),
+            Arguments.of(
+                ApiCommand.newBuilder().setMoveOrder(ApiMoveOrder.newBuilder().setOrderId(1L).setUid(7L)).build(),
+                exchange.core2.core.common.api.ApiMoveOrder.class),
+            Arguments.of(
+                ApiCommand.newBuilder().setCancelOrder(ApiCancelOrder.newBuilder().setOrderId(1L).setUid(7L)).build(),
+                exchange.core2.core.common.api.ApiCancelOrder.class),
+            Arguments.of(
+                ApiCommand.newBuilder().setReduceOrder(ApiReduceOrder.newBuilder().setOrderId(1L).setUid(7L)).build(),
+                exchange.core2.core.common.api.ApiReduceOrder.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setClosePosition(
+                        ApiClosePosition.newBuilder().setOrderId(1L).setUid(7L).setAction(OrderAction.BID))
+                    .build(),
+                exchange.core2.core.common.api.ApiClosePosition.class),
+            Arguments.of(
+                ApiCommand.newBuilder().setOrderBookRequest(ApiOrderBookRequest.newBuilder().setSymbol(1)).build(),
+                exchange.core2.core.common.api.ApiOrderBookRequest.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setAdjustLeverage(ApiAdjustLeverage.newBuilder().setUid(7L).setSymbol(1).setLeverage(10)).build(),
+                exchange.core2.core.common.api.ApiAdjustLeverage.class),
+            Arguments.of(ApiCommand.newBuilder()
+                .setAdjustBalance(ApiAdjustUserBalance.newBuilder().setUid(7L).setCurrency(2).setAmount(100L)).build(),
+                exchange.core2.core.common.api.ApiAdjustUserBalance.class),
+            Arguments.of(ApiCommand.newBuilder().setAddUser(ApiAddUser.newBuilder().setUid(42L)).build(),
+                exchange.core2.core.common.api.ApiAddUser.class),
+            Arguments.of(ApiCommand.newBuilder().setSuspendUser(ApiSuspendUser.newBuilder().setUid(7L)).build(),
+                exchange.core2.core.common.api.ApiSuspendUser.class),
+            Arguments.of(ApiCommand.newBuilder().setResumeUser(ApiResumeUser.newBuilder().setUid(7L)).build(),
+                exchange.core2.core.common.api.ApiResumeUser.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setAdjustPositionMode(
+                        ApiAdjustPositionMode.newBuilder().setUid(7L).setPositionMode(PositionMode.ONEWAY))
+                    .build(),
+                exchange.core2.core.common.api.ApiAdjustPositionMode.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setAdjustMargin(ApiAdjustMargin.newBuilder().setUid(7L).setSymbol(1).setCurrency(2).setAmount(100L)
+                        .setMarginMode(MarginMode.ISOLATED))
+                    .build(),
+                exchange.core2.core.common.api.ApiAdjustMargin.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setAdjustMarkprice(ApiAdjustMarkPrice.newBuilder().setSymbol(1).setMarkPrice(100L)).build(),
+                exchange.core2.core.common.api.ApiAdjustMarkPrice.class),
+            Arguments.of(ApiCommand.newBuilder()
+                .setSettleFundingFees(ApiSettleFundingFees.newBuilder().setSymbol(1).setAction(OrderAction.BID))
+                .build(), exchange.core2.core.common.api.ApiSettleFundingFees.class),
+            Arguments.of(ApiCommand.newBuilder()
+                .setSettlePnl(ApiSettlePNL.newBuilder().setSymbol(1).setSettlePrice(100L)).build(),
+                exchange.core2.core.common.api.ApiSettlePNL.class),
+            Arguments.of(ApiCommand.newBuilder().setResetFee(ApiResetFee.newBuilder()).build(),
+                exchange.core2.core.common.api.ApiResetFee.class),
+            Arguments.of(ApiCommand.newBuilder().setNop(ApiNop.newBuilder()).build(),
+                exchange.core2.core.common.api.ApiNop.class),
+            // 强平 cmd 经 raft 复制：leader publish → follower FSM apply → CommandRegistry dispatch 到 LE 状态机入口
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLiquidationOrder(ApiLiquidationOrder.newBuilder().setOrderId(1L).setUid(7L).setSymbol(1)
+                        .setAction(OrderAction.ASK).setOrderType(OrderType.IOC).setPrice(100L).setSize(4L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLiquidationOrder.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setIfTakeover(ApiIFTakeOver.newBuilder().setOrderId(1L).setUid(7L).setSymbol(1)
+                        .setAction(OrderAction.BID).setPrice(100L).setSize(4L))
+                    .build(),
+                exchange.core2.core.common.api.ApiIFTakeOver.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setAutoDeleveraging(ApiAutoDeleveraging.newBuilder().setOrderId(1L).setUid(7L).setSymbol(1)
+                        .setAction(OrderAction.BID).setPrice(100L).setSize(4L))
+                    .build(),
+                exchange.core2.core.common.api.ApiAutoDeleveraging.class),
+            // loan 子域 —— 详见 loan.md §5；每个 CommandCase.LOAN_XXX / POOL_XXX 一条覆盖，防止漏注册
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanCreate(ApiLoanCreate.newBuilder().setExternalId(1L).setUid(7L).setLoanId(100L)
+                        .setSymbol(1).setCollateralAmount(1L).setPrincipal(30000L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanCreate.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanRepay(ApiLoanRepay.newBuilder().setExternalId(2L).setUid(7L).setLoanId(100L)
+                        .setRepayAmount(0L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanRepay.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanAddCollateral(ApiLoanAddCollateral.newBuilder().setExternalId(3L).setUid(7L)
+                        .setLoanId(100L).setAmount(1L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanAddCollateral.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanReleaseCollateral(ApiLoanReleaseCollateral.newBuilder().setExternalId(4L).setUid(7L)
+                        .setLoanId(100L).setAmount(1L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanReleaseCollateral.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanCrossAddCollateral(ApiLoanCrossAddCollateral.newBuilder().setExternalId(5L).setUid(7L)
+                        .setCurrency(1).setAmount(1L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanCrossAddCollateral.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanCrossWithdrawCollateral(ApiLoanCrossWithdrawCollateral.newBuilder().setExternalId(6L)
+                        .setUid(7L).setCurrency(1).setAmount(1L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanCrossWithdrawCollateral.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanCrossBorrow(ApiLoanCrossBorrow.newBuilder().setExternalId(7L).setUid(7L).setLoanId(200L)
+                        .setLoanCcy(2).setPrincipal(10000L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanCrossBorrow.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanCrossRepay(ApiLoanCrossRepay.newBuilder().setExternalId(8L).setUid(7L).setLoanId(200L)
+                        .setRepayAmount(0L))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanCrossRepay.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setPoolDeposit(ApiPoolDeposit.newBuilder().setExternalId(9L).setShardId(0).setCurrency(2)
+                        .setAmount(50000L))
+                    .build(),
+                exchange.core2.core.common.api.ApiPoolDeposit.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setPoolWithdraw(ApiPoolWithdraw.newBuilder().setExternalId(10L).setShardId(0).setCurrency(2)
+                        .setAmount(10000L))
+                    .build(),
+                exchange.core2.core.common.api.ApiPoolWithdraw.class));
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("allCases")
+    void toExchangeCommand_mapsToExpectedCorePojoType(ApiCommand grpcCmd,
+        Class<? extends exchange.core2.core.common.api.ApiCommand> expectedCoreType) {
+        CommandRegistry reg = new CommandRegistry();
+
+        exchange.core2.core.common.api.ApiCommand result = reg.toExchangeCommand(grpcCmd);
+
+        assertNotNull(result, "case " + grpcCmd.getCommandCase() + " 必须有 dispatch entry");
+        assertEquals(expectedCoreType, result.getClass(),
+            "case " + grpcCmd.getCommandCase() + " 应映射到 " + expectedCoreType.getSimpleName());
+    }
+}

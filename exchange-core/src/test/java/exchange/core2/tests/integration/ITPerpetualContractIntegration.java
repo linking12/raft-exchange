@@ -21,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -243,6 +244,14 @@ class ITPerpetualContractIntegration {
         long deposit = 20000L;
         int makerFee = 100;
         int takerFee = 200;
+        List<IFundEventsHandler.FundEventReport> pnlSettlements = Collections.synchronizedList(new ArrayList<>());
+        doAnswer(inv -> {
+            IFundEventsHandler.FundEventReport r = inv.getArgument(0);
+            if (FundEvent.FundEventType.PNL_SETTLEMENT.equals(r.getEventType())) {
+                pnlSettlements.add(r);
+            }
+            return null;
+        }).when(handler).fundEventReport(any());
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
             container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
@@ -299,19 +308,20 @@ class ITPerpetualContractIntegration {
                 assertThat(profile.getPositions().size(), is(0));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
-        } finally {
-            verify(handler, atLeast(19)).fundEventReport(fundEventCaptor.capture());
-            // check fund event
-            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
-            IFundEventsHandler.FundEventReport pnl1 = null;
 
-            for (int i = 0; i < fundEvents.size(); i++) {
-                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
-                if (report.getEventType().equals(FundEvent.FundEventType.PNL_SETTLEMENT) && report.getAccountId() == UID_1) {
-                    pnl1 = report;
-                    break;
-                }
-            }
+            LatencyTools.waitForCondition(60_000, () ->
+                    pnlSettlements.stream().anyMatch(r -> r.getAccountId() == UID_1) &&
+                    pnlSettlements.stream().anyMatch(r -> r.getAccountId() == UID_2));
+
+            // 总事件数断言（fundEventReport 包含所有 type 的事件，断言期望条数 >=19）
+            verify(handler, atLeast(19)).fundEventReport(any());
+
+            // 诊断直接读 pnlSettlements（doAnswer 同步注入），避免再走 mockito captor —— 在 disruptor 线程异步推送下
+            // captor 的快照与 doAnswer 注入的列表会有时序差，先前 finally 用 captor 导致 iter≥2 时 pnl2=null 的 NPE。
+            IFundEventsHandler.FundEventReport pnl1 = pnlSettlements.stream()
+                    .filter(r -> r.getAccountId() == UID_1)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("PNL_SETTLEMENT for UID_1 not received"));
             assertThat(UID_1, is(pnl1.getAccountId()));
             assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl1.getEventType()));
             assertThat(quoteId, is(pnl1.getBalances().getCurrency()));
@@ -333,14 +343,10 @@ class ITPerpetualContractIntegration {
             EventCheck.checkEvent(pnl1);
             EventCheck.checkEventPending(pnl1);
 
-            IFundEventsHandler.FundEventReport pnl2 = null;
-            for (int i = 0; i < fundEvents.size(); i++) {
-                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
-                if (report.getEventType().equals(FundEvent.FundEventType.PNL_SETTLEMENT) && report.getAccountId() == UID_2) {
-                    pnl2 = report;
-                    break;
-                }
-            }
+            IFundEventsHandler.FundEventReport pnl2 = pnlSettlements.stream()
+                    .filter(r -> r.getAccountId() == UID_2)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("PNL_SETTLEMENT for UID_2 not received"));
             assertThat(UID_2, is(pnl2.getAccountId()));
             assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl2.getEventType()));
             assertThat(quoteId, is(pnl2.getBalances().getCurrency()));
@@ -525,24 +531,26 @@ class ITPerpetualContractIntegration {
             container.createAskWithOrderId(MAKER_2, UID_1, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.createBidWithOrderId(TAKER_2, UID_3, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             // init margin = 150 - 150/10 = 135
+            // 关仓手续费：1 手 maker 关仓费 = makerFee/size = 10
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee - 10));
                 assertThat(profile.getPositions().getFirst().get(0).openVolume, is(size - 1L));
                 assertThat(profile.getPositions().getFirst().get(0).profit, is(-150L));
                 assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(1000L * size - updatedPrice));
                 assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(135L));
             });
 
-            // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit
+            // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit - 全程 10 手 maker 关仓费 (= makerFee)
             container.createAskWithOrderId(MAKER_3, UID_1, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.createBidWithOrderId(TAKER_3, UID_3, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 - 150));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 - 150 - makerFee));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         } finally {
-            verify(handler, times(33)).fundEventReport(fundEventCaptor.capture());
+            // 33 原始事件 + 1 PNL_SETTLEMENT（其中一方仓位归零后 profit 入账）
+            verify(handler, times(34)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
             IFundEventsHandler.FundEventReport event1 = null;
@@ -685,7 +693,7 @@ class ITPerpetualContractIntegration {
                     .build();
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
 
-            LatencyTools.waitForCondition(150, () -> {
+            LatencyTools.waitForCondition(60_000, () -> {
                 try {
                     return container.getUserProfile(UID_1).getPositions().getFirst().get(0).profit > 0;
                 } catch (Exception e) {
@@ -712,20 +720,21 @@ class ITPerpetualContractIntegration {
             container.createAskWithOrderId(MAKER_2, UID_1, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.createBidWithOrderId(TAKER_2, UID_3, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             // init margin = 150 - 150/10 = 135
+            // 关仓手续费：1 手 maker 关仓费 = makerFee/size = 10
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee - 10));
                 assertThat(profile.getPositions().getFirst().get(0).openVolume, is(size - 1L));
                 assertThat(profile.getPositions().getFirst().get(0).profit, is(150L));
                 assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(1000L * size - updatedPrice));
                 assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(135L));
             });
 
-            // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit
+            // 平仓剩余所有, balance = deposit - makerFee - 全程 maker 关仓费 (= makerFee) + profit + fundingFee
             container.createAskWithOrderId(MAKER_3, UID_1, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.createBidWithOrderId(TAKER_3, UID_3, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 + 150));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 + 150 - makerFee));
             });
             assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
         }
@@ -823,12 +832,25 @@ class ITPerpetualContractIntegration {
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
             // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
             // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            // triggerOnce 向 ring buffer 投入强平命令后立即返回，多步流程（FORCE→IF→ADL）需要 LiquidationEngine
+            // 多次 republish 推进。取消钉核后 2s scheduler 调度被 OS 抖动 → 主动每 100ms triggerOnce 兜底，
+            // 绕开 scheduler 延迟保证 5s 内能完成全流程。
+            Runnable trigger = () ->
+                container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            trigger.run();
+            LatencyTools.waitForCondition(5_000, () -> {
+                try {
+                    return container.getUserProfile(UID_1).getPositions().size() == 0;
+                } catch (Exception e) {
+                    return false;
+                }
+            }, trigger, 100);
 
             //  openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 4/10 = 66L
             // openPriceSum = 10 * 1000 - 4 * 600 = 7600L
+            // 强平时被强平方按 taker 关仓费收（Binance 模型），10 手 takerFee 关仓费 = takerFee
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee - liquidateFee));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee - liquidateFee - takerFee));
                 assertThat(profile.getPositions().size(), is(0));
             });
 

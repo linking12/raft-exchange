@@ -54,8 +54,8 @@ public final class SimpleEventsProcessorTest {
         cmd.matcherEvent = new MatcherTradeEvent(MatcherEventType.REDUCE, 0, true, 0, 0, true,
                 OrderCommandType.PLACE_ORDER, 0, 0, OrderType.GTC, 0, 0, 0, 0, 0, 0, 0, 0, 0, null);
 
-        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 0L, 0L, 0, 0L, 0L, 0L, 1, 0L, 0L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, null);
-        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 0L, 0L, 0, 0L, 0L, 0L, 1, 0L, 0L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, null);
+        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 0L, 0L, 0, 0L, 0L, 0L, 1, 0L, 0L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0L, 0L, (byte) 0, null);
+        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 0L, 0L, 0, 0L, 0L, 0L, 1, 0L, 0L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0L, 0L, (byte) 0, null);
 
         processor.accept(cmd, 192837L);
 
@@ -152,8 +152,8 @@ public final class SimpleEventsProcessorTest {
                 .nextEvent(null)
                 .build();
 
-        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 1000L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, null);
-        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 10000L, PositionDirection.LONG, 1, 2, 3, 4, 5, 6, 7, 8, 9, MarginMode.ISOLATED, 10, 11, 12, 13, 14, null);
+        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 1000L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0L, 0L, (byte) 0, null);
+        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 10000L, PositionDirection.LONG, 1, 2, 3, 4, 5, 6, 7, 8, 9, MarginMode.ISOLATED, 10, 11, 12, 13, 14, 0L, 0L, (byte) 0, null);
 
         processor.accept(cmd, 192837L);
 
@@ -320,8 +320,8 @@ public final class SimpleEventsProcessorTest {
         cmd.matcherEvent = firstTrade;
         firstTrade.nextEvent = secondTrade;
 
-        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 1000L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, null);
-        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 10000L, PositionDirection.LONG, 1, 2, 3, 4, 5, 6, 7, 8, 9, MarginMode.ISOLATED, 10, 11, 12, 13, 14, null);
+        cmd.takerFundEvents = new FundEvent(false, FundEvent.FundEventType.LOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 1000L, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0L, 0L, (byte) 0, null);
+        cmd.takerFundEvents.nextEvent = new FundEvent(false, FundEvent.FundEventType.UNLOCKED, 10L, 100L, 10, 1000L, 0L, 10L, 1, 1000L, 10000L, PositionDirection.LONG, 1, 2, 3, 4, 5, 6, 7, 8, 9, MarginMode.ISOLATED, 10, 11, 12, 13, 14, 0L, 0L, (byte) 0, null);
 
         processor.accept(cmd, 12981721239L);
 
@@ -557,7 +557,7 @@ public final class SimpleEventsProcessorTest {
 
     private OrderCommand sampleCancelCommand() {
 
-        return OrderCommand.builder()
+        return OrderCommand.testBuilder(0)
                 .command(OrderCommandType.CANCEL_ORDER)
                 .orderId(123L)
                 .symbol(3)
@@ -577,7 +577,7 @@ public final class SimpleEventsProcessorTest {
 
     private OrderCommand sampleReduceCommand() {
 
-        return OrderCommand.builder()
+        return OrderCommand.testBuilder(0)
                 .command(OrderCommandType.REDUCE_ORDER)
                 .orderId(123L)
                 .symbol(3)
@@ -597,7 +597,7 @@ public final class SimpleEventsProcessorTest {
 
     private OrderCommand samplePlaceOrderCommand() {
 
-        return OrderCommand.builder()
+        return OrderCommand.testBuilder(0)
                 .command(OrderCommandType.PLACE_ORDER)
                 .orderId(123L)
                 .symbol(3)
@@ -633,7 +633,7 @@ public final class SimpleEventsProcessorTest {
     }
 
     private OrderCommand sampleBalanceAdjustCommand() {
-        OrderCommand cmd = OrderCommand.builder()
+        OrderCommand cmd = OrderCommand.testBuilder(0)
                 .command(OrderCommandType.BALANCE_ADJUSTMENT)
                 .uid(301L)
                 .symbol(30)

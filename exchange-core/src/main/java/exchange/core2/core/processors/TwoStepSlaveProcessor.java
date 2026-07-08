@@ -104,6 +104,10 @@ public final class TwoStepSlaveProcessor implements EventProcessor {
                     return;
                 }
 
+            } catch (final AlertException ex) {
+                if (running.get() != RUNNING) {
+                    return;
+                }
             } catch (final Throwable ex) {
                 exceptionHandler.handleEventException(ex, nextSequence, event);
                 sequence.set(nextSequence);

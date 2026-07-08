@@ -500,19 +500,20 @@ class ITFutureBasic extends ITFutureBase {
 
             // check balance
             container.validateUserState(userId1, profile -> {
-                // Profit: 10500 - 10000 = 500, minus maker fee 10
-                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L + 500L)));
+                // Profit: 10500 - 10000 = 500, minus open maker fee 10 + close maker fee 10
+                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L - 10L + 500L)));
             });
             container.validateUserState(userId2, profile -> {
-                // Loss: 10000 - 10500 = -500, minus taker fee 20
-                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L - 500L)));
+                // Loss: 10000 - 10500 = -500, minus open taker fee 20 + close taker fee 20
+                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L - 20L - 500L)));
             });
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(14)).fundEventReport(fundEventCaptor.capture());
+            // 8 原始事件 + 2 PNL_SETTLEMENT（双方全平后 profit 入账）
+            verify(handler, times(16)).fundEventReport(fundEventCaptor.capture());
         }
     }
 
@@ -547,12 +548,12 @@ class ITFutureBasic extends ITFutureBase {
 
             // check balance
             container.validateUserState(userId1, profile -> {
-                // Only maker fee deducted, profit not realized until fully closed
-                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L * 10)));
+                // Open maker fee 10*10 + partial close maker fee 10*1; profit not realized until fully closed
+                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L * 10 - 10L * 1)));
             });
             container.validateUserState(userId2, profile -> {
-                // Only taker fee deducted, loss not realized until fully closed
-                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L * 10)));
+                // Open taker fee 20*10 + partial close taker fee 20*1; loss not realized until fully closed
+                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L * 10 - 20L * 1)));
             });
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
@@ -710,15 +711,254 @@ class ITFutureBasic extends ITFutureBase {
                     .build();
             container.submitCommandSync(reduceOnlyOrder, CommandResultCode.SUCCESS);
 
-            // 验证无仓位被创建
+            // 验证无仓位被创建：reduce-only 无仓 → SUCCESS 但不入 map，positions 上无 symbolId
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), Is.is((long) deposit));
-                // reduce-only订单被忽略，仓位应该是空的或openVolume为0
-                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is(0L));
+                assertNull(profile.getPositions().get(symbolId));
             });
 
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    // -------------------------- deferred position insertion tests --------------------------
+    // 这一组测试锁定 placeOrder 的"全部校验通过才入 map"契约：
+    //   失败的 leverage / NSF / reduce-only-zero 不应在 userProfile.positions 上留下空 record。
+
+    // T1：leverage 超限拒绝时，positions map 上不应被污染（与 testReduceOnlyWithoutPosition 对称）。
+    @Test
+    public void testLeverageRejectDoesNotLeavePosition() throws Exception {
+        int deposit = 100000;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, deposit, quoteId);
+
+            // 该 spec maxLeverage 上限 = 10；leverage=100 必拒。
+            ApiPlaceOrder badLeverage = ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(5001L).action(OrderAction.BID).size(1).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(100).build();
+            container.submitCommandSync(badLeverage, CommandResultCode.RISK_INVALID_LEVERAGE);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is((long) deposit));
+                assertNull(profile.getPositions().get(symbolId));
+            });
+
+            // 后续合法下单仍应成功（验 objectsPool 回收的 record 干净）。
+            container.createBidWithOrderId(5002L, userId1, 1, 10000, symbolId);
+            container.createAskWithOrderId(5003L, userId2, 1, 10000, symbolId);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is(1L));
+            });
+        }
+    }
+
+    // T2：NSF 拒绝且无已存在仓位时，positions map 上不应被污染。
+    @Test
+    public void testNSFRejectDoesNotLeavePosition() throws Exception {
+        long deposit = 100; // 故意做小，肯定 NSF
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, 1_000_000, quoteId);
+
+            // notional = 10 * 10000 = 100000，required margin = 100000 / 500 = 200 > deposit 100 → NSF。
+            // leverage=5 在 spec 允许范围内（maxLeverage tier）；避免被 leverage 校验先拒。
+            ApiPlaceOrder bigOrder = ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(6001L).action(OrderAction.BID).size(10).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build();
+            container.submitCommandSync(bigOrder, CommandResultCode.RISK_NSF);
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is(deposit));
+                assertNull(profile.getPositions().get(symbolId));
+            });
+        }
+    }
+
+    // T3：用户已持有仓位时，NSF 失败的新单**绝不能**误删老仓位。
+    @Test
+    public void testNSFRejectKeepsExistingPosition() throws Exception {
+        long deposit = 50000;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        int positionSize = 1;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, 1_000_000, quoteId);
+
+            // 先开 LONG 1，显式 leverage=5（让后续加仓单 leverage 一致避免 LEVERAGE_MISMATCH）。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(7001L).action(OrderAction.BID).size(positionSize).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(userId2).orderId(7002L).action(OrderAction.ASK).size(positionSize).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build(), CommandResultCode.SUCCESS);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is((long) positionSize));
+            });
+
+            // 大幅 NSF 加仓单：size=3000 → notional=30M → required=60000 > 剩余资金 ≈ 49980 → RISK_NSF。
+            ApiPlaceOrder bigOrder = ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(7003L).action(OrderAction.BID).size(3000).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build();
+            container.submitCommandSync(bigOrder, CommandResultCode.RISK_NSF);
+
+            // 老 LONG 1 必须完整保留：openVolume 不变、没被误删。
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is((long) positionSize));
+            });
+        }
+    }
+
+    // T4：reduce-only-zero SUCCESS 后，紧接着开仓应成功（验 objectsPool 还回的 record 被正确重置）。
+    @Test
+    public void testReduceOnlyZeroFollowedBySuccessfulOpen() throws Exception {
+        int deposit = 100000;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, deposit, quoteId);
+
+            // reduce-only 无仓 → SUCCESS（不入 map）。
+            ApiPlaceOrder reduceOnly = ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(8001L).action(OrderAction.ASK).size(1).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).reduceOnly(true).build();
+            container.submitCommandSync(reduceOnly, CommandResultCode.SUCCESS);
+            container.validateUserState(userId1, profile -> assertNull(profile.getPositions().get(symbolId)));
+
+            // 随后合法 BID 1 应成功开仓（对手方 userId2 ASK 撮合）。
+            container.createBidWithOrderId(8002L, userId1, 1, 10000, symbolId);
+            container.createAskWithOrderId(8003L, userId2, 1, 10000, symbolId);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is(1L));
+            });
+        }
+    }
+
+    // T5：连续 fail 的下单不应改 user accounts、不应污染 exchangeLocked、全局守恒成立。
+    @Test
+    public void testGlobalBalanceConservedAfterFailedPlaceOrders() throws Exception {
+        long deposit = 10000;
+        long userId1 = UID_1;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+
+            long orderId = 9000L;
+            // 3 种 fail 模式混打。
+            for (int i = 0; i < 5; i++) {
+                container.submitCommandSync(ApiPlaceOrder.builder()
+                        .uid(userId1).orderId(++orderId).action(OrderAction.ASK).size(1).price(10000)
+                        .symbol(symbolId).orderType(OrderType.GTC)
+                        .marginMode(MarginMode.ISOLATED).reduceOnly(true).build(),
+                        CommandResultCode.SUCCESS);
+                container.submitCommandSync(ApiPlaceOrder.builder()
+                        .uid(userId1).orderId(++orderId).action(OrderAction.BID).size(1).price(10000)
+                        .symbol(symbolId).orderType(OrderType.GTC)
+                        .marginMode(MarginMode.ISOLATED).leverage(100).build(),
+                        CommandResultCode.RISK_INVALID_LEVERAGE);
+                container.submitCommandSync(ApiPlaceOrder.builder()
+                        .uid(userId1).orderId(++orderId).action(OrderAction.BID).size(1000).price(10000)
+                        .symbol(symbolId).orderType(OrderType.GTC)
+                        .marginMode(MarginMode.ISOLATED).leverage(5).build(),
+                        CommandResultCode.RISK_NSF);
+            }
+
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), Is.is(deposit));
+                assertNull(profile.getPositions().get(symbolId));
+                assertThat(profile.getExchangeLocked().get(quoteId), Is.is(0L));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "连续 fail 下单后全局守恒必须成立");
+        }
+    }
+
+    // ONEWAY 同向 reduce-only 守卫：已持 LONG 5 + reduce-only BID 应被 R1 裁到 0 → SUCCESS no-op、仓位不变。
+    // maxClosableSize 通过 isOppositeToAction 检查方向，同向 / 空仓直接返 0，防止 reduce-only 被误用成开新敞口。
+    @Test
+    public void testReduceOnlySameDirectionDoesNotExtendPosition() throws Exception {
+        long deposit = 100_000;
+        long userId1 = UID_1;
+        long userId2 = UID_2;
+        int positionSize = 5;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.initFutureSymbol(symbolId, quoteId);
+            container.addCurrency(BASE_CURRENCY_ID);
+            container.addCurrency(quoteId);
+            container.initMarkPrice(symbolId, 10000);
+            container.createUserWithSpecificMoney(userId1, deposit, quoteId);
+            container.createUserWithSpecificMoney(userId2, 1_000_000, quoteId);
+
+            // userId1 开 LONG 5（BID matches userId2 ASK）。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(10001L).action(OrderAction.BID).size(positionSize).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(userId2).orderId(10002L).action(OrderAction.ASK).size(positionSize).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build(), CommandResultCode.SUCCESS);
+            container.validateUserState(userId1, profile -> {
+                assertThat(profile.getPositions().get(symbolId).get(0).openVolume, Is.is((long) positionSize));
+            });
+
+            // 同向 reduce-only BID 3：R1 应当裁到 0 → SUCCESS no-op、不进 orderbook。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(userId1).orderId(10003L).action(OrderAction.BID).size(3).price(10000)
+                    .symbol(symbolId).orderType(OrderType.GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).reduceOnly(true).build(),
+                    CommandResultCode.SUCCESS);
+
+            // 即使有对手方 ASK 3 等着，由于上面 reduce-only 应当 no-op（没进 orderbook），对手方挂着也不应成交。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(userId2).orderId(10004L).action(OrderAction.ASK).size(3).price(10000)
+                    .symbol(symbolId).orderType(OrderType.IOC)
+                    .marginMode(MarginMode.ISOLATED).leverage(5).build(), CommandResultCode.SUCCESS);
+
+            // userId1 LONG 应当仍为 5（reduce-only BID 同向裁到 0 → 不下单 → 不扩仓）。
+            // 当前 bug：实际会被错误地扩成 8。
+            container.validateUserState(userId1, profile -> {
+                assertThat("ONEWAY 同向 reduce-only 不应扩仓",
+                        profile.getPositions().get(symbolId).get(0).openVolume, Is.is((long) positionSize));
+            });
         }
     }
 
@@ -980,11 +1220,12 @@ class ITFutureBasic extends ITFutureBase {
                     .build();
             container.submitCommandSync(reduceOnlyOrder, CommandResultCode.SUCCESS);
 
-            // 验证用户1仓位未改变（订单被忽略）
+            // R1 同向 guard：reduce-only 同向被裁到 0 → SUCCESS no-op，订单未入 orderbook。
+            // 仓位不变、pending 也不变。
             container.validateUserState(userId1, profile -> {
                 var positions = profile.getPositions().get(symbolId);
                 assertThat(positions.get(0).openVolume, Is.is((long) positionSize));
-                assertThat(positions.get(0).pendingBuySize, Is.is(size));
+                assertThat(positions.get(0).pendingBuySize, Is.is(0L));
                 assertThat(positions.get(0).direction, Is.is(PositionDirection.LONG));
             });
 

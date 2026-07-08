@@ -7,7 +7,7 @@ import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import static exchange.core2.core.utils.CoreArithmeticUtils.sizePriceToCurrencyScale;
 import static exchange.core2.core.utils.CoreArithmeticUtils.symbolToCurrencyScale;

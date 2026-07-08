@@ -28,3 +28,4 @@ nbdist/
 logs/
 
 RAFT-EXCHANGE-DATA/
+/RAFT-EXCHANGE-EVENT/

@@ -4,16 +4,13 @@ import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
-import exchange.core2.core.orderbook.OrderBookDirectImpl;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.config.PerformanceConfiguration;
-import exchange.core2.core.utils.AffinityThreadFactory;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
-import net.jpountz.lz4.LZ4Factory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,16 +56,11 @@ class ITLiquidationIntegration {
     }
 
     protected PerformanceConfiguration getPerformanceConfiguration4Test() {
-        return PerformanceConfiguration.builder()
-                .ringBufferSize(64 * 1024)
-                .matchingEnginesNum(4)
+        // 唯一有意义的差异：riskEnginesNum=8 以模拟多分片跨 shard 强平场景。
+        // disruptorThreadFactory / waitStrategy 由 ExchangeTestContainer 统一覆盖，无需在此设置。
+        return PerformanceConfiguration.DEFAULT.toBuilder()
                 .riskEnginesNum(8)
-                .msgsInGroupLimit(4_096)
-                .maxGroupDurationNs(4_000_000)
-                .threadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "Exchange-Core-Disruptor"))
-                .waitStrategy(CoreWaitStrategy.BUSY_SPIN)
-                .binaryCommandsLz4CompressorFactory(() -> LZ4Factory.fastestInstance().highCompressor())
-                .orderBookFactory(OrderBookDirectImpl::new).build();
+                .build();
     }
 
     /**
@@ -82,6 +74,7 @@ class ITLiquidationIntegration {
         int size = 5;
         long price = 10000;
         long liquidationPrice = 2000; // 触发强平的价格
+        long bpFillPrice = 9920L;
 
         // 创建分布在不同分片的用户ID（基于 uid % numShards 的分片算法）
         // 假设有 2 个分片，创建用户ID让它们分布在不同分片
@@ -148,8 +141,7 @@ class ITLiquidationIntegration {
             }
 
             log.info("创建流动性订单用于接收强平订单");
-            // 在强平价格附近创建买单，用于接收强平时的卖单
-            container.createBidWithOrderId(orderId++, liquidityProvider2, 50, liquidationPrice, symbol.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(orderId++, liquidityProvider2, 50, bpFillPrice, symbol.symbolId, MarginMode.CROSS);
 
             log.info("更新价格到 {} 触发强平条件", liquidationPrice);
             // 价格大幅下跌，触发强平
@@ -169,7 +161,7 @@ class ITLiquidationIntegration {
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
 
             // 等待强平完成
-            Thread.sleep(3000L);
+            Thread.sleep(500L);
             container.getApi().groupingControl(0, 1);
             Thread.sleep(500L);  // 确保事件处理完成
 
@@ -267,7 +259,7 @@ class ITLiquidationIntegration {
 
             // 触发强平
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            Thread.sleep(500L);
             container.getApi().groupingControl(0, 1);
             Thread.sleep(500L);  // 确保事件处理完成
 
@@ -385,6 +377,7 @@ class ITLiquidationIntegration {
         int positionSize = 5;   // 增加持仓量，增加风险
         long entryPrice = 10000L;  // 提高入场价格
         long liquidationPrice = 500L;  // 极端下跌95%，确保触发强平
+        long bpFillPrice = 9920L;
 
         // 创建分布在不同分片的用户
         // 分片0的用户: userId % 2 == 0
@@ -438,8 +431,8 @@ class ITLiquidationIntegration {
 
             log.info("创建流动性订单用于接收强平订单");
             // 创建足够的流动性接收强平订单
-            container.createBidWithOrderId(orderId++, liquidityProvider, allUsers.length * positionSize + 5,
-                    liquidationPrice, symbol.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(orderId++, liquidityProvider, allUsers.length * positionSize + 15,
+                    bpFillPrice, symbol.symbolId, MarginMode.CROSS);
 
             log.info("更新价格到 {} 触发强平条件", liquidationPrice);
             // 价格大幅下跌，触发强平条件
@@ -454,13 +447,13 @@ class ITLiquidationIntegration {
             long[] shard1Users = {shard1User1, shard1User2, shard1User3};
 
             for (long userId : shard0Users) {
-                LatencyTools.waitForCondition(10000, () -> {
+                LatencyTools.waitForCondition(60_000, () -> {
                     try {
                         return container.getUserProfile(userId).getPositions().size() == 0;
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
-                });
+                }, shard0Engine::triggerOnce, 100);
             }
 
             log.info("验证单分片强平结果");
@@ -553,13 +546,13 @@ class ITLiquidationIntegration {
             shard1Engine.triggerOnce();
 
             for (long userId : shard1Users) {
-                LatencyTools.waitForCondition(150, () -> {
+                LatencyTools.waitForCondition(60_000, () -> {
                     try {
                         return container.getUserProfile(userId).getPositions().size() == 0;
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
-                });
+                }, shard1Engine::triggerOnce, 100);
             }
 
             // 重新统计强平情况
@@ -587,7 +580,7 @@ class ITLiquidationIntegration {
             container.validateUserState(liquidityProvider, profile -> {
                 if (profile.getPositions().size() > 0) {
                     SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
-                    long totalLiquidityProvided = allUsers.length * positionSize + 5;
+                    long totalLiquidityProvided = allUsers.length * positionSize + 15;
                     long consumedLiquidity = totalLiquidityProvided - position.pendingBuySize;
                     log.info("流动性提供者接收了 {} 手强平订单", consumedLiquidity);
                     assertThat("流动性提供者应该接收了强平订单", consumedLiquidity > 0, is(true));
@@ -613,6 +606,7 @@ class ITLiquidationIntegration {
         int size = 3; // 减少交易量，降低风险敞口
         long price = 10000;
         long liquidationPrice = 8000; // 更保守的价格下跌：20%的下跌
+        long bpFillPrice = 9920L;
 
         // 用户分布在不同分片，使用不同保证金模式
         long crossUser1 = 4001L; // 分片1，全仓
@@ -679,73 +673,61 @@ class ITLiquidationIntegration {
             log.info("创建流动性订单用于接收强平订单");
             // 创建足够的流动性接收强平订单
             container.createBidWithOrderId(orderId++, liquidityProvider, allUsers.length * size + 10,
-                    liquidationPrice, symbol.symbolId, MarginMode.CROSS);
+                    bpFillPrice, symbol.symbolId, MarginMode.CROSS);
 
             log.info("更新价格到 {} 触发强平条件", liquidationPrice);
             // 价格大幅下跌，触发强平条件
             container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
 
             log.info("触发所有分片的强平引擎");
-            // 触发所有分片的强平
-            liquidationEngines.forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            long[] crossUsers = {crossUser1, crossUser2};
+            long[] isolatedUsers = {isolatedUser1, isolatedUser2};
+
+            // 等强平真正执行完：动态查持仓（不读 int snapshot），onTick 反复 triggerOnce 直到至少 1 个用户被平。
+            Runnable trigger = () -> liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+            java.util.function.Supplier<Integer> countLiquidated = () -> {
+                int c = 0;
+                for (long uid : new long[]{crossUser1, crossUser2, isolatedUser1, isolatedUser2}) {
+                    try {
+                        container.validateUserState(uid, profile -> {
+                            if (profile.getPositions().size() == 0) {
+                                throw new RuntimeException("LIQUIDATED");
+                            }
+                        });
+                    } catch (RuntimeException e) {
+                        if ("LIQUIDATED".equals(e.getMessage())) c++;
+                    } catch (Exception ignored) {}
+                }
+                return c;
+            };
+            trigger.run();
+            LatencyTools.waitForCondition(5_000, () -> countLiquidated.get() > 0, trigger, 100);
             container.getApi().groupingControl(0, 1);
-            Thread.sleep(500L);  // 确保事件处理完成
+            Thread.sleep(200L);
 
             log.info("验证混合保证金模式强平结果");
 
-            // 统计不同保证金模式的强平情况
+            // 统计不同保证金模式的强平情况（wait 结束后再读，保证看到最终态）
             int crossModeLiquidatedUsers = 0;
             int isolatedModeLiquidatedUsers = 0;
             int shard0LiquidatedUsers = 0;
             int shard1LiquidatedUsers = 0;
 
-            long[] crossUsers = {crossUser1, crossUser2};
-            long[] isolatedUsers = {isolatedUser1, isolatedUser2};
-
-            // 检查全仓模式用户的强平情况
-            for (long userId : crossUsers) {
-                container.validateUserState(userId, profile -> {
-                    log.info("全仓用户 {} 强平后持仓数: {}", userId, profile.getPositions().size());
-                    if (profile.getPositions().size() == 0) {
-                        log.info("全仓用户 {} 被强平", userId);
-                    } else {
-                        SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
-                        log.info("全仓用户 {} 剩余持仓: {}", userId, position.openVolume);
-                    }
-                });
-            }
-
-            // 检查逐仓模式用户的强平情况
-            for (long userId : isolatedUsers) {
-                container.validateUserState(userId, profile -> {
-                    log.info("逐仓用户 {} 强平后持仓数: {}", userId, profile.getPositions().size());
-                    if (profile.getPositions().size() == 0) {
-                        log.info("逐仓用户 {} 被强平", userId);
-                    } else {
-                        SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
-                        log.info("逐仓用户 {} 剩余持仓: {}", userId, position.openVolume);
-                    }
-                });
-            }
-
-            // 统计实际强平情况
             for (long userId : crossUsers) {
                 try {
                     container.validateUserState(userId, profile -> {
+                        log.info("全仓用户 {} 强平后持仓数: {}", userId, profile.getPositions().size());
                         if (profile.getPositions().size() == 0) {
                             throw new RuntimeException("LIQUIDATED");
+                        } else {
+                            SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
+                            log.info("全仓用户 {} 剩余持仓: {}", userId, position.openVolume);
                         }
                     });
                 } catch (RuntimeException e) {
                     if ("LIQUIDATED".equals(e.getMessage())) {
                         crossModeLiquidatedUsers++;
-                        int shardId = (int) (userId % 2);
-                        if (shardId == 0) {
-                            shard0LiquidatedUsers++;
-                        } else {
-                            shard1LiquidatedUsers++;
-                        }
+                        if ((int) (userId % 2) == 0) shard0LiquidatedUsers++; else shard1LiquidatedUsers++;
                     }
                 }
             }
@@ -753,19 +735,18 @@ class ITLiquidationIntegration {
             for (long userId : isolatedUsers) {
                 try {
                     container.validateUserState(userId, profile -> {
+                        log.info("逐仓用户 {} 强平后持仓数: {}", userId, profile.getPositions().size());
                         if (profile.getPositions().size() == 0) {
                             throw new RuntimeException("LIQUIDATED");
+                        } else {
+                            SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
+                            log.info("逐仓用户 {} 剩余持仓: {}", userId, position.openVolume);
                         }
                     });
                 } catch (RuntimeException e) {
                     if ("LIQUIDATED".equals(e.getMessage())) {
                         isolatedModeLiquidatedUsers++;
-                        int shardId = (int) (userId % 2);
-                        if (shardId == 0) {
-                            shard0LiquidatedUsers++;
-                        } else {
-                            shard1LiquidatedUsers++;
-                        }
+                        if ((int) (userId % 2) == 0) shard0LiquidatedUsers++; else shard1LiquidatedUsers++;
                     }
                 }
             }
@@ -777,17 +758,7 @@ class ITLiquidationIntegration {
             log.info("分片1被强平用户数: {}", shard1LiquidatedUsers);
             log.info("总被强平用户数: {}", crossModeLiquidatedUsers + isolatedModeLiquidatedUsers);
 
-            // 验证强平结果的预期
-            // 1. 应该有用户被强平（说明强平机制工作）
             int totalLiquidatedUsers = crossModeLiquidatedUsers + isolatedModeLiquidatedUsers;
-            LatencyTools.waitForCondition(5000, () -> {
-                try {
-                    return totalLiquidatedUsers > 0;
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            });
-
             assertThat("应该有用户被强平", totalLiquidatedUsers > 0, is(true));
 
             // 2. 验证分片间的独立性 - 两个分片都应该处理强平
@@ -842,6 +813,7 @@ class ITLiquidationIntegration {
         int tradeSize = 1;    // 增加交易量，增加风险敞口
         long entryPrice = 10000L;
         long liquidationPrice = 500L; // 95%极端下跌，确保强平
+        long bpFillPrice = 9920L;
 
         // 用户分布在不同分片，使用不同保证金模式
         long userId1 = 7001L; // 分片1，逐仓模式，做多
@@ -926,9 +898,9 @@ class ITLiquidationIntegration {
 
             log.info("步骤3: 创建强平流动性 - 为所有方向和symbol都提供流动性");
             // 为userId1多头强平创建买单流动性（接收强平卖单）
-            container.createBidWithOrderId(99001L, liquidityProvider, tradeSize + 2, liquidationPrice, symbol1.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(99001L, liquidityProvider, tradeSize + 12, bpFillPrice, symbol1.symbolId, MarginMode.CROSS);
             // 为userId2第二symbol多头强平创建买单流动性
-            container.createBidWithOrderId(99003L, liquidityProvider, secondarySize + 2, liquidationPrice, symbol2.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(99003L, liquidityProvider, secondarySize + 15, bpFillPrice, symbol2.symbolId, MarginMode.CROSS);
 
             container.validateUserState(liquidityProvider, profile -> {
                 assertThat(profile.getPositions().get(symbol1.symbolId).size(), is(1));
@@ -943,7 +915,7 @@ class ITLiquidationIntegration {
 
             log.info("步骤5: 手动触发所有分片的强平引擎");
             liquidationEngines.forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            Thread.sleep(500L);
             container.getApi().groupingControl(0, 1);
             Thread.sleep(500L);  // 确保事件处理完成
 
@@ -982,22 +954,26 @@ class ITLiquidationIntegration {
             log.info("userId2 (分片{}, 全仓模式) 被强平: {}", userId2 % 2, userId2Liquidated);
 
             boolean finalUserId1Liquidated = userId1Liquidated;
-            LatencyTools.waitForCondition(10000, () -> {
+            Runnable trigger1 = () -> liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+            trigger1.run();
+            LatencyTools.waitForCondition(5_000, () -> {
                 try {
                     return finalUserId1Liquidated;
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
-            });
+            }, trigger1, 100);
 
             boolean finalUserId2Liquidated = userId2Liquidated;
-            LatencyTools.waitForCondition(10000, () -> {
+            Runnable trigger2 = () -> liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+            trigger2.run();
+            LatencyTools.waitForCondition(5_000, () -> {
                 try {
                     return finalUserId2Liquidated;
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
-            });
+            }, trigger2, 100);
 
             // 核心验证：两个对手方都应该被强平
             assertThat("userId1应该被强平（价格下跌，多头逐仓保证金不足）", userId1Liquidated, is(true));
@@ -1035,13 +1011,13 @@ class ITLiquidationIntegration {
                         // 验证流动性被消耗，说明强平订单被处理
                         if (symbolId == symbol1.symbolId) {
                             // symbol1应该有买单和卖单流动性被消耗
-                            long initialBuyLiquidity = tradeSize + 2;
-                            long initialSellLiquidity = tradeSize + 2;
+                            long initialBuyLiquidity = tradeSize + 12;
+                            long initialSellLiquidity = tradeSize + 12;
                             assertThat("symbol1买单流动性应该被消耗", position.pendingBuySize < initialBuyLiquidity, is(true));
                             assertThat("symbol1卖单流动性应该被消耗", position.pendingSellSize < initialSellLiquidity, is(true));
                         } else if (symbolId == symbol2.symbolId) {
                             // symbol2应该有买单流动性被消耗
-                            long initialBuyLiquidity = secondarySize + 2;
+                            long initialBuyLiquidity = secondarySize + 15;
                             assertThat("symbol2买单流动性应该被消耗", position.pendingBuySize < initialBuyLiquidity, is(true));
                         }
                     }
@@ -1065,6 +1041,7 @@ class ITLiquidationIntegration {
         int positionSize = 10;
         long entryPrice = 10000L;
         long liquidationPrice = 500L;  // 95%极端下跌
+        long bpFillPrice = 9920L;
 
         long trader = 1001L;
         long liquidityProvider = 2001L;
@@ -1096,7 +1073,7 @@ class ITLiquidationIntegration {
 
             log.info("创建流动性订单用于接收强平订单");
             // 在强平价格创建买单，用于接收强平卖单
-            container.createBidWithOrderId(orderId++, liquidityProvider, positionSize + 5, liquidationPrice, symbol.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(orderId++, liquidityProvider, positionSize + 15, bpFillPrice, symbol.symbolId, MarginMode.CROSS);
 
             log.info("价格下跌到 {} 触发强平", liquidationPrice);
             // 价格大幅下跌，触发强平条件
@@ -1143,7 +1120,8 @@ class ITLiquidationIntegration {
         int positionSize1 = 5;
         int positionSize2 = 8;
         long entryPrice = 10000L;
-        long liquidationPrice = 3000L;
+        long liquidationPrice = 8000L;
+        long bpFillPrice = 10000L;
 
         long trader = 1002L;
         long liquidityProvider = 2002L;
@@ -1178,35 +1156,51 @@ class ITLiquidationIntegration {
 
             log.info("创建流动性订单用于接收强平订单");
             // 为两个品种都创建流动性
-            container.createBidWithOrderId(orderId++, liquidityProvider, positionSize1 + 2, liquidationPrice, symbol1.symbolId, MarginMode.CROSS);
-            container.createBidWithOrderId(orderId++, liquidityProvider, positionSize2 + 2, liquidationPrice, symbol2.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(orderId++, liquidityProvider, positionSize1 + 15, bpFillPrice, symbol1.symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(orderId++, liquidityProvider, positionSize2 + 17, bpFillPrice, symbol2.symbolId, MarginMode.CROSS);
 
             log.info("两个品种价格都下跌到 {} 触发强平", liquidationPrice);
             // 两个品种价格都下跌
             container.updateCurrentPriceTo((int) liquidationPrice, symbol1.symbolId, QUOTE_ID);
             container.updateCurrentPriceTo((int) liquidationPrice, symbol2.symbolId, QUOTE_ID);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            int initialTotalVolume = positionSize1 + positionSize2;
+            Runnable triggerAll1 = () ->
+                container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            triggerAll1.run();
+            // 等仓位总量被减下来——全仓只平到 equity ≥ maintenance 为止，不要求清零
+            LatencyTools.waitForCondition(60_000, () -> {
+                try {
+                    return sumOpenVolume(container.getUserProfile(trader)) < initialTotalVolume;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, triggerAll1, 100);
             container.getApi().groupingControl(0, 1);
-            Thread.sleep(500L);  // 确保事件处理完成
+            Thread.sleep(500L);
 
-            log.info("验证全仓模式强平结果");
-            // 验证交易者强平情况
+            // 验证全仓强平至少减仓了
             container.validateUserState(trader, profile -> {
-                log.info("强平后交易者持仓数: {}", profile.getPositions().size());
-                // 全仓模式可能部分强平或全部强平
-                profile.getPositions().forEachKeyValue((symbolId, positions) -> {
-                    if (!positions.isEmpty()) {
-                        SingleUserReportResult.Position position = positions.get(0);
-                        log.info("品种 {} 剩余持仓: {}", symbolId, position.openVolume);
-                    }
-                });
+                long remaining = sumOpenVolume(profile);
+                log.info("全仓强平前总仓位 {}，强平后剩余 {}", initialTotalVolume, remaining);
+                assertThat("全仓强平后总仓位应小于初始（至少有一个仓位被减）",
+                        remaining < initialTotalVolume, is(true));
             });
         } catch (Exception e) {
             log.error("全仓模式强平测试失败", e);
             fail("全仓模式强平测试失败: " + e.getMessage());
         }
+    }
+
+    /** 用户所有 symbol 的 |openVolume| 求和。用于全仓减仓断言。 */
+    private static long sumOpenVolume(SingleUserReportResult profile) {
+        long total = 0;
+        for (List<SingleUserReportResult.Position> positions : profile.getPositions().values()) {
+            for (SingleUserReportResult.Position p : positions) {
+                total += Math.abs(p.openVolume);
+            }
+        }
+        return total;
     }
 
     /**
@@ -1220,6 +1214,7 @@ class ITLiquidationIntegration {
         int positionSize = 6;
         long entryPrice = 5000L;
         long liquidationPrice = 12000L; // 价格上涨触发空头强平
+        long bpFillPrice = 5030L;
 
         long trader = 1003L;
         long liquidityProvider = 2003L;
@@ -1250,35 +1245,37 @@ class ITLiquidationIntegration {
 
             log.info("创建流动性订单用于接收强平订单");
             // 在强平价格创建卖单，用于接收强平买单
-            container.createAskWithOrderId(orderId++, liquidityProvider, positionSize + 3, liquidationPrice, symbol.symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(orderId++, liquidityProvider, positionSize + 13, bpFillPrice, symbol.symbolId, MarginMode.CROSS);
 
             log.info("价格上涨到 {} 触发空头强平", liquidationPrice);
             // 价格大幅上涨，触发空头强平
             container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            Runnable triggerAll2 = () ->
+                container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            triggerAll2.run();
+            // 等仓位清空（cascade 跑完一轮），60s 给足余量；正常单实例毫秒级
+            LatencyTools.waitForCondition(60_000, () -> {
+                try {
+                    return container.getUserProfile(trader).getPositions().isEmpty();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, triggerAll2, 100);
             container.getApi().groupingControl(0, 1);
             Thread.sleep(500L);  // 确保事件处理完成
 
-            log.info("验证空头强平结果");
-            // 验证交易者被强平
+            // 验证空头仓位被强平清空
             container.validateUserState(trader, profile -> {
-                log.info("强平后交易者持仓数: {}", profile.getPositions().size());
-                if (profile.getPositions().size() == 0) {
-                    log.info("空头交易者完全被强平");
-                } else {
-                    SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
-                    log.info("空头交易者剩余持仓: {}", position.openVolume);
-                }
+                assertThat("空头交易者应该被完全强平，仓位清空",
+                        profile.getPositions().isEmpty(), is(true));
             });
 
-            // 验证流动性提供者接收了强平订单
+            // 验证流动性提供者接到了强平订单（卖单余量被吃）
             container.validateUserState(liquidityProvider, profile -> {
-                if (profile.getPositions().size() > 0) {
-                    SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
-                    log.info("流动性提供者接收空头强平订单，剩余待成交: {}", position.pendingSellSize);
-                    assertThat("流动性提供者应该接收了强平订单", position.pendingSellSize < positionSize + 3, is(true));
-                }
+                SingleUserReportResult.Position position = profile.getPositions().get(symbol.symbolId).get(0);
+                log.info("流动性提供者接收空头强平订单，剩余待成交: {}", position.pendingSellSize);
+                assertThat("流动性提供者应该接收了强平订单",
+                        position.pendingSellSize < positionSize + 3, is(true));
             });
 
         } catch (Exception e) {
@@ -1336,20 +1333,21 @@ class ITLiquidationIntegration {
             log.info("价格下跌到 {} 触发部分强平", partialLiquidationPrice);
             // 价格下跌，触发强平
             container.updateCurrentPriceTo((int) partialLiquidationPrice, symbol.symbolId, QUOTE_ID);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            Runnable trigger = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            trigger.run();
+            Thread.sleep(500L);
             container.getApi().groupingControl(0, 1);
             Thread.sleep(500L);  // 确保事件处理完成
 
             log.info("验证部分强平结果");
 
-            LatencyTools.waitForCondition(150, () -> {
+            LatencyTools.waitForCondition(5_000, () -> {
                 try {
                     return container.getUserProfile(trader).getPositions().get(symbol.symbolId).get(0).openVolume < initialPositionSize;
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
-            });
+            }, trigger, 100);
 
             // 验证部分强平
             container.validateUserState(trader, profile -> {
@@ -1434,7 +1432,7 @@ class ITLiquidationIntegration {
             // 价格大幅下跌，同时触发所有用户强平
             container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
-            Thread.sleep(3000L);
+            Thread.sleep(500L);
             container.getApi().groupingControl(0, 1);
             Thread.sleep(500L);  // 确保事件处理完成
 

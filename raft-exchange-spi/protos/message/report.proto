@@ -14,6 +14,7 @@ enum ReportType {
   SINGLE_USER_REPORT = 10002;
   TOTAL_CURRENCY_BALANCE = 10003;
   SYMBOL_CURRENCY_REPORT = 10004;
+  FEE_REPORT = 10005;
 }
 
 // Base Report Query Message
@@ -24,6 +25,7 @@ message ReportQuery {
     StateHashReportQuery state_hash = 3;
     TotalCurrencyBalanceReportQuery total_currency_balance = 4;
     SymbolCurrencyReportQuery symbol_currency_report = 5;
+    FeeReportQuery fee_report = 6;
   }
 }
 
@@ -44,6 +46,10 @@ message TotalCurrencyBalanceReportQuery {
 message SymbolCurrencyReportQuery {
 }
 
+// Fee Report Query
+message FeeReportQuery {
+}
+
 // Base Report Result Message
 message ReportResult {
   oneof result {
@@ -51,6 +57,7 @@ message ReportResult {
     StateHashReportResult state_hash = 2;
     TotalCurrencyBalanceReportResult total_currency_balance = 3;
     SymbolCurrencyReportResult symbol_currency_report = 4;
+    FeeReportResult fee_report = 5;
   }
 }
 
@@ -111,6 +118,7 @@ message SingleUserReportResult {
   map<int32, PositionList> positions = 4;
   map<int32, OrderList> orders = 5;
   QueryExecutionStatus query_execution_status = 6;
+  map<int32, int64> exchange_locked = 7;
 }
 
 enum SubmoduleType {
@@ -149,15 +157,31 @@ message TotalCurrencyBalanceReportResult {
   map<int32, int64> fees = 2;
   map<int32, int64> adjustments = 3;
   map<int32, int64> suspends = 4;
-  map<int32, int64> orders_balances = 5;
+  reserved 5;
+  reserved "orders_balances";
   map<int32, int64> open_interest_long = 6;
   map<int32, int64> open_interest_short = 7;
   map<int32, int64> if_balances = 8;
   map<int32, int64> if_open_interest_long = 9;
   map<int32, int64> if_open_interest_short = 10;
+  map<int32, int64> extra_margin = 11;
+  map<int32, int64> exchange_locked = 12;
+  // currency id -> spec（含 name）。仅展示用，对账/state hash 不依赖。
+  map<int32, CoreCurrencySpecification> currency_specs = 13;
+  // symbol id -> spec（含 base/quote currency），给 open_interest_* 翻译可读名用。
+  map<int32, CoreSymbolSpecification> symbol_specs = 14;
 }
 
 message SymbolCurrencyReportResult {
   map<int32, CoreSymbolSpecification> symbolSpecs = 1;
   map<int32, CoreCurrencySpecification> currencySpecs = 2;
+}
+
+// Fee Report Result
+// currency -> 跨所有 shard 聚合后的 totalFee（= riskEngine.getFees() 跨 shard mergeSum）。
+// 与 TotalCurrencyBalanceReportResult.fees 同源同口径，不参与对账方程。
+message FeeReportResult {
+  map<int32, int64> fees = 1;
+  // currency id -> spec（含 name），仅展示用
+  map<int32, CoreCurrencySpecification> currency_specs = 2;
 }

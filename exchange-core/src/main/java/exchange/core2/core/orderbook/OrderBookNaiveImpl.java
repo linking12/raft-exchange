@@ -95,10 +95,34 @@ public final class OrderBookNaiveImpl implements IOrderBook {
             case FOK_BUDGET:
                 newOrderMatchFokBudget(cmd);
                 break;
-            // TODO IOC_BUDGET and FOK support
+            case IOC_BUDGET:
+                newOrderMatchIocBudget(cmd);
+                break;
+            // TODO FOK support
             default:
                 log.warn("Unsupported order type: {}", cmd);
                 eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
+        }
+    }
+
+    /**
+     * IOC_BUDGET：用预算上限买单（cmd.price 是 product-scale 总预算）。
+     * 走到 size 上限或预算耗尽就停，剩余部分 cancel。
+     * <p>语义上仅对 BID 有意义（用预算买）；ASK IOC_BUDGET 语义模糊（最低收入约束无法部分成交），暂不支持。
+     */
+    private void newOrderMatchIocBudget(final OrderCommand cmd) {
+        if (cmd.action != OrderAction.BID) {
+            log.warn("IOC_BUDGET only supports BID action: {}", cmd);
+            eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
+            return;
+        }
+        // 用 askBuckets 全集（无价格上限），budget 由 tryMatchInstantlyWithBudget 内约束
+        final SortedMap<Long, OrdersBucketNaive> matchingBuckets = askBuckets;
+        final long[] matchResult = tryMatchInstantlyWithBudget(cmd, matchingBuckets, cmd, cmd.price);
+        final long filledSize = matchResult.length == 0 ? cmd.getFilled() : matchResult[0];
+        final long rejectedSize = cmd.size - filledSize;
+        if (rejectedSize != 0) {
+            eventsHelper.attachRejectEvent(cmd, rejectedSize, symbolSpec);
         }
     }
 
@@ -196,10 +220,10 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
             if (size > availableSize) {
                 size -= availableSize;
-                budget += availableSize * price;
+                budget += Math.multiplyExact(availableSize, price);
                 if (logDebug) log.debug("add    {} * {} -> {}", price, availableSize, budget);
             } else {
-                final long result = budget + size * price;
+                final long result = budget + Math.multiplyExact(size, price);
                 if (logDebug) log.debug("return {} * {} -> {}", price, size, result);
                 return Optional.of(result);
             }
@@ -284,6 +308,72 @@ public final class OrderBookNaiveImpl implements IOrderBook {
 
 //        log.debug("emptyBuckets: {}", emptyBuckets);
 //        log.debug("matchingRecords: {}", matchingRecords);
+
+        return new long[]{filled, filledNotional};
+    }
+
+    /**
+     * IOC_BUDGET 专用撮合：结构与 {@link #tryMatchInstantly(IOrder, SortedMap, OrderCommand)} 同构，
+     * 区别是每个 bucket 按 {@code remainingBudget / bucketPrice} 限制可购量，预算耗尽即停；
+     * 未成交剩余 size 由调用方走 reject 事件。
+     * <p>刻意复制一份而不是与主 {@code tryMatchInstantly} 合并，避免污染限价/IOC/FOK_BUDGET 主路径。
+     * <p>仅在 IOC_BUDGET BID 路径下调用（{@code newOrderMatchIocBudget} 已守卫 ASK）。
+     */
+    private long[] tryMatchInstantlyWithBudget(
+            final IOrder activeOrder,
+            final SortedMap<Long, OrdersBucketNaive> matchingBuckets,
+            final OrderCommand triggerCmd,
+            long remainingBudget) {
+
+        if (matchingBuckets.size() == 0) {
+            return EMPTY_LONGS;
+        }
+
+        final long orderSize = activeOrder.getSize();
+
+        long filled = activeOrder.getFilled();
+        long filledNotional = activeOrder.getFilledNotional();
+        MatcherTradeEvent eventsTail = null;
+        List<Long> emptyBuckets = new ArrayList<>();
+        for (final OrdersBucketNaive bucket : matchingBuckets.values()) {
+
+            final long bucketPrice = bucket.getPrice();
+            // budget 约束：本档可购量上限 = remainingBudget / bucketPrice（向下取整）。
+            // bucketPrice 为 0 时跳过约束以防除零。
+            final long affordableAtBucket = (bucketPrice == 0)
+                    ? Long.MAX_VALUE
+                    : remainingBudget / bucketPrice;
+            final long sizeLeft = Math.min(orderSize - filled, affordableAtBucket);
+            if (sizeLeft == 0) {
+                // budget 不足以再吃一个最小成交单位
+                break;
+            }
+
+            final OrdersBucketNaive.MatcherResult bucketMatchings = bucket.match(sizeLeft, activeOrder, eventsHelper);
+
+            bucketMatchings.ordersToRemove.forEach(idMap::remove);
+
+            filled += bucketMatchings.volume;
+            filledNotional += bucketMatchings.notional;
+            remainingBudget -= bucketMatchings.notional;
+
+            if (eventsTail == null) {
+                triggerCmd.matcherEvent = bucketMatchings.eventsChainHead;
+            } else {
+                eventsTail.nextEvent = bucketMatchings.eventsChainHead;
+            }
+            eventsTail = bucketMatchings.eventsChainTail;
+
+            if (bucket.getTotalVolume() == 0) {
+                emptyBuckets.add(bucketPrice);
+            }
+
+            if (filled == orderSize) {
+                break;
+            }
+        }
+
+        emptyBuckets.forEach(matchingBuckets::remove);
 
         return new long[]{filled, filledNotional};
     }

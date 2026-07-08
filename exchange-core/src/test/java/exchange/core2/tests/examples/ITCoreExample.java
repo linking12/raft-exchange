@@ -15,6 +15,7 @@ import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportQuery;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.ExchangeConfiguration;
+import exchange.core2.core.common.config.PerformanceConfiguration;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.CompletableFuture;
@@ -50,8 +51,11 @@ class ITCoreExample {
             }
         });
 
-        // default exchange configuration
-        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder().build();
+        // 示例不需要钉核：baseBuilder 给的是 Thread::new + BLOCKING，避开 affinity / BUSY_SPIN
+        // 副作用，让示例既可读又能安全和其他 IT 用例共存（不污染 LockInventory）。
+        ExchangeConfiguration conf = ExchangeConfiguration.defaultBuilder()
+                .performanceCfg(PerformanceConfiguration.baseBuilder().build())
+                .build();
 
         // build exchange core
         ExchangeCore exchangeCore = ExchangeCore.builder()

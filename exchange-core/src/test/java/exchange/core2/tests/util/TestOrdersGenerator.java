@@ -408,14 +408,14 @@ public final class TestOrdersGenerator {
         if (q == 2) {
             session.orderUids.remove(orderId);
             session.counterCancel++;
-            return OrderCommand.cancel(orderId, uid);
+            return OrderCommandFactory.cancel(orderId, uid);
 
         } else if (q == 3) {
             session.counterReduce++;
 
             int prevSize = session.orderSizes.get(orderId);
             int reduceBy = session.rand.nextInt(prevSize) + 1;
-            return OrderCommand.reduce(orderId, uid, reduceBy);
+            return OrderCommandFactory.reduce(orderId, uid, reduceBy);
 
         } else {
             int prevPrice = session.orderPrices.get(orderId);
@@ -442,7 +442,7 @@ public final class TestOrdersGenerator {
 
             session.orderPrices.put(orderId, newPrice);
 
-            return OrderCommand.update(orderId, (int) (long) uid, newPrice);
+            return OrderCommandFactory.update(orderId, (int) (long) uid, newPrice);
         }
     }
 
@@ -478,7 +478,7 @@ public final class TestOrdersGenerator {
         session.counterPlaceLimit++;
         session.seq++;
 
-        return OrderCommand.builder()
+        return OrderCommand.testBuilder(0)
                 .command(OrderCommandType.PLACE_ORDER)
                 .uid(uid)
                 .orderId(newOrderId)
@@ -548,7 +548,7 @@ public final class TestOrdersGenerator {
         session.seq++;
 
 
-        return OrderCommand.builder()
+        return OrderCommand.testBuilder(0)
                 .command(OrderCommandType.PLACE_ORDER)
                 .orderType(orderType)
                 .uid(uid)

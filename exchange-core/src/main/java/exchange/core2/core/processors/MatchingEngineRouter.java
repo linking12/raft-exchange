@@ -32,9 +32,6 @@ import exchange.core2.core.common.config.ReportsQueriesConfiguration;
 import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
 import exchange.core2.core.processors.journaling.ISerializationProcessor;
-import exchange.core2.core.processors.settlement.ADLSettlementProcessor;
-import exchange.core2.core.processors.settlement.FundingFeeSettlementProcessor;
-import exchange.core2.core.processors.settlement.IFSettlementProcessor;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
 import lombok.Builder;
@@ -65,9 +62,10 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     // local objects pool for order books
     private final ObjectsPool objectsPool;
 
-    private final IFSettlementProcessor ifSettlementProcessor;
-    private final ADLSettlementProcessor adlSettlementProcessor;
-    private final FundingFeeSettlementProcessor fundingFeeSettlementProcessor;
+    private final IFCommandProcessor ifProcessor;
+    private final ADLCommandProcessor adlProcessor;
+    private final FundingFeeCommandProcessor fundingFeeProcessor;
+    private final ResetFeeCommandProcessor resetFeeProcessor;
 
     // sharding by symbolId
     private final int shardId;
@@ -117,9 +115,10 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.objectsPool = new ObjectsPool(objectsPoolConfig);
         this.sharedPool = sharedPool;
 
-        this.ifSettlementProcessor = new IFSettlementProcessor(eventsHelper);
-        this.adlSettlementProcessor = new ADLSettlementProcessor(eventsHelper);
-        this.fundingFeeSettlementProcessor = new FundingFeeSettlementProcessor(eventsHelper);
+        this.ifProcessor = new IFCommandProcessor(eventsHelper);
+        this.adlProcessor = new ADLCommandProcessor(eventsHelper);
+        this.fundingFeeProcessor = new FundingFeeCommandProcessor(eventsHelper);
+        this.resetFeeProcessor = new ResetFeeCommandProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
@@ -176,24 +175,30 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         if (command == OrderCommandType.IF_TAKEOVER) {
             // only process IF cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
-                cmd.resultCode = ifSettlementProcessor.process(cmd);
+                cmd.resultCode = ifProcessor.process(cmd);
             }
 
         } else if (command == OrderCommandType.AUTO_DELEVERAGING) {
             // only process ADL cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
-                cmd.resultCode = adlSettlementProcessor.process(cmd);
+                cmd.resultCode = adlProcessor.process(cmd);
             }
 
         } else if (command == OrderCommandType.SETTLE_FUNDINGFEES) {
+            // only process fundingFee cmd on the symbol shard
             if (symbolForThisHandler(cmd.symbol)) {
-                cmd.resultCode = fundingFeeSettlementProcessor.process(cmd);
+                cmd.resultCode = fundingFeeProcessor.process(cmd);
             }
+
+        } else if (command == OrderCommandType.RESET_FEE) {
+            cmd.resultCode = resetFeeProcessor.process(cmd);
 
         } else if (command == OrderCommandType.MOVE_ORDER
                 || command == OrderCommandType.CANCEL_ORDER
                 || command == OrderCommandType.PLACE_ORDER
                 || command == OrderCommandType.FORCE_LIQUIDATION
+                || command == OrderCommandType.LOAN_FORCE_LIQUIDATE
+                || command == OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE
                 || command == OrderCommandType.REDUCE_ORDER
                 || command == OrderCommandType.CLOSE_POSITION
                 || command == OrderCommandType.ORDER_BOOK_REQUEST) {

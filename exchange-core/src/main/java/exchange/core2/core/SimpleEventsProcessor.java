@@ -154,17 +154,15 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
             }
             event = event.nextEvent;
         }
-        if (cmd.makerFundEventsByShard != null) {
-            for (FundEvent shardHead : cmd.makerFundEventsByShard) {
-                FundEvent e = shardHead;
-                while (e != null) {
-                    if (!e.processed) {
-                        e.processed = true;
-                        long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index++, true);
-                        fundEventsHandler.process(FundEventReport.fromFundEvent(e, uniId));
-                    }
-                    e = e.nextEvent;
+        for (FundEvent shardHead : cmd.makerFundEventsByShard) {
+            FundEvent e = shardHead;
+            while (e != null) {
+                if (!e.processed) {
+                    e.processed = true;
+                    long uniId = ITradeEventsHandler.ExecutionIdGenerator.buildTradeExecId(seq, index++, true);
+                    fundEventsHandler.process(FundEventReport.fromFundEvent(e, uniId));
                 }
+                e = e.nextEvent;
             }
         }
     }
@@ -182,7 +180,24 @@ public class SimpleEventsProcessor implements ObjLongConsumer<OrderCommand> {
                 bids.add(new ITradeEventsHandler.OrderBookRecord(marketData.bidPrices[i], marketData.bidVolumes[i], (int)marketData.bidOrders[i]));
             }
 
-            tradeEventsHandler.orderBook(new ITradeEventsHandler.OrderBook(cmd.symbol, asks, bids, cmd.timestamp));
+            // 从 spec 取 scale 一并发出，下游 PB 自描述，不再需要消费端维护 symbol→scale 字典
+            final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+            final long baseScaleK;
+            final long quoteScaleK;
+            if (spec != null) {
+                baseScaleK = spec.baseScaleK;
+                quoteScaleK = spec.quoteScaleK;
+            } else {
+                // 按设计这条不可达：spec 通过 BatchAddSymbolsCommand 在 R1 阶段先于 orderBook 注册，
+                // marketData 非 null 意味着 orderBook 存在 ⇒ 同一 symbol 的 spec 必然已注册。
+                // 真触发说明上游配置错乱 / 状态漂移，scale=0 的 PB 会被下游按整数解，数据有毒，
+                // 但坚持"只要 marketData 有就发"的原则，不丢这条事件，只留错误日志便于定位。
+                log.error("[BUG] marketData attached for symbol={} but spec is null; sending with scale=0", cmd.symbol);
+                baseScaleK = 0L;
+                quoteScaleK = 0L;
+            }
+            tradeEventsHandler.orderBook(new ITradeEventsHandler.OrderBook(
+                cmd.symbol, asks, bids, cmd.timestamp, baseScaleK, quoteScaleK));
         }
     }
 

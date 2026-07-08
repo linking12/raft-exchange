@@ -19,6 +19,7 @@ import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.LoggingConfiguration;
+import exchange.core2.tests.util.OrderCommandFactory;
 import exchange.core2.tests.util.TestOrdersGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
@@ -138,7 +139,7 @@ public abstract class OrderBookDirectImplTest extends OrderBookBaseTest {
 
         // placing limit bid orders
         for (long price = bottomPrice; price < INITIAL_PRICE; price++) {
-            OrderCommand cmd = OrderCommand.newOrder(GTC, orderId++, UID_1, price, price * 10, 1, BID);
+            OrderCommand cmd = OrderCommandFactory.newOrder(GTC, orderId++, UID_1, price, price * 10, 1, BID);
 //            log.debug("BID {}", price);
             processAndValidate(cmd, SUCCESS);
             results.put(price, -1L);
@@ -147,7 +148,7 @@ public abstract class OrderBookDirectImplTest extends OrderBookBaseTest {
 
         for (long price = topPrice; price >= bottomPrice; price--) {
             long size = price * price;
-            OrderCommand cmd = OrderCommand.newOrder(GTC, orderId++, UID_2, price, 0, size, ASK);
+            OrderCommand cmd = OrderCommandFactory.newOrder(GTC, orderId++, UID_2, price, 0, size, ASK);
 //            log.debug("ASK {}", price);
             processAndValidate(cmd, SUCCESS);
             results.compute(price, (p, v) -> v == null ? size : v + size);
@@ -197,7 +198,7 @@ public abstract class OrderBookDirectImplTest extends OrderBookBaseTest {
 
         // placing limit ask orders
         for (long price = topPrice; price > INITIAL_PRICE; price--) {
-            OrderCommand cmd = OrderCommand.newOrder(GTC, orderId++, UID_1, price, 0, 1, ASK);
+            OrderCommand cmd = OrderCommandFactory.newOrder(GTC, orderId++, UID_1, price, 0, 1, ASK);
 //            log.debug("BID {}", price);
             processAndValidate(cmd, SUCCESS);
             results.put(price, -1L);
@@ -205,7 +206,7 @@ public abstract class OrderBookDirectImplTest extends OrderBookBaseTest {
 
         for (long price = bottomPrice; price <= topPrice; price++) {
             long size = price * price;
-            OrderCommand cmd = OrderCommand.newOrder(GTC, orderId++, UID_2, price, price * 10, size, BID);
+            OrderCommand cmd = OrderCommandFactory.newOrder(GTC, orderId++, UID_2, price, price * 10, size, BID);
 //            log.debug("ASK {}", price);
             processAndValidate(cmd, SUCCESS);
             results.compute(price, (p, v) -> v == null ? size : v + size);

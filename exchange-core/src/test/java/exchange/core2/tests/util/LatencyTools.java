@@ -56,10 +56,24 @@ public final class LatencyTools {
     }
 
     public static void waitForCondition(long timeoutMillis, BooleanSupplier condition) {
+        waitForCondition(timeoutMillis, condition, null, 0);
+    }
+
+    /**
+     * 取消 LiquidationEngine 钉核后，2 秒 scheduler 调度被 OS 抖动到几秒——多步流程的 republish 在 timeoutMillis
+     * 内可能跑不完。允许 caller 传 onTick（如 {@code LiquidationEngine::triggerOnce}），按 tickPeriodMs 节流主动 drive。
+     */
+    public static void waitForCondition(long timeoutMillis, BooleanSupplier condition,
+                                        Runnable onTick, long tickPeriodMs) {
         long deadline = System.currentTimeMillis() + timeoutMillis;
+        long nextTickAt = onTick != null ? System.currentTimeMillis() : Long.MAX_VALUE;
         while (System.currentTimeMillis() < deadline) {
             if (condition.getAsBoolean()) {
                 return;
+            }
+            if (onTick != null && System.currentTimeMillis() >= nextTickAt) {
+                onTick.run();
+                nextTickAt = System.currentTimeMillis() + tickPeriodMs;
             }
             try {
                 Thread.sleep(5);

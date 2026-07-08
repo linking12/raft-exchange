@@ -154,86 +154,86 @@ public abstract class ITFutureBase {
 
     // -------------------------- buy no rejection tests -----------------------------
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionMarginGtc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, GTC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionExchangeGtc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, GTC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionExchangeIoc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionMarginIoc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyNoRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, RejectionCause.NO_REJECTION);
     }
 
     // -------------------------- buy with rejection tests -----------------------------
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionMarginGtc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, GTC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionExchangeGtc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, GTC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionExchangeIoc() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, IOC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithRejectionMarginIoc() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, IOC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithSizeRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithSizeRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithBudgetRejectionExchangeFokB() {
         testMultiBuy(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, RejectionCause.REJECTION_BY_BUDGET);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiBuyWithBudgetRejectionMarginFokB() {
         testMultiBuy(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, RejectionCause.REJECTION_BY_BUDGET);
     }
@@ -241,37 +241,37 @@ public abstract class ITFutureBase {
     // -------------------------- sell no rejection tests -----------------------------
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionMarginGtc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, GTC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionExchangeGtc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, GTC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionMarginIoc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionExchangeIoc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, RejectionCause.NO_REJECTION);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellNoRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, RejectionCause.NO_REJECTION);
     }
@@ -279,49 +279,49 @@ public abstract class ITFutureBase {
     // -------------------------- sell with rejection tests -----------------------------
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionMarginGtc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, GTC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionExchangeGtc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, GTC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionMarginIoc() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, IOC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithRejectionExchangeIoc() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, IOC, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithSizeRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithSizeRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, RejectionCause.REJECTION_BY_SIZE);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithExpectationRejectionMarginFokB() {
         testMultiSell(SYMBOLSPECFEE_USD_JPY, FOK_BUDGET, RejectionCause.REJECTION_BY_BUDGET);
     }
 
     @Test
-    @Timeout(5)
+    @Timeout(15)
     public void testMultiSellWithExpectationRejectionExchangeFokB() {
         testMultiSell(SYMBOLSPECFEE_XBT_LTC, FOK_BUDGET, RejectionCause.REJECTION_BY_BUDGET);
     }

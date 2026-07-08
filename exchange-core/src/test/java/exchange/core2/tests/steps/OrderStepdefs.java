@@ -189,11 +189,16 @@ public class OrderStepdefs implements En {
 
         And("A balance of a client {user}:",
             (Long clientId, DataTable table) -> {
+                // feature 里的 balance 语义是"可用余额" = accounts(真实持有) - exchangeLocked(现货冻结)。
+                // accounts 直接是真实持有，需要在这里减去 exchangeLocked。
                 List<List<String>> balance = table.asLists();
                 SingleUserReportResult profile = container.getUserProfile(clientId);
                 for (List<String> record : balance) {
+                    int currencyId = TestConstants.getCurrency(record.get(0));
+                    long available = profile.getAccounts().get(currencyId)
+                            - (profile.getExchangeLocked() == null ? 0L : profile.getExchangeLocked().get(currencyId));
                     assertThat("Unexpected balance of: " + record.get(0),
-                        profile.getAccounts().get(TestConstants.getCurrency(record.get(0))),
+                        available,
                         is(Long.parseLong(record.get(1))));
                 }
             });

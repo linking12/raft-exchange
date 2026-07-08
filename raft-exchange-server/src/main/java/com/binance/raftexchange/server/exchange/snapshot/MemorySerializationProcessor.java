@@ -44,18 +44,22 @@ public class MemorySerializationProcessor implements ISerializationProcessor {
     private LZ4Compressor lz4Compressor;
 
     public MemorySerializationProcessor(ExchangeConfiguration configuration) {
-        enableCompression = Boolean.parseBoolean(System.getProperty("raft-exchange.snapshot.compression", "false"));
+        enableCompression = Boolean.parseBoolean(System.getProperty("raftexchange.snapshot.compression", "false"));
         if (enableCompression) {
             lz4Compressor = LZ4Factory.fastestInstance().fastCompressor();
         }
     }
 
     @Override
-    public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId, WriteBytesMarshallable obj) {
+    public boolean storeData(long snapshotId, long seq, long timestampNs, SerializedModuleType type, int instanceId,
+        WriteBytesMarshallable obj) {
         LOG.debug("Writing state into memory stream... (Compression: {})", enableCompression);
         try (OutputStream bos = new BufferedOutputStream(StreamManager.build(snapshotId, type, instanceId));
-            OutputStream os = enableCompression ? new LZ4FrameOutputStream(bos, LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB, -1, lz4Compressor,
-                XXHashFactory.fastestInstance().hash32(), LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE) : bos;
+            OutputStream os =
+                enableCompression
+                    ? new LZ4FrameOutputStream(bos, LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB, -1, lz4Compressor,
+                        XXHashFactory.fastestInstance().hash32(), LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE)
+                    : bos;
             WireToOutputStream wireToOutputStream = new WireToOutputStream(WireType.RAW, os)) {
             Wire wire = wireToOutputStream.getWire();
             wire.writeBytes(obj);
@@ -73,8 +77,8 @@ public class MemorySerializationProcessor implements ISerializationProcessor {
     public <T> T loadData(long snapshotId, SerializedModuleType type, int instanceId, Function<BytesIn, T> initFunc) {
         Path path = resolveSnapshotPath(snapshotId, type, instanceId);
         LOG.debug("Loading state from {}", path);
-        try (final InputStream is = Files.newInputStream(path, StandardOpenOption.READ); final InputStream bis = new BufferedInputStream(is);
-            final InputStream in = autoDetectInputStream(bis)) {
+        try (final InputStream is = Files.newInputStream(path, StandardOpenOption.READ);
+            final InputStream bis = new BufferedInputStream(is); final InputStream in = autoDetectInputStream(bis)) {
             final InputStreamToWire inputStreamToWire = new InputStreamToWire(WireType.RAW, in);
             final Wire wire = inputStreamToWire.readOne();
             LOG.debug("start de-serializing...");
@@ -113,7 +117,8 @@ public class MemorySerializationProcessor implements ISerializationProcessor {
     }
 
     @Override
-    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration, ExchangeApi exchangeApi) {}
+    public void replayJournalFullAndThenEnableJouraling(InitialStateConfiguration initialStateConfiguration,
+        ExchangeApi exchangeApi) {}
 
     @Override
     public Path resolveSnapshotPath(long snapshotId, SerializedModuleType type, int instanceId) {
@@ -130,30 +135,36 @@ public class MemorySerializationProcessor implements ISerializationProcessor {
      * @param inputStream
      * @return
      */
-    private static InputStream autoDetectInputStream(InputStream inputStream) {
-        try {
-            // 读取前4字节，判断是否是LZ4
-            inputStream.mark(4);
-            byte[] header = new byte[4];
-            int bytesRead = inputStream.read(header);
-            inputStream.reset(); // 重置流，回到起始位置
-            if (bytesRead == 4 && ByteBuffer.wrap(header).getInt() == LZ4_MAGIC_INT) {
-                return new LZ4FrameInputStream(inputStream);
-            }
-        } catch (IOException e) {
-            LOG.error("Failed to read stream from file", e);
+    private static InputStream autoDetectInputStream(InputStream inputStream) throws IOException {
+        inputStream.mark(4);
+        byte[] header = new byte[4];
+        int bytesRead = inputStream.read(header);
+        inputStream.reset();
+        if (bytesRead == 4 && ByteBuffer.wrap(header).getInt() == LZ4_MAGIC_INT) {
+            return new LZ4FrameInputStream(inputStream);
         }
         return inputStream;
     }
 
     private static class WireToOutputStream implements AutoCloseable {
-        private final Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer(128 * 1024 * 1024);
+        private final Bytes<ByteBuffer> bytes;
         private final Wire wire;
         private final DataOutputStream dos;
 
         public WireToOutputStream(WireType wireType, OutputStream os) {
-            wire = wireType.apply(bytes);
-            dos = new DataOutputStream(os);
+            // Allocate in the constructor body so we can release on failure before
+            // the try-with-resources in the caller ever sees a valid reference.
+            Bytes<ByteBuffer> b = Bytes.elasticByteBuffer(128 * 1024 * 1024);
+            Wire w;
+            try {
+                w = wireType.apply(b);
+            } catch (Throwable t) {
+                b.releaseLast(); // prevent 128 MB leak if wireType.apply throws
+                throw t;
+            }
+            this.bytes = b;
+            this.wire = w;
+            this.dos = new DataOutputStream(os);
         }
 
         public Wire getWire() {

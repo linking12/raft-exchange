@@ -93,10 +93,6 @@ public final class StateHashReportQuery implements ReportQuery<StateHashReportRe
                 riskEngine.getBinaryCommandsProcessor().stateHash());
 
         hashCodes.put(
-                StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_LAST_PRICE_CACHE),
-                HashingUtils.stateHash(riskEngine.getLastPriceCache()));
-
-        hashCodes.put(
                 StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_FEES),
                 riskEngine.getFees().hashCode());
 
@@ -115,6 +111,10 @@ public final class StateHashReportQuery implements ReportQuery<StateHashReportRe
         hashCodes.put(
                 StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_IF_SERVICE),
                 riskEngine.getLiquidationService().stateHash());
+
+        hashCodes.put(
+                StateHashReportResult.createKey(moduleId, StateHashReportResult.SubmoduleType.RISK_LOAN_SERVICE),
+                riskEngine.getLoanService().stateHash());
 
         return Optional.of(
                 new StateHashReportResult(hashCodes));

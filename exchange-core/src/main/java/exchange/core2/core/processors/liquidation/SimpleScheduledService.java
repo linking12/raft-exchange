@@ -23,8 +23,8 @@ public abstract class SimpleScheduledService {
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    protected SimpleScheduledService(long delay, TimeUnit unit, String name) {
-        this(delay, unit, defaultThreadFactory(name));
+    protected SimpleScheduledService(long delay, TimeUnit unit, String name, ThreadFactory threadFactory) {
+        this(delay, unit, threadFactory);
     }
 
     /**
@@ -35,14 +35,12 @@ public abstract class SimpleScheduledService {
     /**
      * 可选：启动前动作
      */
-    protected void beforeStart() {
-    }
+    protected void beforeStart() {}
 
     /**
      * 可选：停止后动作
      */
-    protected void afterStop() {
-    }
+    protected void afterStop() {}
 
     /**
      * 异常默认打印，可重写
@@ -107,13 +105,5 @@ public abstract class SimpleScheduledService {
 
     public boolean isRunning() {
         return running.get();
-    }
-
-    private static ThreadFactory defaultThreadFactory(String name) {
-        return r -> {
-            Thread t = new Thread(r, name);
-            t.setDaemon(true);
-            return t;
-        };
     }
 }

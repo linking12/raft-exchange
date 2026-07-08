@@ -10,12 +10,12 @@ import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public final class ITExchangeCoreCustomLeverage {
 
@@ -123,7 +123,7 @@ public final class ITExchangeCoreCustomLeverage {
             CoreSymbolSpecification spec = container.initSymbol();
             container.addCurrency(spec.baseCurrency, 0);
             container.addCurrency(spec.quoteCurrency, 0);
-            container.initMarkPrice(spec.symbolId, 10000);
+            container.initMarkPrice(spec.symbolId, 1000);
             container.createUserWithMoney(UID_1, spec.quoteCurrency, deposit);
             container.createUserWithMoney(UID_2, spec.quoteCurrency, 12_000);
 
@@ -761,12 +761,12 @@ public final class ITExchangeCoreCustomLeverage {
             // 模拟价格下跌，跌幅超过19[=(1000-50)/50]要强平了
             container.updateCurrentPriceTo(980, spec.symbolId, spec.quoteCurrency);
 
-            // 准备980的买单，用来和强平成交【注意顺序在价格更新之后，否则会和更新价格的单子们匹配上】
+            // BP-based FORCE: BP=1000 (dynamic fee, IM=1000)。BID 挂 1000 承接
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(30003L)
-                    .price(980)
-                    .reservePrice(990)
+                    .price(1000)
+                    .reservePrice(1010)
                     .size(1)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
@@ -776,19 +776,20 @@ public final class ITExchangeCoreCustomLeverage {
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Thread.sleep(200);
 
-            // 检查用户被强平1手
+            // 检查用户被强平1手（BP=1000 收盘，PnL=0）
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(49L));
-                // 平1手多单，是减仓，不收费
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L));
+                // BP fill @1000: PnL=0, taker close fee = ceil(1*1000*2/100)=20
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(1500L - 20L));
             });
 
-            // 检查用户被强平1手
+            // 检查UID_2 SHORT 被 partial close 1 手
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getPositions().get(spec.symbolId).get(0).getOpenVolume(), is(49L));
-                // 平1手空弹，是减仓，不收费
-                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(99000L));
+                // maker close fee = ceil(1*1000*1/100)=10
+                assertThat(profile.getAccounts().get(spec.quoteCurrency), is(99000L - 10L));
             });
         }
     }
@@ -920,12 +921,12 @@ public final class ITExchangeCoreCustomLeverage {
             // 模拟价格下跌，如果按照leverage为1来计算的话, 价格达到25才会触发强平了
             container.updateCurrentPriceTo(25, spec.symbolId, spec.quoteCurrency);
 
-            // 准备980的买单，用来和强平成交
+            // BP-based FORCE: BP=1000。BID 挂 1000 承接
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(30003L)
-                    .price(980)
-                    .reservePrice(990)
+                    .price(1000)
+                    .reservePrice(1010)
                     .size(50)
                     .symbol(spec.symbolId)
                     .action(OrderAction.BID)
@@ -937,8 +938,9 @@ public final class ITExchangeCoreCustomLeverage {
                 assertThat(profile.getPositions().getFirst().get(0).openVolume, is(50L));
             });
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Thread.sleep(200);
 
-            // 检查用户被强平1手
+            // 检查用户被强平清仓
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().size(), is(0));
             });

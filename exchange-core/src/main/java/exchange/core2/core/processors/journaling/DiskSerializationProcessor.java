@@ -99,6 +99,13 @@ public final class DiskSerializationProcessor implements ISerializationProcessor
 
         this.exchangeId = initStateCfg.getExchangeId();
         this.folder = Paths.get(diskConfig.getStorageFolder());
+        // 提前创建 snapshot/journal 存储目录，避免后续 storeData 在不存在的 dir 上
+        // 直接 Files.newOutputStream(CREATE_NEW) 抛 NoSuchFileException。
+        try {
+            java.nio.file.Files.createDirectories(this.folder);
+        } catch (java.io.IOException ex) {
+            log.warn("Could not create storage folder {}: {}", this.folder, ex.toString());
+        }
         this.baseSnapshotId = initStateCfg.getSnapshotId();
         this.baseSeq = initStateCfg.getSnapshotBaseSeq();
 

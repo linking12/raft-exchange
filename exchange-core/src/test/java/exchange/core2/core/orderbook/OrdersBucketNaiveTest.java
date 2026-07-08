@@ -21,6 +21,7 @@ import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.Order;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.tests.util.OrderCommandFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -194,7 +195,7 @@ public final class OrdersBucketNaiveTest {
             assertThat(bucket.getTotalVolume(), is(expectedVolume));
         }
 
-        OrderCommand triggerOrd = OrderCommand.update(8182, UID_9, 1000);
+        OrderCommand triggerOrd = OrderCommandFactory.update(8182, UID_9, 1000);
         OrdersBucketNaive.MatcherResult matcherResult = bucket.match(expectedVolume, triggerOrd, eventsHelper);
 
         assertThat(MatcherTradeEvent.asList(matcherResult.eventsChainHead).size(), is(expectedNumOrders));
@@ -249,7 +250,7 @@ public final class OrdersBucketNaiveTest {
 
             long toMatch = expectedVolume / 2;
 
-            OrderCommand triggerOrd = OrderCommand.update(119283900, UID_9, 1000);
+            OrderCommand triggerOrd = OrderCommandFactory.update(119283900, UID_9, 1000);
 
             OrdersBucketNaive.MatcherResult matcherResult = bucket.match(toMatch, triggerOrd, eventsHelper);
             long totalVolume = matcherResult.volume;
@@ -261,7 +262,7 @@ public final class OrdersBucketNaiveTest {
             bucket.validate();
         }
 
-        OrderCommand triggerOrd = OrderCommand.update(1238729387, UID_9, 1000);
+        OrderCommand triggerOrd = OrderCommandFactory.update(1238729387, UID_9, 1000);
 
         OrdersBucketNaive.MatcherResult matcherResult = bucket.match(expectedVolume, triggerOrd, eventsHelper);
 

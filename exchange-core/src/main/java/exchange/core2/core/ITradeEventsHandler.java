@@ -7,9 +7,7 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
-import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.PositionMode;
-import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -67,6 +65,8 @@ public interface ITradeEventsHandler {
         public final List<OrderBookRecord> asks;
         public final List<OrderBookRecord> bids;
         public final long timestamp;
+        public final long baseScaleK;
+        public final long quoteScaleK;
     }
 
     @Data
@@ -276,7 +276,7 @@ public interface ITradeEventsHandler {
             result.tradeId = buildTradeId(seq, tradeIndex);
             result.lastQty = ev.size;
             result.lastPrice = ev.price;
-            result.lastQuoteQty = ev.size * ev.price;
+            result.lastQuoteQty = Math.multiplyExact(ev.size, ev.price);
             result.cumulativeQty = ev.filled;
             result.cumulativeQuoteQty = ev.filledNotional;
             result.commission = CoreArithmeticUtils.calculateTakerFee(ev.size, ev.price, spec);
@@ -308,7 +308,7 @@ public interface ITradeEventsHandler {
             result.tradeId = buildTradeId(seq, tradeIndex);
             result.lastQty = ev.size;
             result.lastPrice = ev.price;
-            result.lastQuoteQty = ev.size * ev.price;
+            result.lastQuoteQty = Math.multiplyExact(ev.size, ev.price);
             result.cumulativeQty = ev.matchedOrderFilled;
             result.cumulativeQuoteQty = ev.matchedOrderFilledNotional;
             result.commission = CoreArithmeticUtils.calculateMakerFee(ev.size, ev.price, spec);
@@ -489,15 +489,6 @@ public interface ITradeEventsHandler {
         public static FuturesExecutionReport tradeTaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile userProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET;
-            long sizeToOpen;
-            SymbolPositionRecord pos = userProfile.positions.get(userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command));
-            if (pos == null || pos.direction == PositionDirection.of(cmd.action)) {
-                // 仓位为空，或者方向相同 → 全部开仓
-                sizeToOpen = event.size;
-            } else {
-                // 方向相反 → 先平仓，再看是否有剩余开仓
-                sizeToOpen = calcSizeToOpen(event.size, cmd.action, pos);
-            }
             FuturesExecutionReport result = FuturesExecutionReport.borrow();
             result.uniId = buildTradeExecId(seq, tradeIndex, false);
             result.executionType = ExecType.TRADE;
@@ -522,41 +513,17 @@ public interface ITradeEventsHandler {
             result.cumQty = event.filled;
             result.cumQuoteQty = event.filledNotional;
             result.avgPx = event.filled == 0 ? 0L : event.filledNotional / event.filled;
-            result.fee = CoreArithmeticUtils.calculateTakerFee(sizeToOpen, event.price, spec);
+            // 一笔 fill 全量按 taker 率收：RiskEngine 在 closedSize/sizeToOpen 两段分别扣，
+            // 总额等同 calculateTakerFee(event.size, ev.price, spec) — 跟引擎单一真理源对齐
+            result.fee = CoreArithmeticUtils.calculateTakerFee(event.size, event.price, spec);
             result.feeAssetId = spec.quoteCurrency;
             result.isMaker = false;
             return result;
         }
 
-        private static long calcSizeToOpen(long tradeSize, OrderAction action, SymbolPositionRecord pos) {
-            // 去掉本次成交对同向 pending 的影响，得到成交前的 pending
-            long pbPre = pos.pendingBuySize - (action == OrderAction.BID ? tradeSize : 0);//10
-            long psPre = pos.pendingSellSize - (action == OrderAction.ASK ? tradeSize : 0);//20
-
-            // 计算成交前净仓位（多为正，空为负）：
-            long netPre = pos.direction.getMultiplier() * pos.openVolume + (pbPre - psPre); // 成交前净仓位（含此前pending）
-
-            long maxClosable = (action == OrderAction.BID)
-                    ? Math.max(0, -netPre)   // 只有净空才可被买单平
-                    : Math.max(0, netPre);  // 只有净多才可被卖单平
-
-            long closeSize = Math.min(tradeSize, maxClosable);
-            long sizeToOpen = tradeSize - closeSize;
-            return sizeToOpen;
-        }
-
         public static FuturesExecutionReport tradeMaker(OrderCommand cmd, long seq, CoreSymbolSpecification spec,
                                                         UserProfile makerProfile, MatcherTradeEvent event, int tradeIndex) {
             final boolean budgetOrder = event.matchedOrderType == OrderType.FOK_BUDGET || event.matchedOrderType == OrderType.IOC_BUDGET;
-            long sizeToOpen;
-            SymbolPositionRecord pos = makerProfile.positions.get(makerProfile.createPositionsKey(spec.symbolId, cmd.action.opposite(), event.matchedOrderCommandType));
-            if (pos == null || pos.direction == PositionDirection.of(cmd.action.opposite())) {
-                // 仓位为空，或者方向相同 → 全部开仓
-                sizeToOpen = event.size;
-            } else {
-                // 方向相反 → 先平仓，再看是否有剩余开仓
-                sizeToOpen = calcSizeToOpen(event.size, cmd.action.opposite(), pos);
-            }
             FuturesExecutionReport result = FuturesExecutionReport.borrow();
             result.uniId = buildTradeExecId(seq, tradeIndex, true);
             result.executionType = ExecType.TRADE;
@@ -581,7 +548,7 @@ public interface ITradeEventsHandler {
             result.cumQty = event.matchedOrderFilled;
             result.cumQuoteQty = event.matchedOrderFilledNotional;
             result.avgPx = event.matchedOrderFilled == 0 ? 0L : event.matchedOrderFilledNotional / event.matchedOrderFilled;
-            result.fee = CoreArithmeticUtils.calculateMakerFee(sizeToOpen, event.price, spec);
+            result.fee = CoreArithmeticUtils.calculateMakerFee(event.size, event.price, spec);
             result.feeAssetId = spec.quoteCurrency;
             result.isMaker = true;
             return result;

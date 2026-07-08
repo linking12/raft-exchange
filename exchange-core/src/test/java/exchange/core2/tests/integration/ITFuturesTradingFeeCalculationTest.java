@@ -2,6 +2,7 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.ITradeEventsHandler;
 import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.ApiAdjustMargin;
 import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiClosePosition;
 import exchange.core2.core.common.api.ApiPlaceOrder;
@@ -9,10 +10,12 @@ import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +35,7 @@ import static exchange.core2.core.common.OrderType.*;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsNot.not;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -229,6 +233,993 @@ class ITFuturesTradingFeeCalculationTest {
     }
 
     /**
+     * 验证期货 GTC/IOC/FOK_BUDGET/IOC_BUDGET 四种 taker OrderType 下，**每个用户**的最终
+     * account 余额都等于闭式应得值（initial - 开仓手续费）。
+     *
+     * 设计：每种 OrderType 走一轮独立 container。
+     *   开仓：makerUid GTC ASK 挂单 -> takerUid <takerType> BID 撮合
+     *   平仓：takerUid GTC ASK 挂单 -> makerUid GTC BID 撮合 (双方都是反向，按引擎规则平仓不收 fee)
+     *   终态：双方仓位归零，无 lockedMargin / 无 PnL，account 闭式可断言
+     *
+     * 这条测试是"全局账平 ≠ 每用户余额正确"的补强 —— 全局守恒只能保证 sum=0，
+     * 不能排除"A 多扣的钱被 B 少扣抵消"的情形；这里对每个用户单独断言闭式值。
+     */
+    @Test
+    @Timeout(30)
+    public void testFuturesPerUserBalanceAcrossOrderTypes() throws Exception {
+        runFuturesPerUserBalanceCheck(GTC);
+        runFuturesPerUserBalanceCheck(IOC);
+        runFuturesPerUserBalanceCheck(FOK_BUDGET);
+        runFuturesPerUserBalanceCheck(IOC_BUDGET);
+    }
+
+    private void runFuturesPerUserBalanceCheck(OrderType takerType) throws Exception {
+        final long makerUid = 9001L;
+        final long takerUid = 9002L;
+        final long size = 4L;
+        final long price = 50000L;
+        final long deposit = 1_000_000L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            container.createUserWithSpecificMoney(makerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+
+            // ============ 开仓 ============
+            // maker GTC ASK -> 开 SHORT；taker <takerType> BID -> 开 LONG
+            container.createAskWithOrderId(9101L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+
+            final long takerPriceField = (takerType == FOK_BUDGET || takerType == IOC_BUDGET)
+                    ? size * price   // BUDGET 单 price 字段是总预算 notional
+                    : price;
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid)
+                            .orderId(9102L)
+                            .price(takerPriceField)
+                            .reservePrice(takerPriceField)
+                            .size(size)
+                            .action(BID)
+                            .orderType(takerType)
+                            .symbol(symbolId)
+                            .marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 平仓（反向撮合, 平仓同样按 maker/taker 收 fee） ============
+            // 这一轮换边：原 takerUid 挂单变 maker，原 makerUid 主动吃单变 taker
+            container.createAskWithOrderId(9103L, takerUid, (int) size, price, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(9104L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+
+            // ============ 断言：仓位清空 ============
+            container.validateUserState(makerUid, profile -> assertTrue(
+                    profile.getPositions().get(symbolId) == null || profile.getPositions().get(symbolId).isEmpty(),
+                    "[" + takerType + "] maker 仓位应全部平掉"));
+            container.validateUserState(takerUid, profile -> assertTrue(
+                    profile.getPositions().get(symbolId) == null || profile.getPositions().get(symbolId).isEmpty(),
+                    "[" + takerType + "] taker 仓位应全部平掉"));
+
+            // ============ 断言：account == initial - 开仓 fee - 平仓 fee ============
+            long expectedMakerFee = CoreArithmeticUtils.calculateMakerFee(size, price, BTC_SYMBOL);
+            long expectedTakerFee = CoreArithmeticUtils.calculateTakerFee(size, price, BTC_SYMBOL);
+            // 原 makerUid：开仓 maker fee + 平仓 taker fee (close 时主动吃)
+            long expectedMakerAccount = deposit - expectedMakerFee - expectedTakerFee;
+            // 原 takerUid：开仓 taker fee + 平仓 maker fee (close 时被动挂)
+            long expectedTakerAccount = deposit - expectedTakerFee - expectedMakerFee;
+
+            container.validateUserState(makerUid, profile -> assertThat(
+                    "[" + takerType + "] maker account 应为 " + expectedMakerAccount,
+                    profile.getAccounts().get(CURRENECY_USD), is(expectedMakerAccount)));
+            container.validateUserState(takerUid, profile -> assertThat(
+                    "[" + takerType + "] taker account 应为 " + expectedTakerAccount,
+                    profile.getAccounts().get(CURRENECY_USD), is(expectedTakerAccount)));
+
+            // ============ 顺带验全局账平 ============
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 全局账面应该闭合");
+
+            log.info("Futures per-user balance verified for taker={}: makerFee={}, takerFee={}",
+                    takerType, expectedMakerFee, expectedTakerFee);
+        }
+    }
+
+    /**
+     * 完整生命周期账目守恒：充值 → 开仓 → 平仓 → 提现 → 对账。
+     *
+     * 验证（每种 taker OrderType 各一轮）：
+     *   1) 充值走 ApiAdjustUserBalance：accounts += deposit, adjustments -= deposit（反向记账）
+     *   2) 开仓/平仓后双方 account = deposit - 开仓 fee
+     *   3) 提现走 ApiAdjustUserBalance(负数)：accounts -= (deposit - fee), adjustments += (deposit - fee)
+     *   4) 终态：双方 account == 0, 仓位清空, 全局对账闭合
+     *   5) adjustments 净额 == -fee 总和（充值-提现差额，等于被引擎吃掉的手续费）
+     */
+    @Test
+    @Timeout(30)
+    public void testFuturesFullLifecycleWithDepositWithdraw() throws Exception {
+        runFuturesFullLifecycle(GTC);
+        runFuturesFullLifecycle(IOC);
+        runFuturesFullLifecycle(FOK_BUDGET);
+        runFuturesFullLifecycle(IOC_BUDGET);
+    }
+
+    private void runFuturesFullLifecycle(OrderType takerType) throws Exception {
+        final long makerUid = 9201L;
+        final long takerUid = 9202L;
+        final long size = 4L;
+        final long price = 50000L;
+        final long deposit = 1_000_000L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            // ============ 阶段 1：充值 (createUserWithSpecificMoney 走 ApiAdjustUserBalance) ============
+            container.createUserWithSpecificMoney(makerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+
+            // 验证充值后：account = deposit, adjustments = -2 * deposit, 全局账平
+            container.validateUserState(makerUid, profile ->
+                    assertThat("[" + takerType + "] 充值后 maker account",
+                            profile.getAccounts().get(CURRENECY_USD), is(deposit)));
+            container.validateUserState(takerUid, profile ->
+                    assertThat("[" + takerType + "] 充值后 taker account",
+                            profile.getAccounts().get(CURRENECY_USD), is(deposit)));
+            assertThat("[" + takerType + "] 充值后 adjustments 应为 -2*deposit",
+                    container.totalBalanceReport().getAdjustments().get(CURRENECY_USD), is(-2 * deposit));
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 充值后全局账平");
+
+            // ============ 阶段 2：开仓（maker GTC ASK + taker <takerType> BID） ============
+            container.createAskWithOrderId(9301L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+            final long takerPriceField = (takerType == FOK_BUDGET || takerType == IOC_BUDGET)
+                    ? size * price
+                    : price;
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid)
+                            .orderId(9302L)
+                            .price(takerPriceField)
+                            .reservePrice(takerPriceField)
+                            .size(size)
+                            .action(BID)
+                            .orderType(takerType)
+                            .symbol(symbolId)
+                            .marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 阶段 3：平仓（双方反向, 平仓同样收 fee, 但 maker/taker 换边） ============
+            // 原 takerUid 在平仓时挂单 → 成 maker；原 makerUid 在平仓时主动吃单 → 成 taker
+            container.createAskWithOrderId(9303L, takerUid, (int) size, price, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(9304L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+
+            final long expectedMakerFee = CoreArithmeticUtils.calculateMakerFee(size, price, BTC_SYMBOL);
+            final long expectedTakerFee = CoreArithmeticUtils.calculateTakerFee(size, price, BTC_SYMBOL);
+            // 原 makerUid：开仓 maker fee + 平仓 taker fee
+            final long makerBalanceBeforeWithdraw = deposit - expectedMakerFee - expectedTakerFee;
+            // 原 takerUid：开仓 taker fee + 平仓 maker fee
+            final long takerBalanceBeforeWithdraw = deposit - expectedTakerFee - expectedMakerFee;
+
+            container.validateUserState(makerUid, profile -> assertThat(
+                    "[" + takerType + "] 平仓后 maker account = deposit - openMakerFee - closeTakerFee",
+                    profile.getAccounts().get(CURRENECY_USD), is(makerBalanceBeforeWithdraw)));
+            container.validateUserState(takerUid, profile -> assertThat(
+                    "[" + takerType + "] 平仓后 taker account = deposit - openTakerFee - closeMakerFee",
+                    profile.getAccounts().get(CURRENECY_USD), is(takerBalanceBeforeWithdraw)));
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 平仓后全局账平");
+
+            // ============ 阶段 4：提现（addMoneyToUser 传负数走 ApiAdjustUserBalance 的 withdraw 路径） ============
+            container.addMoneyToUser(makerUid, CURRENECY_USD, -makerBalanceBeforeWithdraw);
+            container.addMoneyToUser(takerUid, CURRENECY_USD, -takerBalanceBeforeWithdraw);
+
+            // ============ 阶段 5：终态断言 ============
+            container.validateUserState(makerUid, profile -> assertThat(
+                    "[" + takerType + "] 提现后 maker account 应清零",
+                    profile.getAccounts().get(CURRENECY_USD), is(0L)));
+            container.validateUserState(takerUid, profile -> assertThat(
+                    "[" + takerType + "] 提现后 taker account 应清零",
+                    profile.getAccounts().get(CURRENECY_USD), is(0L)));
+
+            // adjustments 净额 = -(deposit*2 - withdraw*2) = -(开仓 + 平仓 fee 总和)
+            // 因为最后未被提走的钱正是引擎收的手续费
+            long expectedAdjustments = -2 * (expectedMakerFee + expectedTakerFee);
+            assertThat("[" + takerType + "] adjustments 净额应等于 -总手续费",
+                    container.totalBalanceReport().getAdjustments().get(CURRENECY_USD),
+                    is(expectedAdjustments));
+
+            // fees 总额应等于 maker + taker (开仓 + 平仓) 手续费
+            assertThat("[" + takerType + "] fees 总额应等于开/平仓手续费总和",
+                    container.totalBalanceReport().getFees().get(CURRENECY_USD),
+                    is(2 * (expectedMakerFee + expectedTakerFee)));
+
+            // adjustments + fees == 0（充值/提现差额 = 引擎收的所有手续费）
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 全生命周期后全局账平");
+
+            log.info("Futures full lifecycle verified for taker={}: deposit={}, makerFee={}, takerFee={}, finalAdjustments={}",
+                    takerType, deposit, expectedMakerFee, expectedTakerFee, expectedAdjustments);
+        }
+    }
+
+    /**
+     * HEDGE 双向持仓全生命周期账目守恒 × 4 种 taker OrderType。
+     *
+     * 单向持仓版本已覆盖（见 testFuturesFullLifecycleWithDepositWithdraw）。
+     * 本测试聚焦双向持仓特有的两条风险路径：
+     *   1) 同 symbol 下 taker 同时持多 + 持空：UserProfile.createPositionsKey 在 HEDGE
+     *      下用 BID=+symbol、ASK=-symbol 把同一 symbol 拆成两个 position record。这条
+     *      链路如果 BUDGET 单/IOC 单不能正确触发开空（被误判成"平多"），LONG 就会被
+     *      抵消而不会建出 SHORT。
+     *   2) 平仓走 ApiClosePosition 命令：CLOSE_POSITION 在 createPositionsKey 里会翻转
+     *      key（平多用 ASK 但要命中 +symbol 的多仓记录）。这条翻转链路如果挂了，
+     *      平仓会去找一个不存在的 -symbol 记录 → 平仓失败 → 仓位/账目永远漂着。
+     *
+     * 每轮（一种 OrderType）流程：
+     *   1) 充值 maker + taker
+     *   2) taker 切 HEDGE
+     *   3) 开多：maker GTC ASK + taker <takerType> BID  → taker LONG
+     *   4) 开空：maker GTC BID + taker <takerType> ASK  → taker SHORT (HEDGE 不会抵消多仓)
+     *   5) 平多：taker ApiClosePosition(ASK) + maker GTC BID
+     *   6) 平空：taker ApiClosePosition(BID) + maker GTC ASK
+     *   7) 提现：读出 maker/taker 余额，全数提走
+     *   8) 终态：双方账户清零，仓位 openVolume == 0，全局账平
+     *
+     * 不精确预算手续费（HEDGE 多了开空一边的 fee，与 close-position 路径的 fee 规则耦合），
+     * 改用"读多少提多少"间接验证守恒：充值 - 提现 = 引擎留下的所有 fee，全局闭合。
+     */
+    @Test
+    @Timeout(30)
+    public void testFuturesHedgeFullLifecycleWithDepositWithdraw() throws Exception {
+        runFuturesHedgeFullLifecycle(GTC);
+        runFuturesHedgeFullLifecycle(IOC);
+        runFuturesHedgeFullLifecycle(FOK_BUDGET);
+        runFuturesHedgeFullLifecycle(IOC_BUDGET);
+    }
+
+    private void runFuturesHedgeFullLifecycle(OrderType takerType) throws Exception {
+        final long makerUid = 9401L;
+        final long takerUid = 9402L;
+        final long size = 4L;
+        final long price = 50000L;
+        // HEDGE 同时锁多仓 + 空仓两边保证金，需要的钱比单向版多一倍以上，留足余量。
+        final long deposit = 100_000_000L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            // ============ 阶段 1：充值 ============
+            container.createUserWithSpecificMoney(makerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 充值后全局账平");
+
+            // ============ 阶段 2：taker 切 HEDGE ============
+            container.adjustPositionMode(takerUid, PositionMode.HEDGE);
+
+            // BUDGET 单 price 字段是总预算 notional
+            final long takerPriceField = (takerType == FOK_BUDGET || takerType == IOC_BUDGET)
+                    ? size * price
+                    : price;
+
+            // 引擎限制：IOC_BUDGET 只支持 BID（OrderBookNaiveImpl#newOrderMatchIocBudget 直接 reject ASK，
+            // 因为"最低收入"约束无法部分成交，语义模糊）。开空仓阶段对 IOC_BUDGET 退化到 GTC，
+            // 这样 4 种 takerType 都能跑完整全周期、覆盖 BID 侧路径与 close-position 翻转逻辑。
+            final OrderType askTakerType = (takerType == IOC_BUDGET) ? GTC : takerType;
+            final long askTakerPriceField = (askTakerType == FOK_BUDGET || askTakerType == IOC_BUDGET)
+                    ? size * price
+                    : price;
+
+            // ============ 阶段 3：开多仓 (maker GTC ASK + taker <takerType> BID) ============
+            container.createAskWithOrderId(9501L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid).orderId(9502L)
+                            .price(takerPriceField).reservePrice(takerPriceField).size(size)
+                            .action(BID).orderType(takerType)
+                            .symbol(symbolId).marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 阶段 4：开空仓 (maker GTC BID + taker <askTakerType> ASK) ============
+            // 关键断言点：HEDGE 下 taker ASK 不会抵消多仓，必须建出新的空仓
+            container.createBidWithOrderId(9503L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid).orderId(9504L)
+                            .price(askTakerPriceField).reservePrice(askTakerPriceField).size(size)
+                            .action(ASK).orderType(askTakerType)
+                            .symbol(symbolId).marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            container.validateUserState(takerUid, profile -> {
+                assertThat("[" + takerType + "] taker 双向持仓应有 2 条记录",
+                        profile.getPositions().get(symbolId).size(), is(2));
+                assertThat("[" + takerType + "] taker LONG direction",
+                        profile.getPositions().get(symbolId).get(0).direction, is(PositionDirection.LONG));
+                assertThat("[" + takerType + "] taker LONG openVolume = size",
+                        profile.getPositions().get(symbolId).get(0).openVolume, is(size));
+                assertThat("[" + takerType + "] taker SHORT direction",
+                        profile.getPositions().get(symbolId).get(1).direction, is(PositionDirection.SHORT));
+                assertThat("[" + takerType + "] taker SHORT openVolume = size",
+                        profile.getPositions().get(symbolId).get(1).openVolume, is(size));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 双向开仓后全局账平");
+
+            // ============ 阶段 5：平多仓 (ApiClosePosition ASK + maker GTC BID) ============
+            container.submitCommandSync(
+                    ApiClosePosition.builder()
+                            .uid(takerUid).orderId(9505L).symbol(symbolId)
+                            .price(price).size(size).action(ASK)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.createBidWithOrderId(9506L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+
+            // ============ 阶段 6：平空仓 (ApiClosePosition BID + maker GTC ASK) ============
+            container.submitCommandSync(
+                    ApiClosePosition.builder()
+                            .uid(takerUid).orderId(9507L).symbol(symbolId)
+                            .price(price).size(size).action(BID)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.createAskWithOrderId(9508L, makerUid, (int) size, price, symbolId, MarginMode.CROSS);
+
+            // 平仓后 position 记录可能被引擎清掉，也可能 openVolume 归 0 留着；都视为合法。
+            // 真正要断言的是：剩下的仓位 openVolume 总和 == 0（没有遗漏的多空仓）。
+            container.validateUserState(takerUid, profile -> {
+                List<SingleUserReportResult.Position> remaining = profile.getPositions().get(symbolId);
+                long openVolumeSum = remaining == null ? 0L
+                        : remaining.stream().mapToLong(p -> p.openVolume).sum();
+                assertThat("[" + takerType + "] taker 平仓后 openVolume 总和应为 0",
+                        openVolumeSum, is(0L));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 双向平仓后全局账平");
+
+            // ============ 阶段 7：读出双方余额，全数提走 ============
+            final long[] balances = new long[2];  // [maker, taker]
+            container.validateUserState(makerUid, p -> balances[0] = p.getAccounts().get(CURRENECY_USD));
+            container.validateUserState(takerUid, p -> balances[1] = p.getAccounts().get(CURRENECY_USD));
+            if (balances[0] != 0) container.addMoneyToUser(makerUid, CURRENECY_USD, -balances[0]);
+            if (balances[1] != 0) container.addMoneyToUser(takerUid, CURRENECY_USD, -balances[1]);
+
+            // ============ 阶段 8：终态断言 ============
+            container.validateUserState(makerUid, p -> assertThat(
+                    "[" + takerType + "] 提现后 maker account 应清零",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+            container.validateUserState(takerUid, p -> assertThat(
+                    "[" + takerType + "] 提现后 taker account 应清零",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+
+            final TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            long adjustments = bal.getAdjustments().get(CURRENECY_USD);
+            long fees = bal.getFees().get(CURRENECY_USD);
+            assertThat("[" + takerType + "] adjustments + fees == 0",
+                    adjustments + fees, is(0L));
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "[" + takerType + "] HEDGE 全生命周期后全局账平");
+
+            log.info("Futures HEDGE full lifecycle verified for taker={}: makerBalance={}, takerBalance={}, fees={}, adjustments={}",
+                    takerType, balances[0], balances[1], fees, adjustments);
+        }
+    }
+
+    /**
+     * ISOLATED 逐仓 + HEDGE 双向持仓全生命周期 × 4 种 taker OrderType。
+     *
+     * 与 testFuturesHedgeFullLifecycleWithDepositWithdraw（CROSS 版）相比，
+     * 本测试聚焦逐仓特有的风险路径：
+     *   - HEDGE + ISOLATED 时，多仓和空仓各自独立锁逐仓保证金（openInitMarginSum
+     *     必须分别 > 0，而不是共用 account 余额）。如果引擎把 ISOLATED+HEDGE 误退化
+     *     成 CROSS 的共享池模型，开空仓时不会建立独立的 isolated margin lock，
+     *     强平/追加保证金的隔离边界就会被破坏。
+     *   - leverage 字段必须正确写入两侧 position record（CROSS 不依赖 leverage 字段）。
+     *
+     * IOC_BUDGET ASK 引擎不支持的限制同 CROSS 版处理（fallback 到 GTC）。
+     */
+    @Test
+    @Timeout(30)
+    public void testFuturesIsolatedHedgeFullLifecycleWithDepositWithdraw() throws Exception {
+        runFuturesIsolatedHedgeFullLifecycle(GTC);
+        runFuturesIsolatedHedgeFullLifecycle(IOC);
+        runFuturesIsolatedHedgeFullLifecycle(FOK_BUDGET);
+        runFuturesIsolatedHedgeFullLifecycle(IOC_BUDGET);
+    }
+
+    private void runFuturesIsolatedHedgeFullLifecycle(OrderType takerType) throws Exception {
+        final long makerUid = 9601L;
+        final long takerUid = 9602L;
+        final long size = 4L;
+        final long price = 50000L;
+        final int leverage = 10;
+        final long deposit = 100_000_000L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            // ============ 阶段 1：充值 ============
+            container.createUserWithSpecificMoney(makerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 充值后全局账平");
+
+            // ============ 阶段 2：taker 切 HEDGE ============
+            container.adjustPositionMode(takerUid, PositionMode.HEDGE);
+
+            final long takerPriceField = (takerType == FOK_BUDGET || takerType == IOC_BUDGET)
+                    ? size * price : price;
+            // IOC_BUDGET ASK 引擎不支持，开空仓阶段退化 GTC（同 CROSS HEDGE 版）
+            final OrderType askTakerType = (takerType == IOC_BUDGET) ? GTC : takerType;
+            final long askTakerPriceField = (askTakerType == FOK_BUDGET || askTakerType == IOC_BUDGET)
+                    ? size * price : price;
+
+            // ============ 阶段 3：开多仓 ============
+            // helper createAsk/BidWithOrderId 不支持 leverage 字段，ISOLATED 必须显式带 leverage，
+            // 因此 maker/taker 全部走 ApiPlaceOrder.builder() 直接构造。
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(makerUid).orderId(9701L)
+                            .price(price).size(size)
+                            .action(ASK).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid).orderId(9702L)
+                            .price(takerPriceField).reservePrice(takerPriceField).size(size)
+                            .action(BID).orderType(takerType)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 阶段 4：开空仓 ============
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(makerUid).orderId(9703L)
+                            .price(price).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid).orderId(9704L)
+                            .price(askTakerPriceField).reservePrice(askTakerPriceField).size(size)
+                            .action(ASK).orderType(askTakerType)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // 关键断言：HEDGE + ISOLATED 下，多仓 / 空仓各自独立锁定逐仓保证金
+            container.validateUserState(takerUid, profile -> {
+                List<SingleUserReportResult.Position> twoLegs = profile.getPositions().get(symbolId);
+                assertThat("[" + takerType + "] taker 双向持仓有 2 条记录",
+                        twoLegs.size(), is(2));
+                SingleUserReportResult.Position longLeg = twoLegs.get(0);
+                SingleUserReportResult.Position shortLeg = twoLegs.get(1);
+                assertThat("[" + takerType + "] LONG direction", longLeg.direction, is(PositionDirection.LONG));
+                assertThat("[" + takerType + "] LONG openVolume", longLeg.openVolume, is(size));
+                assertThat("[" + takerType + "] LONG marginMode == ISOLATED", longLeg.marginMode, is(MarginMode.ISOLATED));
+                assertThat("[" + takerType + "] LONG openInitMarginSum 应 > 0（逐仓独立锁仓保证金）",
+                        longLeg.openInitMarginSum > 0, is(true));
+                assertThat("[" + takerType + "] SHORT direction", shortLeg.direction, is(PositionDirection.SHORT));
+                assertThat("[" + takerType + "] SHORT openVolume", shortLeg.openVolume, is(size));
+                assertThat("[" + takerType + "] SHORT marginMode == ISOLATED", shortLeg.marginMode, is(MarginMode.ISOLATED));
+                assertThat("[" + takerType + "] SHORT openInitMarginSum 应 > 0（不与多仓共享保证金）",
+                        shortLeg.openInitMarginSum > 0, is(true));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 开仓后全局账平");
+
+            // ============ 阶段 5：平多仓 ============
+            container.submitCommandSync(
+                    ApiClosePosition.builder()
+                            .uid(takerUid).orderId(9705L).symbol(symbolId)
+                            .price(price).size(size).action(ASK)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(makerUid).orderId(9706L)
+                            .price(price).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 阶段 6：平空仓 ============
+            container.submitCommandSync(
+                    ApiClosePosition.builder()
+                            .uid(takerUid).orderId(9707L).symbol(symbolId)
+                            .price(price).size(size).action(BID)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(makerUid).orderId(9708L)
+                            .price(price).size(size)
+                            .action(ASK).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            container.validateUserState(takerUid, profile -> {
+                List<SingleUserReportResult.Position> remaining = profile.getPositions().get(symbolId);
+                long openVolumeSum = remaining == null ? 0L
+                        : remaining.stream().mapToLong(p -> p.openVolume).sum();
+                assertThat("[" + takerType + "] taker 平仓后 openVolume 总和应为 0",
+                        openVolumeSum, is(0L));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "[" + takerType + "] 平仓后全局账平");
+
+            // ============ 阶段 7：读余额全数提走 ============
+            final long[] balances = new long[2];  // [maker, taker]
+            container.validateUserState(makerUid, p -> balances[0] = p.getAccounts().get(CURRENECY_USD));
+            container.validateUserState(takerUid, p -> balances[1] = p.getAccounts().get(CURRENECY_USD));
+            if (balances[0] != 0) container.addMoneyToUser(makerUid, CURRENECY_USD, -balances[0]);
+            if (balances[1] != 0) container.addMoneyToUser(takerUid, CURRENECY_USD, -balances[1]);
+
+            // ============ 阶段 8：终态对账 ============
+            container.validateUserState(makerUid, p -> assertThat(
+                    "[" + takerType + "] 提现后 maker account 应清零",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+            container.validateUserState(takerUid, p -> assertThat(
+                    "[" + takerType + "] 提现后 taker account 应清零",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+
+            final TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            long adjustments = bal.getAdjustments().get(CURRENECY_USD);
+            long fees = bal.getFees().get(CURRENECY_USD);
+            assertThat("[" + takerType + "] adjustments + fees == 0",
+                    adjustments + fees, is(0L));
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "[" + takerType + "] ISOLATED+HEDGE 全生命周期后全局账平");
+
+            log.info("Futures ISOLATED+HEDGE full lifecycle verified for taker={}: makerBalance={}, takerBalance={}, fees={}, adjustments={}",
+                    takerType, balances[0], balances[1], fees, adjustments);
+        }
+    }
+
+    /**
+     * 强平全生命周期账目守恒：充值 → 开仓 → 暴跌 → 强平 → 提现 → 对账。
+     *
+     * 之前的全周期模板都是"用户主动平仓"，本测试聚焦强平这条高风险路径：
+     *   1) FORCE_LIQUIDATION 路径自动生成的平仓单与正常 ApiPlaceOrder/ApiClosePosition 分支
+     *      共用 RiskEngine 结算逻辑；如果强平路径漏算 fee、未把残值打回 victim、或没把
+     *      亏损部分挪入 IF（保险基金），全局对账会立刻不平。
+     *   2) ifBalances 是 TotalCurrencyBalanceReportResult#getGlobalBalancesSum 的项之一
+     *      （见 LiquidationService#creditLiquidationFee 与 IFNotional），强平后必须把
+     *      IF 端的现金流闭合到全局守恒里。
+     *
+     * 场景设计：
+     *   victim：薄保证金（10k），ISOLATED LONG，杠杆刚够开仓
+     *   lp：深资金池（1e8），CROSS — 既挂高价 ASK 撮合 victim 开仓（变 SHORT），
+     *        又在低价挂 BID 接收强平卖出（再变回 ~flat）
+     *   开仓价 50000 → 暴跌到 25000，多头爆仓
+     *
+     * 守恒方式与其它全周期一致：读出 victim/lp 最终账户余额，全数提走；
+     * isGlobalBalancesAllZero() 在最终态必须成立（accountBalances + extraMargin
+     * + fees + adjustments + suspends + ifBalances 全部为 0）。
+     */
+    @Test
+    @Timeout(30)
+    public void testFuturesLiquidationFullLifecycleConservation() throws Exception {
+        final long victimUid = 9801L;
+        final long lpUid = 9802L;
+        final long acceptorUid = 9803L;  // 独立第三方：专门挂 BID 接强平 ASK 卖单
+        final long victimDeposit = 10_000L;
+        final long lpDeposit = 100_000_000L;
+        final long acceptorDeposit = 100_000_000L;
+        final long openPrice = 50_000L;
+        final long crashPrice = 25_000L;
+        final int size = 4;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            // 关闭自动强平线程，由测试手动触发 → 时序可控
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, openPrice));
+
+            // ============ 阶段 1：充值 ============
+            container.createUserWithSpecificMoney(victimUid, victimDeposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(lpUid, lpDeposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(acceptorUid, acceptorDeposit, CURRENECY_USD);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "充值后全局账平");
+
+            // ============ 阶段 2：开仓 (LP ASK + victim BID ISOLATED) ============
+            container.createAskWithOrderId(9901L, lpUid, size, openPrice, symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(9902L, victimUid, size, openPrice, symbolId, MarginMode.ISOLATED);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "开仓后全局账平");
+
+            // ============ 阶段 3：acceptor 预挂低价 BID 接收强平卖单 ============
+            // 用独立第三方而非 LP：避开 LP 已持 SHORT 时挂反向 BID 引入的持仓抵销路径。
+            // 显式构造 ApiPlaceOrder 设置 reservePrice 确保 BID 单成功挂上。
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(acceptorUid).orderId(9903L)
+                            .price(crashPrice).reservePrice(crashPrice).size(size * 2)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 阶段 4：暴跌 + 触发强平 ============
+            container.updateCurrentPriceTo((int) crashPrice, symbolId, CURRENECY_USD);
+
+            List<LiquidationEngine> liquidationEngines = container.getExchangeCore().getLiquidationEngines();
+            // LiquidationEngine.stop() 后 republish scheduler 被关，强平多步流程 (FORCE→IF→ADL)
+            // 需要 caller 主动 drive。单次 triggerOnce 只起第一拍，后续步骤靠 waitForCondition 的
+            // onTick 重发 — 参考 LatencyTools.waitForCondition JavaDoc + testPerpetualScenario3 同款模式。
+            // 内层 5s + tick 100ms（最多 50 次重发），跟 @Timeout(30) 留够余量。
+            Runnable trigger = () -> liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+            trigger.run();
+            LatencyTools.waitForCondition(5_000L, () -> {
+                try {
+                    SingleUserReportResult p = container.getUserProfile(victimUid);
+                    List<SingleUserReportResult.Position> positions = p.getPositions().get(symbolId);
+                    long sum = positions == null ? 0L
+                            : positions.stream().mapToLong(pos -> pos.openVolume).sum();
+                    return sum == 0L;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, trigger, 100);
+            container.getApi().groupingControl(0, 1);
+
+            // ============ 阶段 5：验证 victim 持仓被清掉 ============
+            container.validateUserState(victimUid, profile -> {
+                List<SingleUserReportResult.Position> positions = profile.getPositions().get(symbolId);
+                long openVolumeSum = positions == null ? 0L
+                        : positions.stream().mapToLong(p -> p.openVolume).sum();
+                assertThat("victim 强平后 openVolume 总和应为 0",
+                        openVolumeSum, is(0L));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "强平后全局账平（含 ifBalances 与 fees）");
+
+            // ============ 阶段 6：撤掉 acceptor 残留挂单 ============
+            // acceptor 阶段 3 挂了 size*2，强平只吃掉了 size，订单簿上还有 size 残单
+            container.cancelOrder(acceptorUid, 9903L, symbolId);
+
+            // ============ 阶段 7：提现 victim account（LP/acceptor 仍持仓不提现）============
+            // 设计与 HEDGE 测试对齐：LP CROSS SHORT 与 acceptor CROSS LONG 在测试结束时仍持仓，
+            // 它们的 account 里锁着保证金 → 不能 withdraw 全部，但锁定部分仍计入 isGlobalBalancesAllZero
+            // 守恒求和，所以全局守恒断言依然能闭合。
+            final long[] balances = new long[3];  // [victim, lp, acceptor]
+            container.validateUserState(victimUid, p -> balances[0] = p.getAccounts().get(CURRENECY_USD));
+            container.validateUserState(lpUid, p -> balances[1] = p.getAccounts().get(CURRENECY_USD));
+            container.validateUserState(acceptorUid, p -> balances[2] = p.getAccounts().get(CURRENECY_USD));
+            if (balances[0] != 0) container.addMoneyToUser(victimUid, CURRENECY_USD, -balances[0]);
+
+            // ============ 阶段 8：终态守恒 ============
+            container.validateUserState(victimUid, p -> assertThat(
+                    "提现后 victim account 应清零（强平已清掉持仓）",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+
+            final TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            long adjustments = bal.getAdjustments().get(CURRENECY_USD);
+            long fees = bal.getFees().get(CURRENECY_USD);
+            long ifBalance = bal.getIfBalances() == null ? 0L
+                    : bal.getIfBalances().get(CURRENECY_USD);
+
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "强平全生命周期后全局账平（含 LP/acceptor 持仓锁定保证金 + adjustments + fees + ifBalances）");
+
+            log.info("Liquidation lifecycle verified: victimDeposit={}, lpDeposit={}, acceptorDeposit={}, "
+                            + "victimWithdraw={}, lpAccountRemain={}, acceptorAccountRemain={}, fees={}, ifBalance={}, adjustments={}",
+                    victimDeposit, lpDeposit, acceptorDeposit, balances[0], balances[1], balances[2], fees, ifBalance, adjustments);
+        }
+    }
+
+    /**
+     * extraMargin（追加逐仓保证金）全生命周期账目守恒。
+     *
+     * 流程：充值 → 开仓（ISOLATED LONG）→ ApiAdjustMargin 追加 isolated margin → 平仓 → 提现 → 对账。
+     *
+     * 关键路径：ApiAdjustMargin(ISOLATED) 把钱从 accountBalances 搬到 position.extraMargin
+     * 这一对账户/仓位之间的现金流，在平仓时反向归还（剩余 extraMargin 退回 account）。
+     * 如果搬运两端记账没对齐（例如 account 扣了但 extraMargin 没加，或平仓时归还漏算），
+     * isGlobalBalancesAllZero 会立刻穿仓。
+     *
+     * 现有 ITExtraMarginIntegration 测了"加/减/匹配"行为本身，但没跑过端到端的
+     * "充值 → 追加 → 平仓 → 提现 → 对账"完整闭合，这是补这条链路的最后一公里。
+     */
+    @Test
+    @Timeout(20)
+    public void testFuturesExtraMarginFullLifecycleConservation() throws Exception {
+        final long takerUid = 9701L;
+        final long makerUid = 9702L;
+        final long deposit = 1_000_000L;
+        final long extraMarginAmount = 200_000L;
+        final long price = 50_000L;
+        final int size = 4;
+        final int leverage = 10;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            // ============ 阶段 1：充值 ============
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(makerUid, deposit * 10, CURRENECY_USD);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "充值后全局账平");
+
+            // ============ 阶段 2：开 ISOLATED LONG (maker ASK + taker BID) ============
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(makerUid).orderId(9801L)
+                            .price(price).size(size)
+                            .action(ASK).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid).orderId(9802L)
+                            .price(price).reservePrice(price).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "开仓后全局账平");
+
+            // ============ 阶段 3：追加 extraMargin ============
+            // 关键不变量：accountBalances 减少 extraMarginAmount，position.extraMargin 增加 extraMarginAmount
+            final long[] accountBefore = new long[1];
+            container.validateUserState(takerUid, p -> accountBefore[0] = p.getAccounts().get(CURRENECY_USD));
+
+            container.submitCommandSync(
+                    ApiAdjustMargin.builder()
+                            .transactionId(container.getRandomTransactionId())
+                            .symbol(symbolId).uid(takerUid)
+                            .amount(extraMarginAmount).currency(CURRENECY_USD)
+                            .marginMode(MarginMode.ISOLATED)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            container.validateUserState(takerUid, profile -> {
+                assertThat("追加后 account 应减少 extraMarginAmount",
+                        profile.getAccounts().get(CURRENECY_USD),
+                        is(accountBefore[0] - extraMarginAmount));
+                assertThat("追加后 position.extraMargin == extraMarginAmount",
+                        profile.getPositions().get(symbolId).get(0).extraMargin,
+                        is(extraMarginAmount));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "追加 margin 后全局账平");
+
+            // ============ 阶段 4：平仓 (taker ASK + maker BID, 价格不变) ============
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(takerUid).orderId(9803L)
+                            .price(price).size(size)
+                            .action(ASK).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(makerUid).orderId(9804L)
+                            .price(price).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "平仓后全局账平");
+
+            // ============ 阶段 5：提现 ============
+            final long[] balances = new long[2];
+            container.validateUserState(takerUid, p -> balances[0] = p.getAccounts().get(CURRENECY_USD));
+            container.validateUserState(makerUid, p -> balances[1] = p.getAccounts().get(CURRENECY_USD));
+            if (balances[0] != 0) container.addMoneyToUser(takerUid, CURRENECY_USD, -balances[0]);
+            if (balances[1] != 0) container.addMoneyToUser(makerUid, CURRENECY_USD, -balances[1]);
+
+            // ============ 阶段 6：终态对账 ============
+            container.validateUserState(takerUid, p -> assertThat(
+                    "提现后 taker account 应清零",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+            container.validateUserState(makerUid, p -> assertThat(
+                    "提现后 maker account 应清零",
+                    p.getAccounts().get(CURRENECY_USD), is(0L)));
+
+            final TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "extraMargin 全生命周期后全局账平");
+
+            log.info("extraMargin lifecycle verified: deposit={}, extraMargin={}, "
+                            + "takerWithdraw={}, makerWithdraw={}, fees={}",
+                    deposit, extraMarginAmount, balances[0], balances[1],
+                    bal.getFees().get(CURRENECY_USD));
+        }
+    }
+
+    /**
+     * HEDGE + 强平全生命周期账目守恒：双向持仓只爆一边。
+     *
+     * 流程：充值 → 切 HEDGE → 开多 + 开空（双仓独立保证金）→ 暴跌 → 触发强平
+     *      → 验证 LONG 被爆 / SHORT 保留 → 提现 → 对账。
+     *
+     * 关键路径（与单向强平的差异）：
+     *   1) HEDGE + ISOLATED 下，LONG 仓位的 isolated margin 必须 *独立* 被消耗，
+     *      不应去吃 SHORT 仓位的 isolated margin（否则两侧保证金隔离边界破坏）。
+     *   2) 强平引擎查 LONG 仓位用 createPositionsKey(symbol, ASK, FORCE_LIQUIDATION) → +symbol
+     *      （ASK 翻转回 LONG key），如果翻转链路出错，强平会找不到 LONG 仓位 → 仓位漂着。
+     *   3) victim 强平后 SHORT 仓位的 isolated margin 仍锁在 extraMargin 里（没释放），
+     *      提现只能提 accountBalances，全局守恒仍必须成立（extraMargin 是
+     *      isGlobalBalancesAllZero 的项之一）。
+     */
+    @Test
+    @Timeout(30)
+    public void testFuturesHedgeLiquidationFullLifecycleConservation() throws Exception {
+        final long victimUid = 9901L;
+        final long lpUid = 9902L;
+        final long victimDeposit = 100_000L;
+        final long lpDeposit = 100_000_000L;
+        final long openPrice = 50_000L;
+        final long crashPrice = 25_000L;
+        final int size = 4;
+        final int leverage = 10;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            // 关自动强平
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            final int symbolId = symbols.get(0).symbolId;
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, openPrice));
+
+            // ============ 阶段 1：充值 ============
+            container.createUserWithSpecificMoney(victimUid, victimDeposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(lpUid, lpDeposit, CURRENECY_USD);
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "充值后全局账平");
+
+            // ============ 阶段 2：victim 切 HEDGE ============
+            container.adjustPositionMode(victimUid, PositionMode.HEDGE);
+
+            // ============ 阶段 3：开多仓 (LP ASK + victim BID) ============
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(lpUid).orderId(10001L)
+                            .price(openPrice).size(size)
+                            .action(ASK).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(victimUid).orderId(10002L)
+                            .price(openPrice).reservePrice(openPrice).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            // ============ 阶段 4：开空仓 (LP BID + victim ASK) ============
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(lpUid).orderId(10003L)
+                            .price(openPrice).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(victimUid).orderId(10004L)
+                            .price(openPrice).reservePrice(openPrice).size(size)
+                            .action(ASK).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(leverage)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            container.validateUserState(victimUid, profile -> {
+                List<SingleUserReportResult.Position> twoLegs = profile.getPositions().get(symbolId);
+                assertThat("HEDGE 开仓后应有 2 条记录", twoLegs.size(), is(2));
+                assertThat("LONG direction", twoLegs.get(0).direction, is(PositionDirection.LONG));
+                assertThat("LONG openVolume", twoLegs.get(0).openVolume, is((long) size));
+                assertThat("SHORT direction", twoLegs.get(1).direction, is(PositionDirection.SHORT));
+                assertThat("SHORT openVolume", twoLegs.get(1).openVolume, is((long) size));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "双开后全局账平");
+
+            // ============ 阶段 5：暴跌后挂 LP BID @ BP 承接 FORCE ============
+            container.updateCurrentPriceTo((int) crashPrice, symbolId, CURRENECY_USD);
+
+            // spec initMargin=1/100 + order leverage=10 → IM=200；BP=ceil((200000−(200−takerFee*4))/4)=49970。
+            // BID 放在 updateCurrentPriceTo 之后，避免被 UPDATE_PRICE_USER2 的 ASK@crashPrice 消耗。
+            final long bpFillPrice = 49970L;
+            container.submitCommandSync(
+                    ApiPlaceOrder.builder()
+                            .uid(lpUid).orderId(10005L)
+                            .price(bpFillPrice).size(size)
+                            .action(BID).orderType(GTC)
+                            .symbol(symbolId).marginMode(MarginMode.CROSS)
+                            .build(),
+                    CommandResultCode.SUCCESS);
+
+            List<LiquidationEngine> engines = container.getExchangeCore().getLiquidationEngines();
+            // 同 testFuturesLiquidationFullLifecycleConservation：多步强平靠 onTick 重发 drive
+            Runnable trigger = () -> engines.forEach(LiquidationEngine::triggerOnce);
+            trigger.run();
+            // condition-poll 等 victim LONG 持仓归零（HEDGE 双向中 SHORT 完好保留，所以只看 LONG）。
+            LatencyTools.waitForCondition(5_000L, () -> {
+                try {
+                    SingleUserReportResult p = container.getUserProfile(victimUid);
+                    List<SingleUserReportResult.Position> positions = p.getPositions().get(symbolId);
+                    if (positions == null) return true;
+                    long longVol = positions.stream()
+                            .filter(pos -> pos.direction == PositionDirection.LONG)
+                            .mapToLong(pos -> pos.openVolume).sum();
+                    return longVol == 0L;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, trigger, 100);
+            container.getApi().groupingControl(0, 1);
+
+            // ============ 阶段 7：验证 LONG 被爆 + SHORT 完好保留 ============
+            container.validateUserState(victimUid, profile -> {
+                List<SingleUserReportResult.Position> positions = profile.getPositions().get(symbolId);
+                long longVolume = 0L, shortVolume = 0L;
+                if (positions != null) {
+                    for (SingleUserReportResult.Position p : positions) {
+                        if (p.direction == PositionDirection.LONG) longVolume = p.openVolume;
+                        else if (p.direction == PositionDirection.SHORT) shortVolume = p.openVolume;
+                    }
+                }
+                assertThat("LONG 应被强平清掉", longVolume, is(0L));
+                assertThat("SHORT 应完好保留（暴跌时 SHORT 是盈利方）",
+                        shortVolume, is((long) size));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero(),
+                    "HEDGE 强平后全局账平");
+
+            // ============ 阶段 6：撤 LP 残单 + 提现 ============
+            container.cancelOrder(lpUid, 10005L, symbolId);
+            final long[] balances = new long[2];
+            container.validateUserState(victimUid, p -> balances[0] = p.getAccounts().get(CURRENECY_USD));
+            container.validateUserState(lpUid, p -> balances[1] = p.getAccounts().get(CURRENECY_USD));
+            if (balances[0] != 0) container.addMoneyToUser(victimUid, CURRENECY_USD, -balances[0]);
+            if (balances[1] != 0) container.addMoneyToUser(lpUid, CURRENECY_USD, -balances[1]);
+
+            // ============ 阶段 7：终态守恒 ============
+            final TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            long fees = bal.getFees().get(CURRENECY_USD);
+            long ifBalance = bal.getIfBalances() == null ? 0L
+                    : bal.getIfBalances().get(CURRENECY_USD);
+
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "HEDGE 强平全周期后全局账平（含 victim SHORT 未平仓位的 extraMargin）");
+
+            log.info("HEDGE liquidation lifecycle verified: victimDeposit={}, lpDeposit={}, "
+                            + "victimWithdraw={}, lpWithdraw={}, fees={}, ifBalance={}",
+                    victimDeposit, lpDeposit, balances[0], balances[1], fees, ifBalance);
+        }
+    }
+
+    /**
      * Test position closing scenarios - fees only charged on opening portions
      */
     @Test
@@ -272,13 +1263,14 @@ class ITFuturesTradingFeeCalculationTest {
 
             assertTrue(tradeReports.size() >= 2, "Should have at least 2 trade execution reports for closing");
 
-            // The closing portion should have reduced/no fees, opening portion should have full fees
+            // maker 平仓也按 maker 率全量收，与 RiskEngine 单一真理源对齐
             ITradeEventsHandler.FuturesExecutionReport makerReport = tradeReports.stream()
                     .filter(r -> r.isMaker)
                     .findFirst()
                     .orElse(null);
 
-            assertThat("close order should charge no fee", makerReport.fee, is(0L));
+            long expectedMakerCloseFee = CoreArithmeticUtils.calculateMakerFee(closeSize, price, BTC_SYMBOL);
+            assertThat("close order maker fee should match full close size", makerReport.fee, is(expectedMakerCloseFee));
 
             // UID_3 opens new position (should pay full fee), takerUid closes position (should pay no fee for closing portion)
             ITradeEventsHandler.FuturesExecutionReport takerReport = tradeReports.stream()
@@ -718,6 +1710,166 @@ class ITFuturesTradingFeeCalculationTest {
     }
 
     /**
+     * 期货 IOC_BUDGET 全成：budget 精确覆盖 size，taker fee 按全量 size×price 计算。
+     */
+    @Test
+    @Timeout(10)
+    public void testFuturesIocBudgetFullFillTakerFeeCalculation() throws ExecutionException, InterruptedException {
+        long makerUid = UID_1;
+        long takerUid = UID_2;
+        long size = 8L;
+        long price = 46000L;
+        long budget = size * price; // 预算精确覆盖 size
+        long makerOrderId = 7101L;
+        long takerOrderId = 7102L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            long deposit = 100000L;
+            container.createUserWithSpecificMoney(makerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+
+            container.createAskWithOrderId(makerOrderId, makerUid, (int) size, price, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            ApiPlaceOrder iocBudgetOrder = ApiPlaceOrder.builder()
+                    .uid(takerUid)
+                    .orderId(takerOrderId)
+                    .price(budget)
+                    .reservePrice(budget)
+                    .size(size)
+                    .action(BID)
+                    .orderType(IOC_BUDGET)
+                    .symbol(symbols.get(0).symbolId)
+                    .marginMode(MarginMode.CROSS)
+                    .build();
+            container.submitCommandSync(iocBudgetOrder, CommandResultCode.SUCCESS);
+
+        } finally {
+            verify(handler, atLeast(2)).futuresExecutionReport(futuresExecutionReportCaptor.capture());
+            List<ITradeEventsHandler.FuturesExecutionReport> reports = futuresExecutionReportCaptor.getAllValues();
+
+            List<ITradeEventsHandler.FuturesExecutionReport> rejectReports = reports.stream()
+                    .filter(r -> r.executionType == ITradeEventsHandler.ExecType.REJECT)
+                    .collect(Collectors.toList());
+            assertEquals(0, rejectReports.size(), "Full-fill IOC_BUDGET should have no REJECT report");
+
+            List<ITradeEventsHandler.FuturesExecutionReport> tradeReports = reports.stream()
+                    .filter(r -> r.executionType == ITradeEventsHandler.ExecType.TRADE)
+                    .collect(Collectors.toList());
+            assertEquals(2, tradeReports.size(), "Should have 2 trade execution reports (maker + taker)");
+
+            ITradeEventsHandler.FuturesExecutionReport takerReport = tradeReports.stream()
+                    .filter(r -> !r.isMaker && r.orderType == IOC_BUDGET)
+                    .findFirst()
+                    .orElse(null);
+            assertNotNull(takerReport, "Should have IOC_BUDGET taker execution report");
+            assertThat("Taker lastQty should equal full size", takerReport.lastQty, is(size));
+
+            long expectedTakerFee = CoreArithmeticUtils.calculateTakerFee(size, price, BTC_SYMBOL);
+            assertThat("Futures IOC_BUDGET full-fill taker fee should be correct", takerReport.fee, is(expectedTakerFee));
+
+            log.info("Futures IOC_BUDGET full-fill taker fee verified: {}", expectedTakerFee);
+        }
+    }
+
+    /**
+     * 期货 IOC_BUDGET 部分成交：预算只够吃部分单位，残量 reject。
+     * 关键验证：
+     *   1) fee 必须按已成交 size 计算，不能按 cmd.size 全量计费
+     *   2) 全局对账：含 margin 路径下 pendingHoldBudget → pendingRelease 闭环
+     */
+    @Test
+    @Timeout(10)
+    public void testFuturesIocBudgetPartialFillTakerFeeCalculation() throws ExecutionException, InterruptedException {
+        long makerUid = UID_1;
+        long takerUid = UID_2;
+        long requestedSize = 10L;
+        long filledSize = 6L;
+        long price = 48000L;
+        long budget = filledSize * price; // 预算只够吃 6 张
+        long makerOrderId = 7201L;
+        long takerOrderId = 7202L;
+
+        TotalCurrencyBalanceReportResult finalBalance = null;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            symbols.forEach(s -> container.initMarkPrice(s.symbolId, price));
+
+            long deposit = 100000L;
+            container.createUserWithSpecificMoney(makerUid, deposit, CURRENECY_USD);
+            container.createUserWithSpecificMoney(takerUid, deposit, CURRENECY_USD);
+
+            // Maker 挂 10 张，taker IOC_BUDGET 要 10 张但预算只够 6 张
+            container.createAskWithOrderId(makerOrderId, makerUid, (int) requestedSize, price, symbols.get(0).symbolId, MarginMode.CROSS);
+
+            ApiPlaceOrder iocBudgetOrder = ApiPlaceOrder.builder()
+                    .uid(takerUid)
+                    .orderId(takerOrderId)
+                    .price(budget)
+                    .reservePrice(budget)
+                    .size(requestedSize)
+                    .action(BID)
+                    .orderType(IOC_BUDGET)
+                    .symbol(symbols.get(0).symbolId)
+                    .marginMode(MarginMode.CROSS)
+                    .build();
+            container.submitCommandSync(iocBudgetOrder, CommandResultCode.SUCCESS);
+
+            finalBalance = container.totalBalanceReport();
+        } finally {
+            verify(handler, atLeast(3)).futuresExecutionReport(futuresExecutionReportCaptor.capture());
+            List<ITradeEventsHandler.FuturesExecutionReport> reports = futuresExecutionReportCaptor.getAllValues();
+
+            List<ITradeEventsHandler.FuturesExecutionReport> rejectReports = reports.stream()
+                    .filter(r -> r.executionType == ITradeEventsHandler.ExecType.REJECT && r.orderType == IOC_BUDGET)
+                    .collect(Collectors.toList());
+            assertEquals(1, rejectReports.size(), "Partial fill should produce exactly 1 REJECT report");
+
+            List<ITradeEventsHandler.FuturesExecutionReport> tradeReports = reports.stream()
+                    .filter(r -> r.executionType == ITradeEventsHandler.ExecType.TRADE)
+                    .collect(Collectors.toList());
+            assertEquals(2, tradeReports.size(), "Should have 2 trade execution reports");
+
+            ITradeEventsHandler.FuturesExecutionReport takerReport = tradeReports.stream()
+                    .filter(r -> !r.isMaker && r.orderType == IOC_BUDGET)
+                    .findFirst()
+                    .orElse(null);
+            assertNotNull(takerReport, "Should have IOC_BUDGET taker execution report");
+            assertThat("Taker lastQty must equal filled (not requested) size", takerReport.lastQty, is(filledSize));
+            assertThat("Taker lastPx should equal maker price", takerReport.lastPx, is(price));
+
+            long expectedTakerFee = CoreArithmeticUtils.calculateTakerFee(filledSize, price, BTC_SYMBOL);
+            assertThat("Futures IOC_BUDGET partial-fill taker fee should be on filled size only",
+                    takerReport.fee, is(expectedTakerFee));
+
+            // 反向校验
+            long wrongFeeOnRequestedSize = CoreArithmeticUtils.calculateTakerFee(requestedSize, price, BTC_SYMBOL);
+            assertThat("Sanity: full-size fee differs from filled-size fee", takerReport.fee, is(not(wrongFeeOnRequestedSize)));
+
+            log.info("Futures IOC_BUDGET partial-fill taker fee verified: filled={}, fee={}, rejected={}",
+                    filledSize, expectedTakerFee, requestedSize - filledSize);
+
+            // ★ 关键对账校验：margin 路径下全局收支闭环
+            assertNotNull(finalBalance, "totalBalanceReport not captured");
+            log.info("--- futures balance breakdown ---");
+            log.info("accountBalances: {}", finalBalance.getAccountBalances());
+            log.info("extraMargin:     {}", finalBalance.getExtraMargin());
+            log.info("exchangeLocked:  {}", finalBalance.getExchangeLocked());
+            log.info("fees:            {}", finalBalance.getFees());
+            log.info("adjustments:     {}", finalBalance.getAdjustments());
+            log.info("openInterestLong:  {}", finalBalance.getOpenInterestLong());
+            log.info("openInterestShort: {}", finalBalance.getOpenInterestShort());
+            log.info("globalSum:       {}", finalBalance.getGlobalBalancesSum());
+            assertTrue(finalBalance.isGlobalBalancesAllZero(),
+                    "Futures IOC_BUDGET 部分成交后全局账面应该闭合 — 如果挂了，说明 margin 路径下 pendingHoldBudget/pendingRelease 链路有泄漏");
+            assertTrue(finalBalance.getFees().get(CURRENECY_USD) > 0,
+                    "应该收到 USD fee（taker + maker fee on filled portion）");
+        }
+    }
+
+    /**
      * Test that futures fee calculation uses correct size and price parameters
      */
     @Test
@@ -1109,20 +2261,14 @@ class ITFuturesTradingFeeCalculationTest {
             assertNotNull(makerReport, "Should have maker execution report for user1");
             assertNotNull(takerReport, "Should have taker execution report for user3");
 
-            // Calculate expected fees for reverse opening
-            // Only the opening portion (2 contracts) should be charged fees
-            // The closing portion (10 contracts) should have no fees
             long openingSize = reverseSize - initialSize;  // 2 contracts
+            long closingSize = initialSize;                // 10 contracts (user1 平掉的原 LONG)
             long expectedMakerFeeForOpening = CoreArithmeticUtils.calculateMakerFee(openingSize, reversePrice, BTC_SYMBOL);
             long expectedTakerFeeForFullSize = CoreArithmeticUtils.calculateTakerFee(reverseSize, reversePrice, BTC_SYMBOL);
-
-            // Verify fees
-            // Note: The maker fee should only be charged for the opening portion
-            // The actual implementation might charge fees differently, so we verify the reasonable fee structure
+            // ExecutionReport.fee 按 event.size 全量收 → reports 总和已包含开+关 fee
             assertTrue(makerReport.fee >= 0, "Maker fee should be non-negative");
             assertThat("Taker fee should match full size calculation", takerReport.fee, is(expectedTakerFeeForFullSize));
 
-            // Calculate total fees from reports
             long totalFeesFromReports = makerReport.fee + takerReport.fee;
 
             // Verify global fee consistency
@@ -1354,9 +2500,9 @@ class ITFuturesTradingFeeCalculationTest {
             log.info("Hedge mode partial closing fees verified: User fees={}, Counterparty fees={}, User reports={}, Counterparty reports={}, Total reports={}",
                     totalUserFees, totalCounterpartyFees, userReports.size(), counterpartyReports.size(), reports.size());
 
-            // UID_1关仓不收手续费
-            assertThat(userReports.get(0).fee, is(0L));
-            // counterparty3Uid属于开仓要收手续费
+            // UID_1 关仓也按 maker 率全量收：userUid 用 ApiClosePosition 挂 ASK 在书上是 maker，
+            // counterparty3 BID 吃单是 taker
+            assertThat(userReports.get(0).fee, is(CoreArithmeticUtils.calculateMakerFee(partialCloseSize, price, BTC_SYMBOL)));
             long expectedShortMakerFee = CoreArithmeticUtils.calculateTakerFee(8L, price, BTC_SYMBOL);
             assertThat(counterpartyReports.get(1).fee, is(expectedShortMakerFee));
             // For ApiClosePosition, there might be no trade reports if the close position is processed differently
@@ -1482,8 +2628,10 @@ class ITFuturesTradingFeeCalculationTest {
             long totalUserFees = userReports.stream().mapToLong(r -> r.fee).sum();
 
             if (closeReport != null) {
-                // ApiClosePosition should not charge fees for closing
-                assertThat("Close position should have no fee", closeReport.fee, is(0L));
+                // closeReport 也按 maker 率全量收（userUid ApiClosePosition 挂 ASK 是 maker）
+                long expectedCloseFee = CoreArithmeticUtils.calculateMakerFee(initialLongSize, price, BTC_SYMBOL);
+                assertThat("Close position fee should match full maker fee on initialLongSize",
+                        closeReport.fee, is(expectedCloseFee));
                 log.info("Close position fee verified: {}", closeReport.fee);
             }
 

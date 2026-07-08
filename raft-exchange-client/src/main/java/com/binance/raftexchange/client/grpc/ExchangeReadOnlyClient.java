@@ -9,12 +9,15 @@ import com.binance.raftexchange.stubs.report.StateHashReportQuery;
 import com.binance.raftexchange.stubs.report.StateHashReportResult;
 import com.binance.raftexchange.stubs.report.SymbolCurrencyReportQuery;
 import com.binance.raftexchange.stubs.report.SymbolCurrencyReportResult;
+import com.binance.raftexchange.stubs.report.FeeReportQuery;
+import com.binance.raftexchange.stubs.report.FeeReportResult;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportQuery;
 import com.binance.raftexchange.stubs.report.TotalCurrencyBalanceReportResult;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.response.CommandResult;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import io.grpc.ManagedChannel;
 import io.grpc.NameResolverRegistry;
@@ -26,6 +29,7 @@ import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 
 import javax.annotation.Nullable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 class ExchangeReadOnlyClient implements AutoCloseable {
 
@@ -36,59 +40,62 @@ class ExchangeReadOnlyClient implements AutoCloseable {
     }
 
     public CompletableFuture<CommandResult> searchOrderBook(ApiOrderBookRequest request) {
-        CompletableFuture<CommandResult> future = new CompletableFuture<>();
-        Futures.addCallback(searchServiceFutureStub.searchOrder(request), new FutureCallback<CommandResult>() {
-            @Override
-            public void onSuccess(@Nullable CommandResult commandResult) {
-                future.complete(commandResult);
-            }
-
-            @Override
-            public void onFailure(Throwable throwable) {
-                future.completeExceptionally(throwable);
-            }
-        }, MoreExecutors.directExecutor());
-        return future;
+        return toCompletable(searchServiceFutureStub.searchOrder(request));
     }
 
     public CompletableFuture<SingleUserReportResult> singleUserReport(int transferId, SingleUserReportQuery query) {
-        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setSingleUserReport(query).build()).thenApply(ReportResult::getSingleUserReport);
+        return query(ReportQuery.newBuilder().setTransferId(transferId).setSingleUserReport(query).build())
+            .thenApply(ReportResult::getSingleUserReport);
     }
 
     public CompletableFuture<StateHashReportResult> stateHashReport(int transferId, StateHashReportQuery query) {
-        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setStateHash(query).build()).thenApply(ReportResult::getStateHash);
+        return query(ReportQuery.newBuilder().setTransferId(transferId).setStateHash(query).build())
+            .thenApply(ReportResult::getStateHash);
     }
 
-    public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId, TotalCurrencyBalanceReportQuery query) {
-        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setTotalCurrencyBalance(query).build())
+    public CompletableFuture<TotalCurrencyBalanceReportResult> totalCurrencyBalanceReport(int transferId,
+        TotalCurrencyBalanceReportQuery query) {
+        return query(ReportQuery.newBuilder().setTransferId(transferId).setTotalCurrencyBalance(query).build())
             .thenApply(ReportResult::getTotalCurrencyBalance);
     }
 
-    public CompletableFuture<SymbolCurrencyReportResult> symbolCurrencyReport(int transferId, SymbolCurrencyReportQuery query) {
-        return rawReporter(ReportQuery.newBuilder().setTransferId(transferId).setSymbolCurrencyReport(query).build())
+    public CompletableFuture<SymbolCurrencyReportResult> symbolCurrencyReport(int transferId,
+        SymbolCurrencyReportQuery query) {
+        return query(ReportQuery.newBuilder().setTransferId(transferId).setSymbolCurrencyReport(query).build())
             .thenApply(ReportResult::getSymbolCurrencyReport);
     }
 
-    private CompletableFuture<ReportResult> rawReporter(ReportQuery request) {
-        CompletableFuture<ReportResult> future = new CompletableFuture<>();
-        Futures.addCallback(searchServiceFutureStub.query(request), new FutureCallback<ReportResult>() {
+    public CompletableFuture<FeeReportResult> feeReport(int transferId, FeeReportQuery query) {
+        return query(ReportQuery.newBuilder().setTransferId(transferId).setFeeReport(query).build())
+            .thenApply(ReportResult::getFeeReport);
+    }
+
+    private CompletableFuture<ReportResult> query(ReportQuery request) {
+        return toCompletable(searchServiceFutureStub.query(request));
+    }
+
+    static <T> CompletableFuture<T> toCompletable(ListenableFuture<T> source) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        Futures.addCallback(source, new FutureCallback<T>() {
             @Override
-            public void onSuccess(@Nullable ReportResult commandResult) {
-                future.complete(commandResult);
+            public void onSuccess(@Nullable T result) {
+                future.complete(result);
             }
 
             @Override
-            public void onFailure(Throwable throwable) {
-                future.completeExceptionally(throwable);
+            public void onFailure(Throwable t) {
+                future.completeExceptionally(t);
             }
         }, MoreExecutors.directExecutor());
         return future;
     }
 
     private QueryServiceGrpc.QueryServiceFutureStub initStub(EventLoopGroup masterLoopGroup) {
-        ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search").eventLoopGroup(masterLoopGroup)
-            .defaultLoadBalancingPolicy("round_robin")
-            .channelType(masterLoopGroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class).usePlaintext().build();
+        ManagedChannel channel = NettyChannelBuilder.forTarget(RaftNameResolverProvider.SCHEMA + "://search")
+            .eventLoopGroup(masterLoopGroup).defaultLoadBalancingPolicy("round_robin")
+            .channelType(
+                masterLoopGroup instanceof EpollEventLoopGroup ? EpollSocketChannel.class : NioSocketChannel.class)
+            .usePlaintext().build();
         return QueryServiceGrpc.newFutureStub(channel);
     }
 
@@ -98,6 +105,10 @@ class ExchangeReadOnlyClient implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        ((ManagedChannel)searchServiceFutureStub.getChannel()).shutdown();
+        ManagedChannel channel = (ManagedChannel)searchServiceFutureStub.getChannel();
+        channel.shutdown();
+        if (!channel.awaitTermination(2, TimeUnit.SECONDS)) {
+            channel.shutdownNow();
+        }
     }
 }

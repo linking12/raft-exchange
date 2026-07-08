@@ -19,6 +19,7 @@ import exchange.core2.core.common.L2MarketData;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.orderbook.IOrderBook;
+import exchange.core2.tests.util.OrderCommandFactory;
 import exchange.core2.tests.util.TestOrdersGenerator;
 //import jdk.nashorn.internal.ir.annotations.Ignore;
 import lombok.extern.slf4j.Slf4j;
@@ -57,14 +58,14 @@ public abstract class ITOrderBookBase {
 
         // match all asks
         long askSum = Arrays.stream(snapshot.askVolumes).sum();
-        IOrderBook.processCommand(orderBook, OrderCommand.newOrder(IOC, 100000000000L, -1, maxPrice, maxPrice, askSum, BID));
+        IOrderBook.processCommand(orderBook, OrderCommandFactory.newOrder(IOC, 100000000000L, -1, maxPrice, maxPrice, askSum, BID));
 //        log.debug("{}", dumpOrderBook(orderBook.getL2MarketDataSnapshot(100000)));
 
         // match all bids
         long bidSum = Arrays.stream(snapshot.bidVolumes).sum();
 
 //        log.debug("Matching {} bids", bidSum);
-        IOrderBook.processCommand(orderBook, OrderCommand.newOrder(IOC, 100000000001L, -2, 1, 0, bidSum, ASK));
+        IOrderBook.processCommand(orderBook, OrderCommandFactory.newOrder(IOC, 100000000001L, -2, 1, 0, bidSum, ASK));
 
 //        log.debug("{}", dumpOrderBook(orderBook.getL2MarketDataSnapshot(100000)));
 
@@ -116,7 +117,7 @@ public abstract class ITOrderBookBase {
                 orderBook = createNewOrderBook();
 
                 long t = System.currentTimeMillis();
-                OrderCommand workCmd = new OrderCommand();
+                OrderCommand workCmd = new OrderCommand(0);
                 for (OrderCommand cmd : orderCommands) {
                     cmd.writeTo(workCmd);
                     workCmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;

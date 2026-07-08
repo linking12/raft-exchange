@@ -34,6 +34,15 @@ public final class HashingUtils {
         return Arrays.hashCode(bitSet.toLongArray());
     }
 
+    /**
+     * 把 enum 编码成进程间稳定的 int。Java enum 默认 hashCode 走 Object.hashCode（identityHashCode），
+     * 跨 JVM 不同——直接 Objects.hash(..., someEnum, ...) 在 raft 集群里会让每个节点 stateHash 漂移。
+     * 用 ordinal 替代既稳定又零成本（注意：依赖 enum 声明顺序，重排会破坏 hash 兼容性）。
+     */
+    public static int enumStateHash(final Enum<?> e) {
+        return e == null ? 0 : e.ordinal();
+    }
+
     public static <T extends StateHash> int stateHash(final LongObjectHashMap<T> hashMap) {
 
         final MutableLong mutableLong = new MutableLong();

@@ -125,7 +125,11 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     long mm = pos.calculateMaintenanceMargin(spec, priceRecord);
                     totalMM += CoreArithmeticUtils.sizePriceToCurrencyScale(mm, spec, quoteCurrency);
                 }
-                long balance = userProfile.accounts.get(currency);
+                // cross 真实可用 = accounts − exchangeLocked − Σ 逐仓虚拟锁定，用 CoreArithmeticUtils 共用 helper
+                // 与 LiquidationEngine#checkLiquidationCross 和 FundEventsHelper#calc 口径完全对齐，
+                // 否则 user 查询看到的 liquidationPrice / marginRatioScaleK 偏乐观，实际强平会"突然"打掉。
+                long balance = userProfile.calculateCrossAvailable(currency, quoteCurrency,
+                    symbolSpecProvider::getSymbolSpecification);
 
                 for (SymbolPositionRecord pos : records) {
                     CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(pos.symbol);
@@ -141,10 +145,26 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 }
             });
 
+            // 返回 raw 字段，free 由客户端按需自己算：
+            //   - accounts: 真实持有总额（currencyScale），含现货挂单冻结（exchangeLocked 未扣减）
+            //   - exchangeLocked: 现货挂单冻结（currencyScale），客户端需自行从 accounts 中减去
+            //   - positions: 每个仓位的 openInitMarginSum / pendingSize / pendingAvgPrice / extraMargin / profit
+            //                 等原始字段（sizePriceScale = baseScaleK × quoteScaleK）
+            //
+            // 典型计算（同 currency，按需聚合）：
+            //   严格冻结 free   = accounts - exchangeLocked
+            //                    - sizePriceToCurrencyScale(Σ_position (openInitMarginSum + pendingMargin + 潜在 fee))
+            //     pendingMargin = pendingSize × pendingAvgPrice × initMarginRate / leverage
+            //     潜在 fee     = takerFee (按 pending size × pendingAvgPrice 估)
+            //   可调度 free（含未实现 PnL）= 严格冻结 free + sizePriceToCurrencyScale(Σ_position unrealizedPnl)
+            //     unrealizedPnl 已在 Position.unrealizedProfit 字段里给出（sizePriceScale）
+            //
+            // 注意：isolated 仓位的 extraMargin 已经从 accounts 扣到 position 内，不重复算入 free。
             return Optional.of(SingleUserReportResult.createFromRiskEngineFound(
                     uid,
                     userProfile.userStatus,
                     userProfile.accounts,
+                    userProfile.exchangeLocked,
                     positions));
         } else {
             // not found

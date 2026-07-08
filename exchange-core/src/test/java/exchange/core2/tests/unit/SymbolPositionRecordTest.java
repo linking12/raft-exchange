@@ -157,7 +157,8 @@ class SymbolPositionRecordTest {
                 maintenanceMargin // 总维持保证金
         );
 
-        assertEquals(51000, result, "normal case");
+        // 迭代法精确解（旧近似给 51000，用 MM(MP) 常量；精确解在同 bracket 内收敛到 50926）
+        assertEquals(50926, result, "normal case");
     }
 
     @Test
@@ -220,7 +221,140 @@ class SymbolPositionRecordTest {
                 maintenanceMargin + 0L // 总维持保证金
         );
 
-        assertEquals(49000, result, "normal case");
+        // 迭代法精确解（旧近似给 49000，用 MM(MP) 常量；精确解在同 bracket 内收敛到 48913）
+        assertEquals(48913, result, "normal case");
+    }
+
+    // =============== pendingHoldBudget (E2: futures BUDGET 单) ===============
+
+    @Test
+    void pendingHoldBudget_emptyState_avgPriceEqualsBudgetOverSize() {
+        // 空 pending 上发 BUDGET BID：size=10, budget=1000 → avgPrice = ceil(1000/10) = 100
+        // 不变式：pendingSize × pendingAvgPrice ≈ budget
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.EMPTY, 0);
+
+        position.pendingHoldBudget(OrderAction.BID, 10L, 1000L);
+
+        assertEquals(10L, position.pendingBuySize);
+        assertEquals(100L, position.pendingBuyAvgPrice);
+        // 不变式：size × avg = 10 × 100 = 1000 = 原 budget
+        assertEquals(1000L, position.pendingBuySize * position.pendingBuyAvgPrice);
+    }
+
+    @Test
+    void pendingHoldBudget_overExistingLimit_maintainsTotalNotional() {
+        // 已有 limit BID：100 unit @ 10 → notional = 1000
+        // 再加 BUDGET BID：size=50, budget=600 → 新 notional 应≈ 1600
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.EMPTY, 0);
+        position.pendingHold(OrderAction.BID, 100L, 10L);
+        assertEquals(1000L, position.pendingBuySize * position.pendingBuyAvgPrice, "limit notional baseline");
+
+        position.pendingHoldBudget(OrderAction.BID, 50L, 600L);
+
+        assertEquals(150L, position.pendingBuySize);
+        // 不变式：avg = ceil((1000+600)/150) = ceil(10.666...) = 11
+        assertEquals(11L, position.pendingBuyAvgPrice);
+        // size × avg = 150 × 11 = 1650，保守覆盖实际 1600 notional（向上取整偏保守 +50）
+        assertEquals(1650L, position.pendingBuySize * position.pendingBuyAvgPrice);
+    }
+
+    @Test
+    void pendingHoldBudget_askSide_independentFromBid() {
+        // ASK BUDGET：size=20, budget=400 → avgPrice = ceil(400/20) = 20
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.EMPTY, 0);
+
+        position.pendingHoldBudget(OrderAction.ASK, 20L, 400L);
+
+        assertEquals(20L, position.pendingSellSize);
+        assertEquals(20L, position.pendingSellAvgPrice);
+        // BID 状态完全不受影响
+        assertEquals(0L, position.pendingBuySize);
+        assertEquals(0L, position.pendingBuyAvgPrice);
+    }
+
+    @Test
+    void pendingHoldBudget_zeroSize_noop() {
+        // size=0 是 noop（防御）
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.EMPTY, 0);
+
+        position.pendingHoldBudget(OrderAction.BID, 0L, 100L);
+
+        assertEquals(0L, position.pendingBuySize);
+        assertEquals(0L, position.pendingBuyAvgPrice);
+    }
+
+    @Test
+    void pendingHoldBudget_thenRelease_clearsState() {
+        // BUDGET hold 后立即 release：pending 状态归零，下游一致性保持
+        SymbolPositionRecord position = createPosition(MarginMode.ISOLATED, PositionDirection.EMPTY, 0);
+        position.pendingHoldBudget(OrderAction.BID, 10L, 1000L);
+
+        long released = position.pendingRelease(OrderAction.BID, 10L);
+
+        assertEquals(10L, released);
+        assertEquals(0L, position.pendingBuySize);
+        assertEquals(0L, position.pendingBuyAvgPrice);
+    }
+
+    // =============== BP fee 集成回归 =================
+    // 核心：锁 calcBankruptcyPriceFromMarginBase 里 takerFee+liquidationFee 合并 + SHORT dynamic 分母 sign 修正
+    // 未来若把 totalFee 拆回单项、或把 SHORT 分母 sign 去掉，这几条测试会 catch 到
+
+    /**
+     * Fixed fee + liquidationFee>0 的 LONG BP：
+     * maxLoss = totalMargin − (takerFee+liquidationFee)×Q = 100 − (1+5)×10 = 40
+     * BP = (openPriceSum − sign×maxLoss)/Q = (1000 − 40)/10 = 96
+     * 若未来漏加 liquidationFee → maxLoss=90 → BP=91（差 5）
+     */
+    @Test
+    void bp_isolated_long_fixedFee_withLiquidationFee() {
+        CoreSymbolSpecification s = fixedFeeSpec(1, 5); // takerFee=1, liquidationFee=5
+        SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.LONG, 10);
+        pos.openPriceSum = 1000;
+        pos.openInitMarginSum = 100;
+        assertEquals(96, pos.calculateBankruptcyPrice(s));
+    }
+
+    /**
+     * Fixed fee + liquidationFee>0 的 SHORT BP：
+     * BP = (openPriceSum − (−1)×maxLoss)/Q = (1000 + 40)/10 = 104
+     */
+    @Test
+    void bp_isolated_short_fixedFee_withLiquidationFee() {
+        CoreSymbolSpecification s = fixedFeeSpec(1, 5);
+        SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.SHORT, 10);
+        pos.openPriceSum = 1000;
+        pos.openInitMarginSum = 100;
+        assertEquals(104, pos.calculateBankruptcyPrice(s));
+    }
+
+    /**
+     * Dynamic fee + liquidationFee>0 的 LONG BP：
+     * BP = feeScaleK×(openPriceSum − marginBase)/(Q×(feeScaleK − totalFee))
+     *    = 1000×(1000−100)/(10×(1000−50)) = 900000/9500 → ceil 95
+     */
+    @Test
+    void bp_isolated_long_dynamicFee_withLiquidationFee() {
+        CoreSymbolSpecification s = dynamicFeeSpec(20, 30, 1000); // takerFee=20 (2%), liqFee=30 (3%)
+        SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.LONG, 10);
+        pos.openPriceSum = 1000;
+        pos.openInitMarginSum = 100;
+        assertEquals(95, pos.calculateBankruptcyPrice(s));
+    }
+
+    /**
+     * Dynamic fee + liquidationFee>0 的 SHORT BP —— **本 session SHORT 分母 sign 修复的锁定测试**：
+     * 正确 denom = feeScaleK − sign×totalFee = 1000 − (−1)×50 = 1050
+     * BP = 1000×(1000 − (−1)×100)/(10×1050) = 1000×1100/10500 = 1100000/10500 → ceil 105
+     * 若未来 sign 去掉（denom=950）→ BP = 1100000/9500 → ceil 116（差 11，容易 catch）
+     */
+    @Test
+    void bp_isolated_short_dynamicFee_withLiquidationFee() {
+        CoreSymbolSpecification s = dynamicFeeSpec(20, 30, 1000);
+        SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.SHORT, 10);
+        pos.openPriceSum = 1000;
+        pos.openInitMarginSum = 100;
+        assertEquals(105, pos.calculateBankruptcyPrice(s));
     }
 
     // =============== 辅助方法 ===============
@@ -231,5 +365,33 @@ class SymbolPositionRecordTest {
         position.direction = direction;
         position.openVolume = volume;
         return position;
+    }
+
+    private CoreSymbolSpecification fixedFeeSpec(long takerFee, long liquidationFee) {
+        return CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL_ID)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                .takerFee(takerFee)
+                .liquidationFee(liquidationFee)
+                .feeScaleK(0) // fixed
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 8L))
+                .maintenanceMarginScaleK(100)
+                .initMargin(10)
+                .initMarginScaleK(100)
+                .build();
+    }
+
+    private CoreSymbolSpecification dynamicFeeSpec(long takerFee, long liquidationFee, long feeScaleK) {
+        return CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL_ID)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                .takerFee(takerFee)
+                .liquidationFee(liquidationFee)
+                .feeScaleK(feeScaleK) // dynamic
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 8L))
+                .maintenanceMarginScaleK(100)
+                .initMargin(10)
+                .initMarginScaleK(100)
+                .build();
     }
 }

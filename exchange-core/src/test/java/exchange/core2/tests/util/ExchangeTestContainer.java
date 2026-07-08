@@ -29,7 +29,7 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.*;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
-import exchange.core2.core.utils.AffinityThreadFactory;
+import java.util.concurrent.ThreadFactory;
 import lombok.Builder;
 import lombok.Data;
 import lombok.Getter;
@@ -64,7 +64,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     private final ExchangeApi api;
 
     @Getter
-    private final AffinityThreadFactory threadFactory;
+    private final ThreadFactory disruptorThreadFactory;
 
     private AtomicLong uniqueIdCounterLong = new AtomicLong();
     private AtomicInteger uniqueIdCounterInt = new AtomicInteger();
@@ -171,20 +171,64 @@ public final class ExchangeTestContainer implements AutoCloseable {
         final CompletableFuture<TestOrdersGenerator.MultiSymbolGenResult> genResult;
     }
 
+    public static ExchangeTestContainer createSpotOnly(final PerformanceConfiguration perfCfg) {
+        return new ExchangeTestContainer(perfCfg,
+                InitialStateConfiguration.CLEAN_TEST,
+                SerializationConfiguration.DEFAULT, null,
+                OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_DISABLED);
+    }
+
     private ExchangeTestContainer(final PerformanceConfiguration perfCfg,
                                   final InitialStateConfiguration initStateCfg,
                                   final SerializationConfiguration serializationCfg,
                                   final ObjLongConsumer<OrderCommand> consumer) {
+        this(perfCfg, initStateCfg, serializationCfg, consumer,
+                OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED);
+    }
+
+    private ExchangeTestContainer(final PerformanceConfiguration perfCfg,
+                                  final InitialStateConfiguration initStateCfg,
+                                  final SerializationConfiguration serializationCfg,
+                                  final ObjLongConsumer<OrderCommand> consumer,
+                                  final OrdersProcessingConfiguration.MarginTradingMode marginTradingMode) {
 
         //log.debug("CREATING exchange container");
 
-        this.threadFactory = new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_PHYSICAL_CORE, "Exchange-Core");
+        // 测试容器对生产配置做三处覆盖：
+        // 1) disruptorThreadFactory → Thread::new：去掉 Disruptor 钉核（生产 AffinityThreadFactory 在测试 JVM
+        //    内多次 new/stop 会污染 net.openhft.affinity.LockInventory；macOS 上 pthread_setaffinity_np
+        //    本身是 no-op，钉核不生效却只贡献副作用）。
+        // 2) waitStrategy → YIELDING：去掉 Disruptor BUSY_SPIN，避免 4 + 2 个钉核线程在测试 fork 里
+        //    100% 占 CPU 饿死其它线程。空载仍是微秒级响应，争用时主动 yield。
+        // 3) liquidationThreadFactory → AffinityThreadFactory：单独把 LiquidationEngine 调度线程钉一个
+        //    逻辑核。原因：生产用 daemon Thread 是因为单进程只跑一个 ExchangeCore，OS 调度足够；
+        //    测试 fork 内 surefire 连跑多个 IT 类、累积 thread 较多，LiquidationEngine 的 2 秒调度被
+        //    OS 调度抖动到 30s 之后是已知 flake (testIFMultiShardBoundary / testSingleShardLiquidation /
+        //    testDeliveryScenario1)。给它单独钉一个核能保证毫秒级触发。仅 LiquidationEngine 钉核，
+        //    Disruptor 仍非钉核，LockInventory 累积量很小（每 fork 2 个 shard × 1 个调度线程）。
+        // 其余 shard 数、ringBufferSize 等通过 perfCfg.toBuilder() 原样保留。
+        final PerformanceConfiguration testPerfCfg = perfCfg.toBuilder()
+                .disruptorThreadFactory(Thread::new)
+                .waitStrategy(CoreWaitStrategy.YIELDING)
+                .liquidationThreadFactory(Thread::new)
+                .build();
 
+        // 测试侧自身 spawn 执行线程也走普通 Thread，不再抢 affinity 槽位
+        this.disruptorThreadFactory = Thread::new;
+
+        // 测试容器默认启用 margin trading：
+        // 否则 RiskEngine / MatchingEngineRouter 在添加 FUTURES_CONTRACT_* symbol 时直接拒
+        // （"Margin symbols are not allowed"），后续撮合时 symbol lookup 返回 null，
+        // SimpleEventsProcessor.sendExecutionReport 触发 NPE。
+        // 对纯现货测试无影响：margin enabled 只是放行期货 symbol 注册，现货流程不变。
+        final OrdersProcessingConfiguration ordersProcessingCfg = OrdersProcessingConfiguration.builder()
+                .marginTradingMode(marginTradingMode)
+                .build();
         final ExchangeConfiguration exchangeConfiguration = ExchangeConfiguration.defaultBuilder()
                 .initStateCfg(initStateCfg)
-                .performanceCfg(perfCfg)
+                .performanceCfg(testPerfCfg)
                 .reportsQueriesCfg(ReportsQueriesConfiguration.createStandardConfig())
-                .ordersProcessingCfg(OrdersProcessingConfiguration.DEFAULT)
+                .ordersProcessingCfg(ordersProcessingCfg)
                 .loggingCfg(LoggingConfiguration.DEFAULT)
                 .serializationCfg(serializationCfg)
                 .build();
@@ -255,7 +299,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
     }
 
     public void initDynamicFeeSymbolsMarkPrice() {
-        initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId, 1000);
+        initMarkPrice(SYMBOLSPEC_DYNAMIC_FEE_XBT_USD.symbolId, 10000);
     }
 
     public void initBasicUsers() {
@@ -865,6 +909,15 @@ public final class ExchangeTestContainer implements AutoCloseable {
         resultValidator.accept(getUserProfile(uid));
     }
 
+    /**
+     * 可支配余额 = 真实持有 - 现货挂单冻结。
+     * accounts 报"持有总额"，老测试普遍按"下单即扣减"的语义断言，
+     * 用这个 helper 统一转成"available"对账即可。
+     */
+    public static long available(SingleUserReportResult profile, int currency) {
+        return profile.getAccounts().get(currency) - profile.getExchangeLocked().get(currency);
+    }
+
     public SingleUserReportResult getUserProfile(long clientId) throws InterruptedException, ExecutionException {
         return api.processReport(new SingleUserReportQuery(clientId), getRandomTransferId()).get();
     }
@@ -883,6 +936,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
         res.getIfOpenInterestShort().forEachKeyValue((k, v) -> openInterestDiff.addToValue(k, -v));
         if (openInterestDiff.anySatisfy(vol -> vol != 0)) {
             throw new IllegalStateException("Open Interest balance check failed");
+        }
+
+        // 同源等价校验：FeeReportQuery.fees 必须等于 TotalCurrencyBalanceReportQuery.fees
+        // —— 两者都来自 RiskEngine.fees 的跨 shard mergeSum，任何一处发散都说明 FeeReport 走偏了
+        final FeeReportResult feeReport = api.processReport(new FeeReportQuery(), getRandomTransferId()).join();
+        if (!feeReport.getFees().equals(res.getFees())) {
+            throw new IllegalStateException(
+                "FeeReport diverged from TotalCurrencyBalance.fees: feeReport=" + feeReport.getFees() + " total=" + res.getFees());
         }
 
         return res;
@@ -1018,7 +1079,7 @@ public final class ExchangeTestContainer implements AutoCloseable {
      */
     public <V> V executeTestingThread(final Callable<V> test) {
         try {
-            final ExecutorService executor = Executors.newSingleThreadExecutor(threadFactory);
+            final ExecutorService executor = Executors.newSingleThreadExecutor(disruptorThreadFactory);
             final V result = executor.submit(test).get();
             executor.shutdown();
             executor.awaitTermination(3000, TimeUnit.SECONDS);
@@ -1122,9 +1183,37 @@ public final class ExchangeTestContainer implements AutoCloseable {
         }
     }
 
+    /**
+     * 关闭前的对账自检：跨用户 / 跨币种的 global balance 必须闭合 (≡ 0)。
+     * 默认开启；若测试场景里使用了 {@code LiquidationService.creditLiquidationFee} 等
+     * 直接绕过 adjustments 的辅助注资工具，可通过 {@link #skipGlobalReconcileOnClose()} 跳过。
+     */
+    private boolean skipGlobalReconcileOnClose = false;
+
+    public void skipGlobalReconcileOnClose() {
+        this.skipGlobalReconcileOnClose = true;
+    }
+
     @Override
     public void close() {
-        exchangeCore.shutdown(3000, TimeUnit.MILLISECONDS);
+        try {
+            if (!skipGlobalReconcileOnClose) {
+                final exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult bal = totalBalanceReport();
+                if (!bal.isGlobalBalancesAllZero()) {
+                    throw new AssertionError(
+                            "Global balance not reconciled at container close: sum=" + bal.getGlobalBalancesSum()
+                                    + ", accountBalances=" + bal.getAccountBalances()
+                                    + ", extraMargin=" + bal.getExtraMargin()
+                                    + ", exchangeLocked=" + bal.getExchangeLocked()
+                                    + ", fees=" + bal.getFees()
+                                    + ", adjustments=" + bal.getAdjustments()
+                                    + ", suspends=" + bal.getSuspends()
+                                    + ", ifBalances=" + bal.getIfBalances());
+                }
+            }
+        } finally {
+            exchangeCore.shutdown(3000, TimeUnit.MILLISECONDS);
+        }
     }
 
     public enum AllowedSymbolTypes {

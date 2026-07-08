@@ -67,15 +67,12 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
 
 
     /**
-     * Perform balance adjustment for specific user
+     * 调整指定用户余额。externalEventId 命中 {@link UserProfile#processedExternalIds} 即拒，
+     * 不要求单调递增。NSF 时不 claim ID，避免污染后续修正重试。
      *
-     * @param uid                  uid
-     * @param currency             account currency
-     * @param amount               balance difference
-     * @param fundingTransactionId transaction id (should increment only)
-     * @return result code
+     * <p>顺序：先 NSF 校验，再 tryClaim——校验失败路径上 ID 未入表，调用方修正参数后可同 ID 重试。
      */
-    public CommandResultCode balanceAdjustment(final long uid, final int currency, final long amount, final long fundingTransactionId) {
+    public CommandResultCode balanceAdjustment(final long uid, final int currency, final long amount, final long externalEventId) {
 
         final UserProfile userProfile = getUserProfile(uid);
         if (userProfile == null) {
@@ -83,27 +80,15 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
             return CommandResultCode.AUTH_INVALID_USER;
         }
 
-//        if (amount == 0) {
-//            return CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ZERO;
-//        }
-
-        // double settlement protection
-        if (userProfile.adjustmentsCounter == fundingTransactionId) {
-            return CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME;
-        }
-        if (userProfile.adjustmentsCounter > fundingTransactionId) {
-            return CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_MANY;
-        }
-
-        // validate balance for withdrawals
         if (amount < 0 && (userProfile.accounts.get(currency) + amount < 0)) {
             return CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF;
         }
 
-        userProfile.adjustmentsCounter = fundingTransactionId;
-        userProfile.accounts.addToValue(currency, amount);
+        if (!userProfile.processedExternalIds.tryClaim(externalEventId)) {
+            return CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME;
+        }
 
-        //log.debug("FUND: {}", userProfile);
+        userProfile.accounts.addToValue(currency, amount);
         return CommandResultCode.SUCCESS;
     }
 
@@ -146,6 +131,12 @@ public class UserProfileService implements WriteBytesMarshallable, StateHash {
             return CommandResultCode.USER_MGMT_USER_NOT_SUSPENDABLE_HAS_POSITIONS;
 
         } else if (userProfile.accounts.anySatisfy(acc -> acc != 0)) {
+            return CommandResultCode.USER_MGMT_USER_NOT_SUSPENDABLE_NON_EMPTY_ACCOUNTS;
+
+        } else if (userProfile.exchangeLocked.anySatisfy(v -> v != 0)) {
+            // 现货挂单冻结 (exchangeLocked) 也必须清零才能 suspend。
+            // 否则 remove userProfile 时这部分 lock 被遗弃，后续撮合释放会让新建的
+            // suspended-profile 出现负 exchangeLocked，破坏全局守恒等式。
             return CommandResultCode.USER_MGMT_USER_NOT_SUSPENDABLE_NON_EMPTY_ACCOUNTS;
 
         } else {

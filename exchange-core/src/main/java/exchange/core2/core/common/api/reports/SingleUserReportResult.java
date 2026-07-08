@@ -41,7 +41,7 @@ import java.util.stream.Stream;
 @Slf4j
 public final class SingleUserReportResult implements ReportResult {
 
-    public static SingleUserReportResult IDENTITY = new SingleUserReportResult(0L, null, null, null, null, QueryExecutionStatus.OK);
+    public static SingleUserReportResult IDENTITY = new SingleUserReportResult(0L, null, null, null, null, null, QueryExecutionStatus.OK);
 
     private final long uid;
 
@@ -49,7 +49,14 @@ public final class SingleUserReportResult implements ReportResult {
     //private final UserProfile userProfile;
 
     private final UserStatus userStatus;
+    /** 真实持有总额（不再预扣 spot 挂单 hold）。free = accounts - locked。 */
     private final IntLongHashMap accounts;
+    /**
+     * 现货侧冻结资产（按 currency 聚合）：未成交挂单等占用的部分。
+     * 客户端按 currency 算"可支配余额"：
+     *   available[c] = accounts[c] - exchangeLocked[c] - Σ_{p: p.currency==c} (p.openInitMarginSum + p.pendingMargin + p.fee)
+     */
+    private final IntLongHashMap exchangeLocked;
     /**
      * symbol -> positions list:
      * [LONG] always comes before [SHORT] if both exist;
@@ -66,15 +73,16 @@ public final class SingleUserReportResult implements ReportResult {
 
 
     public static SingleUserReportResult createFromMatchingEngine(long uid, IntObjectHashMap<List<Order>> orders) {
-        return new SingleUserReportResult(uid, null, null, null, orders, QueryExecutionStatus.OK);
+        return new SingleUserReportResult(uid, null, null, null, null, orders, QueryExecutionStatus.OK);
     }
 
-    public static SingleUserReportResult createFromRiskEngineFound(long uid, UserStatus userStatus, IntLongHashMap accounts, IntObjectHashMap<List<Position>> positions) {
-        return new SingleUserReportResult(uid, userStatus, accounts, positions, null, QueryExecutionStatus.OK);
+    public static SingleUserReportResult createFromRiskEngineFound(long uid, UserStatus userStatus, IntLongHashMap accounts,
+                                                                   IntLongHashMap exchangeLocked, IntObjectHashMap<List<Position>> positions) {
+        return new SingleUserReportResult(uid, userStatus, accounts, exchangeLocked, positions, null, QueryExecutionStatus.OK);
     }
 
     public static SingleUserReportResult createFromRiskEngineNotFound(long uid) {
-        return new SingleUserReportResult(uid, null, null, null, null, QueryExecutionStatus.USER_NOT_FOUND);
+        return new SingleUserReportResult(uid, null, null, null, null, null, QueryExecutionStatus.USER_NOT_FOUND);
     }
 
     public Map<Long, Order> fetchIndexedOrders() {
@@ -88,6 +96,7 @@ public final class SingleUserReportResult implements ReportResult {
 //        this.userProfile = bytesIn.readBoolean() ? new UserProfile(bytesIn) : null;
         this.userStatus = bytesIn.readBoolean() ? UserStatus.of(bytesIn.readByte()) : null;
         this.accounts = bytesIn.readBoolean() ? SerializationUtils.readIntLongHashMap(bytesIn) : null;
+        this.exchangeLocked = bytesIn.readBoolean() ? SerializationUtils.readIntLongHashMap(bytesIn) : null;
         this.positions = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, b -> SerializationUtils.readList(b, Position::new)) : null;
         this.orders = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, b -> SerializationUtils.readList(b, Order::new)) : null;
         this.queryExecutionStatus = QueryExecutionStatus.of(bytesIn.readInt());
@@ -111,6 +120,11 @@ public final class SingleUserReportResult implements ReportResult {
         bytes.writeBoolean(accounts != null);
         if (accounts != null) {
             SerializationUtils.marshallIntLongHashMap(accounts, bytes);
+        }
+
+        bytes.writeBoolean(exchangeLocked != null);
+        if (exchangeLocked != null) {
+            SerializationUtils.marshallIntLongHashMap(exchangeLocked, bytes);
         }
 
         bytes.writeBoolean(positions != null);
@@ -162,6 +176,7 @@ public final class SingleUserReportResult implements ReportResult {
 //                                SerializationUtils.preferNotNull(a.userProfile, b.userProfile),
                                 SerializationUtils.preferNotNull(a.userStatus, b.userStatus),
                                 SerializationUtils.preferNotNull(a.accounts, b.accounts),
+                                SerializationUtils.preferNotNull(a.exchangeLocked, b.exchangeLocked),
                                 SerializationUtils.mergeOverride(a.positions, b.positions),
                                 SerializationUtils.mergeOverride(a.orders, b.orders),
                                 a.queryExecutionStatus != QueryExecutionStatus.OK ? a.queryExecutionStatus : b.queryExecutionStatus));
@@ -250,6 +265,7 @@ public final class SingleUserReportResult implements ReportResult {
         return "SingleUserReportResult{" +
                 "userProfile=" + userStatus +
                 ", accounts=" + accounts +
+                ", exchangeLocked=" + exchangeLocked +
                 ", orders=" + orders +
                 ", queryExecutionStatus=" + queryExecutionStatus +
                 '}';

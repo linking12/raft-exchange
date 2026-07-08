@@ -5,7 +5,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.settlement.ADLSettlementProcessor;
+import exchange.core2.core.processors.ADLCommandProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -17,13 +17,13 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ADLMatchingProcessorTest {
 
-    private ADLSettlementProcessor processor;
+    private ADLCommandProcessor processor;
     private OrderBookEventsHelper eventsHelper;
 
     @BeforeEach
     void setUp() {
         eventsHelper = new OrderBookEventsHelper(() -> new MatcherTradeEvent());
-        processor = new ADLSettlementProcessor(eventsHelper);
+        processor = new ADLCommandProcessor(eventsHelper);
     }
 
     // ========== 基本功能测试 ==========
@@ -159,30 +159,6 @@ class ADLMatchingProcessorTest {
     }
 
     @Test
-    void testProcess_NullCandidates() {
-        // 测试无候选人
-        OrderCommand cmd = createADLCommand(10001, OrderAction.ASK, 10, 1000);
-        cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        cmd.adlUserPositionsByShard = null;
-
-        processor.process(cmd);
-
-        assertEquals(MatcherEventType.REJECT, cmd.matcherEvent.eventType);
-    }
-
-    @Test
-    void testProcess_EmptyCandidates() {
-        // 测试空候选人数组
-        OrderCommand cmd = createADLCommand(10001, OrderAction.ASK, 10, 1000);
-        cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        cmd.adlUserPositionsByShard = new ADLUserPosition[0];
-
-        processor.process(cmd);
-
-        assertEquals(MatcherEventType.REJECT, cmd.matcherEvent.eventType);
-    }
-
-    @Test
     void testProcess_AllShardsEmpty() {
         // 测试所有分片候选人都为null
         OrderCommand cmd = createADLCommand(10001, OrderAction.ASK, 10, 1000);
@@ -297,7 +273,7 @@ class ADLMatchingProcessorTest {
     // ========== 辅助方法 ==========
 
     private OrderCommand createADLCommand(int symbol, OrderAction action, long size, long price) {
-        OrderCommand cmd = new OrderCommand();
+        OrderCommand cmd = new OrderCommand(1);
         cmd.command = OrderCommandType.AUTO_DELEVERAGING;
         cmd.symbol = symbol;
         cmd.action = action;

@@ -13,7 +13,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -363,18 +363,20 @@ public final class ITExchangeCoreMarkPrice {
             container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(txId++).symbol(symbol.symbolId).markPrice(622).build(), CommandResultCode.SUCCESS);
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenVolume(), is(1000L));
-                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getLiquidationPrice(), is(621L));
+                // 分档累加 MM：(0,10000]×5/1000 + (10000,100000]×5/1000 + (100000,622000]×10/1000 = 50 + 450 + 5220 = 5720
+                // LP = (5720 - 65000 + 680000) / 1000 = 620
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getLiquidationPrice(), is(620L));
                 // 这里保证金比率已经是88.8%，后续基本上就是要全仓强平
-                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getMarginRatioScaleK() * 1.0 / symbol.getMaintenanceMarginScaleK(), is(0.888));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getMarginRatioScaleK() * 1.0 / symbol.getMaintenanceMarginScaleK(), is(0.817));
             });
 
-            // markPrice 更新到 621，会触发强平
+            // markPrice 更新到 620（新算法下 LP=620，需 markPrice ≤ LP 才触发），会触发强平
             // 注意 bidPrice也要更新
-            container.updateCurrentPriceTo(621, symbol.symbolId, symbol.quoteCurrency);
+            container.updateCurrentPriceTo(620, symbol.symbolId, symbol.quoteCurrency);
             container.submitCommandSync(ApiPlaceOrder.builder()
                     .uid(UID_2)
                     .orderId(10002L)
-                    .price(621)
+                    .price(620)
                     .size(1000)
                     .symbol(symbol.symbolId)
                     .action(OrderAction.BID)
@@ -468,10 +470,11 @@ public final class ITExchangeCoreMarkPrice {
                     .build(), CommandResultCode.SUCCESS);
 
             // 全部成交，openInitMarginSum 1000 * 100 / 75 + 1000 * 1 / 40 = 1358.33
-            // 保证金比率 1000 * 101 * 1% / 1358 = 0.07437， scaleK = 743
+            // 分档累加 MM：(0,10000]×5/1000 + (10000,100000]×5/1000 + (100000,101000]×10/1000 = 50 + 450 + 10 = 510
+            // 保证金比率 1000 * 510 / 1358 = 375
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(symbol.symbolId).get(0).getOpenInitMarginSum(), is(1358L));
-                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getMarginRatioScaleK(), is(743L));
+                assertThat(profile.getPositions().get(symbol.symbolId).get(0).getMarginRatioScaleK(), is(375L));
                 assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuySize(), is(0L));
                 assertThat(profile.getPositions().get(symbol.symbolId).get(0).getPendingBuyAvgPrice(), is(0L));
             });

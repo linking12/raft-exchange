@@ -10,7 +10,7 @@ import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.hamcrest.core.Is;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assertions;
 
 import java.util.concurrent.ExecutionException;
@@ -19,7 +19,7 @@ import static exchange.core2.core.common.OrderType.GTC;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class ITExchangeCoreHedgeMode {
     private final CoreSymbolSpecification symbol = CoreSymbolSpecification.builder()
@@ -660,6 +660,91 @@ public class ITExchangeCoreHedgeMode {
         }
     }
 
+    // T6：HEDGE 模式下开第二个方向（反向）仓位，跟 deferred-insert 改动相关——
+    // 新 position 在 canPlaceMarginOrder 时还没入 map，loop 遍历不到本 key，对 freeMargin 贡献为 0
+    // （empty position estimatePnl=0），不应被错算；开仓金额必须对得上。
+    @Test
+    public void testHedgeOpenSecondDirectionDoesNotPolluteFreeMarginCalc() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1).positionMode(PositionMode.HEDGE).build(), CommandResultCode.SUCCESS);
+
+            // UID_1 先开 LONG 100：BID 100 @ 750（taker by UID_2 ASK）。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1).orderId(30001L).price(75000000L).size(100L)
+                    .symbol(BNB_USDT.symbolId).action(OrderAction.BID).orderType(GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(10).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_2).orderId(30002L).price(75000000L).size(100L)
+                    .symbol(BNB_USDT.symbolId).action(OrderAction.ASK).orderType(GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(10).build(), CommandResultCode.SUCCESS);
+
+            // UID_1 再开 SHORT 50（不同 positionRecordKey，HEDGE 下独立 record）。
+            // 这是 deferred-insert 的 corner case：SHORT 新 position 校验阶段不在 map 里。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1).orderId(30003L).price(75000000L).size(50L)
+                    .symbol(BNB_USDT.symbolId).action(OrderAction.ASK).orderType(GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(10).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_3).orderId(30004L).price(75000000L).size(50L)
+                    .symbol(BNB_USDT.symbolId).action(OrderAction.BID).orderType(GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(10).build(), CommandResultCode.SUCCESS);
+
+            // 验证两个 position 都存在、openVolume 正确。
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L));
+            });
+
+            // 全局守恒：HEDGE 反向开仓走 deferred-insert 路径仍需保持对账。
+            TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            assertTrue(bal.isGlobalBalancesAllZero(),
+                    "HEDGE 开第二个方向后全局守恒必须成立");
+        }
+    }
+
+    // hedge 模式下同 uid self-match：BID + ASK 同价位，自己跟自己撮合。
+    // 触发 handleMatcherEventMargin 里 taker 块和 maker 块的 uid 相同 → maker 块会修改 takerUp 的另一个 position
+    // （把 LONG 也开起来）。曾经把 PnL settle 的 calculateLocked "优化"成 takerOtherLocked，
+    // 在这种 cross-position 场景下 baseLocked 会 stale，导致守恒破裂。
+    @Test
+    public void testHedgeModeSelfMatchConservation() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            initUsersAndSymbol(container);
+
+            container.submitCommandSync(ApiAdjustPositionMode.builder()
+                    .uid(UID_1).positionMode(PositionMode.HEDGE).build(), CommandResultCode.SUCCESS);
+
+            // UID_1 挂 BID 100 @ 750（pending，LONG 方向）。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1).orderId(20001L).price(75000000L).size(100L)
+                    .symbol(BNB_USDT.symbolId).action(OrderAction.BID).orderType(GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(10).build(), CommandResultCode.SUCCESS);
+
+            // UID_1 aggressive ASK 100 @ 750（taker，跟自己 BID self-match）。
+            container.submitCommandSync(ApiPlaceOrder.builder()
+                    .uid(UID_1).orderId(20002L).price(75000000L).size(100L)
+                    .symbol(BNB_USDT.symbolId).action(OrderAction.ASK).orderType(GTC)
+                    .marginMode(MarginMode.ISOLATED).leverage(10).build(), CommandResultCode.SUCCESS);
+
+            // self-match 后 UID_1 同时持 LONG 100 + SHORT 100。
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).size(), Is.is(2));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(100L));
+                assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(100L));
+            });
+
+            // 全局守恒：accounts + exchangeLocked + fees + adjustments + suspends + ifBalances == 0。
+            // taker 块 + maker 块用同一 takerUp 但不同 positionRecord，必须用 fresh calculateLocked 才能正确反映状态。
+            TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+            Assertions.assertTrue(bal.isGlobalBalancesAllZero(),
+                    "hedge mode self-match 后全局守恒必须成立（PnL settle 不能用 stale takerOtherLocked）");
+        }
+    }
+
     // 测试6: 混合多种持仓，发送资金费率命令，检查多空持仓加减profit正确
     @Test
     public void testMixedFundingRate() throws Exception {
@@ -679,10 +764,12 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(1).openVolume, Is.is(50L)); // SHORT
             });
 
-            // 假设发送资金费率命令（funding rate >0，多头付空头）
-            container.submitCommandSync(ApiSettleFundingFees.builder() // 假设有这个API
+            // 资金费率命令：BID = LONG 付 SHORT，ASK = SHORT 付 LONG
+            // action 决定付费方向，缺失会导致 isSameAsAction(null)=false → 谁也不扣 profit
+            container.submitCommandSync(ApiSettleFundingFees.builder()
                     .transactionId(container.getRandomTransactionId())
                     .symbol(BNB_USDT.symbolId)
+                    .action(OrderAction.BID)
                     .fundingRate(1L)
                     .rateScaleK(100)
                     .build(), CommandResultCode.SUCCESS);
@@ -841,8 +928,10 @@ public class ITExchangeCoreHedgeMode {
             });
 
             // 加到LONG
+            // extraMargin 与 openInitMarginSum 同为 sizePriceScale (baseScaleK × quoteScaleK)，
+            // 见 RiskEngine#ADJUST_MARGIN 注释 — 不能用 currencyToSymbolScale (差 baseScaleK 倍)
             long depositLong = 100 * USDT.getCurrencyScaleK();
-            long scaledLong = CoreArithmeticUtils.currencyToSymbolScale(depositLong, BNB_USDT, USDT);
+            long scaledLong = CoreArithmeticUtils.currencyToSizePriceScale(depositLong, BNB_USDT, USDT);
             container.submitCommandSync(ApiAdjustMargin.builder()
                     .transactionId(container.getRandomTransactionId())
                     .uid(UID_1)
@@ -854,7 +943,7 @@ public class ITExchangeCoreHedgeMode {
 
             // 加到SHORT
             long depositShort = 200 * USDT.getCurrencyScaleK();
-            long scaledShort = CoreArithmeticUtils.currencyToSymbolScale(depositShort, BNB_USDT, USDT);
+            long scaledShort = CoreArithmeticUtils.currencyToSizePriceScale(depositShort, BNB_USDT, USDT);
             container.submitCommandSync(ApiAdjustMargin.builder()
                     .transactionId(container.getRandomTransactionId())
                     .uid(UID_1)
@@ -1201,7 +1290,8 @@ public class ITExchangeCoreHedgeMode {
             long markPrice = 750 * BNB_USDT.getQuoteScaleK();
             container.initMarkPrice(BNB_USDT.symbolId, markPrice);
 
-            container.createUserWithMoney(UID_1, USDT_ID, 100 * USDT.getCurrencyScaleK());
+            // UID_1 需覆盖 LONG + SHORT 双腿的 IM（HEDGE CROSS 两腿独立扣 margin，不做净持仓抵扣）
+            container.createUserWithMoney(UID_1, USDT_ID, 10000 * USDT.getCurrencyScaleK());
             container.createUserWithMoney(UID_2, USDT_ID, 10000 * USDT.getCurrencyScaleK());
             container.createUserWithMoney(UID_3, USDT_ID, 10000 * USDT.getCurrencyScaleK());
             container.createUserWithMoney(UID_4, USDT_ID, 10000 * USDT.getCurrencyScaleK());

@@ -189,8 +189,8 @@ public interface IFundEventsHandler {
                 this.unrealizedProfit = fundEvent.unrealizedProfit;
                 this.liquidationPrice = fundEvent.liquidationPrice;
                 this.marginRatioScaleK = fundEvent.marginRatioScaleK;
-                this.bidsNotional = fundEvent.pendingBuySize * fundEvent.pendingBuyAvgPrice;
-                this.asksNotional = fundEvent.pendingSellSize * fundEvent.pendingSellAvgPrice;
+                this.bidsNotional = Math.multiplyExact(fundEvent.pendingBuySize, fundEvent.pendingBuyAvgPrice);
+                this.asksNotional = Math.multiplyExact(fundEvent.pendingSellSize, fundEvent.pendingSellAvgPrice);
                 this.bidsQty = fundEvent.pendingBuySize;
                 this.asksQty = fundEvent.pendingSellSize;
                 return this;

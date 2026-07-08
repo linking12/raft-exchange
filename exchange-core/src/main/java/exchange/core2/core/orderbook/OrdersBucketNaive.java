@@ -125,9 +125,9 @@ public final class OrdersBucketNaive implements Comparable<OrdersBucketNaive>, W
             final long p = order.price;
 
             takerFilled += v;
-            takerFilledNotional += v * p;
+            takerFilledNotional += Math.multiplyExact(v, p);
             order.filled += v;
-            order.filledNotional += v * p;
+            order.filledNotional += Math.multiplyExact(v, p);
             volumeToCollect -= v;
             totalVolume -= v;
 

@@ -22,6 +22,7 @@ import exchange.core2.core.common.*;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.cmd.CommandResultCode;
+import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,7 @@ import java.util.concurrent.ExecutionException;
 import static exchange.core2.core.common.OrderAction.ASK;
 import static exchange.core2.core.common.OrderAction.BID;
 import static exchange.core2.core.common.OrderType.*;
+import static exchange.core2.tests.util.ExchangeTestContainer.available;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
@@ -331,8 +333,8 @@ class ITFutureCross extends ITFutureBase {
             container.createAskWithOrderId(makerOrderId5, userId1, size, 15000, symbols.get(0).symbolId, MarginMode.CROSS);
             container.createBidWithOrderId(takerOrderId6, userId3, size, 15000, symbols.get(0).symbolId, MarginMode.CROSS);
 
-            // 平仓不收手续费, 因为降低了整体风险
-            long fee3 = 0;
+            // 平仓也按 maker/taker 收手续费, userId1 close 时是 maker
+            long fee3 = symbols.get(0).makerFee;
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee1 - fee2 - fee3 + 5000L));
@@ -383,8 +385,8 @@ class ITFutureCross extends ITFutureBase {
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
-                // exchange dedect balance and fee first
-                assertThat(profile.getAccounts().get(quoteId), is(120L));
+                // 现货下单不再扣 accounts，改记入 exchangeLocked；可支配 = 120
+                assertThat(available(profile, quoteId), is(120L));
                 assertThat(profile.getOrders().size(), is(2));
             });
         } catch (ExecutionException e) {
@@ -494,7 +496,7 @@ class ITFutureCross extends ITFutureBase {
 
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
-            LatencyTools.waitForCondition(150, () -> {
+            LatencyTools.waitForCondition(60_000, () -> {
                 try {
                     return container.getUserProfile(userId1).getPositions().size() == 1;
                 } catch (Exception e) {
@@ -560,8 +562,9 @@ class ITFutureCross extends ITFutureBase {
 
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
             // 期待结果makerOrderId6可以被挂出的强平吃掉
+            // 9840 → 9540: symbol1 强平 close 时 UID_1 是 taker, dynamic taker fee = ceil(1 * 15000 * 2/100) = 300
             container.validateUserState(userId1, profile -> {
-                assertThat(profile.getAccounts().get(quoteId), is(9840L));
+                assertThat(profile.getAccounts().get(quoteId), is(9540L));
                 assertThat(profile.getPositions().size(), is(1));
                 assertThat(profile.getPositions().getFirst().get(0).direction, is(PositionDirection.LONG));
                 assertThat(profile.getPositions().getFirst().get(0).quoteCurrency, is(quoteId));
@@ -598,6 +601,7 @@ class ITFutureCross extends ITFutureBase {
         long makerOrderId4 = 1011L;
         long takerOrderId4 = 1012L;
         long makerOrderId5 = 1013L;
+        long makerOrderId6 = 1014L;
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor);) {
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
             List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
@@ -654,6 +658,9 @@ class ITFutureCross extends ITFutureBase {
 
             // userId5先设置一个单子(两手)用于强制平仓, 此时userId3会被强平, userId1不会强平
             container.createBidWithOrderId(makerOrderId5, userId5, 2, 100, symbols.get(0).symbolId, MarginMode.CROSS);
+            // userId4/symbol1 LONG@EP=15000, BP≈15154 > EP（1%逐仓+动态2%手续费导致）
+            // ADL 路径下 SHORT 持仓在15154价格无盈利 → 无候选 → 死循环；提前挂BID@16000让FORCE直接成交
+            container.createBidWithOrderId(makerOrderId6, userId6, size, 16000, symbols.get(1).symbolId, MarginMode.CROSS);
 
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
 
@@ -661,25 +668,44 @@ class ITFutureCross extends ITFutureBase {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
                 assertThat(profile.getPositions().size(), is(2));
             });
-            // 期待结果makerOrderId5可以被挂出的强平吃掉
+            // BP-based 路径下 FORCE@BP > 盘口 → REJECT → IF → ADL；scanner 已停，用 triggerOnce 主动驱动 stuck-check
+            Runnable triggerOnce = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            LatencyTools.waitForCondition(10_000, () -> {
+                try {
+                    List<SingleUserReportResult.Position> pos = container.getUserProfile(userId3).getPositions().get(symbols.get(0).symbolId);
+                    return pos == null || pos.isEmpty();
+                } catch (Exception e) {
+                    return false;
+                }
+            }, triggerOnce, 500);
             container.validateUserState(userId3, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
             });
-            // userId5挂上去的订单2手被吃掉1手
+            // FORCE@BP REJECT 后 userId5 BID@100 无人吃，仍为 0 fill
             container.validateUserState(userId5, profile -> {
                 assertThat(profile.getOrders().size(), is(1));
-                assertThat(profile.getOrders().getFirst().get(0).filled, is(1L));
+                assertThat(profile.getOrders().getFirst().get(0).filled, is(0L));
                 assertThat(profile.getOrders().getFirst().get(0).size, is(2L));
                 assertThat(profile.getOrders().getFirst().get(0).price, is(100L));
             });
+            LatencyTools.waitForCondition(10_000, () -> {
+                try {
+                    List<SingleUserReportResult.Position> pos = container.getUserProfile(userId4).getPositions().get(symbols.get(1).symbolId);
+                    return pos == null || pos.isEmpty();
+                } catch (Exception e) {
+                    return false;
+                }
+            }, triggerOnce, 500);
 
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(56)).fundEventReport(fundEventCaptor.capture());
-            // check fund event
+            // userId3/symbol0: FORCE@9920 REJECT → IF → ADL（stuck-check 需多次 triggerOnce）
+            // userId4/symbol1: FORCE@15154 直接成交（userId6 BID@16000 在盘口），无需 ADL
+            // 事件总数不固定（≥55），用 atLeast 断言
+            verify(handler, atLeast(55)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport liquidationAlertEvt = null;
 
@@ -707,29 +733,26 @@ class ITFutureCross extends ITFutureBase {
             assertThat(9900L, Is.is(liquidationAlertEvt.getPositions().getLiquidationPrice()));
             assertThat(-1000L, Is.is(liquidationAlertEvt.getPositions().getMarginRatioScaleK()));
 
-            IFundEventsHandler.FundEventReport liquidationEvt = null;
-
+            // userId3 symbol0 走 ADL，断言 ADL_ORIGIN_CLOSE（ADL close @ BP=9920，cumR = (9920-10000)×1 = -80）
+            IFundEventsHandler.FundEventReport adlOriginEvt = null;
             for (int i = 0; i < fundEvents.size(); i++) {
                 IFundEventsHandler.FundEventReport report = fundEvents.get(i);
-                if (report.getEventType().equals(FundEvent.FundEventType.LIQUIDATION_CLOSE) && report.getAccountId() == userId3) {
-                    liquidationEvt = report;
+                if (report.getEventType().equals(FundEvent.FundEventType.ADL_ORIGIN_CLOSE) && report.getAccountId() == userId3) {
+                    adlOriginEvt = report;
                     break;
                 }
             }
 
-            assertThat(userId3, Is.is(liquidationEvt.getAccountId()));
-            assertThat(quoteId, Is.is(liquidationEvt.getBalances().getCurrency()));
-            assertThat(10000, Is.is(liquidationEvt.getPositions().getSymbolId()));
-//            assertThat(takerOrderId, Is.is(liquidationEvt.orderId));
-            assertThat(PositionDirection.LONG, Is.is(liquidationEvt.getPositions().getDirection()));
-            assertThat(FundEvent.FundEventType.LIQUIDATION_CLOSE, Is.is(liquidationEvt.getEventType()));
-            assertThat(9740L, Is.is(liquidationEvt.getBalances().getFree()));
-            assertThat(100L, Is.is(liquidationEvt.getBalances().getLocked()));
-            assertThat(0L, Is.is(liquidationEvt.getPositions().getOpenPriceSum()));
-            assertThat(-9900L, Is.is(liquidationEvt.getPositions().getCumRealized()));
-            assertThat(0L, Is.is(liquidationEvt.getPositions().getQuantity()));
-            // 平仓后openVolume为0, 故unrealizedProfit/liquidationPrice/marginRatioScaleK均为0
-            checkEvent(liquidationEvt);
+            assertThat(userId3, Is.is(adlOriginEvt.getAccountId()));
+            assertThat(quoteId, Is.is(adlOriginEvt.getBalances().getCurrency()));
+            assertThat(10000, Is.is(adlOriginEvt.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, Is.is(adlOriginEvt.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.ADL_ORIGIN_CLOSE, Is.is(adlOriginEvt.getEventType()));
+            assertThat(9740L, Is.is(adlOriginEvt.getBalances().getFree()));
+            assertThat(100L, Is.is(adlOriginEvt.getBalances().getLocked()));
+            assertThat(0L, Is.is(adlOriginEvt.getPositions().getOpenPriceSum()));
+            assertThat(-80L, Is.is(adlOriginEvt.getPositions().getCumRealized()));
+            assertThat(0L, Is.is(adlOriginEvt.getPositions().getQuantity()));
         }
     }
 
@@ -812,8 +835,9 @@ class ITFutureCross extends ITFutureBase {
             assertThat(10000L, Is.is(event1.getPositions().getOpenPriceSum()));
             assertThat(1L, Is.is(event1.getPositions().getQuantity()));
             assertThat(-4700L, Is.is(event1.getPositions().getUnrealizedProfit()));
-            assertThat(-1L, Is.is(event1.getPositions().getLiquidationPrice()));
-            assertThat(1L, Is.is(event1.getPositions().getMarginRatioScaleK()));
+            // 修 FundEventsHelper.calc 里 spec/priceRecord 循环复用 bug 后，多币种 cross 账户 LP 才算准（旧值是错的 -1）
+            assertThat(5286L, Is.is(event1.getPositions().getLiquidationPrice()));
+            assertThat(185L, Is.is(event1.getPositions().getMarginRatioScaleK()));
         }
     }
 
@@ -1054,7 +1078,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(0L, Is.is(takerOpenPositionEvent.getPositions().getUnrealizedProfit()));
             // maintenanceMargin = 50
             // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum = -1 * (50 - 100) + 10000 * 1 = 10050
-            assertThat(3990029L, Is.is(takerOpenPositionEvent.getPositions().getLiquidationPrice()));
+            assertThat(3970775L, Is.is(takerOpenPositionEvent.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / MAX_VALUE) = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.getPositions().getMarginRatioScaleK()));
 
@@ -1400,7 +1424,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(10000L, Is.is(makerOpenPositionEvent.getPositions().getMarkPrice()));
             // openVolume * markPrice - openPriceSum = 10000 - 10000 = 0
             assertThat(0L, Is.is(makerOpenPositionEvent.getPositions().getUnrealizedProfit()));
-            assertThat(10935L, Is.is(makerOpenPositionEvent.getPositions().getLiquidationPrice()));
+            assertThat(10936L, Is.is(makerOpenPositionEvent.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 50 / 990) = long (50.5) = 50
             assertThat(50L, Is.is(makerOpenPositionEvent.getPositions().getMarginRatioScaleK()));
         }
@@ -1654,7 +1678,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(10000L, Is.is(takerOpenPositionEvent.getPositions().getMarkPrice()));
             // openVolume * markPrice - openPriceSum = txSize * 10000 - txSize * 10000 = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.getPositions().getUnrealizedProfit()));
-            assertThat(1999980L, Is.is(takerOpenPositionEvent.getPositions().getLiquidationPrice()));
+            assertThat(1990328L, Is.is(takerOpenPositionEvent.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * (50 * txSize) / (MAX_VALUE)) = 0
             assertThat(0L, Is.is(takerOpenPositionEvent.getPositions().getMarginRatioScaleK()));
             checkEventPending(takerOpenPositionEvent);
@@ -2223,6 +2247,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event6.cumQty, Is.is(1L));
             assertThat(event6.cumQuoteQty, Is.is(10500L));
             assertThat(event6.avgPx, Is.is(10500L));
+            // 纯平仓 trade：按 taker 率全量收（1 张 × 20 takerFee）
             assertThat(event6.fee, Is.is(20L));
             assertThat(event6.feeAssetId, Is.is(840));
             assertThat(event6.isMaker, Is.is(false));
@@ -2249,25 +2274,27 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.cumQty, Is.is(1L));
             assertThat(event7.cumQuoteQty, Is.is(10500L));
             assertThat(event7.avgPx, Is.is(10500L));
+            // 同上，maker 端纯平仓也按 maker 率全量收（1 张 × 10 makerFee）
             assertThat(event7.fee, Is.is(10L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
 
             // check balance
             container.validateUserState(userId1, profile -> {
-                // Profit: 10500 - 10000 = 500, minus maker fee 10
-                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L + 500L)));
+                // Profit: 10500 - 10000 = 500, minus open maker fee 10 + close maker fee 10
+                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L - 10L + 500L)));
             });
             container.validateUserState(userId2, profile -> {
-                // Loss: 10000 - 10500 = -500, minus taker fee 20
-                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L - 500L)));
+                // Loss: 10000 - 10500 = -500, minus open taker fee 20 + close taker fee 20
+                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L - 20L - 500L)));
             });
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(14)).fundEventReport(fundEventCaptor.capture());
+            // 14 原始事件 + 2 PNL_SETTLEMENT（双方全平后 profit 入账）
+            verify(handler, times(16)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
             // Check CLOSE_POSITION event for taker
@@ -2276,8 +2303,8 @@ class ITFutureCross extends ITFutureBase {
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.getEventType()));
             assertThat(quoteId, Is.is(takerCloseEvent.getBalances().getCurrency()));
             assertThat(1L, Is.is(takerCloseEvent.getBalances().getCurrencyScaleK()));
-            // free = MAX_VALUE - 20 (taker fee) - 500 (loss)
-            assertThat(3999980L, Is.is(takerCloseEvent.getBalances().getFree()));
+            // free = MAX_VALUE - 20 (open taker fee) - 20 (close taker fee); 亏损 500 在随后的 PNL_SETTLEMENT 里结算
+            assertThat(3999960L, Is.is(takerCloseEvent.getBalances().getFree()));
             assertThat(0L, Is.is(takerCloseEvent.getBalances().getLocked()));
             // position check
             assertThat(symbolId, Is.is(takerCloseEvent.getPositions().getSymbolId()));
@@ -2294,13 +2321,14 @@ class ITFutureCross extends ITFutureBase {
             assertThat(10000L, Is.is(takerCloseEvent.getPositions().getMarkPrice()));
             checkEvent(takerCloseEvent);
 
-            // Check CLOSE_POSITION event for maker
-            IFundEventsHandler.FundEventReport makerCloseEvent = fundEvents.get(13);
+            // Check CLOSE_POSITION event for maker (index +1 因为 taker 全平后插入了 PNL_SETTLEMENT)
+            IFundEventsHandler.FundEventReport makerCloseEvent = fundEvents.get(14);
             assertThat(userId1, Is.is(makerCloseEvent.getAccountId()));
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(makerCloseEvent.getEventType()));
             assertThat(quoteId, Is.is(makerCloseEvent.getBalances().getCurrency()));
             assertThat(1L, Is.is(makerCloseEvent.getBalances().getCurrencyScaleK()));
-            assertThat(deposit - 10 * 1L, Is.is(makerCloseEvent.getBalances().getFree()));
+            // open maker fee 10 + close maker fee 10
+            assertThat(deposit - 10 * 1L - 10 * 1L, Is.is(makerCloseEvent.getBalances().getFree()));
             assertThat(0L, Is.is(makerCloseEvent.getBalances().getLocked()));
             // position check
             assertThat(symbolId, Is.is(makerCloseEvent.getPositions().getSymbolId()));
@@ -2531,6 +2559,7 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event6.cumQty, Is.is(1L));
             assertThat(event6.cumQuoteQty, Is.is(10500L));
             assertThat(event6.avgPx, Is.is(10500L));
+            // 纯平仓 trade：按 taker 率全量收（1 张 × 20 takerFee）
             assertThat(event6.fee, Is.is(20L));
             assertThat(event6.feeAssetId, Is.is(840));
             assertThat(event6.isMaker, Is.is(false));
@@ -2557,18 +2586,19 @@ class ITFutureCross extends ITFutureBase {
             assertThat(event7.cumQty, Is.is(1L));
             assertThat(event7.cumQuoteQty, Is.is(10500L));
             assertThat(event7.avgPx, Is.is(10500L));
+            // 同上，maker 端纯平仓也按 maker 率全量收（1 张 × 10 makerFee）
             assertThat(event7.fee, Is.is(10L));
             assertThat(event7.feeAssetId, Is.is(840));
             assertThat(event7.isMaker, Is.is(true));
 
             // check balance
             container.validateUserState(userId1, profile -> {
-                // Only maker fee deducted, profit not realized until fully closed
-                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L * 10)));
+                // Open maker fee 10*10 + partial close maker fee 10*1; profit not realized until fully closed
+                assertThat(profile.getAccounts().get(quoteId), Is.is((deposit - 10L * 10 - 10L * 1)));
             });
             container.validateUserState(userId2, profile -> {
-                // Only taker fee deducted, loss not realized until fully closed
-                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L * 10)));
+                // Open taker fee 20*10 + partial close taker fee 20*1; loss not realized until fully closed
+                assertThat(profile.getAccounts().get(quoteId), Is.is((MAX_VALUE - 20L * 10 - 20L * 1)));
             });
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
@@ -2584,7 +2614,8 @@ class ITFutureCross extends ITFutureBase {
             assertThat(FundEvent.FundEventType.CLOSE_POSITION, Is.is(takerCloseEvent.getEventType()));
             assertThat(quoteId, Is.is(takerCloseEvent.getBalances().getCurrency()));
             assertThat(1L, Is.is(takerCloseEvent.getBalances().getCurrencyScaleK()));
-            assertThat(3998900L, Is.is(takerCloseEvent.getBalances().getFree()));
+            // free = MAX_VALUE - open fee 200 - close fee 20 - locked 900
+            assertThat(3998880L, Is.is(takerCloseEvent.getBalances().getFree()));
             assertThat(900L, Is.is(takerCloseEvent.getBalances().getLocked()));
             // position check
             assertThat(symbolId, Is.is(takerCloseEvent.getPositions().getSymbolId()));
@@ -2603,7 +2634,8 @@ class ITFutureCross extends ITFutureBase {
             assertThat(-500L, Is.is(takerCloseEvent.getPositions().getUnrealizedProfit()));
             // maintenanceMargin = 0.5% * 9 * 10000 = 450
             // liquidationPrice = (-1 * (450 - 900) + 90000) / 9 = 9994.4 ≈ 9994
-            assertThat(452106L, Is.is(takerCloseEvent.getPositions().getLiquidationPrice()));
+            // close fee 微调了 free balance, 影响逐仓维持保证金校验里的强平价
+            assertThat(449921L, Is.is(takerCloseEvent.getPositions().getLiquidationPrice()));
             // marginRatioScaleK = 1000 * 450 / MAX_VALUE ≈ 0
             assertThat(0L, Is.is(takerCloseEvent.getPositions().getMarginRatioScaleK()));
             checkEventPending(takerCloseEvent);

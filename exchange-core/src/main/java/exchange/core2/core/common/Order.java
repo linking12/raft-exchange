@@ -16,6 +16,7 @@
 package exchange.core2.core.common;
 
 import exchange.core2.core.common.cmd.OrderCommandType;
+import exchange.core2.core.utils.HashingUtils;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -122,8 +123,13 @@ public final class Order implements WriteBytesMarshallable, IOrder {
 
     @Override
     public int hashCode() {
-        return Objects.hash(orderId, action, orderType, command, price, size, reserveBidPrice, filled, filledNotional,
-                uid, userCookie);
+        // action/orderType/command 是 enum：直接进 Objects.hash 会走 identityHashCode（跨 JVM 漂移）；
+        // 这个 hashCode 同时被 OrderBookNaive 的 stateHash 链路用，必须跨节点稳定。
+        return Objects.hash(orderId,
+                HashingUtils.enumStateHash(action),
+                HashingUtils.enumStateHash(orderType),
+                HashingUtils.enumStateHash(command),
+                price, size, reserveBidPrice, filled, filledNotional, uid, userCookie);
     }
 
 

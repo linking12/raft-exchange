@@ -20,7 +20,7 @@ import java.util.function.Supplier;
  */
 @AllArgsConstructor
 @Getter
-@Builder
+@Builder(toBuilder = true)
 public final class PerformanceConfiguration {
 
     public static final PerformanceConfiguration DEFAULT = PerformanceConfiguration.throughputPerformanceBuilder().build();
@@ -57,14 +57,22 @@ public final class PerformanceConfiguration {
     private final int maxGroupDurationNs;
 
     /*
-     * Disruptor threads factory
+     * Disruptor threads factory (also reused for snapshot loader executor)
      */
-    private final ThreadFactory threadFactory;
+    private final ThreadFactory disruptorThreadFactory;
 
     /*
      * Disruptor wait strategy
      */
     private final CoreWaitStrategy waitStrategy;
+
+    /*
+     * LiquidationEngine 的调度线程工厂（每 shard 一个调度线程）。
+     * null = LiquidationEngine 用内部默认 daemon Thread::new（生产路径，2 秒间隔扫描不需要钉核）。
+     * 非 null = 用调用方传的工厂；测试容器在这里塞 AffinityThreadFactory，避免 LiquidationEngine
+     * 调度线程被 Disruptor / 其它测试 fork 线程抢占造成 Awaitility 超时。
+     */
+    private final ThreadFactory liquidationThreadFactory;
 
     /*
      * Order books factory
@@ -84,8 +92,9 @@ public final class PerformanceConfiguration {
                 ", riskEnginesNum=" + riskEnginesNum +
                 ", msgsInGroupLimit=" + msgsInGroupLimit +
                 ", maxGroupDurationNs=" + maxGroupDurationNs +
-                ", threadFactory=" + (threadFactory == null ? null : threadFactory.getClass().getSimpleName()) +
+                ", disruptorThreadFactory=" + (disruptorThreadFactory == null ? null : disruptorThreadFactory.getClass().getSimpleName()) +
                 ", waitStrategy=" + waitStrategy +
+                ", liquidationThreadFactory=" + (liquidationThreadFactory == null ? null : liquidationThreadFactory.getClass().getSimpleName()) +
                 ", orderBookFactory=" + (orderBookFactory == null ? null : orderBookFactory.getClass().getSimpleName()) +
                 ", binaryCommandsLz4CompressorFactory=" + (binaryCommandsLz4CompressorFactory == null ? null : binaryCommandsLz4CompressorFactory.getClass().getSimpleName()) +
                 '}';
@@ -101,7 +110,8 @@ public final class PerformanceConfiguration {
                 .riskEnginesNum(1)
                 .msgsInGroupLimit(256)
                 .maxGroupDurationNs(10_000)
-                .threadFactory(Thread::new)
+                .disruptorThreadFactory(Thread::new)
+                .liquidationThreadFactory(Thread::new)
                 .waitStrategy(CoreWaitStrategy.BLOCKING)
                 .binaryCommandsLz4CompressorFactory(() -> LZ4Factory.fastestInstance().highCompressor())
                 .orderBookFactory(OrderBookNaiveImpl::new);
@@ -115,7 +125,8 @@ public final class PerformanceConfiguration {
                 .riskEnginesNum(1)
                 .msgsInGroupLimit(256)
                 .maxGroupDurationNs(10_000)
-                .threadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "Exchange-Core-Disruptor"))
+                .disruptorThreadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "Exchange-Core-Disruptor"))
+                .liquidationThreadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_DISABLE, "LiquidationEngine-"))
                 .waitStrategy(CoreWaitStrategy.BUSY_SPIN)
                 .binaryCommandsLz4CompressorFactory(() -> LZ4Factory.fastestInstance().highCompressor())
                 .orderBookFactory(OrderBookDirectImpl::new);
@@ -129,7 +140,8 @@ public final class PerformanceConfiguration {
                 .riskEnginesNum(2)
                 .msgsInGroupLimit(4_096)
                 .maxGroupDurationNs(4_000_000)
-                .threadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "Exchange-Core-Disruptor"))
+                .disruptorThreadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_ENABLE_PER_LOGICAL_CORE, "Exchange-Core-Disruptor"))
+                .liquidationThreadFactory(new AffinityThreadFactory(AffinityThreadFactory.ThreadAffinityMode.THREAD_AFFINITY_DISABLE, "LiquidationEngine-"))
                 .waitStrategy(CoreWaitStrategy.BUSY_SPIN)
                 .binaryCommandsLz4CompressorFactory(() -> LZ4Factory.fastestInstance().highCompressor())
                 .orderBookFactory(OrderBookDirectImpl::new);

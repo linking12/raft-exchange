@@ -199,8 +199,21 @@ public interface IOrderBook extends WriteBytesMarshallable, StateHash {
             }
 
         } else if (commandType == OrderCommandType.FORCE_LIQUIDATION) {
-            orderBook.newOrder(cmd);
-            return CommandResultCode.SUCCESS;
+            if (cmd.resultCode == CommandResultCode.VALID_FOR_MATCHING_ENGINE) {
+                orderBook.newOrder(cmd);
+                return CommandResultCode.SUCCESS;
+            } else {
+                return cmd.resultCode;
+            }
+
+        } else if (commandType == OrderCommandType.LOAN_FORCE_LIQUIDATE
+            || commandType == OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE) {
+            if (cmd.resultCode == CommandResultCode.VALID_FOR_MATCHING_ENGINE) {
+                orderBook.newOrder(cmd);
+                return CommandResultCode.SUCCESS;
+            } else {
+                return cmd.resultCode;
+            }
 
         } else if (commandType == OrderCommandType.ORDER_BOOK_REQUEST) {
             int size = (int) cmd.size;

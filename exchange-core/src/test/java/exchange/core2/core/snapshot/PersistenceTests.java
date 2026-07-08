@@ -174,8 +174,8 @@ public class PersistenceTests {
             assertEquals(50, pos.leverage);
             assertEquals(50000000L, pos.extraMargin);
             assertEquals(850000L, pos.unrealizedProfit);
-            assertEquals(-1240035L, pos.liquidationPrice);
-            assertEquals(170, pos.marginRatioScaleK);
+            assertEquals(-1240085L, pos.liquidationPrice);
+            assertEquals(131, pos.marginRatioScaleK);
         });
         container.validateUserState(UID_2, profile -> {
             // 仓位应被部分或全部平仓
@@ -375,8 +375,8 @@ public class PersistenceTests {
             assertEquals(50, pos.leverage);
             assertEquals(50000000L, pos.extraMargin);
             assertEquals(850000L, pos.unrealizedProfit);
-            assertEquals(-1240035L, pos.liquidationPrice);
-            assertEquals(170, pos.marginRatioScaleK);
+            assertEquals(-1240085L, pos.liquidationPrice);
+            assertEquals(131, pos.marginRatioScaleK);
         });
 
         container.validateUserState(UID_HEDGE, profile -> {

@@ -7,7 +7,7 @@ import io.grpc.NameResolver;
 class RaftExchangeNameResolver extends NameResolver {
     private final URI uri;
     private volatile Listener2 listener2;
-    private ResolutionResult lastResult;
+    private volatile ResolutionResult lastResult;
     private final RaftNameResolverProvider parent;
 
     RaftExchangeNameResolver(URI uri, RaftNameResolverProvider parent) {
@@ -31,8 +31,9 @@ class RaftExchangeNameResolver extends NameResolver {
     @Override
     public void start(Listener2 listener) {
         this.listener2 = listener;
-        if (lastResult != null) {
-            listener2.onResult(lastResult);
+        ResolutionResult current = lastResult;
+        if (current != null) {
+            listener.onResult(current);
         }
     }
 

@@ -3,13 +3,17 @@ package com.binance.raftexchange.server.raft;
 import java.util.Objects;
 
 /**
- * 代表了raft层的对象 不要使用grpc的 这里代表了raft真实提供出去的交互接口
+ * 共识层对节点的统一抽象。两个 backend 共享：
+ * <ul>
+ * <li>jraft：JraftClusterContainer 把 PeerId → RaftNode
+ * <li>aeron：AeronClusterContainer 把 ClusterMember → RaftNode
+ * </ul>
+ *
+ * <p>
+ * port 是 grpc port（客户端通信端口）。
  */
 public final class RaftNode {
     private final String host;
-    /**
-     * 注意是grpc port，通信用的这个
-     */
     private final int port;
     private final NodeType nodeType;
 
@@ -38,7 +42,8 @@ public final class RaftNode {
         if (obj == null || obj.getClass() != this.getClass())
             return false;
         RaftNode that = (RaftNode)obj;
-        return Objects.equals(this.host, that.host) && this.port == that.port && Objects.equals(this.nodeType, that.nodeType);
+        return Objects.equals(this.host, that.host) && this.port == that.port
+            && Objects.equals(this.nodeType, that.nodeType);
     }
 
     @Override

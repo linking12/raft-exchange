@@ -18,7 +18,7 @@ public class ProtoBuilderPool {
      * 注册一个类型的Builder缓存池（必须提前注册）
      */
     public <T extends Builder> void register(Class<T> builderClass, Supplier<T> supplier) {
-        pools.putIfAbsent(builderClass, new  FastThreadLocal<>() {
+        pools.putIfAbsent(builderClass, new FastThreadLocal<>() {
             @Override
             protected T initialValue() {
                 return supplier.get();
@@ -30,7 +30,7 @@ public class ProtoBuilderPool {
      * 获取已注册的Builder
      */
     public <T extends Builder> T get(Class<T> builderClass) {
-        FastThreadLocal<T> local = (FastThreadLocal<T>) pools.get(builderClass);
+        FastThreadLocal<T> local = (FastThreadLocal<T>)pools.get(builderClass);
         if (local == null) {
             throw new IllegalStateException("Builder not registered for: " + builderClass.getName());
         }

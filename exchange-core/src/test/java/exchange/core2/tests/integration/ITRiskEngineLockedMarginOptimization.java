@@ -114,7 +114,7 @@ public class ITRiskEngineLockedMarginOptimization {
     }
 
     /**
-     * 测试用例2: 多持仓场景 - 验证takerBaseLocked的正确性
+     * 测试用例2: 多持仓场景 - 验证takerOtherLocked的正确性
      * 这是优化的核心测试点
      */
     @Test
@@ -335,9 +335,10 @@ public class ITRiskEngineLockedMarginOptimization {
             // 验证extraMargin已退还（balance应该增加）
             long balanceAfterClose = getBalance(container, TAKER_UID);
             log.info("Balance after close: {}", balanceAfterClose);
-            // balance变化 = 平仓盈亏 + extraMargin退还 - 手续费
-            // 这里简单验证balance增加了
-            assertTrue(balanceAfterClose - balanceBeforeClose == extraMargin);
+            // balance变化 = 平仓盈亏(0, 同价) + extraMargin退还 - 平仓手续费
+            // initFutureSymbol takerFee=20 固定，TAKER_UID 平仓时主动吃单 → close taker fee = 20 * 1
+            long expectedCloseFee = 20L;
+            assertTrue(balanceAfterClose - balanceBeforeClose == extraMargin - expectedCloseFee);
         } finally {
             verify(handler, never()).spotExecutionReport(any());
         }
@@ -371,8 +372,8 @@ public class ITRiskEngineLockedMarginOptimization {
 
             long lockedBefore = getInitialLockedMargin(container, TAKER_UID);
 
-            // Taker大单，会匹配多个Maker订单（产生多个MatcherEvent）
-            container.createBidWithOrderId(2002, TAKER_UID, 3, 200_000, SYMBOL_BTC);
+            // Taker大单，会匹配多个Maker订单（产生多个MatcherEvent）；BID 100_003 刚好扫掉最高 ASK 100_002
+            container.createBidWithOrderId(2002, TAKER_UID, 3, 100_003, SYMBOL_BTC);
 
             // 验证所有MatcherEvent处理后，持仓正确
             container.validateUserState(TAKER_UID, profile -> {

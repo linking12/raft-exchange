@@ -20,6 +20,7 @@ import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.LoggingConfiguration;
 import lombok.*;
@@ -114,10 +115,32 @@ public final class OrderBookDirectImpl implements IOrderBook {
             case FOK_BUDGET:
                 newOrderMatchFokBudget(cmd);
                 break;
-            // TODO IOC_BUDGET and FOK support
+            case IOC_BUDGET:
+                newOrderMatchIocBudget(cmd);
+                break;
+            // TODO FOK support
             default:
                 log.warn("Unsupported order type: {}", cmd);
                 eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
+        }
+    }
+
+    /**
+     * IOC_BUDGET：用预算上限买单（cmd.price 是 product-scale 总预算）。
+     * 走到 size 上限或预算耗尽就停，剩余部分 cancel。
+     * <p>语义上仅对 BID 有意义（用预算买）；ASK IOC_BUDGET 语义模糊（最低收入约束无法部分成交），暂不支持。
+     */
+    private void newOrderMatchIocBudget(final OrderCommand cmd) {
+        if (cmd.action != OrderAction.BID) {
+            log.warn("IOC_BUDGET only supports BID action: {}", cmd);
+            eventsHelper.attachRejectEvent(cmd, cmd.size, symbolSpec);
+            return;
+        }
+        final long[] matchResult = tryMatchInstantlyWithBudget(cmd, cmd, cmd.price);
+        final long filledSize = matchResult.length == 0 ? cmd.getFilled() : matchResult[0];
+        final long rejectedSize = cmd.size - filledSize;
+        if (rejectedSize != 0) {
+            eventsHelper.attachRejectEvent(cmd, rejectedSize, symbolSpec);
         }
     }
 
@@ -212,11 +235,11 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
             if (size > availableSize) {
                 size -= availableSize;
-                budget += availableSize * price;
+                budget += Math.multiplyExact(availableSize, price);
                 if (logDebug) log.debug("add    {} * {} -> {}", price, availableSize, budget);
             } else {
-                if (logDebug) log.debug("return {} * {} -> {}", price, size, budget + size * price);
-                return budget + size * price;
+                if (logDebug) log.debug("return {} * {} -> {}", price, size, budget + Math.multiplyExact(size, price));
+                return budget + Math.multiplyExact(size, price);
             }
 
             // switch to next order (can be null)
@@ -345,6 +368,122 @@ public final class OrderBookDirectImpl implements IOrderBook {
         }
 
         // return [filledSize, filledNotional]
+        return new long[]{takerFilled, takerFilledNotional};
+    }
+
+    /**
+     * IOC_BUDGET 专用撮合：结构与 {@link #tryMatchInstantly(IOrder, OrderCommand)} 同构，
+     * 区别是每档按 {@code remainingBudget / tradePrice} 限制可购量，预算耗尽即停；
+     * 未成交剩余 size 由调用方走 reject 事件。
+     * <p>刻意复制一份而不是与主 {@code tryMatchInstantly} 合并，避免污染限价/IOC/FOK_BUDGET 主路径。
+     * <p>仅在 IOC_BUDGET BID 路径下调用（{@code newOrderMatchIocBudget} 已守卫 ASK）。
+     */
+    private long[] tryMatchInstantlyWithBudget(final IOrder takerOrder,
+                                                final OrderCommand triggerCmd,
+                                                long remainingBudget) {
+
+        final boolean isBidAction = takerOrder.getAction() == OrderAction.BID;
+
+        final long limitPrice = takerOrder.getPrice();
+
+        DirectOrder makerOrder;
+        if (isBidAction) {
+            makerOrder = bestAskOrder;
+            if (makerOrder == null || makerOrder.price > limitPrice) {
+                return EMPTY_LONGS;
+            }
+        } else {
+            makerOrder = bestBidOrder;
+            if (makerOrder == null || makerOrder.price < limitPrice) {
+                return EMPTY_LONGS;
+            }
+        }
+
+        long remainingSize = takerOrder.getSize() - takerOrder.getFilled();
+
+        if (remainingSize == 0) {
+            return EMPTY_LONGS;
+        }
+
+        DirectOrder priceBucketTail = makerOrder.parent.tail;
+
+        final long takerReserveBidPrice = takerOrder.getReserveBidPrice();
+
+        long takerFilled = takerOrder.getFilled();
+        long takerFilledNotional = takerOrder.getFilledNotional();
+        MatcherTradeEvent eventsTail = null;
+        // iterate through all orders
+        do {
+
+            final long tradePrice = makerOrder.price;
+            // budget 约束：每档可购量上限 = remainingBudget / tradePrice（向下取整，与 long math 一致）。
+            // tradePrice 为 0 时跳过约束以防除零。
+            final long affordableSize = (tradePrice == 0)
+                    ? Long.MAX_VALUE
+                    : remainingBudget / tradePrice;
+            final long tradeSize = Math.min(Math.min(remainingSize, makerOrder.size - makerOrder.filled), affordableSize);
+            if (tradeSize == 0) {
+                // budget 不足以再吃一个最小成交单位，提前结束匹配
+                break;
+            }
+
+            takerFilled += tradeSize;
+            takerFilledNotional += tradeSize * tradePrice;
+            makerOrder.filled += tradeSize;
+            makerOrder.filledNotional += tradeSize * tradePrice;
+            makerOrder.parent.volume -= tradeSize;
+            remainingSize -= tradeSize;
+            remainingBudget -= tradeSize * tradePrice;
+
+            final boolean makerCompleted = makerOrder.size == makerOrder.filled;
+            if (makerCompleted) {
+                makerOrder.parent.numOrders--;
+            }
+
+            final MatcherTradeEvent tradeEvent = eventsHelper.sendTradeEvent(makerOrder, makerCompleted, remainingSize == 0, tradeSize,
+                    takerFilled, takerFilledNotional, isBidAction ? takerReserveBidPrice : makerOrder.reserveBidPrice, symbolSpec);
+
+            if (eventsTail == null) {
+                triggerCmd.matcherEvent = tradeEvent;
+            } else {
+                eventsTail.nextEvent = tradeEvent;
+            }
+            eventsTail = tradeEvent;
+
+            if (!makerCompleted) {
+                break;
+            }
+
+            orderIdIndex.remove(makerOrder.orderId);
+            objectsPool.put(ObjectsPool.DIRECT_ORDER, makerOrder);
+
+
+            if (makerOrder == priceBucketTail) {
+                final LongAdaptiveRadixTreeMap<Bucket> buckets = isBidAction ? askPriceBuckets : bidPriceBuckets;
+                buckets.remove(makerOrder.price);
+                objectsPool.put(ObjectsPool.DIRECT_BUCKET, makerOrder.parent);
+
+                if (makerOrder.prev != null) {
+                    priceBucketTail = makerOrder.prev.parent.tail;
+                }
+            }
+
+            makerOrder = makerOrder.prev;
+
+        } while (makerOrder != null
+                && remainingSize > 0
+                && (isBidAction ? makerOrder.price <= limitPrice : makerOrder.price >= limitPrice));
+
+        if (makerOrder != null) {
+            makerOrder.next = null;
+        }
+
+        if (isBidAction) {
+            bestAskOrder = makerOrder;
+        } else {
+            bestBidOrder = makerOrder;
+        }
+
         return new long[]{takerFilled, takerFilledNotional};
     }
 
@@ -913,8 +1052,12 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         @Override
         public int hashCode() {
-            return Objects.hash(orderId, action, orderType, command, price, size, reserveBidPrice, filled, filledNotional,
-                    uid, userCookie);
+            // enum 字段必须经 HashingUtils.enumStateHash 稳定化（同步 IOrderBook.stateHash 调用链）。
+            return Objects.hash(orderId,
+                    HashingUtils.enumStateHash(action),
+                    HashingUtils.enumStateHash(orderType),
+                    HashingUtils.enumStateHash(command),
+                    price, size, reserveBidPrice, filled, filledNotional, uid, userCookie);
         }
 
 

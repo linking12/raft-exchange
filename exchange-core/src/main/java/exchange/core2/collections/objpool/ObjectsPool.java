@@ -31,6 +31,8 @@ public final class ObjectsPool {
     public static final int ART_NODE_48 = 10;
     public static final int ART_NODE_256 = 11;
     public static final int SYMBOL_POSITION_RECORD = 12;
+    public static final int ISOLATED_LOAN_RECORD = 13;
+    public static final int CROSS_LOAN_RECORD = 14;
 
     private final ArrayStack[] pools;
 

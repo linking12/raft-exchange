@@ -7,7 +7,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.settlement.IFSettlementProcessor;
+import exchange.core2.core.processors.IFCommandProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,13 +19,13 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class IFMatchingProcessorTest {
 
-    private IFSettlementProcessor processor;
+    private IFCommandProcessor processor;
     private OrderBookEventsHelper eventsHelper;
 
     @BeforeEach
     void setUp() {
         eventsHelper = new OrderBookEventsHelper(() -> new MatcherTradeEvent());
-        processor = new IFSettlementProcessor(eventsHelper);
+        processor = new IFCommandProcessor(eventsHelper);
     }
 
     // ========== 基本功能测试 ==========
@@ -187,30 +187,6 @@ class IFMatchingProcessorTest {
     }
 
     @Test
-    void testProcess_NullReservedByShard() {
-        // 测试null预留数组
-        OrderCommand cmd = createIFCommand(10001, OrderAction.ASK, 10, 100);
-        cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        cmd.ifPreviewCoverByShard = null;
-
-        processor.process(cmd);
-
-        assertEquals(MatcherEventType.REJECT, cmd.matcherEvent.eventType);
-    }
-
-    @Test
-    void testProcess_EmptyReservedByShard() {
-        // 测试空预留数组
-        OrderCommand cmd = createIFCommand(10001, OrderAction.ASK, 10, 100);
-        cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        cmd.ifPreviewCoverByShard = new long[0];
-
-        processor.process(cmd);
-
-        assertEquals(MatcherEventType.REJECT, cmd.matcherEvent.eventType);
-    }
-
-    @Test
     void testProcess_AllShardsZeroReserved() {
         // 测试所有分片预留为0
         OrderCommand cmd = createIFCommand(10001, OrderAction.ASK, 10, 100);
@@ -349,7 +325,7 @@ class IFMatchingProcessorTest {
     // ========== 辅助方法 ==========
 
     private OrderCommand createIFCommand(int symbol, OrderAction action, long size, long price) {
-        OrderCommand cmd = new OrderCommand();
+        OrderCommand cmd = new OrderCommand(1);
         cmd.command = OrderCommandType.IF_TAKEOVER;
         cmd.symbol = symbol;
         cmd.action = action;

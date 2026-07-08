@@ -1,6 +1,7 @@
 package com.binance.raftexchange.client.grpc;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.response.CommandResult;
@@ -8,15 +9,16 @@ import com.binance.raftexchange.stubs.response.CommandResultCode;
 import com.binance.raftexchange.stubs.response.ServerNode;
 
 import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ApiStream implements StreamObserver<ApiCommand>, AutoCloseable {
-
-    private volatile StreamObserver<ApiCommand> internalObserver;
+    private static final Logger LOGGER = LoggerFactory.getLogger(ApiStream.class);
+    private final ReentrantReadWriteLock observerLock = new ReentrantReadWriteLock();
+    private StreamObserver<ApiCommand> internalObserver;
 
     private final ExchangeClient root;
-
     private final StreamObserver<CommandResult> resultStreamObserver;
-
     private final AtomicInteger version;
 
     public ApiStream(ExchangeClient root, StreamObserver<CommandResult> resultStreamObserver) {
@@ -30,16 +32,23 @@ public class ApiStream implements StreamObserver<ApiCommand>, AutoCloseable {
         return new StreamObserver<CommandResult>() {
             @Override
             public void onNext(CommandResult commandResult) {
+                if (currentVersion != version.get()) {
+                    return;
+                }
                 if (commandResult.getResultCode() == CommandResultCode.NEED_MOVE) {
                     ServerNode leaderNode = commandResult.getLeaderNode();
-                    root.reportLeaderFresh(leaderNode);
+                    LOGGER.info("NEED_MOVE received from server, redirecting to {}:{} (streamVersion={})",
+                        leaderNode.getHost(), leaderNode.getPort(), currentVersion);
+                    root.switchToNewLeader(leaderNode);
                 }
-
                 resultStreamObserver.onNext(commandResult);
             }
 
             @Override
             public void onError(Throwable throwable) {
+                if (currentVersion != version.get()) {
+                    return;
+                }
                 resultStreamObserver.onError(throwable);
             }
 
@@ -55,29 +64,58 @@ public class ApiStream implements StreamObserver<ApiCommand>, AutoCloseable {
 
     @Override
     public void onNext(ApiCommand apiCommand) {
-        internalObserver.onNext(apiCommand);
+        observerLock.readLock().lock();
+        try {
+            requireInitialized().onNext(apiCommand);
+        } finally {
+            observerLock.readLock().unlock();
+        }
     }
 
     @Override
     public void onError(Throwable throwable) {
-        internalObserver.onError(throwable);
+        observerLock.readLock().lock();
+        try {
+            requireInitialized().onError(throwable);
+        } finally {
+            observerLock.readLock().unlock();
+        }
     }
 
     @Override
     public void onCompleted() {
-        internalObserver.onCompleted();
+        observerLock.readLock().lock();
+        try {
+            requireInitialized().onCompleted();
+        } finally {
+            observerLock.readLock().unlock();
+        }
         root.endStream(this);
     }
 
-    void replaceInternalObserver(StreamObserver<ApiCommand> observer) {
-        if (this.internalObserver != null) {
-            internalObserver.onCompleted();
+    void replaceInternalObserver(StreamObserver<ApiCommand> newObserver) {
+        observerLock.writeLock().lock();
+        try {
+            StreamObserver<ApiCommand> oldObserver = this.internalObserver;
+            this.internalObserver = newObserver;
+            if (oldObserver != null) {
+                oldObserver.onCompleted();
+            }
+        } finally {
+            observerLock.writeLock().unlock();
         }
-        this.internalObserver = observer;
     }
 
     @Override
     public void close() {
         this.onCompleted();
+    }
+
+    private StreamObserver<ApiCommand> requireInitialized() {
+        StreamObserver<ApiCommand> obs = this.internalObserver;
+        if (obs == null) {
+            throw new IllegalStateException("ApiStream internalObserver not initialized");
+        }
+        return obs;
     }
 }

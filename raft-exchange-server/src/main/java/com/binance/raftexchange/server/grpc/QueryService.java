@@ -5,18 +5,20 @@ import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.binance.raftexchange.server.exchange.SyncTradeAccountApiController;
-import com.binance.raftexchange.server.exchange.SyncTradeMiscApiController;
-import com.binance.raftexchange.server.exchange.SyncTradeOrdersApiController;
+import com.binance.raftexchange.server.exchange.ExchangeCalls;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.util.SerializeHelper;
-import com.binance.raftexchange.server.util.ThrowableFunction;
 import com.binance.raftexchange.stubs.api.QueryServiceGrpc;
 import com.binance.raftexchange.stubs.report.ReportQuery;
 import com.binance.raftexchange.stubs.report.ReportResult;
 import com.binance.raftexchange.stubs.request.ApiOrderBookRequest;
 import com.binance.raftexchange.stubs.response.CommandResult;
 
+import exchange.core2.core.common.api.reports.FeeReportQuery;
+import exchange.core2.core.common.api.reports.SingleUserReportQuery;
+import exchange.core2.core.common.api.reports.StateHashReportQuery;
+import exchange.core2.core.common.api.reports.SymbolCurrencyReportQuery;
+import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportQuery;
 import io.grpc.stub.StreamObserver;
 
 public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
@@ -31,42 +33,47 @@ public class QueryService extends QueryServiceGrpc.QueryServiceImplBase {
 
     @Override
     public void searchOrder(ApiOrderBookRequest request, StreamObserver<CommandResult> responseObserver) {
-        searchTemplate(request, responseObserver, SyncTradeOrdersApiController::getOrderBookAsync);
+        runAsync(responseObserver, raftClusterContainer.readConsistencyBarrier().thenCompose(unused -> {
+            ExchangeCalls calls = raftClusterContainer.exchangeCalls();
+            return calls
+                .callExchangeAsync(exchange.core2.core.common.api.ApiOrderBookRequest.builder()
+                    .symbol(request.getSymbol()).size(request.getSize()).build())
+                .thenApply(SerializeHelper::orderCommandToResult);
+        }));
     }
 
     @Override
     public void query(ReportQuery request, StreamObserver<ReportResult> responseObserver) {
-        searchTemplate(request, responseObserver, query -> {
-            int transferId = query.getTransferId();
-            ReportQuery.TypeCase queryTypeCase = query.getTypeCase();
-            switch (queryTypeCase) {
-                case SINGLE_USER_REPORT:
-                    return SyncTradeAccountApiController.getUserState(request.getSingleUserReport(), transferId).thenApply(SerializeHelper::serializeToPb);
-                case STATE_HASH:
-                    return SyncTradeMiscApiController.getStateHash(request.getStateHash(), transferId).thenApply(SerializeHelper::serializeToPb);
-                case TOTAL_CURRENCY_BALANCE:
-                    return SyncTradeMiscApiController.getTotalCurrencyBalance(request.getTotalCurrencyBalance(), transferId)
-                        .thenApply(SerializeHelper::serializeToPb);
-                case SYMBOL_CURRENCY_REPORT:
-                    return SyncTradeMiscApiController.getSymbolCurrencyReport(request.getSymbolCurrencyReport(), transferId)
-                            .thenApply(SerializeHelper::serializeToPb);
-                default:
-                    return ThrowableFunction.failureFuture("Unsupported ReportQuery: " + queryTypeCase);
-            }
-        });
+        runAsync(responseObserver, raftClusterContainer.readConsistencyBarrier().thenCompose(unused -> {
+            ExchangeCalls calls = raftClusterContainer.exchangeCalls();
+            int transferId = request.getTransferId();
+            return switch (request.getTypeCase()) {
+                case SINGLE_USER_REPORT -> calls
+                    .callExchange(new SingleUserReportQuery(request.getSingleUserReport().getUserId()), transferId)
+                    .thenApply(SerializeHelper::serializeToPb);
+                case STATE_HASH -> calls.callExchange(new StateHashReportQuery(), transferId)
+                    .thenApply(SerializeHelper::serializeToPb);
+                case TOTAL_CURRENCY_BALANCE -> calls.callExchange(new TotalCurrencyBalanceReportQuery(), transferId)
+                    .thenApply(SerializeHelper::serializeToPb);
+                case SYMBOL_CURRENCY_REPORT -> calls.callExchange(new SymbolCurrencyReportQuery(), transferId)
+                    .thenApply(SerializeHelper::serializeToPb);
+                case FEE_REPORT -> calls.callExchange(new FeeReportQuery(), transferId)
+                    .thenApply(SerializeHelper::serializeToPb);
+                default -> CompletableFuture
+                    .failedFuture(new IllegalArgumentException("Unsupported ReportQuery: " + request.getTypeCase()));
+            };
+        }));
     }
 
-    private <Request, Response> void searchTemplate(Request request, StreamObserver<Response> responseObserver,
-        ThrowableFunction<Request, CompletableFuture<Response>> asyncOp) {
-        raftClusterContainer.readFromQuorum().thenCompose((_index) -> asyncOp.toFunction().apply(request)).whenComplete((result, t) -> {
+    private static <T> void runAsync(StreamObserver<T> observer, CompletableFuture<T> future) {
+        future.whenComplete((result, t) -> {
             if (t != null) {
-                LOGGER.warn("searchTemplate fail!", t);
-                responseObserver.onError(t);
+                LOGGER.warn("query fail", t);
+                observer.onError(t);
             } else {
-                responseObserver.onNext(result);
-                responseObserver.onCompleted();
+                observer.onNext(result);
+                observer.onCompleted();
             }
         });
-
     }
 }

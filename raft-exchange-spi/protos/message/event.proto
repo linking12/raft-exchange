@@ -92,6 +92,8 @@ message OrderBookPB {
   repeated OrderBookRecordPB asks = 2;
   repeated OrderBookRecordPB bids = 3;
   int64 timestamp = 4;
+  int64 baseScaleK = 5;
+  int64 quoteScaleK = 6;
 }
 
 message FundEventReportPB {

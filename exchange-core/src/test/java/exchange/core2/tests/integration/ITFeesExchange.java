@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import static exchange.core2.core.common.OrderType.*;
+import static exchange.core2.tests.util.ExchangeTestContainer.available;
 import static exchange.core2.tests.util.TestConstants.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
@@ -104,7 +105,7 @@ public abstract class ITFeesExchange {
                     CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(needAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(needAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -129,7 +130,7 @@ public abstract class ITFeesExchange {
                     CommandResultCode.SUCCESS);
 
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount));
+                assertThat(available(profile, CURRENECY_XBT), is(btcAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -176,7 +177,7 @@ public abstract class ITFeesExchange {
             long expectedFundsLtc = ltcAmount - CoreArithmeticUtils.sizePriceToCurrencyScale(makerFee, symbol, quoteSpec);
             // verify order placed with correct reserve price and account balance is updated accordingly
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedFundsLtc));
+                assertThat(available(profile, CURRENECY_LTC), is(expectedFundsLtc));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -213,8 +214,8 @@ public abstract class ITFeesExchange {
             // 收到1731个xbt
             long xbtBalance = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalFeeU1));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtBalance));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount - order - finalFeeU1));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtBalance));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -222,8 +223,8 @@ public abstract class ITFeesExchange {
             long takerFeeU2 = CoreArithmeticUtils.calculateTakerFee(order101.size, order101.price, symbol);
             long finalFeeU2 = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFeeU2, symbol, quoteSpec);
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalFeeU2));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount - xbtBalance));
+                assertThat(available(profile, CURRENECY_LTC), is(order - finalFeeU2));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtAmount - xbtBalance));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -272,7 +273,7 @@ public abstract class ITFeesExchange {
             long expectedFundsLtc = ltcAmount - takerFee;
             // verify order placed with correct reserve price and account balance is updated accordingly
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(expectedFundsLtc));
+                assertThat(available(profile, CURRENECY_LTC), is(expectedFundsLtc));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -313,8 +314,8 @@ public abstract class ITFeesExchange {
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalMakerFee));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount - order - finalMakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtAmount));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -324,8 +325,8 @@ public abstract class ITFeesExchange {
             long finalTakerFee = takerFee2;
             long order1 = CoreArithmeticUtils.sizePriceToCurrencyScale(order102.size * order101.price, symbol, quoteSpec);
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order1 - finalTakerFee));
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - xbtAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(order1 - finalTakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(btcAmount - xbtAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -372,7 +373,7 @@ public abstract class ITFeesExchange {
             long expected = btcAmount - CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(expected));
+                assertThat(available(profile, CURRENECY_XBT), is(expected));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -407,8 +408,8 @@ public abstract class ITFeesExchange {
             long order = CoreArithmeticUtils.sizePriceToCurrencyScale(order101.size * order101.price, symbol, quoteSpec);
             long finalMakerFee = makerFee;
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_LTC), is(order - finalMakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -420,8 +421,8 @@ public abstract class ITFeesExchange {
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             long finalTakerFee = takerFee;
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order2 - finalTakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount - order2 - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -467,7 +468,7 @@ public abstract class ITFeesExchange {
             long hold = CoreArithmeticUtils.symbolToCurrencyScale(order101.size, symbol, baseSpec);
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(btcAmount - hold));
+                assertThat(available(profile, CURRENECY_XBT), is(btcAmount - hold));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -504,8 +505,8 @@ public abstract class ITFeesExchange {
             // verify seller maker balance
             long finalMakerFee = makerFee;
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_LTC), is(order - finalMakerFee));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -517,8 +518,8 @@ public abstract class ITFeesExchange {
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -563,7 +564,7 @@ public abstract class ITFeesExchange {
 
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -600,8 +601,8 @@ public abstract class ITFeesExchange {
             long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_LTC), is(order - finalMakerFee));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -613,8 +614,8 @@ public abstract class ITFeesExchange {
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -659,7 +660,7 @@ public abstract class ITFeesExchange {
 
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -690,15 +691,15 @@ public abstract class ITFeesExchange {
 
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(0L));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_LTC), is(0L));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -743,7 +744,7 @@ public abstract class ITFeesExchange {
 
             // verify order placed
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
                 assertThat(profile.fetchIndexedOrders().get(101L).price, is(order101.price));
             });
 
@@ -780,8 +781,8 @@ public abstract class ITFeesExchange {
             long order = CoreArithmeticUtils.sizePriceToCurrencyScale(orderSpend, symbol, quoteSpec);
             // verify seller maker balance
             container.validateUserState(UID_1, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(0L));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(order - finalMakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(0L));
+                assertThat(available(profile, CURRENECY_LTC), is(order - finalMakerFee));
                 assertFalse(profile.fetchIndexedOrders().isEmpty());
             });
 
@@ -793,8 +794,8 @@ public abstract class ITFeesExchange {
             long xbtAmount = CoreArithmeticUtils.symbolToCurrencyScale(gainedAmountInBaseCurrency, symbol, baseSpec);
             // verify buyer taker balance
             container.validateUserState(UID_2, profile -> {
-                assertThat(profile.getAccounts().get(CURRENECY_XBT), is(xbtAmount));
-                assertThat(profile.getAccounts().get(CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
+                assertThat(available(profile, CURRENECY_XBT), is(xbtAmount));
+                assertThat(available(profile, CURRENECY_LTC), is(ltcAmount - order - finalTakerFee));
                 assertTrue(profile.fetchIndexedOrders().isEmpty());
             });
 

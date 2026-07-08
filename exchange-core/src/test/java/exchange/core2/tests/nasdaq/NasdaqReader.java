@@ -14,6 +14,8 @@ import org.agrona.BitUtil;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
@@ -25,6 +27,9 @@ public class NasdaqReader {
 
     @Test
     public void test() throws Exception {
+
+        final String pathname = "../../nasdaq/01302020.NASDAQ_ITCH50";
+        assumeTrue(new File(pathname).exists(), "NASDAQ data file not found, skipping: " + pathname);
 
         final int numUsersSuggested = 1_000_000;
 
@@ -54,10 +59,6 @@ public class NasdaqReader {
             ITCH50StatListener statListener = new ITCH50StatListener();
             ITCH50Parser listener = new ITCH50Parser(statListener);
 
-
-            final String pathname = "../../nasdaq/01302020.NASDAQ_ITCH50";
-//          final String pathname = "../../nasdaq/20190730.PSX_ITCH_50";
-//          final String pathname = "../../nasdaq/20190730.BX_ITCH_50";
 
             final ExecutionTime executionTime = new ExecutionTime(d -> log.debug("Time: {}", d));
             BinaryFILE.read(new File(pathname), listener);

@@ -58,20 +58,18 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
 
     @Override
     public void saveUserProfileService(int shardId, UserProfileService userProfileService) {
-        super.saveUserProfileService(shardId, new UserProfileService() {
-            @Override
-            public UserProfile getUserProfile(long uid) {
-                if (userProfileMap.isEmpty()) {
-                    return userProfileService.getUserProfile(uid);
-                }
-                return userProfileMap.get(uid);
-            }
-        });
+        // 直接注册真实的 UserProfileService — 之前的 wrapper 设计有 bug：
+        // ctor 把 ALL_USERS 预填到 userProfileMap → userProfileMap.isEmpty() 永远 false
+        // → wrapper 永远走 mock 分支 → 测试用 ALL_USERS 外的 uid 时返回 null → NPE
+        // 直接委托保证 ResultsHandler 看到的 user 与 RiskEngine 内部状态一致
+        super.saveUserProfileService(shardId, userProfileService);
     }
 
     public CoreSymbolSpecification fakeSpotSymbol(int symbol) {
         return new CoreSymbolSpecification(symbol, SymbolType.CURRENCY_EXCHANGE_PAIR, 1, 2, 1000, 1000,
-                0, 0, 0, 0, 0, 0, null, 0, null);
+                0, 0, 0, 0, 0, 0, null, 0, null,
+                // loan fields —— 测试不涉及借贷，全 0 关闭
+                0, 0, 0, 0, 0L, 0, 0);
     }
 
 }

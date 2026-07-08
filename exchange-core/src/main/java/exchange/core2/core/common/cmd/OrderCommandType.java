@@ -49,6 +49,26 @@ public enum OrderCommandType {
 
     IF_TAKEOVER((byte) 40, true),
     AUTO_DELEVERAGING((byte) 41, true),
+    IF_DEPOSIT((byte) 42, true),
+    IF_WITHDRAW((byte) 43, true),
+
+    // ===== 现货借贷（loan，详见 loan.md §5.1） =====
+    // Isolated
+    LOAN_CREATE((byte) 50, true),
+    LOAN_REPAY((byte) 51, true),
+    LOAN_ADD_COLLATERAL((byte) 52, true),
+    LOAN_RELEASE_COLLATERAL((byte) 53, true),
+    LOAN_FORCE_LIQUIDATE((byte) 54, true),           // scanner published
+    // Cross
+    LOAN_CROSS_ADD_COLLATERAL((byte) 55, true),
+    LOAN_CROSS_WITHDRAW_COLLATERAL((byte) 56, true),
+    LOAN_CROSS_BORROW((byte) 57, true),
+    LOAN_CROSS_REPAY((byte) 58, true),
+    LOAN_CROSS_FORCE_LIQUIDATE((byte) 59, true),     // scanner published
+    // 池子运营（cmd.uid 承载 shardId，跟 IF_DEPOSIT/WITHDRAW 同款）
+    POOL_DEPOSIT((byte) 60, true),
+    POOL_WITHDRAW((byte) 61, true),
+    POOL_ABSORB_BAD_DEBT((byte) 62, true),
 
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
@@ -79,6 +99,32 @@ public enum OrderCommandType {
             throw new IllegalArgumentException("Unknown order command type code:" + code);
         }
         return result;
+    }
+
+    /**
+     * loan 子域命令一等公民判断 —— RiskEngine.preProcessCommand 用它做二级 dispatch 门守，
+     * 命中则整块委托给 {@code LoanCommandHandlers.dispatch}，主 switch 里永远看不到 loan 命令。
+     * 详见 loan.md。
+     */
+    public boolean isLoan() {
+        switch (this) {
+            case LOAN_CREATE:
+            case LOAN_REPAY:
+            case LOAN_ADD_COLLATERAL:
+            case LOAN_RELEASE_COLLATERAL:
+            case LOAN_FORCE_LIQUIDATE:
+            case LOAN_CROSS_ADD_COLLATERAL:
+            case LOAN_CROSS_WITHDRAW_COLLATERAL:
+            case LOAN_CROSS_BORROW:
+            case LOAN_CROSS_REPAY:
+            case LOAN_CROSS_FORCE_LIQUIDATE:
+            case POOL_DEPOSIT:
+            case POOL_WITHDRAW:
+            case POOL_ABSORB_BAD_DEBT:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static HashMap<Byte, OrderCommandType> codes = new HashMap<>();
