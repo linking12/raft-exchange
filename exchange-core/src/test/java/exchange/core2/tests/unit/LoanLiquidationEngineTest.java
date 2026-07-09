@@ -8,6 +8,7 @@ import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.api.ApiCommand;
+import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
 import org.mockito.ArgumentCaptor;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
@@ -362,5 +363,44 @@ class LoanLiquidationEngineTest {
         scanner.check(up);
         // check 期间不应再 publish
         verify(publisher).publish(any(), any());  // 1 次总量
+    }
+
+    @Test
+    void check_cross_nonIdentityScale_publishesLotScaledSizeCappedAtAvailable() {
+        // ★ 回归护栏（Cross）：base 币 currencyScaleK=100（digit=2）+ baseScaleK=1。
+        // 构造"债务需要 4 张但只有 1 张抵押可卖"：正确应封顶到可卖张数=1；
+        // 旧 calculateCrossSellSize 把 available(currencyScale=100) 当张数封顶 → 会算出 4，撮合超卖。
+        final int WBTC = 10;
+        final int SYMBOL_NI = 200;
+        currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(WBTC).name("WBTC").digit(2).build());
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
+                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
+                .loanRateBps(0).collateralWeightBps(9000).build();
+        specProvider.registerSymbol(SYMBOL_NI, spec);
+        LastPriceCacheRecord price = new LastPriceCacheRecord();
+        price.markPrice = 50_000L;
+        priceCache.put(SYMBOL_NI, price);
+        loanService.setNumeraireCurrency(USDT);
+
+        // 抵押 100（= 1 WBTC = 1 张可卖），债务 150000 → 账户 LTV 远超强平线，触发 publishCrossForceSell
+        up.crossLoanCollateral.put(WBTC, 100L);
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 0, 1000L);
+        loan.outstandingPrincipal = 150_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
+        // 可卖张数 = collateralAmountToLots(100) = 1；债务需 4 张但只有 1 张 → 封顶 1
+        long availableLots =
+                LoanService.collateralAmountToLots(100L, spec, currencyProvider.getCurrencySpecification(WBTC));
+        assertEquals(1L, availableLots, "100 currencyScale ÷ 100 = 1 lot（sanity）");
+        assertEquals(availableLots, cmd.size,
+                "cross 强平 size 必须封顶到可卖张数=1，而非把 currencyScale 抵押量当张数（旧 bug 会算出 4）");
+        assertEquals(SYMBOL_NI, cmd.symbol);
     }
 }
