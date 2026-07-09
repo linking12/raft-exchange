@@ -1317,7 +1317,7 @@ public final class ExchangeApi {
             cmd.uid = api.uid;
             cmd.orderId = api.externalId;
             cmd.reserveBidPrice = api.loanId;
-            cmd.symbol = api.loanCcy;
+            cmd.symbol = api.loanCurrency;
             cmd.price = api.principal;
             cmd.resultCode = CommandResultCode.NEW;
         };

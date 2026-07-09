@@ -7,7 +7,7 @@ import lombok.RequiredArgsConstructor;
 /**
  * LOAN_CREATE —— 单笔 Isolated loan 建仓（详见 loan.md §5.2）。
  * <p>字段映射到 OrderCommand：externalId → orderId（幂等 key）/ loanId → reserveBidPrice（业务主键）/
- * symbol → symbol（现货 symbolId，反推 collateralCcy = spec.baseCurrency / loanCcy = spec.quoteCurrency）/
+ * symbol → symbol（现货 symbolId，反推 collateralCurrency = spec.baseCurrency / loanCurrency = spec.quoteCurrency）/
  * collateralAmount → size / principal → price。金额均在 currency scale 下。
  */
 @Builder

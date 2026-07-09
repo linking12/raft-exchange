@@ -111,7 +111,7 @@ public enum CommandResultCode {
     // 加这两条 code 供未来通道支持 result signal 时用，同时让 SerializeHelper 一致性 gate 覆盖 loan 全语义域。
     LOAN_INVALID_CONFIG(-6060),                       // 阈值序 / 范围违规（initial 应 < liquidation < 10000 等）
     LOAN_INVALID_SYMBOL_TYPE(-6070),                  // 试图给非-CURRENCY_EXCHANGE_PAIR（期货/交割）配置 loan
-    LOAN_NUMERAIRE_NOT_CONFIGURED(-6080),             // Cross BORROW / WITHDRAW fail-close：sysprop numeraireCcy 未设
+    LOAN_NUMERAIRE_NOT_CONFIGURED(-6080),             // Cross BORROW / WITHDRAW fail-close：sysprop numeraireCurrency 未设
 
     LOAN_NOT_IMPLEMENTED(-6099),                      // reserved：force-sell 已实装后暂无 caller；将来新加 stub handler 可复用
 

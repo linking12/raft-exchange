@@ -22,11 +22,11 @@ import net.openhft.chronicle.bytes.BytesOut;
 /**
  * UPDATE_LOAN_NUMERAIRE_CONFIG —— 全局 Cross 借贷估值基准币（loan.md §1.2 "Cross 基准币: USDT"）。
  *
- * <p>numeraireCcy 需在启用 Cross 借贷前配好；未配（0）时 Cross BORROW / WITHDRAW handler fail-close
+ * <p>numeraireCurrency 需在启用 Cross 借贷前配好；未配（0）时 Cross BORROW / WITHDRAW handler fail-close
  * ({@code LOAN_NUMERAIRE_NOT_CONFIGURED})，scanner 保守跳过强平。跨节点走 raft snapshot 复制，
  * 因此只需在 leader 提交一次即可。
  *
- * <p>应用侧守卫：{@code numeraireCcy > 0} 才 apply；0 视为"清空"意图但当前实现拒绝（防误清）。
+ * <p>应用侧守卫：{@code numeraireCurrency > 0} 才 apply；0 视为"清空"意图但当前实现拒绝（防误清）。
  */
 @AllArgsConstructor
 @EqualsAndHashCode
@@ -34,15 +34,15 @@ import net.openhft.chronicle.bytes.BytesOut;
 @ToString
 public final class UpdateLoanNumeraireConfigCommand implements BinaryDataCommand {
 
-    private final int numeraireCcy;
+    private final int numeraireCurrency;
 
     public UpdateLoanNumeraireConfigCommand(BytesIn bytes) {
-        this.numeraireCcy = bytes.readInt();
+        this.numeraireCurrency = bytes.readInt();
     }
 
     @Override
     public void writeMarshallable(BytesOut bytes) {
-        bytes.writeInt(numeraireCcy);
+        bytes.writeInt(numeraireCurrency);
     }
 
     @Override

@@ -29,11 +29,11 @@ import static org.mockito.Mockito.mock;
  * <ol>
  *   <li>期货 position margin</li>
  *   <li>spot exchangeLocked</li>
- *   <li>Isolated 借贷抵押（collateralCcy == currency 的 loan record）</li>
+ *   <li>Isolated 借贷抵押（collateralCurrency == currency 的 loan record）</li>
  *   <li>Cross 借贷抵押（账户级多币种池）</li>
  * </ol>
  *
- * <p>③ 和 ④ 是本次改动新加的，重点验证：混合 4 项的 sum + 只匹配 collateralCcy 的 loan 计入 + 跨币种 loan 不干扰。
+ * <p>③ 和 ④ 是本次改动新加的，重点验证：混合 4 项的 sum + 只匹配 collateralCurrency 的 loan 计入 + 跨币种 loan 不干扰。
  */
 class RiskEngineCalculateLockedTest {
 
@@ -105,7 +105,7 @@ class RiskEngineCalculateLockedTest {
     }
 
     @Test
-    void calculateLocked_isolatedLoanCollateralOnly_includedForCollateralCcyOnly() {
+    void calculateLocked_isolatedLoanCollateralOnly_includedForCollateralCurrencyOnly() {
         // 2 个 loan：一个用 BTC 抵押，一个用 ETH 抵押；查 BTC 只该看到 1 个
         IsolatedLoanRecord btcLoan = new IsolatedLoanRecord(UID, 100L, BTC, USDT, 500, 0L);
         btcLoan.collateralAmount = 3L;
@@ -119,11 +119,11 @@ class RiskEngineCalculateLockedTest {
 
         assertEquals(3L, riskEngine.calculateLocked(up, BTC), "③ 只 BTC 抵押的 loan 计入");
         assertEquals(7L, riskEngine.calculateLocked(up, ETH), "③ 只 ETH 抵押的 loan 计入");
-        assertEquals(0L, riskEngine.calculateLocked(up, USDT), "loanCcy 侧不作 collateral 计入 locked");
+        assertEquals(0L, riskEngine.calculateLocked(up, USDT), "loanCurrency 侧不作 collateral 计入 locked");
     }
 
     @Test
-    void calculateLocked_multipleIsolatedLoansSameCollateralCcy_summed() {
+    void calculateLocked_multipleIsolatedLoansSameCollateralCurrency_summed() {
         IsolatedLoanRecord loan1 = new IsolatedLoanRecord(UID, 100L, BTC, USDT, 500, 0L);
         loan1.collateralAmount = 3L;
         up.isolatedLoans.put(100L, loan1);
@@ -174,7 +174,7 @@ class RiskEngineCalculateLockedTest {
         // futures margin 计算依赖 spec，具体数值不是本用例焦点；只断言"包含所有 4 项"关系：
         // USDT lock >= ② + ④ = 1200，且加了 ①
         long usdtLocked = riskEngine.calculateLocked(up, USDT);
-        assertEquals(1_700L, usdtLocked, "USDT：①500 + ②200 + ③0 (BTC 是 collateralCcy) + ④1000");
+        assertEquals(1_700L, usdtLocked, "USDT：①500 + ②200 + ③0 (BTC 是 collateralCurrency) + ④1000");
     }
 
     @Test

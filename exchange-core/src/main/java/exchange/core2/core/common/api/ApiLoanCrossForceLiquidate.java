@@ -25,8 +25,8 @@ import lombok.RequiredArgsConstructor;
 /**
  * Cross Loan 强平 IOC 单：scanner 账户级 LTV 触线时 publish。
  * <p>
- * symbol 指现货 pair (base=sellingCcy, quote=targetLoanCcy)——sellingCcy 从 pickCollateralToSell tiebreak 选出，
- * targetLoanId 从 pickLoanToRepay tiebreak 选出。preProcess 阶段 pre-move sellingCcy 抵押到 exchangeLocked，
+ * symbol 指现货 pair (base=sellingCurrency, quote=targetLoanCurrency)——sellingCurrency 从 pickCollateralToSell tiebreak 选出，
+ * targetLoanId 从 pickLoanToRepay tiebreak 选出。preProcess 阶段 pre-move sellingCurrency 抵押到 exchangeLocked，
  * post-process 阶段 quote proceeds 优先偿付 targetLoan (interest → principal)，剩余 overpay 留在账户。
  */
 @Builder
@@ -42,7 +42,7 @@ public final class ApiLoanCrossForceLiquidate extends ApiCommand {
     public final long price;
     /** 要卖的 collateral 量 */
     public final long size;
-    /** 系统生成 = LoanService.generateCrossForceSellOrderId(uid, sellingCcy) */
+    /** 系统生成 = LoanService.generateCrossForceSellOrderId(uid, sellingCurrency) */
     public final long orderId;
     public final OrderAction action;
     public final OrderType orderType;

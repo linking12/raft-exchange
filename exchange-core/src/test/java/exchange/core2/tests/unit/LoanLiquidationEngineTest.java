@@ -282,7 +282,7 @@ class LoanLiquidationEngineTest {
 
     @Test
     void check_crossNumeraireUnconfigured_returnsZeroLtv_noPublish() {
-        // numeraireCcy=0 sentinel → calculateCrossAccountLtvBps 保守返 0 → 不触发
+        // numeraireCurrency=0 sentinel → calculateCrossAccountLtvBps 保守返 0 → 不触发
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, 1000L);
         loan.outstandingPrincipal = 50_000L;
         up.crossLoans.put(LOAN_ID, loan);

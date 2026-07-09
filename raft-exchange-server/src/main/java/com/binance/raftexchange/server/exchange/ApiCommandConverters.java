@@ -319,7 +319,7 @@ public final class ApiCommandConverters {
     public static ApiLoanCrossBorrow convertLoanCrossBorrow(ApiCommand apiCommand) {
         var g = apiCommand.getLoanCrossBorrow();
         ApiLoanCrossBorrow cmd = ApiLoanCrossBorrow.builder().externalId(g.getExternalId()).uid(g.getUid())
-            .loanId(g.getLoanId()).loanCcy(g.getLoanCcy()).principal(g.getPrincipal()).build();
+            .loanId(g.getLoanId()).loanCurrency(g.getLoanCcy()).principal(g.getPrincipal()).build();
         cmd.updateTimestamp(apiCommand.getTimestamp());
         return cmd;
     }

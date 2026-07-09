@@ -1154,14 +1154,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
         } else if (message instanceof UpdateLoanNumeraireConfigCommand) {
             final UpdateLoanNumeraireConfigCommand cmd = (UpdateLoanNumeraireConfigCommand)message;
-            final int newNumeraire = cmd.getNumeraireCcy();
+            final int newNumeraire = cmd.getNumeraireCurrency();
             if (newNumeraire <= 0) {
                 log.warn("UPDATE_LOAN_NUMERAIRE_CONFIG rejected (must be > 0): {}", cmd);
             } else if (currencySpecificationProvider.getCurrencySpecification(newNumeraire) == null) {
                 log.warn("UPDATE_LOAN_NUMERAIRE_CONFIG rejected (currency spec missing): {}", cmd);
             } else {
-                loanService.setNumeraireCcy(newNumeraire);
-                log.info("UPDATE_LOAN_NUMERAIRE_CONFIG applied: numeraireCcy={}", newNumeraire);
+                loanService.setNumeraireCurrency(newNumeraire);
+                log.info("UPDATE_LOAN_NUMERAIRE_CONFIG applied: numeraireCurrency={}", newNumeraire);
             }
         } else if (message instanceof UpdateSymbolLoanConfigCommand) {
             final UpdateSymbolLoanConfigCommand cmd = (UpdateSymbolLoanConfigCommand)message;
@@ -1439,7 +1439,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
      * 四阶段（末尾追加 loan 抵押两项，本次改动，详见 loan.md §9.2）：
      *   ① 累计所有同 currency 的期货 position 占保证金（含 pending + 潜在 fee）
      *   ② 加 spot 侧 exchangeLocked（未成交挂单）
-     *   ③ 加 Isolated 借贷抵押（collateralCcy == currency 的所有 loan record）
+     *   ③ 加 Isolated 借贷抵押（collateralCurrency == currency 的所有 loan record）
      *   ④ 加 Cross 借贷抵押（账户级多币种池）
      * 不变量：free = accounts − locked。loan 抵押扩项使 futures / spot / withdraw 30 处下游 NSF 自动隔离
      * loan 抵押（不能顶 futures margin / 不能被现货挂单锁走 / 不能提现）；反向 loan 命令的抵押校验也自动排除 futures / spot 已锁部分。
@@ -1456,9 +1456,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         // ② 现货挂单锁定
         locked += userProfile.exchangeLocked.get(currency);
-        // ③ Isolated 借贷抵押（仅 collateralCcy 匹配的 loan 计入）
+        // ③ Isolated 借贷抵押（仅 collateralCurrency 匹配的 loan 计入）
         for (IsolatedLoanRecord loan : userProfile.isolatedLoans) {
-            if (loan.collateralCcy == currency) {
+            if (loan.collateralCurrency == currency) {
                 locked += loan.collateralAmount;
             }
         }

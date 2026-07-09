@@ -588,15 +588,15 @@ class LoanServiceTest {
     }
 
     @Test
-    void crossOrderId_encodesSellingCcyInPayload() {
-        int sellingCcy = 0x123456;
-        long orderId = LoanService.generateCrossForceSellOrderId(42L, sellingCcy);
+    void crossOrderId_encodesSellingCurrencyInPayload() {
+        int sellingCurrency = 0x123456;
+        long orderId = LoanService.generateCrossForceSellOrderId(42L, sellingCurrency);
         long payload = (orderId >>> 24) & 0xFFFFFFL;
-        assertEquals(sellingCcy, payload);
+        assertEquals(sellingCurrency, payload);
     }
 
     @Test
-    void crossOrderId_differentSellingCcyProducesDifferentIds() {
+    void crossOrderId_differentSellingCurrencyProducesDifferentIds() {
         long orderIdA = LoanService.generateCrossForceSellOrderId(42L, 3);
         long orderIdB = LoanService.generateCrossForceSellOrderId(42L, 4);
         assertNotEquals(orderIdA, orderIdB);

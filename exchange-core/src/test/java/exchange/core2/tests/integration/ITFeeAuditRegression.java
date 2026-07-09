@@ -126,27 +126,27 @@ public final class ITFeeAuditRegression {
     public void h2_fokBudgetActualMatchedBelowBudget_refundsFeeDelta() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
 
-            final int baseCcyId = 998;
+            final int baseCurrencyId = 998;
 
             // 动态费率：takerFee = 100 → 1%
             CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                     .symbolId(60201)
                     .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
-                    .baseCurrency(baseCcyId).baseScaleK(1)
+                    .baseCurrency(baseCurrencyId).baseScaleK(1)
                     .quoteCurrency(quoteId).quoteScaleK(1)
                     .takerFee(100)
                     .makerFee(50)
                     .feeScaleK(10000)
                     .build();
 
-            container.addCurrency(baseCcyId, 0);
+            container.addCurrency(baseCurrencyId, 0);
             container.addCurrency(quoteId, 0);
             container.addSymbol(spec);
 
             final long userQuoteDeposit = 1_000_000L;
             final long makerBaseDeposit = 100L;
             container.createUserWithSpecificMoney(UID_1, userQuoteDeposit, quoteId);
-            container.createUserWithMoney(UID_2, baseCcyId, makerBaseDeposit);
+            container.createUserWithMoney(UID_2, baseCurrencyId, makerBaseDeposit);
 
             // Maker ASK 10 @ 120（单价 120，低于 taker 隐含均价 150，
             //   也满足 isAskPriceTooLow 阈值：price >= ceilDiv(feeScaleK, takerFee) = 100）
@@ -184,7 +184,7 @@ public final class ITFeeAuditRegression {
                         profile.getExchangeLocked().get(quoteId), is(0L));
                 assertThat("用户实付 = actualMatched + actualFee（按成交均价），不按 budget 估算",
                         profile.getAccounts().get(quoteId), is(expectedAccounts));
-                assertThat("base 收到 takerSize", profile.getAccounts().get(baseCcyId), is((long) takerSize));
+                assertThat("base 收到 takerSize", profile.getAccounts().get(baseCurrencyId), is((long) takerSize));
             });
 
             assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));

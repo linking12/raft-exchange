@@ -24,48 +24,40 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import java.util.Objects;
 
 /**
- * 现货借贷 Cross 模式的单笔债务凭证。挂在 {@link UserProfile#crossLoans} 上（loanId -> record）。
- * <b>无抵押字段</b> —— Cross 抵押是账户级的，多笔 debt 共享 {@link UserProfile#crossLoanCollateral} 多币种池。
- *
- * <p><b>对象池管理</b>：通过 {@link exchange.core2.collections.objpool.ObjectsPool#CROSS_LOAN_RECORD}
- * 获取 / 归还，跟 {@link SymbolPositionRecord} 同款 pattern。identity 字段语义"不可变"但物理非 final。
- *
- * <p>详见 loan.md §3.2。
+ * Cross 模式单笔债务凭证，挂在 {@link UserProfile#crossLoans}（loanId -> record）。<b>无抵押字段</b> ——
+ * Cross 抵押是账户级的，多笔 debt 共享 {@link UserProfile#crossLoanCollateral} 多币种池。对象池复用，identity 非 final。
  */
 @Slf4j
 @NoArgsConstructor
-public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash {
+public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash, LoanRecord {
 
-    // ===== 用户绑定 =====
-    // 所属用户 uid，跟 UserProfile.uid 一致；不参与序列化（由 UserProfile 上下文注入），进 stateHash。
+    // 所属用户 uid（由 UserProfile 上下文注入，不序列化，仅进 stateHash）。
     public long uid;
 
-    // ===== 业务标识（BORROW 创建时锁死；池化需要非 final 才能 initialize 复用）=====
-    // 客户端提供的 loan 唯一 id，per-user 唯一，Cross 命名空间独立于 Isolated。
+    // 贷款唯一 id（客户端提供，per-user 唯一，Cross 命名空间独立于 Isolated）。创建时锁死。
     public long loanId;
-    // 借出币种。
-    public int loanCcy;
-    // 借时锁定的年化利率（bps）。
+    // 借出币种（抵押是账户级的，见 UserProfile.crossLoanCollateral，本 record 不含抵押字段）。
+    public int loanCurrency;
+    // 借入时锁定的年化利率（bps），存续期不变。
     public int rateBps;
-    // 开仓时间戳（cmd.timestamp, ns），期限校验用；同 IsolatedLoanRecord。
+    // 开仓时间戳（ns），期限校验用。
     public long openedAtTs;
 
-    // ===== 可变业务状态 =====
-    // 剩余本金（currency = loanCcy, scale = currencyScale）。
+    // 剩余未偿本金（loanCurrency，currencyScale）。REPAY / force-sell 递减，账户级 underwater 归零走 badDebt。
     public long outstandingPrincipal;
-    // 已累计但未支付利息（currency = loanCcy, scale = currencyScale）。
+    // 已计提但未支付的利息（loanCurrency，currencyScale）。惰性 accrue 写入，结算时进 interestRevenue。
     public long accumulatedInterest;
-    // 上次 accrue 时间戳（cmd.timestamp, ns），初始化 = openedAtTs。
+    // 上次计息时间戳（ns），惰性 accrue 到此点；初始 = openedAtTs。
     public long lastAccrueTs;
 
-    public CrossLoanRecord(long uid, long loanId, int loanCcy, int rateBps, long openedAtTs) {
-        initialize(uid, loanId, loanCcy, rateBps, openedAtTs);
+    public CrossLoanRecord(long uid, long loanId, int loanCurrency, int rateBps, long openedAtTs) {
+        initialize(uid, loanId, loanCurrency, rateBps, openedAtTs);
     }
 
     public CrossLoanRecord(long uid, BytesIn bytes) {
         this.uid = uid;
         this.loanId = bytes.readLong();
-        this.loanCcy = bytes.readInt();
+        this.loanCurrency = bytes.readInt();
         this.rateBps = bytes.readInt();
         this.openedAtTs = bytes.readLong();
         this.outstandingPrincipal = bytes.readLong();
@@ -74,10 +66,10 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash 
     }
 
     /** 从对象池拿到 record 后必须先 initialize 重置 identity + 可变状态。 */
-    public void initialize(long uid, long loanId, int loanCcy, int rateBps, long openedAtTs) {
+    public void initialize(long uid, long loanId, int loanCurrency, int rateBps, long openedAtTs) {
         this.uid = uid;
         this.loanId = loanId;
-        this.loanCcy = loanCcy;
+        this.loanCurrency = loanCurrency;
         this.rateBps = rateBps;
         this.openedAtTs = openedAtTs;
         this.outstandingPrincipal = 0;
@@ -88,6 +80,15 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash 
     public boolean isEmpty() {
         return outstandingPrincipal == 0 && accumulatedInterest == 0;
     }
+
+    @Override public int getLoanCurrency() { return loanCurrency; }
+    @Override public int getRateBps() { return rateBps; }
+    @Override public long getOutstandingPrincipal() { return outstandingPrincipal; }
+    @Override public void setOutstandingPrincipal(long value) { this.outstandingPrincipal = value; }
+    @Override public long getAccumulatedInterest() { return accumulatedInterest; }
+    @Override public void setAccumulatedInterest(long value) { this.accumulatedInterest = value; }
+    @Override public long getLastAccrueTs() { return lastAccrueTs; }
+    @Override public void setLastAccrueTs(long value) { this.lastAccrueTs = value; }
 
     public void validateInternalState() {
         if (outstandingPrincipal < 0 || accumulatedInterest < 0) {
@@ -100,7 +101,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash 
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeLong(loanId);
-        bytes.writeInt(loanCcy);
+        bytes.writeInt(loanCurrency);
         bytes.writeInt(rateBps);
         bytes.writeLong(openedAtTs);
         bytes.writeLong(outstandingPrincipal);
@@ -110,13 +111,13 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash 
 
     @Override
     public int stateHash() {
-        return Objects.hash(uid, loanId, loanCcy, rateBps, openedAtTs,
+        return Objects.hash(uid, loanId, loanCurrency, rateBps, openedAtTs,
             outstandingPrincipal, accumulatedInterest, lastAccrueTs);
     }
 
     @Override
     public String toString() {
-        return "CrossLoan{" + "u" + uid + " id" + loanId + " lCcy" + loanCcy + " rate" + rateBps
+        return "CrossLoan{" + "u" + uid + " id" + loanId + " loanCur" + loanCurrency + " rate" + rateBps
             + " openedAt" + openedAtTs + " prin=" + outstandingPrincipal + " int=" + accumulatedInterest
             + " lastAccrue=" + lastAccrueTs + '}';
     }

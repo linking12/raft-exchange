@@ -445,13 +445,13 @@ class ITConservationFuzz {
     // ─────────────────────────────────────────────────────────────────
 
     /** Scale 错配的期货合约 spec，sizePrice → currency 必发生 floor 截断。 */
-    private CoreSymbolSpecification scaleMismatchedFutures(int symbolId, int baseCcyId, int quoteCcyId) {
+    private CoreSymbolSpecification scaleMismatchedFutures(int symbolId, int baseCurrencyId, int quoteCurrencyId) {
         // baseScaleK × quoteScaleK = 10000，currencyScaleK = 1 → convertScale 除 10000
         return CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
                 .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
-                .baseCurrency(baseCcyId).baseScaleK(100)
-                .quoteCurrency(quoteCcyId).quoteScaleK(100)
+                .baseCurrency(baseCurrencyId).baseScaleK(100)
+                .quoteCurrency(quoteCurrencyId).quoteScaleK(100)
                 .takerFee(1).makerFee(1).feeScaleK(100)
                 .initMargin(1).initMarginScaleK(100)
                 .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100_000_000L, 10L))
@@ -467,14 +467,14 @@ class ITConservationFuzz {
         long seed = Long.parseLong(System.getProperty("fuzz.m1.seed", "20260622"));
         final Random rng = new Random(seed);
 
-        final int baseCcyId = 900;
-        final int quoteCcyId = CURRENECY_USD;
+        final int baseCurrencyId = 900;
+        final int quoteCurrencyId = CURRENECY_USD;
         final int symbolId = 70001;
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
-            container.addCurrency(new CoreCurrencySpecification(baseCcyId, "BASE", 0));
-            container.addCurrency(new CoreCurrencySpecification(quoteCcyId, "USD", 0));
-            CoreSymbolSpecification spec = scaleMismatchedFutures(symbolId, baseCcyId, quoteCcyId);
+            container.addCurrency(new CoreCurrencySpecification(baseCurrencyId, "BASE", 0));
+            container.addCurrency(new CoreCurrencySpecification(quoteCurrencyId, "USD", 0));
+            CoreSymbolSpecification spec = scaleMismatchedFutures(symbolId, baseCurrencyId, quoteCurrencyId);
             container.addSymbol(spec);
             container.initMarkPrice(spec.symbolId, 50_000L);
 
@@ -482,7 +482,7 @@ class ITConservationFuzz {
             final long[] uids = new long[numUsers];
             for (int i = 0; i < numUsers; i++) {
                 uids[i] = 700_000L + i;
-                container.createUserWithSpecificMoney(uids[i], 100_000_000L, quoteCcyId);
+                container.createUserWithSpecificMoney(uids[i], 100_000_000L, quoteCurrencyId);
             }
             assertConserved(container, "M1 after deposit", -1L, seed);
 
@@ -510,7 +510,7 @@ class ITConservationFuzz {
 
                 // 价格抖动（让 PnL 不为 0，且非整除）
                 long newPrice = Math.max(1L, markPrice + (rng.nextInt(7777) - 3888));
-                container.updateCurrentPriceTo((int) newPrice, symbolId, quoteCcyId);
+                container.updateCurrentPriceTo((int) newPrice, symbolId, quoteCurrencyId);
                 markPrice = newPrice;
 
                 // 部分平仓（按 size 的 1/3）
@@ -553,14 +553,14 @@ class ITConservationFuzz {
         long seed = Long.parseLong(System.getProperty("fuzz.m2.seed", "20260622"));
         final Random rng = new Random(seed);
 
-        final int baseCcyId = 901;
-        final int quoteCcyId = CURRENECY_USD;
+        final int baseCurrencyId = 901;
+        final int quoteCurrencyId = CURRENECY_USD;
         final int symbolId = 70101;
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
-            container.addCurrency(new CoreCurrencySpecification(baseCcyId, "BASE", 0));
-            container.addCurrency(new CoreCurrencySpecification(quoteCcyId, "USD", 0));
-            CoreSymbolSpecification spec = scaleMismatchedFutures(symbolId, baseCcyId, quoteCcyId);
+            container.addCurrency(new CoreCurrencySpecification(baseCurrencyId, "BASE", 0));
+            container.addCurrency(new CoreCurrencySpecification(quoteCurrencyId, "USD", 0));
+            CoreSymbolSpecification spec = scaleMismatchedFutures(symbolId, baseCurrencyId, quoteCurrencyId);
             container.addSymbol(spec);
             container.initMarkPrice(spec.symbolId, 50_000L);
 
@@ -568,7 +568,7 @@ class ITConservationFuzz {
             final long[] uids = new long[numUsers];
             for (int i = 0; i < numUsers; i++) {
                 uids[i] = 710_000L + i;
-                container.createUserWithSpecificMoney(uids[i], 100_000_000L, quoteCcyId);
+                container.createUserWithSpecificMoney(uids[i], 100_000_000L, quoteCurrencyId);
             }
 
             // 建初始持仓（两方对等开多空，让 funding 有双方收付）
@@ -616,30 +616,30 @@ class ITConservationFuzz {
         long seed = Long.parseLong(System.getProperty("fuzz.m3m4.seed", "20260622"));
         final Random rng = new Random(seed);
 
-        final int baseCcyId = 902;
-        final int quoteCcyId = CURRENECY_USD;
+        final int baseCurrencyId = 902;
+        final int quoteCurrencyId = CURRENECY_USD;
         final int symbolId = 70201;
 
         // 现货动态费率 spec：baseScaleK × quoteScaleK = 10000，currencyScaleK = 1
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(symbolId)
                 .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
-                .baseCurrency(baseCcyId).baseScaleK(100)
-                .quoteCurrency(quoteCcyId).quoteScaleK(100)
+                .baseCurrency(baseCurrencyId).baseScaleK(100)
+                .quoteCurrency(quoteCurrencyId).quoteScaleK(100)
                 .takerFee(100).makerFee(50).feeScaleK(10000)  // 1% / 0.5%
                 .build();
 
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
-            container.addCurrency(new CoreCurrencySpecification(baseCcyId, "BASE", 0));
-            container.addCurrency(new CoreCurrencySpecification(quoteCcyId, "USD", 0));
+            container.addCurrency(new CoreCurrencySpecification(baseCurrencyId, "BASE", 0));
+            container.addCurrency(new CoreCurrencySpecification(quoteCurrencyId, "USD", 0));
             container.addSymbol(spec);
 
             final int numUsers = 6;
             final long[] uids = new long[numUsers];
             for (int i = 0; i < numUsers; i++) {
                 uids[i] = 720_000L + i;
-                container.createUserWithSpecificMoney(uids[i], 100_000_000L, quoteCcyId);
-                container.addMoneyToUser(uids[i], baseCcyId, 1_000_000L);
+                container.createUserWithSpecificMoney(uids[i], 100_000_000L, quoteCurrencyId);
+                container.addMoneyToUser(uids[i], baseCurrencyId, 1_000_000L);
             }
             assertConserved(container, "M3M4 after deposit", -1L, seed);
 

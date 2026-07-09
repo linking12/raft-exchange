@@ -18,6 +18,7 @@ import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.UserProfileService;
 import exchange.core2.core.processors.loan.LoanCommandHandlers;
 import exchange.core2.core.processors.loan.LoanService;
+import exchange.core2.core.utils.CoreArithmeticUtils;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,7 +74,7 @@ class LoanCommandHandlersTest {
     @BeforeEach
     void setUp() {
         loanService = new LoanService();
-        loanService.setNumeraireCcy(USDT); // 走 UPDATE_LOAN_NUMERAIRE_CONFIG 通道的等价初始化
+        loanService.setNumeraireCurrency(USDT); // 走 UPDATE_LOAN_NUMERAIRE_CONFIG 通道的等价初始化
         up = new UserProfile(UID, UserStatus.ACTIVE);
         specProvider = new SymbolSpecificationProvider();
         currencyProvider = new CurrencySpecificationProvider();
@@ -695,7 +696,7 @@ class LoanCommandHandlersTest {
 
     @Test
     void loanCrossBorrow_numeraireUnconfigured_failsClose() {
-        loanService.setNumeraireCcy(LoanService.NUMERAIRE_UNSET); // 清 setUp 里配的 USDT
+        loanService.setNumeraireCurrency(LoanService.NUMERAIRE_UNSET); // 清 setUp 里配的 USDT
         OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_BORROW, 1L, UID, 555L, USDT, 0, 20_000L);
         assertEquals(CommandResultCode.LOAN_NUMERAIRE_NOT_CONFIGURED, handlers.handleLoanCrossBorrow(cmd));
         assertTrue(up.crossLoans.isEmpty(), "拒绝后不落 loan");
@@ -703,7 +704,7 @@ class LoanCommandHandlersTest {
 
     @Test
     void loanCrossWithdrawCollateral_numeraireUnconfigured_failsClose() {
-        loanService.setNumeraireCcy(LoanService.NUMERAIRE_UNSET);
+        loanService.setNumeraireCurrency(LoanService.NUMERAIRE_UNSET);
         long collateralBefore = up.crossLoanCollateral.get(BTC);
         OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_WITHDRAW_COLLATERAL, 1L, UID, 0, BTC, 2L, 0);
         assertEquals(CommandResultCode.LOAN_NUMERAIRE_NOT_CONFIGURED, handlers.handleLoanCrossWithdrawCollateral(cmd));
@@ -720,6 +721,11 @@ class LoanCommandHandlersTest {
     @Test
     void crossForceLiquidatePostProcess_oneCurrencyZeroButOthersRemain_keepsLoan() {
         // 场景：BTC=0（这轮卖光了）但 ETH=10 还在 → target loan 不该被写成 badDebt
+        // ETH 必须有现货对（cross 抵押本就要求有对），10 才算"有可卖整张"
+        currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(ETH).name("ETH").digit(0).build());
+        specProvider.registerSymbol(301, CoreSymbolSpecification.builder()
+            .symbolId(301).type(SymbolType.CURRENCY_EXCHANGE_PAIR).baseCurrency(ETH).quoteCurrency(USDT)
+            .baseScaleK(1).quoteScaleK(1).collateralWeightBps(9000).build());
         CrossLoanRecord targetLoan = new CrossLoanRecord(UID, 777L, USDT, 500, 0L);
         targetLoan.outstandingPrincipal = 30_000L;
         up.crossLoans.put(777L, targetLoan);
@@ -736,6 +742,164 @@ class LoanCommandHandlersTest {
 
         assertEquals(1, up.crossLoans.size(), "还有 ETH 抵押可卖，target loan 不该关");
         assertEquals(badDebtBefore, loanService.getBadDebt().get(USDT), "badDebt 不该增加");
+    }
+
+    // ================================================================
+    // Scale 混用复现：baseScaleK != currencyScaleK(base) 时强平资金不守恒
+    //
+    // loan.collateralAmount / exchangeLocked 全程 currency scale；撮合订单 size 是 symbol/lot scale。
+    // pre-move（handleLoanForceLiquidate）把 cmd.size 原样搬进 exchangeLocked / 扣 collateralAmount，
+    // 但 reject 回填（postProcess）用 symbolToCurrencyScale(rejectedSize)。两侧 scale 不一致 →
+    // 一笔"全部被拒（0 成交）"的强平——本应是 no-op——会破坏 loan.collateralAmount。
+    // setUp 里 BTC digit=0 + baseScaleK=1 → identity，掩盖此 bug；这里显式用 non-identity scale 暴露。
+    // ================================================================
+
+    private static final int WBTC = 10;      // base 币：digit=2 → currencyScaleK=100
+    private static final int SYMBOL_NI = 200; // baseScaleK=1 → 与 WBTC currencyScaleK=100 不一致
+
+    /** 注册一个 baseScaleK(1) 但 base 币 currencyScaleK=100 的现货 pair，返回其 spec。 */
+    private CoreSymbolSpecification registerNonIdentityScaleSymbol() {
+        currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(WBTC).name("WBTC").digit(2).build());
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(WBTC).quoteCurrency(USDT)
+            .baseScaleK(1).quoteScaleK(1)
+            .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
+            .loanRateBps(0).loanMaxAmount(0).loanMaxTermDays(0)
+            .collateralWeightBps(9000)
+            .build();
+        specProvider.registerSymbol(SYMBOL_NI, spec);
+        LastPriceCacheRecord price = new LastPriceCacheRecord();
+        price.markPrice = 50000L;
+        priceCache.put(SYMBOL_NI, price);
+        return spec;
+    }
+
+    /** REJECT-only matcher event chain（0 成交，全拒），size = 未成交 lot 数。 */
+    private exchange.core2.core.common.MatcherTradeEvent rejectEvent(long unmatchedSize) {
+        exchange.core2.core.common.MatcherTradeEvent ev = new exchange.core2.core.common.MatcherTradeEvent();
+        ev.eventType = exchange.core2.core.common.MatcherEventType.REJECT;
+        ev.size = unmatchedSize;
+        ev.price = 0L;
+        ev.nextEvent = null;
+        return ev;
+    }
+
+    @Test
+    void forceLiquidate_fullReject_nonIdentityScale_mustBeNoOp() {
+        CoreSymbolSpecification spec = registerNonIdentityScaleSymbol();
+        CoreCurrencySpecification baseSpec = currencyProvider.getCurrencySpecification(WBTC);
+
+        // 抵押 300（WBTC currency scale = 3.00 WBTC）；负债 100k USDT
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 111L, WBTC, USDT, 0, 0L);
+        loan.collateralAmount = 300L;
+        loan.outstandingPrincipal = 100_000L;
+        up.isolatedLoans.put(111L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+
+        final long collateralBefore = loan.collateralAmount;
+
+        // scanner 修复后下单 size = currencyToSymbolScale(collateralAmount) = 300/100 = 3 lot
+        long sellSizeLots = CoreArithmeticUtils.currencyToSymbolScale(loan.collateralAmount, spec, baseSpec);
+        assertEquals(3L, sellSizeLots, "300 currency → 3 lot");
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
+            LoanService.generateIsolatedForceSellOrderId(loan), UID, 111L, SYMBOL_NI, sellSizeLots, 49_500L);
+
+        // R1 pre-move：3 lot → symbolToCurrencyScale(3)=300 currency 挪进 exchangeLocked
+        assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(cmd));
+        assertEquals(0L, loan.collateralAmount, "pre-move 扣 300 currency");
+        assertEquals(300L, up.exchangeLocked.get(WBTC),
+            "pre-move 搬进 exchangeLocked 的是 currency scale(300)，与结算/reject 释放同 scale");
+
+        // 撮合全拒（0 成交）：REJECT 事件 size = 下单 lot 数 = 3
+        cmd.matcherEvent = rejectEvent(sellSizeLots);
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+
+        // 全拒 = 什么都没卖 → collateralAmount 恢复原值（reject 回填 symbolToCurrencyScale(3)=300）
+        assertEquals(collateralBefore, loan.collateralAmount,
+            "全拒强平是 no-op，collateralAmount 恢复原值（scale 边界修复后）");
+    }
+
+    @Test
+    void forceLiquidate_fullReject_identityScale_isNoOp_control() {
+        // 对照组：setUp 的 BTC（digit=0, baseScaleK=1 → identity），同样全拒 → 正确 no-op
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 222L, BTC, USDT, 0, 0L);
+        loan.collateralAmount = 3L;
+        loan.outstandingPrincipal = 100_000L;
+        up.isolatedLoans.put(222L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+
+        CoreSymbolSpecification spec = specProvider.getSymbolSpecification(SYMBOL);
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
+            LoanService.generateIsolatedForceSellOrderId(loan), UID, 222L, SYMBOL, 3L, 49_500L);
+        assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(cmd));
+        assertEquals(3L, up.exchangeLocked.get(BTC), "identity: pre-move 挪 3");
+        cmd.matcherEvent = rejectEvent(3L);
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+
+        assertEquals(3L, loan.collateralAmount, "identity scale 下全拒是正确 no-op");
+    }
+
+    // ================================================================
+    // sub-lot 尘埃 underwater 核销（非 identity scale 才会出现尘埃）
+    // ================================================================
+
+    @Test
+    void forceLiquidate_underwaterWithSubLotDust_writesBadDebtAndCloses() {
+        CoreSymbolSpecification spec = registerNonIdentityScaleSymbol();
+        // 抵押 50（0.5 张，collateralAmountToLots(50)=0）+ 债务未清 → 尘埃卖不掉、underwater
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 111L, WBTC, USDT, 0, 0L);
+        loan.collateralAmount = 50L;
+        loan.outstandingPrincipal = 100_000L;
+        up.isolatedLoans.put(111L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+        long badDebtBefore = loanService.getBadDebt().get(USDT);
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE, 1L, UID, 111L, SYMBOL_NI, 0L, 49_500L);
+        cmd.matcherEvent = null; // 整张已卖光，本轮无成交，只剩尘埃
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+
+        assertTrue(up.isolatedLoans.isEmpty(), "尘埃 underwater → loan 核销关闭");
+        assertEquals(badDebtBefore + 100_000L, loanService.getBadDebt().get(USDT), "剩余债务写 badDebt");
+        assertEquals(0L, loanService.getLoanPoolBorrowed().get(USDT), "principal 从 borrowed 移除");
+    }
+
+    @Test
+    void forceLiquidate_underwaterButWholeLotRemains_keepsLoan() {
+        CoreSymbolSpecification spec = registerNonIdentityScaleSymbol();
+        // 抵押 100（正好 1 张，可卖）+ 债务未清 → 不该核销，等下轮继续卖
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 112L, WBTC, USDT, 0, 0L);
+        loan.collateralAmount = 100L;
+        loan.outstandingPrincipal = 100_000L;
+        up.isolatedLoans.put(112L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+        long badDebtBefore = loanService.getBadDebt().get(USDT);
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE, 1L, UID, 112L, SYMBOL_NI, 0L, 49_500L);
+        cmd.matcherEvent = null;
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+
+        assertEquals(1, up.isolatedLoans.size(), "还有整张可卖，不核销");
+        assertEquals(badDebtBefore, loanService.getBadDebt().get(USDT), "badDebt 不增");
+    }
+
+    @Test
+    void crossForceLiquidate_allCollateralSubLotDust_writesBadDebt() {
+        CoreSymbolSpecification spec = registerNonIdentityScaleSymbol(); // base=WBTC，currencyScaleK=100
+        CrossLoanRecord targetLoan = new CrossLoanRecord(UID, 889L, USDT, 500, 0L);
+        targetLoan.outstandingPrincipal = 30_000L;
+        up.crossLoans.put(889L, targetLoan);
+        up.crossLoanCollateral.clear(); // 清掉 setUp 的 BTC=10
+        up.crossLoanCollateral.put(WBTC, 50L); // 0.5 张尘埃，无可卖整张
+        loanService.getLoanPoolBorrowed().put(USDT, 30_000L);
+        long badDebtBefore = loanService.getBadDebt().get(USDT);
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE, 1L, UID, 889L, SYMBOL_NI, 0L, 49_500L);
+        cmd.matcherEvent = null;
+        handlers.postProcessLoanCrossForceLiquidate(cmd, spec, up);
+
+        assertTrue(up.crossLoans.isEmpty(), "全是尘埃 → target loan 核销");
+        assertEquals(badDebtBefore + 30_000L, loanService.getBadDebt().get(USDT), "剩余债务写 badDebt");
     }
 
     @Test
