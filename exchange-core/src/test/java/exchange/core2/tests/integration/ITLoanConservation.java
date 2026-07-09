@@ -111,8 +111,15 @@ class ITLoanConservation {
             // 抵押被撮合消费，exchangeLocked 必须归零（scale 换算对了才不会漂）
             SingleUserReportResult borrower = c.getUserProfile(BORROWER);
             assertEquals(0L, borrower.getExchangeLocked().get(WBTC), "exchangeLocked[WBTC] 未归零");
+            assertEquals(0L, borrower.getAccounts().get(WBTC), "3 WBTC 抵押应全部卖出");
             // LP 收到 3 WBTC（300 currencyScale）
             assertEquals(COLLATERAL_WBTC, c.getUserProfile(LP).getAccounts().get(WBTC), "LP 应收 3 WBTC");
+            // 结算数学：proceeds=3×50000=150000，liqFee=2%=3000，本金 80000 回池，overpay 留用户。
+            // 借款人 USDT = 借入本金 + proceeds − liqFee − 回池本金 = proceeds − liqFee = 147000。
+            final long proceeds = COLLATERAL_LOTS * MARK_PRICE;
+            final long liqFee = proceeds * 200L / 10000L;
+            assertEquals(proceeds - liqFee, borrower.getAccounts().get(USDT),
+                "借款人 USDT 结算额错（应为 proceeds−liqFee）");
             assertGlobalConserved(c, "after full liquidation");
         }
     }
@@ -130,8 +137,14 @@ class ITLoanConservation {
                 CommandResultCode.SUCCESS);
 
             // 2 lot 成交 + 1 lot 拒单回填：exchangeLocked 仍须归零（成交扣 + 拒单释放两侧同尺）
-            assertEquals(0L, c.getUserProfile(BORROWER).getExchangeLocked().get(WBTC),
-                "partial-fill 后 exchangeLocked[WBTC] 未归零");
+            SingleUserReportResult borrower = c.getUserProfile(BORROWER);
+            assertEquals(0L, borrower.getExchangeLocked().get(WBTC), "partial-fill 后 exchangeLocked[WBTC] 未归零");
+            // 卖出 2 lot = 200 currencyScale，账户 base 从 300 降到 100（剩 1 WBTC 仍是抵押，拒单回填留在 loan）
+            assertEquals(100L, borrower.getAccounts().get(WBTC), "只卖 2 lot，账户应剩 100（1 WBTC）");
+            // proceeds=2×50000=100000，liqFee=2%=2000，本金 80000 回池 → 借款人 USDT = 100000−2000 = 98000
+            final long proceeds = 2L * MARK_PRICE;
+            assertEquals(proceeds - proceeds * 200L / 10000L, borrower.getAccounts().get(USDT),
+                "partial-fill 借款人 USDT 结算额错");
             assertGlobalConserved(c, "after partial-fill liquidation");
         }
     }
@@ -142,9 +155,13 @@ class ITLoanConservation {
         try (ExchangeTestContainer c = boot()) {
             createLoan(c, loanId);
             assertGlobalConserved(c, "after create");
-            // 全额还款（price=0 = payoff）
+            // 借入后借款人 USDT = PRINCIPAL
+            assertEquals(PRINCIPAL, c.getUserProfile(BORROWER).getAccounts().get(USDT), "借入后 USDT 应 = 本金");
+            // 全额还款（repayAmount=0 = payoff 本息）
             c.submitCommandSync(ApiLoanRepay.builder()
                 .externalId(1_000_009L).uid(BORROWER).loanId(loanId).repayAmount(0L).build(), CommandResultCode.SUCCESS);
+            // rate=0 → 无利息，还清后借款人 USDT 归零（本金全额还回池）
+            assertEquals(0L, c.getUserProfile(BORROWER).getAccounts().get(USDT), "全额还款后 USDT 应归零");
             assertGlobalConserved(c, "after full repay");
         }
     }

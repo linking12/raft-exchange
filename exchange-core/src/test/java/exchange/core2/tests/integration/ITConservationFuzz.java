@@ -706,16 +706,9 @@ class ITConservationFuzz {
      * （含降价至 underwater 走 badDebt），每步断言全局守恒。这是今年 scale bug 的直接回归护栏：
      * 报告已把 loan 平台桶纳入对账，pre-move / 结算 / reject 任一处 scale 漂移都会立即破坏守恒。
      */
-    /** 提交命令并返回 resultCode（不断言），供 fuzz 里允许合理拒绝的命令用。 */
-    private CommandResultCode submitRc(ExchangeTestContainer c, ApiCommand cmd) {
-        final CommandResultCode[] rc = new CommandResultCode[1];
-        c.submitCommandSync(cmd, oc -> rc[0] = oc.resultCode);
-        return rc[0];
-    }
-
     @Test
     @Timeout(60)
-    public void fuzzM5LoanScaleMismatchConservation() {
+    public void fuzzM5LoanScaleMismatchConservation() throws Exception {
         long seed = Long.parseLong(System.getProperty("fuzz.m5.seed", "20260709"));
         final Random rng = new Random(seed);
 
@@ -725,8 +718,9 @@ class ITConservationFuzz {
         final int numBorrowers = 4;
         final long lp = 790_000L;
 
-        try (final ExchangeTestContainer container =
-                 ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
+        // 单 shard：loan 池是 per-shard 的，POOL_DEPOSIT(shard 0) 只能覆盖 shard 0 的借款人
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(
+                PerformanceConfiguration.baseBuilder().matchingEnginesNum(1).riskEnginesNum(1).build(), processor)) {
             container.addCurrency(new CoreCurrencySpecification(baseCurrencyId, "WBTC", 2));
             container.addCurrency(new CoreCurrencySpecification(quoteCurrencyId, "USD", 0));
             container.addSymbol(CoreSymbolSpecification.builder()
@@ -747,7 +741,8 @@ class ITConservationFuzz {
             for (int i = 0; i < numBorrowers; i++) {
                 uids[i] = 790_100L + i;
                 container.initOneUser(uids[i]);
-                container.addMoneyToUser(uids[i], baseCurrencyId, 2_000L); // 20 WBTC 抵押额度
+                // 充足 base：强平会永久卖掉抵押 base，40 轮下来单借款人最多消耗 ~5000，给 200 WBTC 富余
+                container.addMoneyToUser(uids[i], baseCurrencyId, 20_000L);
             }
             container.initOneUser(lp);
             container.addMoneyToUser(lp, quoteCurrencyId, 500_000_000L);
@@ -755,61 +750,80 @@ class ITConservationFuzz {
 
             long ext = 9_100_000L;
             long orderId = 9_200_000L;
-            final int numCycles = 30;
+            final int numCycles = 40;
+            // 覆盖计数：确保测试真的执行了操作，而不是全被拒后空转"守恒"。
+            int created = 0, repaid = 0, liqOverpay = 0, liqUnderwater = 0;
 
             for (int cycle = 0; cycle < numCycles; cycle++) {
                 final int b = rng.nextInt(numBorrowers);
                 final long uid = uids[b];
+                final long baseMark = 50_000L;
 
                 if (!hasLoan[b]) {
-                    // 开贷：抵押 2..5 张（每张 100 currencyScale），principal = 张数×markPrice×50%（LTV 50% < 60% initial）
+                    // 开贷：抵押 2..5 张（每张 100 currencyScale），principal = 张数×50000×50%（LTV 50% < 60% initial）。
+                    // 参数确定性合法 → 必须 SUCCESS，否则测试空转，这里硬断言。
                     long lots = 2 + rng.nextInt(4);
-                    long collateral = lots * 100L;
-                    long principal = Math.max(1L, lots * markPrice / 2L);
-                    CommandResultCode rc = submitRc(container, ApiLoanCreate.builder()
+                    container.submitCommandSync(ApiLoanCreate.builder()
                             .externalId(ext++).uid(uid).loanId(uid).symbol(symbolId)
-                            .collateralAmount(collateral).principal(principal).build());
-                    if (rc == CommandResultCode.SUCCESS) {
-                        hasLoan[b] = true;
-                        loanLots[b] = lots;
-                    }
+                            .collateralAmount(lots * 100L).principal(lots * baseMark / 2L).build(),
+                            CommandResultCode.SUCCESS);
+                    hasLoan[b] = true;
+                    loanLots[b] = lots;
+                    created++;
                     assertConserved(container, "M5 cycle " + cycle + " after create", cycle, seed);
                     continue;
                 }
 
+                final long lots = loanLots[b];
                 final int action = rng.nextInt(3);
                 if (action == 0) {
-                    // 部分还款
-                    submitRc(container, ApiLoanRepay.builder()
-                            .externalId(ext++).uid(uid).loanId(uid).repayAmount(1_000L).build());
-                    assertConserved(container, "M5 cycle " + cycle + " after repay", cycle, seed);
-                } else {
-                    // 强平：可能先降价到 underwater。放一张吃满的 LP BID，再 force-liquidate 全部张数。
-                    if (action == 2) {
-                        markPrice = Math.max(1_000L, markPrice - (1_000L + rng.nextInt(20_000)));
-                        container.updateCurrentPriceTo((int) markPrice, symbolId, quoteCurrencyId);
-                    }
-                    long lots = loanLots[b];
-                    container.submitCommandSync(ApiPlaceOrder.builder()
-                            .uid(lp).orderId(orderId++).action(OrderAction.BID).size(lots)
-                            .price(markPrice).reservePrice(markPrice).symbol(symbolId)
-                            .orderType(OrderType.GTC).marginMode(MarginMode.ISOLATED).build(),
+                    // 部分还款（loanCurrency，无 scale 跨域）
+                    container.submitCommandSync(ApiLoanRepay.builder()
+                            .externalId(ext++).uid(uid).loanId(uid).repayAmount(1_000L).build(),
                             CommandResultCode.SUCCESS);
-                    IsolatedLoanRecord idRec = new IsolatedLoanRecord();
-                    idRec.uid = uid;
-                    idRec.loanId = uid;
-                    submitRc(container, ApiLoanForceLiquidate.builder()
-                            .uid(uid).symbol(symbolId).loanId(uid).price(markPrice).size(lots)
-                            .orderId(LoanService.generateIsolatedForceSellOrderId(idRec))
-                            .action(OrderAction.ASK).orderType(OrderType.IOC).build());
-                    hasLoan[b] = false; // 吃满 → 全部卖出 → loan 关闭（overpay 或 underwater 均关）
-                    assertConserved(container, "M5 cycle " + cycle + " after force-liquidate", cycle, seed);
-                    // 价格恢复，便于后续 create 通过 LTV
-                    markPrice = 50_000L;
-                    container.updateCurrentPriceTo((int) markPrice, symbolId, quoteCurrencyId);
+                    repaid++;
+                    assertConserved(container, "M5 cycle " + cycle + " after repay", cycle, seed);
+                    continue;
                 }
+
+                // 强平：action==1 用 50000（proceeds > debt → overpay）；action==2 砸到 5000（proceeds << debt → underwater 走 badDebt）。
+                final boolean underwater = (action == 2);
+                final long sellPrice = underwater ? 5_000L : baseMark;
+                container.updateCurrentPriceTo((int) sellPrice, symbolId, quoteCurrencyId);
+                // LP 挂吃满的 BID
+                container.submitCommandSync(ApiPlaceOrder.builder()
+                        .uid(lp).orderId(orderId++).action(OrderAction.BID).size(lots)
+                        .price(sellPrice).reservePrice(sellPrice).symbol(symbolId)
+                        .orderType(OrderType.GTC).marginMode(MarginMode.ISOLATED).build(),
+                        CommandResultCode.SUCCESS);
+                IsolatedLoanRecord idRec = new IsolatedLoanRecord();
+                idRec.uid = uid;
+                idRec.loanId = uid;
+                // 强平必须 SUCCESS 并真的成交 —— 硬断言，避免"强平坏了也悄悄过"。
+                container.submitCommandSync(ApiLoanForceLiquidate.builder()
+                        .uid(uid).symbol(symbolId).loanId(uid).price(sellPrice).size(lots)
+                        .orderId(LoanService.generateIsolatedForceSellOrderId(idRec))
+                        .action(OrderAction.ASK).orderType(OrderType.IOC).build(),
+                        CommandResultCode.SUCCESS);
+                hasLoan[b] = false; // 吃满 → 全部卖出 → loan 关闭（overpay 或 underwater 均关）
+                if (underwater) {
+                    liqUnderwater++;
+                } else {
+                    liqOverpay++;
+                }
+                // 抵押必须被撮合真正消费掉（scale 换算对了 exchangeLocked 才归零）
+                assertTrue(container.getUserProfile(uid).getExchangeLocked().get(baseCurrencyId) == 0L,
+                        "M5 cycle " + cycle + " 强平后 exchangeLocked[base] 未归零");
+                assertConserved(container, "M5 cycle " + cycle + " after force-liquidate underwater=" + underwater,
+                        cycle, seed);
+                container.updateCurrentPriceTo((int) baseMark, symbolId, quoteCurrencyId); // 恢复价便于后续 create
             }
-            log.info("M5 loan fuzz seed={} cycles={} —— scale 错配借贷全生命周期守恒", seed, numCycles);
+            // 非空转保证：确实建了贷、确实走过 overpay 和 underwater 两种强平。
+            assertTrue(created > 0, "M5 未建任何贷款（测试空转）");
+            assertTrue(liqOverpay > 0, "M5 未执行任何 overpay 强平");
+            assertTrue(liqUnderwater > 0, "M5 未执行任何 underwater 强平（badDebt 路径没被覆盖）");
+            log.info("M5 loan fuzz seed={} cycles={} created={} repaid={} liqOverpay={} liqUnderwater={} —— 全程守恒",
+                    seed, numCycles, created, repaid, liqOverpay, liqUnderwater);
         }
     }
 }

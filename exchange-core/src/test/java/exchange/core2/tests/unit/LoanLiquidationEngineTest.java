@@ -8,6 +8,8 @@ import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.api.ApiCommand;
+import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import org.mockito.ArgumentCaptor;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
@@ -26,6 +28,7 @@ import org.mockito.quality.Strictness;
 
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -229,6 +232,60 @@ class LoanLiquidationEngineTest {
         scanner.check(up);
         // Isolated force-sell 实装：LTV 触线时 publish 一次 ApiLiquidationOrder
         verify(publisher).publish(any(), any());
+    }
+
+    @Test
+    void check_isolated_identityScale_publishesSizeEqualToCollateralLots() {
+        // identity scale（BTC digit=0, baseScaleK=1）：1 lot = 1 currency unit，size 应 == collateral == 1
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, 1000L);
+        loan.collateralAmount = 1L;
+        loan.outstandingPrincipal = 45_000L; // LTV 90% ≥ 80% liquidation
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanForceLiquidate cmd = (ApiLoanForceLiquidate) captor.getValue();
+        assertEquals(1L, cmd.size, "identity scale 下下单 size = 抵押张数 = 1");
+        assertEquals(SYMBOL, cmd.symbol);
+        assertEquals(LOAN_ID, cmd.loanId);
+    }
+
+    @Test
+    void check_isolated_nonIdentityScale_publishesLotScaledSizeNotCurrencyAmount() {
+        // ★ 回归护栏：base 币 currencyScaleK=100（digit=2）+ baseScaleK=1 → 抵押金额(currencyScale) ≠ 下单张数(lot)。
+        // 旧代码 scanner 用 .size(loan.collateralAmount) 会填 300（撮合多卖 100×）；正确应填 collateralAmountToLots=3。
+        final int WBTC = 10;
+        final int SYMBOL_NI = 200;
+        currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(WBTC).name("WBTC").digit(2).build());
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
+                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
+                .loanRateBps(0).collateralWeightBps(9000).build();
+        specProvider.registerSymbol(SYMBOL_NI, spec);
+        LastPriceCacheRecord price = new LastPriceCacheRecord();
+        price.markPrice = 50_000L;
+        priceCache.put(SYMBOL_NI, price);
+
+        // 抵押 300（= 3 WBTC）, 债务 140k → collateralValue = 3×50000 = 150000, LTV = 93% ≥ 80% liquidation
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, 1000L);
+        loan.collateralAmount = 300L;
+        loan.outstandingPrincipal = 140_000L;
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanForceLiquidate cmd = (ApiLoanForceLiquidate) captor.getValue();
+        long expectedLots =
+                LoanService.collateralAmountToLots(300L, spec, currencyProvider.getCurrencySpecification(WBTC));
+        assertEquals(3L, expectedLots, "300 currencyScale ÷ 100 = 3 lot（sanity）");
+        assertEquals(expectedLots, cmd.size,
+                "scanner 下单 size 必须是张数(lot)=3，而非 currencyScale 抵押量 300（旧 bug 会填 300）");
+        assertEquals(SYMBOL_NI, cmd.symbol);
     }
 
     @Test
