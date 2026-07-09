@@ -79,7 +79,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     @Getter
     private final IntLongHashMap loanPoolAvailable;
 
-    // 不变量：Σ (isolated+cross) outstandingPrincipal(loanCurrency==c) == loanPoolBorrowed[c]。
+    // 不变量：Σ (isolated+cross) outstandingPrincipal(loanCurrency==currency) == loanPoolBorrowed[currency]。
     @Getter
     private final IntLongHashMap loanPoolBorrowed;
 
@@ -224,16 +224,16 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
      * loanPool；返回实付额。REPAY 与强平结算共用此一处金钱逻辑。
      */
     public long applyDebtPayment(LoanRecord loan, IntLongHashMap account, long fund) {
-        int ccy = loan.getLoanCurrency();
+        int currency = loan.getLoanCurrency();
         long interestPart = Math.min(fund, loan.getAccumulatedInterest());
         long principalPart = Math.min(fund - interestPart, loan.getOutstandingPrincipal());
         long paid = interestPart + principalPart;
-        account.addToValue(ccy, -paid);
+        account.addToValue(currency, -paid);
         loan.setAccumulatedInterest(loan.getAccumulatedInterest() - interestPart);
         loan.setOutstandingPrincipal(loan.getOutstandingPrincipal() - principalPart);
-        interestRevenue.addToValue(ccy, interestPart);
-        loanPoolAvailable.addToValue(ccy, principalPart);
-        loanPoolBorrowed.addToValue(ccy, -principalPart);
+        interestRevenue.addToValue(currency, interestPart);
+        loanPoolAvailable.addToValue(currency, principalPart);
+        loanPoolBorrowed.addToValue(currency, -principalPart);
         return paid;
     }
 
@@ -297,7 +297,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
      * <pre>
      *   LTV = totalDebt × BPS_SCALE / weightedCollateral
      *   totalDebt          = Σ valueInNumeraire(loan.loanCurrency, principal + 含 pending 的利息)
-     *   weightedCollateral = Σ valueInNumeraire(c, crossLoanCollateral[c]) × collateralWeightBps(c) / BPS_SCALE
+     *   weightedCollateral = Σ valueInNumeraire(cur, crossLoanCollateral[cur]) × collateralWeightBps(cur) / BPS_SCALE
      * </pre>
      * 
      * 边界返回：无债务 / numeraire 未配 / 价格未就绪 → 0（保守 skip）；有债务但无抵押 → {@link Long#MAX_VALUE}； 溢出 debt 侧 → MAX_VALUE、collateral 侧
@@ -342,14 +342,14 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         // ===== 抵押侧 =====
         long weightedCollateral = 0L;
         int[] currencies = userProfile.crossLoanCollateral.keySet().toArray();
-        for (int c : currencies) {
-            long amount = userProfile.crossLoanCollateral.get(c);
+        for (int currency : currencies) {
+            long amount = userProfile.crossLoanCollateral.get(currency);
             if (amount <= 0)
                 continue;
-            int weight = collateralWeightForBase(c, specProvider);
+            int weight = collateralWeightForBase(currency, specProvider);
             if (weight <= 0)
                 continue;
-            long valueInNum = valueInNumeraire(c, amount, numeraireCurrency, numeraireSpec, specProvider,
+            long valueInNum = valueInNumeraire(currency, amount, numeraireCurrency, numeraireSpec, specProvider,
                 currencyProvider, priceCache);
             if (valueInNum < 0)
                 return 0L;
@@ -368,26 +368,26 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * currency c 的 amount 换算成 numeraire currencyScale：c==numeraire 直接返回；否则经 base=c/quote=numeraire 现货 对的 markPrice
-     * 折算。找不到 spec / markPrice / currencySpec → -1（caller 视为价格未就绪 skip）。
+     * currency 的 amount 换算成 numeraire currencyScale：currency==numeraire 直接返回；否则经 base=currency/quote=numeraire
+     * 现货对的 markPrice 折算。找不到 spec / markPrice / currencySpec → -1（caller 视为价格未就绪 skip）。
      */
-    private static long valueInNumeraire(int c, long amount, int numeraireCurrency,
+    private static long valueInNumeraire(int currency, long amount, int numeraireCurrency,
         CoreCurrencySpecification numeraireSpec, SymbolSpecificationProvider specProvider,
         CurrencySpecificationProvider currencyProvider, IntObjectHashMap<LastPriceCacheRecord> priceCache) {
-        if (c == numeraireCurrency) {
+        if (currency == numeraireCurrency) {
             return amount;
         }
-        CoreSymbolSpecification spec = findSpotSpec(c, numeraireCurrency, specProvider);
+        CoreSymbolSpecification spec = findSpotSpec(currency, numeraireCurrency, specProvider);
         if (spec == null)
             return -1L;
         LastPriceCacheRecord rec = priceCache.get(spec.symbolId);
         if (rec == null || rec.markPrice <= 0)
             return -1L;
-        CoreCurrencySpecification cSpec = currencyProvider.getCurrencySpecification(c);
-        if (cSpec == null)
+        CoreCurrencySpecification currencySpec = currencyProvider.getCurrencySpecification(currency);
+        if (currencySpec == null)
             return -1L;
-        // c 的 currencyScale → base scale → ×markPrice → numeraire currencyScale
-        long baseAmount = CoreArithmeticUtils.currencyToSymbolScale(amount, spec, cSpec);
+        // currency 的 currencyScale → base scale → ×markPrice → numeraire currencyScale
+        long baseAmount = CoreArithmeticUtils.currencyToSymbolScale(amount, spec, currencySpec);
         long notional = Math.multiplyExact(baseAmount, rec.markPrice);
         return CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, numeraireSpec);
     }
@@ -430,19 +430,19 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * currency c 作抵押时是否还有≥1 张可卖（任一 base=c 的现货 pair）。sub-lot 尘埃 → false。 Cross underwater 判定用：所有抵押币种都无可卖整张，才认定账户级
-     * underwater。
+     * currency 作抵押时是否还有≥1 张可卖（任一 base=currency 的现货 pair）。sub-lot 尘埃 → false。
+     * Cross underwater 判定用：所有抵押币种都无可卖整张，才认定账户级 underwater。
      */
-    public static boolean hasSellableCollateralLot(int c, long amount, SymbolSpecificationProvider specProvider,
+    public static boolean hasSellableCollateralLot(int currency, long amount, SymbolSpecificationProvider specProvider,
         CurrencySpecificationProvider currencyProvider) {
         if (amount <= 0)
             return false;
-        CoreCurrencySpecification cSpec = currencyProvider.getCurrencySpecification(c);
-        if (cSpec == null)
+        CoreCurrencySpecification currencySpec = currencyProvider.getCurrencySpecification(currency);
+        if (currencySpec == null)
             return false;
         for (CoreSymbolSpecification spec : specProvider.getSymbolSpecs()) {
-            if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.baseCurrency == c
-                && collateralAmountToLots(amount, spec, cSpec) > 0) {
+            if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.baseCurrency == currency
+                && collateralAmountToLots(amount, spec, currencySpec) > 0) {
                 return true;
             }
         }
@@ -462,13 +462,12 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * 返回 currency c 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。
-     * <p>
-     * 规则：找第一条 base=c 且 collateralWeightBps &gt; 0 的现货 pair spec 的 weight。
+     * 返回 currency 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。
+     * 规则：找第一条 base=currency 且 collateralWeightBps &gt; 0 的现货 pair spec 的 weight。
      */
-    public static int collateralWeightForBase(int c, SymbolSpecificationProvider provider) {
+    public static int collateralWeightForBase(int currency, SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
-            if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.baseCurrency == c
+            if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.baseCurrency == currency
                 && spec.collateralWeightBps > 0) {
                 return spec.collateralWeightBps;
             }

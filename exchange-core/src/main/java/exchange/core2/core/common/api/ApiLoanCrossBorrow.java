@@ -21,6 +21,6 @@ public class ApiLoanCrossBorrow extends ApiCommand {
 
     @Override
     public String toString() {
-        return "[LOAN_X_BORROW ext" + externalId + " u" + uid + " id" + loanId + " ccy" + loanCurrency + " p=" + principal + "]";
+        return "[LOAN_X_BORROW ext" + externalId + " u" + uid + " id" + loanId + " cur" + loanCurrency + " p=" + principal + "]";
     }
 }

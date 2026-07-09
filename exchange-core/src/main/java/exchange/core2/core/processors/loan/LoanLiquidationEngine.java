@@ -238,22 +238,22 @@ public final class LoanLiquidationEngine {
     // Cross tiebreak + heuristic
     // ================================================================
 
-    /** 选卖出抵押币：weight DESC / amount DESC / ccy ASC。返回 0 表示无可卖抵押。 */
+    /** 选卖出抵押币：weight DESC / amount DESC / currency ASC。返回 0 表示无可卖抵押。 */
     private int pickCrossCollateralToSell(UserProfile up) {
         int bestCurrency = 0;
         int bestWeight = -1;
         long bestAmount = -1;
-        for (int ccy : up.crossLoanCollateral.keySet().toArray()) {
-            long amount = up.crossLoanCollateral.get(ccy);
+        for (int currency : up.crossLoanCollateral.keySet().toArray()) {
+            long amount = up.crossLoanCollateral.get(currency);
             if (amount <= 0)
                 continue;
-            int weight = LoanService.collateralWeightForBase(ccy, engine.getSymbolSpecificationProvider());
+            int weight = LoanService.collateralWeightForBase(currency, engine.getSymbolSpecificationProvider());
             if (weight <= 0)
                 continue;
             if (weight > bestWeight
                 || (weight == bestWeight && amount > bestAmount)
-                || (weight == bestWeight && amount == bestAmount && ccy < bestCurrency)) {
-                bestCurrency = ccy;
+                || (weight == bestWeight && amount == bestAmount && currency < bestCurrency)) {
+                bestCurrency = currency;
                 bestWeight = weight;
                 bestAmount = amount;
             }

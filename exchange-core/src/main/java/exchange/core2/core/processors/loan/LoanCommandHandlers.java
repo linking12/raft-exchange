@@ -723,8 +723,8 @@ public final class LoanCommandHandlers {
         // Cross underwater 判定查全部 crossLoanCollateral，且用"是否还有可卖整张"而非 amount>0——
         // 别的币种还有整张可下轮继续卖；只剩 sub-lot 尘埃则视为耗尽，否则会漏记 badDebt + target loan 悬挂。
         boolean allCollateralExhausted = true;
-        for (int c : takerUp.crossLoanCollateral.keySet().toArray()) {
-            if (LoanService.hasSellableCollateralLot(c, takerUp.crossLoanCollateral.get(c),
+        for (int currency : takerUp.crossLoanCollateral.keySet().toArray()) {
+            if (LoanService.hasSellableCollateralLot(currency, takerUp.crossLoanCollateral.get(currency),
                 engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider())) {
                 allCollateralExhausted = false;
                 break;

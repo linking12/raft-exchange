@@ -12,9 +12,17 @@ import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiCommand;
+import exchange.core2.core.common.api.ApiLoanCreate;
+import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import exchange.core2.core.common.api.ApiLoanRepay;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiSettleFundingFees;
+import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
+import exchange.core2.core.common.IsolatedLoanRecord;
+import exchange.core2.core.common.cmd.CommandResultCode;
+import exchange.core2.core.processors.loan.LoanService;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
@@ -689,6 +697,119 @@ class ITConservationFuzz {
                 assertConserved(container, "M3M4 step " + step + " op=" + op, step, seed);
             }
             log.info("M3M4 fuzz seed={} ops={} —— 现货动态费率守恒", seed, numOps);
+        }
+    }
+
+    /**
+     * M5: 现货借贷（Isolated）scale 错配守恒 —— base 币 digit=2（currencyScaleK=100）+ baseScaleK=1，
+     * 抵押金额(currencyScale) 与撮合张数(lot) 单位不同。随机跑 create / partial-repay / force-liquidate
+     * （含降价至 underwater 走 badDebt），每步断言全局守恒。这是今年 scale bug 的直接回归护栏：
+     * 报告已把 loan 平台桶纳入对账，pre-move / 结算 / reject 任一处 scale 漂移都会立即破坏守恒。
+     */
+    /** 提交命令并返回 resultCode（不断言），供 fuzz 里允许合理拒绝的命令用。 */
+    private CommandResultCode submitRc(ExchangeTestContainer c, ApiCommand cmd) {
+        final CommandResultCode[] rc = new CommandResultCode[1];
+        c.submitCommandSync(cmd, oc -> rc[0] = oc.resultCode);
+        return rc[0];
+    }
+
+    @Test
+    @Timeout(60)
+    public void fuzzM5LoanScaleMismatchConservation() {
+        long seed = Long.parseLong(System.getProperty("fuzz.m5.seed", "20260709"));
+        final Random rng = new Random(seed);
+
+        final int baseCurrencyId = 910;   // digit=2 → currencyScaleK=100
+        final int quoteCurrencyId = CURRENECY_USD; // digit=0
+        final int symbolId = 71100;
+        final int numBorrowers = 4;
+        final long lp = 790_000L;
+
+        try (final ExchangeTestContainer container =
+                 ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
+            container.addCurrency(new CoreCurrencySpecification(baseCurrencyId, "WBTC", 2));
+            container.addCurrency(new CoreCurrencySpecification(quoteCurrencyId, "USD", 0));
+            container.addSymbol(CoreSymbolSpecification.builder()
+                    .symbolId(symbolId).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                    .baseCurrency(baseCurrencyId).quoteCurrency(quoteCurrencyId)
+                    .baseScaleK(1).quoteScaleK(1).takerFee(0).makerFee(0).build());
+            long markPrice = 50_000L;
+            container.initMarkPrice(symbolId, markPrice);
+            container.sendBinaryDataCommandSync(
+                    new UpdateSymbolLoanConfigCommand(symbolId, 6000, 8500, 7500, 0, Long.MAX_VALUE, 365, 10000), 5000);
+            container.submitCommandSync(ApiPoolDeposit.builder()
+                    .externalId(9_000_000L).shardId(0).currency(quoteCurrencyId).amount(500_000_000L).build(),
+                    CommandResultCode.SUCCESS);
+
+            final long[] uids = new long[numBorrowers];
+            final boolean[] hasLoan = new boolean[numBorrowers];
+            final long[] loanLots = new long[numBorrowers];
+            for (int i = 0; i < numBorrowers; i++) {
+                uids[i] = 790_100L + i;
+                container.initOneUser(uids[i]);
+                container.addMoneyToUser(uids[i], baseCurrencyId, 2_000L); // 20 WBTC 抵押额度
+            }
+            container.initOneUser(lp);
+            container.addMoneyToUser(lp, quoteCurrencyId, 500_000_000L);
+            assertConserved(container, "M5 after setup", -1L, seed);
+
+            long ext = 9_100_000L;
+            long orderId = 9_200_000L;
+            final int numCycles = 30;
+
+            for (int cycle = 0; cycle < numCycles; cycle++) {
+                final int b = rng.nextInt(numBorrowers);
+                final long uid = uids[b];
+
+                if (!hasLoan[b]) {
+                    // 开贷：抵押 2..5 张（每张 100 currencyScale），principal = 张数×markPrice×50%（LTV 50% < 60% initial）
+                    long lots = 2 + rng.nextInt(4);
+                    long collateral = lots * 100L;
+                    long principal = Math.max(1L, lots * markPrice / 2L);
+                    CommandResultCode rc = submitRc(container, ApiLoanCreate.builder()
+                            .externalId(ext++).uid(uid).loanId(uid).symbol(symbolId)
+                            .collateralAmount(collateral).principal(principal).build());
+                    if (rc == CommandResultCode.SUCCESS) {
+                        hasLoan[b] = true;
+                        loanLots[b] = lots;
+                    }
+                    assertConserved(container, "M5 cycle " + cycle + " after create", cycle, seed);
+                    continue;
+                }
+
+                final int action = rng.nextInt(3);
+                if (action == 0) {
+                    // 部分还款
+                    submitRc(container, ApiLoanRepay.builder()
+                            .externalId(ext++).uid(uid).loanId(uid).repayAmount(1_000L).build());
+                    assertConserved(container, "M5 cycle " + cycle + " after repay", cycle, seed);
+                } else {
+                    // 强平：可能先降价到 underwater。放一张吃满的 LP BID，再 force-liquidate 全部张数。
+                    if (action == 2) {
+                        markPrice = Math.max(1_000L, markPrice - (1_000L + rng.nextInt(20_000)));
+                        container.updateCurrentPriceTo((int) markPrice, symbolId, quoteCurrencyId);
+                    }
+                    long lots = loanLots[b];
+                    container.submitCommandSync(ApiPlaceOrder.builder()
+                            .uid(lp).orderId(orderId++).action(OrderAction.BID).size(lots)
+                            .price(markPrice).reservePrice(markPrice).symbol(symbolId)
+                            .orderType(OrderType.GTC).marginMode(MarginMode.ISOLATED).build(),
+                            CommandResultCode.SUCCESS);
+                    IsolatedLoanRecord idRec = new IsolatedLoanRecord();
+                    idRec.uid = uid;
+                    idRec.loanId = uid;
+                    submitRc(container, ApiLoanForceLiquidate.builder()
+                            .uid(uid).symbol(symbolId).loanId(uid).price(markPrice).size(lots)
+                            .orderId(LoanService.generateIsolatedForceSellOrderId(idRec))
+                            .action(OrderAction.ASK).orderType(OrderType.IOC).build());
+                    hasLoan[b] = false; // 吃满 → 全部卖出 → loan 关闭（overpay 或 underwater 均关）
+                    assertConserved(container, "M5 cycle " + cycle + " after force-liquidate", cycle, seed);
+                    // 价格恢复，便于后续 create 通过 LTV
+                    markPrice = 50_000L;
+                    container.updateCurrentPriceTo((int) markPrice, symbolId, quoteCurrencyId);
+                }
+            }
+            log.info("M5 loan fuzz seed={} cycles={} —— scale 错配借贷全生命周期守恒", seed, numCycles);
         }
     }
 }

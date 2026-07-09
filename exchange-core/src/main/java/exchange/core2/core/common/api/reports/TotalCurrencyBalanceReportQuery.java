@@ -214,11 +214,20 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
             ifBalance.addToValue(spec.quoteCurrency, positionValueInCurrency);
         });
 
+        // loan 平台桶：poolAvailable + interestRevenue + loanLiqFees（平台持有现金，参与全局对账）
+        final IntLongHashMap loanBalances = new IntLongHashMap();
+        final exchange.core2.core.processors.loan.LoanService loanService = riskEngine.getLoanService();
+        if (loanService != null) {
+            loanService.getLoanPoolAvailable().forEachKeyValue(loanBalances::addToValue);
+            loanService.getInterestRevenue().forEachKeyValue(loanBalances::addToValue);
+            loanService.getLoanLiqFees().forEachKeyValue(loanBalances::addToValue);
+        }
+
         return Optional.of(
             new TotalCurrencyBalanceReportResult(currencyBalance, extraMargin, new IntLongHashMap(riskEngine.getFees()),
                 new IntLongHashMap(riskEngine.getAdjustments()), new IntLongHashMap(riskEngine.getSuspends()),
-                exchangeLockedTotal, symbolOpenInterestLong, symbolOpenInterestShort, ifBalance, ifOpenInterestLong,
-                ifOpenInterestShort, riskEngine.getCurrencySpecificationProvider().getCurrencySpecs(),
+                exchangeLockedTotal, loanBalances, symbolOpenInterestLong, symbolOpenInterestShort, ifBalance,
+                ifOpenInterestLong, ifOpenInterestShort, riskEngine.getCurrencySpecificationProvider().getCurrencySpecs(),
                 riskEngine.getSymbolSpecificationProvider().getSymbolSpecs()));
     }
 

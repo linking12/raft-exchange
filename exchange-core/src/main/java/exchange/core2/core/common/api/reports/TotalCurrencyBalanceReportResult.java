@@ -45,6 +45,11 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
     final private IntLongHashMap suspends;
     /** RiskEngine 聚合的 UserProfile.exchangeLocked（现货侧冻结，作为独立 bucket 参与全局对账） */
     final private IntLongHashMap exchangeLocked;
+    /**
+     * loan 平台桶 = loanPoolAvailable + interestRevenue + loanLiqFees（均平台持有现金，参与全局对账）。
+     * 不含 loanPoolBorrowed / badDebt —— 那是追踪器，对应的钱在借款人账户里（disburse 时已进 accounts）。
+     */
+    final private IntLongHashMap loanBalances;
 
     // symbol -> volume
     // We have to keep shorts and longs separately because for multi-core processing different risk engine instances will give non-matching results.
@@ -65,7 +70,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
 
     public static TotalCurrencyBalanceReportResult createEmpty() {
         return new TotalCurrencyBalanceReportResult(
-                null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private TotalCurrencyBalanceReportResult(final BytesIn bytesIn) {
@@ -75,6 +80,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
         this.adjustments = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.suspends = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.exchangeLocked = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
+        this.loanBalances = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.openInterestLong = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.openInterestShort = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
         this.ifBalances = SerializationUtils.readNullable(bytesIn, SerializationUtils::readIntLongHashMap);
@@ -92,6 +98,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
         SerializationUtils.marshallNullable(adjustments, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(suspends, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(exchangeLocked, bytes, SerializationUtils::marshallIntLongHashMap);
+        SerializationUtils.marshallNullable(loanBalances, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(openInterestLong, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(openInterestShort, bytes, SerializationUtils::marshallIntLongHashMap);
         SerializationUtils.marshallNullable(ifBalances, bytes, SerializationUtils::marshallIntLongHashMap);
@@ -103,10 +110,11 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
 
     /**
      * 全局对账：accountBalances（可支配） + extraMargin + exchangeLocked（现货冻结）
-     * + fees + adjustments + suspends + ifBalances = 0。
+     * + loanBalances（loan 平台桶） + fees + adjustments + suspends + ifBalances = 0。
      */
     public IntLongHashMap getGlobalBalancesSum() {
-        return SerializationUtils.mergeSum(accountBalances, extraMargin, exchangeLocked, fees, adjustments, suspends, ifBalances);
+        return SerializationUtils.mergeSum(accountBalances, extraMargin, exchangeLocked, loanBalances, fees, adjustments,
+                suspends, ifBalances);
     }
 
     public IntLongHashMap getClientsBalancesSum() {
@@ -130,6 +138,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
                                 SerializationUtils.mergeSum(a.adjustments, b.adjustments),
                                 SerializationUtils.mergeSum(a.suspends, b.suspends),
                                 SerializationUtils.mergeSum(a.exchangeLocked, b.exchangeLocked),
+                                SerializationUtils.mergeSum(a.loanBalances, b.loanBalances),
                                 SerializationUtils.mergeSum(a.openInterestLong, b.openInterestLong),
                                 SerializationUtils.mergeSum(a.openInterestShort, b.openInterestShort),
                                 SerializationUtils.mergeSum(a.ifBalances, b.ifBalances),
