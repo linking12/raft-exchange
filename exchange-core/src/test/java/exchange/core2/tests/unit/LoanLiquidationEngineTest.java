@@ -40,6 +40,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -402,5 +403,54 @@ class LoanLiquidationEngineTest {
         assertEquals(availableLots, cmd.size,
                 "cross 强平 size 必须封顶到可卖张数=1，而非把 currencyScale 抵押量当张数（旧 bug 会算出 4）");
         assertEquals(SYMBOL_NI, cmd.symbol);
+    }
+
+    @Test
+    void failover_freshScanner_reSizesFromReducedState_noDoubleLiquidation() {
+        // failover 幂等：证明 scanner 决策是 replicated loan 状态的纯函数、与 in-flight 记忆无关。
+        // ① 同一 leader：in-flight 去重挡住重复 publish；
+        // ② 新 leader（全新 scanner、空 in-flight）：按"apply 后减少的抵押"重新定 size，不会用原始量过量强平。
+        final int WBTC = 10;
+        final int SYMBOL_NI = 200;
+        currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(WBTC).name("WBTC").digit(2).build());
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
+                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
+                .loanRateBps(0).collateralWeightBps(9000).build();
+        specProvider.registerSymbol(SYMBOL_NI, spec);
+        LastPriceCacheRecord price = new LastPriceCacheRecord();
+        price.markPrice = 50_000L;
+        priceCache.put(SYMBOL_NI, price);
+
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, 1000L);
+        loan.collateralAmount = 300L;          // 3 WBTC
+        loan.outstandingPrincipal = 140_000L;  // LTV 93% ≥ 80% → underwater
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        // 原 leader 首次触发：publish 一次，size=3
+        scanner.check(up);
+        ArgumentCaptor<ApiCommand> cap = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher, times(1)).publish(cap.capture(), any());
+        assertEquals(3L, ((ApiLoanForceLiquidate) cap.getValue()).size);
+
+        // 同一 leader 再扫：loanId 在 in-flight → 不重复 publish
+        scanner.check(up);
+        verify(publisher, times(1)).publish(any(), any());
+
+        // ===== 模拟 failover：一笔部分强平已 apply（抵押 3→1 WBTC，仍 underwater），新 leader 空 in-flight 起步 =====
+        loan.collateralAmount = 100L;         // 1 WBTC 剩余
+        loan.outstandingPrincipal = 45_000L;  // LTV 90% 仍 ≥ 80%
+        LoanLiquidationEngine freshLeaderScanner = new LoanLiquidationEngine(engine);
+
+        freshLeaderScanner.check(up);
+        // 新 leader 会 publish（第 2 次总量），但 size 必须是剩余的 1 张，而不是原始 3 张。
+        // 用独立 captor，取最后一次 publish（新 leader 那次）。
+        ArgumentCaptor<ApiCommand> cap2 = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher, times(2)).publish(cap2.capture(), any());
+        ApiLoanForceLiquidate reSized =
+                (ApiLoanForceLiquidate) cap2.getAllValues().get(cap2.getAllValues().size() - 1);
+        assertEquals(1L, reSized.size,
+                "新 leader 按 apply 后剩余抵押(1 张)定 size，不会用原始 3 张 → 无双重/过量强平");
     }
 }
