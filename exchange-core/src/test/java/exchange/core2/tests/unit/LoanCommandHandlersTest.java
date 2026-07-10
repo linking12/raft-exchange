@@ -598,6 +598,33 @@ class LoanCommandHandlersTest {
     }
 
     @Test
+    void loanForceLiquidate_duplicateApply_secondRejectedByCollateralGuard() {
+        // failover 幂等命门：即使新 leader 因空 in-flight 重复发一条强平，apply 路径的抵押边界会挡下第二条。
+        // pre-move 是"先校验 sellAmount ≤ collateralAmount，再扣减"的原子 compare-and-consume，
+        // raft 日志顺序执行 → 第一条消费掉抵押，第二条扑空 LOAN_INVALID_AMOUNT，不会双重卖出。
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 111L, BTC, USDT, 500, 0L);
+        loan.collateralAmount = 3L;
+        loan.outstandingPrincipal = 100_000L;
+        up.isolatedLoans.put(111L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+
+        // 第一条（X）：卖光 3 张 → pre-move 成功，抵押 3→0 全挪进 exchangeLocked
+        OrderCommand x = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
+            LoanService.generateIsolatedForceSellOrderId(loan), UID, 111L, SYMBOL, 3L, 49500L);
+        assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(x));
+        assertEquals(0L, loan.collateralAmount);
+        assertEquals(3L, up.exchangeLocked.get(BTC));
+
+        // 第二条（Y，新 orderId，模拟 failover 后新 leader 按旧状态又发的 3 张）：抵押已被 X 消费 → 拒
+        OrderCommand y = build(OrderCommandType.LOAN_FORCE_LIQUIDATE, 777_777L, UID, 111L, SYMBOL, 3L, 49500L);
+        assertEquals(CommandResultCode.LOAN_INVALID_AMOUNT, handlers.handleLoanForceLiquidate(y),
+            "第二条重复强平必须被抵押边界拒（无双重卖出）");
+        // 状态未被第二条改动
+        assertEquals(0L, loan.collateralAmount, "第二条不得再扣抵押");
+        assertEquals(3L, up.exchangeLocked.get(BTC), "第二条不得再挪 exchangeLocked");
+    }
+
+    @Test
     void loanCrossForceLiquidate_targetLoanNotFound_returnsLoanNotFound() {
         // targetLoanId 走 cmd.reserveBidPrice；crossLoans 里没这笔 → LOAN_NOT_FOUND
         OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE, 1L, UID, 999L, SYMBOL, 1L, 50000L);

@@ -257,4 +257,34 @@ class ITLoanConservation {
             assertGlobalConserved(c, "after cross full repay");
         }
     }
+
+    // ================================================================
+    // failover 幂等命门（端到端）：重复强平被 apply 路径的抵押边界挡下
+    // ================================================================
+
+    @Test
+    public void duplicateForceLiquidate_secondRejectedByGuard_conserves() throws Exception {
+        final long loanId = 20L;
+        try (ExchangeTestContainer c = boot()) {
+            createLoan(c, loanId);
+            placeLpBid(c, 3000L, 2L); // 只吃 2 lot → 部分成交，loan 保留 1 WBTC
+
+            // X：部分强平成功（模拟已 apply 的那条）
+            c.submitCommandSync(ApiLoanForceLiquidate.builder()
+                .uid(BORROWER).symbol(SYMBOL).loanId(loanId).price(MARK_PRICE).size(COLLATERAL_LOTS)
+                .orderId(forceSellOrderId(loanId)).action(OrderAction.ASK).orderType(OrderType.IOC).build(),
+                CommandResultCode.SUCCESS);
+            assertEquals(100L, c.getUserProfile(BORROWER).getAccounts().get(WBTC), "X 后账户剩 1 WBTC");
+
+            // Y：failover 新 leader 按旧状态又发一条 3 张 → 抵押只剩 1 WBTC，pre-move 拒
+            c.submitCommandSync(ApiLoanForceLiquidate.builder()
+                .uid(BORROWER).symbol(SYMBOL).loanId(loanId).price(MARK_PRICE).size(COLLATERAL_LOTS)
+                .orderId(forceSellOrderId(loanId)).action(OrderAction.ASK).orderType(OrderType.IOC).build(),
+                CommandResultCode.LOAN_INVALID_AMOUNT);
+            // Y 被拒、无副作用，账户不变、守恒
+            assertEquals(100L, c.getUserProfile(BORROWER).getAccounts().get(WBTC), "Y 被拒，账户 WBTC 不变");
+            assertEquals(0L, c.getUserProfile(BORROWER).getExchangeLocked().get(WBTC), "Y 被拒，exchangeLocked 不变");
+            assertGlobalConserved(c, "after duplicate force-liquidate rejected");
+        }
+    }
 }
