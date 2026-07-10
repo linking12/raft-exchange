@@ -453,4 +453,62 @@ class LoanLiquidationEngineTest {
         assertEquals(1L, reSized.size,
                 "新 leader 按 apply 后剩余抵押(1 张)定 size，不会用原始 3 张 → 无双重/过量强平");
     }
+
+    // ================================================================
+    // P0-3 卡单容差爬梯 + 节流
+    // ================================================================
+
+    private IsolatedLoanRecord underwaterLoan(long loanId, int stuckAttempts) {
+        // 1 BTC 抵押 45k → LTV 90% ≥ 80% liquidation
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, loanId, BTC, USDT, 0, 1000L);
+        loan.collateralAmount = 1L;
+        loan.outstandingPrincipal = 45_000L;
+        loan.stuckLiqAttempts = stuckAttempts;
+        return loan;
+    }
+
+    @Test
+    void toleranceLadder_widensWithStuckAttempts() {
+        // markPrice=50000。容差 1%/2%/5% → 限价 49500/49000/47500。切档 3/6。
+        up.isolatedLoans.put(1L, underwaterLoan(1L, 0));  // tier0 → 1%
+        up.isolatedLoans.put(2L, underwaterLoan(2L, 3));  // tier1 → 2%
+        up.isolatedLoans.put(3L, underwaterLoan(3L, 6));  // tier2 → 5%
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> cap = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher, times(3)).publish(cap.capture(), any());
+        java.util.Map<Long, Long> priceByLoan = new java.util.HashMap<>();
+        for (ApiCommand c : cap.getAllValues()) {
+            ApiLoanForceLiquidate f = (ApiLoanForceLiquidate) c;
+            priceByLoan.put(f.loanId, f.price);
+        }
+        assertEquals(49_500L, priceByLoan.get(1L), "0 次卡 → 1% 容差");
+        assertEquals(49_000L, priceByLoan.get(2L), "3 次卡 → 2% 容差");
+        assertEquals(47_500L, priceByLoan.get(3L), "6 次卡 → 5% 容差");
+    }
+
+    @Test
+    void stuckLoan_reFireThrottled_withinWindow() {
+        // 卡住的 loan（attempts>0）在节流窗口内不重发。用 onApplied 清 in-flight，隔离出 throttle 逻辑。
+        doAnswer(inv -> {
+            ((Runnable) inv.getArgument(1)).run();
+            return null;
+        }).when(publisher).publish(any(), any(Runnable.class));
+
+        up.isolatedLoans.put(1L, underwaterLoan(1L, 1)); // 已卡 1 次
+
+        scanner.check(up); // 第一次：未节流 → publish，记 lastLiqMs
+        scanner.check(up); // 立即再扫：30s 窗口内 → 节流，不 publish
+
+        verify(publisher, times(1)).publish(any(), any());
+    }
+
+    @Test
+    void freshLoan_notThrottled_firesImmediately() {
+        // 未卡的 loan（attempts=0）不走节流，首次即触发
+        up.isolatedLoans.put(1L, underwaterLoan(1L, 0));
+        scanner.check(up);
+        verify(publisher, times(1)).publish(any(), any());
+    }
 }

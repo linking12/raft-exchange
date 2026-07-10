@@ -55,10 +55,18 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class LoanLiquidationEngine {
 
-    // Tolerance 分级 v1 hardcode 1%——限价 = markPrice × (10000 − TOLERANCE_BPS) / 10000。
-    // v2 走 spec 或分级 ladder（stuck detection 部分放宽 1% → 2% → 5%）。
-    private static final long ISOLATED_TOLERANCE_BPS = 100L;
-    private static final long CROSS_TOLERANCE_BPS = 100L;
+    // 强平限价容差爬梯（限价 = markPrice × (10000 − tolerance) / 10000）：卡单（连续零成交）越多，容差越宽，
+    // 让 IOC 吃到更深的档位。切档按 loan.stuckLiqAttempts：<3 → 1%，<6 → 2%，否则 5%（封顶）。
+    private static final long TOLERANCE_BASE_BPS = 100L;   // 1%
+    private static final long TOLERANCE_TIER1_BPS = 200L;  // 2%
+    private static final long TOLERANCE_TIER2_BPS = 500L;  // 5%
+    private static final int STUCK_TIER1_ATTEMPTS = 3;
+    private static final int STUCK_TIER2_ATTEMPTS = 6;
+
+    // 卡单重发节流：stuck 的 loan 每 30s 才重发一次（避免每 tick 刷 raft）。进程 local，failover 后重置无碍。
+    private static final long STUCK_RETRY_THROTTLE_MS = 30_000L;
+    // 卡单告警阈值：连续零成交达到此次数（约 STUCK_ALERT_ATTEMPTS × 30s）仍打不进 → 告警（多半是空盘）。
+    private static final int STUCK_ALERT_ATTEMPTS = 10;
 
     // Cross sellSize heuristic：覆盖 realDebt × (10000 + BUFFER_BPS) / 10000（fee + tolerance 冗余）。
     private static final long CROSS_SELL_BUFFER_BPS = 500L; // 5%
@@ -73,6 +81,35 @@ public final class LoanLiquidationEngine {
     // 节流 per-loanId (Isolated) / per-uid (Cross)，进程 local（不进 raft snapshot）
     private final LongLongHashMap lastIsolatedMarginCallMs = new LongLongHashMap();
     private final LongLongHashMap lastCrossMarginCallMs = new LongLongHashMap();
+    // 卡单重发节流：Isolated per-loanId / Cross per-uid，进程 local。
+    private final LongLongHashMap lastIsolatedLiqMs = new LongLongHashMap();
+    private final LongLongHashMap lastCrossLiqMs = new LongLongHashMap();
+
+    /** 容差爬梯：连续零成交次数 → 限价容差 bps。 */
+    private static long toleranceBpsFor(int stuckLiqAttempts) {
+        if (stuckLiqAttempts >= STUCK_TIER2_ATTEMPTS)
+            return TOLERANCE_TIER2_BPS;
+        if (stuckLiqAttempts >= STUCK_TIER1_ATTEMPTS)
+            return TOLERANCE_TIER1_BPS;
+        return TOLERANCE_BASE_BPS;
+    }
+
+    /**
+     * 卡单节流 + 告警（Isolated / Cross 共用）。未卡（attempts==0）直接放行；卡住的每 STUCK_RETRY_THROTTLE_MS
+     * 才放行一次，超阈值发告警。返回 true 表示本轮应跳过（仍在节流窗口内）。key = loanId(Isolated) / uid(Cross)。
+     */
+    private boolean stuckLiqThrottled(String lane, LongLongHashMap lastLiqMs, long key, int stuckAttempts) {
+        if (stuckAttempts == 0)
+            return false;
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastLiqMs.get(key) < STUCK_RETRY_THROTTLE_MS)
+            return true;
+        if (stuckAttempts >= STUCK_ALERT_ATTEMPTS)
+            log.warn("Loan liquidation STUCK: lane={} key={} attempts={} (likely no liquidity)", lane, key,
+                stuckAttempts);
+        lastLiqMs.put(key, nowMs);
+        return false;
+    }
 
     public LoanLiquidationEngine(LiquidationEngine engine) {
         this.engine = engine;
@@ -123,7 +160,9 @@ public final class LoanLiquidationEngine {
             long thresholdLiq = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanLiquidationLtvBps);
 
             if (termExpired || ltvScaled >= thresholdLiq) {
-                publishIsolatedForceSell(loan, spec, priceRecord.markPrice);
+                if (stuckLiqThrottled("isolated", lastIsolatedLiqMs, loan.loanId, loan.stuckLiqAttempts))
+                    return;
+                publishIsolatedForceSell(loan, spec, priceRecord.markPrice, toleranceBpsFor(loan.stuckLiqAttempts));
                 return;
             }
 
@@ -167,9 +206,10 @@ public final class LoanLiquidationEngine {
     /**
      * 构造 Isolated 强平 IOC 单并 publishTracked。orderId 顶字节 'L' + subtype 'S'
      * （{@link LoanService#generateIsolatedForceSellOrderId}），跟 futures 强平 orderId 空间隔离。
-     * 限价 = markPrice × (10000 − {@value #ISOLATED_TOLERANCE_BPS}) / 10000。
+     * 限价 = markPrice × (10000 − toleranceBps) / 10000，toleranceBps 由卡单爬梯给出。
      */
-    private void publishIsolatedForceSell(IsolatedLoanRecord loan, CoreSymbolSpecification spec, long markPrice) {
+    private void publishIsolatedForceSell(IsolatedLoanRecord loan, CoreSymbolSpecification spec, long markPrice,
+        long toleranceBps) {
         // 抵押金额（currencyScale）→ 下单张数（lot）；不足一张的尘埃卖不掉，留在 collateralAmount，跳过本轮
         CoreCurrencySpecification baseSpec =
             engine.getCurrencySpecificationProvider().getCurrencySpecification(loan.collateralCurrency);
@@ -180,7 +220,7 @@ public final class LoanLiquidationEngine {
             return;
         }
         long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
-        long limitPrice = limitPriceWithTolerance(markPrice, ISOLATED_TOLERANCE_BPS);
+        long limitPrice = limitPriceWithTolerance(markPrice, toleranceBps);
         ApiLoanForceLiquidate cmd = ApiLoanForceLiquidate.builder().uid(loan.uid).symbol(spec.symbolId)
             .loanId(loan.loanId).price(limitPrice).size(sellSizeLots).orderId(orderId)
             .action(OrderAction.ASK).orderType(OrderType.IOC).build();
@@ -226,8 +266,11 @@ public final class LoanLiquidationEngine {
                 availableCollateral);
             return;
         }
+        // 卡单节流（per-uid）+ 容差爬梯（按 targetLoan 的连续零成交次数）
+        if (stuckLiqThrottled("cross", lastCrossLiqMs, up.uid, targetLoan.stuckLiqAttempts))
+            return;
         long orderId = LoanService.generateCrossForceSellOrderId(up.uid, sellingCurrency);
-        long limitPrice = limitPriceWithTolerance(priceRecord.markPrice, CROSS_TOLERANCE_BPS);
+        long limitPrice = limitPriceWithTolerance(priceRecord.markPrice, toleranceBpsFor(targetLoan.stuckLiqAttempts));
         ApiLoanCrossForceLiquidate cmd = ApiLoanCrossForceLiquidate.builder().uid(up.uid).symbol(spec.symbolId)
             .targetLoanId(targetLoan.loanId).price(limitPrice).size(sellSize).orderId(orderId)
             .action(OrderAction.ASK).orderType(OrderType.IOC).build();

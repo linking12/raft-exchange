@@ -49,6 +49,8 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     public long accumulatedInterest;
     // 上次计息时间戳（ns），惰性 accrue 到此点；初始 = openedAtTs。
     public long lastAccrueTs;
+    // 连续零成交的强平尝试次数；零成交 +1、有成交归 0。scanner 用它爬容差（1%→2%→5%）+ 卡单告警。
+    public int stuckLiqAttempts;
 
     public CrossLoanRecord(long uid, long loanId, int loanCurrency, int rateBps, long openedAtTs) {
         initialize(uid, loanId, loanCurrency, rateBps, openedAtTs);
@@ -63,6 +65,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
         this.outstandingPrincipal = bytes.readLong();
         this.accumulatedInterest = bytes.readLong();
         this.lastAccrueTs = bytes.readLong();
+        this.stuckLiqAttempts = bytes.readInt();
     }
 
     /** 从对象池拿到 record 后必须先 initialize 重置 identity + 可变状态。 */
@@ -75,6 +78,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
         this.outstandingPrincipal = 0;
         this.accumulatedInterest = 0;
         this.lastAccrueTs = openedAtTs;
+        this.stuckLiqAttempts = 0;
     }
 
     public boolean isEmpty() {
@@ -89,6 +93,8 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     @Override public void setAccumulatedInterest(long value) { this.accumulatedInterest = value; }
     @Override public long getLastAccrueTs() { return lastAccrueTs; }
     @Override public void setLastAccrueTs(long value) { this.lastAccrueTs = value; }
+    @Override public int getStuckLiqAttempts() { return stuckLiqAttempts; }
+    @Override public void setStuckLiqAttempts(int value) { this.stuckLiqAttempts = value; }
 
     public void validateInternalState() {
         if (outstandingPrincipal < 0 || accumulatedInterest < 0) {
@@ -107,12 +113,13 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
         bytes.writeLong(outstandingPrincipal);
         bytes.writeLong(accumulatedInterest);
         bytes.writeLong(lastAccrueTs);
+        bytes.writeInt(stuckLiqAttempts);
     }
 
     @Override
     public int stateHash() {
         return Objects.hash(uid, loanId, loanCurrency, rateBps, openedAtTs,
-            outstandingPrincipal, accumulatedInterest, lastAccrueTs);
+            outstandingPrincipal, accumulatedInterest, lastAccrueTs, stuckLiqAttempts);
     }
 
     @Override

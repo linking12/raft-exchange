@@ -38,4 +38,9 @@ public interface LoanRecord {
     long getLastAccrueTs();
 
     void setLastAccrueTs(long value);
+
+    /** 连续零成交的强平尝试次数（replicated）；驱动 scanner 容差爬梯 + 卡单告警。有成交清 0、零成交 +1。 */
+    int getStuckLiqAttempts();
+
+    void setStuckLiqAttempts(int value);
 }

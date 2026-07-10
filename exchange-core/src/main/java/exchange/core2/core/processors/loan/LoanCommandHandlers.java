@@ -132,7 +132,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_CREATE。
-     * <p>
      * 字段：uid / reserveBidPrice=loanId / symbol=symbolId / size=collateralAmount / price=principal / orderId=externalId
      */
     public CommandResultCode handleLoanCreate(OrderCommand cmd) {
@@ -202,7 +201,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_REPAY。
-     * <p>
      * 字段：uid / reserveBidPrice=loanId / price=repayAmount（0 = payoff full）/ orderId=externalId
      */
     public CommandResultCode handleLoanRepay(OrderCommand cmd) {
@@ -247,7 +245,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_ADD_COLLATERAL—— 补抵押降 LTV。
-     * <p>
      * 字段：uid / reserveBidPrice=loanId / size=amount / orderId=externalId
      */
     public CommandResultCode handleLoanAddCollateral(OrderCommand cmd) {
@@ -281,7 +278,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_RELEASE_COLLATERAL—— 减抵押；允许操作到 marginCall 上方，拒绝直接撤到强平线。
-     * <p>
      * 字段：uid / reserveBidPrice=loanId / size=amount / orderId=externalId
      */
     public CommandResultCode handleLoanReleaseCollateral(OrderCommand cmd) {
@@ -448,8 +444,10 @@ public final class LoanCommandHandlers {
         } else if (loan.isEmpty()) {
             takerUp.isolatedLoans.remove(loanId);
             engine.getObjectsPool().put(ObjectsPool.ISOLATED_LOAN_RECORD, loan);
+        } else {
+            // loan 保留：卡单计数——零成交(打不进)则 +1 让 scanner 爬容差/告警；有成交则清 0
+            loan.stuckLiqAttempts = tradedSize > 0 ? 0 : loan.stuckLiqAttempts + 1;
         }
-        // 部分成交：loan 保留，等 scanner 下轮
     }
 
     // ================================================================================================================
@@ -458,7 +456,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_CROSS_ADD_COLLATERAL。
-     * <p>
      * 字段：uid / symbol=currency / size=amount / orderId=externalId
      */
     public CommandResultCode handleLoanCrossAddCollateral(OrderCommand cmd) {
@@ -489,7 +486,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_CROSS_WITHDRAW_COLLATERAL。
-     * <p>
      * 字段：uid / symbol=currency / size=amount / orderId=externalId
      * <p>
      * 撤后账户级 LTV ≥ crossLiquidationLtvBps 则 revert；numeraire 未配置时 LTV 恒 0，等效于不拦截。
@@ -528,7 +524,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_CROSS_BORROW。
-     * <p>
      * 字段：uid / reserveBidPrice=loanId / symbol=loanCurrency / price=principal / orderId=externalId
      * <p>
      * 借后账户级 LTV > loanInitialLtvBps 则 revert；numeraire 未配置时 LTV 恒 0，等效于不拦截。
@@ -585,7 +580,6 @@ public final class LoanCommandHandlers {
 
     /**
      * LOAN_CROSS_REPAY—— 逻辑同 Isolated REPAY，但不释放抵押。
-     * <p>
      * 字段：uid / reserveBidPrice=loanId / price=repayAmount / orderId=externalId
      */
     public CommandResultCode handleLoanCrossRepay(OrderCommand cmd) {
@@ -741,8 +735,10 @@ public final class LoanCommandHandlers {
         } else if (targetLoan.outstandingPrincipal == 0 && targetLoan.accumulatedInterest == 0) {
             takerUp.crossLoans.remove(targetLoanId);
             engine.getObjectsPool().put(ObjectsPool.CROSS_LOAN_RECORD, targetLoan);
+        } else {
+            // targetLoan 保留：卡单计数（放 targetLoan）——零成交 +1、有成交清 0
+            targetLoan.stuckLiqAttempts = tradedSize > 0 ? 0 : targetLoan.stuckLiqAttempts + 1;
         }
-        // 部分成交 or 还有其他币种抵押：targetLoan 保留，等 scanner 下轮换 sellingCurrency 继续 deleverage
     }
 
     // ================================================================================================================
@@ -751,7 +747,6 @@ public final class LoanCommandHandlers {
 
     /**
      * POOL_DEPOSIT。
-     * <p>
      * 字段：uid=shardId / symbol=currency / size=amount / orderId=externalId
      * <p>
      * 其他 shard 静默 SUCCESS 短路（不 log warn，避免所有 shard 都 broadcast）。
@@ -775,7 +770,6 @@ public final class LoanCommandHandlers {
 
     /**
      * POOL_WITHDRAW。
-     * <p>
      * 字段：uid=shardId / symbol=currency / size=amount / orderId=externalId
      */
     /**

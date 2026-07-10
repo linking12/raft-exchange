@@ -812,6 +812,59 @@ class LoanCommandHandlersTest {
         return ev;
     }
 
+    /** 单条 TRADE 事件（有成交）。 */
+    private exchange.core2.core.common.MatcherTradeEvent tradeEvent(long size, long price) {
+        exchange.core2.core.common.MatcherTradeEvent ev = new exchange.core2.core.common.MatcherTradeEvent();
+        ev.eventType = exchange.core2.core.common.MatcherEventType.TRADE;
+        ev.size = size;
+        ev.price = price;
+        ev.nextEvent = null;
+        return ev;
+    }
+
+    // ================================================================
+    // P0-3 卡单计数：postProcess 里零成交 stuckLiqAttempts++、有成交清 0
+    // ================================================================
+
+    @Test
+    void forceLiquidate_postProcess_zeroTrade_incrementsStuckAttempts() {
+        CoreSymbolSpecification spec = specProvider.getSymbolSpecification(SYMBOL);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 111L, BTC, USDT, 0, 0L);
+        loan.collateralAmount = 5L;
+        loan.outstandingPrincipal = 100_000L;
+        loan.stuckLiqAttempts = 0;
+        up.isolatedLoans.put(111L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+
+        // 全拒（0 成交）→ loan 保留、attempts +1
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE, 1L, UID, 111L, SYMBOL, 3L, 49_500L);
+        cmd.matcherEvent = rejectEvent(3L);
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+        assertEquals(1, up.isolatedLoans.get(111L).stuckLiqAttempts, "全拒 → attempts=1");
+
+        // 再全拒 → 累加到 2
+        cmd.matcherEvent = rejectEvent(3L);
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+        assertEquals(2, up.isolatedLoans.get(111L).stuckLiqAttempts, "再全拒 → attempts=2");
+    }
+
+    @Test
+    void forceLiquidate_postProcess_hasTrade_resetsStuckAttempts() {
+        CoreSymbolSpecification spec = specProvider.getSymbolSpecification(SYMBOL);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 111L, BTC, USDT, 0, 0L);
+        loan.collateralAmount = 5L;
+        loan.outstandingPrincipal = 100_000L;
+        loan.stuckLiqAttempts = 5; // 之前卡了 5 次
+        up.isolatedLoans.put(111L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+
+        // 有成交（2 张 @50000）→ loan 保留（还有债务）、attempts 清 0
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE, 1L, UID, 111L, SYMBOL, 2L, 49_500L);
+        cmd.matcherEvent = tradeEvent(2L, 50_000L);
+        handlers.postProcessLoanForceLiquidate(cmd, spec, up);
+        assertEquals(0, up.isolatedLoans.get(111L).stuckLiqAttempts, "有成交 → attempts 清 0");
+    }
+
     @Test
     void forceLiquidate_fullReject_nonIdentityScale_mustBeNoOp() {
         CoreSymbolSpecification spec = registerNonIdentityScaleSymbol();

@@ -51,6 +51,8 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     public long accumulatedInterest;
     // 上次计息时间戳（ns），惰性 accrue 到此点；初始 = openedAtTs。
     public long lastAccrueTs;
+    // 连续零成交的强平尝试次数；零成交 +1、有成交归 0。scanner 用它爬容差（1%→2%→5%）+ 卡单告警。
+    public int stuckLiqAttempts;
 
     public IsolatedLoanRecord(long uid, long loanId, int collateralCurrency, int loanCurrency, int rateBps,
         long openedAtTs) {
@@ -68,6 +70,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         this.outstandingPrincipal = bytes.readLong();
         this.accumulatedInterest = bytes.readLong();
         this.lastAccrueTs = bytes.readLong();
+        this.stuckLiqAttempts = bytes.readInt();
     }
 
     /** 从对象池拿到 record 后必须先 initialize 重置 identity + 可变状态。跟 {@link SymbolPositionRecord#initialize} 同款契约。 */
@@ -83,6 +86,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         this.outstandingPrincipal = 0;
         this.accumulatedInterest = 0;
         this.lastAccrueTs = openedAtTs;
+        this.stuckLiqAttempts = 0;
     }
 
     public boolean isEmpty() {
@@ -129,6 +133,16 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         this.lastAccrueTs = value;
     }
 
+    @Override
+    public int getStuckLiqAttempts() {
+        return stuckLiqAttempts;
+    }
+
+    @Override
+    public void setStuckLiqAttempts(int value) {
+        this.stuckLiqAttempts = value;
+    }
+
     public void validateInternalState() {
         if (collateralAmount < 0 || outstandingPrincipal < 0 || accumulatedInterest < 0) {
             log.error("uid {} loanId {} : negative amount collateral={} principal={} interest={}", uid, loanId,
@@ -148,12 +162,13 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         bytes.writeLong(outstandingPrincipal);
         bytes.writeLong(accumulatedInterest);
         bytes.writeLong(lastAccrueTs);
+        bytes.writeInt(stuckLiqAttempts);
     }
 
     @Override
     public int stateHash() {
         return Objects.hash(uid, loanId, collateralCurrency, loanCurrency, rateBps, openedAtTs, collateralAmount,
-            outstandingPrincipal, accumulatedInterest, lastAccrueTs);
+            outstandingPrincipal, accumulatedInterest, lastAccrueTs, stuckLiqAttempts);
     }
 
     @Override
