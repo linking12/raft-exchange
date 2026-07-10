@@ -93,7 +93,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
 
     // 无状态的配置字段
     private final SharedPool sharedPool;
-    @Getter
     private final ObjectsPool objectsPool;
     private final long DUST_SAFETY_LIMIT = 1000L;
     // sharding by symbolId
