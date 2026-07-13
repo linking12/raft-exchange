@@ -1154,29 +1154,31 @@ public final class RiskEngine implements WriteBytesMarshallable {
         } else if (message instanceof UpdateLoanGlobalConfigCommand) {
             final UpdateLoanGlobalConfigCommand cmd = (UpdateLoanGlobalConfigCommand)message;
             final int newNumeraire = cmd.getNumeraireCurrency();
-            if (newNumeraire > 0) {
-                if (currencySpecificationProvider.getCurrencySpecification(newNumeraire) == null) {
-                    log.warn("UPDATE_LOAN_GLOBAL_CONFIG numeraire rejected (currency spec missing): {}", cmd);
-                } else {
+            // partial update（≤0 = 不改）+ apply-all-or-nothing：任一违规整条拒绝，不留半更新的配置
+            final boolean numeraireOk =
+                newNumeraire <= 0 || currencySpecificationProvider.getCurrencySpecification(newNumeraire) != null;
+            final boolean valid =
+                numeraireOk && cmd.thresholdsValidGivenCurrent(loanService.getCrossLiquidationLtvBps(),
+                    loanService.getCrossMarginCallLtvBps());
+            if (!valid) {
+                log.warn("UPDATE_LOAN_GLOBAL_CONFIG rejected (invalid config): {}", cmd);
+            } else {
+                if (newNumeraire > 0) {
                     loanService.setNumeraireCurrency(newNumeraire);
-                    log.info("UPDATE_LOAN_GLOBAL_CONFIG numeraireCurrency={}", newNumeraire);
                 }
-            }
-            if (cmd.getCrossLiquidationLtvBps() > 0) {
-                loanService.setCrossLiquidationLtvBps(cmd.getCrossLiquidationLtvBps());
-                log.info("UPDATE_LOAN_GLOBAL_CONFIG crossLiquidationLtvBps={}", cmd.getCrossLiquidationLtvBps());
-            }
-            if (cmd.getCrossMarginCallLtvBps() > 0) {
-                loanService.setCrossMarginCallLtvBps(cmd.getCrossMarginCallLtvBps());
-                log.info("UPDATE_LOAN_GLOBAL_CONFIG crossMarginCallLtvBps={}", cmd.getCrossMarginCallLtvBps());
-            }
-            if (cmd.getLoanPoolUtilizationCapBps() > 0) {
-                loanService.setLoanPoolUtilizationCapBps(cmd.getLoanPoolUtilizationCapBps());
-                log.info("UPDATE_LOAN_GLOBAL_CONFIG loanPoolUtilizationCapBps={}", cmd.getLoanPoolUtilizationCapBps());
-            }
-            if (cmd.getLoanLiquidationFeeBps() > 0) {
-                loanService.setLoanLiquidationFeeBps(cmd.getLoanLiquidationFeeBps());
-                log.info("UPDATE_LOAN_GLOBAL_CONFIG loanLiquidationFeeBps={}", cmd.getLoanLiquidationFeeBps());
+                if (cmd.getCrossLiquidationLtvBps() > 0) {
+                    loanService.setCrossLiquidationLtvBps(cmd.getCrossLiquidationLtvBps());
+                }
+                if (cmd.getCrossMarginCallLtvBps() > 0) {
+                    loanService.setCrossMarginCallLtvBps(cmd.getCrossMarginCallLtvBps());
+                }
+                if (cmd.getLoanPoolUtilizationCapBps() > 0) {
+                    loanService.setLoanPoolUtilizationCapBps(cmd.getLoanPoolUtilizationCapBps());
+                }
+                if (cmd.getLoanLiquidationFeeBps() > 0) {
+                    loanService.setLoanLiquidationFeeBps(cmd.getLoanLiquidationFeeBps());
+                }
+                log.info("UPDATE_LOAN_GLOBAL_CONFIG applied: {}", cmd);
             }
         } else if (message instanceof UpdateSymbolLoanConfigCommand) {
             final UpdateSymbolLoanConfigCommand cmd = (UpdateSymbolLoanConfigCommand)message;
