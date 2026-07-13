@@ -171,7 +171,7 @@ public final class LoanLiquidationEngine {
                 if (ltvScaled >= thresholdWarn) {
                     long ltvBps = collateralValueInLoanCurrency == 0 ? 0
                         : Math.multiplyExact(realDebt, LoanService.BPS_SCALE) / collateralValueInLoanCurrency;
-                    sendIsolatedMarginCallIfNotThrottled(loan, ltvBps);
+                    sendIsolatedMarginCallIfNotThrottled(loan, ltvBps, spec.loanMarginCallLtvBps);
                 }
             }
         });
@@ -195,7 +195,7 @@ public final class LoanLiquidationEngine {
             return;
         }
         if (ltvBps >= loanService.getCrossMarginCallLtvBps()) {
-            sendCrossMarginCallIfNotThrottled(userProfile.uid, ltvBps);
+            sendCrossMarginCallIfNotThrottled(userProfile.uid, ltvBps, loanService.getCrossMarginCallLtvBps());
         }
     }
 
@@ -347,24 +347,30 @@ public final class LoanLiquidationEngine {
     // Margin call 通知 + 节流
     // ================================================================
 
-    private void sendIsolatedMarginCallIfNotThrottled(IsolatedLoanRecord loan, long ltvBps) {
+    // loanMode: 0 = Isolated，1 = Cross（对齐 FundEvent.loanMode 约定）
+    private static final byte LOAN_MODE_ISOLATED = 0;
+    private static final byte LOAN_MODE_CROSS = 1;
+
+    private void sendIsolatedMarginCallIfNotThrottled(IsolatedLoanRecord loan, long ltvBps, long thresholdBps) {
         long nowMs = System.currentTimeMillis();
         long lastMs = lastIsolatedMarginCallMs.get(loan.loanId);
         if (nowMs - lastMs < MARGIN_CALL_THROTTLE_MS)
             return;
         lastIsolatedMarginCallMs.put(loan.loanId, nowMs);
-        FundEvent event = engine.getEventsHelper().sendLoanIsolatedMarginCallEvent(loan.uid, loan.loanId, loan.loanCurrency,
-            ltvBps);
+        FundEvent event = engine.getEventsHelper().sendLoanMarginCallEvent(loan.uid, loan.loanId, LOAN_MODE_ISOLATED,
+            loan.loanCurrency, ltvBps, thresholdBps);
         publishMarginCall(event);
     }
 
-    private void sendCrossMarginCallIfNotThrottled(long uid, long ltvBps) {
+    private void sendCrossMarginCallIfNotThrottled(long uid, long ltvBps, long thresholdBps) {
         long nowMs = System.currentTimeMillis();
         long lastMs = lastCrossMarginCallMs.get(uid);
         if (nowMs - lastMs < MARGIN_CALL_THROTTLE_MS)
             return;
         lastCrossMarginCallMs.put(uid, nowMs);
-        FundEvent event = engine.getEventsHelper().sendLoanCrossMarginCallEvent(uid, ltvBps);
+        // Cross 账户级：loanId=0、loanCurrency=0（无单笔归属）
+        FundEvent event = engine.getEventsHelper().sendLoanMarginCallEvent(uid, 0L, LOAN_MODE_CROSS, 0, ltvBps,
+            thresholdBps);
         publishMarginCall(event);
     }
 

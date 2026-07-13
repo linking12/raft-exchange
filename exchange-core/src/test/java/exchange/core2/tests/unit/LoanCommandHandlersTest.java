@@ -278,8 +278,9 @@ class LoanCommandHandlersTest {
         assertEquals(poolBefore, loanService.getLoanPoolAvailable().get(USDT), "池子未增（没还 principal）");
         assertEquals(borrowedBefore, loanService.getLoanPoolBorrowed().get(USDT), "borrowed 未减");
         assertEquals(interestRevBefore + 500L, loanService.getInterestRevenue().get(USDT), "利息进 interestRevenue");
-        // 结算了 500 利息 → 发 LOAN_INTEREST_SETTLE 事件（Isolated=0）
-        verify(eventsHelper).sendLoanInterestSettleEvent(any(), eq(UID), eq((byte) 0), eq(999L), eq(500L), eq(USDT));
+        // 还款 500 全走利息 → LOAN_REPAY 事件：interestPaid=500、principalDelta=0（Isolated=0）
+        verify(eventsHelper).sendLoanRepayEvent(any(), eq(UID), eq(999L), eq((byte) 0), eq(USDT), anyInt(), anyLong(),
+            anyLong(), anyLong(), anyInt(), anyLong(), eq(0L), eq(500L));
     }
 
     @Test
@@ -452,6 +453,44 @@ class LoanCommandHandlersTest {
     }
 
     // ================================================================
+    // loan 用户维度事件（FundEvent loanXxx 快照 + 增量）
+    // ================================================================
+
+    @Test
+    void loanCreate_emitsBorrowEvent() {
+        handlers.handleLoanCreate(build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L));
+        // 1 BTC 抵押借 30000：本金/抵押全额 delta，LTV = 30000×10000/(1×50000) = 6000
+        verify(eventsHelper).sendLoanBorrowEvent(any(), eq(UID), eq(999L), eq((byte) 0), eq(USDT), eq(BTC),
+            eq(30_000L), eq(1L), eq(500), eq(6000L), eq(30_000L), eq(1L));
+    }
+
+    @Test
+    void loanAddCollateral_emitsCollateralChangeEvent() {
+        handlers.handleLoanCreate(build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L));
+        handlers.handleLoanAddCollateral(build(OrderCommandType.LOAN_ADD_COLLATERAL, 2L, UID, 999L, 0, 2L, 0));
+        // 加 2 BTC → collateral=3，LTV = 30000×10000/(3×50000) = 2000，delta = +2
+        verify(eventsHelper).sendLoanCollateralChangeEvent(any(), eq(UID), eq(999L), eq((byte) 0), eq(USDT), eq(BTC),
+            eq(30_000L), eq(0L), eq(3L), eq(500), eq(2000L), eq(2L));
+    }
+
+    @Test
+    void loanReleaseCollateral_emitsCollateralChangeEvent() {
+        handlers.handleLoanCreate(build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 2L, 30_000L));
+        handlers.handleLoanReleaseCollateral(build(OrderCommandType.LOAN_RELEASE_COLLATERAL, 2L, UID, 999L, 0, 1L, 0));
+        // 撤 1 BTC → collateral=1，LTV=6000，delta = -1
+        verify(eventsHelper).sendLoanCollateralChangeEvent(any(), eq(UID), eq(999L), eq((byte) 0), eq(USDT), eq(BTC),
+            eq(30_000L), eq(0L), eq(1L), eq(500), eq(6000L), eq(-1L));
+    }
+
+    @Test
+    void loanCrossBorrow_emitsBorrowEvent() {
+        handlers.handleLoanCrossBorrow(build(OrderCommandType.LOAN_CROSS_BORROW, 1L, UID, 555L, USDT, 0, 20_000L));
+        // Cross：mode=1、collateralCurrency=numeraire(USDT)、collateralAmount 留 0，principal delta = +20000
+        verify(eventsHelper).sendLoanBorrowEvent(any(), eq(UID), eq(555L), eq((byte) 1), eq(USDT), eq(USDT),
+            eq(20_000L), eq(0L), eq(500), anyLong(), eq(20_000L), eq(0L));
+    }
+
+    // ================================================================
     // LOAN_CROSS_ADD_COLLATERAL
     // ================================================================
 
@@ -541,6 +580,9 @@ class LoanCommandHandlersTest {
         OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_REPAY, 2L, UID, 555L, 0, 0, 0);  // payoff
         assertEquals(CommandResultCode.SUCCESS, handlers.handleLoanCrossRepay(cmd));
         assertEquals(0, up.crossLoans.size());
+        // 全额还清 20000（无利息）→ Cross REPAY 事件：mode=1、collateralCurrency=numeraire、principalDelta=-20000、剩余全 0
+        verify(eventsHelper).sendLoanRepayEvent(any(), eq(UID), eq(555L), eq((byte) 1), eq(USDT), eq(USDT),
+            eq(0L), eq(0L), eq(0L), eq(500), eq(0L), eq(-20_000L), eq(0L));
     }
 
     // ================================================================
@@ -982,8 +1024,9 @@ class LoanCommandHandlersTest {
         assertTrue(up.isolatedLoans.isEmpty(), "尘埃 underwater → loan 核销关闭");
         assertEquals(badDebtBefore + 100_000L, loanService.getBadDebt().get(USDT), "剩余债务写 badDebt");
         assertEquals(0L, loanService.getLoanPoolBorrowed().get(USDT), "principal 从 borrowed 移除");
-        // 坏账入账 → 发 LOAN_BAD_DEBT_INCURRED 事件（Isolated=0，金额 = 剩余债务）
-        verify(eventsHelper).sendLoanBadDebtEvent(any(), eq(UID), eq((byte) 0), eq(111L), eq(USDT), eq(100_000L));
+        // 坏账入账 → LOAN_LIQUIDATED 事件带 badDebt = 剩余债务（Isolated=0，末位参数）
+        verify(eventsHelper).sendLoanLiquidatedEvent(any(), eq(UID), eq(111L), eq((byte) 0), eq(USDT), anyInt(),
+            anyLong(), anyLong(), anyLong(), anyInt(), anyLong(), anyLong(), anyLong(), anyLong(), eq(100_000L));
     }
 
     @Test
@@ -1003,8 +1046,9 @@ class LoanCommandHandlersTest {
 
         assertEquals(1, up.isolatedLoans.size(), "还有整张可卖，不核销");
         assertEquals(badDebtBefore, loanService.getBadDebt().get(USDT), "badDebt 不增");
-        // 未核销 → 不该发坏账事件
-        verify(eventsHelper, never()).sendLoanBadDebtEvent(any(), anyLong(), anyByte(), anyLong(), anyInt(), anyLong());
+        // 零成交 + 无坏账 = 本轮 no-op → 不发 LOAN_LIQUIDATED 事件
+        verify(eventsHelper, never()).sendLoanLiquidatedEvent(any(), anyLong(), anyLong(), anyByte(), anyInt(), anyInt(),
+            anyLong(), anyLong(), anyLong(), anyInt(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
     }
 
     @Test
@@ -1043,5 +1087,8 @@ class LoanCommandHandlersTest {
 
         assertTrue(up.crossLoans.isEmpty(), "target loan 写 badDebt 关闭");
         assertEquals(30_000L, loanService.getBadDebt().get(USDT), "badDebt 记录 30k 损失");
+        // Cross LOAN_LIQUIDATED：mode=1、collateralCurrency=卖出币(BTC)、零成交 → delta 全 0、badDebt=30000
+        verify(eventsHelper).sendLoanLiquidatedEvent(any(), eq(UID), eq(888L), eq((byte) 1), eq(USDT), eq(BTC),
+            eq(0L), eq(0L), eq(0L), eq(500), anyLong(), eq(0L), eq(0L), eq(0L), eq(30_000L));
     }
 }

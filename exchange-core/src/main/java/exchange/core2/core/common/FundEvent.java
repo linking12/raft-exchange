@@ -80,16 +80,19 @@ public class FundEvent {
     // 额外字段
     public long markPrice; // 标记价格
 
-    // ===== 现货借贷 loan 事件专用（详见 loan.md §9.5；仅 LOAN_MARGIN_CALL / LOAN_INTEREST_SETTLE / LOAN_BAD_DEBT_INCURRED 使用）=====
-    // loanAmount 语义随 eventType 变化：
-    //   LOAN_MARGIN_CALL         → 当前 LTV（bps）
-    //   LOAN_INTEREST_SETTLE     → 本次结算的利息量（currencyScale）
-    //   LOAN_BAD_DEBT_INCURRED   → 本次坏账的 principal + interest 合计（currencyScale，正值）
-    public long loanAmount;
-    // loanExtra 仅 LOAN_MARGIN_CALL 使用：预警阈值 bps；其他 loan 事件保 0。
-    public long loanExtra;
-    // 0 = Isolated，1 = Cross；Cross MARGIN_CALL 场景 orderId = 0（无具体 loanId），其他所有 loan 事件 orderId = loanId。
-    public byte loanMode;
+    // 现货借贷 loan 事件字段（orderId=loanId、currency=loanCurrency、uid=借款人）
+    public byte loanMode;                 // 0 = Isolated，1 = Cross
+    public int loanCollateralCurrency;    // Isolated 抵押币；Cross = numeraire 估值币
+    public long loanOutstandingPrincipal; // 操作后剩余本金
+    public long loanAccumulatedInterest;  // 操作后剩余应计利息
+    public long loanCollateralAmount;     // 操作后剩余抵押（Cross = numeraire 估值单值）
+    public int loanRateBps;               // 贷款利率
+    public long loanLtvBps;               // 操作后 LTV（bps）；MARGIN_CALL = 当前 LTV；未计算时 0
+    public long loanPrincipalDelta;       // 本次本金变动（BORROW +，REPAY/LIQUIDATED -）
+    public long loanCollateralDelta;      // 本次抵押变动（加 +，减/强平卖出 -）
+    public long loanInterestPaid;         // 本次偿还的利息（REPAY / LIQUIDATED）
+    public long loanBadDebt;              // 本次坏账核销量（仅 LIQUIDATED underwater）
+    public long loanThresholdBps;         // 仅 MARGIN_CALL：预警阈值 bps
 
     public FundEvent nextEvent;
 
@@ -128,11 +131,12 @@ public class FundEvent {
         // 其他事件
         RESET_FEE(30),          // 重置手续费
 
-        // 现货借贷 loan 事件（详见 loan.md §9.5）
-        // 通道跟期货 MARGIN_ALERT / LIQUIDATION_ALERT 一样 leader-local ring-buffer bypass raft，best-effort。
-        LOAN_MARGIN_CALL(40),        // Cross 账户级或 Isolated 单笔预警（LTV 达到 marginCall 阈值），节流 per-loanId/uid ≥ 5 min
-        LOAN_INTEREST_SETTLE(41),    // 还款 / 强平时同步 emit，让下游把利息从 fees 桶里拆出作利息收入统计
-        LOAN_BAD_DEBT_INCURRED(42);  // Underwater force-sell 时坏账入账；badDebt bucket 是权威真值，本事件用于审计回溯
+        // 现货借贷 loan 用户维度事件（v3；详见 loan.md §9.5）——每个用户操作发一条，携带 loan 快照 + 操作增量。
+        LOAN_MARGIN_CALL(40),        // LTV 达到 marginCall 阈值预警（scanner leader-local，bypass raft，best-effort），节流 ≥ 5 min
+        LOAN_BORROW(41),             // 借款（LOAN_CREATE / LOAN_CROSS_BORROW）：放款 + 抵押锁定
+        LOAN_REPAY(42),             // 还款（LOAN_REPAY / LOAN_CROSS_REPAY）：利息优先 → 本金
+        LOAN_COLLATERAL_CHANGE(43),  // 加/减抵押（ADD / RELEASE / CROSS_ADD / CROSS_WITHDRAW）
+        LOAN_LIQUIDATED(44);         // 强平核销（force-sell 结算：抵押卖出、抵债、overpay 退回、坏账核销）
 
         private final int code;
 
@@ -192,9 +196,18 @@ public class FundEvent {
         liquidationPrice = 0;
         marginRatioScaleK = 0;
         markPrice = 0;
-        loanAmount = 0;
-        loanExtra = 0;
         loanMode = 0;
+        loanCollateralCurrency = 0;
+        loanOutstandingPrincipal = 0;
+        loanAccumulatedInterest = 0;
+        loanCollateralAmount = 0;
+        loanRateBps = 0;
+        loanLtvBps = 0;
+        loanPrincipalDelta = 0;
+        loanCollateralDelta = 0;
+        loanInterestPaid = 0;
+        loanBadDebt = 0;
+        loanThresholdBps = 0;
         nextEvent = null;
     }
 
@@ -203,7 +216,9 @@ public class FundEvent {
         return Objects.hash(processed, eventType, orderId, uid, currency, currencyScaleK, free, locked, symbol, baseScaleK,
                 quoteScaleK, direction, openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize,
                 pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice,
-                marginRatioScaleK, markPrice, loanAmount, loanExtra, loanMode, nextEvent);
+                marginRatioScaleK, markPrice, loanMode, loanCollateralCurrency, loanOutstandingPrincipal,
+                loanAccumulatedInterest, loanCollateralAmount, loanRateBps, loanLtvBps, loanPrincipalDelta,
+                loanCollateralDelta, loanInterestPaid, loanBadDebt, loanThresholdBps, nextEvent);
     }
 
     @Override
@@ -221,7 +236,11 @@ public class FundEvent {
             && pendingBuySize == other.pendingBuySize && pendingSellAvgPrice == other.pendingSellAvgPrice && pendingBuyAvgPrice == other.pendingBuyAvgPrice
             && leverage == other.leverage && marginMode == other.marginMode && extraMargin == other.extraMargin && unrealizedProfit == other.unrealizedProfit
             && liquidationPrice == other.liquidationPrice && marginRatioScaleK == other.marginRatioScaleK && markPrice == other.markPrice
-            && loanAmount == other.loanAmount && loanExtra == other.loanExtra && loanMode == other.loanMode
+            && loanMode == other.loanMode && loanCollateralCurrency == other.loanCollateralCurrency
+            && loanOutstandingPrincipal == other.loanOutstandingPrincipal && loanAccumulatedInterest == other.loanAccumulatedInterest
+            && loanCollateralAmount == other.loanCollateralAmount && loanRateBps == other.loanRateBps && loanLtvBps == other.loanLtvBps
+            && loanPrincipalDelta == other.loanPrincipalDelta && loanCollateralDelta == other.loanCollateralDelta
+            && loanInterestPaid == other.loanInterestPaid && loanBadDebt == other.loanBadDebt && loanThresholdBps == other.loanThresholdBps
             && ((nextEvent == null && other.nextEvent == null) || (nextEvent != null && nextEvent.equals(other.nextEvent)));
     }
 
@@ -235,7 +254,11 @@ public class FundEvent {
             + ", pendingBuySize=" + pendingBuySize + ", pendingSellAvgPrice=" + pendingSellAvgPrice + ", pendingBuyAvgPrice=" + pendingBuyAvgPrice
             + ", leverage=" + leverage + ", marginMode=" + marginMode + ", extraMargin=" + extraMargin + ", unrealizedProfit=" + unrealizedProfit
             + ", liquidationPrice=" + liquidationPrice + ", marginRatioScaleK=" + marginRatioScaleK + ", markPrice=" + markPrice
-            + ", loanAmount=" + loanAmount + ", loanExtra=" + loanExtra + ", loanMode=" + loanMode
+            + ", loanMode=" + loanMode + ", loanCollateralCurrency=" + loanCollateralCurrency
+            + ", loanOutstandingPrincipal=" + loanOutstandingPrincipal + ", loanAccumulatedInterest=" + loanAccumulatedInterest
+            + ", loanCollateralAmount=" + loanCollateralAmount + ", loanRateBps=" + loanRateBps + ", loanLtvBps=" + loanLtvBps
+            + ", loanPrincipalDelta=" + loanPrincipalDelta + ", loanCollateralDelta=" + loanCollateralDelta
+            + ", loanInterestPaid=" + loanInterestPaid + ", loanBadDebt=" + loanBadDebt + ", loanThresholdBps=" + loanThresholdBps
             + ", nextEvent=" + (nextEvent != null) + "]";
     }
 

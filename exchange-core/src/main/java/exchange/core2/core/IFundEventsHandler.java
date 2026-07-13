@@ -28,11 +28,8 @@ public interface IFundEventsHandler {
         private FundEventType eventType;
         private BalanceSnapshot balances;
         private PositionSnapshot positions;
-        // loan 事件专用载荷（详见 FundEvent §9.5）：loanMode 0=Isolated/1=Cross；
-        // loanAmount 语义随 eventType 变（LTV bps / 利息量 / 坏账量）；loanExtra 仅 LOAN_MARGIN_CALL 用（阈值 bps）。非 loan 事件保 0。
-        private byte loanMode;
-        private long loanAmount;
-        private long loanExtra;
+        // loan 用户维度事件载荷（v3；LOAN_* 事件才有意义，其他事件 loan 字段全 0）
+        private LoanSnapshot loan;
 
         private FundEventReport() {
         }
@@ -54,9 +51,6 @@ public interface IFundEventsHandler {
             uniId = 0L;
             accountId = 0L;
             eventType = null;
-            loanMode = 0;
-            loanAmount = 0L;
-            loanExtra = 0L;
             if (balances != null) {
                 balances.recycle();
                 balances = null;
@@ -65,17 +59,19 @@ public interface IFundEventsHandler {
                 positions.recycle();
                 positions = null;
             }
+            if (loan != null) {
+                loan.recycle();
+                loan = null;
+            }
         }
 
         private FundEventReport fill(FundEvent fundEvent, long uniId) {
             this.uniId = uniId;
             this.accountId = fundEvent.uid;
             this.eventType = fundEvent.eventType;
-            this.loanMode = fundEvent.loanMode;
-            this.loanAmount = fundEvent.loanAmount;
-            this.loanExtra = fundEvent.loanExtra;
             this.balances = BalanceSnapshot.borrow().fill(fundEvent);
             this.positions = PositionSnapshot.borrow().fill(fundEvent);
+            this.loan = LoanSnapshot.borrow().fill(fundEvent);
             return this;
         }
 
@@ -204,6 +200,73 @@ public interface IFundEventsHandler {
                 this.asksNotional = Math.multiplyExact(fundEvent.pendingSellSize, fundEvent.pendingSellAvgPrice);
                 this.bidsQty = fundEvent.pendingBuySize;
                 this.asksQty = fundEvent.pendingSellSize;
+                return this;
+            }
+        }
+
+        /** loan 用户维度事件快照（v3；详见 FundEvent §9.5）——操作后 loan 状态 + 本次操作增量。非 loan 事件全 0。 */
+        @Getter
+        public static class LoanSnapshot {
+            private static final ThreadLocal<ArrayDeque<LoanSnapshot>> POOL =
+                    ThreadLocal.withInitial(() -> new ArrayDeque<>(POOL_SIZE));
+
+            private byte mode;                 // 0=Isolated，1=Cross
+            private int collateralCurrency;    // Isolated 抵押币；Cross = numeraire 估值币
+            private long outstandingPrincipal; // 操作后剩余本金
+            private long accumulatedInterest;  // 操作后剩余应计利息
+            private long collateralAmount;     // 操作后剩余抵押
+            private int rateBps;               // 贷款利率
+            private long ltvBps;               // 操作后 LTV（MARGIN_CALL=当前 LTV）
+            private long principalDelta;       // 本次本金变动（借+/还-）
+            private long collateralDelta;      // 本次抵押变动（加+/减-）
+            private long interestPaid;         // 本次偿还利息
+            private long badDebt;              // 本次坏账核销量
+            private long thresholdBps;         // 仅 MARGIN_CALL：预警阈值 bps
+
+            private LoanSnapshot() {
+            }
+
+            private static LoanSnapshot borrow() {
+                LoanSnapshot obj = POOL.get().pollFirst();
+                return (obj != null) ? obj : new LoanSnapshot();
+            }
+
+            private void recycle() {
+                clear();
+                ArrayDeque<LoanSnapshot> pool = POOL.get();
+                if (pool.size() < POOL_SIZE) {
+                    pool.addFirst(this);
+                }
+            }
+
+            private void clear() {
+                mode = 0;
+                collateralCurrency = 0;
+                outstandingPrincipal = 0L;
+                accumulatedInterest = 0L;
+                collateralAmount = 0L;
+                rateBps = 0;
+                ltvBps = 0L;
+                principalDelta = 0L;
+                collateralDelta = 0L;
+                interestPaid = 0L;
+                badDebt = 0L;
+                thresholdBps = 0L;
+            }
+
+            private LoanSnapshot fill(FundEvent fundEvent) {
+                this.mode = fundEvent.loanMode;
+                this.collateralCurrency = fundEvent.loanCollateralCurrency;
+                this.outstandingPrincipal = fundEvent.loanOutstandingPrincipal;
+                this.accumulatedInterest = fundEvent.loanAccumulatedInterest;
+                this.collateralAmount = fundEvent.loanCollateralAmount;
+                this.rateBps = fundEvent.loanRateBps;
+                this.ltvBps = fundEvent.loanLtvBps;
+                this.principalDelta = fundEvent.loanPrincipalDelta;
+                this.collateralDelta = fundEvent.loanCollateralDelta;
+                this.interestPaid = fundEvent.loanInterestPaid;
+                this.badDebt = fundEvent.loanBadDebt;
+                this.thresholdBps = fundEvent.loanThresholdBps;
                 return this;
             }
         }

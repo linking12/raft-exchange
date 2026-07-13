@@ -30,7 +30,9 @@ public enum ReportType {
 
     FEE_REPORT(10005),
 
-    INSURANCE_FUND(10006);
+    INSURANCE_FUND(10006),
+
+    LOAN_PLATFORM(10007);
 
     private final int code;
 
@@ -53,6 +55,8 @@ public enum ReportType {
                 return FEE_REPORT;
             case 10006:
                 return INSURANCE_FUND;
+            case 10007:
+                return LOAN_PLATFORM;
             default:
                 throw new IllegalArgumentException("unknown ReportType:" + code);
         }

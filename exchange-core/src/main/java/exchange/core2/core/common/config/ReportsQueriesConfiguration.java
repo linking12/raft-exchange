@@ -65,6 +65,7 @@ public final class ReportsQueriesConfiguration {
         addQueryClass(reportConstructors, ReportType.SYMBOL_CURRENCY_REPORT.getCode(), SymbolCurrencyReportQuery.class);
         addQueryClass(reportConstructors, ReportType.FEE_REPORT.getCode(), FeeReportQuery.class);
         addQueryClass(reportConstructors, ReportType.INSURANCE_FUND.getCode(), InsuranceFundReportQuery.class);
+        addQueryClass(reportConstructors, ReportType.LOAN_PLATFORM.getCode(), LoanPlatformReportQuery.class);
 
         customReports.forEach((code, customReport) -> addQueryClass(reportConstructors, code, customReport));
 

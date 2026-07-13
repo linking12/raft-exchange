@@ -10,6 +10,7 @@ import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import exchange.core2.core.processors.FundEventsHelper;
 import org.mockito.ArgumentCaptor;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
@@ -68,6 +69,7 @@ class LoanLiquidationEngineTest {
 
     @Mock private LiquidationEngine engine;
     @Mock private LiquidationCmdPublisher publisher;
+    @Mock private FundEventsHelper eventsHelper;
 
     private LoanService loanService;
     private UserProfile up;
@@ -109,6 +111,7 @@ class LoanLiquidationEngineTest {
         when(engine.getLastPriceCache()).thenReturn(priceCache);
         when(engine.getLoanService()).thenReturn(loanService);
         when(engine.getLiquidationCmdPublisher()).thenReturn(publisher);
+        when(engine.getEventsHelper()).thenReturn(eventsHelper);
 
         scanner = new LoanLiquidationEngine(engine);
     }
@@ -236,6 +239,20 @@ class LoanLiquidationEngineTest {
         scanner.check(up);
         // Isolated force-sell 实装：LTV 触线时 publish 一次 ApiLiquidationOrder
         verify(publisher).publish(any(), any());
+    }
+
+    @Test
+    void check_isolatedLtvInMarginCallBand_emitsMarginCallEvent() {
+        // 1 BTC 抵押 37.5k USDT → LTV=75%，处于 marginCall(70%)~liquidation(80%) 之间：只发预警、不强平
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, OPENED_AT_MS);
+        loan.collateralAmount = 1L;
+        loan.outstandingPrincipal = 37_500L;
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        scanner.check(up);
+
+        // scanner 用正确的 LTV=7500 / 阈值=7000 / mode=0 调 helper 发 MARGIN_CALL
+        verify(eventsHelper).sendLoanMarginCallEvent(eq(UID), eq(LOAN_ID), eq((byte) 0), eq(USDT), eq(7500L), eq(7000L));
     }
 
     @Test

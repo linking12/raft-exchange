@@ -228,7 +228,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
     /**
      * 用 fund（loanCurrency）按 <b>利息优先 → 本金</b> 抵债，抵扣上限为当前未偿本息（超出即 overpay，不动）。 从 account 扣实付、利息进 interestRevenue、本金回
-     * loanPool；返回<b>本次结算的利息部分</b>（interestPart ≥ 0，供调用方发 LOAN_INTEREST_SETTLE 事件）。REPAY 与强平结算共用此一处金钱逻辑。
+     * loanPool；返回<b>本次结算的利息部分</b>（interestPart ≥ 0，供调用方发 LOAN_REPAY / LOAN_LIQUIDATED 事件）。REPAY 与强平结算共用此一处金钱逻辑。
      */
     public long applyDebtPayment(LoanRecord loan, IntLongHashMap account, long fund) {
         int currency = loan.getLoanCurrency();
@@ -246,7 +246,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
     /**
      * 强平所得 receivedQuote（loanCurrency，已扣撮合 takerFee）的统一去向：先抽 {@value #LOAN_LIQUIDATION_FEE_BPS} bps 强平费进 loanLiqFees，再
-     * accrue + 抵债；剩余 overpay 留在 account。Isolated / Cross 强平共用。返回<b>本次结算的利息部分</b>（≥ 0，供调用方发 LOAN_INTEREST_SETTLE 事件）。
+     * accrue + 抵债；剩余 overpay 留在 account。Isolated / Cross 强平共用。返回<b>本次结算的利息部分</b>（≥ 0，供调用方发 LOAN_REPAY / LOAN_LIQUIDATED 事件）。
      */
     public long settleLiquidationProceeds(LoanRecord loan, IntLongHashMap account, long receivedQuote, long now) {
         long liqFee =

@@ -201,6 +201,9 @@ public final class LoanCommandHandlers {
         loan.outstandingPrincipal = principal;
         up.isolatedLoans.put(loanId, loan);
         disburseLoan(up, loanService, loanCurrency, principal);
+        engine.getEventsHelper().sendLoanBorrowEvent(cmd, loan.uid, loanId, LOAN_MODE_ISOLATED, loanCurrency,
+            collateralCurrency, loan.outstandingPrincipal, loan.collateralAmount, loan.getRateBps(),
+            isolatedLtvBps(loan, cmd.timestamp), principal, collateralAmount);
         return CommandResultCode.SUCCESS;
     }
 
@@ -239,9 +242,11 @@ public final class LoanCommandHandlers {
             return CommandResultCode.LOAN_ACCOUNT_INSUFFICIENT;
 
         final long interestSettled = loanService.applyDebtPayment(loan, up.accounts, actualRepay);
-        if (interestSettled > 0)
-            engine.getEventsHelper().sendLoanInterestSettleEvent(cmd, loan.uid, LOAN_MODE_ISOLATED, loanId,
-                interestSettled, loanCurrency);
+        // 快照须读操作后、放回对象池前的 loan
+        final long principalRepaid = actualRepay - interestSettled;
+        engine.getEventsHelper().sendLoanRepayEvent(cmd, loan.uid, loanId, LOAN_MODE_ISOLATED, loanCurrency,
+            loan.collateralCurrency, loan.outstandingPrincipal, loan.accumulatedInterest, loan.collateralAmount,
+            loan.getRateBps(), isolatedLtvBps(loan, cmd.timestamp), -principalRepaid, interestSettled);
 
         if (loan.isEmpty()) {
             up.isolatedLoans.remove(loanId);
@@ -280,6 +285,9 @@ public final class LoanCommandHandlers {
             return CommandResultCode.LOAN_COLLATERAL_INSUFFICIENT;
 
         loan.collateralAmount = Math.addExact(loan.collateralAmount, amount);
+        engine.getEventsHelper().sendLoanCollateralChangeEvent(cmd, loan.uid, loanId, LOAN_MODE_ISOLATED,
+            loan.loanCurrency, loan.collateralCurrency, loan.outstandingPrincipal, loan.accumulatedInterest,
+            loan.collateralAmount, loan.getRateBps(), isolatedLtvBps(loan, cmd.timestamp), amount);
         return CommandResultCode.SUCCESS;
     }
 
@@ -338,6 +346,10 @@ public final class LoanCommandHandlers {
         }
 
         loan.collateralAmount = newCollateral;
+        // 快照须读操作后、放回对象池前的 loan；减抵押 delta = -amount
+        engine.getEventsHelper().sendLoanCollateralChangeEvent(cmd, loan.uid, loanId, LOAN_MODE_ISOLATED,
+            loan.loanCurrency, loan.collateralCurrency, loan.outstandingPrincipal, loan.accumulatedInterest,
+            loan.collateralAmount, loan.getRateBps(), isolatedLtvBps(loan, cmd.timestamp), -amount);
         // 全零死壳清理：REPAY 已 payoff（princ+int=0）且本次 RELEASE 减到 collateralAmount=0
         // → 移除 loan record 并归还对象池，让同 loanId 可被 LOAN_CREATE 复用（否则 handleLoanCreate 里 containsKey 卡住）
         if (loan.isEmpty()) {
@@ -425,28 +437,36 @@ public final class LoanCommandHandlers {
             loan.collateralAmount = Math.addExact(loan.collateralAmount, rejectedInCurrencyScale);
         }
 
+        // 事件身份 early-capture（下方分支可能 recycle loan 对象，之后字段被重置）
+        final long borrowerUid = loan.uid;
+        final int rateBps = loan.getRateBps();
+        final int collateralCurrency = loan.collateralCurrency;
+        final long principalBeforeSettle = loan.outstandingPrincipal;
+
         // TRADE：卖出所得（扣撮合 takerFee）→ settleLiquidationProceeds（强平费 + 抵债，overpay 留用户）
+        long interestPaid = 0;
+        long collateralSold = 0; // 本次卖出抵押（loanCurrency 无关，用 base currency scale）
         if (tradedSize > 0) {
             final long avgTakerPrice = tradedNotional / tradedSize;
             final long takerFee = CoreArithmeticUtils.calculateTakerFee(tradedSize, avgTakerPrice, spec);
             final long receivedQuote =
                 CoreArithmeticUtils.sizePriceToCurrencyScale(tradedNotional - takerFee, spec, loanCurrencySpec);
-            final long interestSettled =
-                loanService.settleLiquidationProceeds(loan, takerUp.accounts, receivedQuote, cmd.timestamp);
-            if (interestSettled > 0)
-                engine.getEventsHelper().sendLoanInterestSettleEvent(cmd, loan.uid, LOAN_MODE_ISOLATED, loanId,
-                    interestSettled, loanCurrency);
+            interestPaid = loanService.settleLiquidationProceeds(loan, takerUp.accounts, receivedQuote, cmd.timestamp);
+            collateralSold = CoreArithmeticUtils.symbolToCurrencyScale(tradedSize, spec, baseSpec);
         }
+        final long principalRepaid = principalBeforeSettle - loan.outstandingPrincipal;
 
         long remainDebt = Math.addExact(loan.outstandingPrincipal, loan.accumulatedInterest);
         // Underwater 判定看"是否还有可卖的整张"，而非 collateralAmount==0：sub-lot 尘埃卖不掉，
         // 若还按 ==0 判会漏记 badDebt + loan 悬挂 + scanner 空转。
         long sellableLots = LoanService.collateralAmountToLots(loan.collateralAmount, spec, baseSpec);
+        // loan 核销/清空的两个分支快照全 0；仅保留分支填当前值
+        long badDebt = 0;
+        long snapPrincipal = 0, snapInterest = 0, snapCollateral = 0, snapLtvBps = 0;
         if (sellableLots == 0 && remainDebt > 0) {
             // 抵押只剩不足一张的尘埃且债务未清 → 剩余债务写 badDebt，尘埃释放回用户，清空 loan
+            badDebt = remainDebt;
             loanService.getBadDebt().addToValue(loanCurrency, remainDebt);
-            engine.getEventsHelper().sendLoanBadDebtEvent(cmd, loan.uid, LOAN_MODE_ISOLATED, loanId, loanCurrency,
-                remainDebt);
             loanService.getLoanPoolBorrowed().addToValue(loanCurrency, -loan.outstandingPrincipal);
             loan.outstandingPrincipal = 0;
             loan.accumulatedInterest = 0;
@@ -459,7 +479,16 @@ public final class LoanCommandHandlers {
         } else {
             // loan 保留：卡单计数——零成交(打不进)则 +1 让 scanner 爬容差/告警；有成交则清 0
             loan.stuckLiqAttempts = tradedSize > 0 ? 0 : loan.stuckLiqAttempts + 1;
+            snapPrincipal = loan.outstandingPrincipal;
+            snapInterest = loan.accumulatedInterest;
+            snapCollateral = loan.collateralAmount;
+            snapLtvBps = isolatedLtvBps(loan, cmd.timestamp);
         }
+        // 卡单零成交且无坏账 → 本轮啥也没发生，跳过 no-op 事件（scanner 会周期重试）
+        if (tradedSize > 0 || badDebt > 0)
+            engine.getEventsHelper().sendLoanLiquidatedEvent(cmd, borrowerUid, loanId, LOAN_MODE_ISOLATED, loanCurrency,
+                collateralCurrency, snapPrincipal, snapInterest, snapCollateral, rateBps, snapLtvBps, -principalRepaid,
+                -collateralSold, interestPaid, badDebt);
     }
 
     // ================================================================================================================
@@ -492,6 +521,9 @@ public final class LoanCommandHandlers {
             return CommandResultCode.LOAN_COLLATERAL_INSUFFICIENT;
 
         up.crossLoanCollateral.addToValue(currency, amount);
+        // Cross 账户级抵押变动：loanId=0、debt 字段留 0；collateralAmount=该币新余额
+        engine.getEventsHelper().sendLoanCollateralChangeEvent(cmd, up.uid, 0L, LOAN_MODE_CROSS, 0, currency, 0, 0,
+            up.crossLoanCollateral.get(currency), 0, crossLtvBps(up, cmd.timestamp), amount);
         return CommandResultCode.SUCCESS;
     }
 
@@ -529,6 +561,9 @@ public final class LoanCommandHandlers {
             up.crossLoanCollateral.addToValue(currency, amount); // revert
             return CommandResultCode.LOAN_CROSS_LTV_TOO_HIGH_AFTER_WITHDRAW;
         }
+        // Cross 账户级抵押变动：loanId=0、debt 字段留 0；collateralAmount=该币新余额
+        engine.getEventsHelper().sendLoanCollateralChangeEvent(cmd, up.uid, 0L, LOAN_MODE_CROSS, 0, currency, 0, 0,
+            up.crossLoanCollateral.get(currency), 0, newLtv, -amount);
         return CommandResultCode.SUCCESS;
     }
 
@@ -583,6 +618,9 @@ public final class LoanCommandHandlers {
             return CommandResultCode.LOAN_LTV_TOO_HIGH_AFTER_BORROW;
         }
         disburseLoan(up, loanService, loanCurrency, principal);
+        // Cross 抵押是账户级：collateralCurrency=numeraire、collateralAmount 留 0（详情查 LoanPlatformReport / SingleUserReport）
+        engine.getEventsHelper().sendLoanBorrowEvent(cmd, loan.uid, loanId, LOAN_MODE_CROSS, loanCurrency,
+            loanService.getNumeraireCurrency(), loan.outstandingPrincipal, 0, loan.getRateBps(), newLtv, principal, 0);
         return CommandResultCode.SUCCESS;
     }
 
@@ -622,9 +660,11 @@ public final class LoanCommandHandlers {
             return CommandResultCode.LOAN_ACCOUNT_INSUFFICIENT;
 
         final long interestSettled = loanService.applyDebtPayment(loan, up.accounts, actualRepay);
-        if (interestSettled > 0)
-            engine.getEventsHelper().sendLoanInterestSettleEvent(cmd, loan.uid, LOAN_MODE_CROSS, loanId,
-                interestSettled, loanCurrency);
+        // Cross 抵押账户级：collateralAmount 留 0
+        final long principalRepaid = actualRepay - interestSettled;
+        engine.getEventsHelper().sendLoanRepayEvent(cmd, loan.uid, loanId, LOAN_MODE_CROSS, loanCurrency,
+            loanService.getNumeraireCurrency(), loan.outstandingPrincipal, loan.accumulatedInterest, 0,
+            loan.getRateBps(), crossLtvBps(up, cmd.timestamp), -principalRepaid, interestSettled);
 
         if (loan.isEmpty()) {
             up.crossLoans.remove(loanId);
@@ -714,18 +754,24 @@ public final class LoanCommandHandlers {
             takerUp.crossLoanCollateral.addToValue(sellingCurrency, rejectedInCurrencyScale);
         }
 
+        // 事件身份 early-capture（下方分支可能 recycle targetLoan 对象）
+        final long borrowerUid = targetLoan.uid;
+        final int rateBps = targetLoan.getRateBps();
+        final long principalBeforeSettle = targetLoan.outstandingPrincipal;
+
         // TRADE：卖出所得（扣撮合 takerFee）→ settleLiquidationProceeds（强平费 + 抵债，overpay 留用户）
+        long interestPaid = 0;
+        long collateralSold = 0; // 卖出的 sellingCurrency 抵押（currency scale）
         if (tradedSize > 0) {
             final long avgTakerPrice = tradedNotional / tradedSize;
             final long takerFee = CoreArithmeticUtils.calculateTakerFee(tradedSize, avgTakerPrice, spec);
             final long receivedQuote =
                 CoreArithmeticUtils.sizePriceToCurrencyScale(tradedNotional - takerFee, spec, loanCurrencySpec);
-            final long interestSettled =
+            interestPaid =
                 loanService.settleLiquidationProceeds(targetLoan, takerUp.accounts, receivedQuote, cmd.timestamp);
-            if (interestSettled > 0)
-                engine.getEventsHelper().sendLoanInterestSettleEvent(cmd, targetLoan.uid, LOAN_MODE_CROSS, targetLoanId,
-                    interestSettled, loanCurrency);
+            collateralSold = CoreArithmeticUtils.symbolToCurrencyScale(tradedSize, spec, sellingCurrencySpec);
         }
+        final long principalRepaid = principalBeforeSettle - targetLoan.outstandingPrincipal;
 
         long remainTargetDebt = Math.addExact(targetLoan.outstandingPrincipal, targetLoan.accumulatedInterest);
         // Cross underwater 判定查全部 crossLoanCollateral，且用"是否还有可卖整张"而非 amount>0——
@@ -738,11 +784,13 @@ public final class LoanCommandHandlers {
                 break;
             }
         }
+        // 核销/清空的两个分支快照全 0；仅保留分支填当前值
+        long badDebt = 0;
+        long snapPrincipal = 0, snapInterest = 0;
         if (allCollateralExhausted && remainTargetDebt > 0) {
             // 账户级 underwater：所有抵押币种都清零但 target loan 债务仍剩 → 剩余债务写 badDebt
+            badDebt = remainTargetDebt;
             loanService.getBadDebt().addToValue(loanCurrency, remainTargetDebt);
-            engine.getEventsHelper().sendLoanBadDebtEvent(cmd, targetLoan.uid, LOAN_MODE_CROSS, targetLoanId,
-                loanCurrency, remainTargetDebt);
             loanService.getLoanPoolBorrowed().addToValue(loanCurrency, -targetLoan.outstandingPrincipal);
             targetLoan.outstandingPrincipal = 0;
             targetLoan.accumulatedInterest = 0;
@@ -754,7 +802,14 @@ public final class LoanCommandHandlers {
         } else {
             // targetLoan 保留：卡单计数（放 targetLoan）——零成交 +1、有成交清 0
             targetLoan.stuckLiqAttempts = tradedSize > 0 ? 0 : targetLoan.stuckLiqAttempts + 1;
+            snapPrincipal = targetLoan.outstandingPrincipal;
+            snapInterest = targetLoan.accumulatedInterest;
         }
+        // Cross 强平：collateralCurrency=卖出币、collateralAmount=该币剩余；零成交无坏账则跳过 no-op 事件
+        if (tradedSize > 0 || badDebt > 0)
+            engine.getEventsHelper().sendLoanLiquidatedEvent(cmd, borrowerUid, targetLoanId, LOAN_MODE_CROSS, loanCurrency,
+                sellingCurrency, snapPrincipal, snapInterest, takerUp.crossLoanCollateral.get(sellingCurrency), rateBps,
+                crossLtvBps(takerUp, cmd.timestamp), -principalRepaid, -collateralSold, interestPaid, badDebt);
     }
 
     // ================================================================================================================
@@ -853,6 +908,35 @@ public final class LoanCommandHandlers {
         CoreCurrencySpecification quoteSpec =
             engine.getCurrencySpecificationProvider().getCurrencySpecification(spec.quoteCurrency);
         return LoanService.collateralValueInQuoteCurrency(amount, spec, markPrice, baseSpec, quoteSpec);
+    }
+
+    /**
+     * Isolated 单笔 LTV（bps）——事件用，best-effort：markPrice / spec 缺失或抵押估值 &le; 0 时返 0（下游可用 principal+collateral+markPrice 自算）。
+     * 读操作后 loan 快照（outstandingPrincipal + pending 利息）÷ 抵押估值。
+     */
+    private long isolatedLtvBps(IsolatedLoanRecord loan, long now) {
+        final CoreSymbolSpecification spec = LoanService.findSpotSpec(loan.collateralCurrency, loan.loanCurrency,
+            engine.getSymbolSpecificationProvider());
+        if (spec == null)
+            return 0L;
+        final long markPrice = markPriceOrZero(spec.symbolId);
+        if (markPrice <= 0)
+            return 0L;
+        final long collateralValue = evalCollateralInLoanCurrency(loan.collateralAmount, spec, markPrice);
+        if (collateralValue <= 0)
+            return 0L;
+        final long realDebt = Math.addExact(loan.outstandingPrincipal,
+            engine.getLoanService().calculateDisplayInterest(loan, now));
+        return Math.multiplyExact(realDebt, LoanService.BPS_SCALE) / collateralValue;
+    }
+
+    /** Cross 账户级 LTV（bps）——事件用，best-effort：numeraire 未配置返 0。 */
+    private long crossLtvBps(UserProfile up, long now) {
+        final LoanService loanService = engine.getLoanService();
+        if (!loanService.isNumeraireConfigured())
+            return 0L;
+        return loanService.calculateCrossAccountLtvBps(up, now, engine.getSymbolSpecificationProvider(),
+            engine.getCurrencySpecificationProvider(), engine.getLastPriceCache(), loanService.getNumeraireCurrency());
     }
 
     /** 判 currency 是否允许作 Cross 抵押（有 base==currency 的 spec 且 collateralWeightBps &gt; 0）。 */

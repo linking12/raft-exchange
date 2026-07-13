@@ -13,6 +13,7 @@ import com.binance.raftexchange.server.raft.RaftNode;
 import com.binance.raftexchange.server.util.ProtoBuilderPool;
 import com.binance.raftexchange.stubs.BalanceSnapshot;
 import com.binance.raftexchange.stubs.FundEventReportPB;
+import com.binance.raftexchange.stubs.LoanSnapshot;
 import com.binance.raftexchange.stubs.FuturesExecutionReportPB;
 import com.binance.raftexchange.stubs.OrderBookPB;
 import com.binance.raftexchange.stubs.OrderBookRecordPB;
@@ -158,10 +159,22 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
         if (!isLeader.get()) {
             return;
         }
+        FundEventReport.LoanSnapshot loan = fundEventReport.getLoan();
         FundEventReportPB.Builder builder = builderPool.get(FundEventReportPB.Builder.class)
             .setAccountId(fundEventReport.getAccountId()).setEventTypeValue(fundEventReport.getEventType().getCode())
-            .setLoanMode(fundEventReport.getLoanMode()).setLoanAmount(fundEventReport.getLoanAmount())
-            .setLoanExtra(fundEventReport.getLoanExtra());
+            .setLoan(LoanSnapshot.newBuilder()
+                .setMode(loan.getMode())
+                .setCollateralCurrency(loan.getCollateralCurrency())
+                .setOutstandingPrincipal(loan.getOutstandingPrincipal())
+                .setAccumulatedInterest(loan.getAccumulatedInterest())
+                .setCollateralAmount(loan.getCollateralAmount())
+                .setRateBps(loan.getRateBps())
+                .setLtvBps(loan.getLtvBps())
+                .setPrincipalDelta(loan.getPrincipalDelta())
+                .setCollateralDelta(loan.getCollateralDelta())
+                .setInterestPaid(loan.getInterestPaid())
+                .setBadDebt(loan.getBadDebt())
+                .setThresholdBps(loan.getThresholdBps()));
         FundEventReport.BalanceSnapshot balance = fundEventReport.getBalances();
         builder.setBalances(builderPool.get(BalanceSnapshot.Builder.class).setCurrency(balance.getCurrency())
             .setCurrencyScaleK(balance.getCurrencyScaleK()).setFree(balance.getFree()).setLocked(balance.getLocked()));

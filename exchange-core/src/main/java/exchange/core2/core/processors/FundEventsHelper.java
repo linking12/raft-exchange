@@ -309,35 +309,6 @@ public class FundEventsHelper {
         return event;
     }
 
-    /**
-     * Isolated loan 预警事件（LTV ≥ marginCall 阈值）。<b>不挂桶</b>——由 LoanLiquidationEngine
-     * 定期 scan 触发（per-loanId 5min 节流），返回 event 让 caller 封装 ApiSystemLiquidationNotify 走 publishUntracked。
-     */
-    public FundEvent sendLoanIsolatedMarginCallEvent(long uid, long loanId, int loanCurrency, long ltvBps) {
-        FundEvent event = newFundEvent();
-        event.orderId = SYSTEM_TRIGGERED_ORDER_ID;
-        event.eventType = FundEventType.LOAN_MARGIN_CALL;
-        event.uid = uid;
-        event.currency = loanCurrency;
-        event.symbol = (int)loanId;   // borrow field：Isolated 场景 loanId 承载在 symbol
-        event.free = ltvBps;          // borrow field：LTV(bps) 承载在 free
-        return event;
-    }
-
-    /**
-     * Cross 账户级 loan 预警（LTV ≥ marginCall 阈值）。<b>不挂桶</b>——per-uid 5min 节流。
-     * loanId=0（账户级，非单笔）。
-     */
-    public FundEvent sendLoanCrossMarginCallEvent(long uid, long ltvBps) {
-        FundEvent event = newFundEvent();
-        event.orderId = SYSTEM_TRIGGERED_ORDER_ID;
-        event.eventType = FundEventType.LOAN_MARGIN_CALL;
-        event.uid = uid;
-        event.symbol = 0;             // Cross 账户级：symbol=0 区分于 Isolated 单笔
-        event.free = ltvBps;
-        return event;
-    }
-
     /** 用户手动调整保证金（增/减 extraMargin）。user 主动 cmd → taker 桶。 */
     public FundEvent sendMarginAdjustmentEvent(OrderCommand cmd, SymbolPositionRecord position, long free,
         long locked) {
@@ -422,72 +393,102 @@ public class FundEventsHelper {
     }
 
     // ================================================================
-    // 现货借贷 loan 事件（详见 loan.md §9.5）
+    // 现货借贷 loan 用户维度事件（详见 loan.md §9.5）
     // ================================================================
 
-    /** loan 事件骨架（跟现货 buildSpotEvent 结构类似，无 symbol/position 信息；currency == 0 时不查 currencySpec）。 */
-    private FundEvent buildLoanEvent(long orderId, long uid, int currency, FundEventType type, byte loanMode,
-        long loanAmount, long loanExtra) {
+    /** loan 事件骨架：设身份 + loanCurrency scale；快照/增量字段由各 send 方法按 eventType 填。 */
+    private FundEvent newLoanEvent(long loanId, long uid, byte loanMode, int loanCurrency, int collateralCurrency,
+        FundEventType type) {
         FundEvent event = newFundEvent();
-        event.orderId = orderId;
+        event.orderId = loanId;
         event.uid = uid;
         event.eventType = type;
-        event.currency = currency;
-        event.currencyScaleK = currency == 0 ? 0
-            : currencySpecificationProvider.getCurrencySpecification(currency).getCurrencyScaleK();
         event.loanMode = loanMode;
-        event.loanAmount = loanAmount;
-        event.loanExtra = loanExtra;
+        event.currency = loanCurrency;
+        event.loanCollateralCurrency = collateralCurrency;
+        event.currencyScaleK = loanCurrency == 0 ? 0
+            : currencySpecificationProvider.getCurrencySpecification(loanCurrency).getCurrencyScaleK();
+        return event;
+    }
+
+    /** LOAN_BORROW：借款（放款 + 抵押锁定）。user 主动 → taker 桶。 */
+    public FundEvent sendLoanBorrowEvent(OrderCommand cmd, long uid, long loanId, byte loanMode, int loanCurrency,
+        int collateralCurrency, long outstandingPrincipal, long collateralAmount, int rateBps, long ltvBps,
+        long principalDelta, long collateralDelta) {
+        FundEvent event = newLoanEvent(loanId, uid, loanMode, loanCurrency, collateralCurrency, FundEventType.LOAN_BORROW);
+        event.loanOutstandingPrincipal = outstandingPrincipal;
+        event.loanCollateralAmount = collateralAmount;
+        event.loanRateBps = rateBps;
+        event.loanLtvBps = ltvBps;
+        event.loanPrincipalDelta = principalDelta;
+        event.loanCollateralDelta = collateralDelta;
+        addFundEvent(cmd, cmd.orderId, event);
+        return event;
+    }
+
+    /** LOAN_REPAY：还款（利息优先 → 本金）。user 主动 → taker 桶。 */
+    public FundEvent sendLoanRepayEvent(OrderCommand cmd, long uid, long loanId, byte loanMode, int loanCurrency,
+        int collateralCurrency, long outstandingPrincipal, long accumulatedInterest, long collateralAmount, int rateBps,
+        long ltvBps, long principalDelta, long interestPaid) {
+        FundEvent event = newLoanEvent(loanId, uid, loanMode, loanCurrency, collateralCurrency, FundEventType.LOAN_REPAY);
+        event.loanOutstandingPrincipal = outstandingPrincipal;
+        event.loanAccumulatedInterest = accumulatedInterest;
+        event.loanCollateralAmount = collateralAmount;
+        event.loanRateBps = rateBps;
+        event.loanLtvBps = ltvBps;
+        event.loanPrincipalDelta = principalDelta;
+        event.loanInterestPaid = interestPaid;
+        addFundEvent(cmd, cmd.orderId, event);
+        return event;
+    }
+
+    /** LOAN_COLLATERAL_CHANGE：加/减抵押。user 主动 → taker 桶。collateralDelta 加 +、减 -。 */
+    public FundEvent sendLoanCollateralChangeEvent(OrderCommand cmd, long uid, long loanId, byte loanMode,
+        int loanCurrency, int collateralCurrency, long outstandingPrincipal, long accumulatedInterest,
+        long collateralAmount, int rateBps, long ltvBps, long collateralDelta) {
+        FundEvent event =
+            newLoanEvent(loanId, uid, loanMode, loanCurrency, collateralCurrency, FundEventType.LOAN_COLLATERAL_CHANGE);
+        event.loanOutstandingPrincipal = outstandingPrincipal;
+        event.loanAccumulatedInterest = accumulatedInterest;
+        event.loanCollateralAmount = collateralAmount;
+        event.loanRateBps = rateBps;
+        event.loanLtvBps = ltvBps;
+        event.loanCollateralDelta = collateralDelta;
+        addFundEvent(cmd, cmd.orderId, event);
         return event;
     }
 
     /**
-     * loan 预警事件（Cross 账户级或 Isolated 单笔）。<b>不挂桶</b>——由 LiquidationEngine scanner lane 触发，
-     * 调用方拿返回的 event 封装到独立 SYSTEM_LIQUIDATION_NOTIFY cmd 走 publishUntracked（跟 {@link #sendMarginAlertEvent} 同款）。
-     *
-     * @param uid           用户 uid
-     * @param loanMode      0 = Isolated，1 = Cross
-     * @param loanId        Isolated 时 = 具体 loanId；Cross MARGIN_CALL（账户级）时传 0
-     * @param loanCurrency       Isolated 时 = loan.loanCurrency；Cross 时传 0（账户级无特定 currency）
-     * @param ltvBps        当前 LTV（bps）
-     * @param thresholdBps  触发预警的阈值（bps）
+     * LOAN_LIQUIDATED：强平核销（force-sell 结算：抵押卖出、抵债、overpay 退回、坏账核销）。
+     * 系统触发 → maker 桶（{@code SYSTEM_TRIGGERED} routing，跟期货强平事件同款）。
      */
-    public FundEvent sendLoanMarginCallEvent(long uid, byte loanMode, long loanId, int loanCurrency, long ltvBps,
+    public FundEvent sendLoanLiquidatedEvent(OrderCommand cmd, long uid, long loanId, byte loanMode, int loanCurrency,
+        int collateralCurrency, long outstandingPrincipal, long accumulatedInterest, long collateralAmount, int rateBps,
+        long ltvBps, long principalDelta, long collateralDelta, long interestPaid, long badDebt) {
+        FundEvent event =
+            newLoanEvent(loanId, uid, loanMode, loanCurrency, collateralCurrency, FundEventType.LOAN_LIQUIDATED);
+        event.loanOutstandingPrincipal = outstandingPrincipal;
+        event.loanAccumulatedInterest = accumulatedInterest;
+        event.loanCollateralAmount = collateralAmount;
+        event.loanRateBps = rateBps;
+        event.loanLtvBps = ltvBps;
+        event.loanPrincipalDelta = principalDelta;
+        event.loanCollateralDelta = collateralDelta;
+        event.loanInterestPaid = interestPaid;
+        event.loanBadDebt = badDebt;
+        addFundEvent(cmd, SYSTEM_TRIGGERED_ORDER_ID, event);
+        return event;
+    }
+
+    /**
+     * LOAN_MARGIN_CALL（Isolated 单笔 loanId / Cross 账户级 loanId=0、loanCurrency=0）。
+     * <b>不挂桶</b>——scanner 触发（per-loanId/uid ≥ 5min 节流），返回 event 让 caller 封装 ApiSystemLiquidationNotify 走 publishUntracked。
+     */
+    public FundEvent sendLoanMarginCallEvent(long uid, long loanId, byte loanMode, int loanCurrency, long ltvBps,
         long thresholdBps) {
-        return buildLoanEvent(loanId, uid, loanCurrency, FundEventType.LOAN_MARGIN_CALL, loanMode, ltvBps, thresholdBps);
-    }
-
-    /**
-     * loan 利息结算事件。<b>挂 taker 桶</b>（在 LOAN_REPAY / force-sell 等 cmd apply 里触发），
-     * 让下游把利息从 fees 桶里拆出来作利息收入统计。
-     *
-     * @param loanMode        0 = Isolated，1 = Cross
-     * @param loanId          具体 loanId
-     * @param interestAmount  本次结算的利息量（currencyScale，正值）
-     * @param loanCurrency         利息计价 currency（= loan.loanCurrency）
-     */
-    public FundEvent sendLoanInterestSettleEvent(OrderCommand cmd, long uid, byte loanMode, long loanId,
-        long interestAmount, int loanCurrency) {
-        FundEvent event = buildLoanEvent(loanId, uid, loanCurrency, FundEventType.LOAN_INTEREST_SETTLE, loanMode,
-            interestAmount, 0);
-        addFundEvent(cmd, cmd.orderId, event);
-        return event;
-    }
-
-    /**
-     * loan 坏账事件。<b>挂 taker 桶</b>（在 force-sell underwater 分支触发），给运营做审计回溯。
-     * badDebt bucket 本身是权威真值（进 raft snapshot），本事件用于还原每笔来源。
-     *
-     * @param loanMode        0 = Isolated，1 = Cross
-     * @param loanId          具体 loanId
-     * @param loanCurrency         坏账 currency（= loan.loanCurrency）
-     * @param badDebtAmount   本次坏账合计 principal + interest（currencyScale，正值）
-     */
-    public FundEvent sendLoanBadDebtEvent(OrderCommand cmd, long uid, byte loanMode, long loanId, int loanCurrency,
-        long badDebtAmount) {
-        FundEvent event = buildLoanEvent(loanId, uid, loanCurrency, FundEventType.LOAN_BAD_DEBT_INCURRED, loanMode,
-            badDebtAmount, 0);
-        addFundEvent(cmd, cmd.orderId, event);
+        FundEvent event = newLoanEvent(loanId, uid, loanMode, loanCurrency, 0, FundEventType.LOAN_MARGIN_CALL);
+        event.loanLtvBps = ltvBps;
+        event.loanThresholdBps = thresholdBps;
         return event;
     }
 
