@@ -105,6 +105,34 @@ message OrderList {
   repeated Order orders = 1;
 }
 
+// 现货借贷 Isolated 逐仓 loan：抵押与本笔 1:1 绑定，带 per-loan 实时 LTV
+message IsolatedLoan {
+  int64 loan_id = 1;
+  int32 symbol_id = 2;
+  int32 collateral_currency = 3;
+  int32 loan_currency = 4;
+  int32 rate_bps = 5;
+  int64 opened_at_ts = 6;
+  int64 collateral_amount = 7;
+  int64 outstanding_principal = 8;
+  int64 accumulated_interest = 9;
+  int64 display_interest = 10; // 含未落账 pending 利息
+  int64 ltv_bps = 11;          // spec/markPrice 缺失时为 0（不可信）
+  int64 mark_price = 12;       // 0 = 喂价缺失
+}
+
+// 现货借贷 Cross 全仓 loan：抵押账户级共享（见 cross_loan_collateral / cross_account_ltv_bps），单笔无 LTV
+message CrossLoan {
+  int64 loan_id = 1;
+  int32 symbol_id = 2;
+  int32 loan_currency = 3;
+  int32 rate_bps = 4;
+  int64 opened_at_ts = 5;
+  int64 outstanding_principal = 6;
+  int64 accumulated_interest = 7;
+  int64 display_interest = 8;
+}
+
 enum QueryExecutionStatus {
   OK = 0;
   USER_NOT_FOUND = 1;
@@ -119,6 +147,10 @@ message SingleUserReportResult {
   map<int32, OrderList> orders = 5;
   QueryExecutionStatus query_execution_status = 6;
   map<int32, int64> exchange_locked = 7;
+  repeated IsolatedLoan isolated_loans = 8;
+  repeated CrossLoan cross_loans = 9;
+  map<int32, int64> cross_loan_collateral = 10; // Cross 账户级抵押池 currency -> 数量
+  int64 cross_account_ltv_bps = 11;              // Cross 账户级 LTV（numeraire 未配/无 cross loan → 0）
 }
 
 enum SubmoduleType {

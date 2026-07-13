@@ -18,6 +18,8 @@ import com.binance.raftexchange.stubs.CoreSymbolSpecification;
 import com.binance.raftexchange.stubs.report.HashCodeEntry;
 import com.binance.raftexchange.stubs.report.Order;
 import com.binance.raftexchange.stubs.report.OrderList;
+import com.binance.raftexchange.stubs.report.CrossLoan;
+import com.binance.raftexchange.stubs.report.IsolatedLoan;
 import com.binance.raftexchange.stubs.report.Position;
 import com.binance.raftexchange.stubs.report.PositionList;
 import com.binance.raftexchange.stubs.report.QueryExecutionStatus;
@@ -254,6 +256,19 @@ public class SerializeHelper {
                 .collect(Collectors.toList()))
             .build();
 
+    private static final Function<SingleUserReportResult.IsolatedLoan, IsolatedLoan> isolatedLoanMapping =
+        l -> IsolatedLoan.newBuilder().setLoanId(l.getLoanId()).setSymbolId(l.getSymbolId())
+            .setCollateralCurrency(l.getCollateralCurrency()).setLoanCurrency(l.getLoanCurrency())
+            .setRateBps(l.getRateBps()).setOpenedAtTs(l.getOpenedAtTs()).setCollateralAmount(l.getCollateralAmount())
+            .setOutstandingPrincipal(l.getOutstandingPrincipal()).setAccumulatedInterest(l.getAccumulatedInterest())
+            .setDisplayInterest(l.getDisplayInterest()).setLtvBps(l.getLtvBps()).setMarkPrice(l.getMarkPrice()).build();
+
+    private static final Function<SingleUserReportResult.CrossLoan, CrossLoan> crossLoanMapping =
+        l -> CrossLoan.newBuilder().setLoanId(l.getLoanId()).setSymbolId(l.getSymbolId())
+            .setLoanCurrency(l.getLoanCurrency()).setRateBps(l.getRateBps()).setOpenedAtTs(l.getOpenedAtTs())
+            .setOutstandingPrincipal(l.getOutstandingPrincipal()).setAccumulatedInterest(l.getAccumulatedInterest())
+            .setDisplayInterest(l.getDisplayInterest()).build();
+
     private static final Function<exchange.core2.core.common.CoreSymbolSpecification,
         CoreSymbolSpecification> symbolSpecMapping = s -> CoreSymbolSpecification.newBuilder()
             .setSymbolId(s.getSymbolId()).setTypeValue(s.getType().ordinal()).setBaseCurrency(s.getBaseCurrency())
@@ -289,6 +304,12 @@ public class SerializeHelper {
                 .putAllExchangeLocked(convertToHashMap(singleUserReportResult.getExchangeLocked()))
                 .putAllPositions(convertToHashMap(singleUserReportResult.getPositions(), positionMapping))
                 .putAllOrders(convertToHashMap(singleUserReportResult.getOrders(), ordersMapping))
+                .addAllIsolatedLoans(singleUserReportResult.getIsolatedLoans().stream()
+                    .map(isolatedLoanMapping).collect(Collectors.toList()))
+                .addAllCrossLoans(singleUserReportResult.getCrossLoans().stream()
+                    .map(crossLoanMapping).collect(Collectors.toList()))
+                .putAllCrossLoanCollateral(convertToHashMap(singleUserReportResult.getCrossLoanCollateral()))
+                .setCrossAccountLtvBps(singleUserReportResult.getCrossAccountLtvBps())
                 .setQueryExecutionStatus(
                     QueryExecutionStatus.forNumber(singleUserReportResult.getQueryExecutionStatus().getCode()))
                 .build();

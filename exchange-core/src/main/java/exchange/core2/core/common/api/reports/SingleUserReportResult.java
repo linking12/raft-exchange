@@ -41,7 +41,8 @@ import java.util.stream.Stream;
 @Slf4j
 public final class SingleUserReportResult implements ReportResult {
 
-    public static SingleUserReportResult IDENTITY = new SingleUserReportResult(0L, null, null, null, null, null, QueryExecutionStatus.OK);
+    public static SingleUserReportResult IDENTITY =
+            new SingleUserReportResult(0L, null, null, null, null, null, null, null, 0L, null, QueryExecutionStatus.OK);
 
     private final long uid;
 
@@ -64,6 +65,16 @@ public final class SingleUserReportResult implements ReportResult {
      */
     private final IntObjectHashMap<List<Position>> positions;
 
+    // risk engine: 现货借贷持仓（loan）
+    /** Isolated 逐仓 loan（每笔 1:1 抵押），含实时 LTV。null = 该 shard 无此用户。 */
+    private final List<IsolatedLoan> isolatedLoans;
+    /** Cross 全仓 loan（抵押账户级共享，见 crossLoanCollateral），单笔无 LTV，健康度看 crossAccountLtvBps。 */
+    private final List<CrossLoan> crossLoans;
+    /** Cross 账户级抵押池（currency -> 数量，currencyScale），所有 crossLoans 共享。 */
+    private final IntLongHashMap crossLoanCollateral;
+    /** Cross 账户级 LTV（bps）：Σ 债务 ÷ Σ 抵押估值（folded 到 numeraire）。numeraire 未配 / 无 cross loan → 0。 */
+    private final long crossAccountLtvBps;
+
     // matching engine: orders placed by user
     // symbol -> orders
     private final IntObjectHashMap<List<Order>> orders;
@@ -73,16 +84,19 @@ public final class SingleUserReportResult implements ReportResult {
 
 
     public static SingleUserReportResult createFromMatchingEngine(long uid, IntObjectHashMap<List<Order>> orders) {
-        return new SingleUserReportResult(uid, null, null, null, null, orders, QueryExecutionStatus.OK);
+        return new SingleUserReportResult(uid, null, null, null, null, null, null, null, 0L, orders, QueryExecutionStatus.OK);
     }
 
     public static SingleUserReportResult createFromRiskEngineFound(long uid, UserStatus userStatus, IntLongHashMap accounts,
-                                                                   IntLongHashMap exchangeLocked, IntObjectHashMap<List<Position>> positions) {
-        return new SingleUserReportResult(uid, userStatus, accounts, exchangeLocked, positions, null, QueryExecutionStatus.OK);
+                                                                   IntLongHashMap exchangeLocked, IntObjectHashMap<List<Position>> positions,
+                                                                   List<IsolatedLoan> isolatedLoans, List<CrossLoan> crossLoans,
+                                                                   IntLongHashMap crossLoanCollateral, long crossAccountLtvBps) {
+        return new SingleUserReportResult(uid, userStatus, accounts, exchangeLocked, positions,
+                isolatedLoans, crossLoans, crossLoanCollateral, crossAccountLtvBps, null, QueryExecutionStatus.OK);
     }
 
     public static SingleUserReportResult createFromRiskEngineNotFound(long uid) {
-        return new SingleUserReportResult(uid, null, null, null, null, null, QueryExecutionStatus.USER_NOT_FOUND);
+        return new SingleUserReportResult(uid, null, null, null, null, null, null, null, 0L, null, QueryExecutionStatus.USER_NOT_FOUND);
     }
 
     public Map<Long, Order> fetchIndexedOrders() {
@@ -98,6 +112,10 @@ public final class SingleUserReportResult implements ReportResult {
         this.accounts = bytesIn.readBoolean() ? SerializationUtils.readIntLongHashMap(bytesIn) : null;
         this.exchangeLocked = bytesIn.readBoolean() ? SerializationUtils.readIntLongHashMap(bytesIn) : null;
         this.positions = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, b -> SerializationUtils.readList(b, Position::new)) : null;
+        this.isolatedLoans = bytesIn.readBoolean() ? SerializationUtils.readList(bytesIn, IsolatedLoan::new) : null;
+        this.crossLoans = bytesIn.readBoolean() ? SerializationUtils.readList(bytesIn, CrossLoan::new) : null;
+        this.crossLoanCollateral = bytesIn.readBoolean() ? SerializationUtils.readIntLongHashMap(bytesIn) : null;
+        this.crossAccountLtvBps = bytesIn.readLong();
         this.orders = bytesIn.readBoolean() ? SerializationUtils.readIntHashMap(bytesIn, b -> SerializationUtils.readList(b, Order::new)) : null;
         this.queryExecutionStatus = QueryExecutionStatus.of(bytesIn.readInt());
     }
@@ -131,6 +149,23 @@ public final class SingleUserReportResult implements ReportResult {
         if (positions != null) {
             SerializationUtils.marshallIntHashMap(positions, bytes, pos -> SerializationUtils.marshallList(pos, bytes));
         }
+
+        bytes.writeBoolean(isolatedLoans != null);
+        if (isolatedLoans != null) {
+            SerializationUtils.marshallList(isolatedLoans, bytes);
+        }
+
+        bytes.writeBoolean(crossLoans != null);
+        if (crossLoans != null) {
+            SerializationUtils.marshallList(crossLoans, bytes);
+        }
+
+        bytes.writeBoolean(crossLoanCollateral != null);
+        if (crossLoanCollateral != null) {
+            SerializationUtils.marshallIntLongHashMap(crossLoanCollateral, bytes);
+        }
+
+        bytes.writeLong(crossAccountLtvBps);
 
         bytes.writeBoolean(orders != null);
         if (orders != null) {
@@ -178,6 +213,11 @@ public final class SingleUserReportResult implements ReportResult {
                                 SerializationUtils.preferNotNull(a.accounts, b.accounts),
                                 SerializationUtils.preferNotNull(a.exchangeLocked, b.exchangeLocked),
                                 SerializationUtils.mergeOverride(a.positions, b.positions),
+                                // loan 只由 risk engine section 产出（另一 section 恒 null）：preferNotNull 取到有值那份
+                                SerializationUtils.preferNotNull(a.isolatedLoans, b.isolatedLoans),
+                                SerializationUtils.preferNotNull(a.crossLoans, b.crossLoans),
+                                SerializationUtils.preferNotNull(a.crossLoanCollateral, b.crossLoanCollateral),
+                                a.crossAccountLtvBps != 0 ? a.crossAccountLtvBps : b.crossAccountLtvBps,
                                 SerializationUtils.mergeOverride(a.orders, b.orders),
                                 a.queryExecutionStatus != QueryExecutionStatus.OK ? a.queryExecutionStatus : b.queryExecutionStatus));
     }
@@ -259,6 +299,94 @@ public final class SingleUserReportResult implements ReportResult {
         }
     }
 
+    /** Isolated 逐仓 loan 快照 + 实时健康度。抵押与本笔 1:1 绑定，故带 per-loan LTV。 */
+    @RequiredArgsConstructor
+    @Getter
+    public static class IsolatedLoan implements WriteBytesMarshallable {
+
+        public final long loanId;
+        public final int symbolId;          // 所属现货 pair
+        public final int collateralCurrency; // 抵押币（= spec.baseCurrency）
+        public final int loanCurrency;       // 借出币（= spec.quoteCurrency）
+        public final int rateBps;            // 年化利率（开仓锁定）
+        public final long openedAtTs;        // 开仓时间（ms），期限强平参照
+        public final long collateralAmount;  // 抵押数量（currencyScale）
+        public final long outstandingPrincipal; // 剩余本金（loanCurrency scale）
+        public final long accumulatedInterest;  // 已落账利息
+        public final long displayInterest;   // 含未落账 pending accrue 到 now 的利息（≥ accumulatedInterest）
+        public final long ltvBps;            // 实时 LTV：(本金 + displayInterest) ÷ 抵押估值；spec/markPrice 缺失 → 0
+        public final long markPrice;         // 估值用 markPrice（0 = 喂价缺失，ltvBps 不可信）
+
+        private IsolatedLoan(BytesIn b) {
+            this.loanId = b.readLong();
+            this.symbolId = b.readInt();
+            this.collateralCurrency = b.readInt();
+            this.loanCurrency = b.readInt();
+            this.rateBps = b.readInt();
+            this.openedAtTs = b.readLong();
+            this.collateralAmount = b.readLong();
+            this.outstandingPrincipal = b.readLong();
+            this.accumulatedInterest = b.readLong();
+            this.displayInterest = b.readLong();
+            this.ltvBps = b.readLong();
+            this.markPrice = b.readLong();
+        }
+
+        @Override
+        public void writeMarshallable(BytesOut bytes) {
+            bytes.writeLong(loanId);
+            bytes.writeInt(symbolId);
+            bytes.writeInt(collateralCurrency);
+            bytes.writeInt(loanCurrency);
+            bytes.writeInt(rateBps);
+            bytes.writeLong(openedAtTs);
+            bytes.writeLong(collateralAmount);
+            bytes.writeLong(outstandingPrincipal);
+            bytes.writeLong(accumulatedInterest);
+            bytes.writeLong(displayInterest);
+            bytes.writeLong(ltvBps);
+            bytes.writeLong(markPrice);
+        }
+    }
+
+    /** Cross 全仓 loan 快照。抵押账户级共享（见外层 crossLoanCollateral / crossAccountLtvBps），单笔不含抵押 / LTV。 */
+    @RequiredArgsConstructor
+    @Getter
+    public static class CrossLoan implements WriteBytesMarshallable {
+
+        public final long loanId;
+        public final int symbolId;      // 借款时匹配的现货 pair
+        public final int loanCurrency;  // 借出币（= 该 pair 的 quoteCurrency）
+        public final int rateBps;       // 年化利率（开仓锁定）
+        public final long openedAtTs;   // 开仓时间（ms），期限强平参照
+        public final long outstandingPrincipal; // 剩余本金（loanCurrency scale）
+        public final long accumulatedInterest;  // 已落账利息
+        public final long displayInterest;       // 含未落账 pending accrue 到 now 的利息
+
+        private CrossLoan(BytesIn b) {
+            this.loanId = b.readLong();
+            this.symbolId = b.readInt();
+            this.loanCurrency = b.readInt();
+            this.rateBps = b.readInt();
+            this.openedAtTs = b.readLong();
+            this.outstandingPrincipal = b.readLong();
+            this.accumulatedInterest = b.readLong();
+            this.displayInterest = b.readLong();
+        }
+
+        @Override
+        public void writeMarshallable(BytesOut bytes) {
+            bytes.writeLong(loanId);
+            bytes.writeInt(symbolId);
+            bytes.writeInt(loanCurrency);
+            bytes.writeInt(rateBps);
+            bytes.writeLong(openedAtTs);
+            bytes.writeLong(outstandingPrincipal);
+            bytes.writeLong(accumulatedInterest);
+            bytes.writeLong(displayInterest);
+        }
+    }
+
 
     @Override
     public String toString() {
@@ -266,6 +394,10 @@ public final class SingleUserReportResult implements ReportResult {
                 "userProfile=" + userStatus +
                 ", accounts=" + accounts +
                 ", exchangeLocked=" + exchangeLocked +
+                ", isolatedLoans=" + isolatedLoans +
+                ", crossLoans=" + crossLoans +
+                ", crossLoanCollateral=" + crossLoanCollateral +
+                ", crossAccountLtvBps=" + crossAccountLtvBps +
                 ", orders=" + orders +
                 ", queryExecutionStatus=" + queryExecutionStatus +
                 '}';

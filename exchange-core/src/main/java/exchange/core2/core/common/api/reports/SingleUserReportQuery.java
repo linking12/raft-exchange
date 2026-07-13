@@ -27,6 +27,7 @@ import exchange.core2.core.processors.MatchingEngineRouter;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.loan.LoanService;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
@@ -34,6 +35,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import org.eclipse.collections.impl.list.mutable.FastList;
+import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import java.util.List;
@@ -145,6 +147,49 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                 }
             });
 
+            // ---- 现货借贷 loan 持仓 + 实时健康度（口径对齐 scanner LoanLiquidationEngine，避免查询看到的 LTV 比强平乐观）----
+            final LoanService loanService = riskEngine.getLoanService();
+            final long nowMs = System.currentTimeMillis();
+
+            final List<SingleUserReportResult.IsolatedLoan> isolatedLoans = FastList.newList();
+            userProfile.isolatedLoans.forEachValue(loan -> {
+                if (loan.isEmpty()) {
+                    return;
+                }
+                final CoreSymbolSpecification spec = symbolSpecProvider.getSymbolSpecification(loan.symbolId);
+                final LastPriceCacheRecord priceRecord = riskEngine.getLastPriceCache().get(loan.symbolId);
+                final long markPrice = priceRecord != null ? priceRecord.markPrice : 0L;
+                final long displayInterest = loanService.calculateDisplayInterest(loan, nowMs);
+                long ltvBps = 0L;
+                if (spec != null && markPrice > 0) {
+                    final CoreCurrencySpecification baseSpec = currencySpecProvider.getCurrencySpecification(loan.collateralCurrency);
+                    final CoreCurrencySpecification quoteSpec = currencySpecProvider.getCurrencySpecification(loan.loanCurrency);
+                    final long collateralValue = LoanService.collateralValueInQuoteCurrency(
+                            loan.collateralAmount, spec, markPrice, baseSpec, quoteSpec);
+                    if (collateralValue > 0) {
+                        final long realDebt = loan.outstandingPrincipal + displayInterest;
+                        ltvBps = Math.multiplyExact(realDebt, LoanService.BPS_SCALE) / collateralValue;
+                    }
+                }
+                isolatedLoans.add(new SingleUserReportResult.IsolatedLoan(loan.loanId, loan.symbolId,
+                        loan.collateralCurrency, loan.loanCurrency, loan.rateBps, loan.openedAtTs, loan.collateralAmount,
+                        loan.outstandingPrincipal, loan.accumulatedInterest, displayInterest, ltvBps, markPrice));
+            });
+
+            final List<SingleUserReportResult.CrossLoan> crossLoans = FastList.newList();
+            userProfile.crossLoans.forEachValue(loan -> {
+                if (loan.isEmpty()) {
+                    return;
+                }
+                final long displayInterest = loanService.calculateDisplayInterest(loan, nowMs);
+                crossLoans.add(new SingleUserReportResult.CrossLoan(loan.loanId, loan.symbolId, loan.loanCurrency,
+                        loan.rateBps, loan.openedAtTs, loan.outstandingPrincipal, loan.accumulatedInterest, displayInterest));
+            });
+
+            final IntLongHashMap crossLoanCollateral = new IntLongHashMap(userProfile.crossLoanCollateral);
+            final long crossAccountLtvBps = loanService.calculateCrossAccountLtvBps(userProfile, nowMs,
+                    symbolSpecProvider, currencySpecProvider, riskEngine.getLastPriceCache(), loanService.getNumeraireCurrency());
+
             // 返回 raw 字段，free 由客户端按需自己算：
             //   - accounts: 真实持有总额（currencyScale），含现货挂单冻结（exchangeLocked 未扣减）
             //   - exchangeLocked: 现货挂单冻结（currencyScale），客户端需自行从 accounts 中减去
@@ -165,7 +210,11 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     userProfile.userStatus,
                     userProfile.accounts,
                     userProfile.exchangeLocked,
-                    positions));
+                    positions,
+                    isolatedLoans,
+                    crossLoans,
+                    crossLoanCollateral,
+                    crossAccountLtvBps));
         } else {
             // not found
             return Optional.of(SingleUserReportResult.createFromRiskEngineNotFound(uid));

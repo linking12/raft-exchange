@@ -188,7 +188,8 @@ class SerializeHelperTest {
     private static SingleUserReportResult mergedReport(long uid, IntLongHashMap accounts,
         IntLongHashMap exchangeLocked) {
         SingleUserReportResult risk = SingleUserReportResult.createFromRiskEngineFound(uid, UserStatus.ACTIVE, accounts,
-            exchangeLocked, new IntObjectHashMap<>());
+            exchangeLocked, new IntObjectHashMap<>(),
+            java.util.Collections.emptyList(), java.util.Collections.emptyList(), new IntLongHashMap(), 0L);
         SingleUserReportResult matching =
             SingleUserReportResult.createFromMatchingEngine(uid, new IntObjectHashMap<>());
 
