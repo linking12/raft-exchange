@@ -30,8 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ul>
  *   <li>惰性计息 accrueTo（Isolated + Cross，含溢出保护 / 时钟倒退 / 累计）</li>
  *   <li>只读 calculateDisplayInterest（不修改 loan record）</li>
- *   <li>池子利用率 metric</li>
- *   <li>calculateEffectiveRateBps v1 stub + calculateCrossAccountLtvBps v1 skeleton</li>
+ *   <li>calculateCrossAccountLtvBps</li>
  *   <li>force-sell OrderId 编码 / 分类（'L' 命名空间 + 'S'/'C' subtype，跟 IF 'I' / ADL 'A' 独占）</li>
  *   <li>reset + snapshot round-trip</li>
  * </ul>
@@ -223,53 +222,6 @@ class LoanServiceTest {
 
         assertEquals(1_000_500L, displayed);
         assertEquals(500L, loan.accumulatedInterest, "cross 也不 mutate");
-    }
-
-    // ================================================================
-    // calculatePoolUtilizationBps
-    // ================================================================
-
-    @Test
-    void poolUtil_unknownCurrency_returnsZero() {
-        assertEquals(0, svc.calculatePoolUtilizationBps(999));
-    }
-
-    @Test
-    void poolUtil_allAvailableNoBorrowed_returnsZero() {
-        svc.getLoanPoolAvailable().put(3, 100_000L);
-        assertEquals(0, svc.calculatePoolUtilizationBps(3));
-    }
-
-    @Test
-    void poolUtil_halfBorrowed_returns5000Bps() {
-        svc.getLoanPoolAvailable().put(3, 5000L);
-        svc.getLoanPoolBorrowed().put(3, 5000L);
-        assertEquals(5000, svc.calculatePoolUtilizationBps(3), "50% 利用率");
-    }
-
-    @Test
-    void poolUtil_fullBorrowed_returns10000Bps() {
-        svc.getLoanPoolAvailable().put(3, 0L);
-        svc.getLoanPoolBorrowed().put(3, 10_000L);
-        assertEquals(10000, svc.calculatePoolUtilizationBps(3), "100% 利用率");
-    }
-
-    @Test
-    void poolUtil_thirtyPercent_returns3000Bps() {
-        svc.getLoanPoolAvailable().put(3, 7_000L);
-        svc.getLoanPoolBorrowed().put(3, 3_000L);
-        assertEquals(3000, svc.calculatePoolUtilizationBps(3));
-    }
-
-    // ================================================================
-    // calculateEffectiveRateBps —— v1 stub 永远返回 0
-    // ================================================================
-
-    @Test
-    void effectiveRate_v1_alwaysZero_regardlessOfCurrency() {
-        assertEquals(0, svc.calculateEffectiveRateBps(1));
-        assertEquals(0, svc.calculateEffectiveRateBps(840));
-        assertEquals(0, svc.calculateEffectiveRateBps(0));
     }
 
     // ================================================================

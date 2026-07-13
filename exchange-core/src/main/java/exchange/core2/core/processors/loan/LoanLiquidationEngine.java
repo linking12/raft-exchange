@@ -50,7 +50,7 @@ import lombok.extern.slf4j.Slf4j;
  * <p><b>触发 → 结算流程</b>：scanner publish {@link ApiLoanForceLiquidate} / {@link ApiLoanCrossForceLiquidate} →
  * raft 共识 → apply 侧 {@link LoanCommandHandlers#handleLoanForceLiquidate}（pre-move 抵押到 exchangeLocked）→
  * orderbook 标准 spot ASK IOC 撮合 → R2 {@link LoanCommandHandlers#postProcessLoanForceLiquidate} 路由 quote
- * proceeds 到 loanLiqFees / interestRevenue / poolAvailable，underwater 走 badDebt。
+ * proceeds 到 loanLiquidationFees / interestRevenue / poolAvailable，underwater 走 badDebt。
  */
 @Slf4j
 public final class LoanLiquidationEngine {
@@ -76,14 +76,19 @@ public final class LoanLiquidationEngine {
     private static final long MARGIN_CALL_THROTTLE_MS = 5L * 60L * 1_000L;
 
     private final LiquidationEngine engine;
-    private final MultiReaderSet<Long> inFlightIsolatedLoanLiq = Sets.multiReader.empty();
-    private final MultiReaderSet<Long> inFlightCrossLoanLiq = Sets.multiReader.empty();
-    // 节流 per-loanId (Isolated) / per-uid (Cross)，进程 local（不进 raft snapshot）
-    private final LongLongHashMap lastIsolatedMarginCallMs = new LongLongHashMap();
-    private final LongLongHashMap lastCrossMarginCallMs = new LongLongHashMap();
-    // 卡单重发节流：Isolated per-loanId / Cross per-uid，进程 local。
-    private final LongLongHashMap lastIsolatedLiqMs = new LongLongHashMap();
-    private final LongLongHashMap lastCrossLiqMs = new LongLongHashMap();
+
+    /**
+     * 每条 lane（Isolated / Cross）的进程级状态：in-flight 去重 + margin-call / 卡单重发两类节流窗口。
+     * 不进 raft snapshot（failover 后重置无碍）；key = loanId(Isolated) / uid(Cross)。
+     */
+    private static final class LaneState {
+        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty();
+        final LongLongHashMap marginCallThrottleMs = new LongLongHashMap();
+        final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap();
+    }
+
+    private final LaneState isolated = new LaneState();
+    private final LaneState cross = new LaneState();
 
     /** 容差爬梯：连续零成交次数 → 限价容差 bps。 */
     private static long toleranceBpsFor(int stuckLiqAttempts) {
@@ -128,7 +133,7 @@ public final class LoanLiquidationEngine {
         userProfile.isolatedLoans.forEachValue(loan -> {
             if (loan.isEmpty())
                 return;
-            if (inFlightIsolatedLoanLiq.contains(loan.loanId))
+            if (isolated.inFlight.contains(loan.loanId))
                 return;
 
             CoreSymbolSpecification spec = LoanService.findSpotSpec(loan.collateralCurrency, loan.loanCurrency,
@@ -160,7 +165,7 @@ public final class LoanLiquidationEngine {
             long thresholdLiq = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanLiquidationLtvBps);
 
             if (termExpired || ltvScaled >= thresholdLiq) {
-                if (stuckLiqThrottled("isolated", lastIsolatedLiqMs, loan.loanId, loan.stuckLiqAttempts))
+                if (stuckLiqThrottled("isolated", isolated.liqRetryThrottleMs, loan.loanId, loan.stuckLiqAttempts))
                     return;
                 publishIsolatedForceSell(loan, spec, priceRecord.markPrice, toleranceBpsFor(loan.stuckLiqAttempts));
                 return;
@@ -180,7 +185,7 @@ public final class LoanLiquidationEngine {
     private void checkCross(UserProfile userProfile) {
         if (userProfile.crossLoans.isEmpty())
             return;
-        if (inFlightCrossLoanLiq.contains(userProfile.uid))
+        if (cross.inFlight.contains(userProfile.uid))
             return;
 
         LoanService loanService = engine.getLoanService();
@@ -277,7 +282,7 @@ public final class LoanLiquidationEngine {
             return;
         }
         // 卡单节流（per-uid）+ 容差爬梯（按 targetLoan 的连续零成交次数）
-        if (stuckLiqThrottled("cross", lastCrossLiqMs, up.uid, targetLoan.stuckLiqAttempts))
+        if (stuckLiqThrottled("cross", cross.liqRetryThrottleMs, up.uid, targetLoan.stuckLiqAttempts))
             return;
         long orderId = LoanService.generateCrossForceSellOrderId(up.uid, sellingCurrency);
         long limitPrice = limitPriceWithTolerance(priceRecord.markPrice, toleranceBpsFor(targetLoan.stuckLiqAttempts));
@@ -384,10 +389,10 @@ public final class LoanLiquidationEngine {
 
     private void sendIsolatedMarginCallIfNotThrottled(IsolatedLoanRecord loan, long ltvBps, long thresholdBps) {
         long nowMs = System.currentTimeMillis();
-        long lastMs = lastIsolatedMarginCallMs.get(loan.loanId);
+        long lastMs = isolated.marginCallThrottleMs.get(loan.loanId);
         if (nowMs - lastMs < MARGIN_CALL_THROTTLE_MS)
             return;
-        lastIsolatedMarginCallMs.put(loan.loanId, nowMs);
+        isolated.marginCallThrottleMs.put(loan.loanId, nowMs);
         FundEvent event = engine.getEventsHelper().sendLoanMarginCallEvent(loan.uid, loan.loanId, LOAN_MODE_ISOLATED,
             loan.loanCurrency, ltvBps, thresholdBps);
         publishMarginCall(event);
@@ -395,10 +400,10 @@ public final class LoanLiquidationEngine {
 
     private void sendCrossMarginCallIfNotThrottled(long uid, long ltvBps, long thresholdBps) {
         long nowMs = System.currentTimeMillis();
-        long lastMs = lastCrossMarginCallMs.get(uid);
+        long lastMs = cross.marginCallThrottleMs.get(uid);
         if (nowMs - lastMs < MARGIN_CALL_THROTTLE_MS)
             return;
-        lastCrossMarginCallMs.put(uid, nowMs);
+        cross.marginCallThrottleMs.put(uid, nowMs);
         // Cross 账户级：loanId=0、loanCurrency=0（无单笔归属）
         FundEvent event = engine.getEventsHelper().sendLoanMarginCallEvent(uid, 0L, LOAN_MODE_CROSS, 0, ltvBps,
             thresholdBps);
@@ -416,31 +421,31 @@ public final class LoanLiquidationEngine {
     // ================================================================
 
     public boolean isIsolatedLoanInFlight(long loanId) {
-        return inFlightIsolatedLoanLiq.contains(loanId);
+        return isolated.inFlight.contains(loanId);
     }
 
     public boolean isCrossLoanInFlight(long uid) {
-        return inFlightCrossLoanLiq.contains(uid);
+        return cross.inFlight.contains(uid);
     }
 
     /** Isolated loan force-sell publish 追踪：in-flight set keyed by loanId。 */
     public void publishTrackedIsolated(ApiCommand cmd, long loanId) {
-        inFlightIsolatedLoanLiq.add(loanId);
+        isolated.inFlight.add(loanId);
         try {
-            engine.getLiquidationCmdPublisher().publish(cmd, () -> inFlightIsolatedLoanLiq.remove(loanId));
+            engine.getLiquidationCmdPublisher().publish(cmd, () -> isolated.inFlight.remove(loanId));
         } catch (Throwable t) {
-            inFlightIsolatedLoanLiq.remove(loanId);
+            isolated.inFlight.remove(loanId);
             throw t;
         }
     }
 
     /** Cross loan force-sell publish 追踪：in-flight set keyed by uid（Cross 一账户一 pending）。 */
     public void publishTrackedCross(ApiCommand cmd, long uid) {
-        inFlightCrossLoanLiq.add(uid);
+        cross.inFlight.add(uid);
         try {
-            engine.getLiquidationCmdPublisher().publish(cmd, () -> inFlightCrossLoanLiq.remove(uid));
+            engine.getLiquidationCmdPublisher().publish(cmd, () -> cross.inFlight.remove(uid));
         } catch (Throwable t) {
-            inFlightCrossLoanLiq.remove(uid);
+            cross.inFlight.remove(uid);
             throw t;
         }
     }

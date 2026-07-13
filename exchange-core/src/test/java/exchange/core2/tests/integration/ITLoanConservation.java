@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>断言两件事：① 强平后 exchangeLocked 归零（pre-move 的抵押被真正撮合消费/释放，没漂）；
  * ② {@code totalBalanceReport().isGlobalBalancesAllZero()} —— 现在报告已把 loan 平台桶
- * （poolAvailable + interestRevenue + loanLiqFees）纳入对账，能真正看见 loan 的钱。
+ * （poolAvailable + interestRevenue + loanLiquidationFees）纳入对账，能真正看见 loan 的钱。
  */
 @Slf4j
 class ITLoanConservation {
@@ -177,9 +177,9 @@ class ITLoanConservation {
     }
 
     @Test
-    public void resetFee_sweepsLoanLiqFeesIntoAdjustments_conserves() throws Exception {
-        // 任务1：RESET_FEE 应把 loan 平台收入（此处 loanLiqFees）一并扫进 adjustments 供运营提取，且守恒不破。
-        // sweepRevenueBucket 对 interestRevenue / loanLiqFees 逻辑一致，这里用强平费覆盖该路径（rate=0 无利息、fee=0 无撮合费，
+    public void resetFee_sweepsLoanLiquidationFeesIntoAdjustments_conserves() throws Exception {
+        // 任务1：RESET_FEE 应把 loan 平台收入（此处 loanLiquidationFees）一并扫进 adjustments 供运营提取，且守恒不破。
+        // sweepRevenueBucket 对 interestRevenue / loanLiquidationFees 逻辑一致，这里用强平费覆盖该路径（rate=0 无利息、fee=0 无撮合费，
         // 唯一收入就是 2% 强平费）。
         final long loanId = 4L;
         try (ExchangeTestContainer c = boot()) {
@@ -190,7 +190,7 @@ class ITLoanConservation {
                 .orderId(forceSellOrderId(loanId)).action(OrderAction.ASK).orderType(OrderType.IOC).build(),
                 CommandResultCode.SUCCESS);
 
-            // 全额强平：proceeds=150000，liqFee=2%=3000 进 loanLiqFees；takerFee/makerFee=0 → fees=0
+            // 全额强平：proceeds=150000，liqFee=2%=3000 进 loanLiquidationFees；takerFee/makerFee=0 → fees=0
             final long expectedLiqFee = COLLATERAL_LOTS * MARK_PRICE * 200L / 10000L; // 3000
             TotalCurrencyBalanceReportResult pre = c.totalBalanceReport();
             assertEquals(0L, pre.getFees().get(USDT), "撮合 fees 应为 0（takerFee/makerFee=0）");
@@ -200,9 +200,9 @@ class ITLoanConservation {
             c.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
             TotalCurrencyBalanceReportResult post = c.totalBalanceReport();
 
-            // loanLiqFees 被扫进 adjustments（运营可提取）
+            // loanLiquidationFees 被扫进 adjustments（运营可提取）
             assertEquals(adjBefore + expectedLiqFee, post.getAdjustments().get(USDT),
-                "RESET_FEE 应把 loanLiqFees 扫进 adjustments");
+                "RESET_FEE 应把 loanLiquidationFees 扫进 adjustments");
             // 桶清零后守恒仍成立（loanBalances 减 X、adjustments 加 X 两侧抵消）
             assertTrue(post.isGlobalBalancesAllZero(), "RESET_FEE 扫 loan 收入后全局守恒破裂");
         }

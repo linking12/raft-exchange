@@ -42,7 +42,7 @@ public final class ResetFeeCommandProcessor extends TwoStepCommandProcessor {
         }
         final LoanService loanService = riskEngine.getLoanService();
         sweepRevenueBucket(loanService.getInterestRevenue(), adjustments, shardData);
-        sweepRevenueBucket(loanService.getLoanLiqFees(), adjustments, shardData);
+        sweepRevenueBucket(loanService.getLoanLiquidationFees(), adjustments, shardData);
     }
 
     private void sweepRevenueBucket(IntLongHashMap bucket, IntLongHashMap adjustments, IntLongHashMap shardData) {

@@ -36,7 +36,7 @@ class LoanPlatformReportResultTest {
 
         PerShardData d = parsed.getByShard().get(3);
         assertEquals(1000L, d.getInterestRevenue().get(2));
-        assertEquals(1001L, d.getLoanLiqFees().get(2));
+        assertEquals(1001L, d.getLoanLiquidationFees().get(2));
         assertEquals(1002L, d.getBadDebt().get(2));
         assertEquals(1003L, d.getPoolAvailable().get(2));
         assertEquals(1004L, d.getPoolBorrowed().get(2));

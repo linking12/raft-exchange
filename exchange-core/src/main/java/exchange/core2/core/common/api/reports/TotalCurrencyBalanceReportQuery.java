@@ -214,13 +214,13 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
             ifBalance.addToValue(spec.quoteCurrency, positionValueInCurrency);
         });
 
-        // loan 平台桶：poolAvailable + interestRevenue + loanLiqFees（平台持有现金，参与全局对账）
+        // loan 平台桶：poolAvailable + interestRevenue + loanLiquidationFees（平台持有现金，参与全局对账）
         final IntLongHashMap loanBalances = new IntLongHashMap();
         final exchange.core2.core.processors.loan.LoanService loanService = riskEngine.getLoanService();
         if (loanService != null) {
             loanService.getLoanPoolAvailable().forEachKeyValue(loanBalances::addToValue);
             loanService.getInterestRevenue().forEachKeyValue(loanBalances::addToValue);
-            loanService.getLoanLiqFees().forEachKeyValue(loanBalances::addToValue);
+            loanService.getLoanLiquidationFees().forEachKeyValue(loanBalances::addToValue);
         }
 
         return Optional.of(

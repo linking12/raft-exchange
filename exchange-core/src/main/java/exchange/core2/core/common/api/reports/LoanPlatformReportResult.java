@@ -18,7 +18,7 @@ import java.util.stream.Stream;
  * 5 桶口径完全对齐 {@link LoanService} 的 raft snapshot 字段：
  * <ul>
  *   <li>{@code interestRevenue} —— 累计利息收入（loanCurrency scale）</li>
- *   <li>{@code loanLiqFees} —— 累计强平专项费</li>
+ *   <li>{@code loanLiquidationFees} —— 累计强平专项费</li>
  *   <li>{@code badDebt} —— 累计坏账（underwater 核销）</li>
  *   <li>{@code poolAvailable} —— 借贷池可借余额</li>
  *   <li>{@code poolBorrowed} —— 借贷池已借出（= Σ outstandingPrincipal）</li>
@@ -89,14 +89,14 @@ public final class LoanPlatformReportResult implements ReportResult {
     @RequiredArgsConstructor
     public static final class PerShardData implements net.openhft.chronicle.bytes.WriteBytesMarshallable {
         private final IntLongHashMap interestRevenue;
-        private final IntLongHashMap loanLiqFees;
+        private final IntLongHashMap loanLiquidationFees;
         private final IntLongHashMap badDebt;
         private final IntLongHashMap poolAvailable;
         private final IntLongHashMap poolBorrowed;
 
         public PerShardData(BytesIn bytes) {
             this.interestRevenue = SerializationUtils.readIntLongHashMap(bytes);
-            this.loanLiqFees = SerializationUtils.readIntLongHashMap(bytes);
+            this.loanLiquidationFees = SerializationUtils.readIntLongHashMap(bytes);
             this.badDebt = SerializationUtils.readIntLongHashMap(bytes);
             this.poolAvailable = SerializationUtils.readIntLongHashMap(bytes);
             this.poolBorrowed = SerializationUtils.readIntLongHashMap(bytes);
@@ -105,7 +105,7 @@ public final class LoanPlatformReportResult implements ReportResult {
         @Override
         public void writeMarshallable(BytesOut bytes) {
             SerializationUtils.marshallIntLongHashMap(interestRevenue, bytes);
-            SerializationUtils.marshallIntLongHashMap(loanLiqFees, bytes);
+            SerializationUtils.marshallIntLongHashMap(loanLiquidationFees, bytes);
             SerializationUtils.marshallIntLongHashMap(badDebt, bytes);
             SerializationUtils.marshallIntLongHashMap(poolAvailable, bytes);
             SerializationUtils.marshallIntLongHashMap(poolBorrowed, bytes);

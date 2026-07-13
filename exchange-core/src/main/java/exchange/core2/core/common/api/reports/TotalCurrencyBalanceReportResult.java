@@ -46,7 +46,7 @@ public final class TotalCurrencyBalanceReportResult implements ReportResult {
     /** RiskEngine 聚合的 UserProfile.exchangeLocked（现货侧冻结，作为独立 bucket 参与全局对账） */
     final private IntLongHashMap exchangeLocked;
     /**
-     * loan 平台桶 = loanPoolAvailable + interestRevenue + loanLiqFees（均平台持有现金，参与全局对账）。
+     * loan 平台桶 = loanPoolAvailable + interestRevenue + loanLiquidationFees（均平台持有现金，参与全局对账）。
      * 不含 loanPoolBorrowed / badDebt —— 那是追踪器，对应的钱在借款人账户里（disburse 时已进 accounts）。
      */
     final private IntLongHashMap loanBalances;

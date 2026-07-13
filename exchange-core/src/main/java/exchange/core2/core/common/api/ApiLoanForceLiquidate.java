@@ -25,7 +25,7 @@ import lombok.RequiredArgsConstructor;
 /**
  * Isolated Loan 强平 IOC 单：scanner 在 LTV 触线时 publish，走标准 spot ASK 撮合。
  * preProcess 阶段 pre-move 抵押到 exchangeLocked，让现有 spot 结算路径复用；post-process 阶段
- * 从 taker.accounts[quote] 路由 proceeds 到 loanLiqFees / interestRevenue / poolAvailable / badDebt。
+ * 从 taker.accounts[quote] 路由 proceeds 到 loanLiquidationFees / interestRevenue / poolAvailable / badDebt。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)
