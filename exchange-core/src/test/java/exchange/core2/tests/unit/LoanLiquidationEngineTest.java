@@ -63,6 +63,8 @@ class LoanLiquidationEngineTest {
     private static final int SYMBOL = 100;
     private static final int BTC = 1;
     private static final int USDT = 2;
+    // openedAtTs 近似当前时刻（ms）：避免 loanMaxTermDays 期限强平误触发（旧 sentinel 1000L = 1970 年，ms 语义下恒过期）。
+    private static final long OPENED_AT_MS = System.currentTimeMillis();
 
     @Mock private LiquidationEngine engine;
     @Mock private LiquidationCmdPublisher publisher;
@@ -213,8 +215,8 @@ class LoanLiquidationEngineTest {
     void check_isolatedHealthyLtv_noPublish() {
         // 2 BTC 抵押 30k USDT → LTV = 30k/(2*50k) = 30%，远低于阈值
         // openedAtTs 用当前时刻 + rateBps=0：既不触 loanMaxTermDays 期限强平，也无 pending interest 抬 realDebt
-        long nowNs = System.currentTimeMillis() * 1_000_000L;
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, nowNs);
+        long nowMs = System.currentTimeMillis();
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, nowMs);
         loan.collateralAmount = 2L;
         loan.outstandingPrincipal = 30_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -226,7 +228,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_isolatedLtvOverLiquidation_publishesForceSell() {
         // 1 BTC 抵押 45k USDT → LTV = 90% ≥ 80% liquidation
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -239,7 +241,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_isolated_identityScale_publishesSizeEqualToCollateralLots() {
         // identity scale（BTC digit=0, baseScaleK=1）：1 lot = 1 currency unit，size 应 == collateral == 1
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, OPENED_AT_MS);
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L; // LTV 90% ≥ 80% liquidation
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -272,7 +274,7 @@ class LoanLiquidationEngineTest {
         priceCache.put(SYMBOL_NI, price);
 
         // 抵押 300（= 3 WBTC）, 债务 140k → collateralValue = 3×50000 = 150000, LTV = 93% ≥ 80% liquidation
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, OPENED_AT_MS);
         loan.collateralAmount = 300L;
         loan.outstandingPrincipal = 140_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -293,7 +295,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_isolatedInFlightLoan_skipsWithoutTouchingPriceCache() {
         // pre-populate in-flight → scanner 应早退，不查 markPrice
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -312,7 +314,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_isolatedEmptyLoan_skipped() {
         // isEmpty loan（全零壳）应跳过，不查 spec、不查 markPrice、不触发
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
         // collateralAmount=0, principal=0, interest=0 → isEmpty
         up.isolatedLoans.put(LOAN_ID, loan);
 
@@ -323,7 +325,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_isolatedMarkPriceMissing_skippedNoPublish() {
         priceCache.clear();
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -342,7 +344,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_crossNumeraireUnconfigured_returnsZeroLtv_noPublish() {
         // numeraireCurrency=0 sentinel → calculateCrossAccountLtvBps 保守返 0 → 不触发
-        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, 1000L);
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
         loan.outstandingPrincipal = 50_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
@@ -352,7 +354,7 @@ class LoanLiquidationEngineTest {
 
     @Test
     void check_crossInFlight_skipsLtvCompute() {
-        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, 1000L);
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
         loan.outstandingPrincipal = 50_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
@@ -387,7 +389,7 @@ class LoanLiquidationEngineTest {
 
         // 抵押 100（= 1 WBTC = 1 张可卖），债务 150000 → 账户 LTV 远超强平线，触发 publishCrossForceSell
         up.crossLoanCollateral.put(WBTC, 100L);
-        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 0, 1000L);
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 0, OPENED_AT_MS);
         loan.outstandingPrincipal = 150_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
@@ -423,7 +425,7 @@ class LoanLiquidationEngineTest {
         price.markPrice = 50_000L;
         priceCache.put(SYMBOL_NI, price);
 
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, OPENED_AT_MS);
         loan.collateralAmount = 300L;          // 3 WBTC
         loan.outstandingPrincipal = 140_000L;  // LTV 93% ≥ 80% → underwater
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -460,7 +462,7 @@ class LoanLiquidationEngineTest {
 
     private IsolatedLoanRecord underwaterLoan(long loanId, int stuckAttempts) {
         // 1 BTC 抵押 45k → LTV 90% ≥ 80% liquidation
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, loanId, BTC, USDT, 0, 1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, loanId, BTC, USDT, 0, OPENED_AT_MS);
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         loan.stuckLiqAttempts = stuckAttempts;

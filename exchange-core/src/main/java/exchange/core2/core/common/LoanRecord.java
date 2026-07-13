@@ -34,7 +34,7 @@ public interface LoanRecord {
 
     void setAccumulatedInterest(long value);
 
-    /** 上次计息时间戳（ns）；惰性 accrue 以此为起点计算新增利息，计息后推进到当前时间。 */
+    /** 上次计息时间戳（ms）；惰性 accrue 以此为起点计算新增利息，计息后推进到当前时间。 */
     long getLastAccrueTs();
 
     void setLastAccrueTs(long value);

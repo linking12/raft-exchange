@@ -47,7 +47,7 @@ class LoanServiceTest {
 
     // ================================================================
     // accrueTo(IsolatedLoanRecord)
-    // 公式: interest = elapsed_ns × principal × rateBps / (YEAR_NS × 10000)
+    // 公式: interest = elapsed_ms × principal × rateBps / (YEAR_MS × 10000)
     // ================================================================
 
     @Test
@@ -56,11 +56,11 @@ class LoanServiceTest {
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
         loan.outstandingPrincipal = 1_000_000L;
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS);
 
         assertEquals(1_000_000L, delta, "100% APR 全年 = 本金");
         assertEquals(1_000_000L, loan.accumulatedInterest);
-        assertEquals(LoanService.YEAR_NS, loan.lastAccrueTs);
+        assertEquals(LoanService.YEAR_MS, loan.lastAccrueTs);
     }
 
     @Test
@@ -68,7 +68,7 @@ class LoanServiceTest {
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
         loan.outstandingPrincipal = 1_000_000L;
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS / 2);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS / 2);
 
         assertEquals(500_000L, delta, "100% APR 半年 = 半本金");
     }
@@ -79,7 +79,7 @@ class LoanServiceTest {
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 500, 0L);
         loan.outstandingPrincipal = 30_000_000L;
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS / 4);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS / 4);
 
         // 期望: 30_000_000 × 5% / 4 = 375_000
         assertEquals(375_000L, delta);
@@ -90,12 +90,12 @@ class LoanServiceTest {
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 500, 0L);
         loan.outstandingPrincipal = 0L;
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS);
 
         assertEquals(0L, delta);
         assertEquals(0L, loan.accumulatedInterest);
         // 即使无 principal，lastAccrueTs 仍推进（避免下次 accrue 从太老的时间点算）
-        assertEquals(LoanService.YEAR_NS, loan.lastAccrueTs);
+        assertEquals(LoanService.YEAR_MS, loan.lastAccrueTs);
     }
 
     @Test
@@ -103,10 +103,10 @@ class LoanServiceTest {
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 0, 0L);
         loan.outstandingPrincipal = 1_000_000L;
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS);
 
         assertEquals(0L, delta);
-        assertEquals(LoanService.YEAR_NS, loan.lastAccrueTs, "免息也推 lastAccrueTs");
+        assertEquals(LoanService.YEAR_MS, loan.lastAccrueTs, "免息也推 lastAccrueTs");
     }
 
     @Test
@@ -137,8 +137,8 @@ class LoanServiceTest {
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
         loan.outstandingPrincipal = 1_000_000L;
 
-        svc.accrueTo(loan, LoanService.YEAR_NS / 2);   // +500_000
-        long delta2 = svc.accrueTo(loan, LoanService.YEAR_NS); // +500_000
+        svc.accrueTo(loan, LoanService.YEAR_MS / 2);   // +500_000
+        long delta2 = svc.accrueTo(loan, LoanService.YEAR_MS); // +500_000
 
         assertEquals(500_000L, delta2, "第二次半年利息");
         assertEquals(1_000_000L, loan.accumulatedInterest, "两次累积 = 全年利息");
@@ -146,12 +146,12 @@ class LoanServiceTest {
 
     @Test
     void accrueTo_isolated_overflowProtected_via128BitFallback() {
-        // 溢出保护验证：elapsed × principal 直乘会溢出 long（YEAR_NS ≈ 3.15e16, principal 1e11 → 3.15e27 ≫ 9.2e18）
+        // 溢出保护验证：elapsed × principal 直乘会溢出 long（YEAR_MS ≈ 3.15e10, principal 1e11 → 3.15e21 ≫ 9.2e18）
         // truncMulDiv 会走 128-bit 慢路径避免 silent overflow
         IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
         loan.outstandingPrincipal = 100_000_000_000L; // 1e11
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS);
 
         // 100% APR × 一年 = 本金
         assertEquals(100_000_000_000L, delta);
@@ -166,11 +166,11 @@ class LoanServiceTest {
         CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, 3, 10000, 0L);
         loan.outstandingPrincipal = 1_000_000L;
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_NS);
+        long delta = svc.accrueTo(loan, LoanService.YEAR_MS);
 
         assertEquals(1_000_000L, delta);
         assertEquals(1_000_000L, loan.accumulatedInterest);
-        assertEquals(LoanService.YEAR_NS, loan.lastAccrueTs);
+        assertEquals(LoanService.YEAR_MS, loan.lastAccrueTs);
     }
 
     @Test
@@ -194,7 +194,7 @@ class LoanServiceTest {
         loan.outstandingPrincipal = 1_000_000L;
         loan.accumulatedInterest = 100L;
 
-        long displayed = svc.calculateDisplayInterest(loan, LoanService.YEAR_NS);
+        long displayed = svc.calculateDisplayInterest(loan, LoanService.YEAR_MS);
 
         assertEquals(1_000_100L, displayed, "已累计 100 + pending 1_000_000");
         // 关键：loan 状态不被读接口修改
@@ -219,7 +219,7 @@ class LoanServiceTest {
         loan.outstandingPrincipal = 1_000_000L;
         loan.accumulatedInterest = 500L;
 
-        long displayed = svc.calculateDisplayInterest(loan, LoanService.YEAR_NS);
+        long displayed = svc.calculateDisplayInterest(loan, LoanService.YEAR_MS);
 
         assertEquals(1_000_500L, displayed);
         assertEquals(500L, loan.accumulatedInterest, "cross 也不 mutate");

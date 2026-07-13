@@ -57,8 +57,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     // Numeraire 未配置的 sentinel 值。
     public static final int NUMERAIRE_UNSET = 0;
 
-    // 1 年 = 365 × 24 × 3600 × 10^9 ns（跨节点唯一确定性形式）
-    public static final long YEAR_NS = 365L * 24L * 3600L * 1_000_000_000L;
+    // 1 年 = 365 × 24 × 3600 × 1000 ms（跨节点唯一确定性形式）
+    public static final long YEAR_MS = 365L * 24L * 3600L * 1_000L;
     // LTV / rate 的 bps 精度基准（10000 bps = 100%）
     public static final long BPS_SCALE = 10_000L;
 
@@ -197,7 +197,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
     // ================================================================
     // 惰性计息 + 抵债 —— Isolated / Cross 共用（LoanRecord 视图）
-    // 计息公式：interest = elapsed_ns × principal × rateBps / (YEAR_NS × BPS_SCALE)，两次 truncMulDiv 防溢出；
+    // 计息公式：interest = elapsed_ms × principal × rateBps / (YEAR_MS × BPS_SCALE)，两次 truncMulDiv 防溢出；
     // now < lastAccrueTs（时钟倒退）视为 0 elapsed。
     // ================================================================
 
@@ -259,7 +259,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         if (elapsed <= 0) {
             return 0L;
         }
-        long step1 = CoreArithmeticUtils.truncMulDiv(elapsed, outstandingPrincipal, YEAR_NS);
+        long step1 = CoreArithmeticUtils.truncMulDiv(elapsed, outstandingPrincipal, YEAR_MS);
         return CoreArithmeticUtils.truncMulDiv(step1, rateBps, BPS_SCALE);
     }
 

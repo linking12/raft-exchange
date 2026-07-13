@@ -41,7 +41,7 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>OrderCommand 字段复用约定：{@code orderId}=externalId（幂等 key）/ {@code reserveBidPrice}=loanId /
  * {@code uid}=用户 uid 或 POOL 命令的 shardId / {@code symbol}=symbolId 或 currency / {@code size}=金额或 force-sell 张数 /
- * {@code price}=principal 或 repayAmount / {@code timestamp}=accrue 基准。各 handler 头部再具体标注。
+ * {@code price}=principal 或 repayAmount / {@code timestamp}=accrue 基准（ms）。各 handler 头部再具体标注。
  */
 @Slf4j
 public final class LoanCommandHandlers {
@@ -349,8 +349,8 @@ public final class LoanCommandHandlers {
         final UserProfile up = engine.getUserProfileService().getUserProfile(cmd.uid);
         if (up == null)
             return CommandResultCode.AUTH_INVALID_USER;
-        if (up.userStatus == UserStatus.SUSPENDED)
-            return CommandResultCode.LOAN_USER_SUSPENDED;
+        // 不拦 SUSPENDED：force-liquidate 是系统风控动作，suspend 只该挡用户主动命令。
+        // 若拦，suspended 用户的 underwater loan 永远清不掉 → 坏账累积 + scanner 无限重发。
 
         final long loanId = cmd.reserveBidPrice;
         final IsolatedLoanRecord loan = up.isolatedLoans.get(loanId);
@@ -631,8 +631,7 @@ public final class LoanCommandHandlers {
         final UserProfile up = engine.getUserProfileService().getUserProfile(cmd.uid);
         if (up == null)
             return CommandResultCode.AUTH_INVALID_USER;
-        if (up.userStatus == UserStatus.SUSPENDED)
-            return CommandResultCode.LOAN_USER_SUSPENDED;
+        // 不拦 SUSPENDED：同 handleLoanForceLiquidate —— 系统强平不该被 suspend 挡住。
 
         final long targetLoanId = cmd.reserveBidPrice;
         final CrossLoanRecord targetLoan = up.crossLoans.get(targetLoanId);

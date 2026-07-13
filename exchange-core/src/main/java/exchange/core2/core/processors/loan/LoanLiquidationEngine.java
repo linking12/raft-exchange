@@ -71,7 +71,7 @@ public final class LoanLiquidationEngine {
     // Cross sellSize heuristic：覆盖 realDebt × (10000 + BUFFER_BPS) / 10000（fee + tolerance 冗余）。
     private static final long CROSS_SELL_BUFFER_BPS = 500L; // 5%
 
-    private static final long NS_PER_DAY = 86400L * 1_000_000_000L;
+    private static final long MS_PER_DAY = 86400L * 1_000L;
     // Margin call 节流窗口 5 min，防用户短时间内被同一 loan 反复通知
     private static final long MARGIN_CALL_THROTTLE_MS = 5L * 60L * 1_000L;
 
@@ -139,9 +139,9 @@ public final class LoanLiquidationEngine {
             if (priceRecord == null || priceRecord.markPrice == 0)
                 return;
 
-            long currentTickNs = System.currentTimeMillis() * 1_000_000L;
+            long currentTickMs = System.currentTimeMillis();
             boolean termExpired = spec.loanMaxTermDays > 0
-                && (currentTickNs - loan.openedAtTs) > spec.loanMaxTermDays * NS_PER_DAY;
+                && (currentTickMs - loan.openedAtTs) > spec.loanMaxTermDays * MS_PER_DAY;
 
             // 单位统一到 loanCurrency currencyScale 下比（不做换算原公式恒 pass）
             CoreCurrencySpecification baseSpec =
@@ -155,7 +155,7 @@ public final class LoanLiquidationEngine {
 
             // 真实债务含 accumulatedInterest + pending accrue，避免用户拖债不还避强平
             long realDebt = Math.addExact(loan.outstandingPrincipal,
-                engine.getLoanService().calculateDisplayInterest(loan, currentTickNs));
+                engine.getLoanService().calculateDisplayInterest(loan, currentTickMs));
             long ltvScaled = Math.multiplyExact(realDebt, LoanService.BPS_SCALE);
             long thresholdLiq = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanLiquidationLtvBps);
 
@@ -184,14 +184,14 @@ public final class LoanLiquidationEngine {
             return;
 
         LoanService loanService = engine.getLoanService();
-        long currentTickNs = System.currentTimeMillis() * 1_000_000L;
+        long currentTickMs = System.currentTimeMillis();
         // v1 numeraire 未配置时 ltvBps == 0，直接不触发（保守）
-        long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, currentTickNs,
+        long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, currentTickMs,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
             engine.getLastPriceCache(), loanService.getNumeraireCurrency());
 
         if (ltvBps >= loanService.getCrossLiquidationLtvBps()) {
-            publishCrossForceSell(userProfile, loanService, currentTickNs);
+            publishCrossForceSell(userProfile, loanService, currentTickMs);
             return;
         }
         if (ltvBps >= loanService.getCrossMarginCallLtvBps()) {
@@ -231,7 +231,7 @@ public final class LoanLiquidationEngine {
      * Cross 强平：tiebreak 选一对 (sellingCurrency, targetLoan) → 算 sellSize → publish。
      * Scanner 单轮只处理一对，下轮 tick 重估 LTV 决定是否继续（迭代 deleveraging）。
      */
-    private void publishCrossForceSell(UserProfile up, LoanService loanService, long currentTickNs) {
+    private void publishCrossForceSell(UserProfile up, LoanService loanService, long currentTickMs) {
         int sellingCurrency = pickCrossCollateralToSell(up);
         if (sellingCurrency == 0) {
             log.warn("Cross force-sell abort: no collateral to sell (uid={})", up.uid);
@@ -260,7 +260,7 @@ public final class LoanLiquidationEngine {
         CoreCurrencySpecification loanCurrencySpec =
             engine.getCurrencySpecificationProvider().getCurrencySpecification(targetLoan.loanCurrency);
         long sellSize = calculateCrossSellSize(targetLoan, spec, priceRecord.markPrice, availableCollateral,
-            currentTickNs, loanService, sellingCurrencySpec, loanCurrencySpec);
+            currentTickMs, loanService, sellingCurrencySpec, loanCurrencySpec);
         if (sellSize <= 0) {
             log.warn("Cross force-sell abort: sellSize=0 (uid={} sellingCurrency={} available={})", up.uid, sellingCurrency,
                 availableCollateral);

@@ -39,7 +39,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     public int loanCurrency;
     // 借入时锁定的年化利率（bps），存续期不变。
     public int rateBps;
-    // 开仓时间戳（ns），期限强平用（now - openedAtTs > loanMaxTermDays 触发）。
+    // 开仓时间戳（ms），期限强平用（now - openedAtTs > loanMaxTermDays 触发）。
     public long openedAtTs;
 
     // 已抵押的 collateralCurrency 数量（currencyScale）。force-sell 作卖出量时须经 LoanService.collateralAmountToLots
@@ -49,7 +49,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     public long outstandingPrincipal;
     // 已计提但未支付的利息（loanCurrency，currencyScale）。惰性 accrue 写入，结算时进 interestRevenue。
     public long accumulatedInterest;
-    // 上次计息时间戳（ns），惰性 accrue 到此点；初始 = openedAtTs。
+    // 上次计息时间戳（ms），惰性 accrue 到此点；初始 = openedAtTs。
     public long lastAccrueTs;
     // 连续零成交的强平尝试次数；零成交 +1、有成交归 0。scanner 用它爬容差（1%→2%→5%）+ 卡单告警。
     public int stuckLiqAttempts;

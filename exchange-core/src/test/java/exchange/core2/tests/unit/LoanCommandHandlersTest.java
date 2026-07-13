@@ -598,6 +598,37 @@ class LoanCommandHandlersTest {
     }
 
     @Test
+    void loanForceLiquidate_suspendedUser_stillLiquidates() {
+        // suspend 不该挡系统强平：否则 suspended 用户的 underwater loan 永远清不掉 → 坏账
+        up.userStatus = UserStatus.SUSPENDED;
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, 111L, BTC, USDT, 500, 0L);
+        loan.collateralAmount = 5L;
+        loan.outstandingPrincipal = 100_000L;
+        up.isolatedLoans.put(111L, loan);
+        loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
+            LoanService.generateIsolatedForceSellOrderId(loan), UID, 111L, SYMBOL, 3L, 49_500L);
+        assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(cmd),
+            "suspended 用户的 loan 仍须能被系统强平");
+        assertEquals(2L, loan.collateralAmount, "pre-move 照常执行");
+    }
+
+    @Test
+    void loanCrossForceLiquidate_suspendedUser_stillLiquidates() {
+        up.userStatus = UserStatus.SUSPENDED;
+        CrossLoanRecord targetLoan = new CrossLoanRecord(UID, 777L, USDT, 0, 0L);
+        targetLoan.outstandingPrincipal = 30_000L;
+        up.crossLoans.put(777L, targetLoan);
+        up.crossLoanCollateral.put(BTC, 5L);
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE, 1L, UID, 777L, SYMBOL, 3L, 49_500L);
+        assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanCrossForceLiquidate(cmd),
+            "suspended 用户的 cross loan 仍须能被系统强平");
+        assertEquals(2L, up.crossLoanCollateral.get(BTC), "pre-move 挪 3 张(=3) → 剩 2");
+    }
+
+    @Test
     void loanForceLiquidate_duplicateApply_secondRejectedByCollateralGuard() {
         // failover 幂等命门：即使新 leader 因空 in-flight 重复发一条强平，apply 路径的抵押边界会挡下第二条。
         // pre-move 是"先校验 sellAmount ≤ collateralAmount，再扣减"的原子 compare-and-consume，
