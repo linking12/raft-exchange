@@ -1174,6 +1174,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 loanService.setLoanPoolUtilizationCapBps(cmd.getLoanPoolUtilizationCapBps());
                 log.info("UPDATE_LOAN_GLOBAL_CONFIG loanPoolUtilizationCapBps={}", cmd.getLoanPoolUtilizationCapBps());
             }
+            if (cmd.getLoanLiquidationFeeBps() > 0) {
+                loanService.setLoanLiquidationFeeBps(cmd.getLoanLiquidationFeeBps());
+                log.info("UPDATE_LOAN_GLOBAL_CONFIG loanLiquidationFeeBps={}", cmd.getLoanLiquidationFeeBps());
+            }
         } else if (message instanceof UpdateSymbolLoanConfigCommand) {
             final UpdateSymbolLoanConfigCommand cmd = (UpdateSymbolLoanConfigCommand)message;
             final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.getSymbolId());

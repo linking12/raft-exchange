@@ -370,6 +370,42 @@ class LoanLiquidationEngineTest {
     }
 
     @Test
+    void check_crossLoanExpired_liquidatesThatLoan_evenWithoutNumeraire() {
+        // numeraire 未配（LTV path 恒 0 不触发）；但 loan 已超 90d 期限 → 期限强平仍触发，且针对到期那笔
+        long expiredOpenedMs = OPENED_AT_MS - 91L * 86_400_000L; // 91 天前 > 90d term
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, expiredOpenedMs);
+        loan.outstandingPrincipal = 30_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 1L); // 1 BTC 可卖
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        assertEquals(LOAN_ID, ((ApiLoanCrossForceLiquidate) captor.getValue()).targetLoanId,
+            "期限强平针对到期的那笔");
+    }
+
+    @Test
+    void check_crossMultipleLoans_termLiquidatesExpiredOne_notTiebreakPick() {
+        // 两笔：555 未到期（高利率，tiebreak 会优先选它）；888 已到期。期限强平应针对 888，不是 tiebreak 的 555
+        up.crossLoanCollateral.put(BTC, 1L);
+        CrossLoanRecord fresh = new CrossLoanRecord(UID, 555L, USDT, 900, OPENED_AT_MS);
+        fresh.outstandingPrincipal = 30_000L;
+        up.crossLoans.put(555L, fresh);
+        CrossLoanRecord expired = new CrossLoanRecord(UID, 888L, USDT, 100, OPENED_AT_MS - 91L * 86_400_000L);
+        expired.outstandingPrincipal = 10_000L;
+        up.crossLoans.put(888L, expired);
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        assertEquals(888L, ((ApiLoanCrossForceLiquidate) captor.getValue()).targetLoanId,
+            "期限强平锁定到期笔 888，而非 tiebreak 高利率的 555");
+    }
+
+    @Test
     void check_crossInFlight_skipsLtvCompute() {
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
         loan.outstandingPrincipal = 50_000L;

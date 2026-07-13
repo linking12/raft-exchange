@@ -685,6 +685,7 @@ class LoanServiceTest {
         svc.getBadDebt().put(3, -5_000L);
         svc.getPoolProcessedExternalIds().tryClaim(1001L);
         svc.getPoolProcessedExternalIds().tryClaim(1002L);
+        svc.setLoanLiquidationFeeBps(150); // 非默认值，验证配置字段随快照往返
 
         Bytes<?> buf = Bytes.allocateElasticOnHeap(512);
         svc.writeMarshallable(buf);
@@ -701,6 +702,7 @@ class LoanServiceTest {
         assertEquals(LoanService.DEFAULT_CROSS_LIQUIDATION_LTV_BPS, restored.getCrossLiquidationLtvBps());
         assertEquals(LoanService.DEFAULT_CROSS_MARGIN_CALL_LTV_BPS, restored.getCrossMarginCallLtvBps());
         assertEquals(LoanService.DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS, restored.getLoanPoolUtilizationCapBps());
+        assertEquals(150, restored.getLoanLiquidationFeeBps(), "自定义强平费率随快照往返");
         assertFalse(restored.getPoolProcessedExternalIds().tryClaim(1001L), "dedup 1001 已 claim");
         assertFalse(restored.getPoolProcessedExternalIds().tryClaim(1002L), "dedup 1002 已 claim");
         assertTrue(restored.getPoolProcessedExternalIds().tryClaim(1003L), "新 ID 仍可 claim");

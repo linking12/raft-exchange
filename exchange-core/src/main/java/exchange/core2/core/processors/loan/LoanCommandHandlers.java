@@ -969,16 +969,8 @@ public final class LoanCommandHandlers {
         loanService.getLoanPoolBorrowed().addToValue(loanCurrency, principal);
     }
 
-    /** 找 quote==loanCurrency 且启用借贷的 spec；返回第一个匹配。O(N) TODO：v2 加 reverse index。 */
     private CoreSymbolSpecification findLoanSpecByQuoteCurrency(int loanCurrency) {
-        SymbolSpecificationProvider provider = engine.getSymbolSpecificationProvider();
-        for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
-            if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.quoteCurrency == loanCurrency
-                && spec.loanInitialLtvBps > 0) {
-                return spec;
-            }
-        }
-        return null;
+        return LoanService.findLoanSpecByQuoteCurrency(loanCurrency, engine.getSymbolSpecificationProvider());
     }
 
     /** 池子幂等 key：typeTag 高 8 位 XOR externalId，避免同 externalId 跨 cmdType 意外去重。 */

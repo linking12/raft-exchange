@@ -417,7 +417,8 @@ public final class ApiCommandConverters {
             grpc.getNumeraireCcy(),
             grpc.getCrossLiquidationLtvBps(),
             grpc.getCrossMarginCallLtvBps(),
-            grpc.getLoanPoolUtilizationCapBps());
+            grpc.getLoanPoolUtilizationCapBps(),
+            grpc.getLoanLiquidationFeeBps());
     }
 
     /** engine cmd → raft log bytes，跟 convertLiquidationOrder / IFTakeOver / AutoDeleveraging / LoanForceLiquidate 互逆。 */

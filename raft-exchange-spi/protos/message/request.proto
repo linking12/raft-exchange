@@ -403,6 +403,7 @@ message SpotLoanGlobalConfig {
   int32 crossLiquidationLtvBps = 2;      // Cross 账户级强平线（bps）
   int32 crossMarginCallLtvBps = 3;       // Cross 账户级预警线（bps）
   int32 loanPoolUtilizationCapBps = 4;   // 借贷池利用率上限（bps）
+  int32 loanLiquidationFeeBps = 5;       // 强平专项费率（bps）
 }
 
 message BinaryDataCommand {

@@ -15,7 +15,7 @@ class UpdateLoanGlobalConfigCommandTest {
 
     @Test
     void bytesRoundTrip_preservesAllFields() {
-        UpdateLoanGlobalConfigCommand orig = new UpdateLoanGlobalConfigCommand(2, 8500, 8000, 9000);
+        UpdateLoanGlobalConfigCommand orig = new UpdateLoanGlobalConfigCommand(2, 8500, 8000, 9000, 200);
 
         Bytes<?> buf = Bytes.allocateElasticOnHeap(32);
         orig.writeMarshallable(buf);
@@ -26,6 +26,7 @@ class UpdateLoanGlobalConfigCommandTest {
         assertEquals(8500, parsed.getCrossLiquidationLtvBps());
         assertEquals(8000, parsed.getCrossMarginCallLtvBps());
         assertEquals(9000, parsed.getLoanPoolUtilizationCapBps());
+        assertEquals(200, parsed.getLoanLiquidationFeeBps());
     }
 
     @Test
@@ -36,12 +37,13 @@ class UpdateLoanGlobalConfigCommandTest {
         assertEquals(0, cmd.getCrossLiquidationLtvBps());
         assertEquals(0, cmd.getCrossMarginCallLtvBps());
         assertEquals(0, cmd.getLoanPoolUtilizationCapBps());
+        assertEquals(0, cmd.getLoanLiquidationFeeBps());
     }
 
     @Test
     void thresholdsOnlyUpdate_numeraireZeroMeansUnchanged_roundTrips() {
         // 只调阈值、不动 numeraire：numeraire=0 → handler 视为"不改"
-        UpdateLoanGlobalConfigCommand orig = new UpdateLoanGlobalConfigCommand(0, 7000, 6500, 8500);
+        UpdateLoanGlobalConfigCommand orig = new UpdateLoanGlobalConfigCommand(0, 7000, 6500, 8500, 150);
 
         Bytes<?> buf = Bytes.allocateElasticOnHeap(32);
         orig.writeMarshallable(buf);

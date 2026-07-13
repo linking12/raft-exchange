@@ -95,7 +95,7 @@ class ApiCommandConvertersTest {
         // proto SpotLoanGlobalConfig（numeraire + 三阈值）→ exchange-core UpdateLoanGlobalConfigCommand，字段不丢
         var grpc = com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig.newBuilder()
             .setNumeraireCcy(2).setCrossLiquidationLtvBps(8500).setCrossMarginCallLtvBps(8000)
-            .setLoanPoolUtilizationCapBps(9000).build();
+            .setLoanPoolUtilizationCapBps(9000).setLoanLiquidationFeeBps(200).build();
 
         var cmd = ApiCommandConverters.convertUpdateLoanGlobalConfig(grpc);
 
@@ -103,5 +103,6 @@ class ApiCommandConvertersTest {
         assertEquals(8500, cmd.getCrossLiquidationLtvBps());
         assertEquals(8000, cmd.getCrossMarginCallLtvBps());
         assertEquals(9000, cmd.getLoanPoolUtilizationCapBps());
+        assertEquals(200, cmd.getLoanLiquidationFeeBps());
     }
 }

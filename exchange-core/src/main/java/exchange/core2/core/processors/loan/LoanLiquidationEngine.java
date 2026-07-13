@@ -185,13 +185,21 @@ public final class LoanLiquidationEngine {
 
         LoanService loanService = engine.getLoanService();
         long currentTickMs = System.currentTimeMillis();
-        // v1 numeraire 未配置时 ltvBps == 0，直接不触发（保守）
+
+        // 期限强平优先：到期是硬约束、不依赖 numeraire 估值（只看 openedAtTs + term），到期即平那笔
+        CrossLoanRecord expired = pickExpiredCrossLoan(userProfile, currentTickMs);
+        if (expired != null) {
+            publishCrossForceSell(userProfile, loanService, currentTickMs, expired);
+            return;
+        }
+
+        // LTV 强平/预警：numeraire 未配置时 ltvBps == 0，直接不触发（保守）
         long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, currentTickMs,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
             engine.getLastPriceCache(), loanService.getNumeraireCurrency());
 
         if (ltvBps >= loanService.getCrossLiquidationLtvBps()) {
-            publishCrossForceSell(userProfile, loanService, currentTickMs);
+            publishCrossForceSell(userProfile, loanService, currentTickMs, null);
             return;
         }
         if (ltvBps >= loanService.getCrossMarginCallLtvBps()) {
@@ -231,13 +239,15 @@ public final class LoanLiquidationEngine {
      * Cross 强平：tiebreak 选一对 (sellingCurrency, targetLoan) → 算 sellSize → publish。
      * Scanner 单轮只处理一对，下轮 tick 重估 LTV 决定是否继续（迭代 deleveraging）。
      */
-    private void publishCrossForceSell(UserProfile up, LoanService loanService, long currentTickMs) {
+    /** preselectedTarget != null（期限强平）时强平该指定 loan；否则（LTV 强平）按 tiebreak 选一笔降账户 LTV。 */
+    private void publishCrossForceSell(UserProfile up, LoanService loanService, long currentTickMs,
+        CrossLoanRecord preselectedTarget) {
         int sellingCurrency = pickCrossCollateralToSell(up);
         if (sellingCurrency == 0) {
             log.warn("Cross force-sell abort: no collateral to sell (uid={})", up.uid);
             return;
         }
-        CrossLoanRecord targetLoan = pickCrossLoanToRepay(up);
+        CrossLoanRecord targetLoan = preselectedTarget != null ? preselectedTarget : pickCrossLoanToRepay(up);
         if (targetLoan == null) {
             log.warn("Cross force-sell abort: no target loan (uid={})", up.uid);
             return;
@@ -317,6 +327,27 @@ public final class LoanLiquidationEngine {
                     && loan.loanId < best.loanId)) {
                 best = loan;
             }
+        }
+        return best;
+    }
+
+    /**
+     * 挑一笔已到期（{@code now - openedAtTs > loanMaxTermDays}）的 Cross loan；确定性选 loanId 最小。
+     * 期限从 loanCurrency 对应 spec fresh 读（跟 Isolated / 借款时一致，不 snapshot）；无匹配返回 null。
+     */
+    private CrossLoanRecord pickExpiredCrossLoan(UserProfile up, long currentTickMs) {
+        CrossLoanRecord best = null;
+        for (CrossLoanRecord loan : up.crossLoans) {
+            if (loan.outstandingPrincipal <= 0)
+                continue;
+            CoreSymbolSpecification spec = LoanService.findLoanSpecByQuoteCurrency(loan.loanCurrency,
+                engine.getSymbolSpecificationProvider());
+            if (spec == null || spec.loanMaxTermDays <= 0)
+                continue;
+            if ((currentTickMs - loan.openedAtTs) <= spec.loanMaxTermDays * MS_PER_DAY)
+                continue;
+            if (best == null || loan.loanId < best.loanId)
+                best = loan;
         }
         return best;
     }
