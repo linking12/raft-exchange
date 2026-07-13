@@ -82,9 +82,9 @@ public final class LoanLiquidationEngine {
      * 不进 raft snapshot（failover 后重置无碍）；key = loanId(Isolated) / uid(Cross)。
      */
     private static final class LaneState {
-        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty();
-        final LongLongHashMap marginCallThrottleMs = new LongLongHashMap();
-        final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap();
+        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty();      // 已 publish 未结算的 key，去重防重复强平
+        final LongLongHashMap marginCallThrottleMs = new LongLongHashMap();  // key → 上次 margin-call 通知时刻（ms）
+        final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap();    // key → 上次卡单重发时刻（ms）
     }
 
     private final LaneState isolated = new LaneState();

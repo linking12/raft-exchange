@@ -70,46 +70,49 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
     // ================================================================
     // State（进 raft snapshot，per-shard 独立）
-    // 全局资金守恒：poolAvailable 正桶、badDebt 负桶；poolBorrowed 不进守恒，仅 utilization / metric。
     // ================================================================
 
-    // LOAN_CREATE/BORROW 扣减，REPAY/force-sell/POOL_DEPOSIT 增加。
+    // --- 资金桶（loanCurrency scale）。poolAvailable/interestRevenue/liqFees 进全局对账；borrowed/badDebt 仅追踪 ---
+    // 可借余额：CREATE/BORROW −，REPAY/force-sell/POOL_DEPOSIT +
     @Getter
     private final IntLongHashMap loanPoolAvailable;
-
-    // 不变量：Σ (isolated+cross) outstandingPrincipal(loanCurrency==currency) == loanPoolBorrowed[currency]。
+    // 已借出 = Σ(isolated+cross) outstandingPrincipal(loanCurrency==currency)；不进对账，仅 utilization/metric
     @Getter
     private final IntLongHashMap loanPoolBorrowed;
-
-    // underwater force-sell 时交易所自吸的损失（审计条目，非二次扣真金）。
+    // 坏账：underwater 核销的损失（审计负桶，非二次扣真金）
     @Getter
     private final IntLongHashMap badDebt;
-
-    // 利息收入 / 强平专项费（loanCurrency scale），REPAY / force-sell 结算时入桶，跟撮合 fees 分账。
+    // 利息收入：REPAY / force-sell 结算时入桶（跟撮合 fees 分账）
     @Getter
     private final IntLongHashMap interestRevenue;
+    // 强平专项费：结算时按 loanLiquidationFeeBps 抽取入桶
     @Getter
     private final IntLongHashMap loanLiquidationFees;
 
-    // Cross 账户级强平线 / 预警线 / 池子利用率上限（bps）。
+    // --- 运行时配置（UPDATE_LOAN_GLOBAL_CONFIG 可调，默认值见上方常量）---
+    // Cross 账户级强平线（bps）
     @Getter
     @Setter
     private int crossLiquidationLtvBps;
+    // Cross 账户级预警线（bps）
     @Getter
     @Setter
     private int crossMarginCallLtvBps;
+    // 借贷池利用率上限（bps）
     @Getter
     @Setter
     private int loanPoolUtilizationCapBps;
-    // 强平专项费率（bps）：从 receivedQuote 抽出进 loanLiquidationFees 桶（跟撮合 fees 分账）。
+    // 强平专项费率（bps）
     @Getter
     @Setter
     private int loanLiquidationFeeBps;
-    // Cross 估值基准币；UPDATE_LOAN_GLOBAL_CONFIG 配置。NUMERAIRE_UNSET(0) 时 Cross BORROW/WITHDRAW fail-close、scanner 跳过。
+    // Cross 估值基准币；NUMERAIRE_UNSET(0)=未配 → Cross BORROW/WITHDRAW fail-close、scanner 跳过
     @Getter
     @Setter
     private int numeraireCurrency;
-    // POOL_* 幂等表（per-shard，独立于 UserProfile.processedExternalIds）。
+
+    // --- 幂等 ---
+    // POOL_* 命令去重（per-shard，独立于 UserProfile.processedExternalIds）
     @Getter
     private final BoundedLongDedupSet poolProcessedExternalIds;
 
