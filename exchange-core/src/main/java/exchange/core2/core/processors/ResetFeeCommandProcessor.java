@@ -9,6 +9,7 @@ import exchange.core2.core.common.MatcherEventType;
 import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
+import exchange.core2.core.processors.loan.LoanService;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -38,6 +39,21 @@ public final class ResetFeeCommandProcessor extends TwoStepCommandProcessor {
             fees.addToValue(currency, -amount);
             adjustments.addToValue(currency, +amount);
             shardData.put(currency, amount);
+        }
+        final LoanService loanService = riskEngine.getLoanService();
+        sweepRevenueBucket(loanService.getInterestRevenue(), adjustments, shardData);
+        sweepRevenueBucket(loanService.getLoanLiqFees(), adjustments, shardData);
+    }
+
+    private void sweepRevenueBucket(IntLongHashMap bucket, IntLongHashMap adjustments, IntLongHashMap shardData) {
+        for (int currency : bucket.keySet().toArray()) {
+            long amount = bucket.get(currency);
+            if (amount == 0) {
+                continue;
+            }
+            bucket.addToValue(currency, -amount);
+            adjustments.addToValue(currency, +amount);
+            shardData.addToValue(currency, +amount);
         }
     }
 

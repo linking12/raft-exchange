@@ -16,7 +16,9 @@ import exchange.core2.core.common.api.ApiLoanForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanRepay;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiPoolDeposit;
-import exchange.core2.core.common.api.binary.UpdateLoanNumeraireConfigCommand;
+import exchange.core2.core.common.api.ApiResetFee;
+import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
+import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
 import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -68,7 +70,7 @@ class ITLoanConservation {
         c.sendBinaryDataCommandSync(
             new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, 0, Long.MAX_VALUE, 365, 10000), 5000);
         // Cross 估值基准币（numeraire）；对 Isolated 用例无影响。
-        c.sendBinaryDataCommandSync(new UpdateLoanNumeraireConfigCommand(USDT), 5001);
+        c.sendBinaryDataCommandSync(new UpdateLoanGlobalConfigCommand(USDT), 5001);
         c.submitCommandSync(ApiPoolDeposit.builder()
             .externalId(1_000_001L).shardId(0).currency(USDT).amount(POOL_FUND).build(), CommandResultCode.SUCCESS);
         c.initOneUser(BORROWER);
@@ -171,6 +173,38 @@ class ITLoanConservation {
             // rate=0 → 无利息，还清后借款人 USDT 归零（本金全额还回池）
             assertEquals(0L, c.getUserProfile(BORROWER).getAccounts().get(USDT), "全额还款后 USDT 应归零");
             assertGlobalConserved(c, "after full repay");
+        }
+    }
+
+    @Test
+    public void resetFee_sweepsLoanLiqFeesIntoAdjustments_conserves() throws Exception {
+        // 任务1：RESET_FEE 应把 loan 平台收入（此处 loanLiqFees）一并扫进 adjustments 供运营提取，且守恒不破。
+        // sweepRevenueBucket 对 interestRevenue / loanLiqFees 逻辑一致，这里用强平费覆盖该路径（rate=0 无利息、fee=0 无撮合费，
+        // 唯一收入就是 2% 强平费）。
+        final long loanId = 4L;
+        try (ExchangeTestContainer c = boot()) {
+            createLoan(c, loanId);
+            placeLpBid(c, 1000L, COLLATERAL_LOTS);
+            c.submitCommandSync(ApiLoanForceLiquidate.builder()
+                .uid(BORROWER).symbol(SYMBOL).loanId(loanId).price(MARK_PRICE).size(COLLATERAL_LOTS)
+                .orderId(forceSellOrderId(loanId)).action(OrderAction.ASK).orderType(OrderType.IOC).build(),
+                CommandResultCode.SUCCESS);
+
+            // 全额强平：proceeds=150000，liqFee=2%=3000 进 loanLiqFees；takerFee/makerFee=0 → fees=0
+            final long expectedLiqFee = COLLATERAL_LOTS * MARK_PRICE * 200L / 10000L; // 3000
+            TotalCurrencyBalanceReportResult pre = c.totalBalanceReport();
+            assertEquals(0L, pre.getFees().get(USDT), "撮合 fees 应为 0（takerFee/makerFee=0）");
+            final long adjBefore = pre.getAdjustments().get(USDT);
+            assertGlobalConserved(c, "after liquidation, before reset-fee");
+
+            c.submitCommandSync(ApiResetFee.builder().build(), CommandResultCode.SUCCESS);
+            TotalCurrencyBalanceReportResult post = c.totalBalanceReport();
+
+            // loanLiqFees 被扫进 adjustments（运营可提取）
+            assertEquals(adjBefore + expectedLiqFee, post.getAdjustments().get(USDT),
+                "RESET_FEE 应把 loanLiqFees 扫进 adjustments");
+            // 桶清零后守恒仍成立（loanBalances 减 X、adjustments 加 X 两侧抵消）
+            assertTrue(post.isGlobalBalancesAllZero(), "RESET_FEE 扫 loan 收入后全局守恒破裂");
         }
     }
 

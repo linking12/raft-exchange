@@ -43,7 +43,7 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.binary.BatchAddAccountsCommand;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
-import exchange.core2.core.common.api.binary.UpdateLoanNumeraireConfigCommand;
+import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
 import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.ReportQuery;
@@ -1151,16 +1151,28 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
             });
 
-        } else if (message instanceof UpdateLoanNumeraireConfigCommand) {
-            final UpdateLoanNumeraireConfigCommand cmd = (UpdateLoanNumeraireConfigCommand)message;
+        } else if (message instanceof UpdateLoanGlobalConfigCommand) {
+            final UpdateLoanGlobalConfigCommand cmd = (UpdateLoanGlobalConfigCommand)message;
             final int newNumeraire = cmd.getNumeraireCurrency();
-            if (newNumeraire <= 0) {
-                log.warn("UPDATE_LOAN_NUMERAIRE_CONFIG rejected (must be > 0): {}", cmd);
-            } else if (currencySpecificationProvider.getCurrencySpecification(newNumeraire) == null) {
-                log.warn("UPDATE_LOAN_NUMERAIRE_CONFIG rejected (currency spec missing): {}", cmd);
-            } else {
-                loanService.setNumeraireCurrency(newNumeraire);
-                log.info("UPDATE_LOAN_NUMERAIRE_CONFIG applied: numeraireCurrency={}", newNumeraire);
+            if (newNumeraire > 0) {
+                if (currencySpecificationProvider.getCurrencySpecification(newNumeraire) == null) {
+                    log.warn("UPDATE_LOAN_GLOBAL_CONFIG numeraire rejected (currency spec missing): {}", cmd);
+                } else {
+                    loanService.setNumeraireCurrency(newNumeraire);
+                    log.info("UPDATE_LOAN_GLOBAL_CONFIG numeraireCurrency={}", newNumeraire);
+                }
+            }
+            if (cmd.getCrossLiquidationLtvBps() > 0) {
+                loanService.setCrossLiquidationLtvBps(cmd.getCrossLiquidationLtvBps());
+                log.info("UPDATE_LOAN_GLOBAL_CONFIG crossLiquidationLtvBps={}", cmd.getCrossLiquidationLtvBps());
+            }
+            if (cmd.getCrossMarginCallLtvBps() > 0) {
+                loanService.setCrossMarginCallLtvBps(cmd.getCrossMarginCallLtvBps());
+                log.info("UPDATE_LOAN_GLOBAL_CONFIG crossMarginCallLtvBps={}", cmd.getCrossMarginCallLtvBps());
+            }
+            if (cmd.getLoanPoolUtilizationCapBps() > 0) {
+                loanService.setLoanPoolUtilizationCapBps(cmd.getLoanPoolUtilizationCapBps());
+                log.info("UPDATE_LOAN_GLOBAL_CONFIG loanPoolUtilizationCapBps={}", cmd.getLoanPoolUtilizationCapBps());
             }
         } else if (message instanceof UpdateSymbolLoanConfigCommand) {
             final UpdateSymbolLoanConfigCommand cmd = (UpdateSymbolLoanConfigCommand)message;

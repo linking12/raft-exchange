@@ -89,4 +89,19 @@ class ApiCommandConvertersTest {
         assertThrows(IllegalArgumentException.class, () -> ApiCommandConverters.liquidationCmdToRaftLog(notify, 0L),
             "ApiSystemLiquidationNotify 不在 raft 复制白名单上，必须抛 IllegalArgumentException");
     }
+
+    @Test
+    void updateLoanGlobalConfig_mapsNumeraireAndThresholds() {
+        // proto SpotLoanGlobalConfig（numeraire + 三阈值）→ exchange-core UpdateLoanGlobalConfigCommand，字段不丢
+        var grpc = com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig.newBuilder()
+            .setNumeraireCcy(2).setCrossLiquidationLtvBps(8500).setCrossMarginCallLtvBps(8000)
+            .setLoanPoolUtilizationCapBps(9000).build();
+
+        var cmd = ApiCommandConverters.convertUpdateLoanGlobalConfig(grpc);
+
+        assertEquals(2, cmd.getNumeraireCurrency());
+        assertEquals(8500, cmd.getCrossLiquidationLtvBps());
+        assertEquals(8000, cmd.getCrossMarginCallLtvBps());
+        assertEquals(9000, cmd.getLoanPoolUtilizationCapBps());
+    }
 }

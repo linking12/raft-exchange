@@ -28,6 +28,11 @@ public interface IFundEventsHandler {
         private FundEventType eventType;
         private BalanceSnapshot balances;
         private PositionSnapshot positions;
+        // loan 事件专用载荷（详见 FundEvent §9.5）：loanMode 0=Isolated/1=Cross；
+        // loanAmount 语义随 eventType 变（LTV bps / 利息量 / 坏账量）；loanExtra 仅 LOAN_MARGIN_CALL 用（阈值 bps）。非 loan 事件保 0。
+        private byte loanMode;
+        private long loanAmount;
+        private long loanExtra;
 
         private FundEventReport() {
         }
@@ -49,6 +54,9 @@ public interface IFundEventsHandler {
             uniId = 0L;
             accountId = 0L;
             eventType = null;
+            loanMode = 0;
+            loanAmount = 0L;
+            loanExtra = 0L;
             if (balances != null) {
                 balances.recycle();
                 balances = null;
@@ -63,6 +71,9 @@ public interface IFundEventsHandler {
             this.uniId = uniId;
             this.accountId = fundEvent.uid;
             this.eventType = fundEvent.eventType;
+            this.loanMode = fundEvent.loanMode;
+            this.loanAmount = fundEvent.loanAmount;
+            this.loanExtra = fundEvent.loanExtra;
             this.balances = BalanceSnapshot.borrow().fill(fundEvent);
             this.positions = PositionSnapshot.borrow().fill(fundEvent);
             return this;

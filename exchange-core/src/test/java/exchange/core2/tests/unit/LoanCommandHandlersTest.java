@@ -12,6 +12,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
@@ -35,10 +36,14 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -60,6 +65,7 @@ class LoanCommandHandlersTest {
 
     @Mock private RiskEngine engine;
     @Mock private UserProfileService userProfileService;
+    @Mock private FundEventsHelper eventsHelper;
 
     private LoanService loanService;
     private UserProfile up;
@@ -74,7 +80,7 @@ class LoanCommandHandlersTest {
     @BeforeEach
     void setUp() {
         loanService = new LoanService();
-        loanService.setNumeraireCurrency(USDT); // 走 UPDATE_LOAN_NUMERAIRE_CONFIG 通道的等价初始化
+        loanService.setNumeraireCurrency(USDT); // 走 UPDATE_LOAN_GLOBAL_CONFIG 通道的等价初始化
         up = new UserProfile(UID, UserStatus.ACTIVE);
         specProvider = new SymbolSpecificationProvider();
         currencyProvider = new CurrencySpecificationProvider();
@@ -126,6 +132,7 @@ class LoanCommandHandlersTest {
         when(engine.getCurrencySpecificationProvider()).thenReturn(currencyProvider);
         when(engine.getLastPriceCache()).thenReturn(priceCache);
         when(engine.getLoanService()).thenReturn(loanService);
+        when(engine.getEventsHelper()).thenReturn(eventsHelper);
         when(engine.getFees()).thenReturn(fees);
         when(engine.getAdjustments()).thenReturn(adjustments);
         when(engine.getObjectsPool()).thenReturn(objectsPool);
@@ -271,6 +278,8 @@ class LoanCommandHandlersTest {
         assertEquals(poolBefore, loanService.getLoanPoolAvailable().get(USDT), "池子未增（没还 principal）");
         assertEquals(borrowedBefore, loanService.getLoanPoolBorrowed().get(USDT), "borrowed 未减");
         assertEquals(interestRevBefore + 500L, loanService.getInterestRevenue().get(USDT), "利息进 interestRevenue");
+        // 结算了 500 利息 → 发 LOAN_INTEREST_SETTLE 事件（Isolated=0）
+        verify(eventsHelper).sendLoanInterestSettleEvent(any(), eq(UID), eq((byte) 0), eq(999L), eq(500L), eq(USDT));
     }
 
     @Test
@@ -973,6 +982,8 @@ class LoanCommandHandlersTest {
         assertTrue(up.isolatedLoans.isEmpty(), "尘埃 underwater → loan 核销关闭");
         assertEquals(badDebtBefore + 100_000L, loanService.getBadDebt().get(USDT), "剩余债务写 badDebt");
         assertEquals(0L, loanService.getLoanPoolBorrowed().get(USDT), "principal 从 borrowed 移除");
+        // 坏账入账 → 发 LOAN_BAD_DEBT_INCURRED 事件（Isolated=0，金额 = 剩余债务）
+        verify(eventsHelper).sendLoanBadDebtEvent(any(), eq(UID), eq((byte) 0), eq(111L), eq(USDT), eq(100_000L));
     }
 
     @Test
@@ -992,6 +1003,8 @@ class LoanCommandHandlersTest {
 
         assertEquals(1, up.isolatedLoans.size(), "还有整张可卖，不核销");
         assertEquals(badDebtBefore, loanService.getBadDebt().get(USDT), "badDebt 不增");
+        // 未核销 → 不该发坏账事件
+        verify(eventsHelper, never()).sendLoanBadDebtEvent(any(), anyLong(), anyByte(), anyLong(), anyInt(), anyLong());
     }
 
     @Test

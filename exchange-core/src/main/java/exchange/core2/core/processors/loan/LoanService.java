@@ -101,7 +101,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     @Getter
     private int loanPoolUtilizationCapBps;
 
-    // Cross 估值基准币；UPDATE_LOAN_NUMERAIRE_CONFIG 配置。NUMERAIRE_UNSET(0) 时 Cross BORROW/WITHDRAW fail-close、scanner 跳过。
+    // Cross 估值基准币；UPDATE_LOAN_GLOBAL_CONFIG 配置。NUMERAIRE_UNSET(0) 时 Cross BORROW/WITHDRAW fail-close、scanner 跳过。
     @Getter
     private int numeraireCurrency;
 
@@ -151,17 +151,24 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         numeraireCurrency = NUMERAIRE_UNSET;
     }
 
-    /** Numeraire 是否已配置。未配置时 Cross BORROW / WITHDRAW handler 必须 fail-close。 */
     public boolean isNumeraireConfigured() {
         return numeraireCurrency != NUMERAIRE_UNSET;
     }
 
-    /**
-     * 更新 numeraireCurrency —— 唯一入口是 UPDATE_LOAN_NUMERAIRE_CONFIG 命令 apply 时（RiskEngine.handleBinaryMessage）。 走 raft
-     * 复制到所有节点，保持跨 shard 一致。
-     */
     public void setNumeraireCurrency(int numeraireCurrency) {
         this.numeraireCurrency = numeraireCurrency;
+    }
+
+    public void setCrossLiquidationLtvBps(int crossLiquidationLtvBps) {
+        this.crossLiquidationLtvBps = crossLiquidationLtvBps;
+    }
+
+    public void setCrossMarginCallLtvBps(int crossMarginCallLtvBps) {
+        this.crossMarginCallLtvBps = crossMarginCallLtvBps;
+    }
+
+    public void setLoanPoolUtilizationCapBps(int loanPoolUtilizationCapBps) {
+        this.loanPoolUtilizationCapBps = loanPoolUtilizationCapBps;
     }
 
     @Override
@@ -221,7 +228,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
     /**
      * 用 fund（loanCurrency）按 <b>利息优先 → 本金</b> 抵债，抵扣上限为当前未偿本息（超出即 overpay，不动）。 从 account 扣实付、利息进 interestRevenue、本金回
-     * loanPool；返回实付额。REPAY 与强平结算共用此一处金钱逻辑。
+     * loanPool；返回<b>本次结算的利息部分</b>（interestPart ≥ 0，供调用方发 LOAN_INTEREST_SETTLE 事件）。REPAY 与强平结算共用此一处金钱逻辑。
      */
     public long applyDebtPayment(LoanRecord loan, IntLongHashMap account, long fund) {
         int currency = loan.getLoanCurrency();
@@ -234,20 +241,20 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         interestRevenue.addToValue(currency, interestPart);
         loanPoolAvailable.addToValue(currency, principalPart);
         loanPoolBorrowed.addToValue(currency, -principalPart);
-        return paid;
+        return interestPart;
     }
 
     /**
      * 强平所得 receivedQuote（loanCurrency，已扣撮合 takerFee）的统一去向：先抽 {@value #LOAN_LIQUIDATION_FEE_BPS} bps 强平费进 loanLiqFees，再
-     * accrue + 抵债；剩余 overpay 留在 account。Isolated / Cross 强平共用。
+     * accrue + 抵债；剩余 overpay 留在 account。Isolated / Cross 强平共用。返回<b>本次结算的利息部分</b>（≥ 0，供调用方发 LOAN_INTEREST_SETTLE 事件）。
      */
-    public void settleLiquidationProceeds(LoanRecord loan, IntLongHashMap account, long receivedQuote, long now) {
+    public long settleLiquidationProceeds(LoanRecord loan, IntLongHashMap account, long receivedQuote, long now) {
         long liqFee =
             Math.min(receivedQuote, CoreArithmeticUtils.ceilMulDiv(receivedQuote, LOAN_LIQUIDATION_FEE_BPS, BPS_SCALE));
         account.addToValue(loan.getLoanCurrency(), -liqFee);
         loanLiqFees.addToValue(loan.getLoanCurrency(), liqFee);
         accrueTo(loan, now);
-        applyDebtPayment(loan, account, receivedQuote - liqFee);
+        return applyDebtPayment(loan, account, receivedQuote - liqFee);
     }
 
     /** 给定 principal / rate / lastAccrueTs / now 返回应新增利息（≥ 0）；lastAccrueTs > now 返回 0。 */
@@ -368,8 +375,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * currency 的 amount 换算成 numeraire currencyScale：currency==numeraire 直接返回；否则经 base=currency/quote=numeraire
-     * 现货对的 markPrice 折算。找不到 spec / markPrice / currencySpec → -1（caller 视为价格未就绪 skip）。
+     * currency 的 amount 换算成 numeraire currencyScale：currency==numeraire 直接返回；否则经 base=currency/quote=numeraire 现货对的
+     * markPrice 折算。找不到 spec / markPrice / currencySpec → -1（caller 视为价格未就绪 skip）。
      */
     private static long valueInNumeraire(int currency, long amount, int numeraireCurrency,
         CoreCurrencySpecification numeraireSpec, SymbolSpecificationProvider specProvider,
@@ -430,8 +437,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * currency 作抵押时是否还有≥1 张可卖（任一 base=currency 的现货 pair）。sub-lot 尘埃 → false。
-     * Cross underwater 判定用：所有抵押币种都无可卖整张，才认定账户级 underwater。
+     * currency 作抵押时是否还有≥1 张可卖（任一 base=currency 的现货 pair）。sub-lot 尘埃 → false。 Cross underwater 判定用：所有抵押币种都无可卖整张，才认定账户级
+     * underwater。
      */
     public static boolean hasSellableCollateralLot(int currency, long amount, SymbolSpecificationProvider specProvider,
         CurrencySpecificationProvider currencyProvider) {
@@ -462,8 +469,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * 返回 currency 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。
-     * 规则：找第一条 base=currency 且 collateralWeightBps &gt; 0 的现货 pair spec 的 weight。
+     * 返回 currency 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。 规则：找第一条 base=currency 且 collateralWeightBps &gt; 0 的现货 pair spec 的
+     * weight。
      */
     public static int collateralWeightForBase(int currency, SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {

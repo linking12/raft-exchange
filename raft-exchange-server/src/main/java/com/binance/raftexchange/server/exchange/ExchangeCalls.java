@@ -60,8 +60,8 @@ public final class ExchangeCalls {
             case ADD_CURRENCIES -> callExchange(ApiCommandConverters.convertBatchAddCurrencies(bdc.getAddCurrencies()));
             case UPDATE_SYMBOL_LOAN_CONFIG ->
                 callExchange(ApiCommandConverters.convertUpdateSymbolLoanConfig(bdc.getUpdateSymbolLoanConfig()));
-            case UPDATE_LOAN_NUMERAIRE_CONFIG -> callExchange(
-                ApiCommandConverters.convertUpdateLoanNumeraireConfig(bdc.getUpdateLoanNumeraireConfig()));
+            case UPDATE_LOAN_GLOBAL_CONFIG -> callExchange(
+                ApiCommandConverters.convertUpdateLoanGlobalConfig(bdc.getUpdateLoanGlobalConfig()));
             default -> CompletableFuture
                 .failedFuture(new IllegalArgumentException("Unsupported BinaryDataCommand: " + bdc.getCommandCase()));
         };

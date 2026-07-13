@@ -101,6 +101,10 @@ message FundEventReportPB {
   FundEventType eventType = 2;
   BalanceSnapshot balances = 3;
   PositionSnapshot positions = 4;
+  // loan 事件专用载荷（LOAN_* 事件才有意义，其他事件为 0）：
+  int32 loanMode = 5;     // 0=Isolated，1=Cross
+  int64 loanAmount = 6;   // 语义随 eventType：LTV bps / 结算利息量 / 坏账量
+  int64 loanExtra = 7;    // 仅 LOAN_MARGIN_CALL：预警阈值 bps
 }
 
 message BalanceSnapshot {
@@ -159,4 +163,9 @@ enum FundEventType {
   LIQUIDATION_ALERT = 21;
 
   RESET_FEE = 30;
+
+  // 现货借贷 loan 事件（码值须与 exchange-core FundEvent.FundEventType 一致；映射用 setEventTypeValue(getCode())）
+  LOAN_MARGIN_CALL = 40;        // Cross 账户级 / Isolated 单笔预警（LTV 达到 marginCall 阈值）
+  LOAN_INTEREST_SETTLE = 41;    // 还款 / 强平时结算的利息量（下游从 fees 拆出作利息收入统计）
+  LOAN_BAD_DEBT_INCURRED = 42;  // underwater force-sell 坏账入账（审计回溯用；badDebt bucket 是权威真值）
 }

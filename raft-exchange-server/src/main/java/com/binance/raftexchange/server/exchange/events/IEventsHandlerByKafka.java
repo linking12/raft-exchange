@@ -159,7 +159,9 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
             return;
         }
         FundEventReportPB.Builder builder = builderPool.get(FundEventReportPB.Builder.class)
-            .setAccountId(fundEventReport.getAccountId()).setEventTypeValue(fundEventReport.getEventType().getCode());
+            .setAccountId(fundEventReport.getAccountId()).setEventTypeValue(fundEventReport.getEventType().getCode())
+            .setLoanMode(fundEventReport.getLoanMode()).setLoanAmount(fundEventReport.getLoanAmount())
+            .setLoanExtra(fundEventReport.getLoanExtra());
         FundEventReport.BalanceSnapshot balance = fundEventReport.getBalances();
         builder.setBalances(builderPool.get(BalanceSnapshot.Builder.class).setCurrency(balance.getCurrency())
             .setCurrencyScaleK(balance.getCurrencyScaleK()).setFree(balance.getFree()).setLocked(balance.getLocked()));

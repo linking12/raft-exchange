@@ -12,7 +12,7 @@ import exchange.core2.core.common.api.ApiLoanForceLiquidate;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiRecoverState;
-import exchange.core2.core.common.api.binary.UpdateLoanNumeraireConfigCommand;
+import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
 import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.InitialStateConfiguration;
@@ -58,7 +58,7 @@ class ITLoanFailoverSnapshot {
         c.initMarkPrice(SYMBOL, MARK);
         c.sendBinaryDataCommandSync(
             new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, 0, Long.MAX_VALUE, 365, 10000), 5000);
-        c.sendBinaryDataCommandSync(new UpdateLoanNumeraireConfigCommand(USDT), 5001);
+        c.sendBinaryDataCommandSync(new UpdateLoanGlobalConfigCommand(USDT), 5001);
         c.submitCommandSync(ApiPoolDeposit.builder()
             .externalId(1_000_001L).shardId(0).currency(USDT).amount(POOL_FUND).build(), CommandResultCode.SUCCESS);
         c.initOneUser(BORROWER);

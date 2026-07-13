@@ -410,10 +410,14 @@ public final class ApiCommandConverters {
             grpc.getCollateralWeightBps());
     }
 
-    /** UPDATE_LOAN_NUMERAIRE_CONFIG: proto → exchange-core binary sub-command。 */
-    public static exchange.core2.core.common.api.binary.UpdateLoanNumeraireConfigCommand
-        convertUpdateLoanNumeraireConfig(com.binance.raftexchange.stubs.request.SpotLoanNumeraireConfig grpc) {
-        return new exchange.core2.core.common.api.binary.UpdateLoanNumeraireConfigCommand(grpc.getNumeraireCcy());
+    /** UPDATE_LOAN_GLOBAL_CONFIG: proto → exchange-core binary sub-command（numeraire + 三阈值 partial update）。 */
+    public static exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand
+        convertUpdateLoanGlobalConfig(com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig grpc) {
+        return new exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand(
+            grpc.getNumeraireCcy(),
+            grpc.getCrossLiquidationLtvBps(),
+            grpc.getCrossMarginCallLtvBps(),
+            grpc.getLoanPoolUtilizationCapBps());
     }
 
     /** engine cmd → raft log bytes，跟 convertLiquidationOrder / IFTakeOver / AutoDeleveraging / LoanForceLiquidate 互逆。 */

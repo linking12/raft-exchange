@@ -363,7 +363,7 @@ enum BinaryCommandType {
   ADD_SYMBOLS = 1003;
   ADD_CURRENCIES = 1004;
   UPDATE_SYMBOL_LOAN_CONFIG = 1005;      // loan.md UPDATE_SYMBOL_LOAN_CONFIG 章节
-  UPDATE_LOAN_NUMERAIRE_CONFIG = 1006;   // 全局 Cross 借贷估值基准币；未配时 Cross BORROW/WITHDRAW fail-close
+  UPDATE_LOAN_GLOBAL_CONFIG = 1006;      // 全局 Cross 基准币 + 三大运行时风控阈值；未配基准币时 Cross BORROW/WITHDRAW fail-close
 }
 
 message BatchAddAccountsCommand {
@@ -396,10 +396,13 @@ message SpotLoanConfig {
   int32 collateralWeightBps = 8;    // 0 = 该 currency 不作 Cross 抵押
 }
 
-// UPDATE_LOAN_NUMERAIRE_CONFIG: 全局 Cross 借贷估值基准币（loan.md §1.2）；
-// 未配（0）时 Cross BORROW/WITHDRAW handler fail-close。
-message SpotLoanNumeraireConfig {
-  int32 numeraireCcy = 1;
+// UPDATE_LOAN_GLOBAL_CONFIG: 全局 Cross 基准币 + 三大运行时风控阈值（loan.md §1.2）。
+// partial update 语义：各字段 <=0 表示"本次不改"，>0 才生效。numeraireCcy 未配（0）时 Cross BORROW/WITHDRAW fail-close。
+message SpotLoanGlobalConfig {
+  int32 numeraireCcy = 1;                // Cross 估值基准币
+  int32 crossLiquidationLtvBps = 2;      // Cross 账户级强平线（bps）
+  int32 crossMarginCallLtvBps = 3;       // Cross 账户级预警线（bps）
+  int32 loanPoolUtilizationCapBps = 4;   // 借贷池利用率上限（bps）
 }
 
 message BinaryDataCommand {
@@ -408,7 +411,7 @@ message BinaryDataCommand {
     BatchAddSymbolsCommand add_symbols = 2;
     BatchAddCurrenciesCommand add_currencies = 3;
     SpotLoanConfig update_symbol_loan_config = 4;
-    SpotLoanNumeraireConfig update_loan_numeraire_config = 5;
+    SpotLoanGlobalConfig update_loan_global_config = 5;
   }
 }
 

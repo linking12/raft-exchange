@@ -26,7 +26,7 @@ public enum BinaryCommandType {
     // 更新已有现货 pair 的 loan 配置（详见 loan.md UPDATE_SYMBOL_LOAN_CONFIG 章节）
     UPDATE_SYMBOL_LOAN_CONFIG(1005),
     // 全局 Cross 借贷估值基准币（loan.md §1.2）；未配时 Cross BORROW/WITHDRAW fail-close
-    UPDATE_LOAN_NUMERAIRE_CONFIG(1006);
+    UPDATE_LOAN_GLOBAL_CONFIG(1006);
 
     private final int code;
 
@@ -46,7 +46,7 @@ public enum BinaryCommandType {
             case 1005:
                 return UPDATE_SYMBOL_LOAN_CONFIG;
             case 1006:
-                return UPDATE_LOAN_NUMERAIRE_CONFIG;
+                return UPDATE_LOAN_GLOBAL_CONFIG;
             default:
                 throw new IllegalArgumentException("unknown BinaryCommandType:" + code);
         }
