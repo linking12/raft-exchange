@@ -6,7 +6,7 @@ import java.util.Objects;
 public final class ExchangeApiOptions {
 
     public static final Duration DEFAULT_SEND_TIMEOUT = Duration.ofSeconds(2);
-    public static final Duration DEFAULT_NODES_FLUSH_INTERVAL = Duration.ofSeconds(1);
+    public static final Duration DEFAULT_NODES_FLUSH_INTERVAL = Duration.ofMinutes(1);
     public static final int DEFAULT_RETRY_ATTEMPTS = 3;
     public static final Duration DEFAULT_RETRY_BACKOFF = Duration.ofMillis(100);
 
