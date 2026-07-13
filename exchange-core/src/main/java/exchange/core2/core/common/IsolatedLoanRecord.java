@@ -28,20 +28,27 @@ import java.util.Objects;
 @NoArgsConstructor
 public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHash, LoanRecord {
 
+    // --- 身份（对象池复用，非 final，由 initialize 重置）---
     // 所属用户 uid（由 UserProfile 上下文注入，不序列化，仅进 stateHash）。
     public long uid;
-
     // 贷款唯一 id（客户端提供，per-user 唯一，Isolated 命名空间独立于 Cross）。创建时锁死。
     public long loanId;
+
+    // --- 市场（创建时锁定，源自现货 pair spec）---
+    // 所属现货 pair symbolId（= LOAN_CREATE 的 cmd.symbol）。scanner / handler 直接 getSymbolSpecification(symbolId) 拿 spec，省 O(N) 反查。
+    public int symbolId;
     // 抵押币种（= spec.baseCurrency）。
     public int collateralCurrency;
     // 借出币种（= spec.quoteCurrency）。
     public int loanCurrency;
+
+    // --- 借款条款（创建时锁定）---
     // 借入时锁定的年化利率（bps），存续期不变。
     public int rateBps;
     // 开仓时间戳（ms），期限强平用（now - openedAtTs > loanMaxTermDays 触发）。
     public long openedAtTs;
 
+    // --- 金额 / 运行态（可变）---
     // 已抵押的 collateralCurrency 数量（currencyScale）。force-sell 作卖出量时须经 LoanService.collateralAmountToLots
     // 换成张数（lot），不能直接当 size；反向记账用 lotsToCollateralAmount。不足一张的尘埃卖不掉，underwater 时并入 badDebt。
     public long collateralAmount;
@@ -62,6 +69,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     public IsolatedLoanRecord(long uid, BytesIn bytes) {
         this.uid = uid;
         this.loanId = bytes.readLong();
+        this.symbolId = bytes.readInt();
         this.collateralCurrency = bytes.readInt();
         this.loanCurrency = bytes.readInt();
         this.rateBps = bytes.readInt();
@@ -78,6 +86,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         long openedAtTs) {
         this.uid = uid;
         this.loanId = loanId;
+        this.symbolId = 0; // 由 handleLoanCreate 在 initialize 后写入 cmd.symbol
         this.collateralCurrency = collateralCurrency;
         this.loanCurrency = loanCurrency;
         this.rateBps = rateBps;
@@ -154,6 +163,7 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeLong(loanId);
+        bytes.writeInt(symbolId);
         bytes.writeInt(collateralCurrency);
         bytes.writeInt(loanCurrency);
         bytes.writeInt(rateBps);
@@ -167,13 +177,13 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
 
     @Override
     public int stateHash() {
-        return Objects.hash(uid, loanId, collateralCurrency, loanCurrency, rateBps, openedAtTs, collateralAmount,
+        return Objects.hash(uid, loanId, symbolId, collateralCurrency, loanCurrency, rateBps, openedAtTs, collateralAmount,
             outstandingPrincipal, accumulatedInterest, lastAccrueTs, stuckLiqAttempts);
     }
 
     @Override
     public String toString() {
-        return "IsolatedLoan{" + "u" + uid + " id" + loanId + " colCur" + collateralCurrency + " loanCur" + loanCurrency
+        return "IsolatedLoan{" + "u" + uid + " id" + loanId + " sym" + symbolId + " colCur" + collateralCurrency + " loanCur" + loanCurrency
             + " rate" + rateBps + " openedAt" + openedAtTs + " col=" + collateralAmount + " prin="
             + outstandingPrincipal + " int=" + accumulatedInterest + " lastAccrue=" + lastAccrueTs + '}';
     }

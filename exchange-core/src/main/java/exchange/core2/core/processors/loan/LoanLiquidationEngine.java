@@ -35,56 +35,59 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * 现货借贷子域 scanner —— per-shard 一份实例，由 {@link LiquidationEngine} 每 tick 委托进来。
  *
- * <p><b>二级 scanner 入口</b>：{@link LiquidationEngine#checkLiquidations} per-user 循环里，期货扫完再调本类的
+ * <p>
+ * <b>二级 scanner 入口</b>：{@link LiquidationEngine#checkLiquidations} per-user 循环里，期货扫完再调本类的
  * {@link #check(UserProfile)}；LiquidationEngine 主循环里**永远看不到** loan 扫描细节。
  *
- * <p><b>本类承担</b>：Isolated + Cross 两条 loan 扫描 lane —— in-flight 去重、真实债务(含利息) LTV / 期限判定，
- * 触发时构造 force-sell IOC 单 publish。跟 {@link LoanCommandHandlers} 完全对称——**持** {@link LiquidationEngine}
- * 单一 ref，通过它现取 SymbolSpecificationProvider / CurrencySpecificationProvider / lastPriceCache / LoanService /
- * LiquidationCmdPublisher，不缓存。
+ * <p>
+ * <b>本类承担</b>：Isolated + Cross 两条 loan 扫描 lane —— in-flight 去重、真实债务(含利息) LTV / 期限判定， 触发时构造 force-sell IOC 单 publish。跟
+ * {@link LoanCommandHandlers} 完全对称——**持** {@link LiquidationEngine} 单一 ref，通过它现取 SymbolSpecificationProvider /
+ * CurrencySpecificationProvider / lastPriceCache / LoanService / LiquidationCmdPublisher，不缓存。
  *
- * <p><b>状态</b>：in-flight sets（Isolated keyed by loanId / Cross keyed by uid）—— 进程级，不进 raft snapshot，
- * publisher onApplied 回调清。无 raft-side ctx——scanner 每 tick 独立从 LTV / 期限判定，postProcess 结束后
- * 下一轮 tick 可立即重触发。
+ * <p>
+ * <b>状态</b>：in-flight sets（Isolated keyed by loanId / Cross keyed by uid）—— 进程级，不进 raft snapshot， publisher onApplied
+ * 回调清。无 raft-side ctx——scanner 每 tick 独立从 LTV / 期限判定，postProcess 结束后 下一轮 tick 可立即重触发。
  *
- * <p><b>触发 → 结算流程</b>：scanner publish {@link ApiLoanForceLiquidate} / {@link ApiLoanCrossForceLiquidate} →
- * raft 共识 → apply 侧 {@link LoanCommandHandlers#handleLoanForceLiquidate}（pre-move 抵押到 exchangeLocked）→
- * orderbook 标准 spot ASK IOC 撮合 → R2 {@link LoanCommandHandlers#postProcessLoanForceLiquidate} 路由 quote
- * proceeds 到 loanLiquidationFees / interestRevenue / poolAvailable，underwater 走 badDebt。
+ * <p>
+ * <b>触发 → 结算流程</b>：scanner publish {@link ApiLoanForceLiquidate} / {@link ApiLoanCrossForceLiquidate} → raft 共识 → apply
+ * 侧 {@link LoanCommandHandlers#handleLoanForceLiquidate}（pre-move 抵押到 exchangeLocked）→ orderbook 标准 spot ASK IOC 撮合 →
+ * R2 {@link LoanCommandHandlers#postProcessLoanForceLiquidate} 路由 quote proceeds 到 loanLiquidationFees /
+ * interestRevenue / poolAvailable，underwater 走 badDebt。
  */
 @Slf4j
 public final class LoanLiquidationEngine {
 
-    // 强平限价容差爬梯（限价 = markPrice × (10000 − tolerance) / 10000）：卡单（连续零成交）越多，容差越宽，
-    // 让 IOC 吃到更深的档位。切档按 loan.stuckLiqAttempts：<3 → 1%，<6 → 2%，否则 5%（封顶）。
-    private static final long TOLERANCE_BASE_BPS = 100L;   // 1%
-    private static final long TOLERANCE_TIER1_BPS = 200L;  // 2%
-    private static final long TOLERANCE_TIER2_BPS = 500L;  // 5%
+    // --- 强平限价容差爬梯（限价 = markPrice × (10000 − tolerance) / 10000）---
+    // 卡单（连续零成交）越多容差越宽，让 IOC 吃到更深档位。切档按 loan.stuckLiqAttempts：<3 → 1%，<6 → 2%，否则 5%（封顶）。
+    private static final long TOLERANCE_BASE_BPS = 100L; // 1%
+    private static final long TOLERANCE_TIER1_BPS = 200L; // 2%
+    private static final long TOLERANCE_TIER2_BPS = 500L; // 5%
     private static final int STUCK_TIER1_ATTEMPTS = 3;
     private static final int STUCK_TIER2_ATTEMPTS = 6;
 
-    // 卡单重发节流：stuck 的 loan 每 30s 才重发一次（避免每 tick 刷 raft）。进程 local，failover 后重置无碍。
+    // --- 节流 / 告警（进程级，failover 重置无碍）---
+    // 卡单重发节流：stuck 的 loan 每 30s 才重发一次（避免每 tick 刷 raft）。
     private static final long STUCK_RETRY_THROTTLE_MS = 30_000L;
-    // 卡单告警阈值：连续零成交达到此次数（约 STUCK_ALERT_ATTEMPTS × 30s）仍打不进 → 告警（多半是空盘）。
+    // 卡单告警阈值：连续零成交达到此次数（约 × 30s）仍打不进 → 告警（多半是空盘）。
     private static final int STUCK_ALERT_ATTEMPTS = 10;
+    // Margin call 通知节流：防用户短时间内被同一 loan 反复预警。
+    private static final long MARGIN_CALL_THROTTLE_MS = 5L * 60L * 1_000L; // 5 min
 
-    // Cross sellSize heuristic：覆盖 realDebt × (10000 + BUFFER_BPS) / 10000（fee + tolerance 冗余）。
+    // --- Cross 强平卖出量 buffer：覆盖 realDebt × (10000 + BUFFER_BPS) / 10000（fee + tolerance 冗余）---
     private static final long CROSS_SELL_BUFFER_BPS = 500L; // 5%
 
+    // --- 时间换算（期限强平：now − openedAtTs > loanMaxTermDays × MS_PER_DAY）---
     private static final long MS_PER_DAY = 86400L * 1_000L;
-    // Margin call 节流窗口 5 min，防用户短时间内被同一 loan 反复通知
-    private static final long MARGIN_CALL_THROTTLE_MS = 5L * 60L * 1_000L;
 
+    // --- 依赖：唯一 ref，其余 provider / service 经它现取，不缓存 ---
     private final LiquidationEngine engine;
 
-    /**
-     * 每条 lane（Isolated / Cross）的进程级状态：in-flight 去重 + margin-call / 卡单重发两类节流窗口。
-     * 不进 raft snapshot（failover 后重置无碍）；key = loanId(Isolated) / uid(Cross)。
-     */
+    // --- 运行态（进程级，不进 raft snapshot；failover 后重置无碍）---
+    /** 每条 lane（Isolated / Cross）的状态：in-flight 去重 + margin-call / 卡单重发两类节流窗口。key = loanId(Isolated) / uid(Cross)。 */
     private static final class LaneState {
-        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty();      // 已 publish 未结算的 key，去重防重复强平
-        final LongLongHashMap marginCallThrottleMs = new LongLongHashMap();  // key → 上次 margin-call 通知时刻（ms）
-        final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap();    // key → 上次卡单重发时刻（ms）
+        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty(); // 已 publish 未结算的 key，去重防重复强平
+        final LongLongHashMap marginCallThrottleMs = new LongLongHashMap(); // key → 上次 margin-call 通知时刻（ms）
+        final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap(); // key → 上次卡单重发时刻（ms）
     }
 
     private final LaneState isolated = new LaneState();
@@ -100,8 +103,8 @@ public final class LoanLiquidationEngine {
     }
 
     /**
-     * 卡单节流 + 告警（Isolated / Cross 共用）。未卡（attempts==0）直接放行；卡住的每 STUCK_RETRY_THROTTLE_MS
-     * 才放行一次，超阈值发告警。返回 true 表示本轮应跳过（仍在节流窗口内）。key = loanId(Isolated) / uid(Cross)。
+     * 卡单节流 + 告警（Isolated / Cross 共用）。未卡（attempts==0）直接放行；卡住的每 STUCK_RETRY_THROTTLE_MS 才放行一次，超阈值发告警。返回 true
+     * 表示本轮应跳过（仍在节流窗口内）。key = loanId(Isolated) / uid(Cross)。
      */
     private boolean stuckLiqThrottled(String lane, LongLongHashMap lastLiqMs, long key, int stuckAttempts) {
         if (stuckAttempts == 0)
@@ -136,8 +139,8 @@ public final class LoanLiquidationEngine {
             if (isolated.inFlight.contains(loan.loanId))
                 return;
 
-            CoreSymbolSpecification spec = LoanService.findSpotSpec(loan.collateralCurrency, loan.loanCurrency,
-                engine.getSymbolSpecificationProvider());
+            CoreSymbolSpecification spec =
+                engine.getSymbolSpecificationProvider().getSymbolSpecification(loan.symbolId);
             if (spec == null)
                 return;
             LastPriceCacheRecord priceRecord = engine.getLastPriceCache().get(spec.symbolId);
@@ -145,8 +148,8 @@ public final class LoanLiquidationEngine {
                 return;
 
             long currentTickMs = System.currentTimeMillis();
-            boolean termExpired = spec.loanMaxTermDays > 0
-                && (currentTickMs - loan.openedAtTs) > spec.loanMaxTermDays * MS_PER_DAY;
+            boolean termExpired =
+                spec.loanMaxTermDays > 0 && (currentTickMs - loan.openedAtTs) > spec.loanMaxTermDays * MS_PER_DAY;
 
             // 单位统一到 loanCurrency currencyScale 下比（不做换算原公式恒 pass）
             CoreCurrencySpecification baseSpec =
@@ -167,7 +170,8 @@ public final class LoanLiquidationEngine {
             if (termExpired || ltvScaled >= thresholdLiq) {
                 if (stuckLiqThrottled("isolated", isolated.liqRetryThrottleMs, loan.loanId, loan.stuckLiqAttempts))
                     return;
-                publishIsolatedForceSell(loan, spec, priceRecord.markPrice, toleranceBpsFor(loan.stuckLiqAttempts));
+                publishIsolatedForceSell(loan, spec, priceRecord.markPrice, toleranceBpsFor(loan.stuckLiqAttempts),
+                    currentTickMs);
                 return;
             }
 
@@ -217,32 +221,32 @@ public final class LoanLiquidationEngine {
     // ================================================================
 
     /**
-     * 构造 Isolated 强平 IOC 单并 publishTracked。orderId 顶字节 'L' + subtype 'S'
-     * （{@link LoanService#generateIsolatedForceSellOrderId}），跟 futures 强平 orderId 空间隔离。
-     * 限价 = markPrice × (10000 − toleranceBps) / 10000，toleranceBps 由卡单爬梯给出。
+     * 构造 Isolated 强平 IOC 单并 publishTracked。orderId 顶字节 'L' + subtype 'S' （{@link LoanService#forceSellOrderId}），跟
+     * futures 强平 orderId 空间隔离。 限价 = markPrice × (10000 − toleranceBps) / 10000，toleranceBps 由卡单爬梯给出。
      */
     private void publishIsolatedForceSell(IsolatedLoanRecord loan, CoreSymbolSpecification spec, long markPrice,
-        long toleranceBps) {
+        long toleranceBps, long currentTickMs) {
         // 抵押金额（currencyScale）→ 下单张数（lot）；不足一张的尘埃卖不掉，留在 collateralAmount，跳过本轮
         CoreCurrencySpecification baseSpec =
             engine.getCurrencySpecificationProvider().getCurrencySpecification(loan.collateralCurrency);
         long sellSizeLots = LoanService.collateralAmountToLots(loan.collateralAmount, spec, baseSpec);
         if (sellSizeLots <= 0) {
-            log.warn("Isolated force-sell skip: sub-lot collateral (uid={} loanId={} collateral={})",
-                loan.uid, loan.loanId, loan.collateralAmount);
+            log.warn("Isolated force-sell skip: sub-lot collateral (uid={} loanId={} collateral={})", loan.uid,
+                loan.loanId, loan.collateralAmount);
             return;
         }
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
+        long orderId =
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, currentTickMs);
         long limitPrice = limitPriceWithTolerance(markPrice, toleranceBps);
-        ApiLoanForceLiquidate cmd = ApiLoanForceLiquidate.builder().uid(loan.uid).symbol(spec.symbolId)
-            .loanId(loan.loanId).price(limitPrice).size(sellSizeLots).orderId(orderId)
-            .action(OrderAction.ASK).orderType(OrderType.IOC).build();
+        ApiLoanForceLiquidate cmd =
+            ApiLoanForceLiquidate.builder().uid(loan.uid).symbol(spec.symbolId).loanId(loan.loanId).price(limitPrice)
+                .size(sellSizeLots).orderId(orderId).action(OrderAction.ASK).orderType(OrderType.IOC).build();
         publishTrackedIsolated(cmd, loan.loanId);
     }
 
     /**
-     * Cross 强平：tiebreak 选一对 (sellingCurrency, targetLoan) → 算 sellSize → publish。
-     * Scanner 单轮只处理一对，下轮 tick 重估 LTV 决定是否继续（迭代 deleveraging）。
+     * Cross 强平：tiebreak 选一对 (sellingCurrency, targetLoan) → 算 sellSize → publish。 Scanner 单轮只处理一对，下轮 tick 重估 LTV
+     * 决定是否继续（迭代 deleveraging）。
      */
     /** preselectedTarget != null（期限强平）时强平该指定 loan；否则（LTV 强平）按 tiebreak 选一笔降账户 LTV。 */
     private void publishCrossForceSell(UserProfile up, LoanService loanService, long currentTickMs,
@@ -257,11 +261,11 @@ public final class LoanLiquidationEngine {
             log.warn("Cross force-sell abort: no target loan (uid={})", up.uid);
             return;
         }
-        CoreSymbolSpecification spec = LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency,
-            engine.getSymbolSpecificationProvider());
+        CoreSymbolSpecification spec =
+            LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency, engine.getSymbolSpecificationProvider());
         if (spec == null) {
-            log.warn("Cross force-sell abort: no spot pair sellingCurrency={} loanCurrency={} (uid={})", sellingCurrency,
-                targetLoan.loanCurrency, up.uid);
+            log.warn("Cross force-sell abort: no spot pair sellingCurrency={} loanCurrency={} (uid={})",
+                sellingCurrency, targetLoan.loanCurrency, up.uid);
             return;
         }
         LastPriceCacheRecord priceRecord = engine.getLastPriceCache().get(spec.symbolId);
@@ -277,18 +281,19 @@ public final class LoanLiquidationEngine {
         long sellSize = calculateCrossSellSize(targetLoan, spec, priceRecord.markPrice, availableCollateral,
             currentTickMs, loanService, sellingCurrencySpec, loanCurrencySpec);
         if (sellSize <= 0) {
-            log.warn("Cross force-sell abort: sellSize=0 (uid={} sellingCurrency={} available={})", up.uid, sellingCurrency,
-                availableCollateral);
+            log.warn("Cross force-sell abort: sellSize=0 (uid={} sellingCurrency={} available={})", up.uid,
+                sellingCurrency, availableCollateral);
             return;
         }
         // 卡单节流（per-uid）+ 容差爬梯（按 targetLoan 的连续零成交次数）
         if (stuckLiqThrottled("cross", cross.liqRetryThrottleMs, up.uid, targetLoan.stuckLiqAttempts))
             return;
-        long orderId = LoanService.generateCrossForceSellOrderId(up.uid, sellingCurrency);
+        long orderId =
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, up.uid, targetLoan.loanId, currentTickMs);
         long limitPrice = limitPriceWithTolerance(priceRecord.markPrice, toleranceBpsFor(targetLoan.stuckLiqAttempts));
         ApiLoanCrossForceLiquidate cmd = ApiLoanCrossForceLiquidate.builder().uid(up.uid).symbol(spec.symbolId)
-            .targetLoanId(targetLoan.loanId).price(limitPrice).size(sellSize).orderId(orderId)
-            .action(OrderAction.ASK).orderType(OrderType.IOC).build();
+            .targetLoanId(targetLoan.loanId).price(limitPrice).size(sellSize).orderId(orderId).action(OrderAction.ASK)
+            .orderType(OrderType.IOC).build();
         publishTrackedCross(cmd, up.uid);
     }
 
@@ -308,8 +313,7 @@ public final class LoanLiquidationEngine {
             int weight = LoanService.collateralWeightForBase(currency, engine.getSymbolSpecificationProvider());
             if (weight <= 0)
                 continue;
-            if (weight > bestWeight
-                || (weight == bestWeight && amount > bestAmount)
+            if (weight > bestWeight || (weight == bestWeight && amount > bestAmount)
                 || (weight == bestWeight && amount == bestAmount && currency < bestCurrency)) {
                 bestCurrency = currency;
                 bestWeight = weight;
@@ -325,8 +329,7 @@ public final class LoanLiquidationEngine {
         for (CrossLoanRecord loan : up.crossLoans) {
             if (loan.outstandingPrincipal <= 0)
                 continue;
-            if (best == null
-                || loan.rateBps > best.rateBps
+            if (best == null || loan.rateBps > best.rateBps
                 || (loan.rateBps == best.rateBps && loan.outstandingPrincipal > best.outstandingPrincipal)
                 || (loan.rateBps == best.rateBps && loan.outstandingPrincipal == best.outstandingPrincipal
                     && loan.loanId < best.loanId)) {
@@ -337,16 +340,16 @@ public final class LoanLiquidationEngine {
     }
 
     /**
-     * 挑一笔已到期（{@code now - openedAtTs > loanMaxTermDays}）的 Cross loan；确定性选 loanId 最小。
-     * 期限从 loanCurrency 对应 spec fresh 读（跟 Isolated / 借款时一致，不 snapshot）；无匹配返回 null。
+     * 挑一笔已到期（{@code now - openedAtTs > loanMaxTermDays}）的 Cross loan；确定性选 loanId 最小。 期限从 loanCurrency 对应 spec fresh 读（跟
+     * Isolated / 借款时一致，不 snapshot）；无匹配返回 null。
      */
     private CrossLoanRecord pickExpiredCrossLoan(UserProfile up, long currentTickMs) {
         CrossLoanRecord best = null;
         for (CrossLoanRecord loan : up.crossLoans) {
             if (loan.outstandingPrincipal <= 0)
                 continue;
-            CoreSymbolSpecification spec = LoanService.findLoanSpecByQuoteCurrency(loan.loanCurrency,
-                engine.getSymbolSpecificationProvider());
+            CoreSymbolSpecification spec =
+                engine.getSymbolSpecificationProvider().getSymbolSpecification(loan.symbolId);
             if (spec == null || spec.loanMaxTermDays <= 0)
                 continue;
             if ((currentTickMs - loan.openedAtTs) <= spec.loanMaxTermDays * MS_PER_DAY)
@@ -358,8 +361,8 @@ public final class LoanLiquidationEngine {
     }
 
     /**
-     * 卖多少（返回下单张数 / lot）：覆盖 targetLoan 真实债务 + {@value #CROSS_SELL_BUFFER_BPS} bps buffer（fee + tolerance），
-     * 封顶 available。neededQuote 和 available 都换算成 lot 后再取小。
+     * 卖多少（返回下单张数 / lot）：覆盖 targetLoan 真实债务 + {@value #CROSS_SELL_BUFFER_BPS} bps buffer（fee + tolerance）， 封顶
+     * available。neededQuote 和 available 都换算成 lot 后再取小。
      */
     private long calculateCrossSellSize(CrossLoanRecord targetLoan, CoreSymbolSpecification spec, long markPrice,
         long available, long now, LoanService loanService, CoreCurrencySpecification sellingCurrencySpec,
@@ -405,15 +408,15 @@ public final class LoanLiquidationEngine {
             return;
         cross.marginCallThrottleMs.put(uid, nowMs);
         // Cross 账户级：loanId=0、loanCurrency=0（无单笔归属）
-        FundEvent event = engine.getEventsHelper().sendLoanMarginCallEvent(uid, 0L, LOAN_MODE_CROSS, 0, ltvBps,
-            thresholdBps);
+        FundEvent event =
+            engine.getEventsHelper().sendLoanMarginCallEvent(uid, 0L, LOAN_MODE_CROSS, 0, ltvBps, thresholdBps);
         publishMarginCall(event);
     }
 
     /** 走 leader-local ring-buffer bypass raft，跟 futures MARGIN_ALERT 同款 best-effort 通道。 */
     private void publishMarginCall(FundEvent event) {
-        engine.getLiquidationCmdPublisher()
-            .publish(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
+        engine.getLiquidationCmdPublisher().publish(ApiSystemLiquidationNotify.builder().fundEvent(event).build(),
+            null);
     }
 
     // ================================================================

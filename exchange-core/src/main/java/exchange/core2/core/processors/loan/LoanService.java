@@ -21,7 +21,6 @@ import exchange.core2.core.common.BoundedLongDedupSet;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.CrossLoanRecord;
-import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.LoanRecord;
 import exchange.core2.core.common.StateHash;
 import exchange.core2.core.common.SymbolType;
@@ -60,13 +59,13 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     public static final long YEAR_MS = 365L * 24L * 3600L * 1_000L; // 1 年（ms），跨节点唯一确定性形式
     public static final long BPS_SCALE = 10_000L; // bps 精度基准（10000 = 100%）
 
-    // --- force-sell OrderId 编码：顶字节 'L' 独占（避开期货 'I' / ADL 'A'）+ subtype + 打散 payload（不承担 loanId 反查）---
-    public static final long ORDERID_NAMESPACE_TAG = 0x4CL; // 'L'
-    public static final long ORDERID_SUBTYPE_ISOLATED = 0x53L; // 'S'
-    public static final long ORDERID_SUBTYPE_CROSS = 0x43L; // 'C'
-    public static final long ORDERID_PAYLOAD_MASK = 0xFFFFFFL; // 24 bit
-    private static final long ORDERID_UIDHASH_MASK = 0xFFFFFL; // 20 bit
-    private static final long ORDERID_TS_MASK = 0xFL; // 4 bit
+    // --- force-sell orderId 编码常量（布局见 forceSellOrderId）---
+    public static final long ORDERID_NAMESPACE_TAG = 0x4CL;   // 'L'：loan 强平 orderId 命名空间，独占以避开期货 'I' / ADL 'A'
+    public static final long ORDERID_SUBTYPE_ISOLATED = 0x53L; // 'S'：逐仓
+    public static final long ORDERID_SUBTYPE_CROSS = 0x43L;    // 'C'：全仓
+    public static final long ORDERID_UID_MASK = 0xF_FFFFL;    // 20 bit：uid 扰动 hash
+    public static final long ORDERID_LOANID_MASK = 0xFFFFL;   // 16 bit：loanId 扰动 hash
+    public static final long ORDERID_TS_MASK = 0xFFFL;        // 12 bit：秒（4096s≈68min 后回绕）
 
     // ================================================================
     // State（进 raft snapshot，per-shard 独立）
@@ -428,7 +427,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return false;
     }
 
-    /** 找 base=baseCurrency, quote=quoteCurrency 的现货 pair spec；O(N) 遍历。v2 加 (base,quote)→symbolId 反查索引。 */
+    /** 找 base=baseCurrency, quote=quoteCurrency 的现货 pair spec；O(N) 遍历（币种级动态查询，非 loan 自己的 symbol）。 */
     public static CoreSymbolSpecification findSpotSpec(int baseCurrency, int quoteCurrency,
         SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
@@ -440,7 +439,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return null;
     }
 
-    /** 找 quote==loanCurrency 且启用借贷的现货 pair spec；返回第一个匹配。O(N)，v2 加 reverse index。 */
+    /** 找 quote==loanCurrency 且启用借贷的现货 pair spec；返回第一个匹配。O(N)，仅 Cross BORROW 用一次。 */
     public static CoreSymbolSpecification findLoanSpecByQuoteCurrency(int loanCurrency,
         SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
@@ -453,8 +452,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * 返回 currency 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。 规则：找第一条 base=currency 且 collateralWeightBps &gt; 0 的现货 pair spec 的
-     * weight。
+     * 返回 currency 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。规则：找第一条 base=currency 且 collateralWeightBps &gt; 0 的现货 pair 的
+     * weight。O(N)（Cross 抵押估值按币种查）。
      */
     public static int collateralWeightForBase(int currency, SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
@@ -467,22 +466,18 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     // ================================================================
-    // Force-sell OrderId 编码，布局：
-    // | 63..56 'L' | 55..48 subtype | 47..24 payload | 23..4 uidHash | 3..0 ts |
+    // 强平卖单 orderId 编码，布局（对齐期货「身份 + 秒级时间戳」，无状态）：
+    // | 63..56 'L' | 55..48 subtype | 47..28 uidHash(20) | 27..12 loanIdHash(16) | 11..0 秒(12) |
+    // 身份 (uid, loanId) 编进 orderId：一笔 loan 最多一条强平流，同笔多轮补发靠 scanner in-flight guard
+    // 兜底（同期货）；秒级时间戳区分跨时间的补发。tickTimeMs = scanner tick（leader 生成、随命令复制 → 各副本确定）。
+    // orderId 不承担 loanId 反查（loanId 走 cmd.reserveBidPrice）。
     // ================================================================
 
-    public static long generateIsolatedForceSellOrderId(IsolatedLoanRecord loan) {
-        long payload = loan.loanId & ORDERID_PAYLOAD_MASK;
-        long uidHash = (loan.uid * 31 + 17) & ORDERID_UIDHASH_MASK;
-        long ts = (System.currentTimeMillis() / 1000) & ORDERID_TS_MASK;
-        return (ORDERID_NAMESPACE_TAG << 56) | (ORDERID_SUBTYPE_ISOLATED << 48) | (payload << 24) | (uidHash << 4) | ts;
-    }
-
-    public static long generateCrossForceSellOrderId(long uid, int sellingCurrency) {
-        long payload = ((long)sellingCurrency) & ORDERID_PAYLOAD_MASK;
-        long uidHash = (uid * 31 + 17) & ORDERID_UIDHASH_MASK;
-        long ts = (System.currentTimeMillis() / 1000) & ORDERID_TS_MASK;
-        return (ORDERID_NAMESPACE_TAG << 56) | (ORDERID_SUBTYPE_CROSS << 48) | (payload << 24) | (uidHash << 4) | ts;
+    public static long forceSellOrderId(long subtype, long uid, long loanId, long tickTimeMs) {
+        long uidHash = (uid * 31 + 17) & ORDERID_UID_MASK;
+        long loanIdHash = (loanId * 31 + 17) & ORDERID_LOANID_MASK;
+        long tsSec = (tickTimeMs / 1000) & ORDERID_TS_MASK;
+        return (ORDERID_NAMESPACE_TAG << 56) | (subtype << 48) | (uidHash << 28) | (loanIdHash << 12) | tsSec;
     }
 
     /** 顶字节 == 'L' 即 loan force-sell orderId（对 Isolated / Cross 都成立）。 */

@@ -115,7 +115,7 @@ class ITLoanForceLiquidatePipeline {
             final IsolatedLoanRecord idHolder = new IsolatedLoanRecord();
             idHolder.uid = BORROWER;
             idHolder.loanId = LOAN_ID;
-            final long forceSellOrderId = LoanService.generateIsolatedForceSellOrderId(idHolder);
+            final long forceSellOrderId = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, idHolder.uid, idHolder.loanId, 0L);
 
             final AtomicReference<OrderCommand> resultRef = new AtomicReference<>();
             c.submitCommandSync(

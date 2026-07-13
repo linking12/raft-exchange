@@ -478,102 +478,59 @@ class LoanServiceTest {
     }
 
     // ================================================================
-    // OrderId encoding: Isolated
-    // 布局: | 'L' 0x4C | 'S' 0x53 | payload 24 | uidHash 20 | ts 4 |
+    // OrderId encoding（对齐期货「身份 + 秒级 ts」，无状态）
+    // 布局: | 'L' 0x4C | subtype | uidHash 20 | loanIdHash 16 | ts秒 12 |
     // ================================================================
 
     @Test
-    void isolatedOrderId_topByteIsL() {
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(42L, 999L, 2, 3, 500, 0L);
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
+    void orderId_topByteIsL() {
+        long orderId = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 1L, 100L, 0L);
         assertEquals(LoanService.ORDERID_NAMESPACE_TAG, (orderId >>> 56) & 0xFFL);
     }
 
     @Test
-    void isolatedOrderId_secondByteIsS() {
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(42L, 999L, 2, 3, 500, 0L);
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
+    void orderId_isolatedSubtypeIsS() {
+        long orderId = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 1L, 1L, 0L);
         assertEquals(LoanService.ORDERID_SUBTYPE_ISOLATED, (orderId >>> 48) & 0xFFL, "Isolated subtype 'S'");
     }
 
     @Test
-    void isolatedOrderId_encodesLoanIdInPayload() {
-        long loanId = 0xABCDEFL;
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, loanId, 2, 3, 500, 0L);
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
-        long payload = (orderId >>> 24) & 0xFFFFFFL;
-        assertEquals(loanId, payload);
-    }
-
-    @Test
-    void isolatedOrderId_encodesUidHash() {
-        long uid = 42L;
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(uid, 999L, 2, 3, 500, 0L);
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
-        long expected = (uid * 31 + 17) & 0xFFFFFL;
-        long actual = (orderId >>> 4) & 0xFFFFFL;
-        assertEquals(expected, actual);
-    }
-
-    @Test
-    void isolatedOrderId_differentLoansProduceDifferentIds() {
-        IsolatedLoanRecord loanA = new IsolatedLoanRecord(1L, 100L, 2, 3, 500, 0L);
-        IsolatedLoanRecord loanB = new IsolatedLoanRecord(1L, 101L, 2, 3, 500, 0L);
-        assertNotEquals(LoanService.generateIsolatedForceSellOrderId(loanA),
-            LoanService.generateIsolatedForceSellOrderId(loanB));
-    }
-
-    // ================================================================
-    // OrderId encoding: Cross
-    // ================================================================
-
-    @Test
-    void crossOrderId_topByteIsL() {
-        long orderId = LoanService.generateCrossForceSellOrderId(42L, 3);
-        assertEquals(LoanService.ORDERID_NAMESPACE_TAG, (orderId >>> 56) & 0xFFL);
-    }
-
-    @Test
-    void crossOrderId_secondByteIsC() {
-        long orderId = LoanService.generateCrossForceSellOrderId(42L, 3);
+    void orderId_crossSubtypeIsC() {
+        long orderId = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, 1L, 1L, 0L);
         assertEquals(LoanService.ORDERID_SUBTYPE_CROSS, (orderId >>> 48) & 0xFFL, "Cross subtype 'C'");
     }
 
     @Test
-    void crossOrderId_encodesSellingCurrencyInPayload() {
-        int sellingCurrency = 0x123456;
-        long orderId = LoanService.generateCrossForceSellOrderId(42L, sellingCurrency);
-        long payload = (orderId >>> 24) & 0xFFFFFFL;
-        assertEquals(sellingCurrency, payload);
+    void orderId_encodesIdentityAndTs() {
+        // uid=5 → uidHash=(5*31+17)=172；loanId=100 → loanIdHash=(100*31+17)=3117；nowMs=7000 → ts秒=7
+        long orderId = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 5L, 100L, 7_000L);
+        assertEquals(172L, (orderId >>> 28) & LoanService.ORDERID_UID_MASK, "uidHash 在 47..28");
+        assertEquals(3117L, (orderId >>> 12) & LoanService.ORDERID_LOANID_MASK, "loanIdHash 在 27..12");
+        assertEquals(7L, orderId & LoanService.ORDERID_TS_MASK, "ts秒 在 11..0");
     }
 
     @Test
-    void crossOrderId_differentSellingCurrencyProducesDifferentIds() {
-        long orderIdA = LoanService.generateCrossForceSellOrderId(42L, 3);
-        long orderIdB = LoanService.generateCrossForceSellOrderId(42L, 4);
-        assertNotEquals(orderIdA, orderIdB);
+    void orderId_differentIdentityOrTsProduceDifferentIds() {
+        long base = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 5L, 100L, 0L);
+        assertNotEquals(base, LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 5L, 101L, 0L), "loanId 不同");
+        assertNotEquals(base, LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 6L, 100L, 0L), "uid 不同");
+        assertNotEquals(base, LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 5L, 100L, 60_000L), "ts 不同");
     }
 
     // ================================================================
-    // OrderId classification & 非冲突性
+    // OrderId 分类 & 非冲突性（顶字节 'L' 独占，避开期货 'I' / ADL 'A'）
     // ================================================================
 
     @Test
-    void isLoanForceSellOrderId_trueForIsolated() {
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 500, 0L);
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
-        assertTrue(LoanService.isLoanForceSellOrderId(orderId));
-    }
-
-    @Test
-    void isLoanForceSellOrderId_trueForCross() {
-        long orderId = LoanService.generateCrossForceSellOrderId(42L, 3);
-        assertTrue(LoanService.isLoanForceSellOrderId(orderId));
+    void isLoanForceSellOrderId_trueForForceSell() {
+        assertTrue(LoanService.isLoanForceSellOrderId(
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 1L, 1L, 0L)));
+        assertTrue(LoanService.isLoanForceSellOrderId(
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, 1L, 1L, 0L)));
     }
 
     @Test
     void isLoanForceSellOrderId_falseForRandomOrderIds() {
-        // 顶字节非 'L' 都应该 false
         assertFalse(LoanService.isLoanForceSellOrderId(0L));
         assertFalse(LoanService.isLoanForceSellOrderId(0x1234567890ABCDEFL));
         assertFalse(LoanService.isLoanForceSellOrderId(Long.MAX_VALUE));
@@ -581,7 +538,6 @@ class LoanServiceTest {
 
     @Test
     void isLoanForceSellOrderId_falseForIFOrderId() {
-        // LiquidationService.generateIFOrderId 顶字节是 'I' 0x49，不应该被认为是 loan force-sell
         long ifOrderId = LiquidationService.generateIFOrderId(0x00_1234_5678_9ABCL);
         assertFalse(LoanService.isLoanForceSellOrderId(ifOrderId), "IF orderId 顶字节是 'I' 不是 'L'");
     }
@@ -594,15 +550,14 @@ class LoanServiceTest {
 
     @Test
     void loanForceSellSubtype_returnsSForIsolated() {
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 500, 0L);
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
-        assertEquals((byte) 'S', LoanService.loanForceSellSubtype(orderId));
+        assertEquals((byte) 'S', LoanService.loanForceSellSubtype(
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, 1L, 1L, 0L)));
     }
 
     @Test
     void loanForceSellSubtype_returnsCForCross() {
-        long orderId = LoanService.generateCrossForceSellOrderId(42L, 3);
-        assertEquals((byte) 'C', LoanService.loanForceSellSubtype(orderId));
+        assertEquals((byte) 'C', LoanService.loanForceSellSubtype(
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, 1L, 1L, 0L)));
     }
 
     // ================================================================

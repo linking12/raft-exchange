@@ -638,7 +638,7 @@ class LoanCommandHandlersTest {
         up.isolatedLoans.put(111L, loan);
         loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
 
-        long orderId = LoanService.generateIsolatedForceSellOrderId(loan);
+        long orderId = LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, 0L);
         OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE, orderId, UID, 111L, SYMBOL, 3L, 49500L);
 
         CommandResultCode rc = handlers.handleLoanForceLiquidate(cmd);
@@ -659,7 +659,7 @@ class LoanCommandHandlersTest {
         loanService.getLoanPoolBorrowed().put(USDT, 100_000L);
 
         OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
-            LoanService.generateIsolatedForceSellOrderId(loan), UID, 111L, SYMBOL, 3L, 49_500L);
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, 0L), UID, 111L, SYMBOL, 3L, 49_500L);
         assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(cmd),
             "suspended 用户的 loan 仍须能被系统强平");
         assertEquals(2L, loan.collateralAmount, "pre-move 照常执行");
@@ -692,7 +692,7 @@ class LoanCommandHandlersTest {
 
         // 第一条（X）：卖光 3 张 → pre-move 成功，抵押 3→0 全挪进 exchangeLocked
         OrderCommand x = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
-            LoanService.generateIsolatedForceSellOrderId(loan), UID, 111L, SYMBOL, 3L, 49500L);
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, 0L), UID, 111L, SYMBOL, 3L, 49500L);
         assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(x));
         assertEquals(0L, loan.collateralAmount);
         assertEquals(3L, up.exchangeLocked.get(BTC));
@@ -965,7 +965,7 @@ class LoanCommandHandlersTest {
         long sellSizeLots = CoreArithmeticUtils.currencyToSymbolScale(loan.collateralAmount, spec, baseSpec);
         assertEquals(3L, sellSizeLots, "300 currency → 3 lot");
         OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
-            LoanService.generateIsolatedForceSellOrderId(loan), UID, 111L, SYMBOL_NI, sellSizeLots, 49_500L);
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, 0L), UID, 111L, SYMBOL_NI, sellSizeLots, 49_500L);
 
         // R1 pre-move：3 lot → symbolToCurrencyScale(3)=300 currency 挪进 exchangeLocked
         assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(cmd));
@@ -993,7 +993,7 @@ class LoanCommandHandlersTest {
 
         CoreSymbolSpecification spec = specProvider.getSymbolSpecification(SYMBOL);
         OrderCommand cmd = build(OrderCommandType.LOAN_FORCE_LIQUIDATE,
-            LoanService.generateIsolatedForceSellOrderId(loan), UID, 222L, SYMBOL, 3L, 49_500L);
+            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, 0L), UID, 222L, SYMBOL, 3L, 49_500L);
         assertEquals(CommandResultCode.VALID_FOR_MATCHING_ENGINE, handlers.handleLoanForceLiquidate(cmd));
         assertEquals(3L, up.exchangeLocked.get(BTC), "identity: pre-move 挪 3");
         cmd.matcherEvent = rejectEvent(3L);

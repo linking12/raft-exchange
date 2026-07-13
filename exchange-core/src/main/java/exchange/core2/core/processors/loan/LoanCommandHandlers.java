@@ -29,7 +29,6 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
-import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
 
@@ -197,6 +196,7 @@ public final class LoanCommandHandlers {
         final IsolatedLoanRecord loan =
             engine.getObjectsPool().get(ObjectsPool.ISOLATED_LOAN_RECORD, IsolatedLoanRecord::new);
         loan.initialize(cmd.uid, loanId, collateralCurrency, loanCurrency, spec.loanRateBps, cmd.timestamp);
+        loan.symbolId = spec.symbolId;
         loan.collateralAmount = collateralAmount;
         loan.outstandingPrincipal = principal;
         up.isolatedLoans.put(loanId, loan);
@@ -318,8 +318,8 @@ public final class LoanCommandHandlers {
         if (amount > loan.collateralAmount)
             return CommandResultCode.LOAN_COLLATERAL_EXCEEDS_LOAN;
 
-        final CoreSymbolSpecification spec = LoanService.findSpotSpec(loan.collateralCurrency, loan.loanCurrency,
-            engine.getSymbolSpecificationProvider());
+        final CoreSymbolSpecification spec =
+            engine.getSymbolSpecificationProvider().getSymbolSpecification(loan.symbolId);
         if (spec == null)
             return CommandResultCode.LOAN_NOT_ENABLED;
         final long markPrice = markPriceOrZero(spec.symbolId);
@@ -607,6 +607,7 @@ public final class LoanCommandHandlers {
         // 借后账户级 LTV ≤ loanInitialLtvBps 才允许——先落 loan 记账后调 calculateCrossAccountLtvBps，超线再 revert
         final CrossLoanRecord loan = engine.getObjectsPool().get(ObjectsPool.CROSS_LOAN_RECORD, CrossLoanRecord::new);
         loan.initialize(cmd.uid, loanId, loanCurrency, spec.loanRateBps, cmd.timestamp);
+        loan.symbolId = spec.symbolId;
         loan.outstandingPrincipal = principal;
         up.crossLoans.put(loanId, loan);
         final long newLtv = loanService.calculateCrossAccountLtvBps(up, cmd.timestamp,
@@ -915,8 +916,8 @@ public final class LoanCommandHandlers {
      * 读操作后 loan 快照（outstandingPrincipal + pending 利息）÷ 抵押估值。
      */
     private long isolatedLtvBps(IsolatedLoanRecord loan, long now) {
-        final CoreSymbolSpecification spec = LoanService.findSpotSpec(loan.collateralCurrency, loan.loanCurrency,
-            engine.getSymbolSpecificationProvider());
+        final CoreSymbolSpecification spec =
+            engine.getSymbolSpecificationProvider().getSymbolSpecification(loan.symbolId);
         if (spec == null)
             return 0L;
         final long markPrice = markPriceOrZero(spec.symbolId);

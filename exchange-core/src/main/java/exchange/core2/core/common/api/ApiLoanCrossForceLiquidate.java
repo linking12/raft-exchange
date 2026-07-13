@@ -42,7 +42,7 @@ public final class ApiLoanCrossForceLiquidate extends ApiCommand {
     public final long price;
     /** 要卖的 collateral 量 */
     public final long size;
-    /** 系统生成 = LoanService.generateCrossForceSellOrderId(uid, sellingCurrency) */
+    /** 系统生成 = LoanService.forceSellOrderId(ORDERID_SUBTYPE_CROSS, shardId, seq) */
     public final long orderId;
     public final OrderAction action;
     public final OrderType orderType;

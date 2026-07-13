@@ -40,7 +40,7 @@ public final class ApiLoanForceLiquidate extends ApiCommand {
     public final long price;
     /** 要卖的 collateral 量 */
     public final long size;
-    /** 系统生成 = LoanService.generateIsolatedForceSellOrderId(loan) */
+    /** 系统生成 = LoanService.forceSellOrderId(ORDERID_SUBTYPE_ISOLATED, shardId, seq) */
     public final long orderId;
     public final OrderAction action;
     public final OrderType orderType;

@@ -96,7 +96,7 @@ class ITLoanConservation {
         IsolatedLoanRecord id = new IsolatedLoanRecord();
         id.uid = BORROWER;
         id.loanId = loanId;
-        return LoanService.generateIsolatedForceSellOrderId(id);
+        return LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, id.uid, id.loanId, 0L);
     }
 
     private void assertGlobalConserved(ExchangeTestContainer c, String where) {
@@ -227,7 +227,7 @@ class ITLoanConservation {
     private void crossForceLiquidate(ExchangeTestContainer c, long loanId, long lots, long price) {
         c.submitCommandSync(ApiLoanCrossForceLiquidate.builder()
             .uid(BORROWER).symbol(SYMBOL).targetLoanId(loanId).price(price).size(lots)
-            .orderId(LoanService.generateCrossForceSellOrderId(BORROWER, WBTC))
+            .orderId(LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, BORROWER, loanId, 0L))
             .action(OrderAction.ASK).orderType(OrderType.IOC).build(), CommandResultCode.SUCCESS);
     }
 

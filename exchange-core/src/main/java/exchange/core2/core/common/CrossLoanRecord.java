@@ -31,18 +31,25 @@ import java.util.Objects;
 @NoArgsConstructor
 public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash, LoanRecord {
 
+    // --- 身份（对象池复用，非 final，由 initialize 重置）---
     // 所属用户 uid（由 UserProfile 上下文注入，不序列化，仅进 stateHash）。
     public long uid;
-
     // 贷款唯一 id（客户端提供，per-user 唯一，Cross 命名空间独立于 Isolated）。创建时锁死。
     public long loanId;
-    // 借出币种（抵押是账户级的，见 UserProfile.crossLoanCollateral，本 record 不含抵押字段）。
+
+    // --- 市场（创建时锁定）。抵押是账户级的（见 UserProfile.crossLoanCollateral），本 record 不含抵押字段 ---
+    // 借款时匹配的现货 pair symbolId（findLoanSpecByQuoteCurrency 得到）。scanner 直接 getSymbolSpecification(symbolId) 拿 term/spec，省 O(N) 反查。
+    public int symbolId;
+    // 借出币种（= 该 pair 的 quoteCurrency）。
     public int loanCurrency;
+
+    // --- 借款条款（创建时锁定）---
     // 借入时锁定的年化利率（bps），存续期不变。
     public int rateBps;
     // 开仓时间戳（ms），期限校验用。
     public long openedAtTs;
 
+    // --- 金额 / 运行态（可变）---
     // 剩余未偿本金（loanCurrency，currencyScale）。REPAY / force-sell 递减，账户级 underwater 归零走 badDebt。
     public long outstandingPrincipal;
     // 已计提但未支付的利息（loanCurrency，currencyScale）。惰性 accrue 写入，结算时进 interestRevenue。
@@ -59,6 +66,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     public CrossLoanRecord(long uid, BytesIn bytes) {
         this.uid = uid;
         this.loanId = bytes.readLong();
+        this.symbolId = bytes.readInt();
         this.loanCurrency = bytes.readInt();
         this.rateBps = bytes.readInt();
         this.openedAtTs = bytes.readLong();
@@ -72,6 +80,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     public void initialize(long uid, long loanId, int loanCurrency, int rateBps, long openedAtTs) {
         this.uid = uid;
         this.loanId = loanId;
+        this.symbolId = 0; // 由 handleLoanCrossBorrow 在 initialize 后写入 spec.symbolId
         this.loanCurrency = loanCurrency;
         this.rateBps = rateBps;
         this.openedAtTs = openedAtTs;
@@ -107,6 +116,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeLong(loanId);
+        bytes.writeInt(symbolId);
         bytes.writeInt(loanCurrency);
         bytes.writeInt(rateBps);
         bytes.writeLong(openedAtTs);
@@ -118,13 +128,13 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
 
     @Override
     public int stateHash() {
-        return Objects.hash(uid, loanId, loanCurrency, rateBps, openedAtTs,
+        return Objects.hash(uid, loanId, symbolId, loanCurrency, rateBps, openedAtTs,
             outstandingPrincipal, accumulatedInterest, lastAccrueTs, stuckLiqAttempts);
     }
 
     @Override
     public String toString() {
-        return "CrossLoan{" + "u" + uid + " id" + loanId + " loanCur" + loanCurrency + " rate" + rateBps
+        return "CrossLoan{" + "u" + uid + " id" + loanId + " sym" + symbolId + " loanCur" + loanCurrency + " rate" + rateBps
             + " openedAt" + openedAtTs + " prin=" + outstandingPrincipal + " int=" + accumulatedInterest
             + " lastAccrue=" + lastAccrueTs + '}';
     }

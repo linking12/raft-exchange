@@ -75,7 +75,7 @@ class ITLoanFailoverSnapshot {
         id.loanId = 1L;
         c.submitCommandSync(ApiLoanForceLiquidate.builder()
             .uid(BORROWER).symbol(SYMBOL).loanId(1L).price(MARK).size(3L) // book 空 → IOC 全拒
-            .orderId(LoanService.generateIsolatedForceSellOrderId(id))
+            .orderId(LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, id.uid, id.loanId, 0L))
             .action(OrderAction.ASK).orderType(OrderType.IOC).build(), CommandResultCode.SUCCESS);
 
         // Cross：账户级抵押 3 WBTC 借 60k，保持开仓（丰富 crossLoans / crossLoanCollateral / 池子桶）

@@ -802,7 +802,7 @@ class ITConservationFuzz {
                 // 强平必须 SUCCESS 并真的成交 —— 硬断言，避免"强平坏了也悄悄过"。
                 container.submitCommandSync(ApiLoanForceLiquidate.builder()
                         .uid(uid).symbol(symbolId).loanId(uid).price(sellPrice).size(lots)
-                        .orderId(LoanService.generateIsolatedForceSellOrderId(idRec))
+                        .orderId(LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, idRec.uid, idRec.loanId, 0L))
                         .action(OrderAction.ASK).orderType(OrderType.IOC).build(),
                         CommandResultCode.SUCCESS);
                 hasLoan[b] = false; // 吃满 → 全部卖出 → loan 关闭（overpay 或 underwater 均关）

@@ -220,6 +220,7 @@ class LoanLiquidationEngineTest {
         // openedAtTs 用当前时刻 + rateBps=0：既不触 loanMaxTermDays 期限强平，也无 pending interest 抬 realDebt
         long nowMs = System.currentTimeMillis();
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, nowMs);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 2L;
         loan.outstandingPrincipal = 30_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -232,6 +233,7 @@ class LoanLiquidationEngineTest {
     void check_isolatedLtvOverLiquidation_publishesForceSell() {
         // 1 BTC 抵押 45k USDT → LTV = 90% ≥ 80% liquidation
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -245,6 +247,7 @@ class LoanLiquidationEngineTest {
     void check_isolatedLtvInMarginCallBand_emitsMarginCallEvent() {
         // 1 BTC 抵押 37.5k USDT → LTV=75%，处于 marginCall(70%)~liquidation(80%) 之间：只发预警、不强平
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 37_500L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -259,6 +262,7 @@ class LoanLiquidationEngineTest {
     void check_isolated_identityScale_publishesSizeEqualToCollateralLots() {
         // identity scale（BTC digit=0, baseScaleK=1）：1 lot = 1 currency unit，size 应 == collateral == 1
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L; // LTV 90% ≥ 80% liquidation
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -292,6 +296,7 @@ class LoanLiquidationEngineTest {
 
         // 抵押 300（= 3 WBTC）, 债务 140k → collateralValue = 3×50000 = 150000, LTV = 93% ≥ 80% liquidation
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL_NI; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 300L;
         loan.outstandingPrincipal = 140_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -313,6 +318,7 @@ class LoanLiquidationEngineTest {
     void check_isolatedInFlightLoan_skipsWithoutTouchingPriceCache() {
         // pre-populate in-flight → scanner 应早退，不查 markPrice
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -332,6 +338,7 @@ class LoanLiquidationEngineTest {
     void check_isolatedEmptyLoan_skipped() {
         // isEmpty loan（全零壳）应跳过，不查 spec、不查 markPrice、不触发
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         // collateralAmount=0, principal=0, interest=0 → isEmpty
         up.isolatedLoans.put(LOAN_ID, loan);
 
@@ -343,6 +350,7 @@ class LoanLiquidationEngineTest {
     void check_isolatedMarkPriceMissing_skippedNoPublish() {
         priceCache.clear();
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -362,6 +370,7 @@ class LoanLiquidationEngineTest {
     void check_crossNumeraireUnconfigured_returnsZeroLtv_noPublish() {
         // numeraireCurrency=0 sentinel → calculateCrossAccountLtvBps 保守返 0 → 不触发
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.outstandingPrincipal = 50_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
@@ -374,6 +383,7 @@ class LoanLiquidationEngineTest {
         // numeraire 未配（LTV path 恒 0 不触发）；但 loan 已超 90d 期限 → 期限强平仍触发，且针对到期那笔
         long expiredOpenedMs = OPENED_AT_MS - 91L * 86_400_000L; // 91 天前 > 90d term
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, expiredOpenedMs);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.outstandingPrincipal = 30_000L;
         up.crossLoans.put(LOAN_ID, loan);
         up.crossLoanCollateral.put(BTC, 1L); // 1 BTC 可卖
@@ -391,9 +401,11 @@ class LoanLiquidationEngineTest {
         // 两笔：555 未到期（高利率，tiebreak 会优先选它）；888 已到期。期限强平应针对 888，不是 tiebreak 的 555
         up.crossLoanCollateral.put(BTC, 1L);
         CrossLoanRecord fresh = new CrossLoanRecord(UID, 555L, USDT, 900, OPENED_AT_MS);
+        fresh.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         fresh.outstandingPrincipal = 30_000L;
         up.crossLoans.put(555L, fresh);
         CrossLoanRecord expired = new CrossLoanRecord(UID, 888L, USDT, 100, OPENED_AT_MS - 91L * 86_400_000L);
+        expired.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         expired.outstandingPrincipal = 10_000L;
         up.crossLoans.put(888L, expired);
 
@@ -408,6 +420,7 @@ class LoanLiquidationEngineTest {
     @Test
     void check_crossInFlight_skipsLtvCompute() {
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.outstandingPrincipal = 50_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
@@ -443,6 +456,7 @@ class LoanLiquidationEngineTest {
         // 抵押 100（= 1 WBTC = 1 张可卖），债务 150000 → 账户 LTV 远超强平线，触发 publishCrossForceSell
         up.crossLoanCollateral.put(WBTC, 100L);
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL_NI; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.outstandingPrincipal = 150_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
@@ -479,6 +493,7 @@ class LoanLiquidationEngineTest {
         priceCache.put(SYMBOL_NI, price);
 
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, WBTC, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL_NI; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 300L;          // 3 WBTC
         loan.outstandingPrincipal = 140_000L;  // LTV 93% ≥ 80% → underwater
         up.isolatedLoans.put(LOAN_ID, loan);
@@ -516,6 +531,7 @@ class LoanLiquidationEngineTest {
     private IsolatedLoanRecord underwaterLoan(long loanId, int stuckAttempts) {
         // 1 BTC 抵押 45k → LTV 90% ≥ 80% liquidation
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, loanId, BTC, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
         loan.collateralAmount = 1L;
         loan.outstandingPrincipal = 45_000L;
         loan.stuckLiqAttempts = stuckAttempts;
