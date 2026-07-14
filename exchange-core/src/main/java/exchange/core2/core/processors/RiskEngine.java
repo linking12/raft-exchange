@@ -1165,7 +1165,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             });
 
         } else if (message instanceof BatchAddLoanCommand) {
-            // 统一 loan 配置更新：global / symbol 两部分作用域独立，各自校验、各自 apply，一部分非法不影响另一部分。
+            // 统一 loan 配置更新：global / symbol / rateCurve 三部分作用域独立，各自校验、各自 apply，一部分非法不影响另一部分。
             final BatchAddLoanCommand cmd = (BatchAddLoanCommand)message;
             // --- 全局部分：partial-update（≤0=不改）+ apply-all-or-nothing，任一违规整条拒绝、不留半更新 ---
             if (cmd.hasGlobal()) {
