@@ -28,19 +28,21 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.loan.rate.FixedRateModel;
+import exchange.core2.core.processors.loan.rate.FloatingRateModel;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.Getter;
-import lombok.Setter;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 现货借贷状态 + 纯函数工具 —— per-shard 实例。承载进 raft snapshot 的账本（poolAvailable / poolBorrowed / badDebt / interestRevenue /
- * loanLiquidationFees 五桶 + 三阈值 + numeraire + 池子幂等表，Isolated / Cross 共用、跨 shard 独立）， 以及计息 / 抵债 / LTV / scale 换算 /
- * force-sell orderId 编码等纯函数。不持 RiskEngine ref，依赖经参数传入。 命令 apply 在 {@link LoanCommandHandlers}，scanner 在
- * {@link LoanLiquidationEngine}。
+ * 现货借贷状态 + 纯函数工具 —— per-shard 实例。承载进 raft snapshot 的账本：poolAvailable / poolBorrowed / badDebt /
+ * interestRevenue / loanLiquidationFees 五桶 + 运行时配置（cross LTV 阈值 / 利用率上限 / 强平费率 / numeraire）+ 池子幂等表
+ * + 利率子系统（{@link FloatingRateModel} / {@link FixedRateModel}），Isolated / Cross 共用、跨 shard 独立。
+ * 另有抵债 / LTV / scale 换算 / force-sell orderId 编码等纯函数；计息按 {@code loan.isFixedRate()} 分派到对应利率 model。
+ * 不持 RiskEngine ref，依赖经参数传入。命令 apply 在 {@link LoanCommandHandlers}，scanner 在 {@link LoanLiquidationEngine}。
  */
 public class LoanService implements WriteBytesMarshallable, StateHash {
 
@@ -48,24 +50,17 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     // 常量
     // ================================================================
 
-    // --- 全局配置默认值（可经 UPDATE_LOAN_GLOBAL_CONFIG 覆盖）---
-    public static final int DEFAULT_CROSS_LIQUIDATION_LTV_BPS = 8500; // 85%
-    public static final int DEFAULT_CROSS_MARGIN_CALL_LTV_BPS = 8000; // 80%
-    public static final int DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS = 9000; // 90%
-    public static final int DEFAULT_LOAN_LIQUIDATION_FEE_BPS = 200; // 2%
-    public static final int NUMERAIRE_UNSET = 0; // numeraire 未配置的 sentinel
-
     // --- 计息 / 精度 ---
     public static final long YEAR_MS = 365L * 24L * 3600L * 1_000L; // 1 年（ms），跨节点唯一确定性形式
     public static final long BPS_SCALE = 10_000L; // bps 精度基准（10000 = 100%）
 
     // --- force-sell orderId 编码常量（布局见 forceSellOrderId）---
-    public static final long ORDERID_NAMESPACE_TAG = 0x4CL;   // 'L'：loan 强平 orderId 命名空间，独占以避开期货 'I' / ADL 'A'
+    public static final long ORDERID_NAMESPACE_TAG = 0x4CL; // 'L'：loan 强平 orderId 命名空间，独占以避开期货 'I' / ADL 'A'
     public static final long ORDERID_SUBTYPE_ISOLATED = 0x53L; // 'S'：逐仓
-    public static final long ORDERID_SUBTYPE_CROSS = 0x43L;    // 'C'：全仓
-    public static final long ORDERID_UID_MASK = 0xF_FFFFL;    // 20 bit：uid 扰动 hash
-    public static final long ORDERID_LOANID_MASK = 0xFFFFL;   // 16 bit：loanId 扰动 hash
-    public static final long ORDERID_TS_MASK = 0xFFFL;        // 12 bit：秒（4096s≈68min 后回绕）
+    public static final long ORDERID_SUBTYPE_CROSS = 0x43L; // 'C'：全仓
+    public static final long ORDERID_UID_MASK = 0xF_FFFFL; // 20 bit：uid 扰动 hash
+    public static final long ORDERID_LOANID_MASK = 0xFFFFL; // 16 bit：loanId 扰动 hash
+    public static final long ORDERID_TS_MASK = 0xFFFL; // 12 bit：秒（4096s≈68min 后回绕）
 
     // ================================================================
     // State（进 raft snapshot，per-shard 独立）
@@ -88,32 +83,20 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     @Getter
     private final IntLongHashMap loanLiquidationFees;
 
-    // --- 运行时配置（UPDATE_LOAN_GLOBAL_CONFIG 可调，默认值见上方常量）---
-    // Cross 账户级强平线（bps）
+    // --- 全局运行时配置（UPDATE_LOAN_GLOBAL_CONFIG 可调）：Cross LTV 阈值 / 池利用率上限 / 强平费率 / numeraire ---
     @Getter
-    @Setter
-    private int crossLiquidationLtvBps;
-    // Cross 账户级预警线（bps）
-    @Getter
-    @Setter
-    private int crossMarginCallLtvBps;
-    // 借贷池利用率上限（bps）
-    @Getter
-    @Setter
-    private int loanPoolUtilizationCapBps;
-    // 强平专项费率（bps）
-    @Getter
-    @Setter
-    private int loanLiquidationFeeBps;
-    // Cross 估值基准币；NUMERAIRE_UNSET(0)=未配 → Cross BORROW/WITHDRAW fail-close、scanner 跳过
-    @Getter
-    @Setter
-    private int numeraireCurrency;
+    private final LoanGlobalConfig globalConfig;
 
     // --- 幂等 ---
     // POOL_* 命令去重（per-shard，独立于 UserProfile.processedExternalIds）
     @Getter
     private final BoundedLongDedupSet poolProcessedExternalIds;
+
+    // --- 动态利率子系统：Floating 是动态利率引擎（曲线+累加器），Fixed 开仓锁它当前利率 ---
+    @Getter
+    private final FloatingRateModel floatingRate; // Isolated FLOATING + 全部 Cross：曲线 + reprice + 累加器计息
+    @Getter
+    private final FixedRateModel fixedRate; // Isolated LOCKED：锁 floating 当前利率 + lockedAdjust，线性计息
 
     // ================================================================
     // 构造 / reset / 序列化 / stateHash
@@ -125,12 +108,10 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         this.badDebt = new IntLongHashMap();
         this.interestRevenue = new IntLongHashMap();
         this.loanLiquidationFees = new IntLongHashMap();
-        this.crossLiquidationLtvBps = DEFAULT_CROSS_LIQUIDATION_LTV_BPS;
-        this.crossMarginCallLtvBps = DEFAULT_CROSS_MARGIN_CALL_LTV_BPS;
-        this.loanPoolUtilizationCapBps = DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS;
-        this.loanLiquidationFeeBps = DEFAULT_LOAN_LIQUIDATION_FEE_BPS;
-        this.numeraireCurrency = NUMERAIRE_UNSET;
+        this.globalConfig = new LoanGlobalConfig();
         this.poolProcessedExternalIds = new BoundedLongDedupSet();
+        this.floatingRate = new FloatingRateModel();
+        this.fixedRate = new FixedRateModel(floatingRate);
     }
 
     public LoanService(BytesIn bytes) {
@@ -139,12 +120,10 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         this.badDebt = SerializationUtils.readIntLongHashMap(bytes);
         this.interestRevenue = SerializationUtils.readIntLongHashMap(bytes);
         this.loanLiquidationFees = SerializationUtils.readIntLongHashMap(bytes);
-        this.crossLiquidationLtvBps = bytes.readInt();
-        this.crossMarginCallLtvBps = bytes.readInt();
-        this.loanPoolUtilizationCapBps = bytes.readInt();
-        this.loanLiquidationFeeBps = bytes.readInt();
-        this.numeraireCurrency = bytes.readInt();
+        this.globalConfig = new LoanGlobalConfig(bytes);
         this.poolProcessedExternalIds = new BoundedLongDedupSet(bytes);
+        this.floatingRate = new FloatingRateModel(bytes);
+        this.fixedRate = new FixedRateModel(floatingRate, bytes);
     }
 
     public void reset() {
@@ -153,15 +132,13 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         badDebt.clear();
         interestRevenue.clear();
         loanLiquidationFees.clear();
-        crossLiquidationLtvBps = DEFAULT_CROSS_LIQUIDATION_LTV_BPS;
-        crossMarginCallLtvBps = DEFAULT_CROSS_MARGIN_CALL_LTV_BPS;
-        loanPoolUtilizationCapBps = DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS;
-        loanLiquidationFeeBps = DEFAULT_LOAN_LIQUIDATION_FEE_BPS;
-        numeraireCurrency = NUMERAIRE_UNSET;
+        globalConfig.reset();
+        floatingRate.reset();
+        fixedRate.reset();
     }
 
     public boolean isNumeraireConfigured() {
-        return numeraireCurrency != NUMERAIRE_UNSET;
+        return globalConfig.isNumeraireConfigured();
     }
 
     @Override
@@ -171,12 +148,10 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         SerializationUtils.marshallIntLongHashMap(badDebt, bytes);
         SerializationUtils.marshallIntLongHashMap(interestRevenue, bytes);
         SerializationUtils.marshallIntLongHashMap(loanLiquidationFees, bytes);
-        bytes.writeInt(crossLiquidationLtvBps);
-        bytes.writeInt(crossMarginCallLtvBps);
-        bytes.writeInt(loanPoolUtilizationCapBps);
-        bytes.writeInt(loanLiquidationFeeBps);
-        bytes.writeInt(numeraireCurrency);
+        globalConfig.writeMarshallable(bytes);
         poolProcessedExternalIds.writeMarshallable(bytes);
+        floatingRate.writeMarshallable(bytes);
+        fixedRate.writeMarshallable(bytes);
     }
 
     @Override
@@ -184,16 +159,15 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         // IntLongHashMap.hashCode() 本身 order/capacity independent，跟 UserProfile.stateHash 的 accounts/exchangeLocked 同款
         // pattern。
         return Objects.hash(loanPoolAvailable.hashCode(), loanPoolBorrowed.hashCode(), badDebt.hashCode(),
-            interestRevenue.hashCode(), loanLiquidationFees.hashCode(), crossLiquidationLtvBps, crossMarginCallLtvBps,
-            loanPoolUtilizationCapBps, loanLiquidationFeeBps, numeraireCurrency, poolProcessedExternalIds.stateHash());
+            interestRevenue.hashCode(), loanLiquidationFees.hashCode(), globalConfig.stateHash(),
+            poolProcessedExternalIds.stateHash(), floatingRate.stateHash(), fixedRate.stateHash());
     }
 
     @Override
     public String toString() {
         return "LoanService{" + "poolAvail=" + loanPoolAvailable + ", poolBorrowed=" + loanPoolBorrowed + ", badDebt="
-            + badDebt + ", intRev=" + interestRevenue + ", liqFees=" + loanLiquidationFees + ", crossLiqLtv="
-            + crossLiquidationLtvBps + ", crossMcLtv=" + crossMarginCallLtvBps + ", poolCap="
-            + loanPoolUtilizationCapBps + ", poolDedup=" + poolProcessedExternalIds.size() + '}';
+            + badDebt + ", intRev=" + interestRevenue + ", liqFees=" + loanLiquidationFees + ", " + globalConfig
+            + ", poolDedup=" + poolProcessedExternalIds.size() + '}';
     }
 
     // ================================================================
@@ -202,22 +176,14 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     // now < lastAccrueTs（时钟倒退）视为 0 elapsed。
     // ================================================================
 
-    /** 写路径：把利息补计到 now，累加进 accumulatedInterest 并推进 lastAccrueTs；返回本次新增利息（≥ 0）。 */
+    /** 写路径：补计利息到 now，累加进 accumulatedInterest 并推进游标；返回本次新增利息（≥ 0）。 */
     public long accrueTo(LoanRecord loan, long now) {
-        long delta = accrueDelta(loan.getOutstandingPrincipal(), loan.getRateBps(), loan.getLastAccrueTs(), now);
-        if (delta > 0) {
-            loan.setAccumulatedInterest(Math.addExact(loan.getAccumulatedInterest(), delta));
-        }
-        if (now > loan.getLastAccrueTs()) {
-            loan.setLastAccrueTs(now);
-        }
-        return delta;
+        return loan.isFixedRate() ? fixedRate.accrue(loan, now) : floatingRate.accrue(loan, now);
     }
 
     /** 读路径：accumulatedInterest + 到 now 的 pending 利息，不改 loan。 */
     public long calculateDisplayInterest(LoanRecord loan, long now) {
-        long pending = accrueDelta(loan.getOutstandingPrincipal(), loan.getRateBps(), loan.getLastAccrueTs(), now);
-        return Math.addExact(loan.getAccumulatedInterest(), pending);
+        return loan.isFixedRate() ? fixedRate.displayInterest(loan, now) : floatingRate.displayInterest(loan, now);
     }
 
     /**
@@ -244,25 +210,12 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
      * 事件）。
      */
     public long settleLiquidationProceeds(LoanRecord loan, IntLongHashMap account, long receivedQuote, long now) {
-        long liqFee =
-            Math.min(receivedQuote, CoreArithmeticUtils.ceilMulDiv(receivedQuote, loanLiquidationFeeBps, BPS_SCALE));
+        long liqFee = Math.min(receivedQuote,
+            CoreArithmeticUtils.ceilMulDiv(receivedQuote, globalConfig.loanLiquidationFeeBps, BPS_SCALE));
         account.addToValue(loan.getLoanCurrency(), -liqFee);
         loanLiquidationFees.addToValue(loan.getLoanCurrency(), liqFee);
         accrueTo(loan, now);
         return applyDebtPayment(loan, account, receivedQuote - liqFee);
-    }
-
-    /** 给定 principal / rate / lastAccrueTs / now 返回应新增利息（≥ 0）；lastAccrueTs > now 返回 0。 */
-    private static long accrueDelta(long outstandingPrincipal, int rateBps, long lastAccrueTs, long now) {
-        if (outstandingPrincipal <= 0 || rateBps <= 0) {
-            return 0L;
-        }
-        long elapsed = now - lastAccrueTs;
-        if (elapsed <= 0) {
-            return 0L;
-        }
-        long step1 = CoreArithmeticUtils.truncMulDiv(elapsed, outstandingPrincipal, YEAR_MS);
-        return CoreArithmeticUtils.truncMulDiv(step1, rateBps, BPS_SCALE);
     }
 
     // ================================================================
@@ -444,7 +397,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
             if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.quoteCurrency == loanCurrency
-                && spec.loanInitialLtvBps > 0) {
+                && spec.loanConfig.isEnabled()) {
                 return spec;
             }
         }
@@ -458,8 +411,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     public static int collateralWeightForBase(int currency, SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
             if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.baseCurrency == currency
-                && spec.collateralWeightBps > 0) {
-                return spec.collateralWeightBps;
+                && spec.loanConfig.collateralWeightBps > 0) {
+                return spec.loanConfig.collateralWeightBps;
             }
         }
         return 0;

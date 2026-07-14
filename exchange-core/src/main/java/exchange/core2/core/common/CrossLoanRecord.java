@@ -54,8 +54,10 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     public long outstandingPrincipal;
     // 已计提但未支付的利息（loanCurrency，currencyScale）。惰性 accrue 写入，结算时进 interestRevenue。
     public long accumulatedInterest;
-    // 上次计息时间戳（ms），惰性 accrue 到此点；初始 = openedAtTs。
+    // 上次计息时间戳（ms），惰性 accrue 到此点；初始 = openedAtTs。（Cross 恒 FLOATING，计息走 accSnapshot；lastAccrueTs 保留兼容）
     public long lastAccrueTs;
+    // FLOATING 计息游标：上次 accrue 时的 liveAcc 累加器快照（bps·ms）。Cross 恒 FLOATING，见 loan.md §13.6。
+    public long accSnapshot;
     // 连续零成交的强平尝试次数；零成交 +1、有成交归 0。scanner 用它爬容差（1%→2%→5%）+ 卡单告警。
     public int stuckLiqAttempts;
 
@@ -73,6 +75,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
         this.outstandingPrincipal = bytes.readLong();
         this.accumulatedInterest = bytes.readLong();
         this.lastAccrueTs = bytes.readLong();
+        this.accSnapshot = bytes.readLong();
         this.stuckLiqAttempts = bytes.readInt();
     }
 
@@ -87,6 +90,7 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
         this.outstandingPrincipal = 0;
         this.accumulatedInterest = 0;
         this.lastAccrueTs = openedAtTs;
+        this.accSnapshot = 0;
         this.stuckLiqAttempts = 0;
     }
 
@@ -102,6 +106,9 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
     @Override public void setAccumulatedInterest(long value) { this.accumulatedInterest = value; }
     @Override public long getLastAccrueTs() { return lastAccrueTs; }
     @Override public void setLastAccrueTs(long value) { this.lastAccrueTs = value; }
+    @Override public long getAccSnapshot() { return accSnapshot; }
+    @Override public void setAccSnapshot(long value) { this.accSnapshot = value; }
+    @Override public boolean isFixedRate() { return false; } // Cross 恒 Floating
     @Override public int getStuckLiqAttempts() { return stuckLiqAttempts; }
     @Override public void setStuckLiqAttempts(int value) { this.stuckLiqAttempts = value; }
 
@@ -123,19 +130,20 @@ public final class CrossLoanRecord implements WriteBytesMarshallable, StateHash,
         bytes.writeLong(outstandingPrincipal);
         bytes.writeLong(accumulatedInterest);
         bytes.writeLong(lastAccrueTs);
+        bytes.writeLong(accSnapshot);
         bytes.writeInt(stuckLiqAttempts);
     }
 
     @Override
     public int stateHash() {
         return Objects.hash(uid, loanId, symbolId, loanCurrency, rateBps, openedAtTs,
-            outstandingPrincipal, accumulatedInterest, lastAccrueTs, stuckLiqAttempts);
+            outstandingPrincipal, accumulatedInterest, lastAccrueTs, accSnapshot, stuckLiqAttempts);
     }
 
     @Override
     public String toString() {
         return "CrossLoan{" + "u" + uid + " id" + loanId + " sym" + symbolId + " loanCur" + loanCurrency + " rate" + rateBps
             + " openedAt" + openedAtTs + " prin=" + outstandingPrincipal + " int=" + accumulatedInterest
-            + " lastAccrue=" + lastAccrueTs + '}';
+            + " lastAccrue=" + lastAccrueTs + " accSnap=" + accSnapshot + '}';
     }
 }

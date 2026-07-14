@@ -34,10 +34,18 @@ public interface LoanRecord {
 
     void setAccumulatedInterest(long value);
 
-    /** 上次计息时间戳（ms）；惰性 accrue 以此为起点计算新增利息，计息后推进到当前时间。 */
+    /** 上次计息时间戳（ms）；LOCKED（Fixed）惰性 accrue 以此为起点算新增利息，计息后推进到当前时间。 */
     long getLastAccrueTs();
 
     void setLastAccrueTs(long value);
+
+    /** FLOATING（Flexible）计息游标：上次 accrue 时的 liveAcc 累加器快照（bps·ms）。见 loan.md §13.5。 */
+    long getAccSnapshot();
+
+    void setAccSnapshot(long value);
+
+    /** true=Fixed（LOCKED，走线性计息）；false=Floating（走累加器）。Cross 恒 false。LoanService 据此分派利率 model。 */
+    boolean isFixedRate();
 
     /** 连续零成交的强平尝试次数（replicated）；驱动 scanner 容差爬梯 + 卡单告警。有成交清 0、零成交 +1。 */
     int getStuckLiqAttempts();

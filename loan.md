@@ -200,9 +200,13 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 - `collateralValueInQuoteCurrency(...)` / scale 换算（`collateralAmountToLots` 等）
 - `forceSellOrderId(subtype, uid, loanId, tickTimeMs)` —— force-sell orderId 编码（§7.4）
 
-### 3.5 CoreSymbolSpecification 扩展（7 字段）
+### 3.5 CoreSymbolSpecification 扩展（loanConfig）
 
-`loanInitialLtvBps` / `loanMarginCallLtvBps` / `loanLiquidationLtvBps` / `loanRateBps` / `loanMaxAmount` / `loanMaxTermDays` / `collateralWeightBps`。经 `UPDATE_SYMBOL_LOAN_CONFIG` 命令运行时更新（RiskEngine apply 处校验，见 §11）。
+per-symbol 借贷配置归组进 `SymbolLoanSpecification`（`common` 包），`CoreSymbolSpecification` 只持一个 `loanConfig` 字段（非 null，默认空 = 未启用）。含 `initialLtvBps` / `marginCallLtvBps` / `liquidationLtvBps` / `maxAmount` / `maxTermDays` / `collateralWeightBps`（`isEnabled()` = initialLtvBps > 0）。经 `UPDATE_SYMBOL_LOAN_CONFIG` 命令运行时改写（RiskEngine apply 处校验，见 §11）。
+
+> **利率不在 spec**：利率是 **per-loanCurrency（池级）** 概念，由 `LoanService` 的利率子系统拥有（见 §13），不放 per-symbol。上述 6 项 LTV / 期限 / 抵押折价才是真正 per-pair 的。
+
+> （历史）曾有 `loanRateBps` 每 pair 静态利率；粒度错配（同一借出币被多 pair 借应同利率）已移除，统一到 §13 的 per-currency 利率模型。
 
 ### 3.6 RiskEngine / LoanCommandHandlers / LoanLiquidationEngine
 - RiskEngine +2 字段：`loanService` / `loanCmdHandlers`；`preProcessCommand` 首行二级 dispatch；`calculateLocked` 扩 loan 抵押两项；序列化/stateHash 含 loanService；apply `UPDATE_LOAN_GLOBAL_CONFIG` / `UPDATE_SYMBOL_LOAN_CONFIG`。
@@ -412,7 +416,10 @@ LTV/利息复用 `LoanService` 已测 helper，与强平口径一致（避免查
 5 字段 partial-update（`≤0` = 不改）：`numeraireCurrency, crossLiquidationLtvBps, crossMarginCallLtvBps, loanPoolUtilizationCapBps, loanLiquidationFeeBps`。RiskEngine apply 做 **apply-all-or-nothing 校验**：numeraire 需 currencySpec 存在；`thresholdsValidGivenCurrent` 校验生效后 `0 < marginCall < liquidation < 100%`、利用率上限 ≤ 100%、强平费 < 100%；任一不过整条拒绝（`log.warn`，不留半更新）。
 
 ### 11.2 UPDATE_SYMBOL_LOAN_CONFIG
-7 个 per-symbol loan 字段，RiskEngine apply 校验 `initial < liquidation < 100%`、`marginCall` 在其间、rate/maxAmount/maxTermDays ≥ 0、collateralWeight ∈ [0,10000]，valid 才 `spec.updateLoanConfig(...)`。`loanInitialLtvBps = 0` 即**停借该 pair**（LOAN_CREATE / BORROW → `LOAN_NOT_ENABLED`），可作 per-symbol 熔断开关。
+6 个 per-symbol loan 字段（不含利率，见 §3.5），RiskEngine apply 校验 `initial < liquidation < 100%`、`marginCall` 在其间、maxAmount/maxTermDays ≥ 0、collateralWeight ∈ [0,10000]，valid 才 `spec.updateLoanConfig(...)`。`loanInitialLtvBps = 0` 即**停借该 pair**（LOAN_CREATE / BORROW → `LOAN_NOT_ENABLED`），可作 per-symbol 熔断开关。
+
+### 11.3 利率曲线配置
+利率曲线参数（`base` / `kink` / `slope1` / `slope2` + `lockedRateAdjustBps`，全局单曲线，后续可扩每币种）归 `LoanService` 的利率子系统，经 `UPDATE_LOAN_GLOBAL_CONFIG`（或专用命令）下发，见 §13。
 
 ---
 
@@ -422,75 +429,95 @@ LTV/利息复用 `LoanService` 已测 helper，与强平口径一致（避免查
 
 ---
 
-## 13. 动态/浮动利率设计（提案，未实现）
+## 13. 利率模型设计（提案，未实现）
 
-> 现状：每 pair 固定 `loanRateBps` 开仓锁定。本节设计由供需（池子利用率）驱动的动态利率。
-> **已定：锁定与浮动两种利率模式并存**，借款人开仓时选（= Binance **Fixed Loan** 定期锁定 vs **Flexible Loan** 活期浮动）。
+> 利率是 **per-loanCurrency（池级）** 概念，由 `LoanService` 的利率子系统**独立拥有**（不在 spec，见 §3.5）——同一借出币被多 pair 借应同利率。
+> **已定：锁定 + 浮动两种模式并存**，借款人开仓选（= Binance **Fixed**（定期锁定）/ **Flexible**（活期浮动））；由池子利用率经 kinked 曲线驱动。
 
-### 13.1 双利率模式（LOCKED / FLOATING）
-`LOAN_CREATE` / `LOAN_CROSS_BORROW` **必须显式带** `rateMode ∈ {LOCKED, FLOATING}`（不留隐式默认，避免歧义），记在 record 上；计息按它分派，两条路都落 `accumulatedInterest → interestRevenue`，守恒不变。
-- **LOCKED（Fixed，定期）**：开仓从曲线读 `currentRateBps[ccy]` 锁进 `loan.rateBps`（另叠 §13.6 的 `lockedRateAdjustBps`），之后走**现有 §6.1 线性计息**（rateBps + lastAccrueTs）；存续期利率不变。**有期限**——吃 symbol 的 `loanMaxTermDays`，到期由 scanner 期限强平。
-- **FLOATING（Flexible，活期）**：走 §13.4 累加器，利率随每个 reprice tick 变。**无期限**——随借随还，scanner **不做期限强平**（只 LTV 强平）。
+### 13.1 类结构（利率子系统，抽出 LoanService，防膨胀）
+利率逻辑**不堆进 LoanService**，抽到 `processors.loan.rate` 子包，就**两个类**（无接口、无独立曲线类）。语义上 **Fixed 派生自 Floating**（开仓锁 floating 当前利率 + 点差），所以 Floating 是引擎、Fixed 是它的一层薄封装。
 
-**期限绑 mode（对齐 Binance）**：scanner 的期限判定（isolated 的 term 检查 + `pickExpiredCrossLoan`）加 `&& loan.rateMode == LOCKED` 门；FLOATING 永不因期限被平。
+```
+loan/rate/
+  FloatingRateModel   = 动态利率引擎（Isolated FLOATING + 全部 Cross）。进 snapshot：
+                        曲线参数 base/kink/slope1/slope2 + currentRateBps[ccy] + accRateBpsMs[ccy] 累加器 + lastRepriceTs
+                        curveRateBps(util) / utilizationBps / repriceCurrency / advanceAccumulator / currentRateBpsOrBase
+                        openRateBps = 当前活期利率；accrue = §13.5 累加器
+  FixedRateModel      = Isolated LOCKED。持 FloatingRateModel ref。进 snapshot：仅 lockedRateAdjustBps
+                        openRateBps = floating 当前利率 + lockedRateAdjustBps（下限 0）；accrue = 线性（loan.rateBps，原 §6.1）
+```
+- `LoanService` 持 `floatingRate` + `fixedRate(floatingRate)`；`accrueTo` / `calculateDisplayInterest` 按 `loan.isFixedRate()` **if/else 分派**（2 处，不需接口）。Isolated LOCKED → Fixed；Isolated FLOATING + 全部 Cross → Floating。
+- 序列化 floating 先于 fixed（fixed 的 currentRate 来源在 floating）。
 
-**机制分层**（成本关键）：`①全局利用率 + ②曲线` 两种模式**共用**（LOCKED 开仓读、FLOATING 每 tick 用）；`③累加器` **仅 FLOATING 需要**。即"锁定"是在浮动机制之上白送的一条 §6.1 老路径。
+> **利率是唯一移出 spec 的 loan 配置**（per-currency 池级）。`loanInitialLtvBps` / `loanLiquidationLtvBps` / `loanMarginCallLtvBps` / `loanMaxAmount` / `loanMaxTermDays` / `collateralWeightBps` 仍在 `CoreSymbolSpecification`——它们是 **per-symbol（每 pair 各异）**，而两 model 是 per-shard 单例，放不进也不该放。
 
-链路：`周期 TwoStep → merge 全局利用率 util[ccy] → kinked 曲线 → currentRateBps[ccy] →（LOCKED 开仓锁定走 §6.1 / FLOATING 推进累加器走 §13.4）`。
+### 13.2 双利率模式（Isolated: LOCKED/FLOATING；Cross: 仅 FLOATING）
+**Isolated `LOAN_CREATE` 显式带 `rateMode ∈ {LOCKED, FLOATING}`；Cross `LOAN_CROSS_BORROW` 恒 FLOATING（不带 rateMode）**。计息按 mode 分派，都落 `accumulatedInterest → interestRevenue`，守恒不变。
 
-### 13.2 全局利用率（TwoStepCommandProcessor）——①，两模式共用
-池子桶 per-shard，同币种真实利用率是各 shard 之和；只有 matcher 单线程阶段有全局视角。用 `TwoStepCommandProcessor`（**FundingFee 同款先例**：周期全局费率 → 应用到所有 shard），比"引擎外协调者读 Report 再推 config"更确定、全在 RAFT 日志内。
-- 触发：leader 周期 submit `ApiRepriceLoanRates`（类 `ApiSettleFundingFees`），**默认每小时**（对齐 Binance Flexible 小时级利率刷新；可配）+ 一个 admin 手动触发入口（事故/调参用）
-- **R1** `collectInput`：每 shard 把 `borrowed[ccy]` / `available[ccy]` 写进 `cmd.commonByShard[shardId]`（现为单 `IntLongHashMap`，需扩第二张 map 或 key 编码）
-- **merge** `buildMatcherEvents`：跨 shard 求和 → `util = ΣB × BPS / (ΣB + ΣA)` → 曲线 → `rate[ccy]`
-- **R2**：每 shard 写 `LoanService.currentRateBps[ccy]`（复制状态，进 snapshot + stateHash；来自 merge → 各 shard 相同）。**只写利率缓存、不碰余额 → 比 FundingFee 更轻，无守恒风险**
+**组合矩阵（3 个有效 SKU，对齐 Binance：Fixed 是定期借币产品、不挂全仓）：**
 
-### 13.3 利率曲线（kinked，整数）——②，两模式共用
+| | Fixed（LOCKED） | Flexible（FLOATING） |
+|---|---|---|
+| **Isolated** | ✅ 有期限 | ✅ 无期限 |
+| **Cross** | ✗ 不支持 | ✅ 无期限 |
+
+- **LOCKED（Fixed，定期，仅 Isolated）**：开仓 `loan.rateBps = curve.lockedOpenRateBps(loanCcy)` 锁死，走线性计息；存续期不变。**有期限**——吃 `loanMaxTermDays`，到期 scanner 期限强平。
+- **FLOATING（Flexible，活期，Isolated + 全部 Cross）**：开仓不锁率，走 §13.5 累加器随 reprice 变。**无期限**——随借随还，只 LTV 强平。
+
+**期限绑 mode**：只有 Isolated LOCKED 有期限。Isolated term 检查加 `&& rateMode == LOCKED`。**Cross 恒 Floating → 无期限 → 移除 `pickExpiredCrossLoan`（现有 Cross 期限强平回收，Cross 只保留 LTV 强平）**。
+
+**机制分层**：`①全局利用率 + ②曲线`（= `LoanRateCurve`）两模式共用；`③累加器` 仅 FLOATING。链路：`周期 TwoStep → merge 全局 util[ccy] → 曲线 → currentRateBps[ccy] →（LOCKED 开仓锁定 / FLOATING 累加器）`。
+
+### 13.3 全局利用率（TwoStepCommandProcessor）——①
+池子桶 per-shard，同币种真实利用率是各 shard 之和；只有 matcher 单线程阶段有全局视角。用 `TwoStepCommandProcessor`（**FundingFee 同款先例**），全在 RAFT 日志内、确定性。
+- 触发：leader 周期 submit `ApiRepriceLoanRates`，**默认每小时**（对齐 Binance Flexible 小时级刷新；可配）+ admin 手动触发入口
+- **R1** `collectInput`：每 shard 把 `borrowed` / `available` 写进 `cmd.commonByShard[shardId].amounts`——**复用这单张 map**，key 编码：**borrowed 存 key=currency、available 存 key=~currency**
+- **merge** `buildMatcherEvents`：跨 shard 按 key 符号解码求和 → 每币种 `util = ΣB × BPS / (ΣB+ΣA)`，每币种一条 event 携带 util（曲线参数在 `LoanRateCurve`，matcher 拿不到 → 只算 util，利率放 R2）
+- **R2** `applyEvent`：**每 shard** `curve.repriceCurrency(ccy, util)`（util 过曲线写 `currentRateBps`）；各 shard 写入相同值。只写利率缓存、不碰余额，无守恒风险
+
+### 13.4 利率曲线（kinked，整数）——②
 ```
 util ≤ kink:  rateBps = base + slope1 × util / kink
 util > kink:  rateBps = base + slope1 + slope2 × (util − kink) / (BPS − kink)
 ```
-参数（base / kink / slope1 / slope2）**每 `loanCurrency` 一组，带全局默认回退**（对齐 Binance 每资产独立利率；接口按每币种设计，起步可只填全局默认）。经配置命令下发。
+参数每 `loanCurrency` 一组 + 全局默认回退（对齐 Binance 每资产独立利率；起步可只填全局默认）。经 `UPDATE_LOAN_GLOBAL_CONFIG` 下发（§11.3）。
 
-### 13.4 浮动计息（additive 累加器）——③，仅 FLOATING
-每币种 `accRateBpsMs[ccy]` = Σ(rateBps × Δms)（bps·ms）+ `currentRateBps[ccy]` + `lastRepriceTs`：
+### 13.5 浮动计息（additive 累加器）——③，仅 FLOATING
+`LoanRateCurve` 每币种 `accRateBpsMs[ccy]` = Σ(rateBps × Δms)（bps·ms）：
 ```
 liveAcc(ccy, now) = accRateBpsMs[ccy] + currentRateBps[ccy] × (now − lastRepriceTs)
-每笔 loan 存 accSnapshot（替代 lastAccrueTs）；惰性计息：
+每笔 loan 存 accSnapshot；FloatingRateModel.accrue：
   pending = truncMulDiv(liveAcc(now) − loan.accSnapshot, principal, YEAR_MS × BPS_SCALE)
   loan.accumulatedInterest += pending;  loan.accSnapshot = liveAcc(now)
-re-price tick（R2）：accRateBpsMs[ccy] += currentRateBps[ccy] × (tickTs − lastRepriceTs); currentRateBps[ccy]=新率; lastRepriceTs=tickTs
+reprice R2：accRateBpsMs[ccy] += currentRateBps[ccy] × (tickTs − lastRepriceTs); currentRateBps[ccy]=新率; lastRepriceTs=tickTs
 ```
-**是现有 §6.1 公式的严格推广**（利率恒定时退化成 `accrueDelta`，可做回归护栏）。
+**是线性计息的严格推广**（利率恒定时退化成 FixedRateModel 的公式，可做回归护栏）。
+**additive（单利）而非 multiplicative index（复利）**：additive 线性增长、64-bit 百年不溢、整数精确、与"利率只作用本金"一致；复利需 128-bit / renorm，收益不值。
 
-**additive（单利）而非 multiplicative index（复利）**：additive 线性增长、64-bit 百年不溢、整数精确、与现状"利率只作用本金"一致；复利指数增长需 128-bit 或周期 renorm（renorm 破坏惰性），收益不值。
+### 13.6 数据结构 / accrue 分派 / 冷启动
+- **IsolatedLoanRecord**：+ `byte rateMode`（LOCKED/FLOATING）+ `accSnapshot`（FLOATING 累加器游标）。LOCKED 用 `rateBps`+`lastAccrueTs`；FLOATING 用 `accSnapshot`。
+- **CrossLoanRecord**：**只 + `accSnapshot`，不加 rateMode**（Cross 恒 FLOATING）。
+- **spec**：删 `loanRateBps`（利率不再 per-symbol，见 §3.5）。
+- **accrue 分派**：Isolated 按 `loan.rateMode` 取 `FixedRateModel`/`FloatingRateModel`；Cross 恒 `FloatingRateModel`。都写 `accumulatedInterest`。
+- **scanner 期限门**：只 Isolated LOCKED 有期限（term 检查加 `&& rateMode == LOCKED`）。**移除 `pickExpiredCrossLoan`**（Cross 无期限）。
+- **冷启动**：`currentRateBps` 未 reprice → 回退**曲线基础利率 `curve(0) = base`**（不再依赖 spec）；利率永远曲线派生、genesis 也确定。loan 未上线无迁移负担。
 
-### 13.5 数据结构变更 / accrue 分派 / 冷启动
-两模式并存，一次到位：
-- **record**：加 `byte rateMode`。LOCKED 用 `rateBps` + `lastAccrueTs`；FLOATING 用 `accSnapshot`（`rateBps` 对 FLOATING 仅存"开仓利率"作展示）。`lastAccrueTs` 与 `accSnapshot` 是两种游标，可分两个 long 字段（直白）或共用一槽按 mode 解释（省字段）。
-- **LoanService state**：+ `currentRateBps` / `lastRepriceTs`（②）+ `accRateBpsMs`（③）。
-- **accrue 分派**：`calculateDisplayInterest` / `accrueTo` 内 `switch(rateMode)` —— LOCKED → §6.1（`accrueDelta`）；FLOATING → §13.4（累加器差值）。两者都写 `accumulatedInterest`。
-- **scanner 期限门**：isolated term 检查 + `pickExpiredCrossLoan` 加 `&& loan.rateMode == LOCKED`（FLOATING 无期限）。
-- **命令/处理器**：`ApiRepriceLoanRates` + `LoanRatePricingProcessor`（TwoStep）+ 曲线配置命令。
-- **冷启动**：reprice 未跑时回退 `spec.loanRateBps`，别让首批借款拿 0 利率。loan 未上线无迁移负担。
+### 13.7 定价差 + 分层
+- **LOCKED 定价差**：两模式默认同曲线值；配置 `lockedRateAdjustBps`（默认 0）给 LOCKED 加/减价（下限 0）。引擎不预设倾向。
+- **VIP / 额度分层**（后续）：`finalRate = clamp(curveRate × (BPS − vipDiscountBps)/BPS ± amountTierBps, floor, ceil)`；需 `UserProfile.loanTier` + 数据源，先不做。
 
-### 13.6 定价差（LOCKED 调整）与 tier
-- **LOCKED 定价差**：两模式默认取**同一条曲线值**，另加配置 `lockedRateAdjustBps`（**默认 0**）给 LOCKED 做加/减价。引擎不预设倾向；想给 Fixed 折扣/加成时调配置。
-- **VIP / 额度分层**（后续，非首版）：曲线利率之上套 `finalRate = clamp(curveRate × (BPS − vipDiscountBps)/BPS ± amountTierBps, floor, ceil)`；VIP 需 `UserProfile.loanTier` 字段 + 数据源，先不做。
-
-### 13.7 决策与后续
+### 13.8 决策与后续
 
 **已定**（对齐 Binance Crypto Loans）：
-- 锁定 + 浮动**两者并存**，开仓**显式**选 `rateMode`
-- **期限绑 mode**：LOCKED=Fixed 有期限（吃 `loanMaxTermDays`）；FLOATING=Flexible 无期限（scanner 期限门跳过）
-- **定价**：两模式同曲线值；LOCKED 另留 `lockedRateAdjustBps`（默认 0，不做差）
-- **cadence**：默认每小时 reprice + admin 手动触发
-- **曲线粒度**：每 `loanCurrency` 一组 + 全局默认回退
+- 利率 **per-loanCurrency，单一归 LoanService 利率子系统**；删 `spec.loanRateBps`
+- 类结构（as-built）：**两个类，无接口、无独立曲线类**（见 §13.1）——`FloatingRateModel`（曲线 + reprice + 累加器，动态引擎）+ `FixedRateModel`（持 floating ref，仅 `lockedRateAdjustBps`，线性计息）；曲线/利用率纯函数并入 `FloatingRateModel`
+- **组合矩阵**：Isolated × {Fixed, Floating}；**Cross 仅 Floating**（Fixed 归 Isolated）
+- **Cross 无期限** → 移除 `pickExpiredCrossLoan`（回收现有 Cross 期限强平，Cross 只 LTV 强平）
+- 期限绑 mode（仅 Isolated LOCKED 有期限）；开仓 Isolated 显式选 `rateMode`、Cross 恒 Floating
+- 定价：同曲线值 + `lockedRateAdjustBps`（默认 0）；冷启动回退曲线 base（非 spec）
+- cadence 每小时 + 手动触发；曲线每 `loanCurrency` + 全局默认
 
-**后续（非首版）**：
-- 用户**自选期限**（Binance Fixed 的 7/30/90d 不同利率）——需开仓加 `termDays` 参数 + 期限维度曲线
-- **VIP 分层利率**——`UserProfile.loanTier` + 数据源
-- 用抵押物直接还款、出借人/收益侧（见 §15）
+**后续（非首版）**：用户自选期限（7/30/90d 期限维度曲线）、VIP 分层、每币种曲线细化、用抵押物直接还款、出借人/收益侧（见 §15）
 
 ---
 
@@ -548,7 +575,8 @@ re-price tick（R2）：accRateBpsMs[ccy] += currentRateBps[ccy] × (tickTs − 
 | Underwater 兜底 | `badDebt` 负记账 + `POOL_ABSORB_BAD_DEBT` | 不进守恒（钱在借款人账户），管理员注资核销 |
 | 事件 | 复用 FundEvent + 12 loan 字段 + 5 类型；平台数据走 Report | loan 操作即资金事件，平台侧独立查询 |
 | 配置 | `UPDATE_LOAN_GLOBAL_CONFIG` / `UPDATE_SYMBOL_LOAN_CONFIG` 运行时可调 + 校验 | 无需重启；阈值自洽强制 |
-| 利率 | 当前固定；§13 提案动态**双模式**（LOCKED/FLOATING 并存，TwoStep 全局利用率 + kinked 曲线 + additive 累加器） | Fixed+Flexible 两 SKU，开仓选 rateMode |
+| 利率归属 | **per-loanCurrency，单一归 LoanService 利率子系统**（`LoanRateCurve` + Fixed/Floating 两 model，抽出 LoanService）；删 `spec.loanRateBps` | 池级概念，粒度正确、不膨胀 LoanService（§13） |
+| 利率模式 | 当前固定；§13 提案 Fixed+Flexible 双模式（TwoStep 全局利用率 + kinked 曲线 + additive 累加器） | 两 SKU，开仓选 rateMode，冷启动回退曲线 base |
 | numeraire | 运行时可配，未配 fail-close | 不硬编码 USDT |
 
 ---

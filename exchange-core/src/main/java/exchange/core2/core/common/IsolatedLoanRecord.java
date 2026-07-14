@@ -28,6 +28,10 @@ import java.util.Objects;
 @NoArgsConstructor
 public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHash, LoanRecord {
 
+    // 利率模式：LOCKED=Fixed（定期，开仓锁 rateBps）/ FLOATING=Flexible（活期，随 reprice 浮动、走 accSnapshot 累加器）。见 loan.md §13。
+    public static final byte RATE_MODE_LOCKED = 0;
+    public static final byte RATE_MODE_FLOATING = 1;
+
     // --- 身份（对象池复用，非 final，由 initialize 重置）---
     // 所属用户 uid（由 UserProfile 上下文注入，不序列化，仅进 stateHash）。
     public long uid;
@@ -43,9 +47,11 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     public int loanCurrency;
 
     // --- 借款条款（创建时锁定）---
-    // 借入时锁定的年化利率（bps），存续期不变。
+    // 利率模式（RATE_MODE_LOCKED / FLOATING），开仓锁定。见 loan.md §13.2。
+    public byte rateMode;
+    // 年化利率（bps）。LOCKED：开仓锁定、存续期不变（计息用）；FLOATING：仅存"开仓利率"作展示，计息走 accSnapshot 累加器。
     public int rateBps;
-    // 开仓时间戳（ms），期限强平用（now - openedAtTs > loanMaxTermDays 触发）。
+    // 开仓时间戳（ms），期限强平用（now - openedAtTs > loanMaxTermDays 触发；仅 LOCKED 有期限）。
     public long openedAtTs;
 
     // --- 金额 / 运行态（可变）---
@@ -56,8 +62,10 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     public long outstandingPrincipal;
     // 已计提但未支付的利息（loanCurrency，currencyScale）。惰性 accrue 写入，结算时进 interestRevenue。
     public long accumulatedInterest;
-    // 上次计息时间戳（ms），惰性 accrue 到此点；初始 = openedAtTs。
+    // 上次计息时间戳（ms），惰性 accrue 到此点；初始 = openedAtTs。LOCKED 计息游标。
     public long lastAccrueTs;
+    // FLOATING 计息游标：上次 accrue 时的 liveAcc 累加器快照（bps·ms）；LOCKED 不用。见 loan.md §13.5。
+    public long accSnapshot;
     // 连续零成交的强平尝试次数；零成交 +1、有成交归 0。scanner 用它爬容差（1%→2%→5%）+ 卡单告警。
     public int stuckLiqAttempts;
 
@@ -72,12 +80,14 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         this.symbolId = bytes.readInt();
         this.collateralCurrency = bytes.readInt();
         this.loanCurrency = bytes.readInt();
+        this.rateMode = bytes.readByte();
         this.rateBps = bytes.readInt();
         this.openedAtTs = bytes.readLong();
         this.collateralAmount = bytes.readLong();
         this.outstandingPrincipal = bytes.readLong();
         this.accumulatedInterest = bytes.readLong();
         this.lastAccrueTs = bytes.readLong();
+        this.accSnapshot = bytes.readLong();
         this.stuckLiqAttempts = bytes.readInt();
     }
 
@@ -89,12 +99,14 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         this.symbolId = 0; // 由 handleLoanCreate 在 initialize 后写入 cmd.symbol
         this.collateralCurrency = collateralCurrency;
         this.loanCurrency = loanCurrency;
+        this.rateMode = RATE_MODE_LOCKED; // 默认 LOCKED；由 handleLoanCreate 在 initialize 后按 cmd 写入
         this.rateBps = rateBps;
         this.openedAtTs = openedAtTs;
         this.collateralAmount = 0;
         this.outstandingPrincipal = 0;
         this.accumulatedInterest = 0;
         this.lastAccrueTs = openedAtTs;
+        this.accSnapshot = 0;
         this.stuckLiqAttempts = 0;
     }
 
@@ -143,6 +155,21 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
     }
 
     @Override
+    public long getAccSnapshot() {
+        return accSnapshot;
+    }
+
+    @Override
+    public void setAccSnapshot(long value) {
+        this.accSnapshot = value;
+    }
+
+    @Override
+    public boolean isFixedRate() {
+        return rateMode == RATE_MODE_LOCKED;
+    }
+
+    @Override
     public int getStuckLiqAttempts() {
         return stuckLiqAttempts;
     }
@@ -166,25 +193,27 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
         bytes.writeInt(symbolId);
         bytes.writeInt(collateralCurrency);
         bytes.writeInt(loanCurrency);
+        bytes.writeByte(rateMode);
         bytes.writeInt(rateBps);
         bytes.writeLong(openedAtTs);
         bytes.writeLong(collateralAmount);
         bytes.writeLong(outstandingPrincipal);
         bytes.writeLong(accumulatedInterest);
         bytes.writeLong(lastAccrueTs);
+        bytes.writeLong(accSnapshot);
         bytes.writeInt(stuckLiqAttempts);
     }
 
     @Override
     public int stateHash() {
-        return Objects.hash(uid, loanId, symbolId, collateralCurrency, loanCurrency, rateBps, openedAtTs, collateralAmount,
-            outstandingPrincipal, accumulatedInterest, lastAccrueTs, stuckLiqAttempts);
+        return Objects.hash(uid, loanId, symbolId, collateralCurrency, loanCurrency, rateMode, rateBps, openedAtTs,
+            collateralAmount, outstandingPrincipal, accumulatedInterest, lastAccrueTs, accSnapshot, stuckLiqAttempts);
     }
 
     @Override
     public String toString() {
         return "IsolatedLoan{" + "u" + uid + " id" + loanId + " sym" + symbolId + " colCur" + collateralCurrency + " loanCur" + loanCurrency
-            + " rate" + rateBps + " openedAt" + openedAtTs + " col=" + collateralAmount + " prin="
-            + outstandingPrincipal + " int=" + accumulatedInterest + " lastAccrue=" + lastAccrueTs + '}';
+            + " rateMode" + rateMode + " rate" + rateBps + " openedAt" + openedAtTs + " col=" + collateralAmount + " prin="
+            + outstandingPrincipal + " int=" + accumulatedInterest + " lastAccrue=" + lastAccrueTs + " accSnap=" + accSnapshot + '}';
     }
 }

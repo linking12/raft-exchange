@@ -137,6 +137,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL)cmd);
         } else if (cmd instanceof ApiResetFee) {
             ringBuffer.publishEvent(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
+        } else if (cmd instanceof ApiRepriceLoanRates) {
+            ringBuffer.publishEvent(REPRICE_LOAN_RATES_TRANSLATOR, (ApiRepriceLoanRates)cmd);
         } else if (cmd instanceof ApiReset) {
             ringBuffer.publishEvent(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -228,6 +230,8 @@ public final class ExchangeApi {
             return submitCommandAsync(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL)cmd);
         } else if (cmd instanceof ApiResetFee) {
             return submitCommandAsync(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
+        } else if (cmd instanceof ApiRepriceLoanRates) {
+            return submitCommandAsync(REPRICE_LOAN_RATES_TRANSLATOR, (ApiRepriceLoanRates)cmd);
         } else if (cmd instanceof ApiReset) {
             return submitCommandAsync(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -317,6 +321,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(SETTLE_PNL_TRANSLATOR, (ApiSettlePNL)cmd);
         } else if (cmd instanceof ApiResetFee) {
             return submitCommandAsyncFullResponse(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
+        } else if (cmd instanceof ApiRepriceLoanRates) {
+            return submitCommandAsyncFullResponse(REPRICE_LOAN_RATES_TRANSLATOR, (ApiRepriceLoanRates)cmd);
         } else if (cmd instanceof ApiReset) {
             return submitCommandAsyncFullResponse(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -1083,6 +1089,12 @@ public final class ExchangeApi {
         cmd.resultCode = CommandResultCode.NEW;
     };
 
+    private static final EventTranslatorOneArg<OrderCommand, ApiRepriceLoanRates> REPRICE_LOAN_RATES_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.REPRICE_LOAN_RATES;
+        cmd.timestamp = api.timestamp;
+        cmd.resultCode = CommandResultCode.NEW;
+    };
+
     private static final EventTranslatorOneArg<OrderCommand, ApiMoveOrder> MOVE_ORDER_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.MOVE_ORDER;
         cmd.price = api.newPrice;
@@ -1252,6 +1264,7 @@ public final class ExchangeApi {
             cmd.symbol = api.symbol;
             cmd.size = api.collateralAmount;
             cmd.price = api.principal;
+            cmd.userCookie = api.rateMode; // 利率模式（0=LOCKED/1=FLOATING），见 loan.md §13.2
             cmd.resultCode = CommandResultCode.NEW;
         };
 
@@ -1388,6 +1401,7 @@ public final class ExchangeApi {
         m.put(ApiSettleFundingFees.class, SETTLE_FUNDING_FEES_TRANSLATOR);
         m.put(ApiSettlePNL.class, SETTLE_PNL_TRANSLATOR);
         m.put(ApiResetFee.class, RESET_FEE_TRANSLATOR);
+        m.put(ApiRepriceLoanRates.class, REPRICE_LOAN_RATES_TRANSLATOR);
         m.put(ApiLiquidationOrder.class, LIQUIDATION_ORDER_TRANSLATOR);
         m.put(ApiLoanForceLiquidate.class, LOAN_FORCE_LIQUIDATE_TRANSLATOR);
         m.put(ApiLoanCrossForceLiquidate.class, LOAN_CROSS_FORCE_LIQUIDATE_TRANSLATOR);

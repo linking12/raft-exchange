@@ -44,7 +44,6 @@ public final class UpdateSymbolLoanConfigCommand implements BinaryDataCommand {
     private final int loanInitialLtvBps;
     private final int loanLiquidationLtvBps;
     private final int loanMarginCallLtvBps;
-    private final int loanRateBps;
     private final long loanMaxAmount;
     private final int loanMaxTermDays;
     private final int collateralWeightBps;
@@ -54,7 +53,6 @@ public final class UpdateSymbolLoanConfigCommand implements BinaryDataCommand {
         this.loanInitialLtvBps = bytes.readInt();
         this.loanLiquidationLtvBps = bytes.readInt();
         this.loanMarginCallLtvBps = bytes.readInt();
-        this.loanRateBps = bytes.readInt();
         this.loanMaxAmount = bytes.readLong();
         this.loanMaxTermDays = bytes.readInt();
         this.collateralWeightBps = bytes.readInt();
@@ -66,7 +64,6 @@ public final class UpdateSymbolLoanConfigCommand implements BinaryDataCommand {
         bytes.writeInt(loanInitialLtvBps);
         bytes.writeInt(loanLiquidationLtvBps);
         bytes.writeInt(loanMarginCallLtvBps);
-        bytes.writeInt(loanRateBps);
         bytes.writeLong(loanMaxAmount);
         bytes.writeInt(loanMaxTermDays);
         bytes.writeInt(collateralWeightBps);

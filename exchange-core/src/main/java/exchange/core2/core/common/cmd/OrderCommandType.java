@@ -69,6 +69,8 @@ public enum OrderCommandType {
     POOL_DEPOSIT((byte) 60, true),
     POOL_WITHDRAW((byte) 61, true),
     POOL_ABSORB_BAD_DEBT((byte) 62, true),
+    // 动态利率重定价（周期系统命令，两步：R1 收池子 → merge 算全局利用率+曲线 → R2 写 currentRateBps，见 loan.md §13.2）
+    REPRICE_LOAN_RATES((byte) 63, true),
 
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),

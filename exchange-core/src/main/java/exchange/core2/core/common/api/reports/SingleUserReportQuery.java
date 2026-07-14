@@ -188,7 +188,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
 
             final IntLongHashMap crossLoanCollateral = new IntLongHashMap(userProfile.crossLoanCollateral);
             final long crossAccountLtvBps = loanService.calculateCrossAccountLtvBps(userProfile, nowMs,
-                    symbolSpecProvider, currencySpecProvider, riskEngine.getLastPriceCache(), loanService.getNumeraireCurrency());
+                    symbolSpecProvider, currencySpecProvider, riskEngine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
 
             // 返回 raw 字段，free 由客户端按需自己算：
             //   - accounts: 真实持有总额（currencyScale），含现货挂单冻结（exchangeLocked 未扣减）

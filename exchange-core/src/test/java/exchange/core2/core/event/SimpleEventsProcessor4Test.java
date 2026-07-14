@@ -2,6 +2,7 @@ package exchange.core2.core.event;
 
 import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
@@ -68,8 +69,8 @@ public class SimpleEventsProcessor4Test extends SimpleEventsProcessor {
     public CoreSymbolSpecification fakeSpotSymbol(int symbol) {
         return new CoreSymbolSpecification(symbol, SymbolType.CURRENCY_EXCHANGE_PAIR, 1, 2, 1000, 1000,
                 0, 0, 0, 0, 0, 0, null, 0, null,
-                // loan fields —— 测试不涉及借贷，全 0 关闭
-                0, 0, 0, 0, 0L, 0, 0);
+                // loan config —— 测试不涉及借贷，默认空 = 未启用
+                new SymbolLoanSpecification());
     }
 
 }

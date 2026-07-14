@@ -70,19 +70,12 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
     public final MutableSortedMap<Long, Long> maxLeverage;
 
     // ================================================================
-    // 借贷 loan (type=CURRENCY_EXCHANGE_PAIR only；详见 loan.md §3.5)
-    // ★ 以下 7 字段"业务不可变、物理可写"：仅 UPDATE_SYMBOL_LOAN_CONFIG 命令通过 updateLoanConfig(...) 修改，
-    //   其他路径视为只读（跟 IsolatedLoanRecord 池化去 final 同款 pattern）。
+    // 借贷 per-symbol 风控配置（type=CURRENCY_EXCHANGE_PAIR only）：LTV 阈值 / 期限 / 单笔上限 / 抵押折价，
+    // 归组进 SymbolLoanSpecification。"业务不可变、物理可写"：仅 UPDATE_SYMBOL_LOAN_CONFIG 经 updateLoanConfig(...)
+    // 改写，全 0 = 该 pair 借贷未启用。利率不在此——per-loanCurrency 概念，归 LoanService 利率子系统。
     // ================================================================
-    // Isolated + Cross 共享
-    public int loanInitialLtvBps;      // 开仓 LTV 上限；0 = 借贷未启用
-    public int loanLiquidationLtvBps;  // Isolated 单笔强平触发线（Cross 用 LoanService 全局阈值）
-    public int loanMarginCallLtvBps;   // Isolated 预警线；0 = 关闭
-    public int loanRateBps;            // 静态年化利率；0 = 免息
-    public long loanMaxAmount;         // 单笔本金上限；0 = 无上限
-    public int loanMaxTermDays;        // 最大贷款期限（天）；0 = 无期限限制
-    // Cross 专用
-    public int collateralWeightBps;    // Cross 抵押折价率（bps）；挂在该 currency 作 base 的 spot symbol spec 上；0 = 该 currency 不能作 Cross 抵押
+    @Builder.Default
+    public SymbolLoanSpecification loanConfig = new SymbolLoanSpecification();
 
     public CoreSymbolSpecification(BytesIn bytes) {
         this.symbolId = bytes.readInt();
@@ -100,14 +93,8 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         this.maintenanceMargin = readTreeMapFromBytes(bytes);
         this.maintenanceMarginScaleK = bytes.readLong();
         this.maxLeverage = readTreeMapFromBytes(bytes);
-        // loan fields —— 位置追加末尾，冷启无兼容 gate
-        this.loanInitialLtvBps = bytes.readInt();
-        this.loanLiquidationLtvBps = bytes.readInt();
-        this.loanMarginCallLtvBps = bytes.readInt();
-        this.loanRateBps = bytes.readInt();
-        this.loanMaxAmount = bytes.readLong();
-        this.loanMaxTermDays = bytes.readInt();
-        this.collateralWeightBps = bytes.readInt();
+        // loan config —— 位置追加末尾，冷启无兼容 gate
+        this.loanConfig = new SymbolLoanSpecification(bytes);
     }
 
     /* NOT SUPPORTED YET:
@@ -146,13 +133,13 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         if (initMarginScaleK == 0 || initMargin == 0) {
             return notional / leverage; // 默认按100%初始保证金率处理
         }
-        //notional × initMargin / (initMarginScaleK × leverage)
+        // notional × initMargin / (initMarginScaleK × leverage)
         return CoreArithmeticUtils.ceilMulDiv(notional, initMargin, Math.multiplyExact(initMarginScaleK, leverage));
     }
 
     /**
-     * 维持保证金 = 各分档段 seg × MMR_seg / scaleK 之和。{@link #maintenanceMargin} 以 (Floor, MMR) 分档存表，
-     * 仓位跨档时逐段累加。notional 小于最小 Floor 时用最小档 rate 整段兜底；表空或 scaleK=0 时按 100% 返回 notional。
+     * 维持保证金 = 各分档段 seg × MMR_seg / scaleK 之和。{@link #maintenanceMargin} 以 (Floor, MMR) 分档存表， 仓位跨档时逐段累加。notional 小于最小
+     * Floor 时用最小档 rate 整段兜底；表空或 scaleK=0 时按 100% 返回 notional。
      *
      * @param notional 仓位名义价值
      * @return 维持保证金
@@ -232,37 +219,25 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         writeTreeMapToBytes(maintenanceMargin, bytes);
         bytes.writeLong(maintenanceMarginScaleK);
         writeTreeMapToBytes(maxLeverage, bytes);
-        // loan fields —— 位置追加末尾，冷启无兼容 gate
-        bytes.writeInt(loanInitialLtvBps);
-        bytes.writeInt(loanLiquidationLtvBps);
-        bytes.writeInt(loanMarginCallLtvBps);
-        bytes.writeInt(loanRateBps);
-        bytes.writeLong(loanMaxAmount);
-        bytes.writeInt(loanMaxTermDays);
-        bytes.writeInt(collateralWeightBps);
+        // loan config —— 位置追加末尾，冷启无兼容 gate
+        loanConfig.writeMarshallable(bytes);
     }
 
     @Override
     public int stateHash() {
-        return Objects.hash(symbolId, type.getCode(), baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee, makerFee,
-            liquidationFee, feeScaleK, maintenanceMargin, maintenanceMarginScaleK, maxLeverage,
-            loanInitialLtvBps, loanLiquidationLtvBps, loanMarginCallLtvBps, loanRateBps,
-            loanMaxAmount, loanMaxTermDays, collateralWeightBps);
+        return Objects.hash(symbolId, type.getCode(), baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee,
+            makerFee, liquidationFee, feeScaleK, maintenanceMargin, maintenanceMarginScaleK, maxLeverage,
+            loanConfig.stateHash());
     }
 
     /**
-     * loan config 唯一 mutation point，仅供 {@code UPDATE_SYMBOL_LOAN_CONFIG} handler 调用。
-     * caller 需保证已完成字段层校验（阈值序、范围、symbolType）；本方法只做 7 字段原子写。
+     * loan config 唯一 mutation point，仅供 {@code UPDATE_SYMBOL_LOAN_CONFIG} handler 调用。 caller
+     * 需保证已完成字段层校验（阈值序、范围、symbolType）；本方法只做 6 字段原子写。
      */
     public void updateLoanConfig(int loanInitialLtvBps, int loanLiquidationLtvBps, int loanMarginCallLtvBps,
-        int loanRateBps, long loanMaxAmount, int loanMaxTermDays, int collateralWeightBps) {
-        this.loanInitialLtvBps = loanInitialLtvBps;
-        this.loanLiquidationLtvBps = loanLiquidationLtvBps;
-        this.loanMarginCallLtvBps = loanMarginCallLtvBps;
-        this.loanRateBps = loanRateBps;
-        this.loanMaxAmount = loanMaxAmount;
-        this.loanMaxTermDays = loanMaxTermDays;
-        this.collateralWeightBps = collateralWeightBps;
+        long loanMaxAmount, int loanMaxTermDays, int collateralWeightBps) {
+        loanConfig.update(loanInitialLtvBps, loanLiquidationLtvBps, loanMarginCallLtvBps, loanMaxAmount,
+            loanMaxTermDays, collateralWeightBps);
     }
 
     @Override
@@ -272,14 +247,11 @@ public final class CoreSymbolSpecification implements WriteBytesMarshallable, St
         if (o == null || getClass() != o.getClass())
             return false;
         CoreSymbolSpecification that = (CoreSymbolSpecification)o;
-        return symbolId == that.symbolId && baseCurrency == that.baseCurrency && quoteCurrency == that.quoteCurrency && baseScaleK == that.baseScaleK
-            && quoteScaleK == that.quoteScaleK && takerFee == that.takerFee && makerFee == that.makerFee && liquidationFee == that.liquidationFee && feeScaleK == that.feeScaleK
-            && maintenanceMargin == that.maintenanceMargin && maintenanceMarginScaleK == that.maintenanceMarginScaleK && maxLeverage == that.maxLeverage
-            && type == that.type
-            && loanInitialLtvBps == that.loanInitialLtvBps && loanLiquidationLtvBps == that.loanLiquidationLtvBps
-            && loanMarginCallLtvBps == that.loanMarginCallLtvBps && loanRateBps == that.loanRateBps
-            && loanMaxAmount == that.loanMaxAmount && loanMaxTermDays == that.loanMaxTermDays
-            && collateralWeightBps == that.collateralWeightBps;
+        return symbolId == that.symbolId && baseCurrency == that.baseCurrency && quoteCurrency == that.quoteCurrency
+            && baseScaleK == that.baseScaleK && quoteScaleK == that.quoteScaleK && takerFee == that.takerFee
+            && makerFee == that.makerFee && liquidationFee == that.liquidationFee && feeScaleK == that.feeScaleK
+            && maintenanceMargin == that.maintenanceMargin && maintenanceMarginScaleK == that.maintenanceMarginScaleK
+            && maxLeverage == that.maxLeverage && type == that.type && loanConfig.equals(that.loanConfig);
     }
 
 }

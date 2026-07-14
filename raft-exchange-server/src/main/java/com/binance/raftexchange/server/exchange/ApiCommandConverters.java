@@ -271,7 +271,8 @@ public final class ApiCommandConverters {
     public static ApiLoanCreate convertLoanCreate(ApiCommand apiCommand) {
         var g = apiCommand.getLoanCreate();
         ApiLoanCreate cmd = ApiLoanCreate.builder().externalId(g.getExternalId()).uid(g.getUid()).loanId(g.getLoanId())
-            .symbol(g.getSymbol()).collateralAmount(g.getCollateralAmount()).principal(g.getPrincipal()).build();
+            .symbol(g.getSymbol()).collateralAmount(g.getCollateralAmount()).principal(g.getPrincipal())
+            .rateMode((byte) g.getRateMode()).build();
         cmd.updateTimestamp(apiCommand.getTimestamp());
         return cmd;
     }
@@ -404,7 +405,6 @@ public final class ApiCommandConverters {
             grpc.getLoanInitialLtvBps(),
             grpc.getLoanLiquidationLtvBps(),
             grpc.getLoanMarginCallLtvBps(),
-            grpc.getLoanRateBps(),
             grpc.getLoanMaxAmount(),
             grpc.getLoanMaxTermDays(),
             grpc.getCollateralWeightBps());

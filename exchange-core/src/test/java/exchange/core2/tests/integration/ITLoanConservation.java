@@ -68,7 +68,7 @@ class ITLoanConservation {
         c.initMarkPrice(SYMBOL, MARK_PRICE);
         // initialLtv 6000 / liqLtv 8500 / marginCall 7500 / rate 0（免利息，简化守恒断言）/ maxAmount MAX / term 365d / weight 10000
         c.sendBinaryDataCommandSync(
-            new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, 0, Long.MAX_VALUE, 365, 10000), 5000);
+            new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
         // Cross 估值基准币（numeraire）；对 Isolated 用例无影响。
         c.sendBinaryDataCommandSync(new UpdateLoanGlobalConfigCommand(USDT), 5001);
         c.submitCommandSync(ApiPoolDeposit.builder()

@@ -2,6 +2,7 @@ package exchange.core2.tests.unit;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.CrossLoanRecord;
 import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.SymbolType;
@@ -93,12 +94,13 @@ class LoanLiquidationEngineTest {
                 .symbolId(SYMBOL).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(BTC).quoteCurrency(USDT)
                 .baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000)
-                .loanLiquidationLtvBps(8000)
-                .loanMarginCallLtvBps(7000)
-                .loanRateBps(500)
-                .loanMaxTermDays(90)
-                .collateralWeightBps(9000)
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000)
+                        .liquidationLtvBps(8000)
+                        .marginCallLtvBps(7000)
+                        .maxTermDays(90)
+                        .collateralWeightBps(9000)
+                        .build())
                 .build();
         specProvider.registerSymbol(SYMBOL, spec);
 
@@ -287,8 +289,9 @@ class LoanLiquidationEngineTest {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-                .loanRateBps(0).collateralWeightBps(9000).build();
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build()).build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();
         price.markPrice = 50_000L;
@@ -379,8 +382,9 @@ class LoanLiquidationEngineTest {
     }
 
     @Test
-    void check_crossLoanExpired_liquidatesThatLoan_evenWithoutNumeraire() {
-        // numeraire 未配（LTV path 恒 0 不触发）；但 loan 已超 90d 期限 → 期限强平仍触发，且针对到期那笔
+    void check_crossLoanExpired_notTermLiquidated_crossHasNoTerm() {
+        // §13：Cross 恒 Floating → 无期限。即便 loan 已远超 90d，也不触发期限强平（pickExpiredCrossLoan 已移除）；
+        // 叠加 numeraire 未配 → LTV 路径保守跳过 → 完全不 publish（旧逻辑此处会期限强平）。
         long expiredOpenedMs = OPENED_AT_MS - 91L * 86_400_000L; // 91 天前 > 90d term
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, expiredOpenedMs);
         loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
@@ -390,31 +394,7 @@ class LoanLiquidationEngineTest {
 
         scanner.check(up);
 
-        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
-        verify(publisher).publish(captor.capture(), any());
-        assertEquals(LOAN_ID, ((ApiLoanCrossForceLiquidate) captor.getValue()).targetLoanId,
-            "期限强平针对到期的那笔");
-    }
-
-    @Test
-    void check_crossMultipleLoans_termLiquidatesExpiredOne_notTiebreakPick() {
-        // 两笔：555 未到期（高利率，tiebreak 会优先选它）；888 已到期。期限强平应针对 888，不是 tiebreak 的 555
-        up.crossLoanCollateral.put(BTC, 1L);
-        CrossLoanRecord fresh = new CrossLoanRecord(UID, 555L, USDT, 900, OPENED_AT_MS);
-        fresh.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
-        fresh.outstandingPrincipal = 30_000L;
-        up.crossLoans.put(555L, fresh);
-        CrossLoanRecord expired = new CrossLoanRecord(UID, 888L, USDT, 100, OPENED_AT_MS - 91L * 86_400_000L);
-        expired.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
-        expired.outstandingPrincipal = 10_000L;
-        up.crossLoans.put(888L, expired);
-
-        scanner.check(up);
-
-        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
-        verify(publisher).publish(captor.capture(), any());
-        assertEquals(888L, ((ApiLoanCrossForceLiquidate) captor.getValue()).targetLoanId,
-            "期限强平锁定到期笔 888，而非 tiebreak 高利率的 555");
+        verify(publisher, never()).publish(any(), any());
     }
 
     @Test
@@ -445,13 +425,14 @@ class LoanLiquidationEngineTest {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-                .loanRateBps(0).collateralWeightBps(9000).build();
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build()).build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();
         price.markPrice = 50_000L;
         priceCache.put(SYMBOL_NI, price);
-        loanService.setNumeraireCurrency(USDT);
+        loanService.getGlobalConfig().numeraireCurrency = USDT;
 
         // 抵押 100（= 1 WBTC = 1 张可卖），债务 150000 → 账户 LTV 远超强平线，触发 publishCrossForceSell
         up.crossLoanCollateral.put(WBTC, 100L);
@@ -485,8 +466,9 @@ class LoanLiquidationEngineTest {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-                .loanRateBps(0).collateralWeightBps(9000).build();
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build()).build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();
         price.markPrice = 50_000L;

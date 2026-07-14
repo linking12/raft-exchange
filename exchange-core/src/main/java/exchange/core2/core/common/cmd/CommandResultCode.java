@@ -76,7 +76,7 @@ public enum CommandResultCode {
     // 现货借贷（loan，详见 loan.md §8.1）
     // ============================================================
     // —— 命令级 / 身份 / 状态 ——
-    LOAN_NOT_ENABLED(-6001),                          // spec.loanInitialLtvBps == 0
+    LOAN_NOT_ENABLED(-6001),                          // spec.loanConfig.initialLtvBps == 0
     LOAN_ALREADY_EXISTS(-6002),                       // loanId 已存在（Isolated / Cross 命名空间独立）
     LOAN_NOT_FOUND(-6003),                            // loanId 不存在
     LOAN_UID_MISMATCH(-6004),                         // loan.uid ≠ cmd.uid
@@ -84,7 +84,7 @@ public enum CommandResultCode {
 
     // —— 参数 / 规格 ——
     LOAN_INVALID_AMOUNT(-6010),                       // amount ≤ 0
-    LOAN_PRINCIPAL_EXCEEDS_LIMIT(-6011),              // principal > spec.loanMaxAmount
+    LOAN_PRINCIPAL_EXCEEDS_LIMIT(-6011),              // principal > spec.loanConfig.maxAmount
     LOAN_MARKPRICE_NOT_READY(-6012),                  // markPrice 缺失或 0
 
     // —— LTV 越界（open / 减抵押 / 撤抵押 / Cross borrow 各一）——
@@ -95,7 +95,7 @@ public enum CommandResultCode {
 
     // —— 抵押品相关 ——
     LOAN_COLLATERAL_INSUFFICIENT(-6030),              // accounts − calculateLocked 不足以覆盖新抵押量
-    LOAN_COLLATERAL_NOT_ALLOWED(-6031),               // spec.collateralWeightBps == 0（Cross 抵押白名单）
+    LOAN_COLLATERAL_NOT_ALLOWED(-6031),               // spec.loanConfig.collateralWeightBps == 0（Cross 抵押白名单）
     LOAN_COLLATERAL_EXCEEDS_LOAN(-6032),              // 减 Isolated 抵押量 > loan.collateralAmount
 
     // —— 还款账户不足 ——

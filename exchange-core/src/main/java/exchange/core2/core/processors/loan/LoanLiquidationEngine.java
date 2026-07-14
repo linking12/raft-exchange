@@ -148,8 +148,9 @@ public final class LoanLiquidationEngine {
                 return;
 
             long currentTickMs = System.currentTimeMillis();
-            boolean termExpired =
-                spec.loanMaxTermDays > 0 && (currentTickMs - loan.openedAtTs) > spec.loanMaxTermDays * MS_PER_DAY;
+            // 期限只对 Isolated LOCKED（Fixed）生效；FLOATING 无期限
+            boolean termExpired = loan.rateMode == IsolatedLoanRecord.RATE_MODE_LOCKED && spec.loanConfig.maxTermDays > 0
+                && (currentTickMs - loan.openedAtTs) > spec.loanConfig.maxTermDays * MS_PER_DAY;
 
             // 单位统一到 loanCurrency currencyScale 下比（不做换算原公式恒 pass）
             CoreCurrencySpecification baseSpec =
@@ -165,7 +166,7 @@ public final class LoanLiquidationEngine {
             long realDebt = Math.addExact(loan.outstandingPrincipal,
                 engine.getLoanService().calculateDisplayInterest(loan, currentTickMs));
             long ltvScaled = Math.multiplyExact(realDebt, LoanService.BPS_SCALE);
-            long thresholdLiq = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanLiquidationLtvBps);
+            long thresholdLiq = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanConfig.liquidationLtvBps);
 
             if (termExpired || ltvScaled >= thresholdLiq) {
                 if (stuckLiqThrottled("isolated", isolated.liqRetryThrottleMs, loan.loanId, loan.stuckLiqAttempts))
@@ -175,12 +176,12 @@ public final class LoanLiquidationEngine {
                 return;
             }
 
-            if (spec.loanMarginCallLtvBps > 0) {
-                long thresholdWarn = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanMarginCallLtvBps);
+            if (spec.loanConfig.marginCallLtvBps > 0) {
+                long thresholdWarn = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanConfig.marginCallLtvBps);
                 if (ltvScaled >= thresholdWarn) {
                     long ltvBps = collateralValueInLoanCurrency == 0 ? 0
                         : Math.multiplyExact(realDebt, LoanService.BPS_SCALE) / collateralValueInLoanCurrency;
-                    sendIsolatedMarginCallIfNotThrottled(loan, ltvBps, spec.loanMarginCallLtvBps);
+                    sendIsolatedMarginCallIfNotThrottled(loan, ltvBps, spec.loanConfig.marginCallLtvBps);
                 }
             }
         });
@@ -195,24 +196,18 @@ public final class LoanLiquidationEngine {
         LoanService loanService = engine.getLoanService();
         long currentTickMs = System.currentTimeMillis();
 
-        // 期限强平优先：到期是硬约束、不依赖 numeraire 估值（只看 openedAtTs + term），到期即平那笔
-        CrossLoanRecord expired = pickExpiredCrossLoan(userProfile, currentTickMs);
-        if (expired != null) {
-            publishCrossForceSell(userProfile, loanService, currentTickMs, expired);
-            return;
-        }
-
+        // Cross 恒 Floating → 无期限，只做 LTV 强平（期限只对 Isolated LOCKED 生效）
         // LTV 强平/预警：numeraire 未配置时 ltvBps == 0，直接不触发（保守）
         long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, currentTickMs,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
-            engine.getLastPriceCache(), loanService.getNumeraireCurrency());
+            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
 
-        if (ltvBps >= loanService.getCrossLiquidationLtvBps()) {
+        if (ltvBps >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
             publishCrossForceSell(userProfile, loanService, currentTickMs, null);
             return;
         }
-        if (ltvBps >= loanService.getCrossMarginCallLtvBps()) {
-            sendCrossMarginCallIfNotThrottled(userProfile.uid, ltvBps, loanService.getCrossMarginCallLtvBps());
+        if (ltvBps >= loanService.getGlobalConfig().crossMarginCallLtvBps) {
+            sendCrossMarginCallIfNotThrottled(userProfile.uid, ltvBps, loanService.getGlobalConfig().crossMarginCallLtvBps);
         }
     }
 
@@ -335,27 +330,6 @@ public final class LoanLiquidationEngine {
                     && loan.loanId < best.loanId)) {
                 best = loan;
             }
-        }
-        return best;
-    }
-
-    /**
-     * 挑一笔已到期（{@code now - openedAtTs > loanMaxTermDays}）的 Cross loan；确定性选 loanId 最小。 期限从 loanCurrency 对应 spec fresh 读（跟
-     * Isolated / 借款时一致，不 snapshot）；无匹配返回 null。
-     */
-    private CrossLoanRecord pickExpiredCrossLoan(UserProfile up, long currentTickMs) {
-        CrossLoanRecord best = null;
-        for (CrossLoanRecord loan : up.crossLoans) {
-            if (loan.outstandingPrincipal <= 0)
-                continue;
-            CoreSymbolSpecification spec =
-                engine.getSymbolSpecificationProvider().getSymbolSpecification(loan.symbolId);
-            if (spec == null || spec.loanMaxTermDays <= 0)
-                continue;
-            if ((currentTickMs - loan.openedAtTs) <= spec.loanMaxTermDays * MS_PER_DAY)
-                continue;
-            if (best == null || loan.loanId < best.loanId)
-                best = loan;
         }
         return best;
     }

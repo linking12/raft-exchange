@@ -200,6 +200,7 @@ message ApiLoanCreate {
   int32 symbol = 4;
   int64 collateralAmount = 5;
   int64 principal = 6;
+  int32 rateMode = 7;               // 0=LOCKED(Fixed，默认) / 1=FLOATING(Flexible)，见 loan.md §13.2
 }
 
 // LOAN_REPAY：Isolated 还款（详见 loan.md §5.3）。repayAmount=0 表示 payoff 全部本息。
@@ -390,7 +391,7 @@ message SpotLoanConfig {
   int32 loanInitialLtvBps = 2;      // 0 = 关闭 loan
   int32 loanLiquidationLtvBps = 3;
   int32 loanMarginCallLtvBps = 4;   // 0 = 关预警
-  int32 loanRateBps = 5;
+  reserved 5;                       // 原 loanRateBps —— 利率移到 LoanService per-currency 曲线，见 loan.md §3.5
   int64 loanMaxAmount = 6;          // 0 = 无上限
   int32 loanMaxTermDays = 7;        // 0 = 无期限
   int32 collateralWeightBps = 8;    // 0 = 该 currency 不作 Cross 抵押

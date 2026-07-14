@@ -21,10 +21,12 @@ public class ApiLoanCreate extends ApiCommand {
     public final int symbol;
     public final long collateralAmount;
     public final long principal;
+    // 利率模式：0=LOCKED(Fixed，默认) / 1=FLOATING(Flexible)。承载进 cmd.userCookie，见 loan.md §13.2。
+    public final byte rateMode;
 
     @Override
     public String toString() {
         return "[LOAN_CREATE ext" + externalId + " u" + uid + " id" + loanId + " s" + symbol
-            + " col=" + collateralAmount + " prin=" + principal + "]";
+            + " col=" + collateralAmount + " prin=" + principal + " rateMode=" + rateMode + "]";
     }
 }

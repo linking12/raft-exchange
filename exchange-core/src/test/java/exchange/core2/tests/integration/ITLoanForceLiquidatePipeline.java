@@ -67,7 +67,6 @@ class ITLoanForceLiquidatePipeline {
                     6000,
                     8500,
                     7500,
-                    0,
                     Long.MAX_VALUE,
                     365,
                     10000),

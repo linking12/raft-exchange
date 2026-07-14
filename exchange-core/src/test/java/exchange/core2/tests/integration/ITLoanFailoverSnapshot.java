@@ -57,7 +57,7 @@ class ITLoanFailoverSnapshot {
             .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1).takerFee(0).makerFee(0).build());
         c.initMarkPrice(SYMBOL, MARK);
         c.sendBinaryDataCommandSync(
-            new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, 0, Long.MAX_VALUE, 365, 10000), 5000);
+            new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
         c.sendBinaryDataCommandSync(new UpdateLoanGlobalConfigCommand(USDT), 5001);
         c.submitCommandSync(ApiPoolDeposit.builder()
             .externalId(1_000_001L).shardId(0).currency(USDT).amount(POOL_FUND).build(), CommandResultCode.SUCCESS);

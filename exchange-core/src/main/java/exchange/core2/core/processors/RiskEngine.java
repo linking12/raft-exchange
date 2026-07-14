@@ -59,6 +59,7 @@ import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.processors.liquidation.LiquidationService;
 import exchange.core2.core.processors.loan.LoanCommandHandlers;
+import exchange.core2.core.processors.loan.LoanGlobalConfig;
 import exchange.core2.core.processors.loan.LoanService;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
@@ -112,6 +113,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final IFCommandProcessor ifProcessor;
     private final FundingFeeCommandProcessor fundingFeeProcessor;
     private final ResetFeeCommandProcessor resetFeeProcessor;
+    private final LoanRatePricingProcessor loanRatePricingProcessor;
     private LoanCommandHandlers loanCmdHandlers;
 
     public RiskEngine(final int shardId, final int numShards, final ISerializationProcessor serializationProcessor,
@@ -148,6 +150,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.ifProcessor = new IFCommandProcessor(this);
         this.fundingFeeProcessor = new FundingFeeCommandProcessor(this);
         this.resetFeeProcessor = new ResetFeeCommandProcessor(this);
+        this.loanRatePricingProcessor = new LoanRatePricingProcessor(this);
         this.initState();
     }
 
@@ -561,6 +564,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
             case RESET_FEE: {
                 resetFeeProcessor.collectInput(cmd);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+                }
+                return false;
+            }
+            case REPRICE_LOAN_RATES: {
+                loanRatePricingProcessor.collectInput(cmd);
                 if (shardId == 0) {
                     cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
                 }
@@ -1158,25 +1168,26 @@ public final class RiskEngine implements WriteBytesMarshallable {
             final boolean numeraireOk =
                 newNumeraire <= 0 || currencySpecificationProvider.getCurrencySpecification(newNumeraire) != null;
             final boolean valid =
-                numeraireOk && cmd.thresholdsValidGivenCurrent(loanService.getCrossLiquidationLtvBps(),
-                    loanService.getCrossMarginCallLtvBps());
+                numeraireOk && cmd.thresholdsValidGivenCurrent(loanService.getGlobalConfig().crossLiquidationLtvBps,
+                    loanService.getGlobalConfig().crossMarginCallLtvBps);
             if (!valid) {
                 log.warn("UPDATE_LOAN_GLOBAL_CONFIG rejected (invalid config): {}", cmd);
             } else {
+                final LoanGlobalConfig config = loanService.getGlobalConfig();
                 if (newNumeraire > 0) {
-                    loanService.setNumeraireCurrency(newNumeraire);
+                    config.numeraireCurrency = newNumeraire;
                 }
                 if (cmd.getCrossLiquidationLtvBps() > 0) {
-                    loanService.setCrossLiquidationLtvBps(cmd.getCrossLiquidationLtvBps());
+                    config.crossLiquidationLtvBps = cmd.getCrossLiquidationLtvBps();
                 }
                 if (cmd.getCrossMarginCallLtvBps() > 0) {
-                    loanService.setCrossMarginCallLtvBps(cmd.getCrossMarginCallLtvBps());
+                    config.crossMarginCallLtvBps = cmd.getCrossMarginCallLtvBps();
                 }
                 if (cmd.getLoanPoolUtilizationCapBps() > 0) {
-                    loanService.setLoanPoolUtilizationCapBps(cmd.getLoanPoolUtilizationCapBps());
+                    config.loanPoolUtilizationCapBps = cmd.getLoanPoolUtilizationCapBps();
                 }
                 if (cmd.getLoanLiquidationFeeBps() > 0) {
-                    loanService.setLoanLiquidationFeeBps(cmd.getLoanLiquidationFeeBps());
+                    config.loanLiquidationFeeBps = cmd.getLoanLiquidationFeeBps();
                 }
                 log.info("UPDATE_LOAN_GLOBAL_CONFIG applied: {}", cmd);
             }
@@ -1189,10 +1200,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
             final boolean valid =
                 spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && initial >= 0 && initial < 10000
                     && (initial == 0 || (liq > initial && liq < 10000 && (mc == 0 || (mc > initial && mc < liq))))
-                    && cmd.getLoanRateBps() >= 0 && cmd.getLoanMaxAmount() >= 0 && cmd.getLoanMaxTermDays() >= 0
+                    && cmd.getLoanMaxAmount() >= 0 && cmd.getLoanMaxTermDays() >= 0
                     && cmd.getCollateralWeightBps() >= 0 && cmd.getCollateralWeightBps() <= 10000;
             if (valid) {
-                spec.updateLoanConfig(initial, liq, mc, cmd.getLoanRateBps(), cmd.getLoanMaxAmount(),
+                spec.updateLoanConfig(initial, liq, mc, cmd.getLoanMaxAmount(),
                     cmd.getLoanMaxTermDays(), cmd.getCollateralWeightBps());
                 log.info("UPDATE_SYMBOL_LOAN_CONFIG applied: {}", cmd);
             } else {
@@ -1335,6 +1346,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 resetFeeProcessor.applyEvent(cmd, mte, null, null);
                 mte = mte.nextEvent;
             } while (mte != null);
+            return false;
+        }
+        if (cmd.command == OrderCommandType.REPRICE_LOAN_RATES) {
+            do {
+                loanRatePricingProcessor.applyEvent(cmd, mte, null, null);
+                mte = mte.nextEvent;
+            } while (mte != null);
+            loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp);   // 每 shard 同步推进（Floating 累加器参照，P3）
             return false;
         }
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);

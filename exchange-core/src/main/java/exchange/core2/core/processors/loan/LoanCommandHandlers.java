@@ -151,7 +151,7 @@ public final class LoanCommandHandlers {
         final CoreSymbolSpecification spec = engine.getSymbolSpecificationProvider().getSymbolSpecification(cmd.symbol);
         if (spec == null || spec.type != SymbolType.CURRENCY_EXCHANGE_PAIR)
             return CommandResultCode.LOAN_NOT_ENABLED;
-        if (spec.loanInitialLtvBps <= 0)
+        if (!spec.loanConfig.isEnabled())
             return CommandResultCode.LOAN_NOT_ENABLED;
 
         final long loanId = cmd.reserveBidPrice;
@@ -162,7 +162,7 @@ public final class LoanCommandHandlers {
         final long principal = cmd.price;
         if (principal <= 0 || collateralAmount <= 0)
             return CommandResultCode.LOAN_INVALID_AMOUNT;
-        if (spec.loanMaxAmount != 0 && principal > spec.loanMaxAmount)
+        if (spec.loanConfig.maxAmount != 0 && principal > spec.loanConfig.maxAmount)
             return CommandResultCode.LOAN_PRINCIPAL_EXCEEDS_LIMIT;
 
         final long markPrice = markPriceOrZero(spec.symbolId);
@@ -175,7 +175,7 @@ public final class LoanCommandHandlers {
         if (collateralValueInLoanCurrency < 0)
             return CommandResultCode.LOAN_MARKPRICE_NOT_READY;
         final long lhs = Math.multiplyExact(principal, LoanService.BPS_SCALE);
-        final long rhs = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanInitialLtvBps);
+        final long rhs = Math.multiplyExact(collateralValueInLoanCurrency, (long)spec.loanConfig.initialLtvBps);
         if (lhs > rhs)
             return CommandResultCode.LOAN_LTV_TOO_HIGH;
 
@@ -192,11 +192,20 @@ public final class LoanCommandHandlers {
         if (poolCheck != CommandResultCode.SUCCESS)
             return poolCheck;
 
-        // v1 利率直接从 spec.loanRateBps snapshot 到 loan，之后不变；v2 支持动态利率时替换
+        // 利率按 rateMode（cmd.userCookie 承载）从利率子系统定价，不再 per-symbol
+        final byte rateMode = ((byte)cmd.userCookie) == IsolatedLoanRecord.RATE_MODE_FLOATING
+            ? IsolatedLoanRecord.RATE_MODE_FLOATING : IsolatedLoanRecord.RATE_MODE_LOCKED;
+        final int openRateBps =
+            rateMode == IsolatedLoanRecord.RATE_MODE_FLOATING ? loanService.getFloatingRate().openRateBps(loanCurrency)
+                : loanService.getFixedRate().openRateBps(loanCurrency);
         final IsolatedLoanRecord loan =
             engine.getObjectsPool().get(ObjectsPool.ISOLATED_LOAN_RECORD, IsolatedLoanRecord::new);
-        loan.initialize(cmd.uid, loanId, collateralCurrency, loanCurrency, spec.loanRateBps, cmd.timestamp);
+        loan.initialize(cmd.uid, loanId, collateralCurrency, loanCurrency, openRateBps, cmd.timestamp);
         loan.symbolId = spec.symbolId;
+        loan.rateMode = rateMode;
+        if (rateMode == IsolatedLoanRecord.RATE_MODE_FLOATING) {
+            loanService.getFloatingRate().initOpenSnapshot(loan, cmd.timestamp); // FLOATING 计息游标定在当前累加器
+        }
         loan.collateralAmount = collateralAmount;
         loan.outstandingPrincipal = principal;
         up.isolatedLoans.put(loanId, loan);
@@ -340,7 +349,7 @@ public final class LoanCommandHandlers {
             if (newCollateralValueInLoanCurrency < 0)
                 return CommandResultCode.LOAN_MARKPRICE_NOT_READY;
             final long lhs = Math.multiplyExact(realDebt, LoanService.BPS_SCALE);
-            final long rhs = Math.multiplyExact(newCollateralValueInLoanCurrency, (long)spec.loanLiquidationLtvBps);
+            final long rhs = Math.multiplyExact(newCollateralValueInLoanCurrency, (long)spec.loanConfig.liquidationLtvBps);
             if (lhs >= rhs)
                 return CommandResultCode.LOAN_LTV_TOO_HIGH_AFTER_RELEASE;
         }
@@ -556,8 +565,8 @@ public final class LoanCommandHandlers {
         up.crossLoanCollateral.addToValue(currency, -amount);
         final long newLtv = loanService.calculateCrossAccountLtvBps(up, cmd.timestamp,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
-            engine.getLastPriceCache(), loanService.getNumeraireCurrency());
-        if (newLtv >= loanService.getCrossLiquidationLtvBps()) {
+            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
+        if (newLtv >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
             up.crossLoanCollateral.addToValue(currency, amount); // revert
             return CommandResultCode.LOAN_CROSS_LTV_TOO_HIGH_AFTER_WITHDRAW;
         }
@@ -592,9 +601,9 @@ public final class LoanCommandHandlers {
             return CommandResultCode.LOAN_INVALID_AMOUNT;
 
         final CoreSymbolSpecification spec = findLoanSpecByQuoteCurrency(loanCurrency);
-        if (spec == null || spec.loanInitialLtvBps <= 0)
+        if (spec == null || !spec.loanConfig.isEnabled())
             return CommandResultCode.LOAN_NOT_ENABLED;
-        if (spec.loanMaxAmount != 0 && principal > spec.loanMaxAmount)
+        if (spec.loanConfig.maxAmount != 0 && principal > spec.loanConfig.maxAmount)
             return CommandResultCode.LOAN_PRINCIPAL_EXCEEDS_LIMIT;
 
         final LoanService loanService = engine.getLoanService();
@@ -604,16 +613,19 @@ public final class LoanCommandHandlers {
         if (poolCheck != CommandResultCode.SUCCESS)
             return poolCheck;
 
+        // Cross 恒 FLOATING：利率走浮动、开仓定 accSnapshot 游标
+        final int openRateBps = loanService.getFloatingRate().openRateBps(loanCurrency);
         // 借后账户级 LTV ≤ loanInitialLtvBps 才允许——先落 loan 记账后调 calculateCrossAccountLtvBps，超线再 revert
         final CrossLoanRecord loan = engine.getObjectsPool().get(ObjectsPool.CROSS_LOAN_RECORD, CrossLoanRecord::new);
-        loan.initialize(cmd.uid, loanId, loanCurrency, spec.loanRateBps, cmd.timestamp);
+        loan.initialize(cmd.uid, loanId, loanCurrency, openRateBps, cmd.timestamp);
         loan.symbolId = spec.symbolId;
+        loanService.getFloatingRate().initOpenSnapshot(loan, cmd.timestamp);
         loan.outstandingPrincipal = principal;
         up.crossLoans.put(loanId, loan);
         final long newLtv = loanService.calculateCrossAccountLtvBps(up, cmd.timestamp,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
-            engine.getLastPriceCache(), loanService.getNumeraireCurrency());
-        if (newLtv > spec.loanInitialLtvBps) {
+            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
+        if (newLtv > spec.loanConfig.initialLtvBps) {
             up.crossLoans.remove(loanId);
             engine.getObjectsPool().put(ObjectsPool.CROSS_LOAN_RECORD, loan);
             return CommandResultCode.LOAN_LTV_TOO_HIGH_AFTER_BORROW;
@@ -621,7 +633,7 @@ public final class LoanCommandHandlers {
         disburseLoan(up, loanService, loanCurrency, principal);
         // Cross 抵押是账户级：collateralCurrency=numeraire、collateralAmount 留 0（详情查 LoanPlatformReport / SingleUserReport）
         engine.getEventsHelper().sendLoanBorrowEvent(cmd, loan.uid, loanId, LOAN_MODE_CROSS, loanCurrency,
-            loanService.getNumeraireCurrency(), loan.outstandingPrincipal, 0, loan.getRateBps(), newLtv, principal, 0);
+            loanService.getGlobalConfig().numeraireCurrency, loan.outstandingPrincipal, 0, loan.getRateBps(), newLtv, principal, 0);
         return CommandResultCode.SUCCESS;
     }
 
@@ -664,7 +676,7 @@ public final class LoanCommandHandlers {
         // Cross 抵押账户级：collateralAmount 留 0
         final long principalRepaid = actualRepay - interestSettled;
         engine.getEventsHelper().sendLoanRepayEvent(cmd, loan.uid, loanId, LOAN_MODE_CROSS, loanCurrency,
-            loanService.getNumeraireCurrency(), loan.outstandingPrincipal, loan.accumulatedInterest, 0,
+            loanService.getGlobalConfig().numeraireCurrency, loan.outstandingPrincipal, loan.accumulatedInterest, 0,
             loan.getRateBps(), crossLtvBps(up, cmd.timestamp), -principalRepaid, interestSettled);
 
         if (loan.isEmpty()) {
@@ -808,9 +820,10 @@ public final class LoanCommandHandlers {
         }
         // Cross 强平：collateralCurrency=卖出币、collateralAmount=该币剩余；零成交无坏账则跳过 no-op 事件
         if (tradedSize > 0 || badDebt > 0)
-            engine.getEventsHelper().sendLoanLiquidatedEvent(cmd, borrowerUid, targetLoanId, LOAN_MODE_CROSS, loanCurrency,
-                sellingCurrency, snapPrincipal, snapInterest, takerUp.crossLoanCollateral.get(sellingCurrency), rateBps,
-                crossLtvBps(takerUp, cmd.timestamp), -principalRepaid, -collateralSold, interestPaid, badDebt);
+            engine.getEventsHelper().sendLoanLiquidatedEvent(cmd, borrowerUid, targetLoanId, LOAN_MODE_CROSS,
+                loanCurrency, sellingCurrency, snapPrincipal, snapInterest,
+                takerUp.crossLoanCollateral.get(sellingCurrency), rateBps, crossLtvBps(takerUp, cmd.timestamp),
+                -principalRepaid, -collateralSold, interestPaid, badDebt);
     }
 
     // ================================================================================================================
@@ -912,8 +925,8 @@ public final class LoanCommandHandlers {
     }
 
     /**
-     * Isolated 单笔 LTV（bps）——事件用，best-effort：markPrice / spec 缺失或抵押估值 &le; 0 时返 0（下游可用 principal+collateral+markPrice 自算）。
-     * 读操作后 loan 快照（outstandingPrincipal + pending 利息）÷ 抵押估值。
+     * Isolated 单笔 LTV（bps）——事件用，best-effort：markPrice / spec 缺失或抵押估值 &le; 0 时返 0（下游可用 principal+collateral+markPrice
+     * 自算）。 读操作后 loan 快照（outstandingPrincipal + pending 利息）÷ 抵押估值。
      */
     private long isolatedLtvBps(IsolatedLoanRecord loan, long now) {
         final CoreSymbolSpecification spec =
@@ -926,8 +939,8 @@ public final class LoanCommandHandlers {
         final long collateralValue = evalCollateralInLoanCurrency(loan.collateralAmount, spec, markPrice);
         if (collateralValue <= 0)
             return 0L;
-        final long realDebt = Math.addExact(loan.outstandingPrincipal,
-            engine.getLoanService().calculateDisplayInterest(loan, now));
+        final long realDebt =
+            Math.addExact(loan.outstandingPrincipal, engine.getLoanService().calculateDisplayInterest(loan, now));
         return Math.multiplyExact(realDebt, LoanService.BPS_SCALE) / collateralValue;
     }
 
@@ -937,7 +950,7 @@ public final class LoanCommandHandlers {
         if (!loanService.isNumeraireConfigured())
             return 0L;
         return loanService.calculateCrossAccountLtvBps(up, now, engine.getSymbolSpecificationProvider(),
-            engine.getCurrencySpecificationProvider(), engine.getLastPriceCache(), loanService.getNumeraireCurrency());
+            engine.getCurrencySpecificationProvider(), engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
     }
 
     /** 判 currency 是否允许作 Cross 抵押（有 base==currency 的 spec 且 collateralWeightBps &gt; 0）。 */
@@ -957,7 +970,7 @@ public final class LoanCommandHandlers {
         final long newBorrowed = Math.addExact(borrowed, principal);
         final long totalPool = Math.addExact(available, borrowed);
         if (totalPool > 0 && Math.multiplyExact(newBorrowed, LoanService.BPS_SCALE) > Math.multiplyExact(totalPool,
-            (long)loanService.getLoanPoolUtilizationCapBps())) {
+            (long)loanService.getGlobalConfig().loanPoolUtilizationCapBps)) {
             return CommandResultCode.LOAN_POOL_UTILIZATION_EXCEEDED;
         }
         return CommandResultCode.SUCCESS;
