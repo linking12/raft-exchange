@@ -420,8 +420,8 @@ LTV/利息复用 `LoanService` 已测 helper，与强平口径一致（避免查
 ### 11.2 symbol 部分（`SymbolLoanConfig`）
 6 个 per-symbol loan 字段（不含利率，见 §3.5），RiskEngine apply 校验（`fieldsValid()`）`initial < liquidation < 100%`、`marginCall` 在其间、maxAmount/maxTermDays ≥ 0、collateralWeight ∈ [0,10000] + spec 存在且为 `CURRENCY_EXCHANGE_PAIR`，valid 才 `spec.updateLoanConfig(...)`。`loanInitialLtvBps = 0` 即**停借该 pair**（LOAN_CREATE / BORROW → `LOAN_NOT_ENABLED`），可作 per-symbol 熔断开关。
 
-### 11.3 利率曲线配置
-利率曲线参数（`base` / `kink` / `slope1` / `slope2` + `lockedRateAdjustBps`，全局单曲线，后续可扩每币种）归 `LoanService` 的利率子系统，经 `ADD_LOAN`（或专用命令）下发，见 §13。
+### 11.3 rateCurve 部分（`RateCurveConfig`，as-built）
+动态利率曲线参数（`baseBps` / `kinkUtilBps` / `slope1Bps` / `slope2Bps` + `lockedRateAdjustBps`，全局单曲线，后续可扩每币种）作为 `ADD_LOAN` 的第三个可选部分下发（proto `SpotLoanRateCurveConfig`）。**存在即整体替换**（非 partial-update——因 0 是合法曲线值）：RiskEngine apply 校验 `valid()`（`base ∈ [0,100%)`、`0 < kink < 100%`、`slope1/slope2 ≥ 0`；`lockedRateAdjustBps` 无约束、apply 时 `openRateBps` 下限 0），valid 才写 `FloatingRateModel`（曲线 4 参）+ `FixedRateModel`（点差）。**client 暂不暴露**（仅 server / 运维侧）。曲线子系统见 §13。
 
 ---
 

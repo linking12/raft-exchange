@@ -3,6 +3,7 @@ package exchange.core2.tests.unit;
 import exchange.core2.core.common.api.binary.BinaryCommandType;
 import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.binary.BatchAddLoanCommand.GlobalLoanConfig;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig;
 import exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig;
 import net.openhft.chronicle.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -111,6 +112,60 @@ class BatchAddLoanCommandTest {
         BatchAddLoanCommand cmd = BatchAddLoanCommand.ofGlobalNumeraire(2);
         assertEquals(BinaryCommandType.ADD_LOAN.getCode(), cmd.getBinaryCommandTypeCode());
         assertEquals(1005, cmd.getBinaryCommandTypeCode());
+    }
+
+    // ================================================================
+    // rateCurve 部分：round-trip + valid + 三部分同时
+    // ================================================================
+
+    @Test
+    void rateCurveOnly_bytesRoundTrip_preservesAllFields() {
+        BatchAddLoanCommand orig = BatchAddLoanCommand.ofRateCurve(150, 7500, 350, 5000, -25);
+        BatchAddLoanCommand parsed = roundTrip(orig);
+
+        assertEquals(orig, parsed);
+        assertTrue(parsed.hasRateCurve());
+        assertFalse(parsed.hasGlobal());
+        assertFalse(parsed.hasSymbol());
+        RateCurveConfig r = parsed.getRateCurve();
+        assertEquals(150, r.getBaseBps());
+        assertEquals(7500, r.getKinkUtilBps());
+        assertEquals(350, r.getSlope1Bps());
+        assertEquals(5000, r.getSlope2Bps());
+        assertEquals(-25, r.getLockedRateAdjustBps());
+    }
+
+    @Test
+    void allThreeParts_bytesRoundTrip_preservesEachIndependently() {
+        BatchAddLoanCommand orig = new BatchAddLoanCommand(new GlobalLoanConfig(2, 7000, 6500, 8500, 150),
+            new SymbolLoanConfig(101, 6000, 8000, 7000, 1_000_000L, 60, 9000),
+            new RateCurveConfig(200, 8000, 400, 6000, 0));
+        BatchAddLoanCommand parsed = roundTrip(orig);
+
+        assertEquals(orig, parsed);
+        assertTrue(parsed.hasGlobal());
+        assertTrue(parsed.hasSymbol());
+        assertTrue(parsed.hasRateCurve());
+        assertEquals(8000, parsed.getRateCurve().getKinkUtilBps());
+    }
+
+    @Test
+    void rateCurve_valid_acceptsSaneCurve() {
+        assertTrue(new RateCurveConfig(200, 8000, 400, 6000, 0).valid());
+        assertTrue(new RateCurveConfig(0, 1, 0, 0, -999).valid(), "base=0 / slope=0 是合法曲线值");
+    }
+
+    @Test
+    void rateCurve_invalid_kinkOutOfRange_returnsFalse() {
+        assertFalse(new RateCurveConfig(200, 0, 400, 6000, 0).valid(), "kink=0 应拒");
+        assertFalse(new RateCurveConfig(200, 10000, 400, 6000, 0).valid(), "kink=100% 应拒");
+    }
+
+    @Test
+    void rateCurve_invalid_negativeOrOverBase_returnsFalse() {
+        assertFalse(new RateCurveConfig(-1, 8000, 400, 6000, 0).valid(), "base<0 应拒");
+        assertFalse(new RateCurveConfig(10000, 8000, 400, 6000, 0).valid(), "base=100% 应拒");
+        assertFalse(new RateCurveConfig(200, 8000, -1, 6000, 0).valid(), "slope1<0 应拒");
     }
 
     // ================================================================

@@ -26,18 +26,25 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
     static final int BPS_FULL = 10_000;
     private final GlobalLoanConfig global;
     private final SymbolLoanConfig symbol;
+    private final RateCurveConfig rateCurve;
 
     public BatchAddLoanCommand(GlobalLoanConfig global, SymbolLoanConfig symbol) {
-        if (global == null && symbol == null) {
-            throw new IllegalArgumentException("BatchAddLoanCommand needs at least one of global/symbol");
+        this(global, symbol, null);
+    }
+
+    public BatchAddLoanCommand(GlobalLoanConfig global, SymbolLoanConfig symbol, RateCurveConfig rateCurve) {
+        if (global == null && symbol == null && rateCurve == null) {
+            throw new IllegalArgumentException("BatchAddLoanCommand needs at least one of global/symbol/rateCurve");
         }
         this.global = global;
         this.symbol = symbol;
+        this.rateCurve = rateCurve;
     }
 
     public BatchAddLoanCommand(BytesIn bytes) {
         this.global = bytes.readByte() != 0 ? new GlobalLoanConfig(bytes) : null;
         this.symbol = bytes.readByte() != 0 ? new SymbolLoanConfig(bytes) : null;
+        this.rateCurve = bytes.readByte() != 0 ? new RateCurveConfig(bytes) : null;
     }
 
     public boolean hasGlobal() {
@@ -46,6 +53,10 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
 
     public boolean hasSymbol() {
         return symbol != null;
+    }
+
+    public boolean hasRateCurve() {
+        return rateCurve != null;
     }
 
     public static BatchAddLoanCommand ofGlobal(int numeraireCurrency, int crossLiquidationLtvBps,
@@ -64,6 +75,12 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             loanMarginCallLtvBps, loanMaxAmount, loanMaxTermDays, collateralWeightBps));
     }
 
+    public static BatchAddLoanCommand ofRateCurve(int baseBps, int kinkUtilBps, int slope1Bps, int slope2Bps,
+        int lockedRateAdjustBps) {
+        return new BatchAddLoanCommand(null, null,
+            new RateCurveConfig(baseBps, kinkUtilBps, slope1Bps, slope2Bps, lockedRateAdjustBps));
+    }
+
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeByte((byte)(global != null ? 1 : 0));
@@ -73,6 +90,10 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
         bytes.writeByte((byte)(symbol != null ? 1 : 0));
         if (symbol != null) {
             symbol.write(bytes);
+        }
+        bytes.writeByte((byte)(rateCurve != null ? 1 : 0));
+        if (rateCurve != null) {
+            rateCurve.write(bytes);
         }
     }
 
@@ -162,6 +183,42 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
                         || (loanMarginCallLtvBps > loanInitialLtvBps && loanMarginCallLtvBps < loanLiquidationLtvBps))))
                 && loanMaxAmount >= 0 && loanMaxTermDays >= 0 && collateralWeightBps >= 0
                 && collateralWeightBps <= BPS_FULL;
+        }
+    }
+
+    /** 动态利率 kinked 曲线（全局单曲线）+ Fixed 点差；存在即整体替换 FloatingRateModel/FixedRateModel 参数。见 loan.md §13.4。 */
+    @AllArgsConstructor
+    @Getter
+    @EqualsAndHashCode
+    @ToString
+    public static final class RateCurveConfig {
+
+        private final int baseBps; // 零利用率基础利率
+        private final int kinkUtilBps; // 利用率拐点（须 0 < kink < 100%）
+        private final int slope1Bps; // 拐点前斜率
+        private final int slope2Bps; // 拐点后斜率
+        private final int lockedRateAdjustBps; // Fixed 相对曲线加/减价（可负，apply 时下限 0）
+
+        RateCurveConfig(BytesIn bytes) {
+            this.baseBps = bytes.readInt();
+            this.kinkUtilBps = bytes.readInt();
+            this.slope1Bps = bytes.readInt();
+            this.slope2Bps = bytes.readInt();
+            this.lockedRateAdjustBps = bytes.readInt();
+        }
+
+        void write(BytesOut bytes) {
+            bytes.writeInt(baseBps);
+            bytes.writeInt(kinkUtilBps);
+            bytes.writeInt(slope1Bps);
+            bytes.writeInt(slope2Bps);
+            bytes.writeInt(lockedRateAdjustBps);
+        }
+
+        /** 曲线自洽：base ∈ [0,100%)、0 < kink < 100%、slope1/slope2 ≥ 0；lockedRateAdjustBps 无约束。 */
+        public boolean valid() {
+            return baseBps >= 0 && baseBps < BPS_FULL && kinkUtilBps > 0 && kinkUtilBps < BPS_FULL && slope1Bps >= 0
+                && slope2Bps >= 0;
         }
     }
 }
