@@ -402,7 +402,7 @@ public final class ApiCommandConverters {
     }
 
     /**
-     * ADD_LOAN: proto → exchange-core binary command。global / symbol 两部分可选（proto message presence），
+     * ADD_LOAN: proto → exchange-core binary command。global / symbol / rateCurve 三部分可选（proto message presence），
      * 字段一一对应无缩放；至少一部分存在（否则 exchange-core 命令构造抛错）。
      */
     public static exchange.core2.core.common.api.binary.BatchAddLoanCommand
@@ -421,7 +421,13 @@ public final class ApiCommandConverters {
                 s.getLoanInitialLtvBps(), s.getLoanLiquidationLtvBps(), s.getLoanMarginCallLtvBps(),
                 s.getLoanMaxAmount(), s.getLoanMaxTermDays(), s.getCollateralWeightBps());
         }
-        return new exchange.core2.core.common.api.binary.BatchAddLoanCommand(global, symbol);
+        exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig rateCurve = null;
+        if (grpc.hasRateCurve()) {
+            var r = grpc.getRateCurve();
+            rateCurve = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig(r.getBaseBps(),
+                r.getKinkUtilBps(), r.getSlope1Bps(), r.getSlope2Bps(), r.getLockedRateAdjustBps());
+        }
+        return new exchange.core2.core.common.api.binary.BatchAddLoanCommand(global, symbol, rateCurve);
     }
 
     /**

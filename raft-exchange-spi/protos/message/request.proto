@@ -415,9 +415,19 @@ message SpotLoanGlobalConfig {
 // ADD_LOAN: 统一 loan 配置命令（合并自旧 update_symbol_loan_config / update_loan_global_config，见 loan.md §11）。
 // 命名对齐 BatchAdd{Accounts,Symbols,Currencies}Command 一族。global / symbol 两块可选：消息存在即配置该部分，
 // 两部分作用域独立、各自校验各自 apply。
+// 动态利率 kinked 曲线（全局单曲线）+ Fixed 点差；存在即整体替换。见 loan.md §13.4。
+message SpotLoanRateCurveConfig {
+  int32 baseBps = 1;             // 零利用率基础利率
+  int32 kinkUtilBps = 2;         // 利用率拐点（须 0 < kink < 10000）
+  int32 slope1Bps = 3;           // 拐点前斜率
+  int32 slope2Bps = 4;           // 拐点后斜率
+  int32 lockedRateAdjustBps = 5; // Fixed 相对曲线加/减价（可负）
+}
+
 message BatchAddLoanCommand {
-  SpotLoanGlobalConfig global = 1;   // 存在 => 配置 shard 级全局参数
-  SpotLoanConfig symbol = 2;         // 存在 => 配置该 symbol 的 per-symbol loan 参数
+  SpotLoanGlobalConfig global = 1;      // 存在 => 配置 shard 级全局参数
+  SpotLoanConfig symbol = 2;            // 存在 => 配置该 symbol 的 per-symbol loan 参数
+  SpotLoanRateCurveConfig rateCurve = 3; // 存在 => 整体替换动态利率曲线参数
 }
 
 message BinaryDataCommand {

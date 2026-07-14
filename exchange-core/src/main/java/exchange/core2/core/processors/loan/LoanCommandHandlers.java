@@ -119,7 +119,9 @@ public final class LoanCommandHandlers {
         }
     }
 
-    // ---- Isolated 借贷 ----
+    /**
+     * ---- Isolated 借贷 ----
+     */
 
     /**
      * 字段：uid / reserveBidPrice=loanId / symbol=symbolId / size=collateralAmount / price=principal / orderId=externalId
@@ -471,7 +473,9 @@ public final class LoanCommandHandlers {
                 -collateralSold, interestPaid, badDebt);
     }
 
-    // ---- Cross 借贷 ----
+    /**
+     * ---- Cross 借贷 ----
+     */
 
     /** 字段：uid / symbol=currency / size=amount / orderId=externalId */
     public CommandResultCode handleLoanCrossAddCollateral(OrderCommand cmd) {
