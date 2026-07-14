@@ -35,8 +35,9 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * 现货借贷子域 scanner（per-shard），{@link LiquidationEngine} 每 tick 委托 {@link #check(UserProfile)} 进来。扫 Isolated + Cross 两条
- * lane：真实债务(含利息) LTV / 期限判定，越线则 publish force-sell IOC 单，仅越预警线则发 margin call。 provider / service 全经
- * {@link LiquidationEngine} 现取；in-flight 去重等运行态是进程级的，不进 raft snapshot，换届重置无碍。
+ * lane：真实债务(含利息) LTV / 期限判定，越线则 publish force-sell IOC 单，仅越预警线则发 margin call。此外借 tick 心跳,
+ * shard 0 按 {@code REPRICE_INTERVAL_MS} 周期发 {@code REPRICE_LOAN_RATES} 驱动动态利率重定价（§13.3）。 provider / service 全经
+ * {@link LiquidationEngine} 现取；in-flight 去重 / reprice 节流等运行态是进程级的，不进 raft snapshot，换届重置无碍。
  */
 @Slf4j
 public final class LoanLiquidationEngine {
@@ -64,13 +65,13 @@ public final class LoanLiquidationEngine {
 
     // ---- Scanner 入口 ----
     public void check(UserProfile userProfile) {
-        // 周期发一条 REPRICE_LOAN_RATES（浮动利率重定价）
+        // 借扫描心跳周期驱动动态利率重定价：仅 shard 0（reprice 是全局命令，单发即可）、按间隔节流，
+        // publisher 自带 leader 门控（follower no-op）。与 userProfile 无关，只是搭 tick 的车。
         final long nowMs = System.currentTimeMillis();
         if (engine.getShardId() == 0 && nowMs - lastRepriceMs >= REPRICE_INTERVAL_MS) {
             lastRepriceMs = nowMs;
             engine.getLiquidationCmdPublisher().publish(ApiRepriceLoanRates.builder().build(), null);
         }
-        // 强平检查
         userProfile.isolatedLoans.forEachValue(this::checkIsolatedLoan);
         checkCrossLoan(userProfile);
     }
