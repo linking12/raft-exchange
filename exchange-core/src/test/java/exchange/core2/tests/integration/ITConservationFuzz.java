@@ -18,7 +18,7 @@ import exchange.core2.core.common.api.ApiLoanRepay;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiSettleFundingFees;
-import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.cmd.CommandResultCode;
@@ -730,7 +730,7 @@ class ITConservationFuzz {
             long markPrice = 50_000L;
             container.initMarkPrice(symbolId, markPrice);
             container.sendBinaryDataCommandSync(
-                    new UpdateSymbolLoanConfigCommand(symbolId, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
+                    BatchAddLoanCommand.ofSymbol(symbolId, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
             container.submitCommandSync(ApiPoolDeposit.builder()
                     .externalId(9_000_000L).shardId(0).currency(quoteCurrencyId).amount(500_000_000L).build(),
                     CommandResultCode.SUCCESS);

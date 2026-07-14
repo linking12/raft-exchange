@@ -38,69 +38,33 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 现货借贷状态 + 纯函数工具 —— per-shard 实例。承载进 raft snapshot 的账本：poolAvailable / poolBorrowed / badDebt /
- * interestRevenue / loanLiquidationFees 五桶 + 运行时配置（cross LTV 阈值 / 利用率上限 / 强平费率 / numeraire）+ 池子幂等表
- * + 利率子系统（{@link FloatingRateModel} / {@link FixedRateModel}），Isolated / Cross 共用、跨 shard 独立。
- * 另有抵债 / LTV / scale 换算 / force-sell orderId 编码等纯函数；计息按 {@code loan.isFixedRate()} 分派到对应利率 model。
- * 不持 RiskEngine ref，依赖经参数传入。命令 apply 在 {@link LoanCommandHandlers}，scanner 在 {@link LoanLiquidationEngine}。
+ * 现货借贷状态 + 纯函数工具，per-shard 实例。进 raft snapshot 的账本（五资金桶 + 运行时配置 + 幂等表 + 利率子系统）， Isolated / Cross 共用、跨 shard 独立。计息按
+ * {@code loan.isFixedRate()} 分派到对应利率 model。命令 apply 在 {@link LoanCommandHandlers}，scanner 在
+ * {@link LoanLiquidationEngine}。
  */
+@Getter
 public class LoanService implements WriteBytesMarshallable, StateHash {
 
-    // ================================================================
-    // 常量
-    // ================================================================
-
-    // --- 计息 / 精度 ---
     public static final long YEAR_MS = 365L * 24L * 3600L * 1_000L; // 1 年（ms），跨节点唯一确定性形式
     public static final long BPS_SCALE = 10_000L; // bps 精度基准（10000 = 100%）
 
-    // --- force-sell orderId 编码常量（布局见 forceSellOrderId）---
-    public static final long ORDERID_NAMESPACE_TAG = 0x4CL; // 'L'：loan 强平 orderId 命名空间，独占以避开期货 'I' / ADL 'A'
-    public static final long ORDERID_SUBTYPE_ISOLATED = 0x53L; // 'S'：逐仓
-    public static final long ORDERID_SUBTYPE_CROSS = 0x43L; // 'C'：全仓
-    public static final long ORDERID_UID_MASK = 0xF_FFFFL; // 20 bit：uid 扰动 hash
-    public static final long ORDERID_LOANID_MASK = 0xFFFFL; // 16 bit：loanId 扰动 hash
-    public static final long ORDERID_TS_MASK = 0xFFFL; // 12 bit：秒（4096s≈68min 后回绕）
+    // force-sell orderId 编码常量（布局见 forceSellOrderId）
+    public static final long ORDERID_NAMESPACE_TAG = 0x4CL; // 'L'：独占命名空间，避开期货 'I' / ADL 'A'
+    public static final long ORDERID_SUBTYPE_ISOLATED = 0x53L; // 'S'
+    public static final long ORDERID_SUBTYPE_CROSS = 0x43L; // 'C'
+    public static final long ORDERID_UID_MASK = 0xF_FFFFL; // 20 bit uid hash
+    public static final long ORDERID_LOANID_MASK = 0xFFFFL; // 16 bit loanId hash
+    public static final long ORDERID_TS_MASK = 0xFFFL; // 12 bit 秒（4096s≈68min 后回绕）
 
-    // ================================================================
-    // State（进 raft snapshot，per-shard 独立）
-    // ================================================================
-
-    // --- 资金桶（loanCurrency scale）。poolAvailable/interestRevenue/liqFees 进全局对账；borrowed/badDebt 仅追踪 ---
-    // 可借余额：CREATE/BORROW −，REPAY/force-sell/POOL_DEPOSIT +
-    @Getter
-    private final IntLongHashMap loanPoolAvailable;
-    // 已借出 = Σ(isolated+cross) outstandingPrincipal(loanCurrency==currency)；不进对账，仅 utilization/metric
-    @Getter
-    private final IntLongHashMap loanPoolBorrowed;
-    // 坏账：underwater 核销的损失（审计负桶，非二次扣真金）
-    @Getter
-    private final IntLongHashMap badDebt;
-    // 利息收入：REPAY / force-sell 结算时入桶（跟撮合 fees 分账）
-    @Getter
-    private final IntLongHashMap interestRevenue;
-    // 强平专项费：结算时按 loanLiquidationFeeBps 抽取入桶
-    @Getter
-    private final IntLongHashMap loanLiquidationFees;
-
-    // --- 全局运行时配置（UPDATE_LOAN_GLOBAL_CONFIG 可调）：Cross LTV 阈值 / 池利用率上限 / 强平费率 / numeraire ---
-    @Getter
-    private final LoanGlobalConfig globalConfig;
-
-    // --- 幂等 ---
-    // POOL_* 命令去重（per-shard，独立于 UserProfile.processedExternalIds）
-    @Getter
-    private final BoundedLongDedupSet poolProcessedExternalIds;
-
-    // --- 动态利率子系统：Floating 是动态利率引擎（曲线+累加器），Fixed 开仓锁它当前利率 ---
-    @Getter
-    private final FloatingRateModel floatingRate; // Isolated FLOATING + 全部 Cross：曲线 + reprice + 累加器计息
-    @Getter
-    private final FixedRateModel fixedRate; // Isolated LOCKED：锁 floating 当前利率 + lockedAdjust，线性计息
-
-    // ================================================================
-    // 构造 / reset / 序列化 / stateHash
-    // ================================================================
+    private final IntLongHashMap loanPoolAvailable; // 可借余额
+    private final IntLongHashMap loanPoolBorrowed; // 已借出本金
+    private final IntLongHashMap badDebt; // underwater 核销的坏账损失
+    private final IntLongHashMap interestRevenue; // 利息收入
+    private final IntLongHashMap loanLiquidationFees; // 强平专项费收入
+    private final LoanGlobalConfig globalConfig; // 全局运行时配置（Cross 阈值 / 池上限 / numeraire）
+    private final BoundedLongDedupSet poolProcessedExternalIds; // 池子运营命令去重
+    private final FloatingRateModel floatingRate; // 活期利率：Isolated FLOATING + 全部 Cross
+    private final FixedRateModel fixedRate; // 定期利率：Isolated LOCKED
 
     public LoanService() {
         this.loanPoolAvailable = new IntLongHashMap();
@@ -156,8 +120,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
     @Override
     public int stateHash() {
-        // IntLongHashMap.hashCode() 本身 order/capacity independent，跟 UserProfile.stateHash 的 accounts/exchangeLocked 同款
-        // pattern。
+        // IntLongHashMap.hashCode() order/capacity independent
         return Objects.hash(loanPoolAvailable.hashCode(), loanPoolBorrowed.hashCode(), badDebt.hashCode(),
             interestRevenue.hashCode(), loanLiquidationFees.hashCode(), globalConfig.stateHash(),
             poolProcessedExternalIds.stateHash(), floatingRate.stateHash(), fixedRate.stateHash());
@@ -170,11 +133,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
             + ", poolDedup=" + poolProcessedExternalIds.size() + '}';
     }
 
-    // ================================================================
-    // 惰性计息 + 抵债 —— Isolated / Cross 共用（LoanRecord 视图）
-    // 计息公式：interest = elapsed_ms × principal × rateBps / (YEAR_MS × BPS_SCALE)，两次 truncMulDiv 防溢出；
-    // now < lastAccrueTs（时钟倒退）视为 0 elapsed。
-    // ================================================================
+    // ---- 惰性计息 + 抵债（Isolated / Cross 共用）----
 
     /** 写路径：补计利息到 now，累加进 accumulatedInterest 并推进游标；返回本次新增利息（≥ 0）。 */
     public long accrueTo(LoanRecord loan, long now) {
@@ -187,8 +146,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * 用 fund（loanCurrency）按 <b>利息优先 → 本金</b> 抵债，抵扣上限为当前未偿本息（超出即 overpay，不动）。 从 account 扣实付、利息进 interestRevenue、本金回
-     * loanPool；返回<b>本次结算的利息部分</b>（interestPart ≥ 0，供调用方发 LOAN_REPAY / LOAN_LIQUIDATED 事件）。REPAY 与强平结算共用此一处金钱逻辑。
+     * 用 fund 按利息优先 → 本金抵债，上限为当前未偿本息。返回本次结算的利息部分（≥ 0，供调用方发 LOAN_REPAY / LOAN_LIQUIDATED 事件）。REPAY 与强平结算共用此一处金钱逻辑。
      */
     public long applyDebtPayment(LoanRecord loan, IntLongHashMap account, long fund) {
         int currency = loan.getLoanCurrency();
@@ -205,9 +163,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * 强平所得 receivedQuote（loanCurrency，已扣撮合 takerFee）的统一去向：先抽 {@code loanLiquidationFeeBps} 强平费进 loanLiquidationFees，再
-     * accrue + 抵债；剩余 overpay 留在 account。Isolated / Cross 强平共用。返回<b>本次结算的利息部分</b>（≥ 0，供调用方发 LOAN_REPAY / LOAN_LIQUIDATED
-     * 事件）。
+     * 强平所得 receivedQuote（已扣撮合 takerFee）的统一去向：先抽强平费进 loanLiquidationFees，再 accrue + 抵债，剩余 overpay 留在
+     * account。返回本次结算的利息部分（≥ 0）。Isolated / Cross 强平共用。
      */
     public long settleLiquidationProceeds(LoanRecord loan, IntLongHashMap account, long receivedQuote, long now) {
         long liqFee = Math.min(receivedQuote,
@@ -218,29 +175,17 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return applyDebtPayment(loan, account, receivedQuote - liqFee);
     }
 
-    // ================================================================
-    // Cross 账户级 LTV
-    // ================================================================
+    // ---- Cross 账户级 LTV ----
 
     /**
-     * 账户级 LTV（bps）—— scanner 决策 + Cross BORROW/WITHDRAW 校验共用，归一到 numeraire currency scale：
-     * 
-     * <pre>
-     *   LTV = totalDebt × BPS_SCALE / weightedCollateral
-     *   totalDebt          = Σ valueInNumeraire(loan.loanCurrency, principal + 含 pending 的利息)
-     *   weightedCollateral = Σ valueInNumeraire(cur, crossLoanCollateral[cur]) × collateralWeightBps(cur) / BPS_SCALE
-     * </pre>
-     * 
-     * 边界返回：无债务 / numeraire 未配 / 价格未就绪 → 0（保守 skip）；有债务但无抵押 → {@link Long#MAX_VALUE}； 溢出 debt 侧 → MAX_VALUE、collateral 侧
-     * → 0。
+     * 账户级 LTV（bps）= totalDebt × BPS_SCALE / weightedCollateral，归一到 numeraire scale。scanner 决策 + Cross BORROW/WITHDRAW
+     * 校验共用。边界：无债务 / numeraire 未配 / 价格未就绪 → 0（保守 skip）；有债务但无抵押 → {@link Long#MAX_VALUE}；溢出 debt 侧 → MAX_VALUE、collateral
+     * 侧 → 0。
      */
     public long calculateCrossAccountLtvBps(UserProfile userProfile, long now, SymbolSpecificationProvider specProvider,
         CurrencySpecificationProvider currencyProvider, IntObjectHashMap<LastPriceCacheRecord> priceCache,
         int numeraireCurrency) {
-        if (userProfile.crossLoans.isEmpty()) {
-            return 0L;
-        }
-        if (numeraireCurrency == 0) {
+        if (userProfile.crossLoans.isEmpty() || numeraireCurrency == 0) {
             return 0L;
         }
         CoreCurrencySpecification numeraireSpec = currencyProvider.getCurrencySpecification(numeraireCurrency);
@@ -248,7 +193,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
             return 0L;
         }
 
-        // ===== 债务侧 =====
+        // 债务侧
         long totalDebt = 0L;
         for (CrossLoanRecord loan : userProfile.crossLoans) {
             if (loan.outstandingPrincipal <= 0)
@@ -270,7 +215,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
             }
         }
 
-        // ===== 抵押侧 =====
+        // 抵押侧
         long weightedCollateral = 0L;
         int[] currencies = userProfile.crossLoanCollateral.keySet().toArray();
         for (int currency : currencies) {
@@ -299,8 +244,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * currency 的 amount 换算成 numeraire currencyScale：currency==numeraire 直接返回；否则经 base=currency/quote=numeraire 现货对的
-     * markPrice 折算。找不到 spec / markPrice / currencySpec → -1（caller 视为价格未就绪 skip）。
+     * amount 换算成 numeraire currencyScale，经 base=currency/quote=numeraire 现货对的 markPrice；缺 spec / markPrice /
+     * currencySpec → -1（价格未就绪 skip）。
      */
     private static long valueInNumeraire(int currency, long amount, int numeraireCurrency,
         CoreCurrencySpecification numeraireSpec, SymbolSpecificationProvider specProvider,
@@ -315,18 +260,11 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         if (rec == null || rec.markPrice <= 0)
             return -1L;
         CoreCurrencySpecification currencySpec = currencyProvider.getCurrencySpecification(currency);
-        if (currencySpec == null)
-            return -1L;
-        // currency 的 currencyScale → base scale → ×markPrice → numeraire currencyScale
-        long baseAmount = CoreArithmeticUtils.currencyToSymbolScale(amount, spec, currencySpec);
-        long notional = Math.multiplyExact(baseAmount, rec.markPrice);
-        return CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, numeraireSpec);
+        // 换算复用 collateralValueInQuoteCurrency（base=currency 折成 quote=numeraire）
+        return collateralValueInQuoteCurrency(amount, spec, rec.markPrice, currencySpec, numeraireSpec);
     }
 
-    /**
-     * base amount（base currencyScale）经 markPrice 折算成 quote 等值量（quote currencyScale）；Isolated LTV / scanner 用。 三步：base
-     * currencyScale → baseScale → ×markPrice(sizePriceScale) → quote currencyScale。缺 currencySpec 返回 -1。
-     */
+    /** base amount 经 markPrice 折算成 quote 等值量（quote currencyScale）；Isolated LTV / scanner 用。缺 currencySpec 返回 -1。 */
     public static long collateralValueInQuoteCurrency(long amount, CoreSymbolSpecification spec, long markPrice,
         CoreCurrencySpecification baseCurrencySpec, CoreCurrencySpecification quoteCurrencySpec) {
         if (baseCurrencySpec == null || quoteCurrencySpec == null)
@@ -336,10 +274,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return CoreArithmeticUtils.sizePriceToCurrencyScale(notional, spec, quoteCurrencySpec);
     }
 
-    // ================================================================
-    // Force-sell scale 换算 —— 抵押记账（currencyScale）↔ 撮合订单张数（lot）
-    // force-sell 是抵押唯一跨出账户域进撮合域的路径，故只在这里换尺。
-    // ================================================================
+    // ---- 强平卖出量：抵押记账量 ↔ 撮合张数 ----
 
     /** 抵押金额（base currencyScale）→ 强平下单张数（lot）；不足一张截断为 0。 */
     public static long collateralAmountToLots(long amount, CoreSymbolSpecification spec,
@@ -360,10 +295,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return CoreArithmeticUtils.ceilDivide(notional, markPrice);
     }
 
-    /**
-     * currency 作抵押时是否还有≥1 张可卖（任一 base=currency 的现货 pair）。sub-lot 尘埃 → false。 Cross underwater 判定用：所有抵押币种都无可卖整张，才认定账户级
-     * underwater。
-     */
+    /** currency 作抵押是否还有≥1 张可卖（任一 base=currency 现货 pair）；sub-lot 尘埃 → false。Cross underwater 判定用。 */
     public static boolean hasSellableCollateralLot(int currency, long amount, SymbolSpecificationProvider specProvider,
         CurrencySpecificationProvider currencyProvider) {
         if (amount <= 0)
@@ -404,10 +336,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return null;
     }
 
-    /**
-     * 返回 currency 作 Cross 抵押时的折价率（bps）；未开放作抵押返回 0。规则：找第一条 base=currency 且 collateralWeightBps &gt; 0 的现货 pair 的
-     * weight。O(N)（Cross 抵押估值按币种查）。
-     */
+    /** currency 作 Cross 抵押的折价率（bps）= 第一条 base=currency 且 collateralWeightBps&gt;0 现货 pair 的 weight；未开放返回 0。O(N)。 */
     public static int collateralWeightForBase(int currency, SymbolSpecificationProvider provider) {
         for (CoreSymbolSpecification spec : provider.getSymbolSpecs()) {
             if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && spec.baseCurrency == currency
@@ -418,13 +347,8 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
         return 0;
     }
 
-    // ================================================================
-    // 强平卖单 orderId 编码，布局（对齐期货「身份 + 秒级时间戳」，无状态）：
-    // | 63..56 'L' | 55..48 subtype | 47..28 uidHash(20) | 27..12 loanIdHash(16) | 11..0 秒(12) |
-    // 身份 (uid, loanId) 编进 orderId：一笔 loan 最多一条强平流，同笔多轮补发靠 scanner in-flight guard
-    // 兜底（同期货）；秒级时间戳区分跨时间的补发。tickTimeMs = scanner tick（leader 生成、随命令复制 → 各副本确定）。
-    // orderId 不承担 loanId 反查（loanId 走 cmd.reserveBidPrice）。
-    // ================================================================
+    // ---- 强平卖单 orderId 编码 ----
+    // 布局：| 63..56 'L' | 55..48 subtype | 47..28 uidHash(20) | 27..12 loanIdHash(16) | 11..0 秒(12) |
 
     public static long forceSellOrderId(long subtype, long uid, long loanId, long tickTimeMs) {
         long uidHash = (uid * 31 + 17) & ORDERID_UID_MASK;

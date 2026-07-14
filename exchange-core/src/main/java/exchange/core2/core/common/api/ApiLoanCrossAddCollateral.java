@@ -6,8 +6,8 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * LOAN_CROSS_ADD_COLLATERAL —— Cross 账户级抵押池增（详见 loan.md §5.6）。
- * <p>externalId → orderId / currency → symbol / amount → size。
- * Cross 多笔 debt 共享该多币种抵押池。
+ * <p>
+ * externalId → orderId / currency → symbol / amount → size。 Cross 多笔 debt 共享该多币种抵押池。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)

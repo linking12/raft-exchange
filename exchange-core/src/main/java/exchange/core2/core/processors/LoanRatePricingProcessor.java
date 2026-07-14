@@ -15,17 +15,10 @@ import exchange.core2.core.processors.loan.rate.FloatingRateModel;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * REPRICE_LOAN_RATES 两步处理器（动态利率按全局利用率重定价）：
- * <ul>
- *   <li><b>R1</b> {@link #collectInput}：每 shard 把本地 {@code loanPoolBorrowed} / {@code loanPoolAvailable}
- *       写进 {@code cmd.commonByShard[shard].amounts}——<b>复用这一张 map</b>，key 编码区分两侧：
- *       <b>borrowed 存 key = currency（≥0）、available 存 key = ~currency（&lt;0）</b>，一一对应无冲突。</li>
- *   <li><b>merge</b> {@link #buildMatcherEvents}：跨 shard 按 key 符号解码求和 → 每币种全局利用率
- *       {@code util = ΣB / (ΣB+ΣA)}，每币种产一条 event 携带 {@code util}。曲线参数在 FloatingRateModel（各 shard 相同），
- *       matcher 阶段拿不到 → 只算 util，利率放到 R2 算。</li>
- *   <li><b>R2</b> {@link #applyEvent}：<b>每个 shard</b>（无 shardId==0 短路）先推 Floating 累加器、再按 util 过曲线写
- *       {@code floatingRate.currentRateBps[currency]}——各 shard 写入相同值。只写利率缓存、不碰余额，无守恒影响。</li>
- * </ul>
+ * REPRICE_LOAN_RATES 两步处理器：按全局利用率重定价动态利率。R1 {@link #collectInput} 每 shard 写本地池数据， merge {@link #buildMatcherEvents} 跨
+ * shard 求和算每币种 util，R2 {@link #applyEvent} 每 shard 过曲线写生效利率。
+ * <p>
+ * R1 复用同一张 {@code amounts} map 存两侧，靠 key 符号区分：borrowed 存 key = currency（≥0）、available 存 key = ~currency（&lt;0），一一对应无冲突。
  */
 @Slf4j
 public final class LoanRatePricingProcessor extends TwoStepCommandProcessor {
@@ -48,13 +41,13 @@ public final class LoanRatePricingProcessor extends TwoStepCommandProcessor {
         for (int currency : borrowed.keySet().toArray()) {
             long v = borrowed.get(currency);
             if (v != 0) {
-                shardData.put(currency, v);   // borrowed → key = currency
+                shardData.put(currency, v); // borrowed → key = currency
             }
         }
         for (int currency : available.keySet().toArray()) {
             long v = available.get(currency);
             if (v != 0) {
-                shardData.put(~currency, v);  // available → key = ~currency
+                shardData.put(~currency, v); // available → key = ~currency
             }
         }
     }
@@ -81,12 +74,12 @@ public final class LoanRatePricingProcessor extends TwoStepCommandProcessor {
         }
         MatcherTradeEvent head = null;
         MatcherTradeEvent tail = null;
-        for (int currency : currencies.toSortedArray()) {   // 排序：跨节点确定性
+        for (int currency : currencies.toSortedArray()) { // 排序：跨节点确定性
             long util = FloatingRateModel.utilizationBps(totalBorrowed.get(currency), totalAvailable.get(currency));
             MatcherTradeEvent ev = eventsHelper.newMatcherEvent();
             ev.eventType = MatcherEventType.LOAN_REPRICE_EVENT;
-            ev.matchedOrderUid = currency;   // 载 currency
-            ev.size = util;                  // 载全局利用率（bps）
+            ev.matchedOrderUid = currency; // 载 currency
+            ev.size = util; // 载全局利用率（bps）
             if (head == null) {
                 head = ev;
             } else {
@@ -104,9 +97,9 @@ public final class LoanRatePricingProcessor extends TwoStepCommandProcessor {
         if (ev.eventType != MatcherEventType.LOAN_REPRICE_EVENT) {
             return;
         }
-        final int currency = (int) ev.matchedOrderUid;
+        final int currency = (int)ev.matchedOrderUid;
         final LoanService loanService = riskEngine.getLoanService();
         loanService.getFloatingRate().advanceAccumulator(currency, cmd.timestamp); // 先用旧 currentRate 推进 Floating 累加器
-        loanService.getFloatingRate().repriceCurrency(currency, ev.size);             // 再把 util 过曲线写新生效利率
+        loanService.getFloatingRate().repriceCurrency(currency, ev.size); // 再把 util 过曲线写新生效利率
     }
 }

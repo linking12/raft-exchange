@@ -20,11 +20,8 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 一个 symbol（pair）的现货借贷 per-symbol 配置，挂在 {@link CoreSymbolSpecification#loanConfig} 上。 "业务不可变、物理可写"：仅
- * {@code UPDATE_SYMBOL_LOAN_CONFIG} 命令经 {@link #update} 改写。全 0 = 该 pair 借贷未启用。
- *
- * <p>
- * 注意：<b>利率不在此</b> —— 利率是 per-loanCurrency（池级）概念，归 LoanService 利率子系统。
+ * per-symbol 现货借贷配置，挂在 {@link CoreSymbolSpecification#loanConfig} 上；全 0 = 该 pair 未启用。仅
+ * {@code UPDATE_SYMBOL_LOAN_CONFIG} 经 {@link #update} 改写。利率不在此（是 per-loanCurrency 池级概念，归 LoanService）。
  */
 public final class SymbolLoanSpecification implements WriteBytesMarshallable, StateHash {
 
@@ -35,9 +32,7 @@ public final class SymbolLoanSpecification implements WriteBytesMarshallable, St
     public int maxTermDays; // 最大贷款期限（天）；0 = 无期限（仅 Isolated LOCKED 生效）
     public int collateralWeightBps; // Cross 抵押折价率（bps）；0 = 该 currency 不能作 Cross 抵押
 
-    public SymbolLoanSpecification() {
-        // 全 0：loan 未启用
-    }
+    public SymbolLoanSpecification() {}
 
     @Builder
     public SymbolLoanSpecification(int initialLtvBps, int liquidationLtvBps, int marginCallLtvBps, long maxAmount,
@@ -59,12 +54,11 @@ public final class SymbolLoanSpecification implements WriteBytesMarshallable, St
         this.collateralWeightBps = bytes.readInt();
     }
 
-    /** 借贷是否在该 pair 启用（开仓 LTV 上限 > 0）。 */
     public boolean isEnabled() {
         return initialLtvBps > 0;
     }
 
-    /** 物理改写（UPDATE_SYMBOL_LOAN_CONFIG 唯一 mutation point；caller 已完成字段层校验）。 */
+    /** 唯一 mutation point；caller 已完成字段层校验。 */
     public void update(int initialLtvBps, int liquidationLtvBps, int marginCallLtvBps, long maxAmount, int maxTermDays,
         int collateralWeightBps) {
         this.initialLtvBps = initialLtvBps;

@@ -6,8 +6,7 @@ import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
 import exchange.core2.core.common.api.binary.BinaryCommandType;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
-import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
-import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.reports.*;
 import lombok.Getter;
 import net.openhft.chronicle.bytes.BytesIn;
@@ -53,10 +52,8 @@ public final class ReportsQueriesConfiguration {
         addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_ACCOUNTS, BatchAddAccountsCommand.class);
         addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_SYMBOLS, BatchAddSymbolsCommand.class);
         addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_CURRENCIES, BatchAddCurrenciesCommand.class);
-        addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.UPDATE_SYMBOL_LOAN_CONFIG,
-            UpdateSymbolLoanConfigCommand.class);
-        addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.UPDATE_LOAN_GLOBAL_CONFIG,
-            UpdateLoanGlobalConfigCommand.class);
+        addBinaryCommandClass(binaryCommandConstructors, BinaryCommandType.ADD_LOAN,
+            BatchAddLoanCommand.class);
 
         // predefined queries (extendable)
         addQueryClass(reportConstructors, ReportType.STATE_HASH.getCode(), StateHashReportQuery.class);

@@ -311,6 +311,10 @@ message ApiLoanCrossForceLiquidate {
   OrderType orderType = 8;
 }
 
+// REPRICE_LOAN_RATES：动态利率周期重定价（scanner 每 shard0 周期触发，走 raft 复制；详见 loan.md §13.3）。无 payload。
+message ApiRepriceLoanRates {
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -353,6 +357,7 @@ message ApiCommand {
     ApiLoanForceLiquidate loan_force_liquidate = 36;
     ApiLoanCrossForceLiquidate loan_cross_force_liquidate = 37;
     ApiPoolAbsorbBadDebt pool_absorb_bad_debt = 38;
+    ApiRepriceLoanRates reprice_loan_rates = 39;
   }
 }
 
@@ -407,13 +412,21 @@ message SpotLoanGlobalConfig {
   int32 loanLiquidationFeeBps = 5;       // 强平专项费率（bps）
 }
 
+// ADD_LOAN: 统一 loan 配置命令（合并自旧 update_symbol_loan_config / update_loan_global_config，见 loan.md §11）。
+// 命名对齐 BatchAdd{Accounts,Symbols,Currencies}Command 一族。global / symbol 两块可选：消息存在即配置该部分，
+// 两部分作用域独立、各自校验各自 apply。
+message BatchAddLoanCommand {
+  SpotLoanGlobalConfig global = 1;   // 存在 => 配置 shard 级全局参数
+  SpotLoanConfig symbol = 2;         // 存在 => 配置该 symbol 的 per-symbol loan 参数
+}
+
 message BinaryDataCommand {
+  reserved 4, 5;  // 原 update_symbol_loan_config / update_loan_global_config，已合并为 add_loan
   oneof command {
     BatchAddAccountsCommand add_accounts = 1;
     BatchAddSymbolsCommand add_symbols = 2;
     BatchAddCurrenciesCommand add_currencies = 3;
-    SpotLoanConfig update_symbol_loan_config = 4;
-    SpotLoanGlobalConfig update_loan_global_config = 5;
+    BatchAddLoanCommand add_loan = 6;
   }
 }
 

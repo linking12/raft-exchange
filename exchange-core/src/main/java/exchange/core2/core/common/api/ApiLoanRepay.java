@@ -6,8 +6,8 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * LOAN_REPAY —— Isolated 还款（详见 loan.md §5.3）。
- * <p>externalId → orderId / loanId → reserveBidPrice / repayAmount → price（0 表示 payoff 全部本息）。
- * 部分还款不释放抵押。
+ * <p>
+ * externalId → orderId / loanId → reserveBidPrice / repayAmount → price（0 表示 payoff 全部本息）。 部分还款不释放抵押。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)

@@ -6,13 +6,13 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * LOAN_ADD_COLLATERAL —— Isolated 补抵押降 LTV（详见 loan.md §5.4）。
- * <p>externalId → orderId / loanId → reserveBidPrice / amount → size。
+ * <p>
+ * externalId → orderId / loanId → reserveBidPrice / amount → size。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)
 @RequiredArgsConstructor
 public class ApiLoanAddCollateral extends ApiCommand {
-
     public final long externalId;
     public final long uid;
     public final long loanId;

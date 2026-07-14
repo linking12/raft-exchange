@@ -43,8 +43,7 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.binary.BatchAddAccountsCommand;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
-import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
-import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.ReportQuery;
 import exchange.core2.core.common.api.reports.ReportResult;
@@ -1161,53 +1160,51 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
             });
 
-        } else if (message instanceof UpdateLoanGlobalConfigCommand) {
-            final UpdateLoanGlobalConfigCommand cmd = (UpdateLoanGlobalConfigCommand)message;
-            final int newNumeraire = cmd.getNumeraireCurrency();
-            // partial update（≤0 = 不改）+ apply-all-or-nothing：任一违规整条拒绝，不留半更新的配置
-            final boolean numeraireOk =
-                newNumeraire <= 0 || currencySpecificationProvider.getCurrencySpecification(newNumeraire) != null;
-            final boolean valid =
-                numeraireOk && cmd.thresholdsValidGivenCurrent(loanService.getGlobalConfig().crossLiquidationLtvBps,
-                    loanService.getGlobalConfig().crossMarginCallLtvBps);
-            if (!valid) {
-                log.warn("UPDATE_LOAN_GLOBAL_CONFIG rejected (invalid config): {}", cmd);
-            } else {
+        } else if (message instanceof BatchAddLoanCommand) {
+            // 统一 loan 配置更新：global / symbol 两部分作用域独立，各自校验、各自 apply，一部分非法不影响另一部分。
+            final BatchAddLoanCommand cmd = (BatchAddLoanCommand)message;
+            // --- 全局部分：partial-update（≤0=不改）+ apply-all-or-nothing，任一违规整条拒绝、不留半更新 ---
+            if (cmd.hasGlobal()) {
+                final BatchAddLoanCommand.GlobalLoanConfig g = cmd.getGlobal();
+                final int newNumeraire = g.getNumeraireCurrency();
                 final LoanGlobalConfig config = loanService.getGlobalConfig();
-                if (newNumeraire > 0) {
-                    config.numeraireCurrency = newNumeraire;
+                final boolean numeraireOk =
+                    newNumeraire <= 0 || currencySpecificationProvider.getCurrencySpecification(newNumeraire) != null;
+                if (numeraireOk
+                    && g.thresholdsValidGivenCurrent(config.crossLiquidationLtvBps, config.crossMarginCallLtvBps)) {
+                    if (newNumeraire > 0) {
+                        config.numeraireCurrency = newNumeraire;
+                    }
+                    if (g.getCrossLiquidationLtvBps() > 0) {
+                        config.crossLiquidationLtvBps = g.getCrossLiquidationLtvBps();
+                    }
+                    if (g.getCrossMarginCallLtvBps() > 0) {
+                        config.crossMarginCallLtvBps = g.getCrossMarginCallLtvBps();
+                    }
+                    if (g.getLoanPoolUtilizationCapBps() > 0) {
+                        config.loanPoolUtilizationCapBps = g.getLoanPoolUtilizationCapBps();
+                    }
+                    if (g.getLoanLiquidationFeeBps() > 0) {
+                        config.loanLiquidationFeeBps = g.getLoanLiquidationFeeBps();
+                    }
+                    log.info("ADD_LOAN global config applied: {}", g);
+                } else {
+                    log.warn("ADD_LOAN global config rejected (invalid config): {}", g);
                 }
-                if (cmd.getCrossLiquidationLtvBps() > 0) {
-                    config.crossLiquidationLtvBps = cmd.getCrossLiquidationLtvBps();
-                }
-                if (cmd.getCrossMarginCallLtvBps() > 0) {
-                    config.crossMarginCallLtvBps = cmd.getCrossMarginCallLtvBps();
-                }
-                if (cmd.getLoanPoolUtilizationCapBps() > 0) {
-                    config.loanPoolUtilizationCapBps = cmd.getLoanPoolUtilizationCapBps();
-                }
-                if (cmd.getLoanLiquidationFeeBps() > 0) {
-                    config.loanLiquidationFeeBps = cmd.getLoanLiquidationFeeBps();
-                }
-                log.info("UPDATE_LOAN_GLOBAL_CONFIG applied: {}", cmd);
             }
-        } else if (message instanceof UpdateSymbolLoanConfigCommand) {
-            final UpdateSymbolLoanConfigCommand cmd = (UpdateSymbolLoanConfigCommand)message;
-            final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.getSymbolId());
-            final int initial = cmd.getLoanInitialLtvBps();
-            final int liq = cmd.getLoanLiquidationLtvBps();
-            final int mc = cmd.getLoanMarginCallLtvBps();
-            final boolean valid =
-                spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && initial >= 0 && initial < 10000
-                    && (initial == 0 || (liq > initial && liq < 10000 && (mc == 0 || (mc > initial && mc < liq))))
-                    && cmd.getLoanMaxAmount() >= 0 && cmd.getLoanMaxTermDays() >= 0
-                    && cmd.getCollateralWeightBps() >= 0 && cmd.getCollateralWeightBps() <= 10000;
-            if (valid) {
-                spec.updateLoanConfig(initial, liq, mc, cmd.getLoanMaxAmount(),
-                    cmd.getLoanMaxTermDays(), cmd.getCollateralWeightBps());
-                log.info("UPDATE_SYMBOL_LOAN_CONFIG applied: {}", cmd);
-            } else {
-                log.warn("UPDATE_SYMBOL_LOAN_CONFIG rejected: {}", cmd);
+            // --- per-symbol 部分：字段层校验 + spec 存在性/类型校验，valid 才原子改写该 pair 的 loan 配置 ---
+            if (cmd.hasSymbol()) {
+                final BatchAddLoanCommand.SymbolLoanConfig s = cmd.getSymbol();
+                final CoreSymbolSpecification spec =
+                    symbolSpecificationProvider.getSymbolSpecification(s.getSymbolId());
+                if (spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && s.fieldsValid()) {
+                    spec.updateLoanConfig(s.getLoanInitialLtvBps(), s.getLoanLiquidationLtvBps(),
+                        s.getLoanMarginCallLtvBps(), s.getLoanMaxAmount(), s.getLoanMaxTermDays(),
+                        s.getCollateralWeightBps());
+                    log.info("ADD_LOAN symbol config applied: {}", s);
+                } else {
+                    log.warn("ADD_LOAN symbol config rejected: {}", s);
+                }
             }
         }
     }

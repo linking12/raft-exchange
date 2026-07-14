@@ -25,20 +25,14 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * Fixed（Lock / 定期）利率实现，仅适用 Isolated LOCKED。
- *
- * <p>
- * Fixed = <b>开仓锁定 {@link FloatingRateModel} 当前利率 + 点差</b>，之后不变；计息走线性（利率恒为开仓锁进 loan.rateBps 的值）。
- * 独有状态只有 {@code lockedRateAdjustBps}，利率来源从 floating 引擎读。
+ * 定期利率实现（Fixed / Lock），仅适用 Isolated LOCKED：开仓锁定 {@link FloatingRateModel} 当前利率 + 点差，之后不变，走线性计息。 独有状态只有
+ * {@code lockedRateAdjustBps}，利率来源从 floating 引擎读。见 loan.md §13。
  */
+@Getter
+@Setter
 public final class FixedRateModel implements WriteBytesMarshallable, StateHash {
-
     private final FloatingRateModel floating;
-
-    // Fixed 相对曲线的加/减价（bps），默认 0 = 与 Floating 同价
-    @Getter
-    @Setter
-    private int lockedRateAdjustBps;
+    private int lockedRateAdjustBps; // 相对曲线的加/减价（bps），默认 0 = 与 Floating 同价
 
     public FixedRateModel(FloatingRateModel floating) {
         this.floating = floating;
@@ -50,17 +44,14 @@ public final class FixedRateModel implements WriteBytesMarshallable, StateHash {
         this.lockedRateAdjustBps = bytes.readInt();
     }
 
-    /** Fixed 开仓利率 = floating 当前利率（未 reprice 回退 base）+ lockedRateAdjustBps，下限 0。锁进 loan.rateBps。 */
+    /** 开仓利率 = floating 当前利率（未 reprice 回退 base）+ lockedRateAdjustBps，下限 0。锁进 loan.rateBps。 */
     public int openRateBps(int loanCurrency) {
         return (int)Math.max(0L, (long)floating.currentRateBpsOrBase(loanCurrency) + lockedRateAdjustBps);
     }
 
-    // ================================================================
-    // 计息（线性，利率恒 loan.rateBps 锁定值；now < lastAccrueTs 视为 0 elapsed）
-    // interest = elapsed_ms × principal × rateBps / (YEAR_MS × BPS_SCALE)，两次 truncMulDiv 防溢出
-    // ================================================================
+    // ---- 线性计息（利率恒 loan.rateBps）----
 
-    /** 写路径：补计利息到 now，累加进 accumulatedInterest 并推进 lastAccrueTs；返回本次新增利息（≥ 0）。 */
+    /** 写路径：补计利息到 now，推进 lastAccrueTs；返回本次新增利息（≥ 0）。 */
     public long accrue(LoanRecord loan, long now) {
         long delta = accrueDelta(loan.getOutstandingPrincipal(), loan.getRateBps(), loan.getLastAccrueTs(), now);
         if (delta > 0) {

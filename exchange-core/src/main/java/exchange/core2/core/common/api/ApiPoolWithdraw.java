@@ -6,7 +6,8 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * POOL_WITHDRAW —— 借贷池提现（运营命令，详见 loan.md §5.10.2）。
- * <p>Wire 语义同 {@link ApiPoolDeposit}。资金侧 pool.available -= amount，adjustments += amount 对冲。
+ * <p>
+ * Wire 语义同 {@link ApiPoolDeposit}。资金侧 pool.available -= amount，adjustments += amount 对冲。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)

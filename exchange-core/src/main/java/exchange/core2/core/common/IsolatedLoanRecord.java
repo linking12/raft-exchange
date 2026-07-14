@@ -21,53 +21,34 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import java.util.Objects;
 
 /**
- * Isolated 模式单笔贷款凭证，挂在 {@link UserProfile#isolatedLoans}（loanId -> record）。抵押与本笔 loan
- * 一对一绑定（{@link #collateralAmount}）。对象池复用，故 identity 字段非 final（由 {@link #initialize} 重置）。
+ * Isolated 单笔贷款凭证，挂在 {@link UserProfile#isolatedLoans}；抵押与本笔 loan 一对一绑定。对象池复用，identity 非 final。
  */
 @Slf4j
 @NoArgsConstructor
 public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHash, LoanRecord {
 
-    // 利率模式：LOCKED=Fixed（定期，开仓锁 rateBps）/ FLOATING=Flexible（活期，随 reprice 浮动、走 accSnapshot 累加器）。见 loan.md §13。
+    // rateMode: LOCKED=Fixed（开仓锁 rateBps） / FLOATING=Flexible（走 accSnapshot 累加器）。见 loan.md §13。
     public static final byte RATE_MODE_LOCKED = 0;
     public static final byte RATE_MODE_FLOATING = 1;
 
-    // --- 身份（对象池复用，非 final，由 initialize 重置）---
-    // 所属用户 uid（由 UserProfile 上下文注入，不序列化，仅进 stateHash）。
-    public long uid;
-    // 贷款唯一 id（客户端提供，per-user 唯一，Isolated 命名空间独立于 Cross）。创建时锁死。
-    public long loanId;
+    public long uid; // 所属用户（上下文注入，不序列化，仅进 stateHash）
+    public long loanId; // 客户端提供，per-user 唯一，创建时锁死
 
-    // --- 市场（创建时锁定，源自现货 pair spec）---
-    // 所属现货 pair symbolId（= LOAN_CREATE 的 cmd.symbol）。scanner / handler 直接 getSymbolSpecification(symbolId) 拿 spec，省 O(N) 反查。
-    public int symbolId;
-    // 抵押币种（= spec.baseCurrency）。
-    public int collateralCurrency;
-    // 借出币种（= spec.quoteCurrency）。
-    public int loanCurrency;
+    public int symbolId; // 现货 pair（= cmd.symbol），scanner/handler 直接 getSymbolSpecification 拿 spec
+    public int collateralCurrency; // = spec.baseCurrency
+    public int loanCurrency; // = spec.quoteCurrency
 
-    // --- 借款条款（创建时锁定）---
-    // 利率模式（RATE_MODE_LOCKED / FLOATING），开仓锁定。见 loan.md §13.2。
-    public byte rateMode;
-    // 年化利率（bps）。LOCKED：开仓锁定、存续期不变（计息用）；FLOATING：仅存"开仓利率"作展示，计息走 accSnapshot 累加器。
-    public int rateBps;
-    // 开仓时间戳（ms），期限强平用（now - openedAtTs > loanMaxTermDays 触发；仅 LOCKED 有期限）。
-    public long openedAtTs;
+    public byte rateMode; // 开仓锁定，见 loan.md §13.2
+    public int rateBps; // 年化利率（bps）。LOCKED 计息用；FLOATING 仅作开仓利率展示，计息走累加器
+    public long openedAtTs; // 开仓时间戳（ms），期限强平用（仅 LOCKED 有期限）
 
-    // --- 金额 / 运行态（可变）---
-    // 已抵押的 collateralCurrency 数量（currencyScale）。force-sell 作卖出量时须经 LoanService.collateralAmountToLots
-    // 换成张数（lot），不能直接当 size；反向记账用 lotsToCollateralAmount。不足一张的尘埃卖不掉，underwater 时并入 badDebt。
-    public long collateralAmount;
-    // 剩余未偿本金（loanCurrency，currencyScale）。REPAY / force-sell 递减，underwater 归零走 badDebt。
-    public long outstandingPrincipal;
-    // 已计提但未支付的利息（loanCurrency，currencyScale）。惰性 accrue 写入，结算时进 interestRevenue。
-    public long accumulatedInterest;
-    // 上次计息时间戳（ms），惰性 accrue 到此点；初始 = openedAtTs。LOCKED 计息游标。
-    public long lastAccrueTs;
-    // FLOATING 计息游标：上次 accrue 时的 liveAcc 累加器快照（bps·ms）；LOCKED 不用。见 loan.md §13.5。
-    public long accSnapshot;
-    // 连续零成交的强平尝试次数；零成交 +1、有成交归 0。scanner 用它爬容差（1%→2%→5%）+ 卡单告警。
-    public int stuckLiqAttempts;
+    // force-sell 作卖出量须经 collateralAmountToLots 换张数；不足一张的尘埃 underwater 时并入 badDebt
+    public long collateralAmount; // 已抵押数量（currencyScale）
+    public long outstandingPrincipal; // 剩余未偿本金（loanCurrency）
+    public long accumulatedInterest; // 已计提未付利息（loanCurrency），结算时进 interestRevenue
+    public long lastAccrueTs; // 上次计息时间戳（ms），初始 = openedAtTs；LOCKED 计息游标
+    public long accSnapshot; // FLOATING 计息游标：上次 accrue 的 liveAcc 快照（bps·ms）；LOCKED 不用。见 loan.md §13.5
+    public int stuckLiqAttempts; // 连续零成交强平次数；驱动 scanner 容差爬梯 + 卡单告警
 
     public IsolatedLoanRecord(long uid, long loanId, int collateralCurrency, int loanCurrency, int rateBps,
         long openedAtTs) {
@@ -212,8 +193,9 @@ public final class IsolatedLoanRecord implements WriteBytesMarshallable, StateHa
 
     @Override
     public String toString() {
-        return "IsolatedLoan{" + "u" + uid + " id" + loanId + " sym" + symbolId + " colCur" + collateralCurrency + " loanCur" + loanCurrency
-            + " rateMode" + rateMode + " rate" + rateBps + " openedAt" + openedAtTs + " col=" + collateralAmount + " prin="
-            + outstandingPrincipal + " int=" + accumulatedInterest + " lastAccrue=" + lastAccrueTs + " accSnap=" + accSnapshot + '}';
+        return "IsolatedLoan{" + "u" + uid + " id" + loanId + " sym" + symbolId + " colCur" + collateralCurrency
+            + " loanCur" + loanCurrency + " rateMode" + rateMode + " rate" + rateBps + " openedAt" + openedAtTs
+            + " col=" + collateralAmount + " prin=" + outstandingPrincipal + " int=" + accumulatedInterest
+            + " lastAccrue=" + lastAccrueTs + " accSnap=" + accSnapshot + '}';
     }
 }

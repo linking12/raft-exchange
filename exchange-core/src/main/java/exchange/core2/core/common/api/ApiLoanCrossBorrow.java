@@ -6,7 +6,8 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * LOAN_CROSS_BORROW —— Cross 借新债；共享账户级抵押池（详见 loan.md §5.8）。
- * <p>externalId → orderId / loanId → reserveBidPrice / loanCurrency → symbol / principal → price。
+ * <p>
+ * externalId → orderId / loanId → reserveBidPrice / loanCurrency → symbol / principal → price。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)
@@ -21,6 +22,7 @@ public class ApiLoanCrossBorrow extends ApiCommand {
 
     @Override
     public String toString() {
-        return "[LOAN_X_BORROW ext" + externalId + " u" + uid + " id" + loanId + " cur" + loanCurrency + " p=" + principal + "]";
+        return "[LOAN_X_BORROW ext" + externalId + " u" + uid + " id" + loanId + " cur" + loanCurrency + " p="
+            + principal + "]";
     }
 }

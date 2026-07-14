@@ -10,7 +10,7 @@ import exchange.core2.core.common.api.ApiLoanCreate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiPoolDeposit;
-import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
@@ -62,7 +62,7 @@ class ITLoanForceLiquidatePipeline {
             c.initMarkPrice(SYMBOL_EXCHANGE, MARK_PRICE);
 
             c.sendBinaryDataCommandSync(
-                new UpdateSymbolLoanConfigCommand(
+                BatchAddLoanCommand.ofSymbol(
                     SYMBOL_EXCHANGE,
                     6000,
                     8500,

@@ -13,42 +13,33 @@
 package exchange.core2.core.common;
 
 /**
- * Isolated / Cross 两类贷款凭证共享的债务视图，让 accrue / repay / 强平结算的金钱逻辑只写一份
- * （见 LoanService.accrueTo / applyDebtPayment）。金额均为 loanCurrency 的 currencyScale。
+ * Isolated / Cross 贷款凭证共享的债务视图，让 accrue / repay / 强平结算逻辑只写一份。金额均为 loanCurrency 的 currencyScale。
  */
 public interface LoanRecord {
 
-    /** 借出币种；本金 / 利息以及计息、抵债、结算的记账都在此币种下。 */
     int getLoanCurrency();
 
-    /** 借入时锁定的年化利率（bps），存续期不变，惰性计息用。 */
-    int getRateBps();
+    int getRateBps(); // 借入时锁定的年化利率（bps）
 
-    /** 剩余未偿本金；抵债时递减，归零即本金还清。 */
     long getOutstandingPrincipal();
 
     void setOutstandingPrincipal(long value);
 
-    /** 已计提但未支付的利息；抵债按"利息优先"先抵此项，进 interestRevenue。 */
-    long getAccumulatedInterest();
+    long getAccumulatedInterest(); // 已计提未付利息，抵债利息优先
 
     void setAccumulatedInterest(long value);
 
-    /** 上次计息时间戳（ms）；LOCKED（Fixed）惰性 accrue 以此为起点算新增利息，计息后推进到当前时间。 */
-    long getLastAccrueTs();
+    long getLastAccrueTs(); // LOCKED 计息起点游标
 
     void setLastAccrueTs(long value);
 
-    /** FLOATING（Flexible）计息游标：上次 accrue 时的 liveAcc 累加器快照（bps·ms）。见 loan.md §13.5。 */
-    long getAccSnapshot();
+    long getAccSnapshot(); // FLOATING 计息游标：上次 accrue 的 liveAcc 快照（bps·ms）。见 loan.md §13.5
 
     void setAccSnapshot(long value);
 
-    /** true=Fixed（LOCKED，走线性计息）；false=Floating（走累加器）。Cross 恒 false。LoanService 据此分派利率 model。 */
-    boolean isFixedRate();
+    boolean isFixedRate(); // true=Fixed 走线性计息 / false=Floating 走累加器；Cross 恒 false
 
-    /** 连续零成交的强平尝试次数（replicated）；驱动 scanner 容差爬梯 + 卡单告警。有成交清 0、零成交 +1。 */
-    int getStuckLiqAttempts();
+    int getStuckLiqAttempts(); // 连续零成交强平次数（replicated），驱动 scanner 容差爬梯
 
     void setStuckLiqAttempts(int value);
 }

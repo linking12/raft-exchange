@@ -28,46 +28,24 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * Floating（Flexible / 活期）利率实现 = <b>动态利率引擎</b>。适用 Isolated FLOATING + 全部 Cross；也是 {@link FixedRateModel}
- * 的利率来源（Fixed = 开仓锁本引擎的当前利率 + 点差）。per-shard 复制状态。
- *
- * <p>
- * 承载 kinked 曲线 + reprice 生效利率 {@code currentRateBps[ccy]} + 累加器 {@code accRateBpsMs[ccy]}； 计息按累加器差值（利率随 reprice 变），O(1)
- * 惰性、整数精确。自包含序列化 / stateHash。
+ * 动态利率引擎（Flexible / 活期）：kinked 曲线 + reprice 生效利率 + 累加器计息。适用 Isolated FLOATING + 全部 Cross，也是 {@link FixedRateModel}
+ * 开仓锁率的来源。per-shard 复制状态。见 loan.md §13。
  */
+@Getter
+@Setter
 public final class FloatingRateModel implements WriteBytesMarshallable, StateHash {
+    public static final int DEFAULT_BASE_BPS = 200; // 零利用率 2%
+    public static final int DEFAULT_KINK_UTIL_BPS = 8000; // 拐点 80%
+    public static final int DEFAULT_SLOPE1_BPS = 400; // 0→kink 增幅
+    public static final int DEFAULT_SLOPE2_BPS = 6000; // kink→100% 陡增幅
 
-    // --- kinked 曲线默认值（全局单曲线；后续可扩每币种）---
-    public static final int DEFAULT_BASE_BPS = 200; // 零利用率基础利率 2%
-    public static final int DEFAULT_KINK_UTIL_BPS = 8000; // 最优利用率拐点 80%
-    public static final int DEFAULT_SLOPE1_BPS = 400; // 0→kink 增幅（至拐点 6%）
-    public static final int DEFAULT_SLOPE2_BPS = 6000; // kink→100% 陡增幅（至满 66%）
-
-    // --- 曲线参数 ---
-    @Getter
-    @Setter
-    private int baseBps;
-    @Getter
-    @Setter
-    private int kinkUtilBps;
-    @Getter
-    @Setter
-    private int slope1Bps;
-    @Getter
-    @Setter
-    private int slope2Bps;
-
-    // --- reprice 运行态（REPRICE_LOAN_RATES 每 tick 刷新，各 shard 相同）---
-    // 每币种当前曲线利率（bps）= 活期利率
-    @Getter
-    private final IntLongHashMap currentRateBps;
-    // 每币种累积利率·时间（bps·ms），惰性计息累加器
-    @Getter
-    private final IntLongHashMap accRateBpsMs;
-    // 上次 reprice tick 时刻（ms），liveAcc 参照
-    @Getter
-    @Setter
-    private long lastRepriceTs;
+    private int baseBps; // 零利用率基础利率
+    private int kinkUtilBps; // 利用率拐点
+    private int slope1Bps; // 拐点前斜率
+    private int slope2Bps; // 拐点后斜率
+    private final IntLongHashMap currentRateBps; // 每币种当前曲线利率
+    private final IntLongHashMap accRateBpsMs; // 每币种累积 利率·时间（计息累加器）
+    private long lastRepriceTs; // 上次 reprice 时刻（ms）
 
     public FloatingRateModel() {
         this.baseBps = DEFAULT_BASE_BPS;
@@ -89,82 +67,64 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
         this.lastRepriceTs = bytes.readLong();
     }
 
-    // ================================================================
-    // 曲线（利用率 → 利率）
-    // ================================================================
+    // ---- 曲线：利用率 → 利率 ----
 
-    /** 利用率（bps）= borrowed / (borrowed + available)；空池返 0。truncMulDiv 防 borrowed×BPS 溢出。 */
+    /** 利用率（bps）= borrowed / (borrowed + available)；空池返 0。 */
     public static long utilizationBps(long borrowed, long available) {
         long total = borrowed + available;
-        if (total <= 0) {
-            return 0L;
-        }
-        return CoreArithmeticUtils.truncMulDiv(borrowed, LoanService.BPS_SCALE, total);
+        return total <= 0 ? 0L : CoreArithmeticUtils.truncMulDiv(borrowed, LoanService.BPS_SCALE, total);
     }
 
-    /** kinked 利率曲线：util → rateBps。util clamp 到 [0, BPS]；kink 落在 (0, BPS)。纯整数。 */
+    /** kinked 曲线：util（clamp 到 [0, BPS]）过曲线得 rateBps，纯整数。 */
     public static long curveRateBps(long utilBps, int baseBps, int kinkUtilBps, int slope1Bps, int slope2Bps) {
         long util = utilBps < 0 ? 0 : Math.min(utilBps, LoanService.BPS_SCALE);
         if (util <= kinkUtilBps) {
-            long inc = kinkUtilBps <= 0 ? 0 : (long)slope1Bps * util / kinkUtilBps;
-            return baseBps + inc;
+            return baseBps + (kinkUtilBps <= 0 ? 0 : (long)slope1Bps * util / kinkUtilBps);
         }
         long denom = LoanService.BPS_SCALE - kinkUtilBps;
-        long inc = denom <= 0 ? 0 : (long)slope2Bps * (util - kinkUtilBps) / denom;
-        return baseBps + slope1Bps + inc;
+        return baseBps + slope1Bps + (denom <= 0 ? 0 : (long)slope2Bps * (util - kinkUtilBps) / denom);
     }
 
     public long curveRateBps(long utilBps) {
         return curveRateBps(utilBps, baseBps, kinkUtilBps, slope1Bps, slope2Bps);
     }
 
-    /** 某币种当前利率（bps）；未 reprice → 回退 baseBps（= curveRateBps(0)，冷启动兜底）。Fixed 开仓、Floating 开仓/展示共用。 */
+    /** 某币种当前利率；未 reprice 回退 baseBps（= curveRateBps(0)，冷启动兜底）。 */
     public int currentRateBpsOrBase(int currency) {
-        return currentRateBps.containsKey(currency) ? (int) currentRateBps.get(currency) : baseBps;
+        return currentRateBps.containsKey(currency) ? (int)currentRateBps.get(currency) : baseBps;
     }
 
-    // ================================================================
-    // reprice（每 tick）：先用旧率推累加器，再写新率
-    // ================================================================
+    // ---- reprice：按利用率刷新生效利率 ----
 
-    /** 用**旧** currentRate 把累加器推进 [lastRepriceTs, tickTs]。调用方随后 repriceCurrency + setLastRepriceTs。 */
     public void advanceAccumulator(int currency, long tickTs) {
         if (lastRepriceTs > 0 && tickTs > lastRepriceTs) {
             accRateBpsMs.addToValue(currency, (long)currentRateBpsOrBase(currency) * (tickTs - lastRepriceTs));
         }
     }
 
-    /** 某币种利用率过曲线、写新生效利率。 */
     public void repriceCurrency(int currency, long utilBps) {
         currentRateBps.put(currency, curveRateBps(utilBps));
     }
 
-    // ================================================================
-    // 计息（累加器差值法：利率随 reprice 变，计息只看两次 accSnapshot 之间的累积利率·时间）
-    // liveAcc = accRateBpsMs + currentRate × (now − lastRepriceTs)（冷启动 lastRepriceTs≤0 → 不累积）
-    // interest = principal × (liveAcc − loan.accSnapshot) / (YEAR_MS × BPS_SCALE)，truncMulDiv 防溢出
-    // ================================================================
+    // ---- 计息（累加器差值法）----
 
-    /** 开仓利率 = 当前活期利率。 */
     public int openRateBps(int loanCurrency) {
         return currentRateBpsOrBase(loanCurrency);
     }
 
+    /** 累加器实时值：accRateBpsMs + currentRate × (now − lastRepriceTs)；冷启动（lastRepriceTs≤0）不累积。 */
     public long liveAccRateBpsMs(int currency, long now) {
         long acc = accRateBpsMs.get(currency);
-        if (lastRepriceTs <= 0) {
-            return acc;
-        }
         long elapsed = now - lastRepriceTs;
-        return elapsed <= 0 ? acc : acc + (long)currentRateBpsOrBase(currency) * elapsed;
+        return (lastRepriceTs <= 0 || elapsed <= 0) ? acc : acc + (long)currentRateBpsOrBase(currency) * elapsed;
     }
 
-    /** 开仓：把 loan.accSnapshot 定在当前 liveAcc，从此点起累积。 */
+    /** 开仓：accSnapshot 定在当前 liveAcc，从此点起累积。 */
     public void initOpenSnapshot(LoanRecord loan, long now) {
         loan.setAccSnapshot(liveAccRateBpsMs(loan.getLoanCurrency(), now));
     }
 
-    /** 写路径：按累加器差值补计利息到 now，累加进 accumulatedInterest 并推进 accSnapshot；返回本次新增利息（≥ 0）。 */
+    /** 写路径：补计利息到 now，推进 accSnapshot；返回本次新增利息（≥ 0）。 */
     public long accrue(LoanRecord loan, long now) {
         long live = liveAccRateBpsMs(loan.getLoanCurrency(), now);
         long delta = pending(loan, live);
@@ -175,7 +135,7 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
         return delta;
     }
 
-    /** 读路径：accumulatedInterest + 到 now 的 pending 利息，不改 loan。 */
+    /** 读路径：accumulatedInterest + 到 now 的 pending，不改 loan。 */
     public long displayInterest(LoanRecord loan, long now) {
         return Math.addExact(loan.getAccumulatedInterest(),
             pending(loan, liveAccRateBpsMs(loan.getLoanCurrency(), now)));
@@ -189,10 +149,6 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
         return CoreArithmeticUtils.truncMulDiv(deltaAcc, loan.getOutstandingPrincipal(),
             LoanService.YEAR_MS * LoanService.BPS_SCALE);
     }
-
-    // ================================================================
-    // 序列化 / reset / stateHash
-    // ================================================================
 
     public void reset() {
         baseBps = DEFAULT_BASE_BPS;

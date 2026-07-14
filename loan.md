@@ -51,7 +51,7 @@
 |---|---|
 | 池化借贷 | 出借方是交易所自有池；loan 挂在 user 维度 |
 | 强制存在 spot symbol | Isolated 借贷币对必须存在 `BASE=collateralCurrency, QUOTE=loanCurrency` 的 spot symbol；Cross 每个抵押币须存在 `XXX/numeraire` symbol（估值 + 强平撮合） |
-| Cross 基准币（numeraire） | **运行时可配**（`LoanService.numeraireCurrency`，经 `UPDATE_LOAN_GLOBAL_CONFIG` 设置，不再硬编码 USDT）；未配（`NUMERAIRE_UNSET=0`）时 Cross BORROW/WITHDRAW fail-close、scanner 的 LTV 路径保守跳过（期限强平仍生效，见 §7.3） |
+| Cross 基准币（numeraire） | **运行时可配**（`LoanService.numeraireCurrency`，经 `ADD_LOAN` 设置，不再硬编码 USDT）；未配（`NUMERAIRE_UNSET=0`）时 Cross BORROW/WITHDRAW fail-close、scanner 的 LTV 路径保守跳过（期限强平仍生效，见 §7.3） |
 | 惰性计息 | 无定时 tick 命令；仅在还款/强平触发点现算 |
 | 同 cmd 内闭环 | force-sell IOC 撮合 + 结算 + 终态在一条 raft 命令 apply 内完成 |
 | 抵押物账本隔离 | loan 抵押只服务对应 loan 债务，不能顶 futures margin，也不落 spot `exchangeLocked`；靠 `calculateLocked` 单点扩展实现双向隔离 |
@@ -77,7 +77,7 @@
    Cross:    LOAN_CROSS_ADD_COLLATERAL / WITHDRAW_COLLATERAL / BORROW / REPAY
    强平:     LOAN_FORCE_LIQUIDATE / LOAN_CROSS_FORCE_LIQUIDATE（scanner 生成）
    池子:     POOL_DEPOSIT / POOL_WITHDRAW / POOL_ABSORB_BAD_DEBT
-   配置:     UPDATE_LOAN_GLOBAL_CONFIG / UPDATE_SYMBOL_LOAN_CONFIG
+   配置:     ADD_LOAN
                      ↓ Raft
         RiskEngine（per-shard）
           preProcessCommand 首行 if (cmd.command.isLoan()) → loanCmdHandlers.dispatch(cmd)
@@ -180,7 +180,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     IntLongHashMap badDebt;              // underwater 核销损失（追踪负桶，不进守恒）
     IntLongHashMap interestRevenue;      // 利息收入（守恒正桶）
     IntLongHashMap loanLiquidationFees;  // 强平专项费（守恒正桶）
-    // --- 运行时配置（UPDATE_LOAN_GLOBAL_CONFIG 可调）---
+    // --- 运行时配置（ADD_LOAN 可调）---
     int crossLiquidationLtvBps;          // 默认 8500 = 85%
     int crossMarginCallLtvBps;           // 默认 8000 = 80%
     int loanPoolUtilizationCapBps;       // 默认 9000 = 90%
@@ -202,14 +202,14 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
 
 ### 3.5 CoreSymbolSpecification 扩展（loanConfig）
 
-per-symbol 借贷配置归组进 `SymbolLoanSpecification`（`common` 包），`CoreSymbolSpecification` 只持一个 `loanConfig` 字段（非 null，默认空 = 未启用）。含 `initialLtvBps` / `marginCallLtvBps` / `liquidationLtvBps` / `maxAmount` / `maxTermDays` / `collateralWeightBps`（`isEnabled()` = initialLtvBps > 0）。经 `UPDATE_SYMBOL_LOAN_CONFIG` 命令运行时改写（RiskEngine apply 处校验，见 §11）。
+per-symbol 借贷配置归组进 `SymbolLoanSpecification`（`common` 包），`CoreSymbolSpecification` 只持一个 `loanConfig` 字段（非 null，默认空 = 未启用）。含 `initialLtvBps` / `marginCallLtvBps` / `liquidationLtvBps` / `maxAmount` / `maxTermDays` / `collateralWeightBps`（`isEnabled()` = initialLtvBps > 0）。经 `ADD_LOAN` 命令运行时改写（RiskEngine apply 处校验，见 §11）。
 
 > **利率不在 spec**：利率是 **per-loanCurrency（池级）** 概念，由 `LoanService` 的利率子系统拥有（见 §13），不放 per-symbol。上述 6 项 LTV / 期限 / 抵押折价才是真正 per-pair 的。
 
 > （历史）曾有 `loanRateBps` 每 pair 静态利率；粒度错配（同一借出币被多 pair 借应同利率）已移除，统一到 §13 的 per-currency 利率模型。
 
 ### 3.6 RiskEngine / LoanCommandHandlers / LoanLiquidationEngine
-- RiskEngine +2 字段：`loanService` / `loanCmdHandlers`；`preProcessCommand` 首行二级 dispatch；`calculateLocked` 扩 loan 抵押两项；序列化/stateHash 含 loanService；apply `UPDATE_LOAN_GLOBAL_CONFIG` / `UPDATE_SYMBOL_LOAN_CONFIG`。
+- RiskEngine +2 字段：`loanService` / `loanCmdHandlers`；`preProcessCommand` 首行二级 dispatch；`calculateLocked` 扩 loan 抵押两项；序列化/stateHash 含 loanService；apply `ADD_LOAN`。
 - LoanCommandHandlers：13 handler + dispatch + shard filter + POOL 短路。
 - LoanLiquidationEngine：独立 scanner，两 lane + in-flight + 节流 + 容差爬梯。
 
@@ -261,7 +261,7 @@ LOAN_CROSS_ADD_COLLATERAL / LOAN_CROSS_WITHDRAW_COLLATERAL / LOAN_CROSS_BORROW /
 # 池子运营（3，cmd.uid 承载 shardId）
 POOL_DEPOSIT / POOL_WITHDRAW / POOL_ABSORB_BAD_DEBT
 # 配置（binary command）
-UPDATE_LOAN_GLOBAL_CONFIG / UPDATE_SYMBOL_LOAN_CONFIG
+ADD_LOAN
 ```
 **幂等**：用户维度命令走 `UserProfile.processedExternalIds` + `externalId`；`loanId` 只作业务主键。强平命令无 externalId，幂等靠 apply 时 `loan == null` 检测 + orderId。池子命令走 `LoanService.poolProcessedExternalIds`（key = `hash(cmdType, externalId)`，per-shard）。
 
@@ -412,14 +412,16 @@ LTV/利息复用 `LoanService` 已测 helper，与强平口径一致（避免查
 
 ## 11. 配置（运行时可调）
 
-### 11.1 UPDATE_LOAN_GLOBAL_CONFIG
-5 字段 partial-update（`≤0` = 不改）：`numeraireCurrency, crossLiquidationLtvBps, crossMarginCallLtvBps, loanPoolUtilizationCapBps, loanLiquidationFeeBps`。RiskEngine apply 做 **apply-all-or-nothing 校验**：numeraire 需 currencySpec 存在；`thresholdsValidGivenCurrent` 校验生效后 `0 < marginCall < liquidation < 100%`、利用率上限 ≤ 100%、强平费 < 100%；任一不过整条拒绝（`log.warn`，不留半更新）。
+**统一命令 `ADD_LOAN`（`BatchAddLoanCommand`，binary command code 1005）**：合并了旧 `UPDATE_LOAN_GLOBAL_CONFIG` / `UPDATE_SYMBOL_LOAN_CONFIG` 两条命令，命名对齐 `BatchAdd{Accounts,Symbols,Currencies}Command` 一族。一条命令可选带 **global** 部分（`GlobalLoanConfig`）与 **symbol** 部分（`SymbolLoanConfig`），两块作用域独立、**各自校验各自 apply**，一部分非法只跳过该部分（`log.warn`），不影响另一部分；至少提供一部分。proto 侧 `BatchAddLoanCommand{ global?, symbol? }`（`BinaryDataCommand.add_loan`）。
 
-### 11.2 UPDATE_SYMBOL_LOAN_CONFIG
-6 个 per-symbol loan 字段（不含利率，见 §3.5），RiskEngine apply 校验 `initial < liquidation < 100%`、`marginCall` 在其间、maxAmount/maxTermDays ≥ 0、collateralWeight ∈ [0,10000]，valid 才 `spec.updateLoanConfig(...)`。`loanInitialLtvBps = 0` 即**停借该 pair**（LOAN_CREATE / BORROW → `LOAN_NOT_ENABLED`），可作 per-symbol 熔断开关。
+### 11.1 global 部分（`GlobalLoanConfig`）
+5 字段 partial-update（`≤0` = 不改）：`numeraireCurrency, crossLiquidationLtvBps, crossMarginCallLtvBps, loanPoolUtilizationCapBps, loanLiquidationFeeBps`。RiskEngine apply 做 **apply-all-or-nothing 校验**：numeraire 需 currencySpec 存在；`thresholdsValidGivenCurrent` 校验生效后 `0 < marginCall < liquidation < 100%`、利用率上限 ≤ 100%、强平费 < 100%；任一不过整块拒绝（不留半更新）。
+
+### 11.2 symbol 部分（`SymbolLoanConfig`）
+6 个 per-symbol loan 字段（不含利率，见 §3.5），RiskEngine apply 校验（`fieldsValid()`）`initial < liquidation < 100%`、`marginCall` 在其间、maxAmount/maxTermDays ≥ 0、collateralWeight ∈ [0,10000] + spec 存在且为 `CURRENCY_EXCHANGE_PAIR`，valid 才 `spec.updateLoanConfig(...)`。`loanInitialLtvBps = 0` 即**停借该 pair**（LOAN_CREATE / BORROW → `LOAN_NOT_ENABLED`），可作 per-symbol 熔断开关。
 
 ### 11.3 利率曲线配置
-利率曲线参数（`base` / `kink` / `slope1` / `slope2` + `lockedRateAdjustBps`，全局单曲线，后续可扩每币种）归 `LoanService` 的利率子系统，经 `UPDATE_LOAN_GLOBAL_CONFIG`（或专用命令）下发，见 §13。
+利率曲线参数（`base` / `kink` / `slope1` / `slope2` + `lockedRateAdjustBps`，全局单曲线，后续可扩每币种）归 `LoanService` 的利率子系统，经 `ADD_LOAN`（或专用命令）下发，见 §13。
 
 ---
 
@@ -470,7 +472,7 @@ loan/rate/
 
 ### 13.3 全局利用率（TwoStepCommandProcessor）——①
 池子桶 per-shard，同币种真实利用率是各 shard 之和；只有 matcher 单线程阶段有全局视角。用 `TwoStepCommandProcessor`（**FundingFee 同款先例**），全在 RAFT 日志内、确定性。
-- 触发：leader 周期 submit `ApiRepriceLoanRates`，**默认每小时**（对齐 Binance Flexible 小时级刷新；可配）+ admin 手动触发入口
+- 触发（as-built）：复用强平 scanner 的 2s 心跳——`LoanLiquidationEngine.check` 里 **shard 0** 按 `REPRICE_INTERVAL_MS`（默认 1h）节流,经 leader-gated `LiquidationCmdPublisher` publish 一条 `ApiRepriceLoanRates` 走 raft 复制。节流状态 `lastRepriceMs` 是 leader-local 进程级(换届重置无碍;晚发无害——累加器用旧率补积分,数学精确)。无独立调度线程。
 - **R1** `collectInput`：每 shard 把 `borrowed` / `available` 写进 `cmd.commonByShard[shardId].amounts`——**复用这单张 map**，key 编码：**borrowed 存 key=currency、available 存 key=~currency**
 - **merge** `buildMatcherEvents`：跨 shard 按 key 符号解码求和 → 每币种 `util = ΣB × BPS / (ΣB+ΣA)`，每币种一条 event 携带 util（曲线参数在 `LoanRateCurve`，matcher 拿不到 → 只算 util，利率放 R2）
 - **R2** `applyEvent`：**每 shard** `curve.repriceCurrency(ccy, util)`（util 过曲线写 `currentRateBps`）；各 shard 写入相同值。只写利率缓存、不碰余额，无守恒风险
@@ -480,7 +482,7 @@ loan/rate/
 util ≤ kink:  rateBps = base + slope1 × util / kink
 util > kink:  rateBps = base + slope1 + slope2 × (util − kink) / (BPS − kink)
 ```
-参数每 `loanCurrency` 一组 + 全局默认回退（对齐 Binance 每资产独立利率；起步可只填全局默认）。经 `UPDATE_LOAN_GLOBAL_CONFIG` 下发（§11.3）。
+参数每 `loanCurrency` 一组 + 全局默认回退（对齐 Binance 每资产独立利率；起步可只填全局默认）。经 `ADD_LOAN` 下发（§11.3）。
 
 ### 13.5 浮动计息（additive 累加器）——③，仅 FLOATING
 `LoanRateCurve` 每币种 `accRateBpsMs[ccy]` = Σ(rateBps × Δms)（bps·ms）：
@@ -574,7 +576,7 @@ reprice R2：accRateBpsMs[ccy] += currentRateBps[ccy] × (tickTs − lastReprice
 | 利息 / 强平费桶 | `interestRevenue` / `loanLiquidationFees`（非 `fees`） | 与撮合费分账，经 RESET_FEE 提取 |
 | Underwater 兜底 | `badDebt` 负记账 + `POOL_ABSORB_BAD_DEBT` | 不进守恒（钱在借款人账户），管理员注资核销 |
 | 事件 | 复用 FundEvent + 12 loan 字段 + 5 类型；平台数据走 Report | loan 操作即资金事件，平台侧独立查询 |
-| 配置 | `UPDATE_LOAN_GLOBAL_CONFIG` / `UPDATE_SYMBOL_LOAN_CONFIG` 运行时可调 + 校验 | 无需重启；阈值自洽强制 |
+| 配置 | `ADD_LOAN` 运行时可调 + 校验 | 无需重启；阈值自洽强制 |
 | 利率归属 | **per-loanCurrency，单一归 LoanService 利率子系统**（`LoanRateCurve` + Fixed/Floating 两 model，抽出 LoanService）；删 `spec.loanRateBps` | 池级概念，粒度正确、不膨胀 LoanService（§13） |
 | 利率模式 | 当前固定；§13 提案 Fixed+Flexible 双模式（TwoStep 全局利用率 + kinked 曲线 + additive 累加器） | 两 SKU，开仓选 rateMode，冷启动回退曲线 base |
 | numeraire | 运行时可配，未配 fail-close | 不硬编码 USDT |

@@ -12,7 +12,6 @@ import com.binance.raftexchange.stubs.request.ApiCommand;
 import com.binance.raftexchange.stubs.request.BatchAddAccountsCommand;
 import com.binance.raftexchange.stubs.request.BatchAddCurrenciesCommand;
 import com.binance.raftexchange.stubs.request.BatchAddSymbolsCommand;
-import com.binance.raftexchange.stubs.request.SpotLoanConfig;
 
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
@@ -230,20 +229,19 @@ public final class ApiCommandConverters {
         return cmd;
     }
 
-    public static exchange.core2.core.common.api.ApiLoanForceLiquidate convertLoanForceLiquidate(
-        ApiCommand apiCommand) {
+    public static exchange.core2.core.common.api.ApiLoanForceLiquidate
+        convertLoanForceLiquidate(ApiCommand apiCommand) {
         var g = apiCommand.getLoanForceLiquidate();
-        exchange.core2.core.common.api.ApiLoanForceLiquidate cmd =
-            exchange.core2.core.common.api.ApiLoanForceLiquidate.builder().uid(g.getUid()).symbol(g.getSymbol())
-                .loanId(g.getLoanId()).price(g.getPrice()).size(g.getSize()).orderId(g.getOrderId())
-                .action(OrderAction.of((byte)g.getAction().getNumber()))
-                .orderType(OrderType.of((byte)g.getOrderType().getNumber())).build();
+        exchange.core2.core.common.api.ApiLoanForceLiquidate cmd = exchange.core2.core.common.api.ApiLoanForceLiquidate
+            .builder().uid(g.getUid()).symbol(g.getSymbol()).loanId(g.getLoanId()).price(g.getPrice()).size(g.getSize())
+            .orderId(g.getOrderId()).action(OrderAction.of((byte)g.getAction().getNumber()))
+            .orderType(OrderType.of((byte)g.getOrderType().getNumber())).build();
         cmd.updateTimestamp(apiCommand.getTimestamp());
         return cmd;
     }
 
-    public static exchange.core2.core.common.api.ApiLoanCrossForceLiquidate convertLoanCrossForceLiquidate(
-        ApiCommand apiCommand) {
+    public static exchange.core2.core.common.api.ApiLoanCrossForceLiquidate
+        convertLoanCrossForceLiquidate(ApiCommand apiCommand) {
         var g = apiCommand.getLoanCrossForceLiquidate();
         exchange.core2.core.common.api.ApiLoanCrossForceLiquidate cmd =
             exchange.core2.core.common.api.ApiLoanCrossForceLiquidate.builder().uid(g.getUid()).symbol(g.getSymbol())
@@ -266,13 +264,19 @@ public final class ApiCommandConverters {
         return cmd;
     }
 
+    public static exchange.core2.core.common.api.ApiRepriceLoanRates convertRepriceLoanRates(ApiCommand apiCommand) {
+        var cmd = exchange.core2.core.common.api.ApiRepriceLoanRates.builder().build();
+        cmd.updateTimestamp(apiCommand.getTimestamp());
+        return cmd;
+    }
+
     // ============================== loan 子域 converter（详见 loan.md §5）==============================
 
     public static ApiLoanCreate convertLoanCreate(ApiCommand apiCommand) {
         var g = apiCommand.getLoanCreate();
         ApiLoanCreate cmd = ApiLoanCreate.builder().externalId(g.getExternalId()).uid(g.getUid()).loanId(g.getLoanId())
             .symbol(g.getSymbol()).collateralAmount(g.getCollateralAmount()).principal(g.getPrincipal())
-            .rateMode((byte) g.getRateMode()).build();
+            .rateMode((byte)g.getRateMode()).build();
         cmd.updateTimestamp(apiCommand.getTimestamp());
         return cmd;
     }
@@ -397,31 +401,32 @@ public final class ApiCommandConverters {
         return new exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand(currencies);
     }
 
-    /** UPDATE_SYMBOL_LOAN_CONFIG: proto → exchange-core binary sub-command。字段一一对应，无缩放。 */
-    public static exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand
-        convertUpdateSymbolLoanConfig(SpotLoanConfig grpc) {
-        return new exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand(
-            grpc.getSymbolId(),
-            grpc.getLoanInitialLtvBps(),
-            grpc.getLoanLiquidationLtvBps(),
-            grpc.getLoanMarginCallLtvBps(),
-            grpc.getLoanMaxAmount(),
-            grpc.getLoanMaxTermDays(),
-            grpc.getCollateralWeightBps());
+    /**
+     * ADD_LOAN: proto → exchange-core binary command。global / symbol 两部分可选（proto message presence），
+     * 字段一一对应无缩放；至少一部分存在（否则 exchange-core 命令构造抛错）。
+     */
+    public static exchange.core2.core.common.api.binary.BatchAddLoanCommand
+        convertBatchAddLoan(com.binance.raftexchange.stubs.request.BatchAddLoanCommand grpc) {
+        exchange.core2.core.common.api.binary.BatchAddLoanCommand.GlobalLoanConfig global = null;
+        if (grpc.hasGlobal()) {
+            var g = grpc.getGlobal();
+            global = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.GlobalLoanConfig(g.getNumeraireCcy(),
+                g.getCrossLiquidationLtvBps(), g.getCrossMarginCallLtvBps(), g.getLoanPoolUtilizationCapBps(),
+                g.getLoanLiquidationFeeBps());
+        }
+        exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig symbol = null;
+        if (grpc.hasSymbol()) {
+            var s = grpc.getSymbol();
+            symbol = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig(s.getSymbolId(),
+                s.getLoanInitialLtvBps(), s.getLoanLiquidationLtvBps(), s.getLoanMarginCallLtvBps(),
+                s.getLoanMaxAmount(), s.getLoanMaxTermDays(), s.getCollateralWeightBps());
+        }
+        return new exchange.core2.core.common.api.binary.BatchAddLoanCommand(global, symbol);
     }
 
-    /** UPDATE_LOAN_GLOBAL_CONFIG: proto → exchange-core binary sub-command（numeraire + 三阈值 partial update）。 */
-    public static exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand
-        convertUpdateLoanGlobalConfig(com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig grpc) {
-        return new exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand(
-            grpc.getNumeraireCcy(),
-            grpc.getCrossLiquidationLtvBps(),
-            grpc.getCrossMarginCallLtvBps(),
-            grpc.getLoanPoolUtilizationCapBps(),
-            grpc.getLoanLiquidationFeeBps());
-    }
-
-    /** engine cmd → raft log bytes，跟 convertLiquidationOrder / IFTakeOver / AutoDeleveraging / LoanForceLiquidate 互逆。 */
+    /**
+     * engine cmd → raft log bytes，跟 convertLiquidationOrder / IFTakeOver / AutoDeleveraging / LoanForceLiquidate 互逆。
+     */
     public static byte[] liquidationCmdToRaftLog(exchange.core2.core.common.api.ApiCommand cmd, long timestamp) {
         ApiCommand.Builder b = ApiCommand.newBuilder().setTimestamp(timestamp);
         switch (cmd) {
@@ -442,11 +447,12 @@ public final class ApiCommandConverters {
                     .setOrderId(lfl.orderId).setActionValue(lfl.action.getCode())
                     .setOrderTypeValue(lfl.orderType.getCode()));
             case exchange.core2.core.common.api.ApiLoanCrossForceLiquidate cfl -> b
-                .setLoanCrossForceLiquidate(
-                    com.binance.raftexchange.stubs.request.ApiLoanCrossForceLiquidate.newBuilder().setUid(cfl.uid)
-                        .setSymbol(cfl.symbol).setTargetLoanId(cfl.targetLoanId).setPrice(cfl.price).setSize(cfl.size)
-                        .setOrderId(cfl.orderId).setActionValue(cfl.action.getCode())
-                        .setOrderTypeValue(cfl.orderType.getCode()));
+                .setLoanCrossForceLiquidate(com.binance.raftexchange.stubs.request.ApiLoanCrossForceLiquidate
+                    .newBuilder().setUid(cfl.uid).setSymbol(cfl.symbol).setTargetLoanId(cfl.targetLoanId)
+                    .setPrice(cfl.price).setSize(cfl.size).setOrderId(cfl.orderId).setActionValue(cfl.action.getCode())
+                    .setOrderTypeValue(cfl.orderType.getCode()));
+            case exchange.core2.core.common.api.ApiRepriceLoanRates rlr -> b
+                .setRepriceLoanRates(com.binance.raftexchange.stubs.request.ApiRepriceLoanRates.newBuilder());
             default -> throw new IllegalArgumentException("unsupported liquidation cmd: " + cmd.getClass().getName());
         }
         return b.build().toByteArray();

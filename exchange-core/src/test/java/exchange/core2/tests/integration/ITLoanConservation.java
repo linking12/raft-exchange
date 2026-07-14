@@ -18,8 +18,7 @@ import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiResetFee;
 import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
-import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
-import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -68,9 +67,9 @@ class ITLoanConservation {
         c.initMarkPrice(SYMBOL, MARK_PRICE);
         // initialLtv 6000 / liqLtv 8500 / marginCall 7500 / rate 0（免利息，简化守恒断言）/ maxAmount MAX / term 365d / weight 10000
         c.sendBinaryDataCommandSync(
-            new UpdateSymbolLoanConfigCommand(SYMBOL, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
+            BatchAddLoanCommand.ofSymbol(SYMBOL, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
         // Cross 估值基准币（numeraire）；对 Isolated 用例无影响。
-        c.sendBinaryDataCommandSync(new UpdateLoanGlobalConfigCommand(USDT), 5001);
+        c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofGlobalNumeraire(USDT), 5001);
         c.submitCommandSync(ApiPoolDeposit.builder()
             .externalId(1_000_001L).shardId(0).currency(USDT).amount(POOL_FUND).build(), CommandResultCode.SUCCESS);
         c.initOneUser(BORROWER);
