@@ -13,8 +13,8 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 /**
  * 强平流程进行中的状态。仅 active 阶段持有；闭环时 {@code SymbolPositionRecord#liquidationCtx} 置 null。
  * <p>
- * 进 raft snapshot：随 {@link exchange.core2.core.common.SymbolPositionRecord} 一起序列化，
- * leader failover 时跟 snapshot 复制到新 leader，强平流程可在新 leader 上接续推进。
+ * 进 raft snapshot：随 {@link exchange.core2.core.common.SymbolPositionRecord} 一起序列化， leader failover 时跟 snapshot 复制到新
+ * leader，强平流程可在新 leader 上接续推进。
  */
 @ToString
 public final class LiquidationContext implements WriteBytesMarshallable, StateHash {
@@ -22,9 +22,7 @@ public final class LiquidationContext implements WriteBytesMarshallable, StateHa
     public LiquidationState state;
     public long price;
     public long size;
-    /** 原 FORCE_LIQUIDATION 的 orderId，stuck recovery 重发 IF/ADL 时派生它们的 orderId。 */
     public long originalOrderId;
-    /** 上次 state 推进时的 cmd.timestamp——非 wall clock，保跨节点确定性。 */
     public long lastTransitionAt;
 
     public LiquidationContext(long price, long size, long originalOrderId, long lastTransitionAt) {
@@ -58,9 +56,7 @@ public final class LiquidationContext implements WriteBytesMarshallable, StateHa
     }
 
     public enum LiquidationState {
-        LIQUIDATING((byte) 1),
-        WAIT_IF_EXECUTION((byte) 2),
-        WAIT_ADL_EXECUTION((byte) 3);
+        LIQUIDATING((byte)1), WAIT_IF_EXECUTION((byte)2), WAIT_ADL_EXECUTION((byte)3);
 
         @Getter
         private final byte code;

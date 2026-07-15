@@ -114,9 +114,8 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * IF_WITHDRAW 支持：从 available 扣，含非负校验。只扣 available，不动 reserved
-     * （reserved 是正在保护某笔强平的预冻结部分，运营不能拿走）。
-     * 返回 true = 扣账成功，false = notional 不存在或 available 不足以覆盖。
+     * IF_WITHDRAW 支持：从 available 扣，含非负校验。只扣 available，不动 reserved （reserved 是正在保护某笔强平的预冻结部分，运营不能拿走）。 返回 true =
+     * 扣账成功，false = notional 不存在或 available 不足以覆盖。
      */
     public boolean withdrawFromInsuranceFund(int symbol, long notionalAmount) {
         IFNotional notional = notionals.get(symbol);
