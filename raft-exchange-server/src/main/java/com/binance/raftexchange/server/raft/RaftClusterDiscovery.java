@@ -83,7 +83,7 @@ public class RaftClusterDiscovery {
         if (applications == null)
             return;
         String appsHashCode = applications.getAppsHashCode();
-        if (Objects.equals(this.lastAppsHashCode, appsHashCode) && MapUtils.isNotEmpty(raftToGrpcPeerMap))
+        if (Objects.equals(this.lastAppsHashCode, appsHashCode) && raftToGrpcPeerMap.size() >= startupNodes)
             return;
         Application app = eurekaClient.getApplication(raftClusterName);
         if (app == null)
