@@ -117,6 +117,29 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             new RateCurveConfig(baseBps, kinkUtilBps, slope1Bps, slope2Bps, lockedRateAdjustBps));
     }
 
+    public static final int FIXED_KINK_UTIL_BPS = 8000; // 拐点固定 80%
+
+    public enum RatePreset {
+        CONSERVATIVE(100, 300, 4000),
+        STANDARD(200, 400, 6000),
+        AGGRESSIVE(300, 600, 9000);
+
+        final int baseBps;
+        final int slope1Bps;
+        final int slope2Bps;
+
+        RatePreset(int baseBps, int slope1Bps, int slope2Bps) {
+            this.baseBps = baseBps;
+            this.slope1Bps = slope1Bps;
+            this.slope2Bps = slope2Bps;
+        }
+    }
+
+    public static BatchAddLoanCommand ofRateCurvePreset(RatePreset preset) {
+        return new BatchAddLoanCommand(null, null,
+            new RateCurveConfig(preset.baseBps, FIXED_KINK_UTIL_BPS, preset.slope1Bps, preset.slope2Bps, 0));
+    }
+
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeByte((byte)(global != null ? 1 : 0));

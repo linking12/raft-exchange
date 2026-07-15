@@ -347,4 +347,28 @@ class BatchAddLoanCommandTest {
         assertEquals(30, s.getLoanMaxTermDays());
         assertEquals(SymbolLoanConfig.UNSET, s.getLoanMarginCallLtvBps(), "未 override 仍 UNSET");
     }
+
+    // ================================================================
+    // RatePreset enum + ofRateCurvePreset factory —— preset 曲线快捷
+    // ================================================================
+
+    @Test
+    void ofRateCurvePreset_standardMatchesCurrentDefaults() {
+        RateCurveConfig rc = BatchAddLoanCommand.ofRateCurvePreset(BatchAddLoanCommand.RatePreset.STANDARD).getRateCurve();
+        assertEquals(200, rc.getBaseBps());
+        assertEquals(8000, rc.getKinkUtilBps(), "kink 固定 80%");
+        assertEquals(400, rc.getSlope1Bps());
+        assertEquals(6000, rc.getSlope2Bps());
+        assertEquals(0, rc.getLockedRateAdjustBps());
+        assertTrue(rc.valid());
+    }
+
+    @Test
+    void ofRateCurvePreset_conservativeAndAggressive_valid_kinkFixed() {
+        for (BatchAddLoanCommand.RatePreset p : BatchAddLoanCommand.RatePreset.values()) {
+            RateCurveConfig rc = BatchAddLoanCommand.ofRateCurvePreset(p).getRateCurve();
+            assertEquals(8000, rc.getKinkUtilBps());
+            assertTrue(rc.valid(), "preset " + p + " 曲线自洽");
+        }
+    }
 }
