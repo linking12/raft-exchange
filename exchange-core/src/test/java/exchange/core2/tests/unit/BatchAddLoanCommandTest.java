@@ -58,7 +58,7 @@ class BatchAddLoanCommandTest {
 
     @Test
     void globalOnly_bytesRoundTrip_preservesAllFields() {
-        BatchAddLoanCommand orig = BatchAddLoanCommand.ofGlobal(2, 8500, 8000, 9000, 200);
+        BatchAddLoanCommand orig = BatchAddLoanCommand.ofGlobal(2, 8500, 8000, 9000, 200, 0, 0);
         BatchAddLoanCommand parsed = roundTrip(orig);
 
         assertEquals(orig, parsed);
@@ -77,7 +77,7 @@ class BatchAddLoanCommandTest {
     void bothParts_bytesRoundTrip_preservesEachIndependently() {
         // 合并后的核心能力：一条命令同时改全局 + 某 symbol
         BatchAddLoanCommand orig = new BatchAddLoanCommand(
-            new GlobalLoanConfig(2, 7000, 6500, 8500, 150),
+            new GlobalLoanConfig(2, 7000, 6500, 8500, 150, 0, 0),
             new SymbolLoanConfig(101, 6000, 8000, 7000, 1_000_000L, 60, 9000));
         BatchAddLoanCommand parsed = roundTrip(orig);
 
@@ -137,7 +137,7 @@ class BatchAddLoanCommandTest {
 
     @Test
     void allThreeParts_bytesRoundTrip_preservesEachIndependently() {
-        BatchAddLoanCommand orig = new BatchAddLoanCommand(new GlobalLoanConfig(2, 7000, 6500, 8500, 150),
+        BatchAddLoanCommand orig = new BatchAddLoanCommand(new GlobalLoanConfig(2, 7000, 6500, 8500, 150, 0, 0),
             new SymbolLoanConfig(101, 6000, 8000, 7000, 1_000_000L, 60, 9000),
             new RateCurveConfig(200, 8000, 400, 6000, 0));
         BatchAddLoanCommand parsed = roundTrip(orig);
@@ -173,7 +173,7 @@ class BatchAddLoanCommandTest {
     // ================================================================
 
     private static GlobalLoanConfig glob(int liq, int mc, int cap, int fee) {
-        return new GlobalLoanConfig(0, liq, mc, cap, fee);
+        return new GlobalLoanConfig(0, liq, mc, cap, fee, 0, 0);
     }
 
     @Test
@@ -245,5 +245,28 @@ class BatchAddLoanCommandTest {
     @Test
     void symbol_collateralWeightAbove100pct_returnsFalse() {
         assertFalse(new SymbolLoanConfig(101, 6000, 8000, 7000, 0, 0, 10001).fieldsValid());
+    }
+
+    // ================================================================
+    // ofGlobalPolicy 工厂方法 + GlobalLoanConfig 缓冲字段
+    // ================================================================
+
+    @Test
+    void ofGlobalPolicy_setsNumeraire_buffersUnset() {
+        BatchAddLoanCommand cmd = BatchAddLoanCommand.ofGlobalPolicy(840);
+        assertTrue(cmd.hasGlobal());
+        assertEquals(840, cmd.getGlobal().getNumeraireCurrency());
+        assertEquals(0, cmd.getGlobal().getLtvLiquidationBufferBps(), "0=不改,走当前/默认");
+        assertEquals(0, cmd.getGlobal().getLtvMarginCallBufferBps());
+    }
+
+    @Test
+    void global_buffers_bytesRoundTrip() {
+        BatchAddLoanCommand cmd = BatchAddLoanCommand.ofGlobal(840, 8500, 8000, 9000, 200, 2500, 1200);
+        Bytes<?> b = Bytes.allocateElasticOnHeap(64);
+        cmd.writeMarshallable(b);
+        BatchAddLoanCommand restored = new BatchAddLoanCommand(b);
+        assertEquals(2500, restored.getGlobal().getLtvLiquidationBufferBps());
+        assertEquals(1200, restored.getGlobal().getLtvMarginCallBufferBps());
     }
 }

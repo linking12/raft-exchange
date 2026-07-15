@@ -60,13 +60,19 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
     }
 
     public static BatchAddLoanCommand ofGlobal(int numeraireCurrency, int crossLiquidationLtvBps,
-        int crossMarginCallLtvBps, int loanPoolUtilizationCapBps, int loanLiquidationFeeBps) {
+        int crossMarginCallLtvBps, int loanPoolUtilizationCapBps, int loanLiquidationFeeBps,
+        int ltvLiquidationBufferBps, int ltvMarginCallBufferBps) {
         return new BatchAddLoanCommand(new GlobalLoanConfig(numeraireCurrency, crossLiquidationLtvBps,
-            crossMarginCallLtvBps, loanPoolUtilizationCapBps, loanLiquidationFeeBps), null);
+            crossMarginCallLtvBps, loanPoolUtilizationCapBps, loanLiquidationFeeBps,
+            ltvLiquidationBufferBps, ltvMarginCallBufferBps), null);
     }
 
     public static BatchAddLoanCommand ofGlobalNumeraire(int numeraireCurrency) {
-        return ofGlobal(numeraireCurrency, 0, 0, 0, 0);
+        return ofGlobal(numeraireCurrency, 0, 0, 0, 0, 0, 0);
+    }
+
+    public static BatchAddLoanCommand ofGlobalPolicy(int numeraireCurrency) {
+        return ofGlobal(numeraireCurrency, 0, 0, 0, 0, 0, 0);
     }
 
     public static BatchAddLoanCommand ofSymbol(int symbolId, int loanInitialLtvBps, int loanLiquidationLtvBps,
@@ -113,6 +119,8 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
         private final int crossMarginCallLtvBps; // Cross 账户级预警线（bps）
         private final int loanPoolUtilizationCapBps; // 借贷池利用率上限（bps）
         private final int loanLiquidationFeeBps; // 强平专项费率（bps）
+        private final int ltvLiquidationBufferBps; // Symbol 派生缓冲;≤0=不改
+        private final int ltvMarginCallBufferBps; // Symbol/Cross 派生缓冲;≤0=不改
 
         GlobalLoanConfig(BytesIn bytes) {
             this.numeraireCurrency = bytes.readInt();
@@ -120,6 +128,8 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             this.crossMarginCallLtvBps = bytes.readInt();
             this.loanPoolUtilizationCapBps = bytes.readInt();
             this.loanLiquidationFeeBps = bytes.readInt();
+            this.ltvLiquidationBufferBps = bytes.readInt();
+            this.ltvMarginCallBufferBps = bytes.readInt();
         }
 
         void write(BytesOut bytes) {
@@ -128,6 +138,8 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             bytes.writeInt(crossMarginCallLtvBps);
             bytes.writeInt(loanPoolUtilizationCapBps);
             bytes.writeInt(loanLiquidationFeeBps);
+            bytes.writeInt(ltvLiquidationBufferBps);
+            bytes.writeInt(ltvMarginCallBufferBps);
         }
 
         public boolean thresholdsValidGivenCurrent(int currentCrossLiquidationLtvBps,
@@ -137,7 +149,9 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             final int effMarginCall = crossMarginCallLtvBps > 0 ? crossMarginCallLtvBps : currentCrossMarginCallLtvBps;
             return effMarginCall > 0 && effMarginCall < effLiquidation && effLiquidation < BPS_FULL
                 && (loanPoolUtilizationCapBps <= 0 || loanPoolUtilizationCapBps <= BPS_FULL)
-                && (loanLiquidationFeeBps <= 0 || loanLiquidationFeeBps < BPS_FULL);
+                && (loanLiquidationFeeBps <= 0 || loanLiquidationFeeBps < BPS_FULL)
+                && (ltvLiquidationBufferBps <= 0 || ltvLiquidationBufferBps < BPS_FULL)
+                && (ltvMarginCallBufferBps <= 0 || ltvMarginCallBufferBps < BPS_FULL);
         }
     }
 
