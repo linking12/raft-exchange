@@ -421,10 +421,9 @@ public final class ApiCommandConverters {
             var s = grpc.getSymbol();
             // optional override 缺省 → UNSET(−1)，由 exchange-core resolve() 按全局缓冲派生。
             symbol = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig(s.getSymbolId(),
-                s.getLoanInitialLtvBps(),
-                s.hasLoanLiquidationLtvBps() ? s.getLoanLiquidationLtvBps() : UNSET,
+                s.getLoanInitialLtvBps(), s.hasLoanLiquidationLtvBps() ? s.getLoanLiquidationLtvBps() : UNSET,
                 s.hasLoanMarginCallLtvBps() ? s.getLoanMarginCallLtvBps() : UNSET,
-                s.hasLoanMaxAmount() ? s.getLoanMaxAmount() : (long) UNSET,
+                s.hasLoanMaxAmount() ? s.getLoanMaxAmount() : (long)UNSET,
                 s.hasLoanMaxTermDays() ? s.getLoanMaxTermDays() : UNSET,
                 s.hasCollateralWeightBps() ? s.getCollateralWeightBps() : UNSET);
         }
@@ -433,8 +432,9 @@ public final class ApiCommandConverters {
             var r = grpc.getRateCurve();
             if (r.hasCustom()) {
                 var cc = r.getCustom();
-                rateCurve = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig(cc.getBaseBps(),
-                    cc.getKinkUtilBps(), cc.getSlope1Bps(), cc.getSlope2Bps(), cc.getLockedRateAdjustBps());
+                rateCurve =
+                    new exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig(cc.getBaseBps(),
+                        cc.getKinkUtilBps(), cc.getSlope1Bps(), cc.getSlope2Bps(), cc.getLockedRateAdjustBps());
             } else {
                 // preset（含 UNSPECIFIED→STANDARD）→ 取预设曲线；kink 固定 80%。
                 rateCurve = exchange.core2.core.common.api.binary.BatchAddLoanCommand
