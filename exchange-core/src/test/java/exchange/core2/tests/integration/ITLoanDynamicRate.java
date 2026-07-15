@@ -145,4 +145,45 @@ class ITLoanDynamicRate {
             assertEquals(300, loanRateBps(c, 1L), "非法 symbol 配置被跳过：借款按 good 配置正常开仓，率=曲线 base=300");
         }
     }
+
+    /**
+     * 端到端派生链路：{@code ofMarket} 只设 initialLtv，liquidation/marginCall/collateralWeight 走
+     * {@code Resolved} 派生（缓冲用默认 2000/1000），经真实 ExchangeTestContainer 落到 spec.loanConfig 并被
+     * LTV 校验实际强制。markPrice=50000，抵押 100 BTC → 抵押价值 5,000,000 USDT；initialLtv=6000（60%）→
+     * 借款上限 3,000,000。principal=2,900,000 < 上限 → SUCCESS。
+     */
+    @Test
+    public void ofMarket_derivesThresholds_borrowRespectsDerivedInitialLtv() throws Exception {
+        try (ExchangeTestContainer c = boot(200, 0)) {
+            // 覆盖 boot 里的 symbol 配置：改用 ofMarket 最小配置（只给 initialLtv，其余派生）
+            c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofMarket(SYMBOL, 6000).build(), 5200);
+            c.submitCommandSync(ApiLoanCreate.builder()
+                .externalId(1_000_050L).uid(BORROWER).loanId(50L).symbol(SYMBOL)
+                .collateralAmount(100L).principal(2_900_000L).rateMode((byte) 1).build(),
+                CommandResultCode.SUCCESS);
+        }
+    }
+
+    @Test
+    public void ofMarket_borrowAboveDerivedInitialLtv_rejected() throws Exception {
+        try (ExchangeTestContainer c = boot(200, 0)) {
+            c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofMarket(SYMBOL, 6000).build(), 5201);
+            // 借 3,100,000 > 上限 3,000,000 → LTV 超 initial → 拒绝
+            c.submitCommandSync(ApiLoanCreate.builder()
+                .externalId(1_000_051L).uid(BORROWER).loanId(51L).symbol(SYMBOL)
+                .collateralAmount(100L).principal(3_100_000L).rateMode((byte) 1).build(),
+                CommandResultCode.LOAN_LTV_TOO_HIGH);
+        }
+    }
+
+    @Test
+    public void ofRateCurvePreset_standard_floatingOpensAtPresetBase() throws Exception {
+        try (ExchangeTestContainer c = boot(999, 0)) { // boot 设了个非标 base=999
+            // 用 STANDARD 预设覆盖 → base 变回 200
+            c.sendBinaryDataCommandSync(
+                BatchAddLoanCommand.ofRateCurvePreset(BatchAddLoanCommand.RatePreset.STANDARD), 5202);
+            createLoan(c, 1_000_052L, 52L, 100_000L, (byte) 1); // FLOATING
+            assertEquals(200, loanRateBps(c, 52L), "STANDARD 预设 base=200");
+        }
+    }
 }
