@@ -424,17 +424,9 @@ public final class ApiCommandConverters {
         }
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig rateCurve = null;
         if (grpc.hasRateCurve()) {
-            var r = grpc.getRateCurve();
-            if (r.hasCustom()) {
-                var cc = r.getCustom();
-                rateCurve =
-                    new exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig(cc.getBaseBps(),
-                        cc.getKinkUtilBps(), cc.getSlope1Bps(), cc.getSlope2Bps(), cc.getLockedRateAdjustBps());
-            } else {
-                // preset（含 UNSPECIFIED→STANDARD）→ 取预设曲线；kink 固定 80%。
-                rateCurve = exchange.core2.core.common.api.binary.BatchAddLoanCommand
-                    .ofRateCurvePreset(mapRatePreset(r.getPreset())).getRateCurve();
-            }
+            // preset 档位（含 UNSPECIFIED→STANDARD）→ 预设曲线；kink 固定 80%。
+            rateCurve = exchange.core2.core.common.api.binary.BatchAddLoanCommand
+                .ofRateCurvePreset(mapRatePreset(grpc.getRateCurve().getPreset())).getRateCurve();
         }
         return new exchange.core2.core.common.api.binary.BatchAddLoanCommand(global, symbol, rateCurve);
     }

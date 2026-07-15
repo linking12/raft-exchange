@@ -201,28 +201,6 @@ class ApiCommandConvertersTest {
     }
 
     @Test
-    void batchAddLoan_rateCurveCustom_mapsCurveParams() {
-        // 自定义曲线逃生口:oneof custom → 原样映射五参
-        var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
-            .setRateCurve(com.binance.raftexchange.stubs.request.SpotLoanRateCurveConfig.newBuilder()
-                .setCustom(com.binance.raftexchange.stubs.request.SpotLoanCustomRateCurve.newBuilder().setBaseBps(150)
-                    .setKinkUtilBps(7500).setSlope1Bps(350).setSlope2Bps(5000).setLockedRateAdjustBps(-25)))
-            .build();
-
-        var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
-
-        assertTrue(cmd.hasRateCurve());
-        assertFalse(cmd.hasGlobal());
-        assertFalse(cmd.hasSymbol());
-        var r = cmd.getRateCurve();
-        assertEquals(150, r.getBaseBps());
-        assertEquals(7500, r.getKinkUtilBps());
-        assertEquals(350, r.getSlope1Bps());
-        assertEquals(5000, r.getSlope2Bps());
-        assertEquals(-25, r.getLockedRateAdjustBps());
-    }
-
-    @Test
     void batchAddLoan_rateCurvePreset_mapsToPresetCurve() {
         // 档位:STANDARD → base=200/kink=8000(固定)/slope1=400/slope2=6000,lockedAdjust=0
         var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
