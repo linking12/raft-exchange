@@ -3,6 +3,7 @@ package exchange.core2.tests.integration;
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiLoanCreate;
+import exchange.core2.core.common.api.ApiNop;
 import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiRepriceLoanRates;
 import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
@@ -89,6 +90,10 @@ class ITLoanDynamicRate {
 
             // reprice：util=800（<kink）→ 200 + 400×800/8000 = 240，写入 currentRateBps[USDT]
             c.submitCommandSync(ApiRepriceLoanRates.builder().build(), CommandResultCode.SUCCESS);
+            // REPRICE 的生效写落在 R2（撮合后）阶段，而其 SUCCESS 结果在撮合阶段即发布 —— submitCommandSync 返回时 R2 可能尚未执行。
+            // 若紧接着建 loan2，其 R1 读 currentRateBps 可能早于 reprice 的 R2 写，读到 base（200）而非曲线值。ApiNop 屏障排空管道，
+            // 保证 reprice 的 R2 已应用后再建 loan2（否则该断言在共享 JVM 高负载下偶发 200，见 flaky 排查）。
+            c.submitCommandSync(ApiNop.builder().build(), CommandResultCode.SUCCESS);
 
             // loan2 创建于 reprice 后 → 率 = 曲线值 240
             createLoan(c, 1_000_021L, 2L, 100_000L, (byte) 1);
