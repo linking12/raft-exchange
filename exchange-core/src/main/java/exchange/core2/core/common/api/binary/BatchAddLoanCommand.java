@@ -81,6 +81,36 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             loanMarginCallLtvBps, loanMaxAmount, loanMaxTermDays, collateralWeightBps));
     }
 
+    public static MarketBuilder ofMarket(int symbolId, int initialLtvBps) {
+        return new MarketBuilder(symbolId, initialLtvBps);
+    }
+
+    public static final class MarketBuilder {
+        private final int symbolId;
+        private final int initialLtvBps;
+        private int liquidationLtvBps = SymbolLoanConfig.UNSET;
+        private int marginCallLtvBps = SymbolLoanConfig.UNSET;
+        private long maxAmount = SymbolLoanConfig.UNSET;
+        private int maxTermDays = SymbolLoanConfig.UNSET;
+        private int collateralWeightBps = SymbolLoanConfig.UNSET;
+
+        MarketBuilder(int symbolId, int initialLtvBps) {
+            this.symbolId = symbolId;
+            this.initialLtvBps = initialLtvBps;
+        }
+
+        public MarketBuilder withLiquidationLtv(int v) { this.liquidationLtvBps = v; return this; }
+        public MarketBuilder withMarginCallLtv(int v) { this.marginCallLtvBps = v; return this; }
+        public MarketBuilder withCollateralWeight(int v) { this.collateralWeightBps = v; return this; }
+        public MarketBuilder withMaxAmount(long v) { this.maxAmount = v; return this; }
+        public MarketBuilder withMaxTermDays(int v) { this.maxTermDays = v; return this; }
+
+        public BatchAddLoanCommand build() {
+            return new BatchAddLoanCommand(null, new SymbolLoanConfig(symbolId, initialLtvBps,
+                liquidationLtvBps, marginCallLtvBps, maxAmount, maxTermDays, collateralWeightBps));
+        }
+    }
+
     public static BatchAddLoanCommand ofRateCurve(int baseBps, int kinkUtilBps, int slope1Bps, int slope2Bps,
         int lockedRateAdjustBps) {
         return new BatchAddLoanCommand(null, null,

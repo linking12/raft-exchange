@@ -319,4 +319,32 @@ class BatchAddLoanCommandTest {
         assertEquals(2500, restored.getGlobal().getLtvLiquidationBufferBps());
         assertEquals(1200, restored.getGlobal().getLtvMarginCallBufferBps());
     }
+
+    // ================================================================
+    // ofMarket 工厂 + MarketBuilder 链式 override
+    // ================================================================
+
+    @Test
+    void ofMarket_minimal_allOverridesUnset() {
+        BatchAddLoanCommand cmd = BatchAddLoanCommand.ofMarket(100, 6000).build();
+        SymbolLoanConfig s = cmd.getSymbol();
+        assertEquals(100, s.getSymbolId());
+        assertEquals(6000, s.getLoanInitialLtvBps());
+        assertEquals(SymbolLoanConfig.UNSET, s.getLoanLiquidationLtvBps());
+        assertEquals(SymbolLoanConfig.UNSET, s.getLoanMarginCallLtvBps());
+        assertEquals(SymbolLoanConfig.UNSET, s.getCollateralWeightBps());
+        assertEquals((long) SymbolLoanConfig.UNSET, s.getLoanMaxAmount());
+        assertEquals(SymbolLoanConfig.UNSET, s.getLoanMaxTermDays());
+    }
+
+    @Test
+    void ofMarket_withOverrides_setsExplicit() {
+        BatchAddLoanCommand cmd = BatchAddLoanCommand.ofMarket(100, 6000)
+            .withLiquidationLtv(8500).withCollateralWeight(9000).withMaxTermDays(30).build();
+        SymbolLoanConfig s = cmd.getSymbol();
+        assertEquals(8500, s.getLoanLiquidationLtvBps());
+        assertEquals(9000, s.getCollateralWeightBps());
+        assertEquals(30, s.getLoanMaxTermDays());
+        assertEquals(SymbolLoanConfig.UNSET, s.getLoanMarginCallLtvBps(), "未 override 仍 UNSET");
+    }
 }
