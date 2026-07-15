@@ -1153,4 +1153,102 @@ class LoanCommandHandlersTest {
         verify(eventsHelper).sendLoanLiquidatedEvent(any(), eq(UID), eq(888L), eq((byte) 1), eq(USDT), eq(BTC),
             eq(0L), eq(0L), eq(0L), eq(500), anyLong(), eq(0L), eq(0L), eq(0L), eq(30_000L));
     }
+
+    // ================================================================
+    // P0 补覆盖：池子幂等 / CREATE 缺价 / 部分释放穿仓 / 池利用率上限
+    // ================================================================
+
+    @Test
+    void poolDeposit_replaySameExternalId_idempotent_noDoubleCredit() {
+        OrderCommand cmd = build(OrderCommandType.POOL_DEPOSIT, 7L, 0L, 0, USDT, 50_000L, 0);
+        assertEquals(CommandResultCode.SUCCESS, handlers.handlePoolDeposit(cmd));
+        assertEquals(150_000L, loanService.getLoanPoolAvailable().get(USDT));
+        assertEquals(-50_000L, adjustments.get(USDT));
+        // 重放同 externalId（failover 后命令重放）：去重命中，池子不二次入账
+        OrderCommand replay = build(OrderCommandType.POOL_DEPOSIT, 7L, 0L, 0, USDT, 50_000L, 0);
+        assertEquals(CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME,
+            handlers.handlePoolDeposit(replay));
+        assertEquals(150_000L, loanService.getLoanPoolAvailable().get(USDT), "重放不二次入账");
+        assertEquals(-50_000L, adjustments.get(USDT), "adjustments 不二次对冲");
+    }
+
+    @Test
+    void poolWithdraw_replaySameExternalId_idempotent_noDoubleDebit() {
+        OrderCommand cmd = build(OrderCommandType.POOL_WITHDRAW, 7L, 0L, 0, USDT, 30_000L, 0);
+        assertEquals(CommandResultCode.SUCCESS, handlers.handlePoolWithdraw(cmd));
+        assertEquals(70_000L, loanService.getLoanPoolAvailable().get(USDT));
+        assertEquals(30_000L, adjustments.get(USDT));
+        OrderCommand replay = build(OrderCommandType.POOL_WITHDRAW, 7L, 0L, 0, USDT, 30_000L, 0);
+        assertEquals(CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME,
+            handlers.handlePoolWithdraw(replay));
+        assertEquals(70_000L, loanService.getLoanPoolAvailable().get(USDT), "重放不二次扣款");
+        assertEquals(30_000L, adjustments.get(USDT), "adjustments 不二次");
+    }
+
+    @Test
+    void poolAbsorbBadDebt_replaySameExternalId_idempotent_noDoubleAbsorb() {
+        // 部分核销：核销后 badDebt 仍 >0，重放才会走到去重分支（否则先被 debtOutstanding<=0 挡）
+        loanService.getBadDebt().put(USDT, 1_000L);
+        OrderCommand cmd = build(OrderCommandType.POOL_ABSORB_BAD_DEBT, 7L, 0L, 0, USDT, 400L, 0);
+        assertEquals(CommandResultCode.SUCCESS, handlers.handlePoolAbsorbBadDebt(cmd));
+        assertEquals(600L, loanService.getBadDebt().get(USDT));
+        OrderCommand replay = build(OrderCommandType.POOL_ABSORB_BAD_DEBT, 7L, 0L, 0, USDT, 400L, 0);
+        assertEquals(CommandResultCode.USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME,
+            handlers.handlePoolAbsorbBadDebt(replay));
+        assertEquals(600L, loanService.getBadDebt().get(USDT), "重放不二次核销");
+    }
+
+    @Test
+    void poolDedupKey_sameExternalIdDifferentCmdType_notCrossDeduped() {
+        // 同 externalId 但不同命令类型：poolDedupKey 的 typeTag XOR 隔离，两条都应生效
+        OrderCommand dep = build(OrderCommandType.POOL_DEPOSIT, 5L, 0L, 0, USDT, 50_000L, 0);
+        assertEquals(CommandResultCode.SUCCESS, handlers.handlePoolDeposit(dep));
+        OrderCommand wd = build(OrderCommandType.POOL_WITHDRAW, 5L, 0L, 0, USDT, 30_000L, 0);
+        assertEquals(CommandResultCode.SUCCESS, handlers.handlePoolWithdraw(wd),
+            "同 externalId 跨命令类型不应被去重");
+        assertEquals(120_000L, loanService.getLoanPoolAvailable().get(USDT), "100k +50k -30k");
+    }
+
+    @Test
+    void loanCreate_markPriceNotReady_rejectsAndDoesNotDisburse() {
+        priceCache.remove(SYMBOL); // 抵押品 markPrice 缺失
+        long poolBefore = loanService.getLoanPoolAvailable().get(USDT);
+        OrderCommand cmd = build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L);
+        assertEquals(CommandResultCode.LOAN_MARKPRICE_NOT_READY, handlers.handleLoanCreate(cmd));
+        assertEquals(0, up.isolatedLoans.size(), "未建仓");
+        assertEquals(0L, up.accounts.get(USDT), "未放款到账户");
+        assertEquals(poolBefore, loanService.getLoanPoolAvailable().get(USDT), "池子未扣");
+        assertEquals(0L, loanService.getLoanPoolBorrowed().get(USDT), "borrowed 未增");
+    }
+
+    @Test
+    void loanCreate_poolUtilizationExceeded_rejects() {
+        // 池 available=100k / borrowed=0；cap=20% → 借 30k 使利用率 30% > 20%
+        loanService.getGlobalConfig().loanPoolUtilizationCapBps = 2000;
+        long poolBefore = loanService.getLoanPoolAvailable().get(USDT);
+        OrderCommand cmd = build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L);
+        assertEquals(CommandResultCode.LOAN_POOL_UTILIZATION_EXCEEDED, handlers.handleLoanCreate(cmd));
+        assertEquals(0, up.isolatedLoans.size(), "未建仓");
+        assertEquals(poolBefore, loanService.getLoanPoolAvailable().get(USDT), "池子未扣");
+    }
+
+    @Test
+    void loanCreate_poolUtilizationExactlyAtCap_succeeds() {
+        // 边界：cap=30%，借 30k 使利用率恰 30%（> 才拒，= 放行）
+        loanService.getGlobalConfig().loanPoolUtilizationCapBps = 3000;
+        OrderCommand cmd = build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L);
+        assertEquals(CommandResultCode.SUCCESS, handlers.handleLoanCreate(cmd), "恰到上限放行");
+    }
+
+    @Test
+    void loanReleaseCollateral_partialReleaseIntoLiquidationZone_rejects() {
+        // 建 3 BTC 抵押借 45k（LTV 30%）；释放 2 BTC → 剩 1 BTC=50k，realDebt=45k → LTV 90% ≥ liq 80%
+        handlers.handleLoanCreate(build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 3L, 45_000L));
+        IsolatedLoanRecord loan = up.isolatedLoans.get(999L);
+        assertEquals(3L, loan.collateralAmount);
+        OrderCommand cmd = build(OrderCommandType.LOAN_RELEASE_COLLATERAL, 2L, UID, 999L, 0, 2L, 0);
+        assertEquals(CommandResultCode.LOAN_LTV_TOO_HIGH_AFTER_RELEASE,
+            handlers.handleLoanReleaseCollateral(cmd));
+        assertEquals(3L, loan.collateralAmount, "拒绝后抵押不变（partial-release guard，newCollateral>0 分支）");
+    }
 }

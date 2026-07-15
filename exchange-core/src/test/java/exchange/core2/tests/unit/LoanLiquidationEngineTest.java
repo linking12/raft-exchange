@@ -38,12 +38,16 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -594,5 +598,122 @@ class LoanLiquidationEngineTest {
         up.isolatedLoans.put(1L, underwaterLoan(1L, 0));
         scanner.check(up);
         verify(publisher, times(1)).publish(any(), any());
+    }
+
+    // ================================================================
+    // P0 补覆盖：Isolated 期限强平 / Cross force-sell abort 路径
+    // ================================================================
+
+    @Test
+    void check_isolatedTermExpired_lockedLoan_forcesSellRegardlessOfLtv() {
+        // LOCKED 贷款开仓于 91 天前 > maxTermDays(90) → 到期强平，即便 LTV 健康(30%)
+        long openedMs = System.currentTimeMillis() - 91L * 86_400_000L;
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, openedMs);
+        loan.symbolId = SYMBOL;
+        loan.rateMode = IsolatedLoanRecord.RATE_MODE_LOCKED;
+        loan.collateralAmount = 2L;
+        loan.outstandingPrincipal = 30_000L; // LTV 30% << liq 80%，仅靠期限触发
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        scanner.check(up);
+        verify(publisher).publish(any(), any());
+    }
+
+    @Test
+    void check_isolatedTermExpired_floatingLoan_notTermLiquidated() {
+        // FLOATING 无期限：同样 91 天前开仓 + 健康 LTV → 不强平（期限只对 LOCKED 生效）
+        long openedMs = System.currentTimeMillis() - 91L * 86_400_000L;
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, openedMs);
+        loan.symbolId = SYMBOL;
+        loan.rateMode = IsolatedLoanRecord.RATE_MODE_FLOATING;
+        loan.collateralAmount = 2L;
+        loan.outstandingPrincipal = 30_000L;
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        scanner.check(up);
+        verify(publisher, never()).publish(any(), any());
+    }
+
+    /** 用 spy 把 Cross LTV 钉在强平线上,以隔离测 publishCrossForceSell 内各 abort 分支。 */
+    private LoanService spyWithCrossLtvOverLiquidation() {
+        loanService.getGlobalConfig().crossLiquidationLtvBps = 9000;
+        LoanService spied = spy(loanService);
+        doReturn(9999L).when(spied)
+            .calculateCrossAccountLtvBps(any(), anyLong(), any(), any(), any(), anyInt());
+        when(engine.getLoanService()).thenReturn(spied);
+        return spied;
+    }
+
+    @Test
+    void check_crossOverLiquidation_fullyValidSetup_publishes_provesSpyForcesEntry() {
+        // 阳性对照：同一 spy 强制 LTV 越线 + 全部条件齐备（可卖抵押 + 有债 loan + 现货对 + markPrice）→ 必 publish。
+        // 证明 spy 确实把流程带进 publishCrossForceSell，从而下面各 abort 用例的 never-publish 是真的走了 abort，而非未进入。
+        spyWithCrossLtvOverLiquidation();
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 2L);
+
+        scanner.check(up);
+        verify(publisher).publish(any(), any());
+    }
+
+    @Test
+    void check_crossOverLiquidation_noSellableCollateral_abortsNoPublish() {
+        // 穿仓但无任何可卖抵押 → sellingCurrency==0 → abort，不 publish（应走坏账而非强平）
+        spyWithCrossLtvOverLiquidation();
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        // crossLoanCollateral 空
+
+        scanner.check(up);
+        verify(publisher, never()).publish(any(), any());
+    }
+
+    @Test
+    void check_crossOverLiquidation_noTargetLoanWithDebt_abortsNoPublish() {
+        // 有可卖抵押但无一笔有余额的 loan → targetLoan==null → abort
+        spyWithCrossLtvOverLiquidation();
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 0L; // 无债 → pickCrossLoanToRepay 跳过
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 1L);
+
+        scanner.check(up);
+        verify(publisher, never()).publish(any(), any());
+    }
+
+    @Test
+    void check_crossOverLiquidation_noSpotPair_abortsNoPublish() {
+        // 抵押 BTC 有权重可卖，但目标 loan 币种(ETH) 无 BTC/ETH 现货对 → findSpotSpec null → abort
+        final int ETH = 3;
+        spyWithCrossLtvOverLiquidation();
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, ETH, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 1L);
+
+        scanner.check(up);
+        verify(publisher, never()).publish(any(), any());
+    }
+
+    @Test
+    void check_crossOverLiquidation_markPriceNotReady_abortsNoPublish() {
+        // 找得到现货对(BTC/USDT)但该 symbol 无 markPrice → abort
+        spyWithCrossLtvOverLiquidation();
+        priceCache.remove(SYMBOL);
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 1L);
+
+        scanner.check(up);
+        verify(publisher, never()).publish(any(), any());
     }
 }
