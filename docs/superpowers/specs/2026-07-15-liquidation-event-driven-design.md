@@ -36,9 +36,9 @@
 
 ## 核心设计
 
-### 1. 四类触发(全命令/事件驱动,无 off-lane 线程)
+### 1. 四类触发(全命令/事件驱动;无 off-lane 扫描线程)
 
-偿付状况只被这几类事件主动改变,各自在对应命令 apply 里挂检查;外加一条周期性兜底命令。全部 on-lane,off-lane 扫描线程彻底移除。
+偿付状况只被这几类事件主动改变,各自在对应命令 apply 里挂检查;外加一条周期性兜底命令。检查/扫描全部在 on-lane(disruptor 单写者线程)进行。**注意:仍保留一个轻定时器**,但它只 publish 命令(`REPRICE_LOAN_RATES` 心跳 + `LIQUIDATION_BACKSTOP_TICK`)、**不读任何用户状态、不做扫描**——竞态消失靠"扫描搬到 on-lane",不是靠"没有定时器"。该定时器职责等价于今天 scanner 顺带发 reprice 的那部分,非新增负担(详见 §5)。移除的是**旧的 off-lane 扫描线程**(遍历用户读活状态那根)。
 
 | 触发 | 命令 apply(R1,每分片) | 查谁 |
 |---|---|---|
@@ -131,6 +131,22 @@ BP **条件计算**:只对判定要强平的少数用户算。cross 全仓:某 s
 - 例:某 symbol 全网 2 万持有者、8 分片 → 每分片 2500 人;便宜检查 ~几十 ns/人 → **~75µs / 分片 / 次价格更新**;BP 条件触发(极少);
 - markprice 每 100ms/symbol → 每 100ms 停 ~75µs = **~0.075% 占空比**,可忽略;各分片并行。
 - 对比旧"一次扫十万全量":targeted + 分片后量级差 2–3 个数量级。若某 symbol 持有者极多 × 更新极频打满,再局部加去抖(不改架构)。
+
+## 组件与边界(防 god-class:LiquidationEngine 退成薄编排)
+
+不把索引/流程/判定/命令都塞进 `LiquidationEngine`。按"变化原因不同"切成单一职责小件:
+
+| 组件 | 职责 | 说明 |
+|---|---|---|
+| `LiquidationEngine`(薄编排 / facade) | 触发→索引找人→评估→破产则经 flow 发 FORCE | RiskEngine 调它;只协调,重活委托,几十行 |
+| `PositionSymbolIndex` | `symbol → 持仓用户`:add/remove/getUsers | 独立小类,开/平仓维护 |
+| `LiquidationFlowTracker` | leader-local `Map<key, LiquidationFlow>` + FORCE→IF→ADL 升级状态机 | 原 `nextLiquidationState` 搬此;管流程不管判定 |
+| `FuturesSolvencyEvaluator` | 期货 isolated/cross "是否破产 + BP" verdict | BP 数学委托 `SymbolPositionRecord.calculateBankruptcyPrice` |
+| `LiquidationService`(现有) | orderId/lot 工具 + build FORCE/IF/ADL 命令工厂 | 不变 |
+| `LoanLiquidationEngine`(现有) | loan 域同款编排(判定/BP) | 与 `LiquidationEngine` 平行,**共用** FlowTracker/Index/Service |
+| `LiquidationBackstopCursor` | 兜底切片游标(uid 快照 + cursor) | 小工具,`backstopTick()` 用 |
+
+边界原则:**判定 / 流程 / 目标定位 / 命令构造** 各自成件(变化原因不同);**期货 / 借贷** 各一套编排但共用底层件(不重复)。就切到这几件为止,不过度拆。
 
 ## 涉及文件
 
