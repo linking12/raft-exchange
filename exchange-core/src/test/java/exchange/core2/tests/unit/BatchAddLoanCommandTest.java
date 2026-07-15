@@ -248,6 +248,56 @@ class BatchAddLoanCommandTest {
     }
 
     // ================================================================
+    // SymbolLoanConfig.resolve —— UNSET(-1) 派生 + Resolved 值对象
+    // ================================================================
+
+    @Test
+    void resolve_derivesLiquidationAndMarginCallFromBuffers() {
+        // initial 6000, 全部 override 未指定(−1) → liq=6000+2000=8000, mc=8000−1000=7000, weight=initial=6000
+        SymbolLoanConfig s = new SymbolLoanConfig(100, 6000,
+            SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET,
+            SymbolLoanConfig.UNSET);
+        SymbolLoanConfig.Resolved r = s.resolve(2000, 1000);
+        assertEquals(8000, r.liquidationLtvBps);
+        assertEquals(7000, r.marginCallLtvBps);
+        assertEquals(6000, r.collateralWeightBps);
+        assertEquals(0L, r.maxAmount);
+        assertEquals(0, r.maxTermDays);
+        assertTrue(r.valid());
+    }
+
+    @Test
+    void resolve_explicitOverridesWin() {
+        SymbolLoanConfig s = new SymbolLoanConfig(100, 6000, 8500, 7500, 5_000L, 30, 9000);
+        SymbolLoanConfig.Resolved r = s.resolve(2000, 1000);
+        assertEquals(8500, r.liquidationLtvBps);
+        assertEquals(7500, r.marginCallLtvBps);
+        assertEquals(9000, r.collateralWeightBps);
+        assertEquals(5_000L, r.maxAmount);
+        assertEquals(30, r.maxTermDays);
+        assertTrue(r.valid());
+    }
+
+    @Test
+    void resolve_marginCallZeroMeansDisabled_notDerived() {
+        // marginCall 显式 0 = 关预警(既有语义),不派生
+        SymbolLoanConfig s = new SymbolLoanConfig(100, 6000, SymbolLoanConfig.UNSET, 0,
+            SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET);
+        SymbolLoanConfig.Resolved r = s.resolve(2000, 1000);
+        assertEquals(0, r.marginCallLtvBps, "0 保留:关预警");
+        assertTrue(r.valid(), "marginCall=0 合法(disabled)");
+    }
+
+    @Test
+    void resolved_invalid_whenDerivedThresholdsInverted() {
+        // buffer 过大导致 mc<=initial → 不合法
+        SymbolLoanConfig s = new SymbolLoanConfig(100, 6000, SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET,
+            SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET, SymbolLoanConfig.UNSET);
+        SymbolLoanConfig.Resolved r = s.resolve(500, 1000); // liq=6500, mc=5500 < initial 6000 → invalid
+        assertFalse(r.valid());
+    }
+
+    // ================================================================
     // ofGlobalPolicy 工厂方法 + GlobalLoanConfig 缓冲字段
     // ================================================================
 

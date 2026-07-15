@@ -191,12 +191,47 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
 
         public boolean fieldsValid() {
             return loanInitialLtvBps >= 0 && loanInitialLtvBps < BPS_FULL
-                && (loanInitialLtvBps == 0 || (loanLiquidationLtvBps > loanInitialLtvBps
-                    && loanLiquidationLtvBps < BPS_FULL
-                    && (loanMarginCallLtvBps == 0
-                        || (loanMarginCallLtvBps > loanInitialLtvBps && loanMarginCallLtvBps < loanLiquidationLtvBps))))
+                && (loanInitialLtvBps == 0 || thresholdsValid(loanInitialLtvBps, loanMarginCallLtvBps, loanLiquidationLtvBps))
                 && loanMaxAmount >= 0 && loanMaxTermDays >= 0 && collateralWeightBps >= 0
                 && collateralWeightBps <= BPS_FULL;
+        }
+
+        public static final int UNSET = -1; // override 字段未指定→派生/默认
+
+        /** 派生后的最终配置(所有 −1 已填实)。 */
+        @AllArgsConstructor
+        @Getter
+        @ToString
+        public static final class Resolved {
+            public final int symbolId;
+            public final int initialLtvBps;
+            public final int liquidationLtvBps;
+            public final int marginCallLtvBps;
+            public final long maxAmount;
+            public final int maxTermDays;
+            public final int collateralWeightBps;
+
+            public boolean valid() {
+                return initialLtvBps >= 0 && initialLtvBps < BPS_FULL
+                    && (initialLtvBps == 0 || thresholdsValid(initialLtvBps, marginCallLtvBps, liquidationLtvBps))
+                    && maxAmount >= 0 && maxTermDays >= 0
+                    && collateralWeightBps >= 0 && collateralWeightBps <= BPS_FULL;
+            }
+        }
+
+        /** initial < marginCall < liquidation < 100%;marginCall==0 表示关预警(合法)。 */
+        static boolean thresholdsValid(int initial, int marginCall, int liquidation) {
+            return liquidation > initial && liquidation < BPS_FULL
+                && (marginCall == 0 || (marginCall > initial && marginCall < liquidation));
+        }
+
+        public Resolved resolve(int liqBufferBps, int mcBufferBps) {
+            int liq = loanLiquidationLtvBps == UNSET ? loanInitialLtvBps + liqBufferBps : loanLiquidationLtvBps;
+            int mc = loanMarginCallLtvBps == UNSET ? liq - mcBufferBps : loanMarginCallLtvBps;
+            int weight = collateralWeightBps == UNSET ? loanInitialLtvBps : collateralWeightBps;
+            long maxAmt = loanMaxAmount == UNSET ? 0L : loanMaxAmount;
+            int term = loanMaxTermDays == UNSET ? 0 : loanMaxTermDays;
+            return new Resolved(symbolId, loanInitialLtvBps, liq, mc, maxAmt, term, weight);
         }
     }
 
