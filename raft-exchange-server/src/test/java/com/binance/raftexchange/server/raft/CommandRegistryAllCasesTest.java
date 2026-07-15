@@ -36,14 +36,25 @@ import com.binance.raftexchange.stubs.request.ApiResumeUser;
 import com.binance.raftexchange.stubs.request.ApiSettleFundingFees;
 import com.binance.raftexchange.stubs.request.ApiSettlePNL;
 import com.binance.raftexchange.stubs.request.ApiSuspendUser;
+import com.binance.raftexchange.stubs.request.ApiInsuranceFundDeposit;
+import com.binance.raftexchange.stubs.request.ApiInsuranceFundWithdraw;
+import com.binance.raftexchange.stubs.request.ApiLoanForceLiquidate;
+import com.binance.raftexchange.stubs.request.ApiLoanCrossForceLiquidate;
+import com.binance.raftexchange.stubs.request.ApiPoolAbsorbBadDebt;
+import com.binance.raftexchange.stubs.request.ApiRepriceLoanRates;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * CommandRegistry 所有 case 一对一 dispatch 全覆盖：每个 gRPC oneof case 都映射到正确的 exchange-core ApiCommand 子类。 防止重构时漏掉某条注册或者注册到错的
@@ -193,7 +204,59 @@ class CommandRegistryAllCasesTest {
                     .setPoolWithdraw(ApiPoolWithdraw.newBuilder().setExternalId(10L).setShardId(0).setCurrency(2)
                         .setAmount(10000L))
                     .build(),
-                exchange.core2.core.common.api.ApiPoolWithdraw.class));
+                exchange.core2.core.common.api.ApiPoolWithdraw.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setPoolAbsorbBadDebt(ApiPoolAbsorbBadDebt.newBuilder().setExternalId(11L).setShardId(0)
+                        .setCurrency(2).setAmount(500L))
+                    .build(),
+                exchange.core2.core.common.api.ApiPoolAbsorbBadDebt.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanForceLiquidate(ApiLoanForceLiquidate.newBuilder().setUid(7L).setSymbol(1).setLoanId(100L)
+                        .setPrice(100L).setSize(1L).setOrderId(1L).setAction(OrderAction.ASK)
+                        .setOrderType(OrderType.IOC))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanForceLiquidate.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setLoanCrossForceLiquidate(ApiLoanCrossForceLiquidate.newBuilder().setUid(7L).setSymbol(1)
+                        .setTargetLoanId(200L).setPrice(100L).setSize(1L).setOrderId(1L).setAction(OrderAction.ASK)
+                        .setOrderType(OrderType.IOC))
+                    .build(),
+                exchange.core2.core.common.api.ApiLoanCrossForceLiquidate.class),
+            Arguments.of(ApiCommand.newBuilder().setRepriceLoanRates(ApiRepriceLoanRates.newBuilder()).build(),
+                exchange.core2.core.common.api.ApiRepriceLoanRates.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setInsuranceFundDeposit(ApiInsuranceFundDeposit.newBuilder().setTransactionId(1L).setSymbol(1)
+                        .setCurrencyAmount(1000L).setShardId(0))
+                    .build(),
+                exchange.core2.core.common.api.ApiInsuranceFundDeposit.class),
+            Arguments.of(
+                ApiCommand.newBuilder()
+                    .setInsuranceFundWithdraw(ApiInsuranceFundWithdraw.newBuilder().setTransactionId(2L).setSymbol(1)
+                        .setCurrencyAmount(1000L).setShardId(0))
+                    .build(),
+                exchange.core2.core.common.api.ApiInsuranceFundWithdraw.class));
+    }
+
+    /**
+     * 完备性守卫：除去 oneof 未设 + BINARY_DATA（走 ExchangeCalls.applyBinaryData），每个 CommandCase 都必须在 allCases 里有一条。
+     * 新增一条 gRPC 命令却忘了在此测 + 在 CommandRegistry 注册时，本测试会直接失败（防"漏注册/漏测"）。
+     */
+    @Test
+    void allCases_coversEveryDispatchableCommandCase() {
+        Set<ApiCommand.CommandCase> covered =
+            allCases().map(a -> ((ApiCommand)a.get()[0]).getCommandCase()).collect(Collectors.toSet());
+        Set<ApiCommand.CommandCase> excluded =
+            EnumSet.of(ApiCommand.CommandCase.COMMAND_NOT_SET, ApiCommand.CommandCase.BINARY_DATA);
+        for (ApiCommand.CommandCase cc : ApiCommand.CommandCase.values()) {
+            if (!excluded.contains(cc)) {
+                assertTrue(covered.contains(cc),
+                    "CommandCase " + cc + " 未被 allCases 覆盖（新增命令须在此补一条 + 在 CommandRegistry 注册）");
+            }
+        }
     }
 
     @ParameterizedTest(name = "{1}")

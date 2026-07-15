@@ -66,6 +66,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     private final ADLCommandProcessor adlProcessor;
     private final FundingFeeCommandProcessor fundingFeeProcessor;
     private final ResetFeeCommandProcessor resetFeeProcessor;
+    private final LoanRatePricingProcessor loanRatePricingProcessor;
 
     // sharding by symbolId
     private final int shardId;
@@ -119,6 +120,7 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.adlProcessor = new ADLCommandProcessor(eventsHelper);
         this.fundingFeeProcessor = new FundingFeeCommandProcessor(eventsHelper);
         this.resetFeeProcessor = new ResetFeeCommandProcessor(eventsHelper);
+        this.loanRatePricingProcessor = new LoanRatePricingProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
@@ -192,6 +194,9 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
 
         } else if (command == OrderCommandType.RESET_FEE) {
             cmd.resultCode = resetFeeProcessor.process(cmd);
+
+        } else if (command == OrderCommandType.REPRICE_LOAN_RATES) {
+            cmd.resultCode = loanRatePricingProcessor.process(cmd);
 
         } else if (command == OrderCommandType.MOVE_ORDER
                 || command == OrderCommandType.CANCEL_ORDER

@@ -2,6 +2,7 @@ package exchange.core2.tests.unit;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.CrossLoanRecord;
 import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.SymbolType;
@@ -11,6 +12,7 @@ import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.liquidation.LiquidationService;
+import exchange.core2.core.processors.loan.LoanGlobalConfig;
 import exchange.core2.core.processors.loan.LoanService;
 import net.openhft.chronicle.bytes.Bytes;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -161,15 +163,61 @@ class LoanServiceTest {
     // ================================================================
 
     @Test
-    void accrueTo_cross_fullYear_matchesFormula() {
-        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, 3, 10000, 0L);
+    void accrueTo_cross_floating_fullYear_matchesFormula() {
+        // Cross 恒 FLOATING：计息走 FloatingRateModel 累加器（loan.md §13.5/§13.6），不看 loan.rateBps。
+        // 把 ccy=3 当前活期利率钉到 100%（10000bps）、以开仓时刻为 reprice 基准，验证满一年利息 = 本金。
+        final int ccy = 3;
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 10000L);
+        svc.getFloatingRate().setLastRepriceTs(1000L);
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, ccy, 10000, 1000L);
         loan.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(loan, 1000L); // 开仓快照 = liveAcc(1000) = 0
 
-        long delta = svc.accrueTo(loan, LoanService.YEAR_MS);
+        long delta = svc.accrueTo(loan, 1000L + LoanService.YEAR_MS);
 
-        assertEquals(1_000_000L, delta);
+        assertEquals(1_000_000L, delta, "100% 活期利率满一年 = 本金");
         assertEquals(1_000_000L, loan.accumulatedInterest);
-        assertEquals(LoanService.YEAR_MS, loan.lastAccrueTs);
+    }
+
+    @Test
+    void accrueTo_floating_integratesAcrossRateChange() {
+        // 累加器的核心价值：利率在两次 reprice 之间变化时，利息 = ∫rate dt（分段积分），而非用单一利率线性。
+        // [T0,T1) 10% 半年 + [T1,T2) 30% 半年 → 全年等效 20% 本金。
+        final int ccy = 3;
+        final long half = LoanService.YEAR_MS / 2;
+        final long t0 = 1000L, t1 = t0 + half, t2 = t0 + LoanService.YEAR_MS;
+        svc.getFloatingRate().setLastRepriceTs(t0);
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 1000L); // [t0,t1) 用 10%
+
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, ccy, 1000, t0);
+        loan.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(loan, t0);
+
+        // t1 reprice：先用【旧率】10% 把累加器推到 t1，再切 30%（模拟 RiskEngine R2 的 advance→reprice→set 顺序）
+        svc.getFloatingRate().advanceAccumulator(ccy, t1);
+        svc.getFloatingRate().setLastRepriceTs(t1);
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 3000L); // [t1,t2) 用 30%
+
+        long delta = svc.accrueTo(loan, t2);
+
+        assertEquals(200_000L, delta, "10% 半年 + 30% 半年 = 20% 本金（累加器分段积分，非线性）");
+    }
+
+    @Test
+    void accrueTo_isolatedFloating_dispatchesToAccumulator_notLinearRate() {
+        // Isolated 按 rateMode 分派：FLOATING → FloatingRateModel（累加器），不看 loan.rateBps。
+        // 令 loan.rateBps=0（若误走线性会算出 0 利息），曲线现值=100% → 有利息即证明走了累加器。
+        final int ccy = 3;
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 10000L);
+        svc.getFloatingRate().setLastRepriceTs(1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, ccy, 0, 1000L); // rateBps=0
+        loan.rateMode = IsolatedLoanRecord.RATE_MODE_FLOATING;
+        loan.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(loan, 1000L);
+
+        long delta = svc.accrueTo(loan, 1000L + LoanService.YEAR_MS);
+
+        assertEquals(1_000_000L, delta, "Isolated FLOATING 走累加器（曲线 100%），非 loan.rateBps=0 线性");
     }
 
     @Test
@@ -213,15 +261,21 @@ class LoanServiceTest {
     }
 
     @Test
-    void displayInterest_cross_smokeTest() {
-        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, 3, 10000, 0L);
+    void displayInterest_cross_floating_includesPending_doesNotMutate() {
+        // Cross FLOATING 只读计息：accumulatedInterest + 到 now 的 pending（累加器差值），不 mutate loan。
+        final int ccy = 3;
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 10000L);
+        svc.getFloatingRate().setLastRepriceTs(1000L);
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, ccy, 10000, 1000L);
         loan.outstandingPrincipal = 1_000_000L;
         loan.accumulatedInterest = 500L;
+        svc.getFloatingRate().initOpenSnapshot(loan, 1000L);
 
-        long displayed = svc.calculateDisplayInterest(loan, LoanService.YEAR_MS);
+        long displayed = svc.calculateDisplayInterest(loan, 1000L + LoanService.YEAR_MS);
 
-        assertEquals(1_000_500L, displayed);
-        assertEquals(500L, loan.accumulatedInterest, "cross 也不 mutate");
+        assertEquals(1_000_500L, displayed, "已累计 500 + pending 1_000_000");
+        assertEquals(500L, loan.accumulatedInterest, "cross 也不 mutate accumulatedInterest");
+        assertEquals(0L, loan.getAccSnapshot(), "只读不推进 accSnapshot");
     }
 
     // ================================================================
@@ -236,7 +290,7 @@ class LoanServiceTest {
             new exchange.core2.core.processors.SymbolSpecificationProvider(),
             new exchange.core2.core.processors.CurrencySpecificationProvider(),
             new org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap<>(),
-            LoanService.NUMERAIRE_UNSET));
+            LoanGlobalConfig.NUMERAIRE_UNSET));
     }
 
     @Test
@@ -252,7 +306,7 @@ class LoanServiceTest {
             new exchange.core2.core.processors.SymbolSpecificationProvider(),
             new exchange.core2.core.processors.CurrencySpecificationProvider(),
             new org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap<>(),
-            LoanService.NUMERAIRE_UNSET), "numeraire 未配置保守返回 0");
+            LoanGlobalConfig.NUMERAIRE_UNSET), "numeraire 未配置保守返回 0");
     }
 
     // ================================================================
@@ -271,12 +325,12 @@ class LoanServiceTest {
         p.registerSymbol(SYMBOL_BTC_USDT, CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_BTC_USDT).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(BTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .collateralWeightBps(9000)  // 90% BTC 折价
+                .loanConfig(SymbolLoanSpecification.builder().collateralWeightBps(9000).build())  // 90% BTC 折价
                 .build());
         p.registerSymbol(SYMBOL_ETH_USDT, CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_ETH_USDT).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(ETH).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .collateralWeightBps(8000)  // 80% ETH 折价
+                .loanConfig(SymbolLoanSpecification.builder().collateralWeightBps(8000).build())  // 80% ETH 折价
                 .build());
         return p;
     }
@@ -575,9 +629,9 @@ class LoanServiceTest {
         assertTrue(svc.getLoanPoolAvailable().isEmpty());
         assertTrue(svc.getLoanPoolBorrowed().isEmpty());
         assertTrue(svc.getBadDebt().isEmpty());
-        assertEquals(LoanService.DEFAULT_CROSS_LIQUIDATION_LTV_BPS, svc.getCrossLiquidationLtvBps());
-        assertEquals(LoanService.DEFAULT_CROSS_MARGIN_CALL_LTV_BPS, svc.getCrossMarginCallLtvBps());
-        assertEquals(LoanService.DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS, svc.getLoanPoolUtilizationCapBps());
+        assertEquals(LoanGlobalConfig.DEFAULT_CROSS_LIQUIDATION_LTV_BPS, svc.getGlobalConfig().crossLiquidationLtvBps);
+        assertEquals(LoanGlobalConfig.DEFAULT_CROSS_MARGIN_CALL_LTV_BPS, svc.getGlobalConfig().crossMarginCallLtvBps);
+        assertEquals(LoanGlobalConfig.DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS, svc.getGlobalConfig().loanPoolUtilizationCapBps);
     }
 
     // ================================================================
@@ -592,7 +646,7 @@ class LoanServiceTest {
         svc.getBadDebt().put(3, -5_000L);
         svc.getPoolProcessedExternalIds().tryClaim(1001L);
         svc.getPoolProcessedExternalIds().tryClaim(1002L);
-        svc.setLoanLiquidationFeeBps(150); // 非默认值，验证配置字段随快照往返
+        svc.getGlobalConfig().loanLiquidationFeeBps = 150; // 非默认值，验证配置字段随快照往返
 
         Bytes<?> buf = Bytes.allocateElasticOnHeap(512);
         svc.writeMarshallable(buf);
@@ -606,10 +660,10 @@ class LoanServiceTest {
         assertEquals(50_000L, restored.getLoanPoolAvailable().get(4));
         assertEquals(20_000L, restored.getLoanPoolBorrowed().get(3));
         assertEquals(-5_000L, restored.getBadDebt().get(3));
-        assertEquals(LoanService.DEFAULT_CROSS_LIQUIDATION_LTV_BPS, restored.getCrossLiquidationLtvBps());
-        assertEquals(LoanService.DEFAULT_CROSS_MARGIN_CALL_LTV_BPS, restored.getCrossMarginCallLtvBps());
-        assertEquals(LoanService.DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS, restored.getLoanPoolUtilizationCapBps());
-        assertEquals(150, restored.getLoanLiquidationFeeBps(), "自定义强平费率随快照往返");
+        assertEquals(LoanGlobalConfig.DEFAULT_CROSS_LIQUIDATION_LTV_BPS, restored.getGlobalConfig().crossLiquidationLtvBps);
+        assertEquals(LoanGlobalConfig.DEFAULT_CROSS_MARGIN_CALL_LTV_BPS, restored.getGlobalConfig().crossMarginCallLtvBps);
+        assertEquals(LoanGlobalConfig.DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS, restored.getGlobalConfig().loanPoolUtilizationCapBps);
+        assertEquals(150, restored.getGlobalConfig().loanLiquidationFeeBps, "自定义强平费率随快照往返");
         assertFalse(restored.getPoolProcessedExternalIds().tryClaim(1001L), "dedup 1001 已 claim");
         assertFalse(restored.getPoolProcessedExternalIds().tryClaim(1002L), "dedup 1002 已 claim");
         assertTrue(restored.getPoolProcessedExternalIds().tryClaim(1003L), "新 ID 仍可 claim");

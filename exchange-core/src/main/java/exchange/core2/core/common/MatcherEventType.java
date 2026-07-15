@@ -39,5 +39,7 @@ public enum MatcherEventType {
 
     FUNDING_EVENT,
 
-    RESET_FEE_EVENT;
+    RESET_FEE_EVENT,
+
+    LOAN_REPRICE_EVENT;
 }

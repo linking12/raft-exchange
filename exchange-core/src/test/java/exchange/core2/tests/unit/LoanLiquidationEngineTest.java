@@ -2,6 +2,7 @@ package exchange.core2.tests.unit;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.CrossLoanRecord;
 import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.SymbolType;
@@ -10,6 +11,7 @@ import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import exchange.core2.core.common.api.ApiRepriceLoanRates;
 import exchange.core2.core.processors.FundEventsHelper;
 import org.mockito.ArgumentCaptor;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
@@ -37,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -48,11 +51,11 @@ import static org.mockito.Mockito.when;
 /**
  * LoanLiquidationEngine 单元测试。
  *
- * <p>覆盖两大块：
+ * <p>覆盖：
  * <ul>
  *   <li><b>in-flight 生命周期</b>：publishTrackedIsolated / publishTrackedCross 的加入 / onApplied 清 / 异常回滚。</li>
- *   <li><b>Scanner skeleton</b>：check() 各分支保 no-throw；当前 log.debug 占位下"永不 publish"作为 skeleton
- *   invariant——force-sell 实装后这些"never publish" 断言会失败作提示。</li>
+ *   <li><b>Isolated / Cross 强平判定</b>：LTV / 期限越线 → force-sell IOC，marginCall 预警，容差爬梯 / 卡单节流。</li>
+ *   <li><b>动态利率周期触发</b>：check() 里 shard 0 按间隔搭 tick 车发 REPRICE_LOAN_RATES。</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -93,12 +96,13 @@ class LoanLiquidationEngineTest {
                 .symbolId(SYMBOL).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(BTC).quoteCurrency(USDT)
                 .baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000)
-                .loanLiquidationLtvBps(8000)
-                .loanMarginCallLtvBps(7000)
-                .loanRateBps(500)
-                .loanMaxTermDays(90)
-                .collateralWeightBps(9000)
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000)
+                        .liquidationLtvBps(8000)
+                        .marginCallLtvBps(7000)
+                        .maxTermDays(90)
+                        .collateralWeightBps(9000)
+                        .build())
                 .build();
         specProvider.registerSymbol(SYMBOL, spec);
 
@@ -112,6 +116,8 @@ class LoanLiquidationEngineTest {
         when(engine.getLoanService()).thenReturn(loanService);
         when(engine.getLiquidationCmdPublisher()).thenReturn(publisher);
         when(engine.getEventsHelper()).thenReturn(eventsHelper);
+        // 默认非 0 shard：强平相关用例不触发周期 reprice（reprice 仅 shard 0）；reprice 用例各自改写 getShardId。
+        when(engine.getShardId()).thenReturn(1);
 
         scanner = new LoanLiquidationEngine(engine);
     }
@@ -124,6 +130,33 @@ class LoanLiquidationEngineTest {
     void inFlight_startsEmpty_forBothLanes() {
         assertFalse(scanner.isIsolatedLoanInFlight(LOAN_ID));
         assertFalse(scanner.isCrossLoanInFlight(UID));
+    }
+
+    // ================================================================
+    // 动态利率周期触发（check 里搭 tick 车发 REPRICE_LOAN_RATES）
+    // up 无 loan → 扫描不 publish force-sell，publisher 上只会出现 reprice
+    // ================================================================
+
+    @Test
+    void reprice_shard0_firstCheck_emitsRepriceCommand() {
+        when(engine.getShardId()).thenReturn(0);
+        scanner.check(up);
+        verify(publisher).publish(any(ApiRepriceLoanRates.class), isNull());
+    }
+
+    @Test
+    void reprice_shard0_secondCheckWithinInterval_doesNotRepublish() {
+        when(engine.getShardId()).thenReturn(0);
+        scanner.check(up); // 首次发一条（lastRepriceMs 从 0 起）
+        scanner.check(up); // 间隔（1h）内，不应再发
+        verify(publisher, times(1)).publish(any(ApiRepriceLoanRates.class), isNull());
+    }
+
+    @Test
+    void reprice_nonZeroShard_neverEmits() {
+        // setUp 已 stub getShardId()=1：reprice 是全局命令，只 shard 0 单发
+        scanner.check(up);
+        verify(publisher, never()).publish(any(ApiRepriceLoanRates.class), any());
     }
 
     // ================================================================
@@ -287,8 +320,9 @@ class LoanLiquidationEngineTest {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-                .loanRateBps(0).collateralWeightBps(9000).build();
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build()).build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();
         price.markPrice = 50_000L;
@@ -379,8 +413,9 @@ class LoanLiquidationEngineTest {
     }
 
     @Test
-    void check_crossLoanExpired_liquidatesThatLoan_evenWithoutNumeraire() {
-        // numeraire 未配（LTV path 恒 0 不触发）；但 loan 已超 90d 期限 → 期限强平仍触发，且针对到期那笔
+    void check_crossLoanExpired_notTermLiquidated_crossHasNoTerm() {
+        // §13：Cross 恒 Floating → 无期限。即便 loan 已远超 90d，也不触发期限强平（pickExpiredCrossLoan 已移除）；
+        // 叠加 numeraire 未配 → LTV 路径保守跳过 → 完全不 publish（旧逻辑此处会期限强平）。
         long expiredOpenedMs = OPENED_AT_MS - 91L * 86_400_000L; // 91 天前 > 90d term
         CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, expiredOpenedMs);
         loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
@@ -390,31 +425,7 @@ class LoanLiquidationEngineTest {
 
         scanner.check(up);
 
-        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
-        verify(publisher).publish(captor.capture(), any());
-        assertEquals(LOAN_ID, ((ApiLoanCrossForceLiquidate) captor.getValue()).targetLoanId,
-            "期限强平针对到期的那笔");
-    }
-
-    @Test
-    void check_crossMultipleLoans_termLiquidatesExpiredOne_notTiebreakPick() {
-        // 两笔：555 未到期（高利率，tiebreak 会优先选它）；888 已到期。期限强平应针对 888，不是 tiebreak 的 555
-        up.crossLoanCollateral.put(BTC, 1L);
-        CrossLoanRecord fresh = new CrossLoanRecord(UID, 555L, USDT, 900, OPENED_AT_MS);
-        fresh.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
-        fresh.outstandingPrincipal = 30_000L;
-        up.crossLoans.put(555L, fresh);
-        CrossLoanRecord expired = new CrossLoanRecord(UID, 888L, USDT, 100, OPENED_AT_MS - 91L * 86_400_000L);
-        expired.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
-        expired.outstandingPrincipal = 10_000L;
-        up.crossLoans.put(888L, expired);
-
-        scanner.check(up);
-
-        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
-        verify(publisher).publish(captor.capture(), any());
-        assertEquals(888L, ((ApiLoanCrossForceLiquidate) captor.getValue()).targetLoanId,
-            "期限强平锁定到期笔 888，而非 tiebreak 高利率的 555");
+        verify(publisher, never()).publish(any(), any());
     }
 
     @Test
@@ -445,13 +456,14 @@ class LoanLiquidationEngineTest {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-                .loanRateBps(0).collateralWeightBps(9000).build();
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build()).build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();
         price.markPrice = 50_000L;
         priceCache.put(SYMBOL_NI, price);
-        loanService.setNumeraireCurrency(USDT);
+        loanService.getGlobalConfig().numeraireCurrency = USDT;
 
         // 抵押 100（= 1 WBTC = 1 张可卖），债务 150000 → 账户 LTV 远超强平线，触发 publishCrossForceSell
         up.crossLoanCollateral.put(WBTC, 100L);
@@ -485,8 +497,9 @@ class LoanLiquidationEngineTest {
         CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
                 .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(WBTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-                .loanRateBps(0).collateralWeightBps(9000).build();
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build()).build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();
         price.markPrice = 50_000L;

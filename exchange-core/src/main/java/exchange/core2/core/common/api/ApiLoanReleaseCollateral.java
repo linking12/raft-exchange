@@ -6,8 +6,9 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * LOAN_RELEASE_COLLATERAL —— Isolated 减抵押（详见 loan.md §5.5）。
- * <p>externalId → orderId / loanId → reserveBidPrice / amount → size。
- * 减后 LTV &lt; loanLiquidationLtvBps 才允许；抵押减到 0 且本息全清则死壳清理（对象池归还）。
+ * <p>
+ * externalId → orderId / loanId → reserveBidPrice / amount → size。 减后 LTV &lt; loanLiquidationLtvBps 才允许；抵押减到 0
+ * 且本息全清则死壳清理（对象池归还）。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)

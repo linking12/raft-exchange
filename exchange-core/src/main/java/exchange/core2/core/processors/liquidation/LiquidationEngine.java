@@ -68,26 +68,18 @@ import lombok.extern.slf4j.Slf4j;
  * 跟进程同生死，新 leader 从空集合起步，已 apply 的 ctx 通过 raft 已复制到位。
  */
 @Slf4j
+@Getter
 public final class LiquidationEngine extends SimpleScheduledService {
     private final int shardId;
     private final long stuckThresholdMs;
-    @Getter
     private final FundEventsHelper eventsHelper;
-
-    @Getter
     @Setter
     private boolean insuranceFundEnabled = true;
-
-    @Getter
     private SymbolSpecificationProvider symbolSpecificationProvider;
-    @Getter
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
-    @Getter
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
-    @Getter
     private LoanService loanService;
-    @Getter
     @Setter
     private LiquidationCmdPublisher liquidationCmdPublisher;
     private LoanLiquidationEngine loanLiquidationEngine;
@@ -101,8 +93,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
             exchangeConfiguration.getPerformanceCfg().getLiquidationThreadFactory());
         this.shardId = shardId;
-        this.stuckThresholdMs =
-            Long.parseLong(System.getProperty("raftexchange.liquidation.stuckThresholdMs", "5000"));
+        this.stuckThresholdMs = Long.parseLong(System.getProperty("raftexchange.liquidation.stuckThresholdMs", "5000"));
         this.eventsHelper = new FundEventsHelper(eventSupplier, shardId);
     }
 
@@ -325,17 +316,18 @@ public final class LiquidationEngine extends SimpleScheduledService {
     /**
      * 破产价（BP）—— scanner 强平入口，作为 FORCE / IF / ADL 全流程复用的 {@code ctx.price} seed。
      *
-     * <p>路径分派：
+     * <p>
+     * 路径分派：
      * <ul>
-     *   <li>{@code ISOLATED} — 单仓 self-contained，marginBase = openInitMarginSum + extraMargin</li>
-     *   <li>{@code CROSS} — 账户级按 MM 占比分配 marginBase 后交给下游反解</li>
-     *   <li>{@code spec == null} 兜底 — 退 markPrice，保 FORCE 单能挂出去</li>
-     *   <li>{@code UP == null} 兜底 — 退 ISOLATED 公式，数量级仍在 EP 附近</li>
+     * <li>{@code ISOLATED} — 单仓 self-contained，marginBase = openInitMarginSum + extraMargin</li>
+     * <li>{@code CROSS} — 账户级按 MM 占比分配 marginBase 后交给下游反解</li>
+     * <li>{@code spec == null} 兜底 — 退 markPrice，保 FORCE 单能挂出去</li>
+     * <li>{@code UP == null} 兜底 — 退 ISOLATED 公式，数量级仍在 EP 附近</li>
      * </ul>
      * 兜底不抛异常——scanner 每 2s 一 tick，异常状态若已修复下轮自然恢复正确算法。
      *
-     * <p>输入全是 replicated state，跨节点 apply 到同 raft offset 算出同值——failover 后新 leader 从
-     * {@code ctx.price} 读到的是同一值。
+     * <p>
+     * 输入全是 replicated state，跨节点 apply 到同 raft offset 算出同值——failover 后新 leader 从 {@code ctx.price} 读到的是同一值。
      */
     private long calculateBankruptcyPrice(SymbolPositionRecord pos) {
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(pos.symbol);
@@ -357,8 +349,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
         final CoreCurrencySpecification currencySpec =
             currencySpecificationProvider.getCurrencySpecification(pos.currency);
         // tick-scoped 缓存：同 (uid, currency) 只算一次 marginBase 分配
-        final long marginBaseCurrency = tickBpMarginBaseCache
-            .getIfAbsentPut(pos.uid, IntObjectHashMap::new)
+        final long marginBaseCurrency = tickBpMarginBaseCache.getIfAbsentPut(pos.uid, IntObjectHashMap::new)
             .getIfAbsentPut(pos.currency, () -> calculateCrossBpMarginBaseAllocation(up, pos.currency, currencySpec))
             .get(pos);
         final long marginBase = CoreArithmeticUtils.currencyToSizePriceScale(marginBaseCurrency, spec, currencySpec);
@@ -366,34 +357,38 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     /**
-     * 账户级 marginBalance 按 MM 占比分给同 currency 每个 CROSS 仓，返回每仓的 EP-基础 marginBase
-     * （currency scale），可直接喂给 {@link SymbolPositionRecord#calculateBankruptcyPrice(CoreSymbolSpecification, long)}。
+     * 账户级 marginBalance 按 MM 占比分给同 currency 每个 CROSS 仓，返回每仓的 EP-基础 marginBase （currency scale），可直接喂给
+     * {@link SymbolPositionRecord#calculateBankruptcyPrice(CoreSymbolSpecification, long)}。
      *
-     * <p>分配方程（MP 基础）：
+     * <p>
+     * 分配方程（MP 基础）：
+     * 
      * <pre>
      *   marginBalance = crossAvailable + Σ CROSS UPnL          （账户级）
      *   Σ MM          = Σ CROSS 仓各自的维持保证金                （账户级）
      *   allocated_i   = marginBalance × mm_i / Σ MM             （每仓按 MM 占比公平分账户余额）
      *   BP_i          = MP_i − allocated_i / (Q_i × side_i)
      * </pre>
-     * 而 {@code calcBankruptcyPriceFromMarginBase} 用 EP 基础 {@code BP = EP − sign × marginBase / Q}，
-     * 代数换算：
+     * 
+     * 而 {@code calcBankruptcyPriceFromMarginBase} 用 EP 基础 {@code BP = EP − sign × marginBase / Q}， 代数换算：
+     * 
      * <pre>
      *   marginBase_i = allocated_i − UPnL_i
      * </pre>
      *
-     * <p>闭合不变式：{@code Σ marginBase_i = marginBalance − Σ UPnL_i = crossAvailable}——分配前后
-     * 账户可支配余额守恒（整型除法截断可能少几个单位，量纲不影响）。
+     * <p>
+     * 闭合不变式：{@code Σ marginBase_i = marginBalance − Σ UPnL_i = crossAvailable}——分配前后 账户可支配余额守恒（整型除法截断可能少几个单位，量纲不影响）。
      *
-     * <p>单仓等价：{@code mm_i/ΣMM = 1} → allocated = marginBalance → marginBase = crossAvailable，
-     * 跟旧 4 参重载单仓语义代数一致；多仓时按 MM 占比分。
+     * <p>
+     * 单仓等价：{@code mm_i/ΣMM = 1} → allocated = marginBalance → marginBase = crossAvailable， 跟旧 4 参重载单仓语义代数一致；多仓时按 MM
+     * 占比分。
      *
-     * <p>边界：
+     * <p>
+     * 边界：
      * <ul>
-     *   <li>{@code marginBalance < 0} — 沿用统一公式（allocated 为负 → marginBase 为负），未实现
-     *       "盈利仓/亏损仓分岔"，数学总账仍守恒</li>
-     *   <li>{@code Σ MM = 0} — 返回空 Map，caller {@code .get(pos)} 拿默认 0</li>
-     *   <li>{@code spec / price 缺失} — 该仓跳过，其他仓照分</li>
+     * <li>{@code marginBalance < 0} — 沿用统一公式（allocated 为负 → marginBase 为负），未实现 "盈利仓/亏损仓分岔"，数学总账仍守恒</li>
+     * <li>{@code Σ MM = 0} — 返回空 Map，caller {@code .get(pos)} 拿默认 0</li>
+     * <li>{@code spec / price 缺失} — 该仓跳过，其他仓照分</li>
      * </ul>
      */
     private ObjectLongHashMap<SymbolPositionRecord> calculateCrossBpMarginBaseAllocation(UserProfile up, int currency,
@@ -422,9 +417,9 @@ public final class LiquidationEngine extends SimpleScheduledService {
             return marginBaseByPos;
         }
         final long totalMmFinal = totalMm;
-        final long marginBalance =
-            Math.addExact(up.calculateCrossAvailable(currency, currencySpec,
-                symbolSpecificationProvider::getSymbolSpecification), totalUpnl);
+        final long marginBalance = Math.addExact(
+            up.calculateCrossAvailable(currency, currencySpec, symbolSpecificationProvider::getSymbolSpecification),
+            totalUpnl);
         mmByPos.forEachKeyValue((pos, mm) -> {
             final long allocated = Math.multiplyExact(marginBalance, mm) / totalMmFinal;
             marginBaseByPos.put(pos, Math.subtractExact(allocated, upnlByPos.get(pos)));
@@ -485,8 +480,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
         ctx.size = firstEvent.size;
         if (isInsuranceFundEnabled()) {
             ctx.state = LiquidationState.WAIT_IF_EXECUTION;
-            log.warn("Publish IF takeover: uid={} symbol={} size={} price={}",
-                pos.uid, pos.symbol, ctx.size, ctx.price);
+            log.warn("Publish IF takeover: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, ctx.size,
+                ctx.price);
             publishTracked(buildIFCmd(pos, ctx), pos);
         } else {
             enterAdlPhase(pos, ctx);
@@ -505,8 +500,7 @@ public final class LiquidationEngine extends SimpleScheduledService {
 
     private void enterAdlPhase(SymbolPositionRecord pos, LiquidationContext ctx) {
         ctx.state = LiquidationState.WAIT_ADL_EXECUTION;
-        log.warn("Publish ADL: uid={} symbol={} size={} price={}",
-            pos.uid, pos.symbol, ctx.size, ctx.price);
+        log.warn("Publish ADL: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, ctx.size, ctx.price);
         publishTracked(buildADLCmd(pos, ctx), pos);
     }
 
@@ -527,25 +521,19 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     private ApiLiquidationOrder buildForceCmd(SymbolPositionRecord pos, long orderId, long price, long size) {
-        return ApiLiquidationOrder.builder().orderType(OrderType.IOC).orderId(orderId)
-            .uid(pos.uid).symbol(pos.symbol).price(price).size(size)
-            .action(takerActionFor(pos.direction)).build();
+        return ApiLiquidationOrder.builder().orderType(OrderType.IOC).orderId(orderId).uid(pos.uid).symbol(pos.symbol)
+            .price(price).size(size).action(takerActionFor(pos.direction)).build();
     }
 
     private ApiIFTakeOver buildIFCmd(SymbolPositionRecord pos, LiquidationContext ctx) {
-        return ApiIFTakeOver.builder()
-            .orderId(LiquidationService.generateIFOrderId(ctx.originalOrderId))
-            .uid(pos.uid).symbol(pos.symbol)
-            .action(counterpartyActionFor(pos.direction))
-            .size(ctx.size).price(ctx.price).build();
+        return ApiIFTakeOver.builder().orderId(LiquidationService.generateIFOrderId(ctx.originalOrderId)).uid(pos.uid)
+            .symbol(pos.symbol).action(counterpartyActionFor(pos.direction)).size(ctx.size).price(ctx.price).build();
     }
 
     private ApiAutoDeleveraging buildADLCmd(SymbolPositionRecord pos, LiquidationContext ctx) {
-        return ApiAutoDeleveraging.builder()
-            .orderId(LiquidationService.generateADLOrderId(ctx.originalOrderId))
-            .uid(pos.uid).symbol(pos.symbol)
-            .action(counterpartyActionFor(pos.direction))
-            .size(ctx.size).price(ctx.price).build();
+        return ApiAutoDeleveraging.builder().orderId(LiquidationService.generateADLOrderId(ctx.originalOrderId))
+            .uid(pos.uid).symbol(pos.symbol).action(counterpartyActionFor(pos.direction)).size(ctx.size)
+            .price(ctx.price).build();
     }
 
     // ============================== Publisher 辅助 ==============================

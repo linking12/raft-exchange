@@ -6,8 +6,9 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * LOAN_CROSS_WITHDRAW_COLLATERAL —— Cross 抵押池减（详见 loan.md §5.7）。
- * <p>externalId → orderId / currency → symbol / amount → size。
- * 撤后账户级 LTV &lt; crossLiquidationLtvBps 才允许（服务器端 revert-on-fail）。
+ * <p>
+ * externalId → orderId / currency → symbol / amount → size。 撤后账户级 LTV &lt; crossLiquidationLtvBps 才允许（服务器端
+ * revert-on-fail）。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)

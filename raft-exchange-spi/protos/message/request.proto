@@ -200,6 +200,7 @@ message ApiLoanCreate {
   int32 symbol = 4;
   int64 collateralAmount = 5;
   int64 principal = 6;
+  int32 rateMode = 7;               // 0=LOCKED(Fixed，默认) / 1=FLOATING(Flexible)，见 loan.md §13.2
 }
 
 // LOAN_REPAY：Isolated 还款（详见 loan.md §5.3）。repayAmount=0 表示 payoff 全部本息。
@@ -310,6 +311,10 @@ message ApiLoanCrossForceLiquidate {
   OrderType orderType = 8;
 }
 
+// REPRICE_LOAN_RATES：动态利率周期重定价（scanner 每 shard0 周期触发，走 raft 复制；详见 loan.md §13.3）。无 payload。
+message ApiRepriceLoanRates {
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -352,6 +357,7 @@ message ApiCommand {
     ApiLoanForceLiquidate loan_force_liquidate = 36;
     ApiLoanCrossForceLiquidate loan_cross_force_liquidate = 37;
     ApiPoolAbsorbBadDebt pool_absorb_bad_debt = 38;
+    ApiRepriceLoanRates reprice_loan_rates = 39;
   }
 }
 
@@ -390,7 +396,7 @@ message SpotLoanConfig {
   int32 loanInitialLtvBps = 2;      // 0 = 关闭 loan
   int32 loanLiquidationLtvBps = 3;
   int32 loanMarginCallLtvBps = 4;   // 0 = 关预警
-  int32 loanRateBps = 5;
+  reserved 5;                       // 原 loanRateBps —— 利率移到 LoanService per-currency 曲线，见 loan.md §3.5
   int64 loanMaxAmount = 6;          // 0 = 无上限
   int32 loanMaxTermDays = 7;        // 0 = 无期限
   int32 collateralWeightBps = 8;    // 0 = 该 currency 不作 Cross 抵押
@@ -406,13 +412,31 @@ message SpotLoanGlobalConfig {
   int32 loanLiquidationFeeBps = 5;       // 强平专项费率（bps）
 }
 
+// ADD_LOAN: 统一 loan 配置命令（合并自旧 update_symbol_loan_config / update_loan_global_config，见 loan.md §11）。
+// 命名对齐 BatchAdd{Accounts,Symbols,Currencies}Command 一族。global / symbol 两块可选：消息存在即配置该部分，
+// 两部分作用域独立、各自校验各自 apply。
+// 动态利率 kinked 曲线（全局单曲线）+ Fixed 点差；存在即整体替换。见 loan.md §13.4。
+message SpotLoanRateCurveConfig {
+  int32 baseBps = 1;             // 零利用率基础利率
+  int32 kinkUtilBps = 2;         // 利用率拐点（须 0 < kink < 10000）
+  int32 slope1Bps = 3;           // 拐点前斜率
+  int32 slope2Bps = 4;           // 拐点后斜率
+  int32 lockedRateAdjustBps = 5; // Fixed 相对曲线加/减价（可负）
+}
+
+message BatchAddLoanCommand {
+  SpotLoanGlobalConfig global = 1;      // 存在 => 配置 shard 级全局参数
+  SpotLoanConfig symbol = 2;            // 存在 => 配置该 symbol 的 per-symbol loan 参数
+  SpotLoanRateCurveConfig rateCurve = 3; // 存在 => 整体替换动态利率曲线参数
+}
+
 message BinaryDataCommand {
+  reserved 4, 5;  // 原 update_symbol_loan_config / update_loan_global_config，已合并为 add_loan
   oneof command {
     BatchAddAccountsCommand add_accounts = 1;
     BatchAddSymbolsCommand add_symbols = 2;
     BatchAddCurrenciesCommand add_currencies = 3;
-    SpotLoanConfig update_symbol_loan_config = 4;
-    SpotLoanGlobalConfig update_loan_global_config = 5;
+    BatchAddLoanCommand add_loan = 6;
   }
 }
 

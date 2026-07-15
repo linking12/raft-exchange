@@ -3,6 +3,7 @@ package exchange.core2.tests.unit;
 import exchange.core2.collections.objpool.ObjectsPool;
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.CrossLoanRecord;
 import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.SymbolType;
@@ -18,6 +19,7 @@ import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.UserProfileService;
 import exchange.core2.core.processors.loan.LoanCommandHandlers;
+import exchange.core2.core.processors.loan.LoanGlobalConfig;
 import exchange.core2.core.processors.loan.LoanService;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
@@ -80,7 +82,10 @@ class LoanCommandHandlersTest {
     @BeforeEach
     void setUp() {
         loanService = new LoanService();
-        loanService.setNumeraireCurrency(USDT); // 走 UPDATE_LOAN_GLOBAL_CONFIG 通道的等价初始化
+        loanService.getGlobalConfig().numeraireCurrency = USDT; // 走 UPDATE_LOAN_GLOBAL_CONFIG 通道的等价初始化
+        // 利率移出 spec 后由 LoanService 利率子系统定价；把 USDT 当前曲线利率钉到 500bps（= 旧 spec.loanRateBps=5% APR），
+        // 让 LOCKED 开仓 rate（fixed=floating 当前+adjust0）= 500，保持既有事件断言不变。
+        loanService.getFloatingRate().getCurrentRateBps().put(USDT, 500L);
         up = new UserProfile(UID, UserStatus.ACTIVE);
         specProvider = new SymbolSpecificationProvider();
         currencyProvider = new CurrencySpecificationProvider();
@@ -102,13 +107,14 @@ class LoanCommandHandlersTest {
                 .symbolId(SYMBOL).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(BTC).quoteCurrency(USDT)
                 .baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000)
-                .loanLiquidationLtvBps(8000)
-                .loanMarginCallLtvBps(7000)
-                .loanRateBps(500)
-                .loanMaxAmount(0)
-                .loanMaxTermDays(90)
-                .collateralWeightBps(9000)
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000)
+                        .liquidationLtvBps(8000)
+                        .marginCallLtvBps(7000)
+                        .maxAmount(0)
+                        .maxTermDays(90)
+                        .collateralWeightBps(9000)
+                        .build())
                 .build();
         specProvider.registerSymbol(SYMBOL, spec);
 
@@ -171,6 +177,28 @@ class LoanCommandHandlersTest {
         assertEquals(30_000L, up.accounts.get(USDT), "principal 打进 accounts");
         assertEquals(70_000L, loanService.getLoanPoolAvailable().get(USDT), "pool 扣掉 30k");
         assertEquals(30_000L, loanService.getLoanPoolBorrowed().get(USDT));
+        // 默认 rateMode=LOCKED（userCookie=0）：走 Fixed，accSnapshot 不初始化
+        IsolatedLoanRecord locked = up.isolatedLoans.get(999L);
+        assertEquals(IsolatedLoanRecord.RATE_MODE_LOCKED, locked.rateMode, "默认开仓 = LOCKED");
+        assertEquals(500, locked.rateBps, "LOCKED 开仓率 = 曲线现值 + adjust(0) = 500");
+        assertEquals(0L, locked.accSnapshot, "LOCKED 不用累加器游标");
+    }
+
+    @Test
+    void loanCreate_floatingRateMode_setsFloatingAndInitsAccSnapshot() {
+        // userCookie=FLOATING → 走 Floating：rateMode=FLOATING，开仓率=曲线现值，accSnapshot 定在开仓 liveAcc
+        loanService.getFloatingRate().setLastRepriceTs(500L);
+        loanService.getFloatingRate().getAccRateBpsMs().put(USDT, 7_000L);
+        // liveAcc(1000) = 7000 + currentRate(500)×(1000−500) = 257000
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L);
+        cmd.userCookie = IsolatedLoanRecord.RATE_MODE_FLOATING;
+        assertEquals(CommandResultCode.SUCCESS, handlers.handleLoanCreate(cmd));
+
+        IsolatedLoanRecord loan = up.isolatedLoans.get(999L);
+        assertEquals(IsolatedLoanRecord.RATE_MODE_FLOATING, loan.rateMode, "rateMode=FLOATING");
+        assertEquals(500, loan.rateBps, "FLOATING 开仓率 = 曲线现值 500（展示用）");
+        assertEquals(257_000L, loan.accSnapshot, "accSnapshot 定在开仓 liveAcc");
     }
 
     @Test
@@ -805,7 +833,7 @@ class LoanCommandHandlersTest {
 
     @Test
     void loanCrossBorrow_numeraireUnconfigured_failsClose() {
-        loanService.setNumeraireCurrency(LoanService.NUMERAIRE_UNSET); // 清 setUp 里配的 USDT
+        loanService.getGlobalConfig().numeraireCurrency = LoanGlobalConfig.NUMERAIRE_UNSET; // 清 setUp 里配的 USDT
         OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_BORROW, 1L, UID, 555L, USDT, 0, 20_000L);
         assertEquals(CommandResultCode.LOAN_NUMERAIRE_NOT_CONFIGURED, handlers.handleLoanCrossBorrow(cmd));
         assertTrue(up.crossLoans.isEmpty(), "拒绝后不落 loan");
@@ -813,7 +841,7 @@ class LoanCommandHandlersTest {
 
     @Test
     void loanCrossWithdrawCollateral_numeraireUnconfigured_failsClose() {
-        loanService.setNumeraireCurrency(LoanService.NUMERAIRE_UNSET);
+        loanService.getGlobalConfig().numeraireCurrency = LoanGlobalConfig.NUMERAIRE_UNSET;
         long collateralBefore = up.crossLoanCollateral.get(BTC);
         OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_WITHDRAW_COLLATERAL, 1L, UID, 0, BTC, 2L, 0);
         assertEquals(CommandResultCode.LOAN_NUMERAIRE_NOT_CONFIGURED, handlers.handleLoanCrossWithdrawCollateral(cmd));
@@ -834,7 +862,8 @@ class LoanCommandHandlersTest {
         currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(ETH).name("ETH").digit(0).build());
         specProvider.registerSymbol(301, CoreSymbolSpecification.builder()
             .symbolId(301).type(SymbolType.CURRENCY_EXCHANGE_PAIR).baseCurrency(ETH).quoteCurrency(USDT)
-            .baseScaleK(1).quoteScaleK(1).collateralWeightBps(9000).build());
+            .baseScaleK(1).quoteScaleK(1)
+            .loanConfig(SymbolLoanSpecification.builder().collateralWeightBps(9000).build()).build());
         CrossLoanRecord targetLoan = new CrossLoanRecord(UID, 777L, USDT, 500, 0L);
         targetLoan.outstandingPrincipal = 30_000L;
         up.crossLoans.put(777L, targetLoan);
@@ -873,9 +902,9 @@ class LoanCommandHandlersTest {
             .symbolId(SYMBOL_NI).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
             .baseCurrency(WBTC).quoteCurrency(USDT)
             .baseScaleK(1).quoteScaleK(1)
-            .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000).loanMarginCallLtvBps(7000)
-            .loanRateBps(0).loanMaxAmount(0).loanMaxTermDays(0)
-            .collateralWeightBps(9000)
+            .loanConfig(SymbolLoanSpecification.builder()
+                    .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                    .collateralWeightBps(9000).build())
             .build();
         specProvider.registerSymbol(SYMBOL_NI, spec);
         LastPriceCacheRecord price = new LastPriceCacheRecord();

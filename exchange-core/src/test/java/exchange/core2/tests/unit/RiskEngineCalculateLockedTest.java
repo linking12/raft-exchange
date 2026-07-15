@@ -2,6 +2,7 @@ package exchange.core2.tests.unit;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
@@ -82,8 +83,8 @@ class RiskEngineCalculateLockedTest {
                 .symbolId(2001).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                 .baseCurrency(BTC).quoteCurrency(USDT)
                 .baseScaleK(1).quoteScaleK(1)
-                .loanInitialLtvBps(6000).loanLiquidationLtvBps(8000)
-                .loanRateBps(500).collateralWeightBps(9000)
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).collateralWeightBps(9000).build())
                 .build();
         riskEngine.getSymbolSpecificationProvider().registerSymbol(2001, spotSpec);
 

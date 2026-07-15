@@ -42,9 +42,8 @@ import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.binary.BatchAddAccountsCommand;
 import exchange.core2.core.common.api.binary.BatchAddCurrenciesCommand;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.binary.BatchAddSymbolsCommand;
-import exchange.core2.core.common.api.binary.UpdateLoanGlobalConfigCommand;
-import exchange.core2.core.common.api.binary.UpdateSymbolLoanConfigCommand;
 import exchange.core2.core.common.api.binary.BinaryDataCommand;
 import exchange.core2.core.common.api.reports.ReportQuery;
 import exchange.core2.core.common.api.reports.ReportResult;
@@ -59,7 +58,9 @@ import exchange.core2.core.processors.journaling.ISerializationProcessor;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.processors.liquidation.LiquidationService;
 import exchange.core2.core.processors.loan.LoanCommandHandlers;
+import exchange.core2.core.processors.loan.LoanGlobalConfig;
 import exchange.core2.core.processors.loan.LoanService;
+import exchange.core2.core.processors.loan.rate.FloatingRateModel;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.SerializationUtils;
 import exchange.core2.core.utils.UnsafeUtils;
@@ -112,6 +113,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final IFCommandProcessor ifProcessor;
     private final FundingFeeCommandProcessor fundingFeeProcessor;
     private final ResetFeeCommandProcessor resetFeeProcessor;
+    private final LoanRatePricingProcessor loanRatePricingProcessor;
     private LoanCommandHandlers loanCmdHandlers;
 
     public RiskEngine(final int shardId, final int numShards, final ISerializationProcessor serializationProcessor,
@@ -148,6 +150,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.ifProcessor = new IFCommandProcessor(this);
         this.fundingFeeProcessor = new FundingFeeCommandProcessor(this);
         this.resetFeeProcessor = new ResetFeeCommandProcessor(this);
+        this.loanRatePricingProcessor = new LoanRatePricingProcessor(this);
         this.initState();
     }
 
@@ -204,7 +207,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final IntLongHashMap adjustments = SerializationUtils.readIntLongHashMap(bytesIn);
                 final IntLongHashMap suspends = SerializationUtils.readIntLongHashMap(bytesIn);
                 return new State(symbolSpecificationProvider, currencySpecificationProvider, userProfileService,
-                    liquidationService, loanService, binaryCommandsProcessor, lastPriceCache, fees, adjustments, suspends);
+                    liquidationService, loanService, binaryCommandsProcessor, lastPriceCache, fees, adjustments,
+                    suspends);
             });
         if (state.lastPriceCache == null || state.fees == null) {
             throw new IllegalStateException("Invalid recovered state: missing critical fields");
@@ -363,10 +367,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             return false;
                         }
                         // NSF 公式：currentBalance - spotLocked + freeFuturesMargin ≥ cmd.price
-                        //   currentBalance        = accounts[currency]
-                        //   spotLocked            = 现货挂单冻结，必扣（防把现货锁的钱拨进 isolate margin 破坏现货冻结语义）
-                        //   freeFuturesMargin     = calcFreeFuturesMargin，已扣全部 futures 占用后的净盈余（可正可负）
-                        //   cmd.price             = 本次要追加的保证金
+                        // currentBalance = accounts[currency]
+                        // spotLocked = 现货挂单冻结，必扣（防把现货锁的钱拨进 isolate margin 破坏现货冻结语义）
+                        // freeFuturesMargin = calcFreeFuturesMargin，已扣全部 futures 占用后的净盈余（可正可负）
+                        // cmd.price = 本次要追加的保证金
                         final long currentBalance = userProfile.accounts.get(pos.currency);
                         final long spotLocked = userProfile.exchangeLocked.get(pos.currency);
                         long freeFuturesMargin = calcFreeFuturesMargin(userProfile, pos.currency);
@@ -381,7 +385,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                             return false;
                         }
                         // 资金转入 position.extraMargin：accounts -= cmd.price（currencyScale），extraMargin += sizePriceScale。
-                        // **必须 currencyToSizePriceScale**（不是 currencyToSymbolScale）——extraMargin 必须与 openInitMarginSum 同单位
+                        // **必须 currencyToSizePriceScale**（不是 currencyToSymbolScale）——extraMargin 必须与 openInitMarginSum
+                        // 同单位
                         // (baseScaleK × quoteScaleK)，否则爆仓价/破产价计算严重偏低。
                         // processIFDeposit 已对 currencyToSizePriceScale → sizePriceToCurrencyScale 做 round-trip 守恒校验。
                         long quoteBalance = userProfile.accounts.addToValue(pos.currency, -cmd.price);
@@ -407,9 +412,9 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     }
                     final long currentBalance = userProfile.accounts.get(cmd.symbol);
                     // 提现 NSF 公式：currentBalance - spotLocked + freeFuturesMargin ≥ withdrawalAmount
-                    //   spotLocked 必扣（现货挂单冻结的钱不能提走），独立于 cfgMarginTradingEnabled——
-                    //   spot-only 部署也要扣，否则用户可以提走现货已冻结资产。
-                    //   freeFuturesMargin 仅 margin trading 开启时算（calcFreeFuturesMargin 返净盈余，可正可负）。
+                    // spotLocked 必扣（现货挂单冻结的钱不能提走），独立于 cfgMarginTradingEnabled——
+                    // spot-only 部署也要扣，否则用户可以提走现货已冻结资产。
+                    // freeFuturesMargin 仅 margin trading 开启时算（calcFreeFuturesMargin 返净盈余，可正可负）。
                     if (amountDiff < 0) {
                         long withdrawalAmount = -amountDiff;
                         long spotLocked = userProfile.exchangeLocked.get(currency);
@@ -566,6 +571,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
             }
+            case REPRICE_LOAN_RATES: {
+                loanRatePricingProcessor.collectInput(cmd);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
+                }
+                return false;
+            }
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
                 binaryCommandsProcessor.acceptBinaryFrame(cmd); // ignore return result, because it should be set by
@@ -613,14 +625,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
             }
             case IF_DEPOSIT: {
                 final CommandResultCode rc = processIFDeposit(cmd);
-                if ((int) cmd.uid == shardId) {
+                if ((int)cmd.uid == shardId) {
                     cmd.resultCode = rc;
                 }
                 return false;
             }
             case IF_WITHDRAW: {
                 final CommandResultCode rc = processIFWithdraw(cmd);
-                if ((int) cmd.uid == shardId) {
+                if ((int)cmd.uid == shardId) {
                     cmd.resultCode = rc;
                 }
                 return false;
@@ -759,26 +771,29 @@ public final class RiskEngine implements WriteBytesMarshallable {
     /**
      * 期货下单 NSF 校验：仓位总保证金 + 手续费预扣 + 开仓浮亏 − 同 currency 可抵扣浮盈 ≤ 账户可支配。
      *
-     * <p>字段来源：
+     * <p>
+     * 字段来源：
      * <ul>
-     *   <li>{@code cmd.action / size / price / symbol / orderType} — 新单信息</li>
-     *   <li>{@code position.openVolume / direction} 判反向单；
-     *       {@link SymbolPositionRecord#calculateRequiredMarginForOrder} 算含新单的总仓位 margin</li>
-     *   <li>{@code userProfile.positions} — 遍历同账户所有仓位算 cross 抵扣</li>
-     *   <li>{@code userProfile.positionMode} — ONEWAY 反向单要先扣 openVolume</li>
-     *   <li>{@code userProfile.accounts / exchangeLocked} — 可支配 = accounts − 现货冻结</li>
-     *   <li>{@code lastPriceCache[symbol].markPrice} — 其它仓 PnL 估值 + openLoss 参照</li>
-     *   <li>{@code spec / currencySpec} — scale 换算</li>
+     * <li>{@code cmd.action / size / price / symbol / orderType} — 新单信息</li>
+     * <li>{@code position.openVolume / direction} 判反向单； {@link SymbolPositionRecord#calculateRequiredMarginForOrder}
+     * 算含新单的总仓位 margin</li>
+     * <li>{@code userProfile.positions} — 遍历同账户所有仓位算 cross 抵扣</li>
+     * <li>{@code userProfile.positionMode} — ONEWAY 反向单要先扣 openVolume</li>
+     * <li>{@code userProfile.accounts / exchangeLocked} — 可支配 = accounts − 现货冻结</li>
+     * <li>{@code lastPriceCache[symbol].markPrice} — 其它仓 PnL 估值 + openLoss 参照</li>
+     * <li>{@code spec / currencySpec} — scale 换算</li>
      * </ul>
      *
-     * <p>三块可抵扣 / 预留：
+     * <p>
+     * 三块可抵扣 / 预留：
      * <ul>
-     *   <li>{@code crossFreeMargin} = Σ(其它仓 PnL − 已锁 margin) + 本仓 PnL —— cross 浮盈可开新单</li>
-     *   <li>{@code pendingFee} — 本单成交按 taker rate 预扣（BUDGET 走专用估算）</li>
-     *   <li>{@code openLoss} — orderPrice 相对 mark 不利时的成交浮亏预留，防"开仓即爆仓"</li>
+     * <li>{@code crossFreeMargin} = Σ(其它仓 PnL − 已锁 margin) + 本仓 PnL —— cross 浮盈可开新单</li>
+     * <li>{@code pendingFee} — 本单成交按 taker rate 预扣（BUDGET 走专用估算）</li>
+     * <li>{@code openLoss} — orderPrice 相对 mark 不利时的成交浮亏预留，防"开仓即爆仓"</li>
      * </ul>
      *
-     * <p>跨 currency 不互通；BUDGET 单成交价由撮合决定，跳过 openLoss 检查。
+     * <p>
+     * 跨 currency 不互通；BUDGET 单成交价由撮合决定，跳过 openLoss 检查。
      */
     private boolean canPlaceMarginOrder(final OrderCommand cmd, final UserProfile userProfile,
         final CoreSymbolSpecification spec, final SymbolPositionRecord position,
@@ -799,8 +814,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // ────────────────────────────────────────────────────────────────────
         // ② crossFreeMargin：同 currency 下的账户级可抵扣（仅 CROSS 仓位参与浮盈抵扣）
         // ────────────────────────────────────────────────────────────────────
-        //   PnL：只有 CROSS 仓位的浮盈算进 cross 账户资本；ISOLATED 仓位隔离，PnL 不给别的单当资本。
-        //   已锁保证金：无论 marginMode 都要从 spendable 里剥离——accounts 未扣，实际这部分已被锁在仓位里。
+        // PnL：只有 CROSS 仓位的浮盈算进 cross 账户资本；ISOLATED 仓位隔离，PnL 不给别的单当资本。
+        // 已锁保证金：无论 marginMode 都要从 spendable 里剥离——accounts 未扣，实际这部分已被锁在仓位里。
         // 本仓（posRecord == position）：其 margin 已含在 positionMargin 里，此处只补加自己的浮盈（如属 CROSS）。
         // 其它仓（跨 symbol 或 HEDGE 同 symbol 对侧腿）：CROSS → 加 PnL 减 margin；ISOLATED → 只减 margin。
         // 用对象引用 `==` 判本仓——HEDGE 下同 symbol 有 LONG/SHORT 两条独立 record，key 靠 +− 区分，
@@ -825,15 +840,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // ③ pendingFee：本单成交时按 taker rate 应扣的手续费（这里只做容量判定，R2 才实际扣）
         // ────────────────────────────────────────────────────────────────────
         // BUDGET 走专用函数（跟 pendingHoldBudget 同源），把 cmd.price 当总预算而不是单价。
-        final long pendingFee = isBudgetOrder
-            ? position.calculatePendingFeeForOrderBudget(spec, cmd.action, cmd.size, cmd.price)
-            : position.calculatePendingFeeForOrder(spec, cmd.action, cmd.size, cmd.price);
+        final long pendingFee =
+            isBudgetOrder ? position.calculatePendingFeeForOrderBudget(spec, cmd.action, cmd.size, cmd.price)
+                : position.calculatePendingFeeForOrder(spec, cmd.action, cmd.size, cmd.price);
 
         // ────────────────────────────────────────────────────────────────────
         // ④ openLoss：开仓瞬间浮亏预留，防"开仓即爆仓"
         // ────────────────────────────────────────────────────────────────────
-        //   BID 超付（orderPrice > mark）：openLoss = (orderPrice − mark) × openingSize
-        //   ASK 贱卖（orderPrice < mark）：openLoss = (mark − orderPrice) × openingSize
+        // BID 超付（orderPrice > mark）：openLoss = (orderPrice − mark) × openingSize
+        // ASK 贱卖（orderPrice < mark）：openLoss = (mark − orderPrice) × openingSize
         // openingSize 只算真正"开新敞口"的手数：ONEWAY 反向单先抵掉 openVolume，剩余 (cmd.size − openVolume)
         // 才是新开对侧的部分；HEDGE 每条腿独立，openingSize = cmd.size 全部计入。
         // 即便 newOrderMargin == -1（净敞口不扩），反向大单的对侧开仓部分仍有立即浮亏风险，须算 openLoss。
@@ -849,8 +864,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long markPrice = lastPriceCache.get(cmd.symbol).markPrice;
                 final long orderCost = Math.multiplyExact(openingSize, cmd.price);
                 final long markCost = Math.multiplyExact(openingSize, markPrice);
-                openLoss = cmd.action == OrderAction.BID
-                    ? Math.max(0L, Math.subtractExact(orderCost, markCost))
+                openLoss = cmd.action == OrderAction.BID ? Math.max(0L, Math.subtractExact(orderCost, markCost))
                     : Math.max(0L, Math.subtractExact(markCost, orderCost));
             }
         }
@@ -860,8 +874,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // ────────────────────────────────────────────────────────────────────
         final int currency = position.currency;
         final long spendable = userProfile.accounts.get(currency) - userProfile.exchangeLocked.get(currency);
-        final long required = CoreArithmeticUtils.sizePriceToCurrencyScale(
-            positionMargin + pendingFee + openLoss - crossFreeMargin, spec, currencySpec);
+        final long required = CoreArithmeticUtils
+            .sizePriceToCurrencyScale(positionMargin + pendingFee + openLoss - crossFreeMargin, spec, currencySpec);
         return required <= spendable;
     }
 
@@ -927,15 +941,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
     // ====================================================================================
 
     /**
-     * IF_DEPOSIT 定向单 shard 充值：cmd.uid 承载目标 shardId，只有匹配的 RiskEngine 入账，其他 shard 静默 SUCCESS no-op。
-     * 运营侧通过 {@link exchange.core2.core.common.api.reports.InsuranceFundReportQuery} 查各 shard 明细决定注资目标，
-     * 应对分片不均衡（跟期货 IF 池同款 per-shard state 设计）。
-     * 精度可逆校验：sizePriceToCurrencyScale(currencyToSizePriceScale(currencyAmount)) 必须严格等于原值，
-     * 否则 adjustments 对冲会有截断残量，对账漂移。
+     * IF_DEPOSIT 定向单 shard 充值：cmd.uid 承载目标 shardId，只有匹配的 RiskEngine 入账，其他 shard 静默 SUCCESS no-op。 运营侧通过
+     * {@link exchange.core2.core.common.api.reports.InsuranceFundReportQuery} 查各 shard 明细决定注资目标， 应对分片不均衡（跟期货 IF 池同款
+     * per-shard state 设计）。 精度可逆校验：sizePriceToCurrencyScale(currencyToSizePriceScale(currencyAmount)) 必须严格等于原值， 否则
+     * adjustments 对冲会有截断残量，对账漂移。
      */
     private CommandResultCode processIFDeposit(final OrderCommand cmd) {
         // 定向 shard 路由：不是我的 shard 直接静默 SUCCESS no-op
-        if ((int) cmd.uid != shardId) {
+        if ((int)cmd.uid != shardId) {
             return CommandResultCode.SUCCESS;
         }
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
@@ -966,13 +979,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     /**
-     * IF_WITHDRAW 定向单 shard 抽资：语义跟 {@link #processIFDeposit} 对称，差别只在正负号 + 非负校验。
-     * IF available 不足以覆盖时返回 {@link CommandResultCode#RISK_IF_INSUFFICIENT}。
-     * 仅从 available 扣，不动 reserved（reserved 是正在保护某笔强平的预冻结部分）。
+     * IF_WITHDRAW 定向单 shard 抽资：语义跟 {@link #processIFDeposit} 对称，差别只在正负号 + 非负校验。 IF available 不足以覆盖时返回
+     * {@link CommandResultCode#RISK_IF_INSUFFICIENT}。 仅从 available 扣，不动 reserved（reserved 是正在保护某笔强平的预冻结部分）。
      */
     private CommandResultCode processIFWithdraw(final OrderCommand cmd) {
         // 定向 shard 路由：不是我的 shard 直接静默 SUCCESS no-op
-        if ((int) cmd.uid != shardId) {
+        if ((int)cmd.uid != shardId) {
             return CommandResultCode.SUCCESS;
         }
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
@@ -1046,7 +1058,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.SUCCESS;
         }
         // FORCE_LIQUIDATION 用被强平者平仓视角（action 与 position direction 反向）；
-        // IF_TAKEOVER / AUTO_DELEVERAGING 用 counterparty 接管视角（action 与 position direction 同向，参见 LiquidationEngine#tryRepublishStuckLiquidation 注释）。
+        // IF_TAKEOVER / AUTO_DELEVERAGING 用 counterparty 接管视角（action 与 position direction 同向，参见
+        // LiquidationEngine#tryRepublishStuckLiquidation 注释）。
         // 视角不一致——这里不能套 reduce-only 的方向 guard，纯按 openVolume 收敛 size。
         cmd.size = Math.min(cmd.size, position.openVolume);
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
@@ -1151,52 +1164,67 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
             });
 
-        } else if (message instanceof UpdateLoanGlobalConfigCommand) {
-            final UpdateLoanGlobalConfigCommand cmd = (UpdateLoanGlobalConfigCommand)message;
-            final int newNumeraire = cmd.getNumeraireCurrency();
-            // partial update（≤0 = 不改）+ apply-all-or-nothing：任一违规整条拒绝，不留半更新的配置
-            final boolean numeraireOk =
-                newNumeraire <= 0 || currencySpecificationProvider.getCurrencySpecification(newNumeraire) != null;
-            final boolean valid =
-                numeraireOk && cmd.thresholdsValidGivenCurrent(loanService.getCrossLiquidationLtvBps(),
-                    loanService.getCrossMarginCallLtvBps());
-            if (!valid) {
-                log.warn("UPDATE_LOAN_GLOBAL_CONFIG rejected (invalid config): {}", cmd);
-            } else {
-                if (newNumeraire > 0) {
-                    loanService.setNumeraireCurrency(newNumeraire);
+        } else if (message instanceof BatchAddLoanCommand) {
+            // 统一 loan 配置更新：global / symbol / rateCurve 三部分作用域独立，各自校验、各自 apply，一部分非法不影响另一部分。
+            final BatchAddLoanCommand cmd = (BatchAddLoanCommand)message;
+            // --- 全局部分：partial-update（≤0=不改）+ apply-all-or-nothing，任一违规整条拒绝、不留半更新 ---
+            if (cmd.hasGlobal()) {
+                final BatchAddLoanCommand.GlobalLoanConfig g = cmd.getGlobal();
+                final int newNumeraire = g.getNumeraireCurrency();
+                final LoanGlobalConfig config = loanService.getGlobalConfig();
+                final boolean numeraireOk =
+                    newNumeraire <= 0 || currencySpecificationProvider.getCurrencySpecification(newNumeraire) != null;
+                if (numeraireOk
+                    && g.thresholdsValidGivenCurrent(config.crossLiquidationLtvBps, config.crossMarginCallLtvBps)) {
+                    if (newNumeraire > 0) {
+                        config.numeraireCurrency = newNumeraire;
+                    }
+                    if (g.getCrossLiquidationLtvBps() > 0) {
+                        config.crossLiquidationLtvBps = g.getCrossLiquidationLtvBps();
+                    }
+                    if (g.getCrossMarginCallLtvBps() > 0) {
+                        config.crossMarginCallLtvBps = g.getCrossMarginCallLtvBps();
+                    }
+                    if (g.getLoanPoolUtilizationCapBps() > 0) {
+                        config.loanPoolUtilizationCapBps = g.getLoanPoolUtilizationCapBps();
+                    }
+                    if (g.getLoanLiquidationFeeBps() > 0) {
+                        config.loanLiquidationFeeBps = g.getLoanLiquidationFeeBps();
+                    }
+                    log.info("ADD_LOAN global config applied: {}", g);
+                } else {
+                    log.warn("ADD_LOAN global config rejected (invalid config): {}", g);
                 }
-                if (cmd.getCrossLiquidationLtvBps() > 0) {
-                    loanService.setCrossLiquidationLtvBps(cmd.getCrossLiquidationLtvBps());
-                }
-                if (cmd.getCrossMarginCallLtvBps() > 0) {
-                    loanService.setCrossMarginCallLtvBps(cmd.getCrossMarginCallLtvBps());
-                }
-                if (cmd.getLoanPoolUtilizationCapBps() > 0) {
-                    loanService.setLoanPoolUtilizationCapBps(cmd.getLoanPoolUtilizationCapBps());
-                }
-                if (cmd.getLoanLiquidationFeeBps() > 0) {
-                    loanService.setLoanLiquidationFeeBps(cmd.getLoanLiquidationFeeBps());
-                }
-                log.info("UPDATE_LOAN_GLOBAL_CONFIG applied: {}", cmd);
             }
-        } else if (message instanceof UpdateSymbolLoanConfigCommand) {
-            final UpdateSymbolLoanConfigCommand cmd = (UpdateSymbolLoanConfigCommand)message;
-            final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.getSymbolId());
-            final int initial = cmd.getLoanInitialLtvBps();
-            final int liq = cmd.getLoanLiquidationLtvBps();
-            final int mc = cmd.getLoanMarginCallLtvBps();
-            final boolean valid =
-                spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && initial >= 0 && initial < 10000
-                    && (initial == 0 || (liq > initial && liq < 10000 && (mc == 0 || (mc > initial && mc < liq))))
-                    && cmd.getLoanRateBps() >= 0 && cmd.getLoanMaxAmount() >= 0 && cmd.getLoanMaxTermDays() >= 0
-                    && cmd.getCollateralWeightBps() >= 0 && cmd.getCollateralWeightBps() <= 10000;
-            if (valid) {
-                spec.updateLoanConfig(initial, liq, mc, cmd.getLoanRateBps(), cmd.getLoanMaxAmount(),
-                    cmd.getLoanMaxTermDays(), cmd.getCollateralWeightBps());
-                log.info("UPDATE_SYMBOL_LOAN_CONFIG applied: {}", cmd);
-            } else {
-                log.warn("UPDATE_SYMBOL_LOAN_CONFIG rejected: {}", cmd);
+            // --- per-symbol 部分：字段层校验 + spec 存在性/类型校验，valid 才原子改写该 pair 的 loan 配置 ---
+            if (cmd.hasSymbol()) {
+                final BatchAddLoanCommand.SymbolLoanConfig s = cmd.getSymbol();
+                final CoreSymbolSpecification spec =
+                    symbolSpecificationProvider.getSymbolSpecification(s.getSymbolId());
+                if (spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && s.fieldsValid()) {
+                    spec.updateLoanConfig(s.getLoanInitialLtvBps(), s.getLoanLiquidationLtvBps(),
+                        s.getLoanMarginCallLtvBps(), s.getLoanMaxAmount(), s.getLoanMaxTermDays(),
+                        s.getCollateralWeightBps());
+                    log.info("ADD_LOAN symbol config applied: {}", s);
+                } else {
+                    log.warn("ADD_LOAN symbol config rejected: {}", s);
+                }
+            }
+
+            // 利率曲线部分：存在即整体替换 Floating 曲线参数 + Fixed 点差（valid 才写，否则整块拒绝）
+            if (cmd.hasRateCurve()) {
+                final BatchAddLoanCommand.RateCurveConfig rc = cmd.getRateCurve();
+                if (rc.valid()) {
+                    final FloatingRateModel floating = loanService.getFloatingRate();
+                    floating.setBaseBps(rc.getBaseBps());
+                    floating.setKinkUtilBps(rc.getKinkUtilBps());
+                    floating.setSlope1Bps(rc.getSlope1Bps());
+                    floating.setSlope2Bps(rc.getSlope2Bps());
+                    loanService.getFixedRate().setLockedRateAdjustBps(rc.getLockedRateAdjustBps());
+                    log.info("ADD_LOAN rate curve applied: {}", rc);
+                } else {
+                    log.warn("ADD_LOAN rate curve rejected: {}", rc);
+                }
             }
         }
     }
@@ -1308,8 +1336,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     /**
-     * 可平量 = 只有 position direction 与 action 反向时才有意义。
-     * EMPTY / 同向 action 直接返 0，让上游 no-op，防止把"reduce-only / CLOSE"误用成开新敞口。
+     * 可平量 = 只有 position direction 与 action 反向时才有意义。 EMPTY / 同向 action 直接返 0，让上游 no-op，防止把"reduce-only / CLOSE"误用成开新敞口。
      */
     private long maxClosableSize(SymbolPositionRecord pos, OrderAction action, long requestedSize) {
         if (!pos.direction.isOppositeToAction(action)) {
@@ -1335,6 +1362,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 resetFeeProcessor.applyEvent(cmd, mte, null, null);
                 mte = mte.nextEvent;
             } while (mte != null);
+            return false;
+        }
+        if (cmd.command == OrderCommandType.REPRICE_LOAN_RATES) {
+            do {
+                loanRatePricingProcessor.applyEvent(cmd, mte, null, null);
+                mte = mte.nextEvent;
+            } while (mte != null);
+            loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp); 
             return false;
         }
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
@@ -1452,14 +1487,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
     // ====================================================================================
 
     /**
-     * 算用户在某 currency 上的全量 locked（缩放到 currency 精度）。
-     * 四阶段（末尾追加 loan 抵押两项，本次改动，详见 loan.md §9.2）：
-     *   ① 累计所有同 currency 的期货 position 占保证金（含 pending + 潜在 fee）
-     *   ② 加 spot 侧 exchangeLocked（未成交挂单）
-     *   ③ 加 Isolated 借贷抵押（collateralCurrency == currency 的所有 loan record）
-     *   ④ 加 Cross 借贷抵押（账户级多币种池）
-     * 不变量：free = accounts − locked。loan 抵押扩项使 futures / spot / withdraw 30 处下游 NSF 自动隔离
-     * loan 抵押（不能顶 futures margin / 不能被现货挂单锁走 / 不能提现）；反向 loan 命令的抵押校验也自动排除 futures / spot 已锁部分。
+     * 算用户在某 currency 上的全量 locked（缩放到 currency 精度）。 四阶段（末尾追加 loan 抵押两项，本次改动，详见 loan.md §9.2）： ① 累计所有同 currency 的期货
+     * position 占保证金（含 pending + 潜在 fee） ② 加 spot 侧 exchangeLocked（未成交挂单） ③ 加 Isolated 借贷抵押（collateralCurrency ==
+     * currency 的所有 loan record） ④ 加 Cross 借贷抵押（账户级多币种池） 不变量：free = accounts − locked。loan 抵押扩项使 futures / spot /
+     * withdraw 30 处下游 NSF 自动隔离 loan 抵押（不能顶 futures margin / 不能被现货挂单锁走 / 不能提现）；反向 loan 命令的抵押校验也自动排除 futures / spot 已锁部分。
      */
     public long calculateLocked(UserProfile userProfile, int currency) {
         long locked = 0;

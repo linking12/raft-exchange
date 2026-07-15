@@ -6,8 +6,10 @@ import exchange.core2.core.common.OrderType;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 锁定 LiquidationEngine 触发的强平 cmd 经 raft 复制 round-trip 后字段不丢/不串。
@@ -91,18 +93,130 @@ class ApiCommandConvertersTest {
     }
 
     @Test
-    void updateLoanGlobalConfig_mapsNumeraireAndThresholds() {
-        // proto SpotLoanGlobalConfig（numeraire + 三阈值）→ exchange-core UpdateLoanGlobalConfigCommand，字段不丢
-        var grpc = com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig.newBuilder()
-            .setNumeraireCcy(2).setCrossLiquidationLtvBps(8500).setCrossMarginCallLtvBps(8000)
-            .setLoanPoolUtilizationCapBps(9000).setLoanLiquidationFeeBps(200).build();
+    void batchAddLoan_globalOnly_mapsNumeraireAndThresholds() {
+        // proto BatchAddLoanCommand{global} → exchange-core BatchAddLoanCommand，global 部分字段不丢
+        var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
+            .setGlobal(com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig.newBuilder()
+                .setNumeraireCcy(2).setCrossLiquidationLtvBps(8500).setCrossMarginCallLtvBps(8000)
+                .setLoanPoolUtilizationCapBps(9000).setLoanLiquidationFeeBps(200))
+            .build();
 
-        var cmd = ApiCommandConverters.convertUpdateLoanGlobalConfig(grpc);
+        var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
 
-        assertEquals(2, cmd.getNumeraireCurrency());
-        assertEquals(8500, cmd.getCrossLiquidationLtvBps());
-        assertEquals(8000, cmd.getCrossMarginCallLtvBps());
-        assertEquals(9000, cmd.getLoanPoolUtilizationCapBps());
-        assertEquals(200, cmd.getLoanLiquidationFeeBps());
+        assertTrue(cmd.hasGlobal());
+        assertFalse(cmd.hasSymbol());
+        var g = cmd.getGlobal();
+        assertEquals(2, g.getNumeraireCurrency());
+        assertEquals(8500, g.getCrossLiquidationLtvBps());
+        assertEquals(8000, g.getCrossMarginCallLtvBps());
+        assertEquals(9000, g.getLoanPoolUtilizationCapBps());
+        assertEquals(200, g.getLoanLiquidationFeeBps());
+    }
+
+    @Test
+    void batchAddLoan_bothParts_mapsGlobalAndSymbol() {
+        // 合并后的核心能力：一条 proto 命令同时携带 global + symbol
+        var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
+            .setGlobal(com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig.newBuilder().setNumeraireCcy(2))
+            .setSymbol(com.binance.raftexchange.stubs.request.SpotLoanConfig.newBuilder()
+                .setSymbolId(101).setLoanInitialLtvBps(6000).setLoanLiquidationLtvBps(8000)
+                .setLoanMarginCallLtvBps(7000).setLoanMaxAmount(1_000_000L).setLoanMaxTermDays(90)
+                .setCollateralWeightBps(9000))
+            .build();
+
+        var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
+
+        assertTrue(cmd.hasGlobal());
+        assertTrue(cmd.hasSymbol());
+        assertEquals(2, cmd.getGlobal().getNumeraireCurrency());
+        var s = cmd.getSymbol();
+        assertEquals(101, s.getSymbolId());
+        assertEquals(6000, s.getLoanInitialLtvBps());
+        assertEquals(8000, s.getLoanLiquidationLtvBps());
+        assertEquals(7000, s.getLoanMarginCallLtvBps());
+        assertEquals(1_000_000L, s.getLoanMaxAmount());
+        assertEquals(90, s.getLoanMaxTermDays());
+        assertEquals(9000, s.getCollateralWeightBps());
+    }
+
+    // ---- loan 强平 / reprice 的 raft-log round-trip：scanner 命令 leader→follower 字段不丢，否则状态机分叉 ----
+
+    @Test
+    void loanForceLiquidate_roundTripPreservesAllFields() throws Exception {
+        long ts = 111L;
+        var leaderCmd = exchange.core2.core.common.api.ApiLoanForceLiquidate.builder().uid(9801L).symbol(100)
+            .loanId(55L).price(50_000L).size(3L).orderId(123L).action(OrderAction.ASK).orderType(OrderType.IOC).build();
+
+        byte[] raftLog = ApiCommandConverters.liquidationCmdToRaftLog(leaderCmd, ts);
+        ApiCommand parsed = ApiCommand.parseFrom(raftLog);
+        assertEquals(ts, parsed.getTimestamp());
+        assertSame(ApiCommand.CommandCase.LOAN_FORCE_LIQUIDATE, parsed.getCommandCase());
+
+        var f = ApiCommandConverters.convertLoanForceLiquidate(parsed);
+        assertEquals(leaderCmd.uid, f.uid);
+        assertEquals(leaderCmd.symbol, f.symbol);
+        assertEquals(leaderCmd.loanId, f.loanId);
+        assertEquals(leaderCmd.price, f.price);
+        assertEquals(leaderCmd.size, f.size);
+        assertEquals(leaderCmd.orderId, f.orderId);
+        assertSame(leaderCmd.action, f.action);
+        assertSame(leaderCmd.orderType, f.orderType);
+    }
+
+    @Test
+    void loanCrossForceLiquidate_roundTripPreservesAllFields() throws Exception {
+        long ts = 222L;
+        var leaderCmd = exchange.core2.core.common.api.ApiLoanCrossForceLiquidate.builder().uid(9802L).symbol(100)
+            .targetLoanId(200L).price(49_500L).size(2L).orderId(456L).action(OrderAction.ASK).orderType(OrderType.IOC)
+            .build();
+
+        byte[] raftLog = ApiCommandConverters.liquidationCmdToRaftLog(leaderCmd, ts);
+        ApiCommand parsed = ApiCommand.parseFrom(raftLog);
+        assertEquals(ts, parsed.getTimestamp());
+        assertSame(ApiCommand.CommandCase.LOAN_CROSS_FORCE_LIQUIDATE, parsed.getCommandCase());
+
+        var f = ApiCommandConverters.convertLoanCrossForceLiquidate(parsed);
+        assertEquals(leaderCmd.uid, f.uid);
+        assertEquals(leaderCmd.symbol, f.symbol);
+        assertEquals(leaderCmd.targetLoanId, f.targetLoanId);
+        assertEquals(leaderCmd.price, f.price);
+        assertEquals(leaderCmd.size, f.size);
+        assertEquals(leaderCmd.orderId, f.orderId);
+        assertSame(leaderCmd.action, f.action);
+        assertSame(leaderCmd.orderType, f.orderType);
+    }
+
+    @Test
+    void repriceLoanRates_roundTripPreservesCaseAndTimestamp() throws Exception {
+        long ts = 1_700_000_000_000L;
+        var leaderCmd = exchange.core2.core.common.api.ApiRepriceLoanRates.builder().build();
+
+        byte[] raftLog = ApiCommandConverters.liquidationCmdToRaftLog(leaderCmd, ts);
+        ApiCommand parsed = ApiCommand.parseFrom(raftLog);
+        assertEquals(ts, parsed.getTimestamp(), "reprice 的 leader timestamp 须随 raft log 复制（累加器确定性）");
+        assertSame(ApiCommand.CommandCase.REPRICE_LOAN_RATES, parsed.getCommandCase());
+
+        var f = ApiCommandConverters.convertRepriceLoanRates(parsed);
+        assertEquals(ts, f.timestamp, "follower 侧 timestamp 透传");
+    }
+
+    @Test
+    void batchAddLoan_rateCurve_mapsCurveParams() {
+        var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
+            .setRateCurve(com.binance.raftexchange.stubs.request.SpotLoanRateCurveConfig.newBuilder().setBaseBps(150)
+                .setKinkUtilBps(7500).setSlope1Bps(350).setSlope2Bps(5000).setLockedRateAdjustBps(-25))
+            .build();
+
+        var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
+
+        assertTrue(cmd.hasRateCurve());
+        assertFalse(cmd.hasGlobal());
+        assertFalse(cmd.hasSymbol());
+        var r = cmd.getRateCurve();
+        assertEquals(150, r.getBaseBps());
+        assertEquals(7500, r.getKinkUtilBps());
+        assertEquals(350, r.getSlope1Bps());
+        assertEquals(5000, r.getSlope2Bps());
+        assertEquals(-25, r.getLockedRateAdjustBps());
     }
 }

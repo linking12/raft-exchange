@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
+import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,7 +83,7 @@ public class RaftClusterDiscovery {
         if (applications == null)
             return;
         String appsHashCode = applications.getAppsHashCode();
-        if (Objects.equals(this.lastAppsHashCode, appsHashCode))
+        if (Objects.equals(this.lastAppsHashCode, appsHashCode) && raftToGrpcPeerMap.size() >= startupNodes)
             return;
         Application app = eurekaClient.getApplication(raftClusterName);
         if (app == null)
