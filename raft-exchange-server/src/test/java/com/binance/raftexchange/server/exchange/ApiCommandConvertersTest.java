@@ -115,13 +115,13 @@ class ApiCommandConvertersTest {
 
     @Test
     void batchAddLoan_bothParts_mapsGlobalAndSymbol() {
-        // 合并后的核心能力：一条 proto 命令同时携带 global + symbol
+        // 合并后的核心能力：一条 proto 命令同时携带 global + symbol。
+        // symbol 只带 symbolId + initialLtv,其余阈值 → UNSET(−1),由 exchange-core resolve() 派生。
+        final int UNSET = exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig.UNSET;
         var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
             .setGlobal(com.binance.raftexchange.stubs.request.SpotLoanGlobalConfig.newBuilder().setNumeraireCcy(2))
             .setSymbol(com.binance.raftexchange.stubs.request.SpotLoanConfig.newBuilder()
-                .setSymbolId(101).setLoanInitialLtvBps(6000).setLoanLiquidationLtvBps(8000)
-                .setLoanMarginCallLtvBps(7000).setLoanMaxAmount(1_000_000L).setLoanMaxTermDays(90)
-                .setCollateralWeightBps(9000))
+                .setSymbolId(101).setLoanInitialLtvBps(6000))
             .build();
 
         var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
@@ -132,11 +132,11 @@ class ApiCommandConvertersTest {
         var s = cmd.getSymbol();
         assertEquals(101, s.getSymbolId());
         assertEquals(6000, s.getLoanInitialLtvBps());
-        assertEquals(8000, s.getLoanLiquidationLtvBps());
-        assertEquals(7000, s.getLoanMarginCallLtvBps());
-        assertEquals(1_000_000L, s.getLoanMaxAmount());
-        assertEquals(90, s.getLoanMaxTermDays());
-        assertEquals(9000, s.getCollateralWeightBps());
+        assertEquals(UNSET, s.getLoanLiquidationLtvBps(), "override 不进 proto → UNSET → 派生");
+        assertEquals(UNSET, s.getLoanMarginCallLtvBps());
+        assertEquals((long) UNSET, s.getLoanMaxAmount());
+        assertEquals(UNSET, s.getLoanMaxTermDays());
+        assertEquals(UNSET, s.getCollateralWeightBps());
     }
 
     // ---- loan 强平 / reprice 的 raft-log round-trip：scanner 命令 leader→follower 字段不丢，否则状态机分叉 ----

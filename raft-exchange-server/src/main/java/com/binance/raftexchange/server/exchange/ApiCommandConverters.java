@@ -407,7 +407,6 @@ public final class ApiCommandConverters {
      */
     public static exchange.core2.core.common.api.binary.BatchAddLoanCommand
         convertBatchAddLoan(com.binance.raftexchange.stubs.request.BatchAddLoanCommand grpc) {
-        final int UNSET = exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig.UNSET;
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.GlobalLoanConfig global = null;
         if (grpc.hasGlobal()) {
             var g = grpc.getGlobal();
@@ -419,13 +418,9 @@ public final class ApiCommandConverters {
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig symbol = null;
         if (grpc.hasSymbol()) {
             var s = grpc.getSymbol();
-            // optional override 缺省 → UNSET(−1)，由 exchange-core resolve() 按全局缓冲派生。
-            symbol = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig(s.getSymbolId(),
-                s.getLoanInitialLtvBps(), s.hasLoanLiquidationLtvBps() ? s.getLoanLiquidationLtvBps() : UNSET,
-                s.hasLoanMarginCallLtvBps() ? s.getLoanMarginCallLtvBps() : UNSET,
-                s.hasLoanMaxAmount() ? s.getLoanMaxAmount() : (long)UNSET,
-                s.hasLoanMaxTermDays() ? s.getLoanMaxTermDays() : UNSET,
-                s.hasCollateralWeightBps() ? s.getCollateralWeightBps() : UNSET);
+            // proto 只带 symbolId + initialLtv;其余阈值全由 exchange-core resolve() 按全局缓冲派生。
+            symbol = exchange.core2.core.common.api.binary.BatchAddLoanCommand
+                .ofMarket(s.getSymbolId(), s.getLoanInitialLtvBps()).build().getSymbol();
         }
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig rateCurve = null;
         if (grpc.hasRateCurve()) {

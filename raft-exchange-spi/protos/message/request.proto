@@ -391,18 +391,13 @@ message BatchAddCurrenciesCommand {
 
 // UPDATE_SYMBOL_LOAN_CONFIG: 给已上架现货 pair 追配 / 重置 loan 参数（loan.md UPDATE_SYMBOL_LOAN_CONFIG 章节）
 // 只能改 CURRENCY_EXCHANGE_PAIR；期货 / 交割 spec 拒绝。
-// 简化：每市场只必填 symbolId + loanInitialLtvBps；其余为 optional override，
-// 缺省=按全局缓冲派生（liquidation=initial+缓冲、marginCall=liquidation−缓冲、weight=initialLtv、
-// maxAmount/maxTermDays=无限/无期限）。见 loan.md §11 简化设计。
+// 简化：每市场只暴露 symbolId + loanInitialLtvBps。其余阈值全部按全局缓冲派生
+//（liquidation=initial+缓冲、marginCall=liquidation−缓冲、weight=initialLtv、maxAmount/maxTermDays=无限/无期限）。
+// override 字段刻意不进 proto —— 需要某个再单独加，保持调用面最小。见 loan.md §11 简化设计。
 message SpotLoanConfig {
   int32 symbolId = 1;
-  int32 loanInitialLtvBps = 2;               // 必填；0 = 关闭 loan
-  optional int32 loanLiquidationLtvBps = 3;  // 缺省=派生
-  optional int32 loanMarginCallLtvBps = 4;   // 缺省=派生；显式 0 = 关预警
-  reserved 5;                                // 原 loanRateBps —— 利率移到 LoanService per-currency 曲线，见 loan.md §3.5
-  optional int64 loanMaxAmount = 6;          // 缺省=无上限
-  optional int32 loanMaxTermDays = 7;        // 缺省=无期限
-  optional int32 collateralWeightBps = 8;    // 缺省=派生(=initialLtv)
+  int32 loanInitialLtvBps = 2;   // 必填；0 = 关闭 loan
+  reserved 3, 4, 5, 6, 7, 8;     // 原 liquidation/marginCall/loanRateBps/maxAmount/maxTermDays/weight —— 派生或按需再加
 }
 
 // UPDATE_LOAN_GLOBAL_CONFIG: 全局 Cross 基准币 + 三大运行时风控阈值（loan.md §1.2）。
