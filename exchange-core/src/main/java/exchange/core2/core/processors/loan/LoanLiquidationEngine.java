@@ -116,7 +116,8 @@ public final class LoanLiquidationEngine {
         final int marginCallLtvBps = spec.loanConfig.marginCallLtvBps;
         if (marginCallLtvBps > 0 && ltvScaled >= Math.multiplyExact(collateralValue, (long)marginCallLtvBps)) {
             final long ltvBps = collateralValue == 0 ? 0 : ltvScaled / collateralValue;
-            sendIsolatedMarginCallIfNotThrottled(loan, ltvBps, marginCallLtvBps);
+            sendMarginCallIfNotThrottled(isolated, loan.loanId, loan.uid, loan.loanId, LOAN_MODE_ISOLATED,
+                loan.loanCurrency, ltvBps, marginCallLtvBps);
         }
     }
 
@@ -135,7 +136,8 @@ public final class LoanLiquidationEngine {
         if (ltvBps >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
             publishCrossForceSell(userProfile, loanService, nowMs, null);
         } else if (ltvBps >= loanService.getGlobalConfig().crossMarginCallLtvBps) {
-            sendCrossMarginCallIfNotThrottled(userProfile.uid, ltvBps,
+            // Cross 账户级：loanId=0 / loanCurrency=0（无单笔归属）
+            sendMarginCallIfNotThrottled(cross, userProfile.uid, userProfile.uid, 0L, LOAN_MODE_CROSS, 0, ltvBps,
                 loanService.getGlobalConfig().crossMarginCallLtvBps);
         }
     }
@@ -270,30 +272,16 @@ public final class LoanLiquidationEngine {
 
     // ---- Margin call 通知 + 节流 ----
 
-    private void sendIsolatedMarginCallIfNotThrottled(IsolatedLoanRecord loan, long ltvBps, long thresholdBps) {
+    // 两 lane 共用：throttleKey = loanId(Isolated) / uid(Cross)；走 leader-local ring-buffer bypass raft，best-effort。
+    private void sendMarginCallIfNotThrottled(LaneState lane, long throttleKey, long uid, long loanId, byte mode,
+        int loanCurrency, long ltvBps, long thresholdBps) {
         long nowMs = System.currentTimeMillis();
-        long lastMs = isolated.marginCallThrottleMs.get(loan.loanId);
-        if (nowMs - lastMs < MARGIN_CALL_THROTTLE_MS)
+        if (nowMs - lane.marginCallThrottleMs.get(throttleKey) < MARGIN_CALL_THROTTLE_MS)
             return;
-        isolated.marginCallThrottleMs.put(loan.loanId, nowMs);
-        FundEvent event = engine.getEventsHelper().sendLoanMarginCallEvent(loan.uid, loan.loanId, LOAN_MODE_ISOLATED,
-            loan.loanCurrency, ltvBps, thresholdBps);
-        // 走 leader-local ring-buffer bypass raft，best-effort（跟 futures MARGIN_ALERT 同款通道）
-        engine.getLiquidationCmdPublisher().publish(ApiSystemLiquidationNotify.builder().fundEvent(event).build(),
-            null);
-    }
-
-    private void sendCrossMarginCallIfNotThrottled(long uid, long ltvBps, long thresholdBps) {
-        long nowMs = System.currentTimeMillis();
-        long lastMs = cross.marginCallThrottleMs.get(uid);
-        if (nowMs - lastMs < MARGIN_CALL_THROTTLE_MS)
-            return;
-        cross.marginCallThrottleMs.put(uid, nowMs);
-        // Cross 账户级：loanId=0、loanCurrency=0（无单笔归属）
+        lane.marginCallThrottleMs.put(throttleKey, nowMs);
         FundEvent event =
-            engine.getEventsHelper().sendLoanMarginCallEvent(uid, 0L, LOAN_MODE_CROSS, 0, ltvBps, thresholdBps);
-        engine.getLiquidationCmdPublisher().publish(ApiSystemLiquidationNotify.builder().fundEvent(event).build(),
-            null);
+            engine.getEventsHelper().sendLoanMarginCallEvent(uid, loanId, mode, loanCurrency, ltvBps, thresholdBps);
+        engine.getLiquidationCmdPublisher().publish(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
     }
 
     // ---- In-flight 去重 + publish ----
@@ -308,22 +296,21 @@ public final class LoanLiquidationEngine {
 
     /** Isolated force-sell publish 追踪：in-flight set keyed by loanId。 */
     public void publishTrackedIsolated(ApiCommand cmd, long loanId) {
-        isolated.inFlight.add(loanId);
-        try {
-            engine.getLiquidationCmdPublisher().publish(cmd, () -> isolated.inFlight.remove(loanId));
-        } catch (Throwable t) {
-            isolated.inFlight.remove(loanId);
-            throw t;
-        }
+        publishTracked(isolated, cmd, loanId);
     }
 
     /** Cross force-sell publish 追踪：in-flight set keyed by uid（Cross 一账户一 pending）。 */
     public void publishTrackedCross(ApiCommand cmd, long uid) {
-        cross.inFlight.add(uid);
+        publishTracked(cross, cmd, uid);
+    }
+
+    // 两 lane 共用：key 进 in-flight，publish 的 onApplied 回调清掉（异常路径也清，避免死值）。
+    private void publishTracked(LaneState lane, ApiCommand cmd, long key) {
+        lane.inFlight.add(key);
         try {
-            engine.getLiquidationCmdPublisher().publish(cmd, () -> cross.inFlight.remove(uid));
+            engine.getLiquidationCmdPublisher().publish(cmd, () -> lane.inFlight.remove(key));
         } catch (Throwable t) {
-            cross.inFlight.remove(uid);
+            lane.inFlight.remove(key);
             throw t;
         }
     }

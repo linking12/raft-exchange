@@ -50,22 +50,14 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 强平引擎。两条互相独立的路径：
- *
- * <p>
- * <b>Scanner 路径</b>（off-lane，{@link SimpleScheduledService} 每 2 秒触发）：扫描所有用户的持仓，发现破产则 publish
- * {@code FORCE_LIQUIDATION}；发现强平流程卡在某阶段则 republish 对应阶段 cmd。Scanner 不修改任何 replicated state—— 不写 ctx，不写
- * lastTransitionAt——只读判断 + publish。
- *
- * <p>
- * <b>Apply 路径</b>（on-lane，raft cmd 落地后）：{@link #nextLiquidationState} 由 RiskEngine 在强平类 cmd （{@code FORCE_LIQUIDATION}
- * / {@code IF_TAKEOVER} / {@code AUTO_DELEVERAGING}）apply 完成后调用。 推进强平流程状态机（LIQUIDATING → WAIT_IF_EXECUTION →
- * WAIT_ADL_EXECUTION → 闭环置 null），并 publish 后续阶段 cmd。<b>所有 {@link LiquidationContext} 写入唯一入口都在这里。</b>
- *
- * <p>
- * <b>In-flight 去重</b>：{@link #inFlightLiquidationCmd} 在 leader 端覆盖"已 publish 但未 apply"这段空窗，通过
- * {@link LiquidationCmdPublisher} 的 onApplied 回调由 publisher 自动清理（包括 raft 失败路径，失败也触发 onApplied， 避免死值）。Failover 时 set
- * 跟进程同生死，新 leader 从空集合起步，已 apply 的 ctx 通过 raft 已复制到位。
+ * 强平引擎，两条独立路径：
+ * <p><b>Scanner（off-lane，每 2s）</b>：扫所有持仓，破产则 publish {@code FORCE_LIQUIDATION}，流程卡住则 republish 对应阶段。
+ * 只读判断 + publish，不写任何 replicated state（不写 ctx / lastTransitionAt）。
+ * <p><b>Apply（on-lane，cmd 落地后）</b>：{@link #nextLiquidationState} 推进状态机
+ * （LIQUIDATING → WAIT_IF_EXECUTION → WAIT_ADL_EXECUTION → 闭环置 null）并 publish 后续阶段。
+ * <b>所有 {@link LiquidationContext} 写入的唯一入口。</b>
+ * <p><b>In-flight 去重</b>：{@link #inFlightLiquidationCmd} 盖住"已 publish 未 apply"的空窗，由 publisher 的 onApplied 回调清理
+ * （raft 失败路径也触发，避免死值）。Failover 后新 leader 从空集起步，已 apply 的 ctx 已随 raft 复制到位。
  */
 @Slf4j
 @Getter
@@ -314,20 +306,9 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     /**
-     * 破产价（BP）—— scanner 强平入口，作为 FORCE / IF / ADL 全流程复用的 {@code ctx.price} seed。
-     *
-     * <p>
-     * 路径分派：
-     * <ul>
-     * <li>{@code ISOLATED} — 单仓 self-contained，marginBase = openInitMarginSum + extraMargin</li>
-     * <li>{@code CROSS} — 账户级按 MM 占比分配 marginBase 后交给下游反解</li>
-     * <li>{@code spec == null} 兜底 — 退 markPrice，保 FORCE 单能挂出去</li>
-     * <li>{@code UP == null} 兜底 — 退 ISOLATED 公式，数量级仍在 EP 附近</li>
-     * </ul>
-     * 兜底不抛异常——scanner 每 2s 一 tick，异常状态若已修复下轮自然恢复正确算法。
-     *
-     * <p>
-     * 输入全是 replicated state，跨节点 apply 到同 raft offset 算出同值——failover 后新 leader 从 {@code ctx.price} 读到的是同一值。
+     * 破产价（BP），FORCE / IF / ADL 全流程复用的 {@code ctx.price} seed。ISOLATED 单仓自足；CROSS 按 MM 占比分配 marginBase 后反解。
+     * 兜底不抛异常（下轮 tick 自然恢复）：spec 缺失退 markPrice、UP 缺失退 ISOLATED 公式。
+     * 输入全是 replicated state → 跨节点同 raft offset 算同值，failover 无碍。
      */
     private long calculateBankruptcyPrice(SymbolPositionRecord pos) {
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(pos.symbol);
@@ -357,39 +338,16 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     /**
-     * 账户级 marginBalance 按 MM 占比分给同 currency 每个 CROSS 仓，返回每仓的 EP-基础 marginBase （currency scale），可直接喂给
-     * {@link SymbolPositionRecord#calculateBankruptcyPrice(CoreSymbolSpecification, long)}。
+     * 账户级 marginBalance 按 MM 占比分给同 currency 的每个 CROSS 仓，返回每仓 EP-基础 marginBase（currency scale），
+     * 直接喂 {@link SymbolPositionRecord#calculateBankruptcyPrice(CoreSymbolSpecification, long)}。
      *
-     * <p>
-     * 分配方程（MP 基础）：
-     * 
      * <pre>
-     *   marginBalance = crossAvailable + Σ CROSS UPnL          （账户级）
-     *   Σ MM          = Σ CROSS 仓各自的维持保证金                （账户级）
-     *   allocated_i   = marginBalance × mm_i / Σ MM             （每仓按 MM 占比公平分账户余额）
-     *   BP_i          = MP_i − allocated_i / (Q_i × side_i)
+     *   marginBalance = crossAvailable + Σ UPnL
+     *   allocated_i   = marginBalance × mm_i / Σ MM     （按 MM 占比分账户余额）
+     *   marginBase_i  = allocated_i − UPnL_i            （EP 基础换算）
      * </pre>
-     * 
-     * 而 {@code calcBankruptcyPriceFromMarginBase} 用 EP 基础 {@code BP = EP − sign × marginBase / Q}， 代数换算：
-     * 
-     * <pre>
-     *   marginBase_i = allocated_i − UPnL_i
-     * </pre>
-     *
-     * <p>
-     * 闭合不变式：{@code Σ marginBase_i = marginBalance − Σ UPnL_i = crossAvailable}——分配前后 账户可支配余额守恒（整型除法截断可能少几个单位，量纲不影响）。
-     *
-     * <p>
-     * 单仓等价：{@code mm_i/ΣMM = 1} → allocated = marginBalance → marginBase = crossAvailable， 跟旧 4 参重载单仓语义代数一致；多仓时按 MM
-     * 占比分。
-     *
-     * <p>
-     * 边界：
-     * <ul>
-     * <li>{@code marginBalance < 0} — 沿用统一公式（allocated 为负 → marginBase 为负），未实现 "盈利仓/亏损仓分岔"，数学总账仍守恒</li>
-     * <li>{@code Σ MM = 0} — 返回空 Map，caller {@code .get(pos)} 拿默认 0</li>
-     * <li>{@code spec / price 缺失} — 该仓跳过，其他仓照分</li>
-     * </ul>
+     * 守恒不变式：{@code Σ marginBase_i = crossAvailable}。单仓时 marginBase=crossAvailable；marginBalance<0 沿用同一公式。
+     * 边界：{@code Σ MM = 0} 返空 Map（caller 取默认 0）；spec/price 缺失的仓跳过、其余照分。
      */
     private ObjectLongHashMap<SymbolPositionRecord> calculateCrossBpMarginBaseAllocation(UserProfile up, int currency,
         CoreCurrencySpecification currencySpec) {
