@@ -1191,6 +1191,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     if (g.getLoanLiquidationFeeBps() > 0) {
                         config.loanLiquidationFeeBps = g.getLoanLiquidationFeeBps();
                     }
+                    if (g.getLtvLiquidationBufferBps() > 0) {
+                        config.ltvLiquidationBufferBps = g.getLtvLiquidationBufferBps();
+                    }
+                    if (g.getLtvMarginCallBufferBps() > 0) {
+                        config.ltvMarginCallBufferBps = g.getLtvMarginCallBufferBps();
+                    }
                     log.info("ADD_LOAN global config applied: {}", g);
                 } else {
                     log.warn("ADD_LOAN global config rejected (invalid config): {}", g);
@@ -1201,11 +1207,13 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final BatchAddLoanCommand.SymbolLoanConfig s = cmd.getSymbol();
                 final CoreSymbolSpecification spec =
                     symbolSpecificationProvider.getSymbolSpecification(s.getSymbolId());
-                if (spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && s.fieldsValid()) {
-                    spec.updateLoanConfig(s.getLoanInitialLtvBps(), s.getLoanLiquidationLtvBps(),
-                        s.getLoanMarginCallLtvBps(), s.getLoanMaxAmount(), s.getLoanMaxTermDays(),
-                        s.getCollateralWeightBps());
-                    log.info("ADD_LOAN symbol config applied: {}", s);
+                final LoanGlobalConfig gc = loanService.getGlobalConfig();
+                final BatchAddLoanCommand.SymbolLoanConfig.Resolved r =
+                    s.resolve(gc.ltvLiquidationBufferBps, gc.ltvMarginCallBufferBps);
+                if (spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && r.valid()) {
+                    spec.updateLoanConfig(r.initialLtvBps, r.liquidationLtvBps, r.marginCallLtvBps,
+                        r.maxAmount, r.maxTermDays, r.collateralWeightBps);
+                    log.info("ADD_LOAN symbol config applied (resolved): {}", r);
                 } else {
                     log.warn("ADD_LOAN symbol config rejected: {}", s);
                 }
