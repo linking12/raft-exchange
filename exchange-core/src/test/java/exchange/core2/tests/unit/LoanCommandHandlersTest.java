@@ -38,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -554,7 +555,8 @@ class LoanCommandHandlersTest {
     void loanCrossWithdrawCollateral_ltvExceedsLiquidation_revertsCollateral() {
         // 绕开 NUMERAIRE_UNSET=0 sentinel：spy LoanService，让 calculateCrossAccountLtvBps 强制返高 LTV
         LoanService spied = spy(loanService);
-        doReturn(10_000L).when(spied).calculateCrossAccountLtvBps(any(), anyLong(), any(), any(), any(), anyInt());
+        doReturn(10_000L).when(spied).calculateCrossAccountLtvBps(any(), anyLong(), any(), any(), any(), anyInt(),
+            anyBoolean());
         when(engine.getLoanService()).thenReturn(spied);
 
         up.crossLoanCollateral.put(BTC, 5L);
@@ -563,6 +565,36 @@ class LoanCommandHandlersTest {
 
         assertEquals(CommandResultCode.LOAN_CROSS_LTV_TOO_HIGH_AFTER_WITHDRAW, rc);
         assertEquals(5L, up.crossLoanCollateral.get(BTC), "拒绝后 collateral revert 到原值");
+    }
+
+    @Test
+    void loanCrossWithdrawCollateral_missingPrice_failsClose() {
+        // F2 回归：有债务但抵押缺 markPrice 时，撤抵押 guard 必须 fail-close(拒绝)——
+        // 旧实现把"价格未就绪"读成 LTV=0=安全而放行，可撤走全部抵押→事后坏账。
+        handlers.handleLoanCrossBorrow(build(OrderCommandType.LOAN_CROSS_BORROW, 1L, UID, 555L, USDT, 0, 20_000L));
+        priceCache.remove(SYMBOL); // BTC/USDT markPrice 消失 → 抵押无法估值
+        OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_WITHDRAW_COLLATERAL, 2L, UID, 0, BTC, 5L, 0);
+
+        CommandResultCode rc = handlers.handleLoanCrossWithdrawCollateral(cmd);
+
+        assertEquals(CommandResultCode.LOAN_CROSS_LTV_TOO_HIGH_AFTER_WITHDRAW, rc, "缺价应 fail-close 拒绝(F2)");
+        assertEquals(10L, up.crossLoanCollateral.get(BTC), "拒绝后 collateral revert 到原值");
+    }
+
+    @Test
+    void loanCrossBorrow_missingPrice_failsClose() {
+        // F2 回归：抵押缺 markPrice 时借款 guard 必须 fail-close(拒绝)——旧实现 LTV=0 会放行→无抵押超借。
+        priceCache.remove(SYMBOL); // BTC/USDT markPrice 消失
+        final long acctBefore = up.accounts.get(USDT);
+        final long poolAvailBefore = loanService.getLoanPoolAvailable().get(USDT);
+        OrderCommand cmd = build(OrderCommandType.LOAN_CROSS_BORROW, 1L, UID, 555L, USDT, 0, 20_000L);
+
+        CommandResultCode rc = handlers.handleLoanCrossBorrow(cmd);
+
+        assertEquals(CommandResultCode.LOAN_LTV_TOO_HIGH_AFTER_BORROW, rc, "缺价应 fail-close 拒绝(F2)");
+        assertTrue(up.crossLoans.isEmpty(), "拒绝后 loan record revert 移除");
+        assertEquals(acctBefore, up.accounts.get(USDT), "principal 未打进账户");
+        assertEquals(poolAvailBefore, loanService.getLoanPoolAvailable().get(USDT), "pool 未动");
     }
 
     // ================================================================
@@ -581,7 +613,8 @@ class LoanCommandHandlersTest {
     void loanCrossBorrow_ltvExceedsInitial_revertsLoanEntryAndKeepsAccountsPoolIntact() {
         // spy LoanService，让 LTV 校验必然失败（触发 revert 分支）
         LoanService spied = spy(loanService);
-        doReturn(10_000L).when(spied).calculateCrossAccountLtvBps(any(), anyLong(), any(), any(), any(), anyInt());
+        doReturn(10_000L).when(spied).calculateCrossAccountLtvBps(any(), anyLong(), any(), any(), any(), anyInt(),
+            anyBoolean());
         when(engine.getLoanService()).thenReturn(spied);
 
         long accountsBefore = up.accounts.get(USDT);

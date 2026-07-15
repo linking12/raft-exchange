@@ -146,6 +146,28 @@ class LoanServiceTest {
     }
 
     @Test
+    void accrueTo_isolated_frequentSubThresholdAccrual_doesNotZeroOutInterest() {
+        // F1 回归：P=1e6、100% APR → 每 1 单位利息需 elapsed ≥ YEAR_MS/P = 31536ms。
+        // 用 10512ms(< 阈值)高频 accrue：旧实现每步截断为 0 且游标照推 → 利息被永久抹成 0；
+        // 修复后游标在"可计息却被截断"时保留，高频总利息应 == 单次一把算。
+        final long stepMs = 10_512L;
+        final long totalMs = 3_153_600L; // = 100 × 31536ms → 单次算 = 100 利息
+        IsolatedLoanRecord frequent = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
+        frequent.outstandingPrincipal = 1_000_000L;
+        for (long t = stepMs; t <= totalMs; t += stepMs) {
+            svc.accrueTo(frequent, t);
+        }
+        IsolatedLoanRecord single = new IsolatedLoanRecord(1L, 101L, 2, 3, 10000, 0L);
+        single.outstandingPrincipal = 1_000_000L;
+        svc.accrueTo(single, totalMs);
+
+        assertEquals(100L, single.accumulatedInterest, "单次一把算 = 100");
+        assertTrue(frequent.accumulatedInterest > 0, "高频 accrue 不应把利息抹零(F1)");
+        assertEquals(single.accumulatedInterest, frequent.accumulatedInterest,
+            "高频 accrue 总利息应 == 单次(游标保留亚阈值时间)");
+    }
+
+    @Test
     void accrueTo_isolated_overflowProtected_via128BitFallback() {
         // 溢出保护验证：elapsed × principal 直乘会溢出 long（YEAR_MS ≈ 3.15e10, principal 1e11 → 3.15e21 ≫ 9.2e18）
         // truncMulDiv 会走 128-bit 慢路径避免 silent overflow
@@ -177,6 +199,33 @@ class LoanServiceTest {
 
         assertEquals(1_000_000L, delta, "100% 活期利率满一年 = 本金");
         assertEquals(1_000_000L, loan.accumulatedInterest);
+    }
+
+    @Test
+    void accrueTo_cross_floating_frequentSubThresholdAccrual_doesNotZeroOutInterest() {
+        // F1 回归(FLOATING 累加器版)：同 P/rate，阈值同为 31536ms。高频 accrue 时 snapshot 应保留亚阈值增量，
+        // 总利息 == 单次；旧实现无条件推 snapshot → 抹零。
+        final int ccy = 3;
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 10000L);
+        svc.getFloatingRate().setLastRepriceTs(1000L);
+        final long open = 1000L;
+        final long stepMs = 10_512L;
+        final long spanMs = 3_153_600L; // 100 × 31536ms
+
+        CrossLoanRecord frequent = new CrossLoanRecord(1L, 200L, ccy, 10000, open);
+        frequent.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(frequent, open);
+        for (long t = open + stepMs; t <= open + spanMs; t += stepMs) {
+            svc.accrueTo(frequent, t);
+        }
+        CrossLoanRecord single = new CrossLoanRecord(1L, 201L, ccy, 10000, open);
+        single.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(single, open);
+        svc.accrueTo(single, open + spanMs);
+
+        assertEquals(100L, single.accumulatedInterest, "单次一把算 = 100");
+        assertTrue(frequent.accumulatedInterest > 0, "高频 FLOATING accrue 不应抹零(F1)");
+        assertEquals(single.accumulatedInterest, frequent.accumulatedInterest, "高频总利息 == 单次");
     }
 
     @Test
