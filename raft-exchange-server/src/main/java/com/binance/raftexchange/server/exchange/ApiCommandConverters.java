@@ -407,27 +407,56 @@ public final class ApiCommandConverters {
      */
     public static exchange.core2.core.common.api.binary.BatchAddLoanCommand
         convertBatchAddLoan(com.binance.raftexchange.stubs.request.BatchAddLoanCommand grpc) {
+        final int UNSET = exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig.UNSET;
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.GlobalLoanConfig global = null;
         if (grpc.hasGlobal()) {
             var g = grpc.getGlobal();
+            // 派生缓冲不经 proto（走系统默认）→ 末两位传 0（partial-update 语义：0=不改）。
             global = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.GlobalLoanConfig(g.getNumeraireCcy(),
                 g.getCrossLiquidationLtvBps(), g.getCrossMarginCallLtvBps(), g.getLoanPoolUtilizationCapBps(),
-                g.getLoanLiquidationFeeBps());
+                g.getLoanLiquidationFeeBps(), 0, 0);
         }
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig symbol = null;
         if (grpc.hasSymbol()) {
             var s = grpc.getSymbol();
+            // optional override 缺省 → UNSET(−1)，由 exchange-core resolve() 按全局缓冲派生。
             symbol = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig(s.getSymbolId(),
-                s.getLoanInitialLtvBps(), s.getLoanLiquidationLtvBps(), s.getLoanMarginCallLtvBps(),
-                s.getLoanMaxAmount(), s.getLoanMaxTermDays(), s.getCollateralWeightBps());
+                s.getLoanInitialLtvBps(),
+                s.hasLoanLiquidationLtvBps() ? s.getLoanLiquidationLtvBps() : UNSET,
+                s.hasLoanMarginCallLtvBps() ? s.getLoanMarginCallLtvBps() : UNSET,
+                s.hasLoanMaxAmount() ? s.getLoanMaxAmount() : (long) UNSET,
+                s.hasLoanMaxTermDays() ? s.getLoanMaxTermDays() : UNSET,
+                s.hasCollateralWeightBps() ? s.getCollateralWeightBps() : UNSET);
         }
         exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig rateCurve = null;
         if (grpc.hasRateCurve()) {
             var r = grpc.getRateCurve();
-            rateCurve = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig(r.getBaseBps(),
-                r.getKinkUtilBps(), r.getSlope1Bps(), r.getSlope2Bps(), r.getLockedRateAdjustBps());
+            if (r.hasCustom()) {
+                var cc = r.getCustom();
+                rateCurve = new exchange.core2.core.common.api.binary.BatchAddLoanCommand.RateCurveConfig(cc.getBaseBps(),
+                    cc.getKinkUtilBps(), cc.getSlope1Bps(), cc.getSlope2Bps(), cc.getLockedRateAdjustBps());
+            } else {
+                // preset（含 UNSPECIFIED→STANDARD）→ 取预设曲线；kink 固定 80%。
+                rateCurve = exchange.core2.core.common.api.binary.BatchAddLoanCommand
+                    .ofRateCurvePreset(mapRatePreset(r.getPreset())).getRateCurve();
+            }
         }
         return new exchange.core2.core.common.api.binary.BatchAddLoanCommand(global, symbol, rateCurve);
+    }
+
+    /** proto RatePreset → exchange-core RatePreset；UNSPECIFIED 视为 STANDARD。 */
+    private static exchange.core2.core.common.api.binary.BatchAddLoanCommand.RatePreset
+        mapRatePreset(com.binance.raftexchange.stubs.request.SpotLoanRatePreset p) {
+        switch (p) {
+            case RATE_PRESET_CONSERVATIVE:
+                return exchange.core2.core.common.api.binary.BatchAddLoanCommand.RatePreset.CONSERVATIVE;
+            case RATE_PRESET_AGGRESSIVE:
+                return exchange.core2.core.common.api.binary.BatchAddLoanCommand.RatePreset.AGGRESSIVE;
+            case RATE_PRESET_STANDARD:
+            case RATE_PRESET_UNSPECIFIED:
+            default:
+                return exchange.core2.core.common.api.binary.BatchAddLoanCommand.RatePreset.STANDARD;
+        }
     }
 
     /**

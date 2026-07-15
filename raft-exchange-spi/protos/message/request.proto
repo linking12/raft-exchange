@@ -391,15 +391,18 @@ message BatchAddCurrenciesCommand {
 
 // UPDATE_SYMBOL_LOAN_CONFIG: 给已上架现货 pair 追配 / 重置 loan 参数（loan.md UPDATE_SYMBOL_LOAN_CONFIG 章节）
 // 只能改 CURRENCY_EXCHANGE_PAIR；期货 / 交割 spec 拒绝。
+// 简化：每市场只必填 symbolId + loanInitialLtvBps；其余为 optional override，
+// 缺省=按全局缓冲派生（liquidation=initial+缓冲、marginCall=liquidation−缓冲、weight=initialLtv、
+// maxAmount/maxTermDays=无限/无期限）。见 loan.md §11 简化设计。
 message SpotLoanConfig {
   int32 symbolId = 1;
-  int32 loanInitialLtvBps = 2;      // 0 = 关闭 loan
-  int32 loanLiquidationLtvBps = 3;
-  int32 loanMarginCallLtvBps = 4;   // 0 = 关预警
-  reserved 5;                       // 原 loanRateBps —— 利率移到 LoanService per-currency 曲线，见 loan.md §3.5
-  int64 loanMaxAmount = 6;          // 0 = 无上限
-  int32 loanMaxTermDays = 7;        // 0 = 无期限
-  int32 collateralWeightBps = 8;    // 0 = 该 currency 不作 Cross 抵押
+  int32 loanInitialLtvBps = 2;               // 必填；0 = 关闭 loan
+  optional int32 loanLiquidationLtvBps = 3;  // 缺省=派生
+  optional int32 loanMarginCallLtvBps = 4;   // 缺省=派生；显式 0 = 关预警
+  reserved 5;                                // 原 loanRateBps —— 利率移到 LoanService per-currency 曲线，见 loan.md §3.5
+  optional int64 loanMaxAmount = 6;          // 缺省=无上限
+  optional int32 loanMaxTermDays = 7;        // 缺省=无期限
+  optional int32 collateralWeightBps = 8;    // 缺省=派生(=initialLtv)
 }
 
 // UPDATE_LOAN_GLOBAL_CONFIG: 全局 Cross 基准币 + 三大运行时风控阈值（loan.md §1.2）。
@@ -416,12 +419,26 @@ message SpotLoanGlobalConfig {
 // 命名对齐 BatchAdd{Accounts,Symbols,Currencies}Command 一族。global / symbol 两块可选：消息存在即配置该部分，
 // 两部分作用域独立、各自校验各自 apply。
 // 动态利率 kinked 曲线（全局单曲线）+ Fixed 点差；存在即整体替换。见 loan.md §13.4。
-message SpotLoanRateCurveConfig {
+// 简化：常规用 preset 档位（一个字段即可）；kink 固定 80%，base/slope 由档位决定。
+// 需要非标曲线时走 custom 逃生口。见 loan.md §13.4 简化设计。
+enum SpotLoanRatePreset {
+  RATE_PRESET_UNSPECIFIED = 0;   // 未指定 → 视为 STANDARD
+  RATE_PRESET_CONSERVATIVE = 1;
+  RATE_PRESET_STANDARD = 2;
+  RATE_PRESET_AGGRESSIVE = 3;
+}
+message SpotLoanCustomRateCurve {
   int32 baseBps = 1;             // 零利用率基础利率
   int32 kinkUtilBps = 2;         // 利用率拐点（须 0 < kink < 10000）
   int32 slope1Bps = 3;           // 拐点前斜率
   int32 slope2Bps = 4;           // 拐点后斜率
   int32 lockedRateAdjustBps = 5; // Fixed 相对曲线加/减价（可负）
+}
+message SpotLoanRateCurveConfig {
+  oneof curve {
+    SpotLoanRatePreset preset = 1; // 档位（推荐）
+    SpotLoanCustomRateCurve custom = 2; // 非标自定义曲线
+  }
 }
 
 message BatchAddLoanCommand {

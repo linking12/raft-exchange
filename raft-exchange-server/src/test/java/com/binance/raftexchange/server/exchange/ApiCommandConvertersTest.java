@@ -201,10 +201,12 @@ class ApiCommandConvertersTest {
     }
 
     @Test
-    void batchAddLoan_rateCurve_mapsCurveParams() {
+    void batchAddLoan_rateCurveCustom_mapsCurveParams() {
+        // 自定义曲线逃生口:oneof custom → 原样映射五参
         var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
-            .setRateCurve(com.binance.raftexchange.stubs.request.SpotLoanRateCurveConfig.newBuilder().setBaseBps(150)
-                .setKinkUtilBps(7500).setSlope1Bps(350).setSlope2Bps(5000).setLockedRateAdjustBps(-25))
+            .setRateCurve(com.binance.raftexchange.stubs.request.SpotLoanRateCurveConfig.newBuilder()
+                .setCustom(com.binance.raftexchange.stubs.request.SpotLoanCustomRateCurve.newBuilder().setBaseBps(150)
+                    .setKinkUtilBps(7500).setSlope1Bps(350).setSlope2Bps(5000).setLockedRateAdjustBps(-25)))
             .build();
 
         var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
@@ -218,5 +220,44 @@ class ApiCommandConvertersTest {
         assertEquals(350, r.getSlope1Bps());
         assertEquals(5000, r.getSlope2Bps());
         assertEquals(-25, r.getLockedRateAdjustBps());
+    }
+
+    @Test
+    void batchAddLoan_rateCurvePreset_mapsToPresetCurve() {
+        // 档位:STANDARD → base=200/kink=8000(固定)/slope1=400/slope2=6000,lockedAdjust=0
+        var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
+            .setRateCurve(com.binance.raftexchange.stubs.request.SpotLoanRateCurveConfig.newBuilder()
+                .setPreset(com.binance.raftexchange.stubs.request.SpotLoanRatePreset.RATE_PRESET_STANDARD))
+            .build();
+
+        var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
+
+        var r = cmd.getRateCurve();
+        assertEquals(200, r.getBaseBps());
+        assertEquals(8000, r.getKinkUtilBps());
+        assertEquals(400, r.getSlope1Bps());
+        assertEquals(6000, r.getSlope2Bps());
+        assertEquals(0, r.getLockedRateAdjustBps());
+    }
+
+    @Test
+    void batchAddLoan_symbolMinimal_omittedOverridesBecomeUnset() {
+        // 简化核心:每市场只传 symbolId + initialLtv,其余 optional 缺省 → UNSET(−1)(由 resolve 派生)
+        final int UNSET = exchange.core2.core.common.api.binary.BatchAddLoanCommand.SymbolLoanConfig.UNSET;
+        var grpc = com.binance.raftexchange.stubs.request.BatchAddLoanCommand.newBuilder()
+            .setSymbol(com.binance.raftexchange.stubs.request.SpotLoanConfig.newBuilder()
+                .setSymbolId(202).setLoanInitialLtvBps(6000))
+            .build();
+
+        var cmd = ApiCommandConverters.convertBatchAddLoan(grpc);
+
+        var s = cmd.getSymbol();
+        assertEquals(202, s.getSymbolId());
+        assertEquals(6000, s.getLoanInitialLtvBps());
+        assertEquals(UNSET, s.getLoanLiquidationLtvBps(), "缺省 → UNSET → 派生");
+        assertEquals(UNSET, s.getLoanMarginCallLtvBps());
+        assertEquals((long) UNSET, s.getLoanMaxAmount());
+        assertEquals(UNSET, s.getLoanMaxTermDays());
+        assertEquals(UNSET, s.getCollateralWeightBps());
     }
 }
