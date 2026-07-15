@@ -7,6 +7,8 @@ option java_multiple_files = true;
 
 import "message/common.proto";
 
+// ========================= API Commands =========================
+
 // Binary Data Command
 message ApiBinaryDataCommand {
   int32 transferId = 1;
@@ -343,7 +345,6 @@ message ApiCommand {
     ApiAutoDeleveraging auto_deleveraging = 23;
     ApiInsuranceFundDeposit insurance_fund_deposit = 24;
     ApiInsuranceFundWithdraw insurance_fund_withdraw = 25;
-    // loan 子域（详见 loan.md §5）；CROSS_FORCE_LIQUIDATE scanner 触发，Cross 落地时再加。
     ApiLoanCreate loan_create = 26;
     ApiLoanRepay loan_repay = 27;
     ApiLoanAddCollateral loan_add_collateral = 28;
@@ -362,14 +363,14 @@ message ApiCommand {
 }
 
 
-// Path: src/main/java/exchange/core2/core/common/api/binary
+// ==================== Batch / Binary Data Commands ====================
+
 enum BinaryCommandType {
-  BINARY_COMMAND_TYPE_UNSPECIFIED = 0; // proto3 enum必须从0开始
+  BINARY_COMMAND_TYPE_UNSPECIFIED = 0;
   ADD_ACCOUNTS = 1002;
   ADD_SYMBOLS = 1003;
   ADD_CURRENCIES = 1004;
-  UPDATE_SYMBOL_LOAN_CONFIG = 1005;      // loan.md UPDATE_SYMBOL_LOAN_CONFIG 章节
-  UPDATE_LOAN_GLOBAL_CONFIG = 1006;      // 全局 Cross 基准币 + 三大运行时风控阈值；未配基准币时 Cross BORROW/WITHDRAW fail-close
+  ADD_LOAN = 1005;
 }
 
 message BatchAddAccountsCommand {
@@ -389,47 +390,43 @@ message BatchAddCurrenciesCommand {
   map<int32, CoreCurrencySpecification> currencies = 1;
 }
 
-// ===== ADD_LOAN 配置 =====（loan.md §11 / §13）
-// BatchAddLoanCommand 的三个可选子块：global（全局风控）/ symbol（per-symbol）/ rateCurve（利率曲线）。
-// 各子块独立作用域、各自校验各自 apply；对应旧 update_symbol_loan_config / update_loan_global_config。
-
-// per-symbol loan 参数（仅 CURRENCY_EXCHANGE_PAIR）。只暴露 symbolId + initialLtv，
-// 其余阈值由服务端按全局缓冲派生（liquidation/marginCall/weight/maxAmount/maxTermDays），需要某个再单独加。
+// Spot Loan Config (per-symbol)
 message SpotLoanConfig {
   int32 symbolId = 1;
-  int32 loanInitialLtvBps = 2;   // 必填；0 = 关闭 loan
-  reserved 3, 4, 5, 6, 7, 8;     // 派生阈值 / 原 loanRateBps —— 按需再加
+  int32 loanInitialLtvBps = 2;   // 0 = 关闭 loan
+  reserved 3, 4, 5, 6, 7, 8;
 }
 
-// 全局 Cross 风控参数。partial update：字段 <=0 = 本次不改，>0 才生效；numeraireCcy=0 时 Cross 借贷 fail-close。
+// Spot Loan Global Config
 message SpotLoanGlobalConfig {
-  int32 numeraireCcy = 1;                // Cross 估值基准币
-  int32 crossLiquidationLtvBps = 2;      // Cross 账户级强平线（bps）
-  int32 crossMarginCallLtvBps = 3;       // Cross 账户级预警线（bps）
-  int32 loanPoolUtilizationCapBps = 4;   // 借贷池利用率上限（bps）
-  int32 loanLiquidationFeeBps = 5;       // 强平专项费率（bps）
+  int32 numeraireCcy = 1;
+  int32 crossLiquidationLtvBps = 2;
+  int32 crossMarginCallLtvBps = 3;
+  int32 loanPoolUtilizationCapBps = 4;
+  int32 loanLiquidationFeeBps = 5;
 }
 
-// 动态利率曲线：只暴露 preset 档位（kink 固定 80%，base/slope 由档位定）。非标曲线需要时再加字段。
 enum SpotLoanRatePreset {
-  RATE_PRESET_UNSPECIFIED = 0;   // 未指定 → 视为 STANDARD
+  RATE_PRESET_UNSPECIFIED = 0;   // 视为 STANDARD
   RATE_PRESET_CONSERVATIVE = 1;
   RATE_PRESET_STANDARD = 2;
   RATE_PRESET_AGGRESSIVE = 3;
 }
+
+// Spot Loan Rate Curve Config
 message SpotLoanRateCurveConfig {
-  SpotLoanRatePreset preset = 1; // 利率档位
+  SpotLoanRatePreset preset = 1;
 }
 
-// ADD_LOAN 命令本体：三块子配置各自可选，消息存在即配置该块。
+// Add Loan Command
 message BatchAddLoanCommand {
-  SpotLoanGlobalConfig global = 1;       // 全局 Cross 风控参数
-  SpotLoanConfig symbol = 2;             // per-symbol loan 参数
-  SpotLoanRateCurveConfig rateCurve = 3; // 动态利率曲线
+  SpotLoanGlobalConfig global = 1;
+  SpotLoanConfig symbol = 2;
+  SpotLoanRateCurveConfig rateCurve = 3;
 }
 
 message BinaryDataCommand {
-  reserved 4, 5;  // 原 update_symbol_loan_config / update_loan_global_config，已合并为 add_loan
+  reserved 4, 5;
   oneof command {
     BatchAddAccountsCommand add_accounts = 1;
     BatchAddSymbolsCommand add_symbols = 2;
