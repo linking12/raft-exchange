@@ -892,4 +892,28 @@ class LoanServiceTest {
         assertEquals(4444L, ltvFailOpen, "6-arg fail-open 有限 LTV");
         assertEquals(ltvFailOpen, ltvFailClosed, "价格齐全时 failClosed 与 failOpen 结果相同");
     }
+
+    // ================================================================
+    // LoanGlobalConfig 派生缓冲字段 (Task 1)
+    // ================================================================
+
+    @Test
+    void loanGlobalConfig_defaultsIncludeDerivationBuffers() {
+        LoanGlobalConfig g = new LoanGlobalConfig();
+        assertEquals(2000, g.ltvLiquidationBufferBps, "默认 liquidation 缓冲 20%");
+        assertEquals(1000, g.ltvMarginCallBufferBps, "默认 marginCall 缓冲 10%");
+    }
+
+    @Test
+    void loanGlobalConfig_roundTrip_preservesBuffers() {
+        LoanGlobalConfig g = new LoanGlobalConfig();
+        g.ltvLiquidationBufferBps = 2500;
+        g.ltvMarginCallBufferBps = 1200;
+        Bytes<?> bytes = Bytes.allocateElasticOnHeap();
+        g.writeMarshallable(bytes);
+        LoanGlobalConfig restored = new LoanGlobalConfig(bytes);
+        assertEquals(2500, restored.ltvLiquidationBufferBps);
+        assertEquals(1200, restored.ltvMarginCallBufferBps);
+        assertEquals(g.stateHash(), restored.stateHash());
+    }
 }
