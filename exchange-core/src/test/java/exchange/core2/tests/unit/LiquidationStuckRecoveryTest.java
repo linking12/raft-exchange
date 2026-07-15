@@ -14,6 +14,7 @@ import exchange.core2.core.common.api.ApiAutoDeleveraging;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiIFTakeOver;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
+import exchange.core2.core.common.api.ApiRepriceLoanRates;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.ExchangeConfiguration;
@@ -66,7 +67,12 @@ class LiquidationStuckRecoveryTest {
     void setup() {
         le = new LiquidationEngine(null, 0, TEST_CFG);
         published = new ArrayList<>();
-        le.setLiquidationCmdPublisher((cmd, onApplied) -> published.add(cmd));
+        // 忽略周期 reprice（shard0 借 scanner tick 发的 REPRICE_LOAN_RATES）——与本 futures stuck 测试无关
+        le.setLiquidationCmdPublisher((cmd, onApplied) -> {
+            if (!(cmd instanceof ApiRepriceLoanRates)) {
+                published.add(cmd);
+            }
+        });
         userProfileService = new UserProfileService();
         // 这些 provider 在 stuck 检测路径上不会真正访问到，但 checkLiquidations 入口需要 non-null。
         // SYMBOL 不在 spec 表里 → tryRepublishStuckLiquidation 在前面就返 true 提前退出，不会撞 NPE。

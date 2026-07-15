@@ -172,10 +172,9 @@ class AeronSingleNodeApplyTest {
             buffer.getBytes(offset + Long.BYTES, cmdBytes);
             received.add(cmdBytes);
 
+            // egress 必须用当前帧格式 [8B cid][8B leaderLogPos][8B engineNanos][payload]，否则 client 按 HEADER_LENGTH(24) 判 too-short 丢弃
             byte[] resp = echoOf(cmdBytes);
-            UnsafeBuffer out = new UnsafeBuffer(new byte[Long.BYTES + resp.length]);
-            out.putLong(0, correlationId);
-            out.putBytes(Long.BYTES, resp);
+            UnsafeBuffer out = AeronFrame.Egress.encode(correlationId, 0L, 0L, resp);
 
             long deadline = System.nanoTime() + 5_000_000_000L;
             while (true) {

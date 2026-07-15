@@ -180,6 +180,47 @@ class LoanServiceTest {
     }
 
     @Test
+    void accrueTo_floating_integratesAcrossRateChange() {
+        // 累加器的核心价值：利率在两次 reprice 之间变化时，利息 = ∫rate dt（分段积分），而非用单一利率线性。
+        // [T0,T1) 10% 半年 + [T1,T2) 30% 半年 → 全年等效 20% 本金。
+        final int ccy = 3;
+        final long half = LoanService.YEAR_MS / 2;
+        final long t0 = 1000L, t1 = t0 + half, t2 = t0 + LoanService.YEAR_MS;
+        svc.getFloatingRate().setLastRepriceTs(t0);
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 1000L); // [t0,t1) 用 10%
+
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, ccy, 1000, t0);
+        loan.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(loan, t0);
+
+        // t1 reprice：先用【旧率】10% 把累加器推到 t1，再切 30%（模拟 RiskEngine R2 的 advance→reprice→set 顺序）
+        svc.getFloatingRate().advanceAccumulator(ccy, t1);
+        svc.getFloatingRate().setLastRepriceTs(t1);
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 3000L); // [t1,t2) 用 30%
+
+        long delta = svc.accrueTo(loan, t2);
+
+        assertEquals(200_000L, delta, "10% 半年 + 30% 半年 = 20% 本金（累加器分段积分，非线性）");
+    }
+
+    @Test
+    void accrueTo_isolatedFloating_dispatchesToAccumulator_notLinearRate() {
+        // Isolated 按 rateMode 分派：FLOATING → FloatingRateModel（累加器），不看 loan.rateBps。
+        // 令 loan.rateBps=0（若误走线性会算出 0 利息），曲线现值=100% → 有利息即证明走了累加器。
+        final int ccy = 3;
+        svc.getFloatingRate().getCurrentRateBps().put(ccy, 10000L);
+        svc.getFloatingRate().setLastRepriceTs(1000L);
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, ccy, 0, 1000L); // rateBps=0
+        loan.rateMode = IsolatedLoanRecord.RATE_MODE_FLOATING;
+        loan.outstandingPrincipal = 1_000_000L;
+        svc.getFloatingRate().initOpenSnapshot(loan, 1000L);
+
+        long delta = svc.accrueTo(loan, 1000L + LoanService.YEAR_MS);
+
+        assertEquals(1_000_000L, delta, "Isolated FLOATING 走累加器（曲线 100%），非 loan.rateBps=0 线性");
+    }
+
+    @Test
     void accrueTo_cross_clockBackwards_noopNoRegression() {
         CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, 3, 500, 10_000L);
         loan.outstandingPrincipal = 1_000_000L;

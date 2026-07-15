@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -28,6 +29,9 @@ import com.binance.raftexchange.stubs.request.ApiNop;
 import com.binance.raftexchange.stubs.response.CommandResult;
 
 import exchange.core2.core.ExchangeApi;
+import exchange.core2.core.common.cmd.CommandResultCode;
+import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.common.cmd.OrderCommandType;
 
 import io.aeron.cluster.codecs.CloseReason;
 import io.aeron.cluster.service.ClientSession;
@@ -60,7 +64,7 @@ class AeronExchangeStateMachineUnitTest {
         UnsafeBuffer in = frame(correlationId, nopCommand().toByteArray());
         sm.onSessionMessage(session, 0L, in, 0, in.capacity(), null);
 
-        // NOP 走 handleNoOp 即时完成 future，pending 立刻有 response；drain timer fire 后 offer
+        // NOP 经 ExchangeCalls.callExchange 完成 future（mock 即时返回），pending 有 response；drain timer fire 后 offer
         sm.onTimerEvent(DRAIN_TIMER_ID, 1L);
 
         ArgumentCaptor<DirectBuffer> bufCap = ArgumentCaptor.forClass(DirectBuffer.class);
@@ -71,10 +75,10 @@ class AeronExchangeStateMachineUnitTest {
         DirectBuffer out = bufCap.getValue();
         int off = offCap.getValue();
         int len = lenCap.getValue();
-        assertEquals(correlationId, out.getLong(off), "correlationId 必须原样回带");
+        assertEquals(correlationId, AeronFrame.Egress.correlationId(out, off), "correlationId 必须原样回带");
 
-        byte[] respBytes = new byte[len - Long.BYTES];
-        out.getBytes(off + Long.BYTES, respBytes);
+        // egress 帧头是 [cid][leaderLogPos][engineNanos]（24B）；用 AeronFrame.Egress 解 payload，别手动跳 8B
+        byte[] respBytes = AeronFrame.Egress.payload(out, off, len);
         CommandResult.parseFrom(respBytes); // 必须是合法 CommandResult，否则抛
     }
 
@@ -199,8 +203,13 @@ class AeronExchangeStateMachineUnitTest {
         SnapshotFetcher noopFetcher = (id, dir) -> {
             throw new IllegalStateException("fetcher should not be invoked in unit tests");
         };
-        AeronExchangeStateMachine sm =
-            new AeronExchangeStateMachine(new ExchangeCalls(mock(ExchangeApi.class)), tmp, noopFetcher);
+        // 命令经 ExchangeCalls → api.submitCommandAsyncFullResponse（含 NOP，走 callExchange）；mock 须返回已完成 future，否则 thenApply NPE
+        ExchangeApi api = mock(ExchangeApi.class);
+        OrderCommand done = new OrderCommand(1);
+        done.command = OrderCommandType.NOP;
+        done.resultCode = CommandResultCode.SUCCESS;
+        when(api.submitCommandAsyncFullResponse(any())).thenReturn(CompletableFuture.completedFuture(done));
+        AeronExchangeStateMachine sm = new AeronExchangeStateMachine(new ExchangeCalls(api), tmp, noopFetcher);
         if (roleListener != null) {
             sm.addRoleChangeListener(roleListener);
         }

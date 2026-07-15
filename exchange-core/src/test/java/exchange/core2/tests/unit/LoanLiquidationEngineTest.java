@@ -11,6 +11,7 @@ import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import exchange.core2.core.common.api.ApiRepriceLoanRates;
 import exchange.core2.core.processors.FundEventsHelper;
 import org.mockito.ArgumentCaptor;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
@@ -38,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -49,11 +51,11 @@ import static org.mockito.Mockito.when;
 /**
  * LoanLiquidationEngine 单元测试。
  *
- * <p>覆盖两大块：
+ * <p>覆盖：
  * <ul>
  *   <li><b>in-flight 生命周期</b>：publishTrackedIsolated / publishTrackedCross 的加入 / onApplied 清 / 异常回滚。</li>
- *   <li><b>Scanner skeleton</b>：check() 各分支保 no-throw；当前 log.debug 占位下"永不 publish"作为 skeleton
- *   invariant——force-sell 实装后这些"never publish" 断言会失败作提示。</li>
+ *   <li><b>Isolated / Cross 强平判定</b>：LTV / 期限越线 → force-sell IOC，marginCall 预警，容差爬梯 / 卡单节流。</li>
+ *   <li><b>动态利率周期触发</b>：check() 里 shard 0 按间隔搭 tick 车发 REPRICE_LOAN_RATES。</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -114,6 +116,8 @@ class LoanLiquidationEngineTest {
         when(engine.getLoanService()).thenReturn(loanService);
         when(engine.getLiquidationCmdPublisher()).thenReturn(publisher);
         when(engine.getEventsHelper()).thenReturn(eventsHelper);
+        // 默认非 0 shard：强平相关用例不触发周期 reprice（reprice 仅 shard 0）；reprice 用例各自改写 getShardId。
+        when(engine.getShardId()).thenReturn(1);
 
         scanner = new LoanLiquidationEngine(engine);
     }
@@ -126,6 +130,33 @@ class LoanLiquidationEngineTest {
     void inFlight_startsEmpty_forBothLanes() {
         assertFalse(scanner.isIsolatedLoanInFlight(LOAN_ID));
         assertFalse(scanner.isCrossLoanInFlight(UID));
+    }
+
+    // ================================================================
+    // 动态利率周期触发（check 里搭 tick 车发 REPRICE_LOAN_RATES）
+    // up 无 loan → 扫描不 publish force-sell，publisher 上只会出现 reprice
+    // ================================================================
+
+    @Test
+    void reprice_shard0_firstCheck_emitsRepriceCommand() {
+        when(engine.getShardId()).thenReturn(0);
+        scanner.check(up);
+        verify(publisher).publish(any(ApiRepriceLoanRates.class), isNull());
+    }
+
+    @Test
+    void reprice_shard0_secondCheckWithinInterval_doesNotRepublish() {
+        when(engine.getShardId()).thenReturn(0);
+        scanner.check(up); // 首次发一条（lastRepriceMs 从 0 起）
+        scanner.check(up); // 间隔（1h）内，不应再发
+        verify(publisher, times(1)).publish(any(ApiRepriceLoanRates.class), isNull());
+    }
+
+    @Test
+    void reprice_nonZeroShard_neverEmits() {
+        // setUp 已 stub getShardId()=1：reprice 是全局命令，只 shard 0 单发
+        scanner.check(up);
+        verify(publisher, never()).publish(any(ApiRepriceLoanRates.class), any());
     }
 
     // ================================================================

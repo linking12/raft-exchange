@@ -177,6 +177,28 @@ class LoanCommandHandlersTest {
         assertEquals(30_000L, up.accounts.get(USDT), "principal 打进 accounts");
         assertEquals(70_000L, loanService.getLoanPoolAvailable().get(USDT), "pool 扣掉 30k");
         assertEquals(30_000L, loanService.getLoanPoolBorrowed().get(USDT));
+        // 默认 rateMode=LOCKED（userCookie=0）：走 Fixed，accSnapshot 不初始化
+        IsolatedLoanRecord locked = up.isolatedLoans.get(999L);
+        assertEquals(IsolatedLoanRecord.RATE_MODE_LOCKED, locked.rateMode, "默认开仓 = LOCKED");
+        assertEquals(500, locked.rateBps, "LOCKED 开仓率 = 曲线现值 + adjust(0) = 500");
+        assertEquals(0L, locked.accSnapshot, "LOCKED 不用累加器游标");
+    }
+
+    @Test
+    void loanCreate_floatingRateMode_setsFloatingAndInitsAccSnapshot() {
+        // userCookie=FLOATING → 走 Floating：rateMode=FLOATING，开仓率=曲线现值，accSnapshot 定在开仓 liveAcc
+        loanService.getFloatingRate().setLastRepriceTs(500L);
+        loanService.getFloatingRate().getAccRateBpsMs().put(USDT, 7_000L);
+        // liveAcc(1000) = 7000 + currentRate(500)×(1000−500) = 257000
+
+        OrderCommand cmd = build(OrderCommandType.LOAN_CREATE, 1L, UID, 999L, SYMBOL, 1L, 30_000L);
+        cmd.userCookie = IsolatedLoanRecord.RATE_MODE_FLOATING;
+        assertEquals(CommandResultCode.SUCCESS, handlers.handleLoanCreate(cmd));
+
+        IsolatedLoanRecord loan = up.isolatedLoans.get(999L);
+        assertEquals(IsolatedLoanRecord.RATE_MODE_FLOATING, loan.rateMode, "rateMode=FLOATING");
+        assertEquals(500, loan.rateBps, "FLOATING 开仓率 = 曲线现值 500（展示用）");
+        assertEquals(257_000L, loan.accSnapshot, "accSnapshot 定在开仓 liveAcc");
     }
 
     @Test

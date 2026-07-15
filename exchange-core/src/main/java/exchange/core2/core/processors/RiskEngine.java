@@ -1369,7 +1369,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 loanRatePricingProcessor.applyEvent(cmd, mte, null, null);
                 mte = mte.nextEvent;
             } while (mte != null);
-            loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp); // 每 shard 同步推进（Floating 累加器参照，P3）
+            loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp); 
             return false;
         }
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
