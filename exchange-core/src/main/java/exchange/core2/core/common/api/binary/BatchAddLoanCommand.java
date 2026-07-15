@@ -67,8 +67,9 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             ltvLiquidationBufferBps, ltvMarginCallBufferBps), null);
     }
 
+    /** Legacy alias for {@link #ofGlobalPolicy(int)} —— 仅设 numeraire,其余全局策略走默认。 */
     public static BatchAddLoanCommand ofGlobalNumeraire(int numeraireCurrency) {
-        return ofGlobal(numeraireCurrency, 0, 0, 0, 0, 0, 0);
+        return ofGlobalPolicy(numeraireCurrency);
     }
 
     public static BatchAddLoanCommand ofGlobalPolicy(int numeraireCurrency) {
@@ -173,7 +174,7 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
         private final int loanPoolUtilizationCapBps; // 借贷池利用率上限（bps）
         private final int loanLiquidationFeeBps; // 强平专项费率（bps）
         private final int ltvLiquidationBufferBps; // Symbol 派生缓冲;≤0=不改
-        private final int ltvMarginCallBufferBps; // Symbol/Cross 派生缓冲;≤0=不改
+        private final int ltvMarginCallBufferBps; // Symbol 派生缓冲;≤0=不改
 
         GlobalLoanConfig(BytesIn bytes) {
             this.numeraireCurrency = bytes.readInt();
@@ -242,6 +243,7 @@ public final class BatchAddLoanCommand implements BinaryDataCommand {
             bytes.writeInt(collateralWeightBps);
         }
 
+        /** DTO 自校验(全字段 explicit 时);dispatch 实际走 {@link Resolved#valid()}。仅单测/显式命令自检用。 */
         public boolean fieldsValid() {
             return loanInitialLtvBps >= 0 && loanInitialLtvBps < BPS_FULL
                 && (loanInitialLtvBps == 0 || thresholdsValid(loanInitialLtvBps, loanMarginCallLtvBps, loanLiquidationLtvBps))

@@ -38,7 +38,7 @@ public final class LoanGlobalConfig implements WriteBytesMarshallable, StateHash
     public int loanPoolUtilizationCapBps; // 借贷池利用率上限（bps）
     public int loanLiquidationFeeBps; // 强平专项费率（bps）
     public int ltvLiquidationBufferBps; // Symbol 派生:liquidation = initial + 本值
-    public int ltvMarginCallBufferBps;  // Symbol/Cross 派生:marginCall = liquidation − 本值
+    public int ltvMarginCallBufferBps;  // Symbol 派生:marginCall = liquidation − 本值
 
     public LoanGlobalConfig() {
         this.numeraireCurrency = NUMERAIRE_UNSET;
