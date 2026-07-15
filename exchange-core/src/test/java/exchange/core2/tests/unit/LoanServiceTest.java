@@ -15,6 +15,7 @@ import exchange.core2.core.processors.liquidation.LiquidationService;
 import exchange.core2.core.processors.loan.LoanGlobalConfig;
 import exchange.core2.core.processors.loan.LoanService;
 import net.openhft.chronicle.bytes.Bytes;
+import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -730,5 +731,165 @@ class LoanServiceTest {
         assertTrue(restored.getLoanPoolBorrowed().isEmpty());
         assertTrue(restored.getBadDebt().isEmpty());
         assertEquals(svc.stateHash(), restored.stateHash());
+    }
+
+    // ================================================================
+    // applyDebtPayment —— 利息优先 → 本金抵债，clamp 到未偿本息
+    // 公式: interestPart = min(fund, accInt); principalPart = min(fund-interestPart, principal)
+    //       account[cur] -= paid; interestRevenue[cur] += interestPart;
+    //       loanPoolAvailable[cur] += principalPart; loanPoolBorrowed[cur] -= principalPart
+    // ================================================================
+
+    @Test
+    void applyDebtPayment_fundBelowInterest_interestOnly_principalAndPoolUntouched() {
+        // loanCurrency=3；accInt=1000, principal=5000；fund=400 (< accInt) → 只还利息，本金/池不动
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
+        loan.outstandingPrincipal = 5_000L;
+        loan.accumulatedInterest = 1_000L;
+        IntLongHashMap account = new IntLongHashMap();
+        account.put(3, 10_000L);
+        svc.getLoanPoolBorrowed().put(3, 5_000L);
+        svc.getLoanPoolAvailable().put(3, 0L);
+
+        long interestPart = svc.applyDebtPayment(loan, account, 400L);
+
+        assertEquals(400L, interestPart, "返回值 = interestPart = min(400,1000)");
+        assertEquals(9_600L, account.get(3), "account -= paid(400)");
+        assertEquals(600L, loan.accumulatedInterest, "accInt -= 400");
+        assertEquals(5_000L, loan.outstandingPrincipal, "principal 不动");
+        assertEquals(400L, svc.getInterestRevenue().get(3), "interestRevenue += 400");
+        assertEquals(0L, svc.getLoanPoolAvailable().get(3), "principalPart=0 → pool available 不动");
+        assertEquals(5_000L, svc.getLoanPoolBorrowed().get(3), "principalPart=0 → pool borrowed 不动");
+    }
+
+    @Test
+    void applyDebtPayment_fundCoversInterestAndPartialPrincipal_splitAndPoolMutated() {
+        // accInt=1000, principal=5000；fund=3000 → 利息 1000 + 本金 2000，池按 2000 迁移
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
+        loan.outstandingPrincipal = 5_000L;
+        loan.accumulatedInterest = 1_000L;
+        IntLongHashMap account = new IntLongHashMap();
+        account.put(3, 10_000L);
+        svc.getLoanPoolBorrowed().put(3, 5_000L);
+        svc.getLoanPoolAvailable().put(3, 2_000L);
+
+        long interestPart = svc.applyDebtPayment(loan, account, 3_000L);
+
+        assertEquals(1_000L, interestPart, "返回值 = interestPart = 全部利息");
+        assertEquals(7_000L, account.get(3), "account -= paid(3000)");
+        assertEquals(0L, loan.accumulatedInterest, "利息清零");
+        assertEquals(3_000L, loan.outstandingPrincipal, "principal -= 2000");
+        assertEquals(1_000L, svc.getInterestRevenue().get(3), "interestRevenue += 1000");
+        assertEquals(4_000L, svc.getLoanPoolAvailable().get(3), "available += principalPart(2000)");
+        assertEquals(3_000L, svc.getLoanPoolBorrowed().get(3), "borrowed -= principalPart(2000)");
+    }
+
+    @Test
+    void applyDebtPayment_fundExceedsOutstanding_clampsNoOverpay() {
+        // accInt=500, principal=2000 (total 2500)；fund=10000 → paid clamp 到 2500，无超额扣款
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
+        loan.outstandingPrincipal = 2_000L;
+        loan.accumulatedInterest = 500L;
+        IntLongHashMap account = new IntLongHashMap();
+        account.put(3, 10_000L);
+        svc.getLoanPoolBorrowed().put(3, 2_000L);
+        svc.getLoanPoolAvailable().put(3, 0L);
+
+        long interestPart = svc.applyDebtPayment(loan, account, 10_000L);
+
+        assertEquals(500L, interestPart, "返回值 = interestPart = 全部利息");
+        assertEquals(7_500L, account.get(3), "只扣 paid(2500)，剩余 7500 留在 account");
+        assertEquals(0L, loan.accumulatedInterest, "利息清零");
+        assertEquals(0L, loan.outstandingPrincipal, "本金清零");
+        assertEquals(500L, svc.getInterestRevenue().get(3), "interestRevenue += 500");
+        assertEquals(2_000L, svc.getLoanPoolAvailable().get(3), "available += principalPart(2000)");
+        assertEquals(0L, svc.getLoanPoolBorrowed().get(3), "borrowed -= principalPart(2000)");
+    }
+
+    // ================================================================
+    // settleLiquidationProceeds —— 抽强平费(ceil) → accrue → 抵债
+    // ================================================================
+
+    @Test
+    void settleLiquidationProceeds_skimsCeilFee_accruesThenPaysDebt() {
+        // liqFee=100bps(1%)；receivedQuote=100050 → fee=ceil(100050×100/10000)=ceil(1000.5)=1001
+        svc.getGlobalConfig().loanLiquidationFeeBps = 100;
+        // LOCKED 100% APR 满一年：accrueTo 补计利息 = principal = 50000
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(1L, 100L, 2, 3, 10000, 0L);
+        loan.outstandingPrincipal = 50_000L;
+        loan.accumulatedInterest = 0L;
+        IntLongHashMap account = new IntLongHashMap();
+        account.put(3, 200_000L);
+        svc.getLoanPoolBorrowed().put(3, 50_000L);
+        svc.getLoanPoolAvailable().put(3, 0L);
+
+        // fund 抵债 = receivedQuote - liqFee = 100050 - 1001 = 99049
+        // 抵债: interestPart=min(99049,50000)=50000; principalPart=min(49049,50000)=49049
+        long interestPart = svc.settleLiquidationProceeds(loan, account, 100_050L, LoanService.YEAR_MS);
+
+        assertEquals(50_000L, interestPart, "返回值 = 结算的利息部分");
+        assertEquals(1_001L, svc.getLoanLiquidationFees().get(3), "强平费 ceil skim = 1001");
+        assertEquals(LoanService.YEAR_MS, loan.lastAccrueTs, "accrueTo 已把游标推到 now");
+        assertEquals(0L, loan.accumulatedInterest, "利息全部结清");
+        assertEquals(951L, loan.outstandingPrincipal, "principal -= 49049 → 951");
+        assertEquals(50_000L, svc.getInterestRevenue().get(3), "interestRevenue += 50000");
+        assertEquals(49_049L, svc.getLoanPoolAvailable().get(3), "available += principalPart(49049)");
+        assertEquals(951L, svc.getLoanPoolBorrowed().get(3), "borrowed -= 49049 → 951");
+        // account: 200000 - liqFee(1001) - paid(99049) = 99950
+        assertEquals(99_950L, account.get(3), "account 扣 liqFee 再扣 paid");
+    }
+
+    // ================================================================
+    // calculateCrossAccountLtvBps 7-arg failClosed=true —— F2 fail-close guard
+    // (BORROW/WITHDRAW 前置校验：价格/spec 未就绪时返回 MAX_VALUE 拒绝，而非 0 放行)
+    // ================================================================
+
+    @Test
+    void crossLtv_failClosed_numeraireSpecMissing_returnsMaxValue() {
+        UserProfile up = new UserProfile(1L, UserStatus.ACTIVE);
+        up.crossLoanCollateral.put(BTC, 1L);
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, USDT, 500, 0L);
+        loan.outstandingPrincipal = 20_000L;
+        up.crossLoans.put(200L, loan);
+
+        // currencyProvider 缺 numeraire(USDT) 的 spec
+        CurrencySpecificationProvider partial = new CurrencySpecificationProvider();
+        partial.addCurrency(CoreCurrencySpecification.builder().id(BTC).name("BTC").digit(0).build());
+
+        long ltv = svc.calculateCrossAccountLtvBps(up, 0L, setupSpecs(), partial,
+                setupPrices(50_000L, 3_000L), USDT, true);
+        assertEquals(Long.MAX_VALUE, ltv, "numeraireSpec 缺失 fail-close → 拒绝(MAX_VALUE)");
+    }
+
+    @Test
+    void crossLtv_failClosed_markPriceMissing_returnsMaxValue() {
+        UserProfile up = new UserProfile(1L, UserStatus.ACTIVE);
+        up.crossLoanCollateral.put(BTC, 1L);
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, USDT, 500, 0L);
+        loan.outstandingPrincipal = 20_000L;
+        up.crossLoans.put(200L, loan);
+
+        // priceCache 空 → BTC 抵押折价拿不到 markPrice
+        long ltv = svc.calculateCrossAccountLtvBps(up, 0L, setupSpecs(), setupCurrencies(),
+                new IntObjectHashMap<>(), USDT, true);
+        assertEquals(Long.MAX_VALUE, ltv, "markPrice 缺失 fail-close → 拒绝(MAX_VALUE)");
+    }
+
+    @Test
+    void crossLtv_failClosed_allPresent_matchesFailOpenFiniteLtv() {
+        UserProfile up = new UserProfile(1L, UserStatus.ACTIVE);
+        // 与 crossLtv_happy 同构：1 BTC(weight 90%)=45000, 借 20000 USDT → LTV=4444 bps
+        up.crossLoanCollateral.put(BTC, 1L);
+        CrossLoanRecord loan = new CrossLoanRecord(1L, 200L, USDT, 500, 0L);
+        loan.outstandingPrincipal = 20_000L;
+        up.crossLoans.put(200L, loan);
+
+        long ltvFailOpen = svc.calculateCrossAccountLtvBps(up, 0L, setupSpecs(), setupCurrencies(),
+                setupPrices(50_000L, 3_000L), USDT);
+        long ltvFailClosed = svc.calculateCrossAccountLtvBps(up, 0L, setupSpecs(), setupCurrencies(),
+                setupPrices(50_000L, 3_000L), USDT, true);
+
+        assertEquals(4444L, ltvFailOpen, "6-arg fail-open 有限 LTV");
+        assertEquals(ltvFailOpen, ltvFailClosed, "价格齐全时 failClosed 与 failOpen 结果相同");
     }
 }

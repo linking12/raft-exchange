@@ -9,10 +9,13 @@ import exchange.core2.core.common.api.ApiLoanCreate;
 import exchange.core2.core.common.api.ApiLoanCrossAddCollateral;
 import exchange.core2.core.common.api.ApiLoanCrossBorrow;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import exchange.core2.core.common.api.ApiNop;
 import exchange.core2.core.common.api.ApiPersistState;
 import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiRecoverState;
+import exchange.core2.core.common.api.ApiRepriceLoanRates;
 import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
+import exchange.core2.core.common.api.reports.SingleUserReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.InitialStateConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
@@ -47,6 +50,18 @@ class ITLoanFailoverSnapshot {
     private static final long POOL_FUND = 10_000_000L;
     private static final long BORROWER = 9001L;
     private static final long LP = 9002L;
+
+    // ==== 动态利率 failover 场景专用（identity scale，数字直算，避免与上面的 scale 错配币种混淆）====
+    private static final int RC_BTC = 730;          // 抵押币，digit 0
+    private static final int RC_USDT = 731;         // 借出币 / numeraire，digit 0
+    private static final int RC_SYMBOL = 73010;
+    private static final long RC_MARK = 50_000L;
+    private static final long RC_POOL = 10_000_000L;
+    private static final long RC_BORROWER = 9101L;
+    // kinked 曲线：base=200 / kink=8000 / slope1=400 / slope2=6000（对齐 ITLoanDynamicRate）
+    private static final int RC_BASE = 200, RC_KINK = 8000, RC_SLOPE1 = 400, RC_SLOPE2 = 6000;
+    // util = 800_000 / 10_000_000 = 800 bps（<kink）→ 200 + 400×800/8000 = 240
+    private static final int RC_EXPECTED = 240;
 
     private void setupLoansWithStuckLiquidation(ExchangeTestContainer c) throws Exception {
         c.addCurrency(WBTC, 2);
@@ -114,6 +129,106 @@ class ITLoanFailoverSnapshot {
 
             assertEquals(originalHash, r.requestStateHash(),
                 "恢复后 stateHash 必须与原 leader 逐字节一致（loan records + 池子桶都在快照里）");
+            assertTrue(r.totalBalanceReport().isGlobalBalancesAllZero(), "恢复后应守恒");
+        }
+    }
+
+    private void setupLoanWithRateCurve(ExchangeTestContainer c) throws Exception {
+        c.addCurrency(RC_BTC, 0);
+        c.addCurrency(RC_USDT, 0);
+        c.addSymbol(CoreSymbolSpecification.builder()
+            .symbolId(RC_SYMBOL).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(RC_BTC).quoteCurrency(RC_USDT).baseScaleK(1).quoteScaleK(1)
+            .takerFee(0).makerFee(0).build());
+        c.initMarkPrice(RC_SYMBOL, RC_MARK);
+        c.sendBinaryDataCommandSync(
+            BatchAddLoanCommand.ofSymbol(RC_SYMBOL, 6000, 8500, 7500, Long.MAX_VALUE, 365, 10000), 5000);
+        c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofGlobalNumeraire(RC_USDT), 5001);
+        c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofRateCurve(RC_BASE, RC_KINK, RC_SLOPE1, RC_SLOPE2, 0), 5002);
+        c.submitCommandSync(ApiPoolDeposit.builder()
+            .externalId(1_000_101L).shardId(0).currency(RC_USDT).amount(RC_POOL).build(), CommandResultCode.SUCCESS);
+        c.initOneUser(RC_BORROWER);
+        c.addMoneyToUser(RC_BORROWER, RC_BTC, 400L); // 够 3 笔 100 抵押（loan1/2 原实例 + loan3 恢复后）
+    }
+
+    private void createFloatingLoan(ExchangeTestContainer c, long extId, long loanId, long principal)
+        throws Exception {
+        c.submitCommandSync(ApiLoanCreate.builder()
+            .externalId(extId).uid(RC_BORROWER).loanId(loanId).symbol(RC_SYMBOL)
+            .collateralAmount(100L).principal(principal).rateMode((byte) 1).build(), // FLOATING
+            CommandResultCode.SUCCESS);
+    }
+
+    private int floatingLoanRateBps(ExchangeTestContainer c, long loanId) throws Exception {
+        for (SingleUserReportResult.IsolatedLoan l : c.getUserProfile(RC_BORROWER).getIsolatedLoans()) {
+            if (l.loanId == loanId) {
+                return l.rateBps;
+            }
+        }
+        throw new AssertionError("isolated loan not found: " + loanId);
+    }
+
+    /**
+     * 补齐 failover 只 round-trip <b>DEFAULT</b> 利率状态的缺口：验证 reprice 后的<b>动态</b>利率状态
+     * （{@code currentRateBps} / {@code lastRepriceTs}）也随快照存活。
+     *
+     * <p>原 leader：配非默认曲线 → 建一笔 FLOATING 借款制造非零利用率 → {@code REPRICE_LOAN_RATES}(+{@code ApiNop} 屏障
+     * 排空 R2 写) 把 {@code currentRateBps} 写成 curve(util)=240（≠ base 200）。用 reprice 后新开的 FLOATING 贷款
+     * 率==240 就地证明 currentRateBps 已非默认。落 DISK 快照，全新实例恢复。
+     *
+     * <p>关键判据：恢复后<b>新开</b>的 FLOATING 贷款仍按 240 开仓。若 currentRateBps 未随快照恢复（重置为空），
+     * 回退曲线 base 只会得 200；得 240 即证明 reprice 后的利率状态穿过 failover 存活，未被重置为 base。
+     * 外加 stateHash 逐字节一致做整体幂等背书。
+     */
+    @Test
+    public void loanRateState_survivesSnapshotRestore_repricedCurveRatePreserved() throws Exception {
+        final PerformanceConfiguration perf =
+            PerformanceConfiguration.baseBuilder().matchingEnginesNum(1).riskEnginesNum(1).build();
+        final String exchangeId = String.format("%012X", System.nanoTime());
+        final long stateId = System.nanoTime();
+        final int originalHash;
+
+        // ===== 原 leader：配曲线 + 建仓制造利用率 + reprice 写非默认 currentRateBps，然后落快照 =====
+        try (ExchangeTestContainer c = ExchangeTestContainer.create(
+                perf, InitialStateConfiguration.cleanStart(exchangeId), SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
+            c.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop); // 手动控，避免自动强平干扰快照
+            setupLoanWithRateCurve(c);
+
+            // loan1 借 800_000 → util = 800_000 / 10_000_000 = 800 bps，制造非零利用率
+            createFloatingLoan(c, 1_000_102L, 1L, 800_000L);
+
+            // reprice：util=800(<kink) → 200 + 400×800/8000 = 240 写入 currentRateBps[USDT]，lastRepriceTs 也变非默认
+            c.submitCommandSync(ApiRepriceLoanRates.builder().build(), CommandResultCode.SUCCESS);
+            // reprice 的 currentRateBps 写落在撮合后 R2 阶段，其 SUCCESS 在撮合阶段即发布 —— submitCommandSync 返回时 R2 可能未执行。
+            // ApiNop 屏障排空管道，保证快照/断言前 reprice 的 R2 写已生效（否则新 loan 的 R1 读可能早于 R2 写，读到 base）。
+            c.submitCommandSync(ApiNop.builder().build(), CommandResultCode.SUCCESS);
+
+            // 快照前就地证明 currentRateBps 已非默认：reprice 后新开 FLOATING 率 = curve(util) = 240（≠ base 200）
+            createFloatingLoan(c, 1_000_103L, 2L, 100_000L);
+            assertEquals(RC_EXPECTED, floatingLoanRateBps(c, 2L),
+                "快照前：reprice 后新 FLOATING 率 = curve(util) = 240");
+
+            assertTrue(c.totalBalanceReport().isGlobalBalancesAllZero(), "快照前应守恒");
+            c.submitCommandSync(ApiPersistState.builder().dumpId(stateId).build(), CommandResultCode.SUCCESS);
+            originalHash = c.requestStateHash();
+        }
+
+        // ===== 新 leader：从快照恢复，比对 stateHash + 用恢复后新贷款率验证 currentRateBps 存活 =====
+        try (ExchangeTestContainer r = ExchangeTestContainer.create(perf,
+                InitialStateConfiguration.fromSnapshotOnly(exchangeId, stateId, 0),
+                SerializationConfiguration.DISK_SNAPSHOT_ONLY)) {
+            r.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
+            r.getApi().submitRecoverCommandAsync(ApiRecoverState.builder().snapshotId(stateId).build()).get();
+            r.totalBalanceReport(); // 等 core 起来
+
+            assertEquals(originalHash, r.requestStateHash(),
+                "恢复后 stateHash 必须逐字节一致（currentRateBps / lastRepriceTs 都在快照里）");
+
+            // 关键判据：恢复后新开 FLOATING 贷款仍按曲线现值 240 开仓 —— 若 currentRateBps 未随快照恢复（重置为空），
+            // 回退曲线 base 只会得 200。得 240 证明 reprice 后的动态利率状态穿过 failover 存活，未被重置为 base。
+            createFloatingLoan(r, 1_000_104L, 3L, 100_000L);
+            assertEquals(RC_EXPECTED, floatingLoanRateBps(r, 3L),
+                "恢复后新 FLOATING 率 = curve(util) = 240（证明 currentRateBps 随快照存活，未重置为 base 200）");
             assertTrue(r.totalBalanceReport().isGlobalBalancesAllZero(), "恢复后应守恒");
         }
     }

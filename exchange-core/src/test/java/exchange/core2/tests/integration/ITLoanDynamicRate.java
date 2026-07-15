@@ -100,4 +100,49 @@ class ITLoanDynamicRate {
             assertEquals(240, loanRateBps(c, 2L), "reprice 后新 FLOATING 率 = curve(util) = 240");
         }
     }
+
+    /**
+     * ADD_LOAN rateCurve 部分独立校验：非法曲线（kink=100% 越界，见 {@code RateCurveConfig.valid()}）被
+     * RiskEngine dispatch 静默跳过（warn，无 reject 码），既有 good 曲线原样保留。
+     *
+     * <p>观测口径：非法 ofRateCurve 携带 base=999/adjust=0；若被误应用，FLOATING 开仓率会变 999、LOCKED 变 999。
+     * 断言仍为 good 曲线的 base=300 / base+adjust=350，证明非法配置未覆盖既有曲线。
+     */
+    @Test
+    public void rateCurveConfig_invalidRejected_keepsGoodCurve() throws Exception {
+        // boot 已应用 good 曲线 base=300 / lockedAdjust=50
+        try (ExchangeTestContainer c = boot(300, 50)) {
+            // 非法曲线：kink=10000（=100%）越界 → RateCurveConfig.valid() 返回 false → dispatch 跳过应用。
+            // base=999 是"若误应用"会被观测到的哨兵值。
+            c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofRateCurve(999, 10000, 400, 6000, 0), 5100);
+
+            // 未 reprice → currentRate 空 → FLOATING 回退曲线 base；仍为 good 的 300 而非非法哨兵 999。
+            createLoan(c, 1_000_030L, 1L, 1_000_000L, (byte) 1); // FLOATING
+            createLoan(c, 1_000_031L, 2L, 1_000_000L, (byte) 0); // LOCKED
+            assertEquals(300, loanRateBps(c, 1L), "非法曲线被跳过：FLOATING 率仍为 good base=300");
+            assertEquals(350, loanRateBps(c, 2L), "非法曲线被跳过：LOCKED 率仍为 good base+adjust=350");
+        }
+    }
+
+    /**
+     * ADD_LOAN symbol 部分独立校验：非法阈值（liquidation ≤ initial，见 {@code SymbolLoanConfig.fieldsValid()}）
+     * 被 RiskEngine dispatch 静默跳过，既有 good symbol loanConfig（含 loanMaxAmount=MAX）原样保留。
+     *
+     * <p>观测口径：非法 ofSymbol 携带 loanMaxAmount=1；若被误应用（原子改写整块配置），principal=1_000_000
+     * 的借款会撞 {@code LOAN_PRINCIPAL_EXCEEDS_LIMIT}。断言该借款仍 SUCCESS，证明 good 阈值未被非法配置污染。
+     */
+    @Test
+    public void symbolConfig_invalidRejected_keepsGoodConfig() throws Exception {
+        try (ExchangeTestContainer c = boot(300, 50)) {
+            // 非法 symbol 配置：liquidation=5000 ≤ initial=6000 → fieldsValid() 返回 false → dispatch 跳过。
+            // loanMaxAmount=1 是"若误应用"会拦截大额借款的哨兵值。
+            c.sendBinaryDataCommandSync(
+                BatchAddLoanCommand.ofSymbol(SYMBOL, 6000, 5000, 0, 1L, 365, 10000), 5101);
+
+            // good 配置 loanMaxAmount=Long.MAX_VALUE 未被覆盖 → principal=1_000_000 借款仍应 SUCCESS
+            // （createLoan 内部断言 CommandResultCode.SUCCESS；若哨兵 maxAmount=1 生效则会 LOAN_PRINCIPAL_EXCEEDS_LIMIT）。
+            createLoan(c, 1_000_040L, 1L, 1_000_000L, (byte) 1); // FLOATING
+            assertEquals(300, loanRateBps(c, 1L), "非法 symbol 配置被跳过：借款按 good 配置正常开仓，率=曲线 base=300");
+        }
+    }
 }

@@ -716,4 +716,130 @@ class LoanLiquidationEngineTest {
         scanner.check(up);
         verify(publisher, never()).publish(any(), any());
     }
+
+    // ================================================================
+    // Cross tiebreak selectors: pickCrossCollateralToSell / pickCrossLoanToRepay
+    // 全部用 spyWithCrossLtvOverLiquidation 强制进 publishCrossForceSell，
+    // 再用 ArgumentCaptor 取 ApiLoanCrossForceLiquidate 反推所选卖出币 / 还款笔：
+    //   - symbol = findSpotSpec(sellingCurrency, loanCurrency) 的 symbolId；loanCurrency 恒 USDT，
+    //     故 symbol 唯一指向所选卖出币（BTC/USDT vs ETH/USDT）。
+    //   - targetLoanId = 所选还款 loan 的 loanId。
+    // ================================================================
+
+    /** ETH/USDT 现货对：既给 ETH 抵押权重、又作 ETH 卖 USDT 的现货对。 */
+    private int registerEthUsdtSpot(int ethCurrency, int symbolId, int weightBps) {
+        currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(ethCurrency).name("ETH").digit(0).build());
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(symbolId).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(ethCurrency).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(weightBps).build())
+                .build();
+        specProvider.registerSymbol(symbolId, spec);
+        LastPriceCacheRecord price = new LastPriceCacheRecord();
+        price.markPrice = 50_000L;
+        priceCache.put(symbolId, price);
+        return symbolId;
+    }
+
+    @Test
+    void check_crossPickCollateral_higherWeightCurrencySold() {
+        // 两抵押币：BTC/USDT weight 9000 vs ETH/USDT weight 5000 → 选高权重 BTC 卖出。
+        final int ETH = 3;
+        final int SYMBOL_ETH = 101;
+        spyWithCrossLtvOverLiquidation();
+        registerEthUsdtSpot(ETH, SYMBOL_ETH, 5000); // 低权重
+
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 2L); // weight 9000（setUp 的 BTC/USDT）
+        up.crossLoanCollateral.put(ETH, 2L); // weight 5000
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
+        assertEquals(SYMBOL, cmd.symbol, "高权重 BTC(9000) 优先卖 → symbol=BTC/USDT 现货对");
+    }
+
+    @Test
+    void check_crossPickCollateral_equalWeightHigherAmountSold() {
+        // 两抵押币权重相等(9000)：BTC amount 1 vs ETH amount 5 → amount 大者 ETH 胜出。
+        final int ETH = 3;
+        final int SYMBOL_ETH = 101;
+        spyWithCrossLtvOverLiquidation();
+        registerEthUsdtSpot(ETH, SYMBOL_ETH, 9000); // 与 BTC 同权重
+
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 1L); // 权重同，量小
+        up.crossLoanCollateral.put(ETH, 5L); // 权重同，量大 → 胜
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
+        assertEquals(SYMBOL_ETH, cmd.symbol, "权重相等时高抵押量 ETH 胜出 → symbol=ETH/USDT 现货对");
+    }
+
+    @Test
+    void check_crossPickLoan_higherRateLoanRepaid() {
+        // 两笔 Cross loan（同币种 USDT），rate 500 vs 800 → 选高利率笔偿还。
+        final long LOAN_LO = LOAN_ID;      // rate 500
+        final long LOAN_HI = LOAN_ID + 1;  // rate 800 → 应选中
+        spyWithCrossLtvOverLiquidation();
+
+        CrossLoanRecord loanLo = new CrossLoanRecord(UID, LOAN_LO, USDT, 500, OPENED_AT_MS);
+        loanLo.symbolId = SYMBOL;
+        loanLo.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_LO, loanLo);
+
+        CrossLoanRecord loanHi = new CrossLoanRecord(UID, LOAN_HI, USDT, 800, OPENED_AT_MS);
+        loanHi.symbolId = SYMBOL;
+        loanHi.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_HI, loanHi);
+
+        up.crossLoanCollateral.put(BTC, 2L);
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
+        assertEquals(LOAN_HI, cmd.targetLoanId, "高利率(800)笔优先偿还");
+    }
+
+    @Test
+    void check_crossPickLoan_equalRateHigherPrincipalRepaid() {
+        // 两笔同利率(500) Cross loan：principal 30k vs 60k → 选本金大者偿还。
+        final long LOAN_SMALL = LOAN_ID;      // principal 30k
+        final long LOAN_BIG = LOAN_ID + 1;    // principal 60k → 应选中
+        spyWithCrossLtvOverLiquidation();
+
+        CrossLoanRecord loanSmall = new CrossLoanRecord(UID, LOAN_SMALL, USDT, 500, OPENED_AT_MS);
+        loanSmall.symbolId = SYMBOL;
+        loanSmall.outstandingPrincipal = 30_000L;
+        up.crossLoans.put(LOAN_SMALL, loanSmall);
+
+        CrossLoanRecord loanBig = new CrossLoanRecord(UID, LOAN_BIG, USDT, 500, OPENED_AT_MS);
+        loanBig.symbolId = SYMBOL;
+        loanBig.outstandingPrincipal = 60_000L;
+        up.crossLoans.put(LOAN_BIG, loanBig);
+
+        up.crossLoanCollateral.put(BTC, 2L);
+
+        scanner.check(up);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).publish(captor.capture(), any());
+        ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
+        assertEquals(LOAN_BIG, cmd.targetLoanId, "利率相等时高本金(60k)笔优先偿还");
+    }
 }

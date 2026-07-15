@@ -133,4 +133,77 @@ class LoanRateCurveTest {
         assertEquals(987_654L, parsed.getFloatingRate().getAccRateBpsMs().get(2));
         assertEquals(orig.stateHash(), parsed.stateHash(), "序列化 round-trip 后 stateHash 一致");
     }
+
+    @Test
+    void liveAcc_coldStart_returnsAccUnchanged() {
+        // lastRepriceTs≤0（冷启动）：即使 now>0，也不叠加 currentRate×elapsed，原样返回 acc。
+        FloatingRateModel m = new FloatingRateModel();
+        m.getAccRateBpsMs().put(2, 987_654L);
+        m.getCurrentRateBps().put(2, 555L); // 若误累积会污染结果
+        m.setLastRepriceTs(0L);
+        assertEquals(987_654L, m.liveAccRateBpsMs(2, 1_000_000L), "冷启动 now>0 仍返回 acc 原值");
+    }
+
+    @Test
+    void liveAcc_nonPositiveElapsed_returnsAccUnchanged() {
+        // lastRepriceTs>0 但 now≤lastRepriceTs（elapsed≤0）：同样原样返回 acc；now>last 才累积。
+        FloatingRateModel m = new FloatingRateModel();
+        m.getAccRateBpsMs().put(2, 987_654L);
+        m.getCurrentRateBps().put(2, 555L);
+        m.setLastRepriceTs(1_000L);
+        assertEquals(987_654L, m.liveAccRateBpsMs(2, 1_000L), "elapsed=0 返回 acc 原值");
+        assertEquals(987_654L, m.liveAccRateBpsMs(2, 500L), "elapsed<0 返回 acc 原值");
+        // 对照：now>last 时正常累积 acc + 555×(2000−1000)。
+        assertEquals(987_654L + 555L * 1_000L, m.liveAccRateBpsMs(2, 2_000L), "elapsed>0 正常累积");
+    }
+
+    @Test
+    void advanceAccumulator_coldStart_isNoOp() {
+        // lastRepriceTs≤0 守卫：acc 不动。
+        FloatingRateModel m = new FloatingRateModel();
+        m.getAccRateBpsMs().put(2, 100L);
+        m.getCurrentRateBps().put(2, 555L);
+        m.setLastRepriceTs(0L);
+        m.advanceAccumulator(2, 5_000L);
+        assertEquals(100L, m.getAccRateBpsMs().get(2), "冷启动 advance 为 no-op");
+    }
+
+    @Test
+    void advanceAccumulator_tickNotAfterLastReprice_isNoOp() {
+        // tickTs≤lastRepriceTs 守卫：acc 不动。
+        FloatingRateModel m = new FloatingRateModel();
+        m.getAccRateBpsMs().put(2, 100L);
+        m.getCurrentRateBps().put(2, 555L);
+        m.setLastRepriceTs(1_000L);
+        m.advanceAccumulator(2, 1_000L); // 相等
+        assertEquals(100L, m.getAccRateBpsMs().get(2), "tickTs=lastRepriceTs 为 no-op");
+        m.advanceAccumulator(2, 500L); // 更早
+        assertEquals(100L, m.getAccRateBpsMs().get(2), "tickTs<lastRepriceTs 为 no-op");
+    }
+
+    @Test
+    void advanceAccumulator_positive_accumulatesRateTimesElapsed() {
+        // lastRepriceTs>0 && tickTs>lastRepriceTs：acc += currentRate×(tickTs−lastRepriceTs)。
+        FloatingRateModel m = new FloatingRateModel();
+        m.getAccRateBpsMs().put(2, 100L);
+        m.getCurrentRateBps().put(2, 555L);
+        m.setLastRepriceTs(1_000L);
+        m.advanceAccumulator(2, 3_000L);
+        assertEquals(100L + 555L * 2_000L, m.getAccRateBpsMs().get(2), "累积 555×(3000−1000)");
+    }
+
+    @Test
+    void curve_kinkAtBpsScale_noSlope2Segment() {
+        // kink=BPS_SCALE(10000)：util clamp 到 ≤10000 恒 ≤kink，永不进入 slope2 段；
+        // denom = BPS_SCALE − kink = 0 被守卫，结果为 base+slope1（无除零、无 slope2 贡献）。
+        assertEquals(600L, FloatingRateModel.curveRateBps(10000, 200, 10000, 400, 6000), "kink=10000 满 util → base+slope1");
+        assertEquals(600L, FloatingRateModel.curveRateBps(20000, 200, 10000, 400, 6000), "超范围 clamp 后仍 base+slope1");
+    }
+
+    @Test
+    void utilization_overflowScalePath_usesTruncMulDiv128() {
+        // borrowed×BPS_SCALE 溢出 64-bit fast path，走 truncMulDiv 的 128-bit 兜底仍得正确比值。
+        long half = Long.MAX_VALUE / 2; // borrowed×10000 溢出
+        assertEquals(5000L, FloatingRateModel.utilizationBps(half, half), "溢出 fallback 后 50% 利用率");
+    }
 }
