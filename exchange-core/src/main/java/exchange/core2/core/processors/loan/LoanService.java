@@ -185,12 +185,25 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
     public long calculateCrossAccountLtvBps(UserProfile userProfile, long now, SymbolSpecificationProvider specProvider,
         CurrencySpecificationProvider currencyProvider, IntObjectHashMap<LastPriceCacheRecord> priceCache,
         int numeraireCurrency) {
+        return calculateCrossAccountLtvBps(userProfile, now, specProvider, currencyProvider, priceCache,
+            numeraireCurrency, false);
+    }
+
+    /**
+     * {@code failClosedOnMissingPrice}：缺 markPrice / spec / currencySpec 时的取向。scanner / 展示走 {@code false}（返 0，保守
+     * skip，不误强平）；BORROW / WITHDRAW 前置 guard 走 {@code true}（返 {@link Long#MAX_VALUE}，拒绝而非放行）——否则"价格未就绪"会被读成
+     * LTV=0=绝对安全，可绕过 LTV 限制超借 / 撤走全部抵押，事后只能落坏账(F2)。
+     */
+    public long calculateCrossAccountLtvBps(UserProfile userProfile, long now, SymbolSpecificationProvider specProvider,
+        CurrencySpecificationProvider currencyProvider, IntObjectHashMap<LastPriceCacheRecord> priceCache,
+        int numeraireCurrency, boolean failClosedOnMissingPrice) {
         if (userProfile.crossLoans.isEmpty() || numeraireCurrency == 0) {
             return 0L;
         }
+        final long unevaluable = failClosedOnMissingPrice ? Long.MAX_VALUE : 0L;
         CoreCurrencySpecification numeraireSpec = currencyProvider.getCurrencySpecification(numeraireCurrency);
         if (numeraireSpec == null) {
-            return 0L;
+            return unevaluable;
         }
 
         // 债务侧
@@ -207,7 +220,7 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
             long valueInNum = valueInNumeraire(loan.loanCurrency, realDebt, numeraireCurrency, numeraireSpec,
                 specProvider, currencyProvider, priceCache);
             if (valueInNum < 0)
-                return 0L; // 缺 markPrice / spec / currencySpec，保守 skip
+                return unevaluable; // 缺 markPrice / spec / currencySpec
             try {
                 totalDebt = Math.addExact(totalDebt, valueInNum);
             } catch (ArithmeticException e) {
@@ -228,12 +241,12 @@ public class LoanService implements WriteBytesMarshallable, StateHash {
             long valueInNum = valueInNumeraire(currency, amount, numeraireCurrency, numeraireSpec, specProvider,
                 currencyProvider, priceCache);
             if (valueInNum < 0)
-                return 0L;
+                return unevaluable;
             try {
                 long weighted = CoreArithmeticUtils.truncMulDiv(valueInNum, weight, BPS_SCALE);
                 weightedCollateral = Math.addExact(weightedCollateral, weighted);
             } catch (ArithmeticException e) {
-                return 0L;
+                return unevaluable;
             }
         }
 

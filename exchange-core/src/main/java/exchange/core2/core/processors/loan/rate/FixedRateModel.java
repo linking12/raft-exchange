@@ -57,7 +57,10 @@ public final class FixedRateModel implements WriteBytesMarshallable, StateHash {
         if (delta > 0) {
             loan.setAccumulatedInterest(Math.addExact(loan.getAccumulatedInterest(), delta));
         }
-        if (now > loan.getLastAccrueTs()) {
+        // 只在"已计息(delta>0)"或"本就不可能计息(无本金/免息)"时推进游标。有本金有利率却因截断得 0 时保留游标，
+        // 让被截断的 elapsed 继续累积到跨过精度阈值再计——否则高频 accrue(如反复 REPAY)会把每段亚阈值利息永久吞掉(F1)。
+        if (now > loan.getLastAccrueTs()
+            && (delta > 0 || loan.getOutstandingPrincipal() <= 0 || loan.getRateBps() <= 0)) {
             loan.setLastAccrueTs(now);
         }
         return delta;

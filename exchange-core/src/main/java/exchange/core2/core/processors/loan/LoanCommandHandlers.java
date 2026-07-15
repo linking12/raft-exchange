@@ -536,7 +536,7 @@ public final class LoanCommandHandlers {
         up.crossLoanCollateral.addToValue(currency, -amount);
         final long newLtv = loanService.calculateCrossAccountLtvBps(up, cmd.timestamp,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
-            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
+            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency, true);
         if (newLtv >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
             up.crossLoanCollateral.addToValue(currency, amount); // revert
             return CommandResultCode.LOAN_CROSS_LTV_TOO_HIGH_AFTER_WITHDRAW;
@@ -594,7 +594,7 @@ public final class LoanCommandHandlers {
         up.crossLoans.put(loanId, loan);
         final long newLtv = loanService.calculateCrossAccountLtvBps(up, cmd.timestamp,
             engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
-            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
+            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency, true);
         if (newLtv > spec.loanConfig.initialLtvBps) {
             up.crossLoans.remove(loanId);
             engine.getObjectsPool().put(ObjectsPool.CROSS_LOAN_RECORD, loan);

@@ -131,7 +131,13 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
         if (delta > 0) {
             loan.setAccumulatedInterest(Math.addExact(loan.getAccumulatedInterest(), delta));
         }
-        loan.setAccSnapshot(live);
+        // 有本金且累加器有推进(deltaAcc>0)却截断得 0 时保留 snapshot，让亚阈值增量继续累积到跨过阈值再计；
+        // 否则高频 accrue 会把每段利息吞掉(F1)。已计息/无本金/累加器未动 → 照常推进。
+        long deltaAcc = live - loan.getAccSnapshot();
+        boolean truncatedButChargeable = delta == 0 && loan.getOutstandingPrincipal() > 0 && deltaAcc > 0;
+        if (!truncatedButChargeable) {
+            loan.setAccSnapshot(live);
+        }
         return delta;
     }
 
