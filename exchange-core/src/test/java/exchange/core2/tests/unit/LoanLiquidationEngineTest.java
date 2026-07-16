@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -715,5 +716,66 @@ class LoanLiquidationEngineTest {
         scanner.syncCrossExposure(up);
         scanner.checkLoans(cmd);
         verify(publisher).submit(any(), any());
+    }
+
+    @Test
+    void checkLoans_isolatedClosed_holdsOther_retainsUid() {
+        // 同 SYMBOL 两笔 underwater loan；关掉一笔后另一笔仍非空 → holdsOther=true → 不摘除，targeted 仍命中。
+        up.isolatedLoans.put(1L, underwaterLoan(1L, 0));
+        up.isolatedLoans.put(2L, underwaterLoan(2L, 0));
+        scanner.onIsolatedLoanOpened(UID, SYMBOL);
+
+        up.isolatedLoans.remove(1L);
+        scanner.onIsolatedLoanClosed(up, SYMBOL); // loan 2 仍在同 symbol 非空 → 保留 UID
+
+        clearInvocations(publisher);
+        scanner.checkLoans(priceEventCmd(SYMBOL));
+        verify(publisher).submit(any(), any()); // 仍在索引 → 剩余 loan 被 force-sell
+    }
+
+    @Test
+    void checkLoans_isolatedClosed_lastLoanOnSymbol_dropsFromThatSymbolTargeting() {
+        // 用两个 symbol 观测摘除：UID 在 SYMBOL、SYMBOL2 各一笔 underwater。关掉 SYMBOL 上那笔后，
+        // UID 从 SYMBOL 索引摘除（SYMBOL 上再无非空 loan），但仍在 SYMBOL2 索引。
+        final int SYMBOL2 = 300;
+        CoreSymbolSpecification spec2 = CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL2).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+                .baseCurrency(BTC).quoteCurrency(USDT).baseScaleK(1).quoteScaleK(1)
+                .loanConfig(SymbolLoanSpecification.builder()
+                        .initialLtvBps(6000).liquidationLtvBps(8000).marginCallLtvBps(7000)
+                        .collateralWeightBps(9000).build())
+                .build();
+        specProvider.registerSymbol(SYMBOL2, spec2);
+        LastPriceCacheRecord price2 = new LastPriceCacheRecord();
+        price2.markPrice = 50_000L;
+        priceCache.put(SYMBOL2, price2);
+
+        up.isolatedLoans.put(1L, underwaterLoan(1L, 0)); // symbolId=SYMBOL
+        IsolatedLoanRecord loanB = underwaterLoan(2L, 0);
+        loanB.symbolId = SYMBOL2;
+        up.isolatedLoans.put(2L, loanB);
+        scanner.onIsolatedLoanOpened(UID, SYMBOL);
+        scanner.onIsolatedLoanOpened(UID, SYMBOL2);
+
+        up.isolatedLoans.remove(1L);
+        scanner.onIsolatedLoanClosed(up, SYMBOL); // SYMBOL 上无其它非空 loan → 摘除 UID
+
+        clearInvocations(publisher);
+        // SYMBOL 价格事件：UID 已摘除 → 不命中，不 force-sell（尽管 UID 仍有 SYMBOL2 的 underwater loan）
+        scanner.checkLoans(priceEventCmd(SYMBOL));
+        verify(publisher, never()).submit(any(), any());
+        // SYMBOL2 价格事件：UID 仍在 SYMBOL2 索引 → 命中 → force-sell
+        scanner.checkLoans(priceEventCmd(SYMBOL2));
+        verify(publisher).submit(any(), any());
+    }
+
+    @Test
+    void checkLoans_backstop_scansUnindexedUser() {
+        // backstop（cmd.symbol < 0）遍历 userProfileService，即便索引未登记也能捞到 underwater loan。
+        up.isolatedLoans.put(LOAN_ID, underwaterLoan(LOAN_ID, 0));
+        // 故意不调 onIsolatedLoanOpened → 索引为空
+
+        scanner.checkLoans(priceEventCmd(-1));
+        verify(publisher).submit(any(), any()); // backstop 全扫命中，与索引无关
     }
 }

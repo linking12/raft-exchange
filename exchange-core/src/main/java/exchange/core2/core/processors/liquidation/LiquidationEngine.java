@@ -60,8 +60,8 @@ import lombok.extern.slf4j.Slf4j;
  * leader 侧为空，残余仓被当作破产仓重发 FORCE 恢复，正确性靠 R1 {@code normalizeCmdPositionSize} 对 size 的夹取保证。
  *
  * <p>
- * <b>索引维护/重建</b>：{@link #symbolToUsers}（symbol → uid）在开仓 / 平仓 apply 时由所有节点确定性维护（不 gate）、不进 snapshot；
- * 快照恢复经 {@link #updateProvider} 重建。
+ * <b>索引维护/重建</b>：{@link #symbolToUsers}（symbol → uid）在开仓 / 平仓 apply 时由所有节点确定性维护（不 gate）、不进 snapshot； 快照恢复经
+ * {@link #updateProvider} 重建。
  *
  * <p>
  * <b>loan 集成</b>：{@link #loanLiquidationEngine} 是构造时创建的稳定单例，现货借贷强平子域委托对象；{@link #checkPositions} 末尾委托其
@@ -74,12 +74,12 @@ public final class LiquidationEngine extends LiquidationScheduledService {
     private static final ToLongFunction<SymbolPositionRecord> NO_CROSS = p -> 0L;
     private final FundEventsHelper eventsHelper;
     private final IntObjectHashMap<MutableLongSet> symbolToUsers; // symbol → 持有者 uid 集合
+    private final LoanLiquidationEngine loanLiquidationEngine;
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private LoanService loanService;
-    private LoanLiquidationEngine loanLiquidationEngine;
 
     public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId,
         ExchangeConfiguration exchangeConfiguration) {
@@ -301,8 +301,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
     }
 
     /**
-     * 强平命令 apply 后推进 FORCE→IF→ADL 状态机（leader-only）。flow 为空且命令是 FORCE 时新建流程（含换届后残余仓恢复）；
-     * 否则按当前 state 校验命令合法性，防重复 / 错序推进。
+     * 强平命令 apply 后推进 FORCE→IF→ADL 状态机（leader-only）。flow 为空且命令是 FORCE 时新建流程（含换届后残余仓恢复）； 否则按当前 state 校验命令合法性，防重复 / 错序推进。
      */
     public void advanceLiquidation(OrderCommand cmd, SymbolPositionRecord pos) {
         if (!isRunning()) {
