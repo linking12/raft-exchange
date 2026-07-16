@@ -23,97 +23,34 @@
 
 ## File Structure
 
-**生产(exchange-core)**
-- `processors/loan/LoanLiquidationEngine.java` — 核心。删 `LaneState`/inFlight/retry-throttle;`check(up)`→`check(up, ts)`;加两索引 + 维护/查询/重建方法。
-- `processors/liquidation/LiquidationCommandSubmitter.java` — `submit(ApiCommand)`(去 `onApplied`)。
-- `processors/liquidation/LiquidationScheduledService.java` — `submit` wrapper + `runOneIteration` 去 `onApplied`。
-- `processors/liquidation/LiquidationEngine.java` — `checkPositions` targeted 分支并 loan 索引;`updateProvider` 调 `rebuildIndices`;`checkUser` 传 `ts` 给 loan。
+**生产(exchange-core)** —— 全部在 loan / liquidation 包内,**不碰调度器/接口/server**
+- `processors/loan/LoanLiquidationEngine.java` — 核心。删 `LaneState`/inFlight/retry-throttle;force-sell/margin-call `submit(cmd, null)`(签名不变);`check(up)`→`check(up, ts)`;加两索引 + 维护/查询/重建方法。
+- `processors/liquidation/LiquidationEngine.java` — `checkUser` 传 `ts` 给 loan(1 行);`checkPositions` targeted 分支并 loan 索引;`updateProvider` 调 `rebuildIndices`。
 - `processors/loan/LoanCommandHandlers.java` — 生命周期 hook 调用索引维护。
 
-**生产(raft-exchange-server)**
-- `server/exchange/ExchangeRuntime.java` — override lambda 去 `onApplied`。
+> **onApplied 不动**:删 inFlight 后 loan 不再用 `onApplied`,但保留 `LiquidationCommandSubmitter.submit(ApiCommand, Runnable)` 签名、loan 传 `null` —— 避免拖动 `LiquidationCommandSubmitter`/`LiquidationScheduledService`/`ExchangeRuntime`(死参数清理不值得跨模块 churn)。
 
 **测试**
-- `tests/unit/LoanLiquidationEngineTest.java` — 删 inFlight/throttle 用例、改 submit 断言、`check(up,ts)`、重写 failover、加索引维护单测。
+- `tests/unit/LoanLiquidationEngineTest.java` — 删 inFlight/throttle 用例、`check(up,ts)`、重写 failover、加索引维护单测(submit 断言签名不变)。
 - `tests/integration/ITLoanTargetedLiquidation.java`(新建) — targeted MARKPRICE 触发 loan-only / cross 用户强平(无 scan);backstop 仍兜利息。
 - `tests/util/ExchangeTestContainer.java` — 加 `enableLiquidationEngines()`(只启引擎不发 scan)。
 
 ---
 
-## Task 1: Cleanup bundle —— 删 inFlight / retry 节流 / onApplied,check(up,ts)
+## Task 1: LoanLiquidationEngine 内部清理 —— 删 inFlight / retry 节流,check(up,ts)
+
+> **onApplied 保留**:`submit(ApiCommand, Runnable)` 签名不变,loan force-sell/margin-call 传 `null`。**不碰** `LiquidationCommandSubmitter` / `LiquidationScheduledService` / `ExchangeRuntime`。
 
 **Files:**
 - Modify: `exchange-core/src/main/java/exchange/core2/core/processors/loan/LoanLiquidationEngine.java`
-- Modify: `exchange-core/src/main/java/exchange/core2/core/processors/liquidation/LiquidationCommandSubmitter.java`
-- Modify: `exchange-core/src/main/java/exchange/core2/core/processors/liquidation/LiquidationScheduledService.java`
-- Modify: `exchange-core/src/main/java/exchange/core2/core/processors/liquidation/LiquidationEngine.java:182`(`check(up)`→`check(up, ts)` 调用点)
-- Modify: `raft-exchange-server/src/main/java/com/binance/raftexchange/server/exchange/ExchangeRuntime.java`
+- Modify: `exchange-core/src/main/java/exchange/core2/core/processors/liquidation/LiquidationEngine.java:182`(`check(up)`→`check(up, ts)` 调用点,1 行)
 - Test: `exchange-core/src/test/java/exchange/core2/tests/unit/LoanLiquidationEngineTest.java`
 
 **Interfaces:**
-- Produces: `LiquidationCommandSubmitter.submit(ApiCommand cmd)`(单参);`LoanLiquidationEngine.check(UserProfile up, long ts)`。
-- Consumes: 现有 `stuckLiqAttempts`(持久化,不动)、`toleranceBpsFor` 爬梯(保留)。
+- Produces: `LoanLiquidationEngine.check(UserProfile up, long ts)`。
+- Consumes: 现有 `LiquidationCommandSubmitter.submit(ApiCommand, Runnable)`(签名不变,传 `null`)、`stuckLiqAttempts`(持久化,不动)、`toleranceBpsFor` 爬梯(保留)。
 
-- [ ] **Step 1: 改 `LiquidationCommandSubmitter` 接口为单参**
-
-`LiquidationCommandSubmitter.java` 整体:
-
-```java
-package exchange.core2.core.processors.liquidation;
-
-import exchange.core2.core.common.api.ApiCommand;
-
-/**
- * 强平命令提交口:leader 侧把强平相关命令送去复制/应用。onApplied 回调已随 loan in-flight 去重删除。
- */
-public interface LiquidationCommandSubmitter {
-    void submit(ApiCommand cmd);
-}
-```
-
-- [ ] **Step 2: 改父类 `LiquidationScheduledService` 的 submit wrapper 与 runOneIteration**
-
-`LiquidationScheduledService.java` 里 `submit` 方法与 `runOneIteration`:
-
-```java
-    protected void runOneIteration() {
-        if (shardId != 0) {
-            return;
-        }
-        submit(ApiLiquidationScan.builder().build());
-        submit(ApiRepriceLoanRates.builder().build());
-    }
-
-    protected final void submit(ApiCommand cmd) {
-        if (commandSubmitter != null) {
-            commandSubmitter.submit(cmd);
-        }
-    }
-```
-
-- [ ] **Step 3: 改 server override lambda 去 onApplied**
-
-`ExchangeRuntime.java` 的 `overrideLiquidationCommandSubmitter` 里 submitter:
-
-```java
-        LiquidationCommandSubmitter submitter = cmd -> {
-            if (!isLeader.getAsBoolean()) {
-                return;
-            }
-            if (cmd instanceof ApiSystemLiquidationNotify) {
-                // 下游事件不改 RiskEngine 状态,无需 raft;走 leader 本地 ringbuffer
-                exchangeCalls.submitCommand(cmd);
-                return;
-            }
-            commit.accept(ApiCommandConverters.liquidationCmdToRaftLog(cmd, System.currentTimeMillis()), err -> {
-                if (err != null) {
-                    log.warn("Liquidation raft consensus failed: cmd={}", cmd, err);
-                }
-            });
-        };
-```
-
-- [ ] **Step 4: 重写 `LoanLiquidationEngine` —— 删 LaneState/inFlight/retry 节流,check(up,ts)**
+- [ ] **Step 1: 重写 `LoanLiquidationEngine` —— 删 LaneState/inFlight/retry 节流,check(up,ts)**
 
 `LoanLiquidationEngine.java` 关键改动(逐处):
 
@@ -226,7 +163,7 @@ public interface LiquidationCommandSubmitter {
         ApiLoanForceLiquidate cmd =
             ApiLoanForceLiquidate.builder().uid(loan.uid).symbol(spec.symbolId).loanId(loan.loanId).price(limitPrice)
                 .size(sellSizeLots).orderId(orderId).action(OrderAction.ASK).orderType(OrderType.IOC).build();
-        engine.getCommandSubmitter().submit(cmd);
+        engine.getCommandSubmitter().submit(cmd, null);
     }
 ```
 
@@ -246,7 +183,7 @@ public interface LiquidationCommandSubmitter {
         ApiLoanCrossForceLiquidate cmd = ApiLoanCrossForceLiquidate.builder().uid(up.uid).symbol(spec.symbolId)
             .targetLoanId(targetLoan.loanId).price(limitPrice).size(sellSize).orderId(orderId).action(OrderAction.ASK)
             .orderType(OrderType.IOC).build();
-        engine.getCommandSubmitter().submit(cmd);
+        engine.getCommandSubmitter().submit(cmd, null);
 ```
 
 (`publishCrossForceSell` 签名把 `currentTickMs` 参数名改为 `ts`。)
@@ -261,30 +198,30 @@ public interface LiquidationCommandSubmitter {
         throttleMap.put(throttleKey, ts);
         FundEvent event =
             engine.getEventsHelper().sendLoanMarginCallEvent(uid, loanId, mode, loanCurrency, ltvBps, thresholdBps);
-        engine.getCommandSubmitter().submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+        engine.getCommandSubmitter().submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
     }
 ```
 
 6. 删掉:`isIsolatedLoanInFlight`、`isCrossLoanInFlight`、`publishTrackedIsolated`、`publishTrackedCross`、`publishTracked`、`stuckLiqThrottled`。**保留** `toleranceBpsFor`、`limitPriceWithTolerance`、Cross 选币/选笔/定量方法不变。
 
-- [ ] **Step 5: 改 `LiquidationEngine.checkUser` 调用点传 ts**
+- [ ] **Step 2: 改 `LiquidationEngine.checkUser` 调用点传 ts**
 
-`LiquidationEngine.java:182`:
+`LiquidationEngine.java:182`(唯一非 loan-包改动,1 行):
 
 ```java
         loanLiquidationEngine.check(userProfile, ts);
 ```
 
-- [ ] **Step 6: 修 `LoanLiquidationEngineTest` 编译 + 删除失效用例**
+- [ ] **Step 3: 修 `LoanLiquidationEngineTest` 编译 + 删除失效用例**
 
 删除以下用例(断言已删行为):`inFlight_startsEmpty_forBothLanes`、`publishTrackedIsolated_addsLoanIdToInFlight`、`publishTrackedIsolated_onAppliedCallbackClearsInFlight`、`publishTrackedIsolated_publisherThrows_cleansUpAndRethrows`、`publishTrackedCross_addsUidToInFlight`、`publishTrackedCross_onAppliedCallbackClearsInFlight`、`publishTrackedCross_publisherThrows_cleansUpAndRethrows`、`check_isolatedInFlightLoan_skipsWithoutTouchingPriceCache`、`check_crossInFlight_skipsLtvCompute`、`stuckLoan_reFireThrottled_withinWindow`。删对应 imports(`AtomicReference` 若不再用)。
 
-全文件 mechanical sweep(两处 pattern):
+全文件 mechanical sweep(**只一处**,submit 签名不变故断言不动):
 - `scanner.check(up)` → `scanner.check(up, OPENED_AT_MS)`(所有调用点;`ts` 用 `OPENED_AT_MS` 即可,期限判定不受影响)。
-- `.submit(any(), any())` → `.submit(any())`;`.submit(cap.capture(), any())` → `.submit(cap.capture())`;`.submit(captor.capture(), any())` → `.submit(captor.capture())`;`.submit(eq(cmd), any(Runnable.class))` 相关的用例已在删除清单里。
-- `doAnswer(...).when(publisher).submit(any(), any(Runnable.class))` 相关用例已删除。
 
-- [ ] **Step 7: 重写 failover 用例(去 in-flight 去重断言,保留 re-size)**
+> `submit(cmd, null)` 保留二参签名,故 `.submit(x, any())` / `.submit(any(), any())` 断言**无需改**(`any()` 匹配 null)。
+
+- [ ] **Step 4: 重写 failover 用例(去 in-flight 去重断言,保留 re-size)**
 
 替换 `failover_freshScanner_reSizesFromReducedState_noDoubleLiquidation` 为:
 
@@ -315,7 +252,7 @@ public interface LiquidationCommandSubmitter {
 
         scanner.check(up, OPENED_AT_MS);
         ArgumentCaptor<ApiCommand> cap = ArgumentCaptor.forClass(ApiCommand.class);
-        verify(publisher, times(1)).submit(cap.capture());
+        verify(publisher, times(1)).submit(cap.capture(), any());
         assertEquals(3L, ((ApiLoanForceLiquidate) cap.getValue()).size);
 
         // 一笔部分强平已 apply(抵押 3→1 WBTC,仍 underwater),再次检测
@@ -324,30 +261,30 @@ public interface LiquidationCommandSubmitter {
 
         scanner.check(up, OPENED_AT_MS);
         ArgumentCaptor<ApiCommand> cap2 = ArgumentCaptor.forClass(ApiCommand.class);
-        verify(publisher, times(2)).submit(cap2.capture());
+        verify(publisher, times(2)).submit(cap2.capture(), any());
         ApiLoanForceLiquidate reSized =
                 (ApiLoanForceLiquidate) cap2.getAllValues().get(cap2.getAllValues().size() - 1);
         assertEquals(1L, reSized.size, "按 apply 后剩余抵押(1 张)重定 size,不会用原始 3 张 → 无过量强平");
     }
 ```
 
-`toleranceLadder_widensWithStuckAttempts`、`freshLoan_notThrottled_firesImmediately` 保留(前者 `.submit(cap.capture())` sweep;后者改名 `underwaterLoan_firesForceSell` 可选,`.submit(any())` sweep)。`ArgumentMatchers.eq` / `Runnable` 相关 import 若不再用则删。
+`toleranceLadder_widensWithStuckAttempts`、`freshLoan_notThrottled_firesImmediately` 保留(submit 断言签名不变,只 sweep `check(up)`→`check(up, OPENED_AT_MS)`)。`Runnable` import 若不再用则删。
 
-- [ ] **Step 8: 跑单测**
+- [ ] **Step 5: 跑单测**
 
 Run: `mvn -q -pl exchange-core test -Dtest=LoanLiquidationEngineTest -DfailIfNoTests=false`
 Expected: PASS(force-sell 判定/爬梯/marginCall/re-size 全绿,无 inFlight/throttle 残留)。
 
-- [ ] **Step 9: 编译全模块(签名跨模块改动)**
+- [ ] **Step 6: 编译 exchange-core**
 
-Run: `mvn -q -pl exchange-core,raft-exchange-server -am test-compile`
-Expected: BUILD SUCCESS(接口单参改动在 server override 已同步)。
+Run: `mvn -q -pl exchange-core test-compile`
+Expected: BUILD SUCCESS(改动全在 loan/liquidation 包内 + checkUser 1 行,不涉及 server)。
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit -m "refactor(loan): 删 in-flight/retry 节流 + onApplied,决策对齐 cmd.timestamp"
+git commit -m "refactor(loan): 删 in-flight/retry 节流,决策对齐 cmd.timestamp"
 ```
 
 ---
@@ -809,7 +746,7 @@ Expected: 全绿(两段 surefire:unit + IT)。若有断言 inFlight/throttle 的
 - [ ] **Step 2: server 全量**
 
 Run: `mvn -q -pl raft-exchange-server -am test`
-Expected: 全绿(接口单参改动 + override 同步)。
+Expected: 全绿(本 plan 不改 server 代码;跑一遍确认 loan/liquidation 改动经 raft 路径不回归)。
 
 - [ ] **Step 3: 记录 backstop 不回归 + stale-index 只损延迟的验证点**
 
@@ -819,7 +756,8 @@ Expected: 全绿(接口单参改动 + override 同步)。
 
 ## Self-Review 结果
 
-- **Spec 覆盖**:targeted(isolated+cross 索引)= Task 2+3;LaneState 清理 + onApplied + ts = Task 1;backstop 保留 = 不动 + Task 4 确认;determinism/rebuild = Task 3 Step 2 + Task 4 Step 3。全覆盖。
+- **Spec 覆盖**:targeted(isolated+cross 索引)= Task 2+3;LaneState 清理(inFlight/retry)+ ts = Task 1;backstop 保留 = 不动 + Task 4 确认;determinism/rebuild = Task 3 Step 2 + Task 4 Step 3。全覆盖。
+- **范围收敛(2026-07-16 user 定)**:砍掉 spec cleanup bundle #4(onApplied 参数删除)——保留 `submit(ApiCommand, Runnable)` 签名、loan 传 `null`,不碰 `LiquidationCommandSubmitter`/`LiquidationScheduledService`/`ExchangeRuntime`。唯一非 loan-包改动是 `LiquidationEngine`(checkUser 传 ts + checkPositions 并索引 + updateProvider 重建),均为 targeted 功能内在要求。
 - **占位符扫描**:无 TBD。原两处待核实(常量归属 `TestConstants`、`getIsolatedLoans()` 读抵押)已核实坐实于代码。
 - **类型一致性**:`check(up, ts)`、`submit(ApiCommand)`、`collectAffectedLoanUsers(spec, sink)`、`rebuildIndices()` 跨 task 签名一致;`IntObjectHashMap<MutableLongSet>` 与 `symbolToUsers` 同型。
 - **顺序**:Task 1(清理,腾出 onApplied)→ Task 2(索引+维护,dead 直到 Task 3)→ Task 3(集成+IT)→ Task 4(回归)。每 task 独立可测。

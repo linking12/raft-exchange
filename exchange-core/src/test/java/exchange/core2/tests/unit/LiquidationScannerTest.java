@@ -1,6 +1,7 @@
 package exchange.core2.tests.unit;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
@@ -358,5 +359,87 @@ class LiquidationScannerTest {
         CoreSymbolSpecification spec = createSpec(false, Long.MAX_VALUE / 2, Long.MAX_VALUE);
 
         Assertions.assertDoesNotThrow(() -> position.calculateBankruptcyPrice(spec, p -> 0L));
+    }
+
+    // ========== CROSS marginBase（非零 alloc）破产价 ==========
+    // 现有用例都传 p -> 0L（零抵扣，逐仓视角）。CROSS 强平走 forceCrossLiquidation 里的 alloc::get，
+    // marginBase 来自 crossMarginBaseAllocation 而非 openInitMarginSum+extraMargin。下面用例把逐仓字段
+    // 填垃圾值，证明 CROSS 路径确实忽略它们、只用 alloc fn 提供的 marginBase。
+
+    /** CROSS 逐仓字段是垃圾值，破产价必须由 alloc 提供的 marginBase 决定（固定费、多头）。 */
+    @Test
+    void testCrossFixedFeeLong_usesAllocatedMarginBase() {
+        SymbolPositionRecord pos = createCrossPosition(PositionDirection.LONG, 10, 10_000);
+        CoreSymbolSpecification spec = createSpec(true, 2, 0);
+        // alloc marginBase=480：maxLoss=480-2*10=460, numer=10000-460=9540, BP=ceil(9540/10)=954
+        // 若错用逐仓字段(999_999) 结果会是天文数字，绝不会等于 954
+        long result = pos.calculateBankruptcyPrice(spec, p -> 480L);
+        assertEquals(954, result);
+    }
+
+    /** CROSS 固定费、空头：sign=-1。 */
+    @Test
+    void testCrossFixedFeeShort_usesAllocatedMarginBase() {
+        SymbolPositionRecord pos = createCrossPosition(PositionDirection.SHORT, 5, 4_000);
+        CoreSymbolSpecification spec = createSpec(true, 3, 0);
+        // marginBase=300：maxLoss=300-3*5=285, numer=4000-(-1)*285=4285, BP=ceil(4285/5)=857
+        long result = pos.calculateBankruptcyPrice(spec, p -> 300L);
+        assertEquals(857, result);
+    }
+
+    /** CROSS 比例费、多头：走 ceilMulDiv 分支，marginBase 仍取自 alloc。 */
+    @Test
+    void testCrossRatioFeeLong_usesAllocatedMarginBase() {
+        SymbolPositionRecord pos = createCrossPosition(PositionDirection.LONG, 8, 9_600);
+        CoreSymbolSpecification spec = createSpec(false, 1_000, 1_000_000);
+        // marginBase=600：numer=9600-600=9000, denom=8*(1e6-1000)=7_992_000, BP=ceil(9000*1e6/7_992_000)=1127
+        long result = pos.calculateBankruptcyPrice(spec, p -> 600L);
+        assertEquals(1127, result);
+    }
+
+    /** alloc 越大（可用抵押越多）→ 多头破产价越低（更抗跌）：证明 alloc 的 marginBase 真正驱动结果。 */
+    @Test
+    void testCrossBankruptcyPrice_variesWithAllocation() {
+        SymbolPositionRecord pos = createCrossPosition(PositionDirection.LONG, 10, 10_000);
+        CoreSymbolSpecification spec = createSpec(true, 2, 0);
+        long lowMargin = pos.calculateBankruptcyPrice(spec, p -> 300L);  // maxLoss=280, numer=9720, BP=972
+        long highMargin = pos.calculateBankruptcyPrice(spec, p -> 800L); // maxLoss=780, numer=9220, BP=922
+        assertEquals(972, lowMargin);
+        assertEquals(922, highMargin);
+        Assertions.assertTrue(highMargin < lowMargin, "marginBase 越大，多头破产价越低");
+    }
+
+    /** totalFee = takerFee + liquidationFee：破产价须把清算费也算进 maxLoss（固定费、多头、CROSS）。 */
+    @Test
+    void testCrossFixedFee_addsLiquidationFeeToTotalFee() {
+        SymbolPositionRecord pos = createCrossPosition(PositionDirection.LONG, 10, 10_000);
+        CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                .symbolId(SYMBOL_ID)
+                .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                .initMargin(10)
+                .initMarginScaleK(100)
+                .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 8L))
+                .maintenanceMarginScaleK(100)
+                .takerFee(2)
+                .makerFee(2)
+                .liquidationFee(3)
+                .feeScaleK(0)
+                .build();
+        // totalFee=2+3=5, maxLoss=500-5*10=450, numer=10000-450=9550, BP=ceil(9550/10)=955
+        // 若漏掉 liquidationFee(totalFee=2) 则得 952，故 955 锁住"清算费计入"
+        long result = pos.calculateBankruptcyPrice(spec, p -> 500L);
+        assertEquals(955, result);
+    }
+
+    /** CROSS 持仓：逐仓保证金字段填垃圾值（openInitMarginSum/extraMargin），确保被 CROSS 路径忽略。 */
+    private SymbolPositionRecord createCrossPosition(PositionDirection direction, long openVolume, long openPriceSum) {
+        SymbolPositionRecord pos = new SymbolPositionRecord();
+        pos.direction = direction;
+        pos.openVolume = openVolume;
+        pos.openPriceSum = openPriceSum;
+        pos.marginMode = MarginMode.CROSS;
+        pos.openInitMarginSum = 999_999L; // 垃圾值：CROSS 必须忽略
+        pos.extraMargin = 999_999L;       // 垃圾值：CROSS 必须忽略
+        return pos;
     }
 }
