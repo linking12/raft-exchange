@@ -28,8 +28,13 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 动态利率引擎（Flexible / 活期）：kinked 曲线 + reprice 生效利率 + 累加器计息。适用 Isolated FLOATING + 全部 Cross，也是 {@link FixedRateModel}
- * 开仓锁率的来源。per-shard 复制状态。见 loan.md §13。
+ * 浮动利率引擎（Flexible/活期）：kinked 曲线 + reprice 生效利率 + 累加器计息。适用于 Isolated FLOATING 及全部 Cross
+ * 借贷，也是 {@link FixedRateModel} 开仓锁率的来源。per-shard 复制状态，见 loan.md §13。
+ *
+ * <p>计息用"累加器差值法"（loan.md §13.5）：{@code accRateBpsMs} 按币种累积"利率 × 时间"，只在 reprice 时用旧生效利率
+ * 结算 {@code [lastRepriceTs, tickTs)} 这段区间；两次 reprice 之间的即时值由 {@link #liveAccRateBpsMs} 用当前生效利率外推得到。
+ * 每笔 loan 记一个 accSnapshot（开仓或上次结息时的累加器读数），欠息 = (liveAcc − accSnapshot) 换算成本金对应的利息——
+ * 这样计息与 loan 笔数无关，一次 reprice 即对所有持仓同时生效。
  */
 @Getter
 @Setter
@@ -43,9 +48,9 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
     private int kinkUtilBps; // 利用率拐点
     private int slope1Bps; // 拐点前斜率
     private int slope2Bps; // 拐点后斜率
-    private final IntLongHashMap currentRateBps; // 每币种当前曲线利率
-    private final IntLongHashMap accRateBpsMs; // 每币种累积 利率·时间（计息累加器）
-    private long lastRepriceTs; // 上次 reprice 时刻（ms）
+    private final IntLongHashMap currentRateBps; // 每币种当前生效利率（reprice 写入）
+    private final IntLongHashMap accRateBpsMs; // 每币种计息累加器：截至 lastRepriceTs 累积的"利率 × 时间"
+    private long lastRepriceTs; // 上次 reprice 时刻（ms）；≤0 表示尚未 reprice 过（冷启动）
 
     public FloatingRateModel() {
         this.baseBps = DEFAULT_BASE_BPS;
@@ -67,8 +72,6 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
         this.lastRepriceTs = bytes.readLong();
     }
 
-    // ---- 曲线：利用率 → 利率 ----
-
     /** 利用率（bps）= borrowed / (borrowed + available)；空池返 0。 */
     public static long utilizationBps(long borrowed, long available) {
         long total = borrowed + available;
@@ -89,50 +92,53 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
         return curveRateBps(utilBps, baseBps, kinkUtilBps, slope1Bps, slope2Bps);
     }
 
-    /** 某币种当前利率；未 reprice 回退 baseBps（= curveRateBps(0)，冷启动兜底）。 */
+    /** 某币种当前利率；未 reprice 过时回退 baseBps（= curveRateBps(0)，冷启动兜底）。 */
     public int currentRateBpsOrBase(int currency) {
         return currentRateBps.containsKey(currency) ? (int)currentRateBps.get(currency) : baseBps;
     }
 
-    // ---- reprice：按利用率刷新生效利率 ----
-
+    /**
+     * reprice 前半步：用旧生效利率把 {@code [lastRepriceTs, tickTs)} 这段区间计入 accRateBpsMs 累加器。
+     * 必须先于 {@link #repriceCurrency} 调用，否则会用新利率错误结算旧区间；调用方在同一次 reprice 处理完所有币种后
+     * 才整体推进 lastRepriceTs（见 RiskEngine），故这里读到的仍是推进前的值。
+     */
     public void advanceAccumulator(int currency, long tickTs) {
         if (lastRepriceTs > 0 && tickTs > lastRepriceTs) {
-            accRateBpsMs.addToValue(currency, (long)currentRateBpsOrBase(currency) * (tickTs - lastRepriceTs));
+            long elapsed = tickTs - lastRepriceTs;
+            accRateBpsMs.addToValue(currency, (long)currentRateBpsOrBase(currency) * elapsed);
         }
     }
 
+    /** reprice 后半步：util 过曲线写入 currentRateBps，成为新生效利率。 */
     public void repriceCurrency(int currency, long utilBps) {
         currentRateBps.put(currency, curveRateBps(utilBps));
     }
-
-    // ---- 计息（累加器差值法）----
 
     public int openRateBps(int loanCurrency) {
         return currentRateBpsOrBase(loanCurrency);
     }
 
-    /** 累加器实时值：accRateBpsMs + currentRate × (now − lastRepriceTs)；冷启动（lastRepriceTs≤0）不累积。 */
+    /** 累加器实时值 = accRateBpsMs + currentRate × (now − lastRepriceTs)，用当前生效利率把上次 reprice 之后的区间外推到 now；冷启动（lastRepriceTs≤0）不外推。 */
     public long liveAccRateBpsMs(int currency, long now) {
         long acc = accRateBpsMs.get(currency);
         long elapsed = now - lastRepriceTs;
         return (lastRepriceTs <= 0 || elapsed <= 0) ? acc : acc + (long)currentRateBpsOrBase(currency) * elapsed;
     }
 
-    /** 开仓：accSnapshot 定在当前 liveAcc，从此点起累积。 */
+    /** 开仓：accSnapshot 定在当前 liveAcc，此后只计从此刻起新增的利息。 */
     public void initOpenSnapshot(LoanRecord loan, long now) {
         loan.setAccSnapshot(liveAccRateBpsMs(loan.getLoanCurrency(), now));
     }
 
-    /** 写路径：补计利息到 now，推进 accSnapshot；返回本次新增利息（≥ 0）。 */
+    /** 写路径：按累加器差值补计利息到 now，推进 accSnapshot；返回本次新增利息（≥ 0）。 */
     public long accrue(LoanRecord loan, long now) {
         long live = liveAccRateBpsMs(loan.getLoanCurrency(), now);
         long delta = pending(loan, live);
         if (delta > 0) {
             loan.setAccumulatedInterest(Math.addExact(loan.getAccumulatedInterest(), delta));
         }
-        // 有本金且累加器有推进(deltaAcc>0)却截断得 0 时保留 snapshot，让亚阈值增量继续累积到跨过阈值再计；
-        // 否则高频 accrue 会把每段利息吞掉(F1)。已计息/无本金/累加器未动 → 照常推进。
+        // 有本金且累加器确有推进(deltaAcc>0)却因截断得 0 时保留 snapshot，让亚阈值增量继续累积到跨过阈值再计；
+        // 否则高频 accrue 会把每段利息永久吞掉（F1，同 FixedRateModel）。已计息/无本金/累加器未动 → 照常推进。
         long deltaAcc = live - loan.getAccSnapshot();
         boolean truncatedButChargeable = delta == 0 && loan.getOutstandingPrincipal() > 0 && deltaAcc > 0;
         if (!truncatedButChargeable) {
@@ -147,6 +153,7 @@ public final class FloatingRateModel implements WriteBytesMarshallable, StateHas
             pending(loan, liveAccRateBpsMs(loan.getLoanCurrency(), now)));
     }
 
+    /** pending = (liveAcc − accSnapshot) 对应的利率·时间增量，换算成本金对应的利息；deltaAcc≤0 或无本金则免息。 */
     private static long pending(LoanRecord loan, long liveAcc) {
         long deltaAcc = liveAcc - loan.getAccSnapshot();
         if (deltaAcc <= 0 || loan.getOutstandingPrincipal() <= 0) {

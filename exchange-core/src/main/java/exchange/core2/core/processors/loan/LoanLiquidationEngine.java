@@ -12,9 +12,11 @@
  */
 package exchange.core2.core.processors.loan;
 
-import org.eclipse.collections.api.set.MultiReaderSet;
-import org.eclipse.collections.impl.factory.Sets;
-import org.eclipse.collections.impl.map.mutable.primitive.LongLongHashMap;
+import java.util.function.Supplier;
+
+import org.eclipse.collections.api.set.primitive.MutableLongSet;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
+import org.eclipse.collections.impl.set.mutable.primitive.LongHashSet;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
 import exchange.core2.core.common.CoreSymbolSpecification;
@@ -24,189 +26,280 @@ import exchange.core2.core.common.IsolatedLoanRecord;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.UserProfile;
-import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
+import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
+import exchange.core2.core.processors.liquidation.LiquidationCommandSubmitter;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 现货借贷子域 scanner（per-shard），{@link LiquidationEngine} 每次检查用户时委托 {@link #check(UserProfile)} 进来。扫 Isolated + Cross 两条
- * lane：真实债务(含利息) LTV / 期限判定，越线则 publish force-sell IOC 单，仅越预警线则发 margin call。 provider / service 全经
- * {@link LiquidationEngine} 现取；in-flight 去重等运行态是进程级的，不进 raft snapshot，换届重置无碍。 （动态利率重定价 {@code REPRICE_LOAN_RATES}
- * 的心跳已上移到父类 {@code LiquidationScheduledService.runOneIteration} 发令。）
+ * 现货借贷强平引擎（per-shard）。{@link LiquidationEngine} 构造时创建的稳定单例，作为其 loan 子域委托对象。
+ *
+ * <p>
+ * <b>检测流程</b>：{@link LiquidationEngine#checkPositions} 过 leader gate 后委托 {@link #checkLoans} ——
+ * 价格事件（{@code cmd.symbol >= 0}）经 loan 索引 targeted 选受影响的持有者；{@code LIQUIDATION_SCAN}（{@code cmd.symbol < 0}） 全量兜底。每个用户经
+ * {@link #checkUser} 逐笔判定真实债务（含利息）LTV 与期限：越强平线发 force-sell IOC，越预警线发 margin call。
+ *
+ * <p>
+ * <b>依赖</b>：全部注入，不回持 {@link LiquidationEngine}。provider 与 loanService 经 {@link #updateProvider} 注入、
+ * 并在快照恢复时刷新；eventsHelper（稳定对象）与 submitter（{@link Supplier} 懒读——server 在 updateProvider 之后才 set）构造时注入。
+ *
+ * <p>
+ * <b>targeted 索引</b>：由 {@link LoanCommandHandlers} 在 loan 命令 apply 时确定性维护（全节点、不 gate）、 {@link #updateProvider}
+ * 从用户态重建；不进 raft snapshot。索引 stale 只损延迟不损正确性——backstop 全扫兜底。
  */
 @Slf4j
 public final class LoanLiquidationEngine {
-    private static final long MS_PER_DAY = 86400L * 1_000L; // 期限强平用
-    private static final long MARGIN_CALL_THROTTLE_MS = 5L * 60L * 1_000L; // 预警节流 5 min
+    private static final long MS_PER_DAY = 86400L * 1_000L; // 天→毫秒，期限强平换算
     private static final byte LOAN_MODE_ISOLATED = 0;
     private static final byte LOAN_MODE_CROSS = 1;
-    private final LiquidationEngine engine;
 
-    private static final class LaneState {
-        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty();
-        final LongLongHashMap marginCallThrottleMs = new LongLongHashMap();
-        final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap();
+    private final IntObjectHashMap<MutableLongSet> isolatedLoanSymbolToUsers; // symbolId → uids
+    private final IntObjectHashMap<MutableLongSet> crossLoanCurrencyToUsers; // currency → uids
+    private final FundEventsHelper eventsHelper;
+    private final Supplier<LiquidationCommandSubmitter> commandSubmitter;
+    private SymbolSpecificationProvider symbolSpecificationProvider;
+    private CurrencySpecificationProvider currencySpecificationProvider;
+    private UserProfileService userProfileService;
+    private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
+    private LoanService loanService;
+
+    public LoanLiquidationEngine(FundEventsHelper eventsHelper,
+        Supplier<LiquidationCommandSubmitter> commandSubmitter) {
+        this.eventsHelper = eventsHelper;
+        this.commandSubmitter = commandSubmitter;
+        this.isolatedLoanSymbolToUsers = IntObjectHashMap.newMap();
+        this.crossLoanCurrencyToUsers = IntObjectHashMap.newMap();
     }
 
-    private final LaneState isolated = new LaneState();
-    private final LaneState cross = new LaneState();
-
-    public LoanLiquidationEngine(LiquidationEngine engine) {
-        this.engine = engine;
+    public void updateProvider(SymbolSpecificationProvider symbolSpecProvider,
+        CurrencySpecificationProvider currencySpecProvider, UserProfileService userService,
+        IntObjectHashMap<LastPriceCacheRecord> lastPriceService, LoanService loanSvc) {
+        this.symbolSpecificationProvider = symbolSpecProvider;
+        this.currencySpecificationProvider = currencySpecProvider;
+        this.userProfileService = userService;
+        this.lastPriceCache = lastPriceService;
+        this.loanService = loanSvc;
+        isolatedLoanSymbolToUsers.clear();
+        crossLoanCurrencyToUsers.clear();
+        userService.getUserProfiles().forEachValue(up -> {
+            up.isolatedLoans.forEachValue(loan -> {
+                if (!loan.isEmpty()) {
+                    onIsolatedLoanOpened(up.uid, loan.symbolId);
+                }
+            });
+            syncCrossExposure(up);
+        });
     }
 
-    public void check(UserProfile userProfile) {
-        userProfile.isolatedLoans.forEachValue(this::checkIsolatedLoan);
-        checkCrossLoan(userProfile);
-    }
-
-    private void checkIsolatedLoan(IsolatedLoanRecord loan) {
-        if (loan.isEmpty() || isolated.inFlight.contains(loan.loanId))
+    /**
+     * 强平检测入口，由 {@link LiquidationEngine#checkPositions} 委托（调用方已过 leader gate）。 {@code cmd.symbol >= 0}：查索引选受该 symbol
+     * 价格影响的持有者；{@code cmd.symbol < 0}：backstop 全量。
+     */
+    public void checkLoans(OrderCommand cmd) {
+        if (cmd.symbol >= 0) {
+            final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(cmd.symbol);
+            if (spec == null) {
+                return;
+            }
+            // 受该 symbol 价格影响的持有者：isolated 按 symbolId、cross 按 base/quote 两币种，求并去重
+            final MutableLongSet uids = new LongHashSet();
+            final MutableLongSet iso = isolatedLoanSymbolToUsers.get(spec.symbolId);
+            if (iso != null) {
+                uids.addAll(iso);
+            }
+            final MutableLongSet base = crossLoanCurrencyToUsers.get(spec.baseCurrency);
+            if (base != null) {
+                uids.addAll(base);
+            }
+            final MutableLongSet quote = crossLoanCurrencyToUsers.get(spec.quoteCurrency);
+            if (quote != null) {
+                uids.addAll(quote);
+            }
+            uids.forEach(uid -> checkUser(userProfileService.getUserProfile(uid), cmd.timestamp));
             return;
-        final CoreSymbolSpecification spec =
-            engine.getSymbolSpecificationProvider().getSymbolSpecification(loan.symbolId);
+        }
+        userProfileService.getUserProfiles().forEachValue(up -> checkUser(up, cmd.timestamp));
+    }
+
+    /** 逐笔检查一个用户的 isolated + cross 借贷。 */
+    public void checkUser(UserProfile userProfile, long ts) {
+        if (userProfile == null) {
+            return;
+        }
+        userProfile.isolatedLoans.forEachValue(loan -> checkIsolated(loan, ts));
+        checkCross(userProfile, ts);
+    }
+
+    private void checkIsolated(IsolatedLoanRecord loan, long ts) {
+        if (loan.isEmpty())
+            return;
+        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(loan.symbolId);
         if (spec == null)
             return;
-        final LastPriceCacheRecord priceRecord = engine.getLastPriceCache().get(spec.symbolId);
+        final LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
         if (priceRecord == null || priceRecord.markPrice == 0)
             return;
 
-        final long nowMs = System.currentTimeMillis();
         final CoreCurrencySpecification baseSpec =
-            engine.getCurrencySpecificationProvider().getCurrencySpecification(loan.collateralCurrency);
+            currencySpecificationProvider.getCurrencySpecification(loan.collateralCurrency);
         final CoreCurrencySpecification loanCurrencySpec =
-            engine.getCurrencySpecificationProvider().getCurrencySpecification(loan.loanCurrency);
+            currencySpecificationProvider.getCurrencySpecification(loan.loanCurrency);
         final long collateralValue = LoanService.collateralValueInQuoteCurrency(loan.collateralAmount, spec,
             priceRecord.markPrice, baseSpec, loanCurrencySpec);
         if (collateralValue < 0)
             return;
 
-        // 真实债务含利息（accumulatedInterest + pending accrue），避免拖债避强平
-        final long realDebt =
-            Math.addExact(loan.outstandingPrincipal, engine.getLoanService().calculateDisplayInterest(loan, nowMs));
+        // 真实债务含利息（已计提 + pending accrue），防拖债避强平
+        final long realDebt = Math.addExact(loan.outstandingPrincipal, loanService.calculateDisplayInterest(loan, ts));
         final long ltvScaled = Math.multiplyExact(realDebt, LoanService.BPS_SCALE);
 
-        // 期限只对 Isolated LOCKED（Fixed）生效；FLOATING 无期限
+        // 期限强平仅对 Isolated LOCKED（定息）生效；FLOATING 无期限
         final boolean termExpired = loan.rateMode == IsolatedLoanRecord.RATE_MODE_LOCKED
-            && spec.loanConfig.maxTermDays > 0 && (nowMs - loan.openedAtTs) > spec.loanConfig.maxTermDays * MS_PER_DAY;
+            && spec.loanConfig.maxTermDays > 0 && (ts - loan.openedAtTs) > spec.loanConfig.maxTermDays * MS_PER_DAY;
 
         if (termExpired || ltvScaled >= Math.multiplyExact(collateralValue, (long)spec.loanConfig.liquidationLtvBps)) {
-            if (!stuckLiqThrottled("isolated", isolated.liqRetryThrottleMs, loan.loanId, loan.stuckLiqAttempts))
-                publishIsolatedForceSell(loan, spec, priceRecord.markPrice, toleranceBpsFor(loan.stuckLiqAttempts),
-                    nowMs);
+            // 抵押 → 下单张数；不足一张的尘埃卖不掉，留在 collateralAmount 跳过本轮。orderId 空间与 futures 强平隔离
+            final long sellSizeLots = LoanService.collateralAmountToLots(loan.collateralAmount, spec, baseSpec);
+            if (sellSizeLots <= 0) {
+                log.warn("Isolated force-sell skip: sub-lot collateral (uid={} loanId={} collateral={})", loan.uid,
+                    loan.loanId, loan.collateralAmount);
+                return;
+            }
+            final long orderId =
+                LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, ts);
+            final long limitPrice =
+                limitPriceWithTolerance(priceRecord.markPrice, toleranceBpsFor(loan.stuckLiqAttempts));
+            commandSubmitter.get()
+                .submit(ApiLoanForceLiquidate.builder().uid(loan.uid).symbol(spec.symbolId).loanId(loan.loanId)
+                    .price(limitPrice).size(sellSizeLots).orderId(orderId).action(OrderAction.ASK)
+                    .orderType(OrderType.IOC).build(), null);
             return;
         }
 
         final int marginCallLtvBps = spec.loanConfig.marginCallLtvBps;
         if (marginCallLtvBps > 0 && ltvScaled >= Math.multiplyExact(collateralValue, (long)marginCallLtvBps)) {
             final long ltvBps = collateralValue == 0 ? 0 : ltvScaled / collateralValue;
-            sendMarginCallIfNotThrottled(isolated, loan.loanId, loan.uid, loan.loanId, LOAN_MODE_ISOLATED,
-                loan.loanCurrency, ltvBps, marginCallLtvBps);
+            sendMarginCall(loan.uid, loan.loanId, LOAN_MODE_ISOLATED, loan.loanCurrency, ltvBps, marginCallLtvBps);
         }
     }
 
-    private void checkCrossLoan(UserProfile userProfile) {
-        if (userProfile.crossLoans.isEmpty() || cross.inFlight.contains(userProfile.uid))
+    private void checkCross(UserProfile userProfile, long ts) {
+        if (userProfile.crossLoans.isEmpty())
             return;
 
-        final LoanService loanService = engine.getLoanService();
-        final long nowMs = System.currentTimeMillis();
-
-        // Cross 恒 Floating → 无期限，只做 LTV 强平/预警；numeraire 未配置时 ltvBps==0 不触发（保守）
-        final long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, nowMs,
-            engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
-            engine.getLastPriceCache(), loanService.getGlobalConfig().numeraireCurrency);
+        // Cross 恒 Floating，无期限，只判账户级 LTV；numeraire 未配则 ltvBps=0，不触发（保守）
+        final long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, ts, symbolSpecificationProvider,
+            currencySpecificationProvider, lastPriceCache, loanService.getGlobalConfig().numeraireCurrency);
 
         if (ltvBps >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
-            publishCrossForceSell(userProfile, loanService, nowMs, null);
+            // 选一对（卖出币, 目标债）出手；单轮只处理一对，靠后续价格事件迭代 deleveraging
+            final int sellingCurrency = pickCrossCollateralToSell(userProfile);
+            if (sellingCurrency == 0) {
+                log.warn("Cross force-sell abort: no collateral to sell (uid={})", userProfile.uid);
+                return;
+            }
+            final CrossLoanRecord targetLoan = pickCrossLoanToRepay(userProfile);
+            if (targetLoan == null) {
+                log.warn("Cross force-sell abort: no target loan (uid={})", userProfile.uid);
+                return;
+            }
+            final CoreSymbolSpecification spec =
+                LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency, symbolSpecificationProvider);
+            if (spec == null) {
+                log.warn("Cross force-sell abort: no spot pair sellingCurrency={} loanCurrency={} (uid={})",
+                    sellingCurrency, targetLoan.loanCurrency, userProfile.uid);
+                return;
+            }
+            final LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
+            if (priceRecord == null || priceRecord.markPrice <= 0) {
+                log.warn("Cross force-sell abort: markPrice not ready for symbol={} (uid={})", spec.symbolId,
+                    userProfile.uid);
+                return;
+            }
+            final long availableCollateral = userProfile.crossLoanCollateral.get(sellingCurrency);
+            final CoreCurrencySpecification sellingCurrencySpec =
+                currencySpecificationProvider.getCurrencySpecification(sellingCurrency);
+            final CoreCurrencySpecification loanCurrencySpec =
+                currencySpecificationProvider.getCurrencySpecification(targetLoan.loanCurrency);
+            final long sellSize = calculateCrossSellSize(targetLoan, spec, priceRecord.markPrice, availableCollateral,
+                ts, loanService, sellingCurrencySpec, loanCurrencySpec);
+            if (sellSize <= 0) {
+                log.warn("Cross force-sell abort: sellSize=0 (uid={} sellingCurrency={} available={})", userProfile.uid,
+                    sellingCurrency, availableCollateral);
+                return;
+            }
+            final long orderId =
+                LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, userProfile.uid, targetLoan.loanId, ts);
+            final long limitPrice =
+                limitPriceWithTolerance(priceRecord.markPrice, toleranceBpsFor(targetLoan.stuckLiqAttempts));
+            commandSubmitter.get()
+                .submit(ApiLoanCrossForceLiquidate.builder().uid(userProfile.uid).symbol(spec.symbolId)
+                    .targetLoanId(targetLoan.loanId).price(limitPrice).size(sellSize).orderId(orderId)
+                    .action(OrderAction.ASK).orderType(OrderType.IOC).build(), null);
         } else if (ltvBps >= loanService.getGlobalConfig().crossMarginCallLtvBps) {
-            // Cross 账户级：loanId=0 / loanCurrency=0（无单笔归属）
-            sendMarginCallIfNotThrottled(cross, userProfile.uid, userProfile.uid, 0L, LOAN_MODE_CROSS, 0, ltvBps,
+            // Cross 账户级预警：loanId / loanCurrency 无单笔归属，填 0
+            sendMarginCall(userProfile.uid, 0L, LOAN_MODE_CROSS, 0, ltvBps,
                 loanService.getGlobalConfig().crossMarginCallLtvBps);
         }
     }
 
-    // ---- Force-sell 构造 + publish ----
-
-    /** 构造 Isolated 强平 IOC 单并 publishTracked；orderId 空间跟 futures 强平隔离。 */
-    private void publishIsolatedForceSell(IsolatedLoanRecord loan, CoreSymbolSpecification spec, long markPrice,
-        long toleranceBps, long currentTickMs) {
-        // 抵押金额 → 下单张数；不足一张的尘埃卖不掉，留在 collateralAmount，跳过本轮
-        CoreCurrencySpecification baseSpec =
-            engine.getCurrencySpecificationProvider().getCurrencySpecification(loan.collateralCurrency);
-        long sellSizeLots = LoanService.collateralAmountToLots(loan.collateralAmount, spec, baseSpec);
-        if (sellSizeLots <= 0) {
-            log.warn("Isolated force-sell skip: sub-lot collateral (uid={} loanId={} collateral={})", loan.uid,
-                loan.loanId, loan.collateralAmount);
-            return;
-        }
-        long orderId =
-            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_ISOLATED, loan.uid, loan.loanId, currentTickMs);
-        long limitPrice = limitPriceWithTolerance(markPrice, toleranceBps);
-        ApiLoanForceLiquidate cmd =
-            ApiLoanForceLiquidate.builder().uid(loan.uid).symbol(spec.symbolId).loanId(loan.loanId).price(limitPrice)
-                .size(sellSizeLots).orderId(orderId).action(OrderAction.ASK).orderType(OrderType.IOC).build();
-        publishTrackedIsolated(cmd, loan.loanId);
+    /** isolated loan 开仓：uid 登记进 symbolId 索引。 */
+    public void onIsolatedLoanOpened(long uid, int symbolId) {
+        isolatedLoanSymbolToUsers.getIfAbsentPut(symbolId, LongHashSet::new).add(uid);
     }
 
-    /**
-     * Cross 强平：选一对 (sellingCurrency, targetLoan) → 算 sellSize → publish；单轮只处理一对，下轮 tick 重估 LTV 迭代
-     * deleveraging。preselectedTarget != null（期限强平）时强平该指定 loan，否则按 tiebreak 选。
-     */
-    private void publishCrossForceSell(UserProfile up, LoanService loanService, long currentTickMs,
-        CrossLoanRecord preselectedTarget) {
-        int sellingCurrency = pickCrossCollateralToSell(up);
-        if (sellingCurrency == 0) {
-            log.warn("Cross force-sell abort: no collateral to sell (uid={})", up.uid);
+    /** isolated loan 清空：uid 在该 symbolId 上已无其它非空 loan 时才摘除（一 uid 可持多笔同 symbol）。 */
+    public void onIsolatedLoanClosed(UserProfile up, int symbolId) {
+        final boolean holdsOther = up.isolatedLoans.anySatisfy(l -> !l.isEmpty() && l.symbolId == symbolId);
+        if (holdsOther) {
             return;
         }
-        CrossLoanRecord targetLoan = preselectedTarget != null ? preselectedTarget : pickCrossLoanToRepay(up);
-        if (targetLoan == null) {
-            log.warn("Cross force-sell abort: no target loan (uid={})", up.uid);
-            return;
+        final MutableLongSet s = isolatedLoanSymbolToUsers.get(symbolId);
+        if (s != null) {
+            s.remove(up.uid);
+            if (s.isEmpty()) {
+                isolatedLoanSymbolToUsers.remove(symbolId);
+            }
         }
-        CoreSymbolSpecification spec =
-            LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency, engine.getSymbolSpecificationProvider());
-        if (spec == null) {
-            log.warn("Cross force-sell abort: no spot pair sellingCurrency={} loanCurrency={} (uid={})",
-                sellingCurrency, targetLoan.loanCurrency, up.uid);
-            return;
-        }
-        LastPriceCacheRecord priceRecord = engine.getLastPriceCache().get(spec.symbolId);
-        if (priceRecord == null || priceRecord.markPrice <= 0) {
-            log.warn("Cross force-sell abort: markPrice not ready for symbol={} (uid={})", spec.symbolId, up.uid);
-            return;
-        }
-        long availableCollateral = up.crossLoanCollateral.get(sellingCurrency);
-        CoreCurrencySpecification sellingCurrencySpec =
-            engine.getCurrencySpecificationProvider().getCurrencySpecification(sellingCurrency);
-        CoreCurrencySpecification loanCurrencySpec =
-            engine.getCurrencySpecificationProvider().getCurrencySpecification(targetLoan.loanCurrency);
-        long sellSize = calculateCrossSellSize(targetLoan, spec, priceRecord.markPrice, availableCollateral,
-            currentTickMs, loanService, sellingCurrencySpec, loanCurrencySpec);
-        if (sellSize <= 0) {
-            log.warn("Cross force-sell abort: sellSize=0 (uid={} sellingCurrency={} available={})", up.uid,
-                sellingCurrency, availableCollateral);
-            return;
-        }
-        if (stuckLiqThrottled("cross", cross.liqRetryThrottleMs, up.uid, targetLoan.stuckLiqAttempts))
-            return;
-        long orderId =
-            LoanService.forceSellOrderId(LoanService.ORDERID_SUBTYPE_CROSS, up.uid, targetLoan.loanId, currentTickMs);
-        long limitPrice = limitPriceWithTolerance(priceRecord.markPrice, toleranceBpsFor(targetLoan.stuckLiqAttempts));
-        ApiLoanCrossForceLiquidate cmd = ApiLoanCrossForceLiquidate.builder().uid(up.uid).symbol(spec.symbolId)
-            .targetLoanId(targetLoan.loanId).price(limitPrice).size(sellSize).orderId(orderId).action(OrderAction.ASK)
-            .orderType(OrderType.IOC).build();
-        publishTrackedCross(cmd, up.uid);
     }
 
-    // ---- Cross 选卖出币 / 选还款笔 / 定量 ----
+    /** cross 敞口变更后 reconcile 索引：登记当前敞口币种（抵押&gt;0 或有借款）；账户全退出则从各币种桶摘除。 */
+    public void syncCrossExposure(UserProfile up) {
+        up.crossLoanCollateral.forEachKeyValue((currency, amount) -> {
+            if (amount > 0) {
+                crossLoanCurrencyToUsers.getIfAbsentPut(currency, LongHashSet::new).add(up.uid);
+            }
+        });
+        up.crossLoans.forEachValue(loan -> {
+            if (!loan.isEmpty()) {
+                crossLoanCurrencyToUsers.getIfAbsentPut(loan.loanCurrency, LongHashSet::new).add(up.uid);
+            }
+        });
+        // 部分币种退出容忍 stale（无害 over-trigger，下次 rebuild 清）；仅账户全退出才精确摘除
+        final boolean hasLoan = up.crossLoans.anySatisfy(l -> !l.isEmpty());
+        final boolean hasCollateral = up.crossLoanCollateral.anySatisfy(a -> a > 0);
+        if (!hasLoan && !hasCollateral) {
+            for (int currency : crossLoanCurrencyToUsers.keySet().toArray()) {
+                final MutableLongSet s = crossLoanCurrencyToUsers.get(currency);
+                if (s != null) {
+                    s.remove(up.uid);
+                    if (s.isEmpty()) {
+                        crossLoanCurrencyToUsers.remove(currency);
+                    }
+                }
+            }
+        }
+    }
 
-    /** 选卖出抵押币：weight DESC / amount DESC / currency ASC。返回 0 表示无可卖抵押。 */
+    /** 选卖出抵押币：权重 DESC → 数量 DESC → 币种 ASC；返回 0 表示无可卖抵押。 */
     private int pickCrossCollateralToSell(UserProfile up) {
         int bestCurrency = 0;
         int bestWeight = -1;
@@ -215,7 +308,7 @@ public final class LoanLiquidationEngine {
             long amount = up.crossLoanCollateral.get(currency);
             if (amount <= 0)
                 continue;
-            int weight = LoanService.collateralWeightForBase(currency, engine.getSymbolSpecificationProvider());
+            int weight = LoanService.collateralWeightForBase(currency, symbolSpecificationProvider);
             if (weight <= 0)
                 continue;
             if (weight > bestWeight || (weight == bestWeight && amount > bestAmount)
@@ -228,7 +321,7 @@ public final class LoanLiquidationEngine {
         return bestCurrency;
     }
 
-    /** 选偿还目标 loan：rate DESC / principal DESC / loanId ASC。返回 null 表示无 loan 可偿。 */
+    /** 选偿还目标 loan：利率 DESC → 本金 DESC → loanId ASC；返回 null 表示无未偿 loan。 */
     private CrossLoanRecord pickCrossLoanToRepay(UserProfile up) {
         CrossLoanRecord best = null;
         for (CrossLoanRecord loan : up.crossLoans) {
@@ -244,7 +337,7 @@ public final class LoanLiquidationEngine {
         return best;
     }
 
-    /** 卖多少（下单张数）：覆盖真实债务 + 5% buffer（fee + tolerance 冗余），封顶 available（都换算成 lot 后取小）。 */
+    /** 下单张数 = min(可卖抵押, 覆盖真实债务 + 5% buffer 所需)（均换算成 lot）。buffer 覆盖 fee + 限价容差冗余。 */
     private long calculateCrossSellSize(CrossLoanRecord targetLoan, CoreSymbolSpecification spec, long markPrice,
         long available, long now, LoanService loanService, CoreCurrencySpecification sellingCurrencySpec,
         CoreCurrencySpecification loanCurrencySpec) {
@@ -258,55 +351,13 @@ public final class LoanLiquidationEngine {
         return Math.min(availableLots, neededLots);
     }
 
-    // ---- Margin call 通知 + 节流 ----
-
-    // 两 lane 共用：throttleKey = loanId(Isolated) / uid(Cross)；走 leader-local ring-buffer bypass raft，best-effort。
-    private void sendMarginCallIfNotThrottled(LaneState lane, long throttleKey, long uid, long loanId, byte mode,
-        int loanCurrency, long ltvBps, long thresholdBps) {
-        long nowMs = System.currentTimeMillis();
-        if (nowMs - lane.marginCallThrottleMs.get(throttleKey) < MARGIN_CALL_THROTTLE_MS)
-            return;
-        lane.marginCallThrottleMs.put(throttleKey, nowMs);
-        FundEvent event =
-            engine.getEventsHelper().sendLoanMarginCallEvent(uid, loanId, mode, loanCurrency, ltvBps, thresholdBps);
-        engine.getCommandSubmitter().submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(),
-            null);
+    /** 越预警线通知：走 leader-local ringbuffer、bypass raft 的 best-effort 事件；去重/限流由下游消费方负责。 */
+    private void sendMarginCall(long uid, long loanId, byte mode, int loanCurrency, long ltvBps, long thresholdBps) {
+        FundEvent event = eventsHelper.sendLoanMarginCallEvent(uid, loanId, mode, loanCurrency, ltvBps, thresholdBps);
+        commandSubmitter.get().submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
     }
 
-    // ---- In-flight 去重 + publish ----
-
-    public boolean isIsolatedLoanInFlight(long loanId) {
-        return isolated.inFlight.contains(loanId);
-    }
-
-    public boolean isCrossLoanInFlight(long uid) {
-        return cross.inFlight.contains(uid);
-    }
-
-    /** Isolated force-sell publish 追踪：in-flight set keyed by loanId。 */
-    public void publishTrackedIsolated(ApiCommand cmd, long loanId) {
-        publishTracked(isolated, cmd, loanId);
-    }
-
-    /** Cross force-sell publish 追踪：in-flight set keyed by uid（Cross 一账户一 pending）。 */
-    public void publishTrackedCross(ApiCommand cmd, long uid) {
-        publishTracked(cross, cmd, uid);
-    }
-
-    // 两 lane 共用：key 进 in-flight，publish 的 onApplied 回调清掉（异常路径也清，避免死值）。
-    private void publishTracked(LaneState lane, ApiCommand cmd, long key) {
-        lane.inFlight.add(key);
-        try {
-            engine.getCommandSubmitter().submit(cmd, () -> lane.inFlight.remove(key));
-        } catch (Throwable t) {
-            lane.inFlight.remove(key);
-            throw t;
-        }
-    }
-
-    // ---- 小工具 ----
-
-    /** 容差爬梯：卡单越多限价容差越宽（吃更深档位）。&lt; 3 次 → 1%，&lt; 6 次 → 2%，否则 5%（封顶）。 */
+    /** 卡单容差爬梯：越卡限价越松以吃更深档位。&lt;3 次 1% / &lt;6 次 2% / 否则 5%（封顶）。 */
     private static long toleranceBpsFor(int stuckLiqAttempts) {
         if (stuckLiqAttempts >= 6)
             return 500L;
@@ -315,21 +366,7 @@ public final class LoanLiquidationEngine {
         return 100L;
     }
 
-    /** 卡单节流 + 告警（两 lane 共用）：30s 内已重发过则跳过（避免刷 raft）；连续零成交 ≥ 10 次告警（多半空盘）。 */
-    private static boolean stuckLiqThrottled(String lane, LongLongHashMap lastLiqMs, long key, int stuckAttempts) {
-        if (stuckAttempts == 0)
-            return false;
-        long nowMs = System.currentTimeMillis();
-        if (nowMs - lastLiqMs.get(key) < 30_000L)
-            return true;
-        if (stuckAttempts >= 10)
-            log.warn("Loan liquidation STUCK: lane={} key={} attempts={} (likely no liquidity)", lane, key,
-                stuckAttempts);
-        lastLiqMs.put(key, nowMs);
-        return false;
-    }
-
-    /** 限价 = markPrice × (10000 − toleranceBps) / 10000。 */
+    /** 卖出限价 = markPrice × (1 − toleranceBps/10000)。 */
     private static long limitPriceWithTolerance(long markPrice, long toleranceBps) {
         return Math.multiplyExact(markPrice, 10000L - toleranceBps) / 10000L;
     }

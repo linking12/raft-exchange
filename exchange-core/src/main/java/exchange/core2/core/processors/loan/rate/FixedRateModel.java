@@ -25,14 +25,16 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 定期利率实现（Fixed / Lock），仅适用 Isolated LOCKED：开仓锁定 {@link FloatingRateModel} 当前利率 + 点差，之后不变，走线性计息。 独有状态只有
- * {@code lockedRateAdjustBps}，利率来源从 floating 引擎读。见 loan.md §13。
+ * 定期利率模型（Fixed/Lock），仅用于 Isolated LOCKED：开仓时锁定 {@link FloatingRateModel} 当前利率 + 点差，
+ * 此后利率不再变化，按固定利率线性计息。
+ *
+ * <p>唯一自有状态是 {@code lockedRateAdjustBps}（点差），利率基准仍读 floating 引擎的曲线值。见 loan.md §13。
  */
 @Getter
 @Setter
 public final class FixedRateModel implements WriteBytesMarshallable, StateHash {
     private final FloatingRateModel floating;
-    private int lockedRateAdjustBps; // 相对曲线的加/减价（bps），默认 0 = 与 Floating 同价
+    private int lockedRateAdjustBps; // 相对 floating 曲线的加/减价（bps），默认 0 = 与 floating 同价
 
     public FixedRateModel(FloatingRateModel floating) {
         this.floating = floating;
@@ -44,21 +46,20 @@ public final class FixedRateModel implements WriteBytesMarshallable, StateHash {
         this.lockedRateAdjustBps = bytes.readInt();
     }
 
-    /** 开仓利率 = floating 当前利率（未 reprice 回退 base）+ lockedRateAdjustBps，下限 0。锁进 loan.rateBps。 */
+    /** 开仓利率 = floating 当前利率（未 reprice 过则回退 base）+ lockedRateAdjustBps，下限 0；结果固化进 loan.rateBps，此后不再随 floating 变化。 */
     public int openRateBps(int loanCurrency) {
-        return (int)Math.max(0L, (long)floating.currentRateBpsOrBase(loanCurrency) + lockedRateAdjustBps);
+        long adjustedRateBps = (long)floating.currentRateBpsOrBase(loanCurrency) + lockedRateAdjustBps;
+        return (int)Math.max(0L, adjustedRateBps);
     }
 
-    // ---- 线性计息（利率恒 loan.rateBps）----
-
-    /** 写路径：补计利息到 now，推进 lastAccrueTs；返回本次新增利息（≥ 0）。 */
+    /** 写路径：按 loan.rateBps 补计利息到 now，推进 lastAccrueTs；返回本次新增利息（≥ 0）。 */
     public long accrue(LoanRecord loan, long now) {
         long delta = accrueDelta(loan.getOutstandingPrincipal(), loan.getRateBps(), loan.getLastAccrueTs(), now);
         if (delta > 0) {
             loan.setAccumulatedInterest(Math.addExact(loan.getAccumulatedInterest(), delta));
         }
-        // 只在"已计息(delta>0)"或"本就不可能计息(无本金/免息)"时推进游标。有本金有利率却因截断得 0 时保留游标，
-        // 让被截断的 elapsed 继续累积到跨过精度阈值再计——否则高频 accrue(如反复 REPAY)会把每段亚阈值利息永久吞掉(F1)。
+        // 只在“已计息(delta>0)”或“本就不可能计息(无本金/免息)”时推进游标；有本金有利率却因截断得 0 时保留游标，
+        // 让被截断的 elapsed 继续累积到跨过精度阈值再计——否则高频 accrue（如反复 REPAY）会把每段亚阈值利息永久吞掉（F1）。
         if (now > loan.getLastAccrueTs()
             && (delta > 0 || loan.getOutstandingPrincipal() <= 0 || loan.getRateBps() <= 0)) {
             loan.setLastAccrueTs(now);
@@ -80,8 +81,9 @@ public final class FixedRateModel implements WriteBytesMarshallable, StateHash {
         if (elapsed <= 0) {
             return 0L;
         }
-        long step1 = CoreArithmeticUtils.truncMulDiv(elapsed, outstandingPrincipal, LoanService.YEAR_MS);
-        return CoreArithmeticUtils.truncMulDiv(step1, rateBps, LoanService.BPS_SCALE);
+        // 分两步 truncMulDiv：先 elapsed×principal/YEAR_MS 再 ×rateBps/BPS_SCALE，避免中间值溢出
+        long interestBase = CoreArithmeticUtils.truncMulDiv(elapsed, outstandingPrincipal, LoanService.YEAR_MS);
+        return CoreArithmeticUtils.truncMulDiv(interestBase, rateBps, LoanService.BPS_SCALE);
     }
 
     public void reset() {

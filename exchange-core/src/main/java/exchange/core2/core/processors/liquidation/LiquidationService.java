@@ -34,29 +34,22 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
  * <ul>
  * <li><b>IF 保险基金池状态</b>：notionals（available / reserved）+ IF 接管的 positions。
  * 经 {@link WriteBytesMarshallable} 序列化进 raft snapshot，跨节点强一致。</li>
- * <li><b>强平命令 orderId 编码</b>：FORCE 是根，IF / ADL 从它派生；位布局见下方常量区注释。</li>
+ * <li><b>强平命令 orderId 编码</b>：FORCE 是根，IF / ADL 从它派生，位布局见 {@link #isLiquidationOrderId} 前的说明。</li>
  * <li><b>ADL 候选构造</b>：{@link #computeProfitablePositionsBySymbol} 在 apply 时按需从复制态
- * （{@link #userProfileService} / {@link #lastPriceCache}）计算，跨节点确定；评分 {@link #riskScore} /
- * {@link #unrealizedPnl} 供排序用。</li>
+ * （{@link #userProfileService} / {@link #lastPriceCache}）计算，跨节点确定；评分见 {@link #riskScore} /
+ * {@link #unrealizedPnl}。</li>
  * </ul>
  * <p>
- * 字段分两类：<b>序列化状态</b>（{@code final}、进 snapshot）{@code notionals} / {@code positions}；
- * <b>注入依赖</b>（{@link #updateProvider} 注入，不进 snapshot）providers + {@code userProfileService} +
- * {@code lastPriceCache}。
+ * {@code notionals} / {@code positions} 是序列化状态（进 snapshot）；providers、userProfileService、
+ * lastPriceCache 是 {@link #updateProvider} 注入的依赖，不进 snapshot。
  */
 public class LiquidationService implements WriteBytesMarshallable, StateHash {
 
-    // ===== 序列化状态（进 raft snapshot） =====
-
-    // symbol -> IF 名义资金（available / reserved）
     @Getter
-    private final IntObjectHashMap<IFNotional> notionals;
+    private final IntObjectHashMap<IFNotional> notionals; // symbol -> IF 名义资金（available / reserved）
 
-    // key = direction.multiplier * symbol：+symbol 为多头仓，-symbol 为空头仓
     @Getter
-    private final IntObjectHashMap<IFPositionRecord> positions;
-
-    // ===== 注入依赖（不进 snapshot，由 updateProvider 注入） =====
+    private final IntObjectHashMap<IFPositionRecord> positions; // key = direction.multiplier * symbol：+symbol 多头仓，-symbol 空头仓
 
     private UserProfileService userProfileService;
     private SymbolSpecificationProvider symbolSpecificationProvider;
@@ -83,31 +76,29 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         this.lastPriceCache = lastPriceCache;
     }
 
-    // ============================================================================
-    // IF 资金池操作
-    // ============================================================================
-
-    /** 将强平手续费计入 IF 可用资金池。 */
+    /** 强平手续费计入 IF 可用资金池。 */
     public void creditLiquidationFee(int symbol, long notionalFee) {
-        IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
+        final IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
         notional.available += notionalFee;
     }
 
     /**
-     * 外部充值 IF 可用资金池（admin 触发）。 入参已是 notional (size*price) 尺度，scale 换算由 RiskEngine 完成。 对账闭环依赖 RiskEngine 同一条命令内对
-     * adjustments 做反向记账。
+     * 外部充值 IF 可用资金池（admin 触发）。入参已是 notional（size*price）尺度，scale 换算由 RiskEngine 完成。
+     * 对账闭环依赖 RiskEngine 在同一条命令内对 adjustments 做反向记账。
      */
     public void depositToInsuranceFund(int symbol, long notionalAmount) {
-        IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
+        final IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
         notional.available += notionalAmount;
     }
 
     /**
-     * IF_WITHDRAW 支持：从 available 扣，含非负校验。只扣 available，不动 reserved （reserved 是正在保护某笔强平的预冻结部分，运营不能拿走）。 返回 true =
-     * 扣账成功，false = notional 不存在或 available 不足以覆盖。
+     * IF_WITHDRAW 支持：从 available 扣款，含非负校验。只扣 available、不动 reserved（reserved 是正在保护某笔强平的
+     * 预冻结部分，运营不能拿走）。
+     *
+     * @return true = 扣账成功；false = notional 不存在或 available 不足以覆盖。
      */
     public boolean withdrawFromInsuranceFund(int symbol, long notionalAmount) {
-        IFNotional notional = notionals.get(symbol);
+        final IFNotional notional = notionals.get(symbol);
         if (notional == null || notional.available < notionalAmount) {
             return false;
         }
@@ -115,33 +106,34 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         return true;
     }
 
-    /** R1：预冻结 IF 可用名义金额。 */
+    /** R1：预冻结 IF 可用名义金额，返回实际能冻结的量（可能小于请求量）。 */
     public long reserveIFNotional(int symbol, long requestSize, long price) {
-        IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
-        long available = notional.available - notional.reserved;
-        long needed = Math.multiplyExact(requestSize, price);
-        long canCover = Math.min(available, needed);
+        final IFNotional notional = notionals.getIfAbsentPut(symbol, () -> new IFNotional(0, 0));
+        final long available = notional.available - notional.reserved;
+        final long needed = Math.multiplyExact(requestSize, price);
+        final long canCover = Math.min(available, needed);
         notional.reserved += canCover;
         return canCover;
     }
 
     /** R2：释放 R1 预冻结的名义金额。 */
     public void releaseReservedIFNotional(int symbol, long reservedNotional) {
-        IFNotional notional = notionals.get(symbol);
+        final IFNotional notional = notionals.get(symbol);
         notional.reserved -= reservedNotional;
     }
 
-    /** R2：IF 接管仓位。 */
+    /** R2：IF 正式接管仓位——从 available 扣款，累加到该 symbol+方向 的持仓量与成本。 */
     public void acceptIFPosition(int symbol, PositionDirection direction, long size, long price) {
-        IFNotional notional = notionals.get(symbol);
-        long spend = Math.multiplyExact(size, price);
+        final IFNotional notional = notionals.get(symbol);
+        final long spend = Math.multiplyExact(size, price);
         notional.available -= spend;
-        IFPositionRecord position = positions.getIfAbsentPut(direction.getMultiplier() * symbol,
+        final IFPositionRecord position = positions.getIfAbsentPut(direction.getMultiplier() * symbol,
             () -> new IFPositionRecord(symbol, direction, 0, 0));
         position.openVolume += size;
         position.openPriceSum += spend;
     }
 
+    /** 清空全部 IF 状态（测试/重建用）。 */
     public void reset() {
         notionals.clear();
         positions.clear();
@@ -158,65 +150,65 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         SerializationUtils.marshallIntHashMap(positions, bytes);
     }
 
-    // ============================================================================
-    // 强平命令 orderId 编码。FORCE 是根，IF / ADL 从它派生（保留低 56 位以便审计回溯）。
-    //
-    // FORCE_LIQUIDATION (generateLiquidationOrderId)，64 位布局：
-    //   bit 63..32 : symbol       (高 32)
-    //   bit 31..12 : uid hash     (20 bit)
-    //   bit 11     : side bit     (LONG=0 / SHORT=1；HEDGE 下同 symbol 同 uid 同秒两侧防撞)
-    //   bit 10..0  : 秒级 ts      (11 bit ≈ 2048s ≈ 34min 内 (symbol,uid,side) 唯一)
-    //
-    // IF_TAKEOVER  (generateIFOrderId)  : 'I' 0x49 << 56 | FORCE 低 56 位
-    // AUTO_DELEVERAGING (generateADLOrderId) : 'A' 0x41 << 56 | FORCE 低 56 位
-    //   两者完全对称：高 8 位是标签，低 56 位 ≡ 对应 FORCE 的低 56 位。
-    //
-    // 注意：派生丢弃 FORCE 高 8 位的 symbol。symbol < 2^24 (≈16M) 时无损，实际场景成立。
-    // ============================================================================
-
+    /**
+     * 强平命令 orderId 编码：FORCE 是根，IF / ADL 从它派生（保留低 56 位以便审计回溯）。
+     *
+     * <p>
+     * FORCE_LIQUIDATION（{@link #generateLiquidationOrderId}），64 位布局：
+     *
+     * <pre>
+     * bit 63..32 : symbol    (高 32 位)
+     * bit 31..12 : uid hash  (20 bit)
+     * bit 11     : side bit  (LONG=0 / SHORT=1；HEDGE 下同 symbol 同 uid 同秒两侧防撞)
+     * bit 10..0  : 秒级 ts   (11 bit ≈ 2048s ≈ 34min 内 (symbol,uid,side) 唯一)
+     * </pre>
+     *
+     * <p>
+     * IF_TAKEOVER（{@link #generateIFOrderId}）与 AUTO_DELEVERAGING（{@link #generateADLOrderId}）完全对称：
+     * 高 8 位是标签（{@code 'I'} / {@code 'A'}），低 56 位 ≡ 对应 FORCE 的低 56 位。
+     *
+     * <p>
+     * 注意：派生会丢弃 FORCE 高 8 位的 symbol；symbol &lt; 2^24（≈16M）时无损，实际场景成立。
+     */
     public static boolean isLiquidationOrderId(long orderId, int symbol, long uid) {
-        long expectedSymbol = (orderId >>> 32); // 高 32 位
+        final long expectedSymbol = (orderId >>> 32); // 高 32 位
         if (expectedSymbol != symbol)
             return false;
-        long expectedUidHash = (uid * 31 + 17) & 0xFFFFF;
-        long actualUidHash = (orderId >>> 12) & 0xFFFFF; // bit 12-31
+        final long expectedUidHash = (uid * 31 + 17) & 0xFFFFF;
+        final long actualUidHash = (orderId >>> 12) & 0xFFFFF; // bit 12-31
         return expectedUidHash == actualUidHash;
     }
 
     public static long generateLiquidationOrderId(SymbolPositionRecord pos) {
-        long uidHash = (pos.uid * 31 + 17) & 0xFFFFF; // 20 bit
-        long sideBit = (pos.direction == PositionDirection.SHORT) ? 1L : 0L;
-        long tsPart = (System.currentTimeMillis() / 1000) & 0x7FF; // 11 bit
+        final long uidHash = (pos.uid * 31 + 17) & 0xFFFFF; // 20 bit
+        final long sideBit = (pos.direction == PositionDirection.SHORT) ? 1L : 0L;
+        final long tsPart = (System.currentTimeMillis() / 1000) & 0x7FF; // 11 bit
         return ((long)pos.symbol << 32) | (uidHash << 12) | (sideBit << 11) | tsPart;
     }
 
     public static long generateIFOrderId(long liquidationOrderId) {
-        long ifOrderTag = 0x49L; // 'I'
+        final long ifOrderTag = 0x49L; // 'I'
         return (ifOrderTag << 56) | (liquidationOrderId & 0x00FFFFFFFFFFFFFFL);
     }
 
     public static long generateADLOrderId(long liquidationOrderId) {
-        long adlOrderTag = 0x41L; // 'A'
+        final long adlOrderTag = 0x41L; // 'A'
         return (adlOrderTag << 56) | (liquidationOrderId & 0x00FFFFFFFFFFFFFFL);
     }
 
-    // ============================================================================
-    // ADL 评分（静态纯函数，供候选排序用）
-    // ============================================================================
-
-    /** 按破产价估算浮动盈亏。饱和乘法防止溢出翻转符号（见 {@link #saturatingMultiply}）。 */
+    /** 按破产价估算浮动盈亏（ADL 排序用，静态纯函数）。饱和乘法防止溢出翻转符号，见 {@link #saturatingMultiply}。 */
     public static long unrealizedPnl(SymbolPositionRecord pos, long bankruptcyPrice) {
-        int sign = pos.direction.getMultiplier();
-        long notional = saturatingMultiply(bankruptcyPrice, pos.openVolume);
+        final int sign = pos.direction.getMultiplier();
+        final long notional = saturatingMultiply(bankruptcyPrice, pos.openVolume);
         return saturatingMultiply((long)sign, notional - pos.openPriceSum);
     }
 
     /** ADL 排序键：浮盈 × 实际杠杆 × 资格因子，越大越优先被摊派。全程饱和乘法。 */
     public static long riskScore(SymbolPositionRecord pos, long bankruptcyPrice) {
-        int sign = pos.direction.getMultiplier();
-        long notional = saturatingMultiply(bankruptcyPrice, pos.openVolume);
-        long unrealizedPnl = saturatingMultiply((long)sign, notional - pos.openPriceSum);
-        long actualLeverage = pos.openPriceSum / pos.openInitMarginSum;
+        final int sign = pos.direction.getMultiplier();
+        final long notional = saturatingMultiply(bankruptcyPrice, pos.openVolume);
+        final long unrealizedPnl = saturatingMultiply((long)sign, notional - pos.openPriceSum);
+        final long actualLeverage = pos.openPriceSum / pos.openInitMarginSum;
         return saturatingMultiply(saturatingMultiply(actualLeverage, unrealizedPnl), pos.adlEligibility);
     }
 
@@ -232,10 +224,6 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         }
     }
 
-    // ============================================================================
-    // ADL 候选构造（R1 ADL apply 时调用）
-    // ============================================================================
-
     /**
      * ADL 候选构造：apply 时按需算出本 shard 全部可被 ADL 摊派的仓位（symbol → list）。
      * <p>
@@ -244,15 +232,15 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
      * raft 复制态（{@code userProfileService} / {@code lastPriceCache}）现算，保证跨节点确定。
      */
     public IntObjectHashMap<MutableList<SymbolPositionRecord>> computeProfitablePositionsBySymbol() {
-        IntObjectHashMap<MutableList<SymbolPositionRecord>> result = IntObjectHashMap.newMap();
+        final IntObjectHashMap<MutableList<SymbolPositionRecord>> result = IntObjectHashMap.newMap();
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
             if (userProfile == null)
                 return;
-            IntObjectHashMap<List<SymbolPositionRecord>> crossByCurrency = IntObjectHashMap.newMap();
+            final IntObjectHashMap<List<SymbolPositionRecord>> crossByCurrency = IntObjectHashMap.newMap();
             userProfile.positions.forEachValue(position -> {
                 if (position == null || position.openVolume == 0)
                     return;
-                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 if (spec == null || !SymbolType.isFuturesContract(spec.type))
                     return;
                 if (lastPriceCache.get(position.symbol) == null)
@@ -272,7 +260,7 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * Cross 用户单 currency 的 ADL 候选构造——聚合 + 用户级 gating + factor + 入选 + 写 adlEligibility 一次性完成。
+     * Cross 用户单 currency 的 ADL 候选构造——聚合 + 用户级 gating + factor + 入选一次性完成。
      *
      * <p>
      * Gating（账户必须足够安全且净盈利才有资格被 ADL 吃）：
@@ -282,34 +270,34 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
      * </ul>
      *
      * <p>
-     * factor 语义：账户离强平线越远 factor 越大，ADL 排序时优先被吃。clamp 到 [0, 100]。
+     * factor 语义：账户离强平线越远 factor 越大，ADL 排序时越优先被吃；clamp 到 [0, 100]。
      */
     private void addCrossPositionsIfUserSafe(UserProfile userProfile, int currency, List<SymbolPositionRecord> records,
         IntObjectHashMap<MutableList<SymbolPositionRecord>> out) {
-        // ===== 1. 聚合本 currency 下 totalProfit + totalMaintenance（已 currency-scale 化）=====
-        CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
+        // 聚合本 currency 下 totalProfit + totalMaintenance（已换算成 currency scale）
+        final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
         long totalProfit = 0;
         long totalMaintenance = 0;
         for (SymbolPositionRecord position : records) {
-            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-            LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-            long m = position.calculateMaintenanceMargin(spec, priceRecord);
-            if (m == 0)
+            final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+            final LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
+            final long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
+            if (maintenance == 0)
                 continue;
-            long p = position.estimatePnl(priceRecord);
-            totalProfit += CoreArithmeticUtils.sizePriceToCurrencyScale(p, spec, currencySpec);
-            totalMaintenance += CoreArithmeticUtils.sizePriceToCurrencyScale(m, spec, currencySpec);
+            final long pnl = position.estimatePnl(priceRecord);
+            totalProfit += CoreArithmeticUtils.sizePriceToCurrencyScale(pnl, spec, currencySpec);
+            totalMaintenance += CoreArithmeticUtils.sizePriceToCurrencyScale(maintenance, spec, currencySpec);
         }
-        // ===== 2. 用户级 gating =====
+        // 用户级 gating
         if (totalMaintenance <= 0 || totalProfit <= 0)
             return;
-        long balance = userProfile.accounts.get(currency) - userProfile.exchangeLocked.get(currency);
-        long equity = balance + totalProfit;
-        long warningThreshold = Math.multiplyExact(totalMaintenance, 6) / 5;
+        final long balance = userProfile.accounts.get(currency) - userProfile.exchangeLocked.get(currency);
+        final long equity = balance + totalProfit;
+        final long warningThreshold = Math.multiplyExact(totalMaintenance, 6) / 5;
         if (equity < warningThreshold)
             return;
-        // ===== 3. factor + 入选 =====
-        long factor = Math.max(0, Math.min(Math.multiplyExact(equity - totalMaintenance, 100) / totalMaintenance, 100));
+        // factor + 入选
+        final long factor = Math.max(0, Math.min(Math.multiplyExact(equity - totalMaintenance, 100) / totalMaintenance, 100));
         for (SymbolPositionRecord position : records) {
             if (addProfitablePosition(position, out)) {
                 position.adlEligibility = factor;
@@ -318,12 +306,12 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     }
 
     /**
-     * 单仓位入选原语（ISOLATED 直接调，CROSS 在 user-level gating 之后逐仓调）—— 按 mark price 判一个仓位是否盈利，盈利则加入 {@code out}，并把"是否加入"通过返回值告诉
-     * caller。
+     * 单仓位入选原语（ISOLATED 直接调，CROSS 在用户级 gating 之后逐仓调）——按 mark price 判该仓位是否盈利，
+     * 盈利则加入 {@code out}，返回值告知调用方是否加入（供 CROSS 分支据此写 adlEligibility）。
      */
     private boolean addProfitablePosition(SymbolPositionRecord position,
         IntObjectHashMap<MutableList<SymbolPositionRecord>> out) {
-        LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
+        final LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
         if (priceRecord == null)
             return false;
         if (position.estimateUnrealizedProfit(priceRecord) <= 0)
@@ -332,10 +320,7 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         return true;
     }
 
-    // ============================================================================
-    // 嵌套数据类型
-    // ============================================================================
-
+    /** IF 单 symbol 名义资金：available 可动用，reserved 是强平流程中的预冻结部分。 */
     @AllArgsConstructor
     public static final class IFNotional implements WriteBytesMarshallable, StateHash {
         public long available;
@@ -358,6 +343,7 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         }
     }
 
+    /** IF 接管仓位：某 symbol+方向 累计接管的持仓量与开仓成本（反向出清估值用）。 */
     @AllArgsConstructor
     public static final class IFPositionRecord implements WriteBytesMarshallable, StateHash {
         public int symbol;

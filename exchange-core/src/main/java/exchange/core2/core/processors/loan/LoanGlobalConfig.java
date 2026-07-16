@@ -20,34 +20,29 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 现货借贷全局（per-shard 单例）运行时配置：Cross 强平线 / 预警线、池利用率上限、强平费率、numeraire。进 raft snapshot、跨 shard 独立， 仅 {@code ADD_LOAN} 命令逐字段
- * partial-update 改写（见 loan.md §11）。
+ * 现货借贷全局（per-shard 单例）运行时配置：Cross 强平线/预警线、借贷池利用率上限、强平费率、numeraire 基准币。
+ *
+ * <p>进 raft snapshot，各 shard 独立维护一份；仅 {@code ADD_LOAN} 命令按字段逐个 partial-update 改写（见 loan.md §11）。
  */
 public final class LoanGlobalConfig implements WriteBytesMarshallable, StateHash {
     public static final int DEFAULT_CROSS_LIQUIDATION_LTV_BPS = 8500; // 85%
     public static final int DEFAULT_CROSS_MARGIN_CALL_LTV_BPS = 8000; // 80%
     public static final int DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS = 9000; // 90%
     public static final int DEFAULT_LOAN_LIQUIDATION_FEE_BPS = 200; // 2%
-    public static final int DEFAULT_LTV_LIQUIDATION_BUFFER_BPS = 2000; // 20% initial→liquidation
-    public static final int DEFAULT_LTV_MARGIN_CALL_BUFFER_BPS = 1000; // 10% liquidation→marginCall
-    public static final int NUMERAIRE_UNSET = 0; // numeraire 未配置的 sentinel
+    public static final int DEFAULT_LTV_LIQUIDATION_BUFFER_BPS = 2000; // 20%，initial→liquidation 缓冲
+    public static final int DEFAULT_LTV_MARGIN_CALL_BUFFER_BPS = 1000; // 10%，liquidation→marginCall 缓冲
+    public static final int NUMERAIRE_UNSET = 0; // numeraire 未配置的 sentinel 值
 
-    public int numeraireCurrency; // Cross 估值基准币；NUMERAIRE_UNSET(0)=未配 → Cross BORROW/WITHDRAW fail-close、scanner 跳过
-    public int crossLiquidationLtvBps; // Cross 账户级强平线（bps）
-    public int crossMarginCallLtvBps; // Cross 账户级预警线（bps）
-    public int loanPoolUtilizationCapBps; // 借贷池利用率上限（bps）
-    public int loanLiquidationFeeBps; // 强平专项费率（bps）
-    public int ltvLiquidationBufferBps; // Symbol 派生:liquidation = initial + 本值
-    public int ltvMarginCallBufferBps;  // Symbol 派生:marginCall = liquidation − 本值
+    public int numeraireCurrency; // Cross 估值基准币；未配（NUMERAIRE_UNSET）时 Cross BORROW/WITHDRAW fail-close、scanner 跳过
+    public int crossLiquidationLtvBps; // Cross 账户级强平线
+    public int crossMarginCallLtvBps; // Cross 账户级预警线
+    public int loanPoolUtilizationCapBps; // 借贷池利用率上限
+    public int loanLiquidationFeeBps; // 强平专项费率
+    public int ltvLiquidationBufferBps; // Symbol 派生：liquidationLtv = initialLtv + 本值
+    public int ltvMarginCallBufferBps; // Symbol 派生：marginCallLtv = liquidationLtv − 本值
 
     public LoanGlobalConfig() {
-        this.numeraireCurrency = NUMERAIRE_UNSET;
-        this.crossLiquidationLtvBps = DEFAULT_CROSS_LIQUIDATION_LTV_BPS;
-        this.crossMarginCallLtvBps = DEFAULT_CROSS_MARGIN_CALL_LTV_BPS;
-        this.loanPoolUtilizationCapBps = DEFAULT_LOAN_POOL_UTILIZATION_CAP_BPS;
-        this.loanLiquidationFeeBps = DEFAULT_LOAN_LIQUIDATION_FEE_BPS;
-        this.ltvLiquidationBufferBps = DEFAULT_LTV_LIQUIDATION_BUFFER_BPS;
-        this.ltvMarginCallBufferBps = DEFAULT_LTV_MARGIN_CALL_BUFFER_BPS;
+        reset();
     }
 
     public LoanGlobalConfig(BytesIn bytes) {
