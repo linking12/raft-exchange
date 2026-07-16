@@ -11,6 +11,7 @@ import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import exchange.core2.tests.util.LatencyTools;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.api.set.primitive.MutableLongSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1262,5 +1263,165 @@ class ITLiquidationIntegration {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    // ==================== 事件驱动 targeted 强平 / symbolToUsers 索引（本次重构新增路径）====================
+
+    /**
+     * 端到端验证 targeted 检测路径：手动 start 引擎成为 leader，但<b>不</b>发 {@code LIQUIDATION_SCAN} 全量扫，
+     * 仅靠 mark price 下跌命令 apply 时 {@link LiquidationEngine#checkPositions} 经 symbolToUsers 索引
+     * 只查该 symbol 持有者，即完成逐仓多头强平（FORCE→撮合→闭环 cascade 自驱）。
+     *
+     * <p>这是本次重构的核心收益——强平不再依赖周期性整扫，价格触发即时强平。
+     */
+    @Test
+    public void testTargetedLiquidationByMarkPriceDrop_isolated() throws Exception {
+        long deposit = 3000L;
+        long largeDeposit = 100000L;
+        int size = 10;
+        long entryPrice = 10000L;
+        long liquidationPrice = 500L;
+        long bpFillPrice = 9920L;
+
+        long trader = 1101L;
+        long liquidityProvider = 2101L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            CoreSymbolSpecification symbol = symbols.get(0);
+            container.initMarkPrice(symbol.symbolId, entryPrice);
+
+            container.createUserWithSpecificMoney(trader, deposit, QUOTE_ID);
+            container.createUserWithSpecificMoney(liquidityProvider, largeDeposit, QUOTE_ID);
+
+            long orderId = 110001L;
+            // 逐仓多头持仓
+            container.createBidWithOrderId(orderId++, trader, size, entryPrice, symbol.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(orderId++, liquidityProvider, size, entryPrice, symbol.symbolId, MarginMode.CROSS);
+            container.validateUserState(trader, profile ->
+                    assertThat("建仓成功", profile.getPositions().size(), is(1)));
+
+            // 强平接单流动性（在破产价上方挂买单）
+            container.createBidWithOrderId(orderId++, liquidityProvider, size + 15, bpFillPrice, symbol.symbolId, MarginMode.CROSS);
+
+            // 手动 start 引擎成为 leader（不发 LIQUIDATION_SCAN），随后只靠价格更新驱动 targeted 强平
+            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::start);
+
+            log.info("价格暴跌到 {}：MARKPRICE 命令 apply 时 targeted checkPositions 应即时强平，无需全量扫", liquidationPrice);
+            container.updateCurrentPriceTo((int) liquidationPrice, symbol.symbolId, QUOTE_ID);
+
+            // 仅靠价格触发 + cascade 自驱，轮询到清仓；onTick 只 flush grouping，绝不补发 LIQUIDATION_SCAN
+            LatencyTools.waitForCondition(15_000, () -> container.noPositions(trader),
+                    () -> container.getApi().groupingControl(0, 1), 50);
+
+            container.validateUserState(trader, profile ->
+                    assertThat("targeted 路径应完成逐仓强平", profile.getPositions().size(), is(0)));
+        }
+    }
+
+    /**
+     * 端到端验证 symbolToUsers 索引维护：开仓 apply 后当且仅当一个分片（持有者所在 shard）索引了该 uid；
+     * 平仓 apply 后该 uid 从索引中摘除。索引由所有节点确定性维护、不受 leader gate 约束，故无需 start 引擎。
+     */
+    @Test
+    public void testSymbolIndexMaintainedThroughOpenAndClose() throws Exception {
+        long deposit = 100000L;
+        int size = 5;
+        long entryPrice = 10000L;
+
+        long trader = 1102L;
+        long counterparty = 2102L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            CoreSymbolSpecification symbol = symbols.get(0);
+            container.initMarkPrice(symbol.symbolId, entryPrice);
+
+            container.createUserWithSpecificMoney(trader, deposit, QUOTE_ID);
+            container.createUserWithSpecificMoney(counterparty, deposit, QUOTE_ID);
+
+            long orderId = 120001L;
+            // trader 开逐仓多头
+            container.createBidWithOrderId(orderId++, trader, size, entryPrice, symbol.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(orderId++, counterparty, size, entryPrice, symbol.symbolId, MarginMode.CROSS);
+            container.validateUserState(trader, profile ->
+                    assertThat("建仓成功", profile.getPositions().size(), is(1)));
+
+            assertThat("开仓后应有且仅有一个分片索引 trader",
+                    countEnginesIndexing(container, symbol.symbolId, trader), is(1));
+
+            log.info("trader 反向平掉全部多头");
+            // trader 卖出等量平多；counterparty 提供买单对手
+            container.createBidWithOrderId(orderId++, counterparty, size, entryPrice, symbol.symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(orderId++, trader, size, entryPrice, symbol.symbolId, MarginMode.ISOLATED);
+            container.validateUserState(trader, profile ->
+                    assertThat("持仓应清空", profile.getPositions().size(), is(0)));
+
+            assertThat("平仓后不应有分片索引 trader",
+                    countEnginesIndexing(container, symbol.symbolId, trader), is(0));
+        }
+    }
+
+    /**
+     * 验证快照恢复路径：{@link LiquidationEngine#updateProvider} 会 clear 后从用户态确定性重建 symbolToUsers。
+     * 用引擎自身现有 provider 再次调用 updateProvider（模拟换届/恢复后的重建），索引应被无损重建出该持有者。
+     */
+    @Test
+    public void testSymbolIndexRebuiltByUpdateProvider() throws Exception {
+        long deposit = 100000L;
+        int size = 5;
+        long entryPrice = 10000L;
+
+        long trader = 1103L;
+        long counterparty = 2103L;
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            List<CoreSymbolSpecification> symbols = container.initFutureSymbols();
+            CoreSymbolSpecification symbol = symbols.get(0);
+            container.initMarkPrice(symbol.symbolId, entryPrice);
+
+            container.createUserWithSpecificMoney(trader, deposit, QUOTE_ID);
+            container.createUserWithSpecificMoney(counterparty, deposit, QUOTE_ID);
+
+            long orderId = 130001L;
+            container.createBidWithOrderId(orderId++, trader, size, entryPrice, symbol.symbolId, MarginMode.ISOLATED);
+            container.createAskWithOrderId(orderId++, counterparty, size, entryPrice, symbol.symbolId, MarginMode.CROSS);
+            container.validateUserState(trader, profile ->
+                    assertThat("建仓成功", profile.getPositions().size(), is(1)));
+
+            LiquidationEngine engine = engineIndexing(container, symbol.symbolId, trader);
+            assertThat("开仓后应能定位到索引 trader 的分片引擎", engine != null, is(true));
+
+            // 模拟快照恢复：用引擎当前 provider 重新 updateProvider（内部 clear + 从用户态重建索引）
+            engine.updateProvider(engine.getSymbolSpecificationProvider(), engine.getCurrencySpecificationProvider(),
+                    engine.getUserProfileService(), engine.getLastPriceCache(), engine.getLoanService());
+
+            MutableLongSet holders = engine.getSymbolToUsers().get(symbol.symbolId);
+            assertThat("updateProvider 重建后索引仍应含 trader",
+                    holders != null && holders.contains(trader), is(true));
+        }
+    }
+
+    /** 统计有多少个分片引擎在 symbolToUsers 里索引了该 uid（正确维护下开仓后应恰为 1、平仓后应为 0）。 */
+    private static int countEnginesIndexing(ExchangeTestContainer container, int symbolId, long uid) {
+        int count = 0;
+        for (LiquidationEngine engine : container.getExchangeCore().getLiquidationEngines()) {
+            MutableLongSet holders = engine.getSymbolToUsers().get(symbolId);
+            if (holders != null && holders.contains(uid)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** 返回索引了该 uid 的分片引擎（持有者所在 shard），无则 null。 */
+    private static LiquidationEngine engineIndexing(ExchangeTestContainer container, int symbolId, long uid) {
+        for (LiquidationEngine engine : container.getExchangeCore().getLiquidationEngines()) {
+            MutableLongSet holders = engine.getSymbolToUsers().get(symbolId);
+            if (holders != null && holders.contains(uid)) {
+                return engine;
+            }
+        }
+        return null;
     }
 }

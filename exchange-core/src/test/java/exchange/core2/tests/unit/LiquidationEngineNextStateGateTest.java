@@ -7,6 +7,7 @@ import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.processors.liquidation.LiquidationCommandSubmitter;
+import exchange.core2.core.processors.liquidation.LiquidationFlow;
 import exchange.core2.core.processors.liquidation.LiquidationFlow.LiquidationState;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import org.junit.jupiter.api.AfterEach;
@@ -90,6 +91,77 @@ class LiquidationEngineNextStateGateTest {
 
         le.start();
         le.stop();
+    }
+
+    /** ADL on null flow 同样是非法跳跃：apply path 直接 skip，flow 保持 null，不 publish。 */
+    @Test
+    void adlCmd_onNullCtx_isIllegalJump_skipped() {
+        le = newRunningEngine();
+        List<exchange.core2.core.common.api.ApiCommand> published = new ArrayList<>();
+        le.setCommandSubmitter((cmd, onApplied) -> published.add(cmd));
+
+        SymbolPositionRecord pos = newPosition();
+        OrderCommand adlCmd = newCmd(OrderCommandType.AUTO_DELEVERAGING, 200L, 5L);
+
+        le.advanceLiquidation(adlCmd, pos);
+
+        assertNull(pos.liquidationFlow, "ADL on null flow 是非法跳跃，flow 保持 null");
+        assertTrue(published.isEmpty(), "非法跳跃不应触发任何 publish");
+    }
+
+    /** 错序：flow 停在 LIQUIDATING 时收到 IF cmd（expected=WAIT_IF）→ 状态不匹配，skip、不 publish、不推进。 */
+    @Test
+    void ifCmd_whileFlowLiquidating_wrongState_skipped() {
+        le = newRunningEngine();
+        List<exchange.core2.core.common.api.ApiCommand> published = new ArrayList<>();
+        le.setCommandSubmitter((cmd, onApplied) -> published.add(cmd));
+
+        SymbolPositionRecord pos = newPosition();
+        pos.liquidationFlow = new LiquidationFlow(12345L, 10L, 999L); // state == LIQUIDATING
+        OrderCommand ifCmd = newCmd(OrderCommandType.IF_TAKEOVER, 200L, 5L);
+
+        le.advanceLiquidation(ifCmd, pos);
+
+        assertSame(LiquidationState.LIQUIDATING, pos.liquidationFlow.state, "错序 IF 不应推进状态");
+        assertTrue(published.isEmpty(), "状态不匹配的 IF 不应 publish");
+    }
+
+    /** 陈旧/重复：flow 已推进到 WAIT_IF 时又收到 FORCE cmd（expected=LIQUIDATING）→ skip、不 publish、不回退。 */
+    @Test
+    void forceCmd_whileFlowWaitIf_staleDuplicate_skipped() {
+        le = newRunningEngine();
+        List<exchange.core2.core.common.api.ApiCommand> published = new ArrayList<>();
+        le.setCommandSubmitter((cmd, onApplied) -> published.add(cmd));
+
+        SymbolPositionRecord pos = newPosition();
+        LiquidationFlow flow = new LiquidationFlow(12345L, 10L, 999L);
+        flow.state = LiquidationState.WAIT_IF_EXECUTION;
+        pos.liquidationFlow = flow;
+        OrderCommand forceCmd = newCmd(OrderCommandType.FORCE_LIQUIDATION, 88888L, 7L);
+
+        le.advanceLiquidation(forceCmd, pos);
+
+        assertSame(flow, pos.liquidationFlow, "陈旧 FORCE 不应替换现有 flow");
+        assertSame(LiquidationState.WAIT_IF_EXECUTION, pos.liquidationFlow.state, "陈旧 FORCE 不应回退状态");
+        assertEquals(12345L, pos.liquidationFlow.bankruptcyPrice, "陈旧 FORCE 不应覆盖 bankruptcyPrice");
+        assertTrue(published.isEmpty(), "陈旧 FORCE 不应 publish");
+    }
+
+    /** leader gate：未 start（follower）时即便是 FORCE cmd 也 no-op——flow 保持 null，不 bootstrap、不 publish。 */
+    @Test
+    void advanceLiquidation_whenNotLeader_isNoOp() {
+        le = new LiquidationEngine(null, 1, TEST_CFG); // 未 start → isRunning()==false
+        List<exchange.core2.core.common.api.ApiCommand> published = new ArrayList<>();
+        le.setCommandSubmitter((cmd, onApplied) -> published.add(cmd));
+
+        SymbolPositionRecord pos = newPosition();
+        OrderCommand forceCmd = newCmd(OrderCommandType.FORCE_LIQUIDATION, 12345L, 10L);
+        forceCmd.matcherEvent = newMatcherEvent(exchange.core2.core.common.MatcherEventType.REJECT, 10L);
+
+        le.advanceLiquidation(forceCmd, pos);
+
+        assertNull(pos.liquidationFlow, "follower 不应 bootstrap flow");
+        assertTrue(published.isEmpty(), "follower 不应 publish");
     }
 
     // ---------- helpers ----------
