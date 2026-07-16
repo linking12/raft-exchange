@@ -151,6 +151,42 @@
     - `onPositionClosed(SymbolPositionRecord pos)`:`MutableLongSet s=symbolToUsers.get(pos.symbol); if(s!=null){s.remove(pos.uid); if(s.isEmpty())symbolToUsers.remove(pos.symbol);} removeFlow(pos);`(**不 gate**)
     - `rebuildIndex()`:`symbolToUsers.clear(); flows.clear(); backstopSnapshot=null; backstopCursor=0;` 再遍历 `userProfileService.getUserProfiles()` 各非空期货仓 `onPositionOpened(pos.symbol, up.uid)`。
   - **`LoanLiquidationEngine.check`:** 删 66-77 reprice 心跳块,只留 `userProfile.isolatedLoans.forEachValue(this::checkIsolatedLoan); checkCrossLoan(userProfile);`(及 `lastRepriceMs`/`REPRICE_INTERVAL_MS` 若无他用则删)。
+
+  **共用结构(伪代码,防理解偏差):** 两入口只是"挑谁"不同,都灌进同一个 `checkUser`;`checkUser` = 原 `checkLiquidations` 的单用户体逐字搬(`now`→`ts`),`checkLiquidationIsolated/Cross/startLiquidationFlow` 原地不改。
+  ```java
+  void checkPositionsOnSymbol(int symbol, OrderCommand cmd) {         // 入口A:targeted
+      if (!isRunning()) return;
+      MutableLongSet holders = symbolToUsers.get(symbol);
+      if (holders != null) holders.forEach(uid -> {
+          UserProfile up = userProfileService.getUserProfile(uid);
+          if (up != null) checkUser(up, cmd.timestamp);
+      });
+  }
+  void backstopTick(OrderCommand cmd) {                               // 入口B:切片兜底
+      if (!isRunning()) return;
+      if (snapshot == null || cursor >= snapshot.length) { snapshot = userProfileService.getUserProfiles().keySet().toArray(); cursor = 0; }
+      int end = Math.min(cursor + N, snapshot.length);
+      for (int i = cursor; i < end; i++) {
+          UserProfile up = userProfileService.getUserProfile(snapshot[i]);
+          if (up != null) checkUser(up, cmd.timestamp);
+      }
+      cursor = end;
+  }
+  void checkUser(UserProfile up, long ts) {                           // 共用核心 = 原单用户体
+      IntObjectHashMap<List<SymbolPositionRecord>> crossByCurrency = newMap();
+      up.positions.forEachValue(pos -> {
+          if (pos == null || pos.openVolume == 0) return;
+          CoreSymbolSpecification spec = symbolSpecProvider.get(pos.symbol);
+          if (!isFuturesContract(spec.type)) return;
+          LastPriceCacheRecord price = lastPriceCache.get(pos.symbol);
+          if (price == null) return;
+          if (pos.marginMode == ISOLATED) checkLiquidationIsolated(up, spec, price, pos);   // 现有,不改
+          else crossByCurrency.getIfAbsentPut(spec.quoteCurrency, newList()).add(pos);
+      });
+      checkLiquidationCross(up, crossByCurrency);                     // 现有,不改
+      loanLiquidationEngine.check(up);                               // loan 旧路(Plan 2)
+  }
+  ```
 - [ ] **Step 4: 跑测试** `mvn -pl exchange-core -Dtest=LiquidationEngineTest,LoanLiquidationEngineTest test` + `mvn -pl raft-exchange-server -am compile`(父类改名后确认 server 过编)。Expected: exchange-core PASS(新用例 + loan 回归)、server 过编。**注**:`ITLiquidationIntegration` 因触发未接(Task 4)此刻可能红,与 Task 4 联合验收。
 - [ ] **Step 5:** 提交(**Task 3 + Task 4 联合验收**:集成检测在 Task 4 闭环,`ITLiquidationIntegration` 在 Task 4 末转绿)。
 
