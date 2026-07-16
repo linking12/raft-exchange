@@ -211,4 +211,5 @@
 5. **索引维护不 gate**(`onPositionOpened/Closed` 在开/平仓 apply、所有节点确定性维护);快照恢复 `rebuildIndex`。派生态,任一节点上位即可用。
 6. **无独立冷启动全扫 / 无 fullScan**:兜底切片 sweep 一轮覆盖全部,兼冷启动;所有扫描 on-lane;server 不直调扫描。代价:换届后空闲已破产仓冷启动延迟 ≤ 一个 sweep 周期(价格在动的仓被 targeted 即时抓)。
 7. **backstop tick 每分片 apply**:shard-0 心跳发一条命令,raft 复制,各分片 apply 扫本分片切片。
+9. **`checkPositionsOnSymbol` 与 `backstopTick` 共用核心 `checkUser`**(检测逻辑一份,复用现有 `checkLiquidationIsolated/Cross`);两者只是"喂给 `checkUser` 的用户集"不同。**backstop 按"用户"切片(每 tick 固定 N 个,游标推进),不按 symbol 切**——按 symbol 切会因热门 symbol 持有者过多导致单 tick 巨型扫描(重现拥堵);按用户切每 tick 成本恒定。
 8. **loan 侧本计划仅摘 reprice 心跳到父类**,targeted 事件化是 **Plan 2**。
