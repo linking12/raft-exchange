@@ -18,7 +18,7 @@
 - **不改快照字节格式**(除 `liquidationCtx` 移除一处)。
 - **行为回归底线全绿**:`ITConservationFuzz`、`ITLoanConservation`、`PersistenceTests`、`LiquidationEngineTest`(及同目录 liquidation 测试)、`ITLiquidationIntegration`、`LoanLiquidationEngineTest`。
 - **YAGNI / 不为测试污染代码**:除 `ApiLiquidationBackstopTick`(新命令 payload,必须是类)外**不新建类**;索引等以字段+方法形式落在 `LiquidationEngine`。
-- **命名保持** `LiquidationEngine`;**父类 `SimpleScheduledService` 改名 `LiquidationScheduledService`**(职责变为 liquidation 发令器),同步改 server 2 处 `import` + `::start/stop` 引用(Task 3 一起做保证过编)。
+- **命名保持** `LiquidationEngine`;**父类 `SimpleScheduledService` 改名 `LiquidationScheduledService`**(职责变为 liquidation 发令器),同步改 server 2 处 `import` + `::start/stop` 引用(Task 4 一起做保证过编)。
 - **loan 侧本计划不动**(targeted 事件化是 Plan 2);仅把 reprice 心跳从 `LoanLiquidationEngine.check` 摘到父类发令。loan 检查暂由 `LiquidationEngine` 的 loan 旧路(`loanLiquidationEngine.check(up)`)覆盖。
 - **所有扫描只在 on-lane**:server 换届只 `start/stop` 定时器(已有),**绝不直调 `engine` 扫描方法**(那会在换届线程 off-lane 读用户态,重现竞态)。冷启动靠 leader 定时器 start 后的兜底 sweep(经 `BACKSTOP_TICK` apply 在 disruptor 线程跑)。
 - **测试运行纪律**:仅在计划标注处运行测试,不自发跑全量。
@@ -26,9 +26,9 @@
 
 **关键既有签名/坐标(以此为准):**
 - `SimpleScheduledService`(父类,**本计划改名 `LiquidationScheduledService`**):`exchange-core/.../processors/liquidation/SimpleScheduledService.java`。`@RequiredArgsConstructor`,字段 `delay/unit/threadFactory` + `scheduler/future/running(AtomicBoolean)`;构造 `(long delay, TimeUnit unit, ThreadFactory)` 与 `(long,TimeUnit,String name,ThreadFactory)`;`protected abstract void runOneIteration()`;`start()`(置 `running=true` + scheduleWithFixedDelay)/`stop()`(置 `running=false`)/`isRunning()`(`running.get()`);hook `beforeStart/afterStop/handleError`。**唯一子类 `LiquidationEngine`**;server 仅 `engines.forEach(SimpleScheduledService::start/stop)`(`JraftClusterContainer:87-89`+import`:48`、`AeronClusterContainer:68-70`+import`:31`)。
-- `LiquidationEngine`:`.../liquidation/LiquidationEngine.java`(513 行)。`extends SimpleScheduledService`(64);构造 `(Supplier<FundEvent> eventSupplier, int shardId, ExchangeConfiguration cfg)`(83-90,内 `super(sysprop raftexchange.liquidation.interval 默认2, SECONDS, ...)`);`updateProvider(SymbolSpecificationProvider, CurrencySpecificationProvider, UserProfileService, IntObjectHashMap<LastPriceCacheRecord>, LoanService)`(92-105,内建 `new LoanLiquidationEngine(this)`)。字段:`shardId`(65)、`stuckThresholdMs`(66,**删**)、`eventsHelper`(67)、`insuranceFundEnabled`(68)、providers/`userProfileService`(72)/`lastPriceCache`(73)/`loanService`(74)、`liquidationCmdPublisher`(76,`@Setter`)、`loanLiquidationEngine`(77)、`inFlightLiquidationCmd`(79,**删**)、`tickBpMarginBaseCache`(80-81)。类级 `@Getter @Slf4j`。方法:`runOneIteration`(116-124)→`checkLiquidations`(137-174,全扫入口:`userProfileService.getUserProfiles().forEachValue(...)` L140,per-user `userProfile.positions` 迭代,`loanLiquidationEngine.check(userProfile)` L172)、`triggerOnce`(126-133)、`start`(109-114)、`tryRepublishStuckLiquidation`(179-202,**删**)、`checkLiquidationIsolated`(204-222)、`checkLiquidationCross`(224-263)、`forceCrossLiquidation`(265-284)、`startLiquidationFlow`(286-298,双门 `inFlightLiquidationCmd.contains(pos)||pos.liquidationCtx!=null`)、`sendWarningEvent`(300-306)、`calculateBankruptcyPrice(SymbolPositionRecord)`(313-338)、`calculateCrossBpMarginBaseAllocation`(352-386)、`nextLiquidationState(OrderCommand,SymbolPositionRecord)`(394-428,唯一写 `pos.liquidationCtx`)、`onMarketDone/onIFTakeoverDone/enterAdlPhase/onADLDone`(431-468)、`buildForceCmd/buildIFCmd/buildADLCmd`(481-495)、`publishTracked`(499-507,add/remove inFlight)/`publishUntracked`(509-511)。`pos.liquidationCtx` 引用点:180,288,396-399,406,432,435,453,467。
+- `LiquidationEngine`:`.../liquidation/LiquidationEngine.java`(513 行)。`extends SimpleScheduledService`(64);构造 `(Supplier<FundEvent> eventSupplier, int shardId, ExchangeConfiguration cfg)`(83-90,内 `super(sysprop raftexchange.liquidation.interval 默认2, SECONDS, ...)`);`updateProvider(SymbolSpecificationProvider, CurrencySpecificationProvider, UserProfileService, IntObjectHashMap<LastPriceCacheRecord>, LoanService)`(92-105,内建 `new LoanLiquidationEngine(this)`)。字段:`shardId`(65)、`stuckThresholdMs`(66,**删**)、`eventsHelper`(67)、`insuranceFundEnabled`(68)、providers/`userProfileService`(72)/`lastPriceCache`(73)/`loanService`(74)、`liquidationCmdPublisher`(76,`@Setter`)、`loanLiquidationEngine`(77)、`inFlightLiquidationCmd`(79,**删**)、`tickBpMarginBaseCache`(80-81,**Task 2 删**)。类级 `@Getter @Slf4j`。方法:`runOneIteration`(116-124)→`checkLiquidations`(137-174,全扫入口:`userProfileService.getUserProfiles().forEachValue(...)` L140,per-user `userProfile.positions` 迭代,`loanLiquidationEngine.check(userProfile)` L172)、`triggerOnce`(126-133)、`start`(109-114)、`tryRepublishStuckLiquidation`(179-202,**删**)、`checkLiquidationIsolated`(204-222)、`checkLiquidationCross`(224-263)、`forceCrossLiquidation`(265-284)、`startLiquidationFlow`(286-298,双门 `inFlightLiquidationCmd.contains(pos)||pos.liquidationCtx!=null`)、`sendWarningEvent`(300-306)、`calculateBankruptcyPrice(SymbolPositionRecord)`(313-338,**Task 2 删**)、`calculateCrossBpMarginBaseAllocation`(352-386,**Task 2 搬 UserProfile**)、`nextLiquidationState(OrderCommand,SymbolPositionRecord)`(394-428,唯一写 `pos.liquidationCtx`)、`onMarketDone/onIFTakeoverDone/enterAdlPhase/onADLDone`(431-468)、`buildForceCmd/buildIFCmd/buildADLCmd`(481-495)、`publishTracked`(499-507,add/remove inFlight)/`publishUntracked`(509-511)。`pos.liquidationCtx` 引用点:180,288,396-399,406,432,435,453,467。
 - `RiskEngine`:`.../processors/RiskEngine.java`(~2064)。`liquidationEngine` 字段(109);`new LiquidationEngine(sharedPool::getFundEventChain, shardId, cfg)`(146);`updateProvider(...)` 在 `initState`(181-182)、`recoverStateBySnapshot`(235-236)。R1 `preProcessCommand`(295-660):`MARKPRICE_ADJUSTMENT`(442-454,更新 `lastPriceCache` 的 `markPrice`,非 uid-gated,仅 `shardId==0` 写 resultCode)、`SETTLE_FUNDINGFEES` R1(538-554,`fundingFeeProcessor.collectInput`)、`FORCE_LIQUIDATION`(502-506,uid-gated→`normalizeCmdPositionSize`)、`REPRICE_LOAN_RATES`(574-580)。R2 `handlerRiskRelease`(1361-1491):`fundingFeeProcessor.applyEvent`(1445-1449)、`liquidationEngine.nextLiquidationState(cmd, takerSpr)`(1466-1470)。`normalizeCmdPositionSize`(1050-1066,`cmd.size=Math.min(cmd.size,position.openVolume)`)。仓位 map 插入:`userProfile.positions.put(positionRecordKey, position)`(756);交易开/平 `handleMatcherEventMargin`(1797-1950,taker `openPositionMargin` ~1844 / `removePositionRecord` ~1874;maker ~1921 / ~1941);交割 `settlePnl`(1021-1044,`removePositionRecord` 1038);**唯一删除点** `removePositionRecord(...)`(2006-2014,`userProfile.positions.removeKey(...)` 2012)。快照恢复反序列化 UserProfile(198 起,swap 216-240)。`uidForThisHandler`(1244-1246)。**exchange-core 内无 isLeader**(本计划也不引入)。
-- `SymbolPositionRecord`:`.../common/SymbolPositionRecord.java`。`liquidationCtx` 字段(67,注释 64-66)、`initialize` 置 null(90)、读构造(123)、`writeMarshallable` 写块(719-724)、`reset` 置 null(747)、`stateHash` 项(767-770,ctx 在 770)、`toString`(779)。BP:`calculateBankruptcyPrice(spec)`(265)、`(spec,marginBase)`(282)。
+- `SymbolPositionRecord`:`.../common/SymbolPositionRecord.java`。`liquidationCtx` 字段(67,注释 64-66)、`initialize` 置 null(90)、读构造(123)、`writeMarshallable` 写块(719-724)、`reset` 置 null(747)、`stateHash` 项(767-770,ctx 在 770)、`toString`(779)。BP(Task 2 三合一):`calculateBankruptcyPrice(spec)`(265,isolated)、`(spec,marginBase)`(282,cross)、私有核 `calcBankruptcyPriceFromMarginBase(spec,marginBase)`(305)。
 - `LiquidationContext`:`.../liquidation/LiquidationContext.java`。字段 `state/price/size/originalOrderId/lastTransitionAt`;enum `LiquidationState{LIQUIDATING(1),WAIT_IF_EXECUTION(2),WAIT_ADL_EXECUTION(3)}`;有 `LiquidationContext(BytesIn)`、`writeMarshallable`、`stateHash`(序列化三件套);另有 4 参构造 `(price,size,originalOrderId,ts)`(初始 state=LIQUIDATING——实现者确认)。
 - `OrderCommandType`:`.../common/cmd/OrderCommandType.java`,`(byte code,boolean mutate)`。`REPRICE_LOAN_RATES((byte)63,true)`(73)、`FORCE_LIQUIDATION((byte)20,true)`;`isLoan()` switch(111-130,REPRICE 不在其中);static 注册块(134-138)自动。**byte 64 空闲**。
 - `ApiRepriceLoanRates`:`.../common/api/ApiRepriceLoanRates.java`(无 payload,`@Builder @EqualsAndHashCode(callSuper=false) extends ApiCommand`)。`ExchangeApi`:`REPRICE_LOAN_RATES_TRANSLATOR`(1092-1096),三处 `instanceof` 分发(140-141、233-234、324-325),map 注册(1404)。
@@ -43,12 +43,13 @@
 **修改:**
 - `common/cmd/OrderCommandType.java` — 加 `LIQUIDATION_BACKSTOP_TICK((byte)64,true)`(不进 `isLoan()`)。
 - `ExchangeApi.java` — `LIQUIDATION_BACKSTOP_TICK_TRANSLATOR` + 3 分发 + map 注册。
-- `common/SymbolPositionRecord.java` — 移除 `liquidationCtx` 字段/序列化/stateHash。
+- `common/SymbolPositionRecord.java` — 破产价三方法合 1(Task 2);移除 `liquidationCtx` 字段/序列化/stateHash(Task 3)。
 - `processors/liquidation/LiquidationContext.java` — 删序列化三件套(变纯内存 holder)。
+- `common/UserProfile.java` — 新增 `crossMarginBaseAllocation(...)`(Task 2,承接原引擎 cross 破产价分摊)。
 - `processors/liquidation/SimpleScheduledService.java` → **改名 `LiquidationScheduledService.java`**(父类)— 持 `liquidationCmdPublisher`(+setter)、`shardId`、心跳节流字段;`runOneIteration()` 变具体 = shard-0 节流发 `BACKSTOP_TICK`+`REPRICE`;加 `protected publish(ApiCommand,Runnable)`。已有 `isRunning()` 复用为 leader gate。server 2 处引用同步改。
-- `processors/liquidation/LiquidationEngine.java`(子类)— 去掉自有 publisher 字段 / `runOneIteration` / `checkLiquidations` / `triggerOnce` / `tryRepublishStuckLiquidation` / `inFlightLiquidationCmd` / `stuckThresholdMs`;加 symbol→uid 索引 + flow-map + backstop 游标(**字段**)+ `checkPositionsOnSymbol/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`(复用现有 check 方法);`checkPositionsOnSymbol`/`backstopTick`/`nextLiquidationState` 开头 `if(!isRunning())return;`(leader gate);`nextLiquidationState` 与所有 `pos.liquidationCtx` 改走 flow-map;发命令用继承的 `publish(...)`。**无 `fullScan`、无 stuck、无 isLeader**。
+- `processors/liquidation/LiquidationEngine.java`(子类)— (Task 2)删 BP dispatch `calculateBankruptcyPrice(pos)`/`calculateCrossBpMarginBaseAllocation`/`tickBpMarginBaseCache`;(Task 4)去掉自有 publisher 字段 / `runOneIteration` / `checkLiquidations` / `triggerOnce` / `tryRepublishStuckLiquidation` / `inFlightLiquidationCmd` / `stuckThresholdMs`;加 symbol→uid 索引 + flow-map + backstop 游标(**字段**)+ `checkPositionsOnSymbol/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`(复用现有 check 方法);`checkPositionsOnSymbol`/`backstopTick`/`nextLiquidationState` 开头 `if(!isRunning())return;`(leader gate);`nextLiquidationState` 与所有 `pos.liquidationCtx` 改走 flow-map;发命令用继承的 `publish(...)`。**无 `fullScan`、无 stuck、无 isLeader**。
 - `processors/loan/LoanLiquidationEngine.java` — `check` 删 reprice 心跳块(改由父类发);只留 isolated/cross loan 扫描。
-- **server 无新增行为**:仅 Task 3 改名带来的 2 处引用更新;`start/stop` 换届启停与 `overrideLiquidationCmdPublisher` 均不动。
+- **server 无新增行为**:仅 Task 4 改名带来的 2 处引用更新;`start/stop` 换届启停与 `overrideLiquidationCmdPublisher` 均不动。
 
 ---
 
@@ -60,7 +61,7 @@
 - Modify: `processors/RiskEngine.java`(主 switch 加最小 case)
 - Test: `test/.../ApiLiquidationBackstopTickTest.java`
 
-**Interfaces(Produces):** `OrderCommandType.LIQUIDATION_BACKSTOP_TICK`;`ApiLiquidationBackstopTick`(空 payload);提交后经 RiskEngine 返回 `SUCCESS`(真正委托 `backstopTick` 在 Task 4 接)。
+**Interfaces(Produces):** `OrderCommandType.LIQUIDATION_BACKSTOP_TICK`;`ApiLiquidationBackstopTick`(空 payload);提交后经 RiskEngine 返回 `SUCCESS`(真正委托 `backstopTick` 在 Task 5 接)。
 
 - [ ] **Step 1: 写失败测试** —— 提交 `ApiLiquidationBackstopTick.builder().build()`,断言 `submitCommandAsync(...).get()` resultCode 为 `SUCCESS`(用 `ExchangeTestContainer` 或直接 API)。
 - [ ] **Step 2:** 跑失败 `mvn -pl exchange-core -Dtest=ApiLiquidationBackstopTickTest test`。
@@ -82,9 +83,59 @@
 
 ---
 
-## Task 2: LiquidationContext depersist → leader-local flow-map(行为保持)
+## Task 2: 破产价三合一 → SymbolPositionRecord + UserProfile 回调(行为保持)
 
-**目标:** 把强平流程状态从 `SymbolPositionRecord.liquidationCtx`(复制+hash)搬到 `LiquidationEngine` 的一个 leader-local `IdentityHashMap<SymbolPositionRecord, LiquidationContext>` 字段。**触发方式此刻不变**(定时器仍 `checkLiquidations` 全扫)、**暂不加 `isRunning()` gate**(Task 3 再加),纯存储搬迁 + 去 `inFlightLiquidationCmd`,便于独立回归。
+**目标:** 把破产价计算收敛——`SymbolPositionRecord` 三个方法(单参 isolated / 双参 cross / 私有核 `calcBankruptcyPriceFromMarginBase`)合成 **1 个**;cross 的账户级 marginBase 分摊搬到 `UserProfile`、经 `ToLongFunction` 回调注入;`LiquidationEngine` 删掉 BP dispatch(`calculateBankruptcyPrice(pos)` 313-338)、账户分摊(`calculateCrossBpMarginBaseAllocation` 352-386)、`tickBpMarginBaseCache` 字段(80-81)。**纯 behavior-preserving,跟事件驱动正交**,先做把 BP 清出引擎,后续 Task 4 重构引擎时更薄。
+
+**Files:**
+- Modify: `common/SymbolPositionRecord.java`(265/282/305 三方法 → 合 1)
+- Modify: `common/UserProfile.java`(新增 `crossMarginBaseAllocation(...)`,承接原引擎分摊逻辑)
+- Modify: `processors/liquidation/LiquidationEngine.java`(删 `calculateBankruptcyPrice(pos)`/`calculateCrossBpMarginBaseAllocation`/`tickBpMarginBaseCache`;`checkLiquidationIsolated`/`checkLiquidationCross`/`forceCrossLiquidation` 里改调新签名)
+- Test: `SymbolPositionRecordTest` + `LiquidationEngineTest` 加 BP 等价对拍
+
+**Interfaces(Produces,Task 4/5 消费):**
+- SPR:`long calculateBankruptcyPrice(CoreSymbolSpecification spec, ToLongFunction<SymbolPositionRecord> crossMarginBaseFn)` —— isolated 用自身字段、cross 走回调;内联原公式。
+- UserProfile:`ObjectLongHashMap<SymbolPositionRecord> crossMarginBaseAllocation(...)` —— 一次算好整账户 cross 仓的 `pos→marginBase`。
+
+- [ ] **Step 1: 写失败测试**(BP 等价对拍):构造若干 isolated + cross 期货仓(参考现有测试),分别记录**重构前**(现三方法)的 BP;重构后用新单方法(isolated 传哨兵 `p->0L`;cross 传 `alloc::get`)算 BP,断言**逐一相等**。cross 用例覆盖:单仓(mm/ΣMM=1,应等于旧双参重载的 crossAvailable 语义)、多仓按 MM 占比分摊。fixed-fee 与 dynamic-fee 两支都要有。
+- [ ] **Step 2:** 跑失败(方法签名未合)。
+- [ ] **Step 3: 实现:**
+  - **`SymbolPositionRecord`** —— 三合一:
+    ```java
+    public long calculateBankruptcyPrice(CoreSymbolSpecification spec,
+                                         ToLongFunction<SymbolPositionRecord> crossMarginBaseFn) {
+        final long marginBase = (marginMode == MarginMode.ISOLATED)
+            ? Math.addExact(openInitMarginSum, extraMargin)      // 原单参重载
+            : crossMarginBaseFn.applyAsLong(this);               // 原双参重载的 marginBase
+        // ↓ 原 calcBankruptcyPriceFromMarginBase 公式逐字内联(保留全部推导注释)
+        final long sign = direction.getMultiplier();
+        final long totalFee = Math.addExact(spec.takerFee, spec.liquidationFee);
+        if (spec.isFixedFee()) {
+            final long maxLoss = Math.subtractExact(marginBase, Math.multiplyExact(totalFee, openVolume));
+            final long numer   = Math.subtractExact(openPriceSum, Math.multiplyExact(sign, maxLoss));
+            return CoreArithmeticUtils.ceilDivide(numer, openVolume);
+        } else {
+            final long numer = Math.subtractExact(openPriceSum, Math.multiplyExact(sign, marginBase));
+            final long denom = Math.multiplyExact(openVolume,
+                Math.subtractExact(spec.feeScaleK, Math.multiplyExact(sign, totalFee)));
+            return CoreArithmeticUtils.ceilMulDiv(numer, spec.feeScaleK, denom);
+        }
+    }
+    ```
+    删原 `calculateBankruptcyPrice(spec)`、`calculateBankruptcyPrice(spec, marginBase)`、`calcBankruptcyPriceFromMarginBase`(逻辑已并入)。加 `import java.util.function.ToLongFunction;`。**若有 SPR 外部旧调用点,一并改到新签名**(全仓 grep `calculateBankruptcyPrice`)。
+  - **`UserProfile`** —— 新增 `crossMarginBaseAllocation(...)`:把 `LiquidationEngine.calculateCrossBpMarginBaseAllocation`(352-386)逻辑搬来,签名接收账户 cross 仓 + spec/price 提供者 + numeraire(照原实现所需入参),返回 `ObjectLongHashMap<SymbolPositionRecord>`(`pos→marginBase`,与 `openInitMarginSum` 同 scale)。**一次算好整账户**,天然替代 tick 缓存。
+  - **`LiquidationEngine`:**
+    - 删 `calculateBankruptcyPrice(SymbolPositionRecord)`(313-338)、`calculateCrossBpMarginBaseAllocation`(352-386)、`tickBpMarginBaseCache` 字段(80-81,及各处 `.clear()`)。
+    - `checkLiquidationIsolated`:BP 调 `pos.calculateBankruptcyPrice(spec, NO_CROSS)`,`private static final ToLongFunction<SymbolPositionRecord> NO_CROSS = p -> 0L;`(isolated 分支不触发回调)。
+    - `checkLiquidationCross`/`forceCrossLiquidation`:进入某账户 cross 强平前算一次 `ObjectLongHashMap<SymbolPositionRecord> alloc = up.crossMarginBaseAllocation(...);`,各仓 BP 调 `pos.calculateBankruptcyPrice(spec, alloc::get)`。原"spec 为 null → markPrice 兜底"的 guard 保留在引擎调用点。
+- [ ] **Step 4: 跑测试** `mvn -pl exchange-core -Dtest=SymbolPositionRecordTest,LiquidationEngineTest,ITLiquidationIntegration,ITConservationFuzz test`。Expected: PASS(BP 逐一相等 + 强平/守恒回归不变)。
+- [ ] **Step 5:** 提交。
+
+---
+
+## Task 3: LiquidationContext depersist → leader-local flow-map(行为保持)
+
+**目标:** 把强平流程状态从 `SymbolPositionRecord.liquidationCtx`(复制+hash)搬到 `LiquidationEngine` 的一个 leader-local `IdentityHashMap<SymbolPositionRecord, LiquidationContext>` 字段。**触发方式此刻不变**(定时器仍 `checkLiquidations` 全扫)、**暂不加 `isRunning()` gate**(Task 4 再加),纯存储搬迁 + 去 `inFlightLiquidationCmd`,便于独立回归。
 
 **Files:**
 - Modify: `common/SymbolPositionRecord.java`(67,90,123,719-724,747,767-770,779)
@@ -92,7 +143,7 @@
 - Modify: `processors/liquidation/LiquidationEngine.java`(加 flow-map 字段;`nextLiquidationState` 及所有 `pos.liquidationCtx`→map;`startLiquidationFlow` 双门改单门;去 `inFlightLiquidationCmd`;`publishTracked`→直接 publish)
 - Test: `test/.../common/SymbolPositionRecordTest.java`(加 stateHash round-trip 用例);`LiquidationEngineTest` 保持绿
 
-**Interfaces(Produces,Task 3/4 消费):** `LiquidationEngine` 内部持 `private final Map<SymbolPositionRecord,LiquidationContext> flows = new IdentityHashMap<>();` + 私有 `beginFlow/getFlow/removeFlow`;`SymbolPositionRecord` 无 `liquidationCtx`;`LiquidationContext` 纯内存。
+**Interfaces(Produces,Task 4/5 消费):** `LiquidationEngine` 内部持 `private final Map<SymbolPositionRecord,LiquidationContext> flows = new IdentityHashMap<>();` + 私有 `beginFlow/getFlow/removeFlow`;`SymbolPositionRecord` 无 `liquidationCtx`;`LiquidationContext` 纯内存。
 
 - [ ] **Step 1: 写失败测试**(`SymbolPositionRecordTest`)——非空期货仓 `writeMarshallable`→`new SymbolPositionRecord(uid,bytes)`→`restored.stateHash()==original.stateHash()`(证明序列化自洽);字段移除后 `original.liquidationCtx` 引用编译失败即预期。
 - [ ] **Step 2:** 先跑现有 `LiquidationEngineTest`,`PersistenceTests` 记基线。
@@ -100,13 +151,13 @@
   - `SymbolPositionRecord`:删 67 字段(+64-66 注释)、90 与 747 的置 null、123 读、719-724 写块(留 `writeLong(extraMargin)`)、767-770 的 ctx hash 项(让 `extraMargin` 收尾,清多余逗号 + 766 注释)、779 `toString` 片段、无用 import。**读(123)与写(719-724)必须一起删**保证字节自洽。
   - `LiquidationContext`:删 `LiquidationContext(BytesIn)`、`writeMarshallable`、`stateHash` 及 `implements`/import;保留字段+enum+4 参构造。
   - `LiquidationEngine`:加 `flows` 字段 + `beginFlow(pos,price,size,orderId,ts)=new LiquidationContext(...)` 存入 / `getFlow(pos)` / `removeFlow(pos)`。把 `nextLiquidationState`、`onMarketDone`、`onIFTakeoverDone`、`enterAdlPhase`、`onADLDone`、`startLiquidationFlow`、`checkLiquidations` 里所有 `pos.liquidationCtx` 读/写/判空**换成 `getFlow/beginFlow/removeFlow` + 本地变量**。`startLiquidationFlow` 双门 → `if (getFlow(pos) != null) return;`。删 `inFlightLiquidationCmd` 字段;`publishTracked(cmd,pos)`→`liquidationCmdPublisher.publish(cmd, null)`;`publishUntracked` 保留或并为一个 publish。**触发路径与状态机语义逐字保持**(仅存储位置变)。
-    - 注:`tryRepublishStuckLiquidation` 本任务**先保留**(它读 `pos.liquidationCtx`,一并改走 `getFlow`),Task 3 再整体删除(stuck 不再需要)。
+    - 注:`tryRepublishStuckLiquidation` 本任务**先保留**(它读 `pos.liquidationCtx`,一并改走 `getFlow`),Task 4 再整体删除(stuck 不再需要)。
 - [ ] **Step 4: 跑测试** `mvn -pl exchange-core -Dtest=SymbolPositionRecordTest,LiquidationEngineTest,PersistenceTests,ITLiquidationIntegration test`。Expected: PASS(行为等价 + stateHash 稳定)。
 - [ ] **Step 5:** 提交。
 
 ---
 
-## Task 3: 父类承载发令 + engine 转 on-lane targeted + isRunning gate + 删 stuck
+## Task 4: 父类承载发令 + engine 转 on-lane targeted + isRunning gate + 删 stuck
 
 **目标:** 父类改名并变 off-lane 发令器;`LiquidationEngine` 去扫描、加 targeted 入口与索引/游标字段(复用现有 check),用 `isRunning()` gate leader-only 逻辑,删除 stuck。
 
@@ -117,7 +168,7 @@
 - Modify: `processors/loan/LoanLiquidationEngine.java`(删 reprice 心跳块)
 - Test: `LiquidationEngineTest`(加 targeted/backstop/heartbeat/running-gate 用例)
 
-**Interfaces(Produces,Task 4 消费):**
+**Interfaces(Produces,Task 5 消费):**
 - 父类:`@Setter protected LiquidationCmdPublisher liquidationCmdPublisher;`、`@Getter protected final int shardId;`(经构造注入)、`protected final void publish(ApiCommand cmd, Runnable onApplied)`。`runOneIteration()` 具体化 = 心跳发令。`isRunning()` 已有(start→true, stop→false)。
 - `LiquidationEngine`:`checkPositionsOnSymbol(int symbol, OrderCommand cmd)`、`backstopTick(OrderCommand cmd)`、`onPositionOpened(int symbol, long uid)`、`onPositionClosed(SymbolPositionRecord pos)`、`rebuildIndex()`;`nextLiquidationState` 签名不变但加 `isRunning()` gate。**无 `fullScan`、无 `setIsLeader`、无 stuck**。
 
@@ -144,9 +195,9 @@
     - `private long[] backstopSnapshot; private int backstopCursor;`(游标)
   - 新/改方法(时间戳一律用入参 `cmd.timestamp`):
     - `checkPositionsOnSymbol(int symbol, OrderCommand cmd)`:`if(!isRunning())return;` 取 `MutableLongSet users=symbolToUsers.get(symbol); if(users!=null) users.forEach(uid -> checkUser(userProfileService.getUserProfile(uid), cmd.timestamp));`
-    - `private void checkUser(UserProfile up, long ts)`:复现原 `checkLiquidations` 单用户体——`tickBpMarginBaseCache` 按需 clear、迭代 `up.positions`、期货仓 `checkLiquidationIsolated`/聚合 `checkLiquidationCross`、`loanLiquidationEngine.check(up)`;**现有方法内部发 FORCE 的 `startLiquidationFlow` 原样复用**,`ts` 传给需要时间戳处(替代原 `System.currentTimeMillis()`)。
+    - `private void checkUser(UserProfile up, long ts)`:复现原 `checkLiquidations` 单用户体——迭代 `up.positions`、期货仓 `checkLiquidationIsolated`/聚合 `checkLiquidationCross`、`loanLiquidationEngine.check(up)`;**现有方法内部发 FORCE 的 `startLiquidationFlow` 原样复用**,`ts` 传给需要时间戳处(替代原 `System.currentTimeMillis()`)。(`tickBpMarginBaseCache` 已在 Task 2 删除,cross 分摊改由 `up.crossMarginBaseAllocation` 每账户算一次。)
     - `backstopTick(OrderCommand cmd)`:`if(!isRunning())return;` 切片(**兼冷启动**:leader 定时器 start 后每 tick 推进,一轮 sweep 覆盖全部):游标取 `userProfileService.getUserProfiles().keySet().toArray()`(uid `long[]`)快照,每 tick 取 `[cursor, cursor+N)` 的 uid,对每个 `UserProfile up = userProfileService.getUserProfile(uid); if(up!=null) checkUser(up, cmd.timestamp);`,`cursor+=N`,扫到尾归零 + 换快照。**用户数据来自引擎自己的 `userProfileService`,命令只提供 `cmd.timestamp`**。**无 stuck 分支**。
-    - `nextLiquidationState(OrderCommand cmd, SymbolPositionRecord pos)`:开头加 `if(!isRunning())return;` → flow-map 只 leader 维护(follower 不填)。其余 flow-map 逻辑同 Task 2。
+    - `nextLiquidationState(OrderCommand cmd, SymbolPositionRecord pos)`:开头加 `if(!isRunning())return;` → flow-map 只 leader 维护(follower 不填)。其余 flow-map 逻辑同 Task 3。
     - `onPositionOpened(int symbol,long uid)`:`symbolToUsers.getIfAbsentPut(symbol,LongHashSet::new).add(uid);`(**不 gate**)
     - `onPositionClosed(SymbolPositionRecord pos)`:`MutableLongSet s=symbolToUsers.get(pos.symbol); if(s!=null){s.remove(pos.uid); if(s.isEmpty())symbolToUsers.remove(pos.symbol);} removeFlow(pos);`(**不 gate**)
     - `rebuildIndex()`:`symbolToUsers.clear(); flows.clear(); backstopSnapshot=null; backstopCursor=0;` 再遍历 `userProfileService.getUserProfiles()` 各非空期货仓 `onPositionOpened(pos.symbol, up.uid)`。
@@ -187,18 +238,18 @@
       loanLiquidationEngine.check(up);                               // loan 旧路(Plan 2)
   }
   ```
-- [ ] **Step 4: 跑测试** `mvn -pl exchange-core -Dtest=LiquidationEngineTest,LoanLiquidationEngineTest test` + `mvn -pl raft-exchange-server -am compile`(父类改名后确认 server 过编)。Expected: exchange-core PASS(新用例 + loan 回归)、server 过编。**注**:`ITLiquidationIntegration` 因触发未接(Task 4)此刻可能红,与 Task 4 联合验收。
-- [ ] **Step 5:** 提交(**Task 3 + Task 4 联合验收**:集成检测在 Task 4 闭环,`ITLiquidationIntegration` 在 Task 4 末转绿)。
+- [ ] **Step 4: 跑测试** `mvn -pl exchange-core -Dtest=LiquidationEngineTest,LoanLiquidationEngineTest test` + `mvn -pl raft-exchange-server -am compile`(父类改名后确认 server 过编)。Expected: exchange-core PASS(新用例 + loan 回归)、server 过编。**注**:`ITLiquidationIntegration` 因触发未接(Task 5)此刻可能红,与 Task 5 联合验收。
+- [ ] **Step 5:** 提交(**Task 4 + Task 5 联合验收**:集成检测在 Task 5 闭环,`ITLiquidationIntegration` 在 Task 5 末转绿)。
 
 ---
 
-## Task 4: RiskEngine 接线(触发委托 + 索引维护 + 快照重建 + 兜底)
+## Task 5: RiskEngine 接线(触发委托 + 索引维护 + 快照重建 + 兜底)
 
 **Files:**
 - Modify: `processors/RiskEngine.java`
 - Test: `test/.../processors/RiskEngineLiquidationWiringTest.java` + `ITLiquidationIntegration`
 
-**Interfaces(Consumes):** Task 3 的 `checkPositionsOnSymbol/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`。
+**Interfaces(Consumes):** Task 4 的 `checkPositionsOnSymbol/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`。
 
 - [ ] **Step 1: 写测试**(`RiskEngineLiquidationWiringTest`):价格触发只查持有者并对破产者发 FORCE;资金费 apply 后触发该 perp 持有者检查;开仓→`symbolToUsers` 含 (symbol,uid),平仓→移除且 flow 清;快照恢复后索引与逐仓遍历对拍;`ApiLiquidationBackstopTick`→`backstopTick` 被调;重复投 `FORCE_LIQUIDATION`(size 超 openVolume)经 `normalizeCmdPositionSize` 夹取不超平。
 - [ ] **Step 2:** 跑失败。
@@ -214,7 +265,7 @@
 
 ---
 
-## Task 5: 全量回归 + 换届 mid-flow 幂等集成用例(重发 FORCE 恢复)
+## Task 6: 全量回归 + 换届 mid-flow 幂等集成用例(重发 FORCE 恢复)
 
 **Files:** 扩 `ITLoanFailoverSnapshot` 或新建 `LiquidationFailoverRecoveryTest.java`
 
@@ -229,23 +280,25 @@
 ## 测试(总览)
 
 - 行为回归底线全绿(见 Global Constraints)。
-- targeted 触发正确性(Task 3/4):价格/资金费 apply 后只查受影响用户、破产者发 FORCE。
-- symbol→uid 索引(Task 3/4):开/平仓增删 + 快照重建对拍。
-- 兜底切片 sweep(兼冷启动,Task 3/4);**无 stuck**。
-- running gate(Task 3):引擎未 start 时 `checkPositionsOnSymbol`/`backstopTick`/`nextLiquidationState` 全 no-op(follower 语义)。
-- 仓位夹住幂等(Task 4):重复/重发 FORCE 不超平。
-- mid-flow 换届重启(Task 5):新 leader flow-map 空 → 重发 FORCE 收敛、不超平、不分叉。
+- **BP 等价对拍(Task 2):** 破产价三合一前后,同批 isolated + cross(单仓/多仓、fixed/dynamic fee)仓的 BP 逐一相等。
+- targeted 触发正确性(Task 4/5):价格/资金费 apply 后只查受影响用户、破产者发 FORCE。
+- symbol→uid 索引(Task 4/5):开/平仓增删 + 快照重建对拍。
+- 兜底切片 sweep(兼冷启动,Task 4/5);**无 stuck**。
+- running gate(Task 4):引擎未 start 时 `checkPositionsOnSymbol`/`backstopTick`/`nextLiquidationState` 全 no-op(follower 语义)。
+- 仓位夹住幂等(Task 5):重复/重发 FORCE 不超平。
+- mid-flow 换届重启(Task 6):新 leader flow-map 空 → 重发 FORCE 收敛、不超平、不分叉。
 - 无竞态(结构性):父类 tick 只 publish、不读 `UserProfile`;所有用户态读在 on-lane apply;server 不直调扫描。
-- stateHash 稳定(Task 2):移除 `liquidationCtx` 后序列化 round-trip + 多节点一致。
+- stateHash 稳定(Task 3):移除 `liquidationCtx` 后序列化 round-trip + 多节点一致。
 
 ## 关键决策记录
 
 1. **只新建 `ApiLiquidationBackstopTick` 一个类**;索引/flow-map/游标是 `LiquidationEngine` 字段——minimal diff 降低确定性代码风险。
-2. **父类 `LiquidationScheduledService`(原 `SimpleScheduledService`)= off-lane 发令器,持 publisher + 心跳发令;`LiquidationEngine`(子类)= on-lane 逻辑**。竞态根除靠"父类 tick 不碰用户态",非删定时器。
-3. **exchange-core 不引入 `isLeader`**:leader-only 逻辑用父类 `isRunning()`(start/stop 生命周期,server 按 leader 驱动)gate。exchange-core 只知"我在跑",不知"谁是 leader";权威门控在 server publisher。
-4. **flow-map 只 leader 维护**(`nextLiquidationState` 加 `isRunning()` gate → follower 不填);不进 stateHash/snapshot;正确性靠 R1 `normalizeCmdPositionSize` size 夹取。**这使 stuck 不再需要**:换届后新 leader flow-map 空 → 残余仓当破产仓重发 FORCE 恢复(price/backstop 触发),重走 FORCE→IF→ADL 收敛。删 `tryRepublishStuckLiquidation` + `stuckThresholdMs`。
-5. **索引维护不 gate**(`onPositionOpened/Closed` 在开/平仓 apply、所有节点确定性维护);快照恢复 `rebuildIndex`。派生态,任一节点上位即可用。
-6. **无独立冷启动全扫 / 无 fullScan**:兜底切片 sweep 一轮覆盖全部,兼冷启动;所有扫描 on-lane;server 不直调扫描。代价:换届后空闲已破产仓冷启动延迟 ≤ 一个 sweep 周期(价格在动的仓被 targeted 即时抓)。
-7. **backstop tick 每分片 apply**:shard-0 心跳发一条命令,raft 复制,各分片 apply 扫本分片切片。
+2. **破产价内聚到数据所有者**(Task 2):公式 + isolated/cross 分派进 `SymbolPositionRecord`(三方法合 1);账户级 marginBase 分摊进 `UserProfile`,经 `ToLongFunction` 回调注入(position 不反向抓账户)。引擎零 BP 公式代码,`tickBpMarginBaseCache` 字段删除(改每账户算一次的本地 map)。纯 behavior-preserving。
+3. **父类 `LiquidationScheduledService`(原 `SimpleScheduledService`)= off-lane 发令器,持 publisher + 心跳发令;`LiquidationEngine`(子类)= on-lane 逻辑**。竞态根除靠"父类 tick 不碰用户态",非删定时器。
+4. **exchange-core 不引入 `isLeader`**:leader-only 逻辑用父类 `isRunning()`(start/stop 生命周期,server 按 leader 驱动)gate。exchange-core 只知"我在跑",不知"谁是 leader";权威门控在 server publisher。
+5. **flow-map 只 leader 维护**(`nextLiquidationState` 加 `isRunning()` gate → follower 不填);不进 stateHash/snapshot;正确性靠 R1 `normalizeCmdPositionSize` size 夹取。**这使 stuck 不再需要**:换届后新 leader flow-map 空 → 残余仓当破产仓重发 FORCE 恢复(price/backstop 触发),重走 FORCE→IF→ADL 收敛。删 `tryRepublishStuckLiquidation` + `stuckThresholdMs`。
+6. **索引维护不 gate**(`onPositionOpened/Closed` 在开/平仓 apply、所有节点确定性维护);快照恢复 `rebuildIndex`。派生态,任一节点上位即可用。
+7. **无独立冷启动全扫 / 无 fullScan**:兜底切片 sweep 一轮覆盖全部,兼冷启动;所有扫描 on-lane;server 不直调扫描。代价:换届后空闲已破产仓冷启动延迟 ≤ 一个 sweep 周期(价格在动的仓被 targeted 即时抓)。
+8. **backstop tick 每分片 apply**:shard-0 心跳发一条命令,raft 复制,各分片 apply 扫本分片切片。
 9. **`checkPositionsOnSymbol` 与 `backstopTick` 共用核心 `checkUser`**(检测逻辑一份,复用现有 `checkLiquidationIsolated/Cross`);两者只是"喂给 `checkUser` 的用户集"不同。**backstop 按"用户"切片(每 tick 固定 N 个,游标推进),不按 symbol 切**——按 symbol 切会因热门 symbol 持有者过多导致单 tick 巨型扫描(重现拥堵);按用户切每 tick 成本恒定。
-8. **loan 侧本计划仅摘 reprice 心跳到父类**,targeted 事件化是 **Plan 2**。
+10. **loan 侧本计划仅摘 reprice 心跳到父类**,targeted 事件化是 **Plan 2**。
