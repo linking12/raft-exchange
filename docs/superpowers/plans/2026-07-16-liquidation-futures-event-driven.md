@@ -4,7 +4,7 @@
 
 **Goal:** 把期货强平从"每 2s off-lane 全量扫描"改成"命令 apply 内 on-lane、按 symbol→uid targeted 的事件驱动检测",根除扫描数据竞态、提升高杠杆及时性,并把 `LiquidationContext` 从复制态抽成 leader-local。
 
-**Architecture:** 强平检查移到 RiskEngine 命令 handler 内(单写者线程,读一致状态)。价格/资金费命令 apply 后只检查受影响 symbol 的持有者(靠 `LiquidationEngine` 里一个 symbol→uid 索引字段);破产则经现有 `LiquidationCmdPublisher` 发 `FORCE_LIQUIDATION`,下游 IF/ADL 不变。**最小改动:不抽新组件类**——索引/flow-map/游标都是 `LiquidationEngine` 的字段,targeted 入口复用现有 `checkLiquidationIsolated/Cross`。定时器不删:父类(`SimpleScheduledService` 改名 `LiquidationScheduledService`)改为"只发命令的 off-lane 发令器"(持 publisher + 心跳发 `BACKSTOP_TICK`/`REPRICE`),`LiquidationEngine`(子类)只做 on-lane 逻辑。强平流程状态 `LiquidationContext` 退出 snapshot/stateHash,改 leader-local;正确性由 R1 `normalizeCmdPositionSize` 的 size 夹取 + 换届冷启动重扫保证。
+**Architecture:** 强平检查移到 RiskEngine 命令 handler 内(单写者线程,读一致状态)。价格/资金费命令 apply 后只检查受影响 symbol 的持有者(靠 `LiquidationEngine` 里一个 symbol→uid 索引字段);破产则经现有 `LiquidationCmdPublisher` 发 `FORCE_LIQUIDATION`,下游 IF/ADL 不变。**最小改动:不抽新组件类**——索引/flow-map/游标都是 `LiquidationEngine` 的字段,targeted 入口复用现有 `checkLiquidationIsolated/Cross`。定时器不删:父类(`SimpleScheduledService` 改名 `LiquidationScheduledService`)改为"只发命令的 off-lane 发令器"(持 publisher + 心跳发 `BACKSTOP_TICK`/`REPRICE`),`LiquidationEngine`(子类)只做 on-lane 逻辑。强平流程状态 `LiquidationContext` 退出 snapshot/stateHash,改 leader-local;正确性由 R1 `normalizeCmdPositionSize` 的 size 夹取 + 换届后兜底 sweep 重扫保证。**无独立冷启动全扫**:兜底切片 sweep 一轮内覆盖全部,兼任冷启动;所有扫描只在 on-lane(含换届后),server 不直调扫描。
 
 **Tech Stack:** Java 25(Corretto),LMAX Disruptor,Eclipse Collections,Chronicle Bytes,JRaft/Aeron(server 层),JUnit 5 + AssertJ + Mockito。构建:`mvn -pl exchange-core test`。
 
@@ -12,7 +12,8 @@
 
 - **确定性(Raft RSM)不可破**:apply 路径内只整数运算(`Math.addExact/multiplyExact`);不引入 wall-clock 到复制态(用 `cmd.timestamp`);检查对复制状态**只读**,产出 `FORCE_LIQUIDATION` 经 publisher 进 log 再各节点确定性 apply。心跳发令用 `System.currentTimeMillis()` 仅作 leader-local 调度节流(不进复制态,允许)。
 - **stateHash 参与项变更全节点一致**:移除 `SymbolPositionRecord.liquidationCtx` 的 stateHash 参与项;pre-launch 无历史快照,直接改,不写版本兼容。
-- **leader-local 结构不进 snapshot/stateHash**:symbol→uid 索引、flow-map、backstop 游标均为派生/进程态;快照恢复时索引**重建**,flow/游标换届重置(中途仓由冷启动扫描重启)。
+- **leader-local 结构不进 snapshot/stateHash**:symbol→uid 索引、flow-map、backstop 游标均为派生/进程态;快照恢复时索引**重建**,flow/游标换届重置(中途仓由兜底 sweep 重扫重启)。
+- **所有扫描只在 on-lane**:换届后也不例外——server 不直调 `engine` 扫描方法(那会在换届线程上 off-lane 读用户态,重现竞态);冷启动靠父类定时器 start 后的兜底 sweep(经 `BACKSTOP_TICK` apply 在 disruptor 线程跑)。
 - **不改快照字节格式**(除 `liquidationCtx` 移除一处);索引派生态恢复时遍历重建。
 - **行为回归底线全绿**:`ITConservationFuzz`、`ITLoanConservation`、`PersistenceTests`、`LiquidationEngineTest`(及同目录 liquidation 测试)、`ITLiquidationIntegration`、`LoanLiquidationEngineTest`。
 - **YAGNI / 不为测试污染代码**:除 `ApiLiquidationBackstopTick`(新命令 payload,必须是类)外**不新建类**;索引等以字段+方法形式落在 `LiquidationEngine`。
@@ -44,9 +45,9 @@
 - `common/SymbolPositionRecord.java` — 移除 `liquidationCtx` 字段/序列化/stateHash。
 - `processors/liquidation/LiquidationContext.java` — 删序列化三件套(变纯内存 holder;字段+enum+4 参构造保留)。
 - `processors/liquidation/SimpleScheduledService.java` → **改名 `LiquidationScheduledService.java`**(父类)— 持 `liquidationCmdPublisher`(+setter)、`shardId`、心跳节流字段;`runOneIteration()` 变具体 = shard-0 节流发 `BACKSTOP_TICK`+`REPRICE`;加 `protected publish(ApiCommand,Runnable)`。server 2 处引用同步改。
-- `processors/liquidation/LiquidationEngine.java`(子类)— 去掉自有 publisher 字段 / `runOneIteration` / `checkLiquidations` / `triggerOnce` / `tryRepublishStuckLiquidation` / `inFlightLiquidationCmd`;加 symbol→uid 索引 + flow-map + backstop 游标(**字段**)+ `checkPositionsOnSymbol/fullScan/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`(复用现有 check 方法)+ `BooleanSupplier isLeader`;`nextLiquidationState` 与所有 `pos.liquidationCtx` 改走 flow-map;发命令用继承的 `publish(...)`。
+- `processors/liquidation/LiquidationEngine.java`(子类)— 去掉自有 publisher 字段 / `runOneIteration` / `checkLiquidations` / `triggerOnce` / `tryRepublishStuckLiquidation` / `inFlightLiquidationCmd`;加 symbol→uid 索引 + flow-map + backstop 游标(**字段**)+ `checkPositionsOnSymbol/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`(复用现有 check 方法)+ `BooleanSupplier isLeader`;`nextLiquidationState` 与所有 `pos.liquidationCtx` 改走 flow-map;发命令用继承的 `publish(...)`。**无 `fullScan`**(兜底 sweep 兼冷启动)。
 - `processors/loan/LoanLiquidationEngine.java` — `check` 删 reprice 心跳块(改由父类发);只留 isolated/cross loan 扫描。
-- server `JraftClusterContainer`/`AeronClusterContainer`(+相关 `ExchangeRuntime`)— 换届 LEADER 追加 `setIsLeader` + `fullScan()`;`start/stop` 不动。
+- server `JraftClusterContainer`/`AeronClusterContainer`(+相关 `ExchangeRuntime`)— 一次性 `setIsLeader` 接线(同 publisher 的 isLeader 源);`start/stop` 不动;**不直调扫描**(冷启动靠兜底 sweep)。
 
 ---
 
@@ -116,7 +117,7 @@
 
 **Interfaces(Produces,Task 4/5 消费):**
 - 父类:`@Setter protected LiquidationCmdPublisher liquidationCmdPublisher;`、`@Getter protected final int shardId;`(经构造注入)、`protected final void publish(ApiCommand cmd, Runnable onApplied)`。`runOneIteration()` 具体化(非 abstract)= 心跳发令。
-- `LiquidationEngine`:`checkPositionsOnSymbol(int symbol, OrderCommand cmd)`、`fullScan()`、`backstopTick(OrderCommand cmd)`、`onPositionOpened(int symbol, long uid)`、`onPositionClosed(SymbolPositionRecord pos)`、`rebuildIndex()`、`setIsLeader(BooleanSupplier)`;`nextLiquidationState` 签名不变。
+- `LiquidationEngine`:`checkPositionsOnSymbol(int symbol, OrderCommand cmd)`、`backstopTick(OrderCommand cmd)`、`onPositionOpened(int symbol, long uid)`、`onPositionClosed(SymbolPositionRecord pos)`、`rebuildIndex()`、`setIsLeader(BooleanSupplier)`;`nextLiquidationState` 签名不变。**无 `fullScan`**。
 
 - [ ] **Step 1: 写测试**(`LiquidationEngineTest` 新增):
   - **heartbeat**:shard-0 引擎 `runOneIteration()` 首调 publish 一条 `ApiLiquidationBackstopTick`(mock publisher 捕获);节流内二次不重发;shard≠0 不发。
@@ -140,12 +141,10 @@
     - `private final IntObjectHashMap<MutableLongSet> symbolToUsers = new IntObjectHashMap<>();`(索引)
     - `private long[] backstopSnapshot; private int backstopCursor;`(游标)
     - `private java.util.function.BooleanSupplier isLeader = () -> true;`(+`setIsLeader`)
-    - `private long lastCmdTimestamp;`(供 `fullScan` 用)
-  - 新方法(leader-gate 除维护类):
-    - `checkPositionsOnSymbol(int symbol, OrderCommand cmd)`:`if(!isLeader.getAsBoolean())return; lastCmdTimestamp=cmd.timestamp;` 取 `MutableLongSet users=symbolToUsers.get(symbol); if(users!=null) users.forEach(uid -> checkUser(userProfileService.getUserProfile(uid), cmd.timestamp));`
+  - 新方法(leader-gate 除维护类;时间戳一律用入参 `cmd.timestamp`,不存字段):
+    - `checkPositionsOnSymbol(int symbol, OrderCommand cmd)`:`if(!isLeader.getAsBoolean())return;` 取 `MutableLongSet users=symbolToUsers.get(symbol); if(users!=null) users.forEach(uid -> checkUser(userProfileService.getUserProfile(uid), cmd.timestamp));`
     - `private void checkUser(UserProfile up, long ts)`:复现原 `checkLiquidations` 单用户体——`tickBpMarginBaseCache` 按需 clear、迭代 `up.positions`、期货仓 `checkLiquidationIsolated`/聚合 `checkLiquidationCross`、`loanLiquidationEngine.check(up)`;**这些现有方法内部发 FORCE 的逻辑(`startLiquidationFlow`)原样复用**。`ts` 传给需要时间戳处(替代原 `System.currentTimeMillis()`;`startLiquidationFlow`/`beginFlow` 用 `ts`)。
-    - `fullScan()`:`if(!isLeader.getAsBoolean())return; userProfileService.getUserProfiles().forEachValue(up -> checkUser(up, lastCmdTimestamp));`
-    - `backstopTick(OrderCommand cmd)`:`if(!isLeader.getAsBoolean())return; lastCmdTimestamp=cmd.timestamp;`(a)切片:游标取 `userProfileService.getUserProfiles().keySet().toArray()` 快照,每 tick 扫 N 个调 `checkUser`;(b)stuck:遍历 `flows` 中 `cmd.timestamp - flow.lastTransitionAt > stuckThresholdMs` 者,按 `flow.state` republish(`buildIFCmd/buildADLCmd/buildForceCmd`)。
+    - `backstopTick(OrderCommand cmd)`:`if(!isLeader.getAsBoolean())return;`(a)切片(**兼冷启动**:换届后父类定时器 start → 每 tick 推进,一轮 sweep 内覆盖全部):游标取 `userProfileService.getUserProfiles().keySet().toArray()` 快照,每 tick 扫 N 个调 `checkUser(up, cmd.timestamp)`,扫到尾归零 + 换快照;(b)stuck:遍历 `flows` 中 `cmd.timestamp - flow.lastTransitionAt > stuckThresholdMs` 者,按 `flow.state` republish(`buildIFCmd/buildADLCmd/buildForceCmd`)。
     - `onPositionOpened(int symbol,long uid)`:`symbolToUsers.getIfAbsentPut(symbol,LongHashSet::new).add(uid);`(**非** leader-gate)
     - `onPositionClosed(SymbolPositionRecord pos)`:`MutableLongSet s=symbolToUsers.get(pos.symbol); if(s!=null){s.remove(pos.uid); if(s.isEmpty())symbolToUsers.remove(pos.symbol);} removeFlow(pos);`(**非** leader-gate)
     - `rebuildIndex()`:`symbolToUsers.clear(); flows.clear(); backstopSnapshot=null; backstopCursor=0;` 再遍历 `userProfileService.getUserProfiles()` 各非空期货仓 `onPositionOpened(pos.symbol, up.uid)`。
@@ -161,7 +160,7 @@
 - Modify: `processors/RiskEngine.java`
 - Test: `test/.../processors/RiskEngineLiquidationWiringTest.java` + `ITLiquidationIntegration`
 
-**Interfaces(Consumes):** Task 3 的 `checkPositionsOnSymbol/fullScan/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`。
+**Interfaces(Consumes):** Task 3 的 `checkPositionsOnSymbol/backstopTick/onPositionOpened/onPositionClosed/rebuildIndex`。
 
 - [ ] **Step 1: 写测试**(`RiskEngineLiquidationWiringTest`):价格触发只查持有者并对破产者发 FORCE;资金费 apply 后触发该 perp 持有者检查;开仓→`symbolToUsers` 含 (symbol,uid),平仓→移除且 flow 清;快照恢复后索引与逐仓遍历对拍;`ApiLiquidationBackstopTick`→`backstopTick` 被调 + stuck republish;重复投 `FORCE_LIQUIDATION`(size 超 openVolume)经 `normalizeCmdPositionSize` 夹取不超平。
 - [ ] **Step 2:** 跑失败。
@@ -177,16 +176,16 @@
 
 ---
 
-## Task 5: server 换届冷启动 + isLeader 注入
+## Task 5: server isLeader 注入(无直调扫描;冷启动靠兜底 sweep)
 
 **Files:**
 - Modify: server `JraftClusterContainer`(85-91)/`AeronClusterContainer`(66-72)/相关 `ExchangeRuntime`
 - Test: 无新单测(靠 Task 6 live/failover);编译 + 现有 server 测试
 
-**Interfaces(Consumes):** Task 3 `setIsLeader`/`fullScan`。
+**Interfaces(Consumes):** Task 3 `setIsLeader`。
 
-- [ ] **Step 1-3:** 换届 LEADER 分支:现有 `engines.forEach(LiquidationScheduledService::start)`(Task 3 改名后)**保留**(父类定时器发心跳),追加 `engines.forEach(e -> { e.setIsLeader(isLeaderSupplier); e.fullScan(); })`(冷启动一次性全扫);非 LEADER:现有 `::stop` 保留。`isLeaderSupplier` 用与 `overrideLiquidationCmdPublisher` 同源的 `isLeader`。
-- [ ] **Step 4:** `mvn -pl raft-exchange-server -am compile`(改引擎 API 后确认下游过编,既有教训)+ `mvn -pl raft-exchange-server test`(在线,若离线 provider 缺失则记为待补)。
+- [ ] **Step 1-3:** 在 wiring 处(同 `overrideLiquidationCmdPublisher` 那段)对每个引擎 `e.setIsLeader(isLeaderSupplier)` 一次性接线(`isLeaderSupplier` 用与 publisher 同源的 `isLeader`)。换届 LEADER/非 LEADER 分支的 `engines.forEach(LiquidationScheduledService::start/stop)`(Task 3 改名后)**原样保留** —— 父类定时器 start 后即发心跳,兜底 sweep 在 on-lane 自然接管冷启动。**不追加任何 `engine.fullScan()` 之类的直调扫描**(那会在换届线程 off-lane 读用户态,重现竞态)。
+- [ ] **Step 4:** `mvn -pl raft-exchange-server -am compile`(改引擎 API/父类改名后确认下游过编,既有教训)+ `mvn -pl raft-exchange-server test`(在线,若离线 provider 缺失则记为待补)。
 - [ ] **Step 5:** 提交。
 
 ---
@@ -195,7 +194,7 @@
 
 **Files:** 扩 `ITLoanFailoverSnapshot` 或新建 `LiquidationStuckRecoveryTest.java`
 
-- [ ] **Step 1: 核心用例**(spec §8):FORCE 出残余(部分成交 REJECT)→ flow 处 WAIT_IF_EXECUTION;模拟换届(清 `flows` / 走快照 `rebuildIndex`)→ 触发 `fullScan()`(或下个价格事件命中残余)→ 残余仓当普通破产仓重发 FORCE(size 夹到当前残余)→ 收敛、**不超平**、守恒不变、多节点 stateHash 一致。
+- [ ] **Step 1: 核心用例**(spec §8):FORCE 出残余(部分成交 REJECT)→ flow 处 WAIT_IF_EXECUTION;模拟换届(清 `flows` / 走快照 `rebuildIndex`)→ 投 `LIQUIDATION_BACKSTOP_TICK` 令兜底 sweep 命中残余(或下个价格事件命中)→ 残余仓当普通破产仓重发 FORCE(size 夹到当前残余)→ 收敛、**不超平**、守恒不变、多节点 stateHash 一致。
 - [ ] **Step 2:** 跑失败。
 - [ ] **Step 3:** 视需要微调(不应大改;需则回对应 Task)。
 - [ ] **Step 4: 全量** `mvn -pl exchange-core test`(~1118 基线不降 + 新用例);必要时 `mvn -pl raft-exchange-server -am test`。
@@ -208,7 +207,7 @@
 - 行为回归底线全绿(见 Global Constraints)。
 - targeted 触发正确性(Task 3/4):价格/资金费 apply 后只查受影响用户、破产者发 FORCE。
 - symbol→uid 索引(Task 3/4):开/平仓增删 + 快照重建对拍。
-- 冷启动全扫 + 兜底切片 + stuck republish(Task 3/4/5)。
+- 兜底切片 sweep(兼冷启动)+ stuck republish(Task 3/4)。
 - 仓位夹住幂等(Task 4):重复/重发 FORCE 不超平。
 - mid-flow 换届重启(Task 6):收敛、不超平、不分叉。
 - 无竞态(结构性):父类 tick 只 publish、不读 `UserProfile`;所有用户态读在 on-lane apply。
@@ -218,7 +217,8 @@
 
 1. **只新建 `ApiLiquidationBackstopTick` 一个类**;索引/flow-map/游标是 `LiquidationEngine` 字段——避免为一个不存在的 god-class 问题做投机拆分,minimal diff 降低确定性代码风险。
 2. **父类 `LiquidationScheduledService`(原 `SimpleScheduledService`)= off-lane 发令器,持 publisher + 心跳发令;`LiquidationEngine`(子类)= on-lane 逻辑**。竞态根除靠"父类 tick 不碰用户态",非删定时器。
-3. **flow-map 在 R2 apply(`nextLiquidationState`)被所有节点确定性更新,但不进 stateHash/snapshot**;正确性靠 R1 `normalizeCmdPositionSize` size 夹取(+loan 抵押 guard),不靠 flow-map;快照恢复后即上位的节点靠换届 `fullScan()` 冷启动补齐。
+3. **flow-map 在 R2 apply(`nextLiquidationState`)被所有节点确定性更新,但不进 stateHash/snapshot**;正确性靠 R1 `normalizeCmdPositionSize` size 夹取(+loan 抵押 guard),不靠 flow-map;快照恢复后即上位的节点靠**兜底 sweep 一轮内**补齐(无独立 fullScan)。
+7. **无独立冷启动全扫**:兜底切片 sweep 一轮覆盖全部,兼任冷启动。所有扫描只在 on-lane(`checkPositionsOnSymbol`/`backstopTick` 均由命令 apply 驱动);server 换届**只 start 定时器 + 一次性 setIsLeader,绝不直调扫描**(直调=换届线程 off-lane 读用户态=竞态)。代价:换届后空闲已破产仓冷启动延迟 ≤ 一个 sweep 周期(价格在动的仓被 targeted 即时抓)。
 4. **检查 leader-gate,索引维护不 gate**(索引派生自复制态开/平仓 apply,任一节点上位即可用);follower 即便空跑也无害(publisher 层 no-op)。
 5. **backstop tick 每分片 apply**:shard-0 心跳发一条命令,raft 复制,各分片 apply 扫本分片切片 + stuck。
 6. **loan 侧本计划仅摘 reprice 心跳到父类**,targeted 事件化是 **Plan 2**。
