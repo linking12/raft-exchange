@@ -25,7 +25,7 @@
 
 **生产(exchange-core)** —— 全部在 loan / liquidation 包内,**不碰调度器/接口/server**
 - `processors/loan/LoanLiquidationEngine.java` — 核心。删 `LaneState`/inFlight/retry-throttle;force-sell/margin-call `submit(cmd, null)`(签名不变);`check(up)`→`check(up, ts)`;加两索引 + 维护/查询/重建方法。
-- `processors/liquidation/LiquidationEngine.java` — `checkUser` 传 `ts` 给 loan(1 行);`checkPositions` targeted 分支并 loan 索引;`updateProvider` 调 `rebuildIndices`。
+- `processors/liquidation/LiquidationEngine.java` — `checkUser` 传 `ts` 给 loan(1 行);`checkPositions` targeted 分支**查 loan 索引求并**(只读);`updateProvider` 调 `rebuildIndices`。
 - `processors/loan/LoanCommandHandlers.java` — 生命周期 hook 调用索引维护。
 
 > **onApplied 不动**:删 inFlight 后 loan 不再用 `onApplied`,但保留 `LiquidationCommandSubmitter.submit(ApiCommand, Runnable)` 签名、loan 传 `null` —— 避免拖动 `LiquidationCommandSubmitter`/`LiquidationScheduledService`/`ExchangeRuntime`(死参数清理不值得跨模块 churn)。
@@ -559,7 +559,7 @@ git commit -m "feat(loan): targeted 强平索引(isolated symbolId / cross curre
 **Interfaces:**
 - Consumes:Task 2 的 `collectAffectedLoanUsers` / `rebuildIndices`。
 
-- [ ] **Step 1: `checkPositions` targeted 分支并 loan 索引**
+- [ ] **Step 1: `checkPositions` targeted 分支查 loan 索引求并(只读)**
 
 `LiquidationEngine.java` 的 `checkPositions`(替换 targeted 分支):
 
@@ -729,7 +729,7 @@ Expected: PASS(targeted 触发生效;force-sell pipeline / 守恒 / failover 快
 
 ```bash
 git add -A
-git commit -m "feat(loan): checkPositions 并 loan 索引 targeted 触发 + updateProvider 重建 + IT"
+git commit -m "feat(loan): checkPositions 查 loan 索引求并 targeted 触发 + updateProvider 重建 + IT"
 ```
 
 ---
