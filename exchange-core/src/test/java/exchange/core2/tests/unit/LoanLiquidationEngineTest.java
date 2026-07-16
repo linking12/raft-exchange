@@ -545,6 +545,35 @@ class LoanLiquidationEngineTest {
         verify(publisher, never()).submit(any(), any());
     }
 
+    @Test
+    void check_crossOverLiquidation_topPickHasNoMarket_fallsBackToSellablePair_publishes() {
+        // ★ 卡死回归护栏：最高息 loan 币种(ETH) 无 BTC/ETH 现货对，但存在 BTC/USDT 现货对可偿还次高息的 USDT loan。
+        // 修复前：pickCrossLoanToRepay 只选最高息 ETH → findSpotSpec 空 → 每次价格事件都重挑同一对、永久 abort，
+        //         坏账永不结算、scanner 空转。修复后：回退到存在市场的(卖 BTC, 偿 USDT loan)组合 → publish。
+        final int ETH = 3;
+        spyWithCrossLtvOverLiquidation();
+
+        CrossLoanRecord ethLoan = new CrossLoanRecord(UID, LOAN_ID, ETH, 800, OPENED_AT_MS); // 最高息、无 BTC/ETH 市场
+        ethLoan.symbolId = SYMBOL;
+        ethLoan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, ethLoan);
+
+        CrossLoanRecord usdtLoan = new CrossLoanRecord(UID, LOAN_ID + 1, USDT, 500, OPENED_AT_MS); // 次高息、有 BTC/USDT 市场
+        usdtLoan.symbolId = SYMBOL;
+        usdtLoan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID + 1, usdtLoan);
+
+        up.crossLoanCollateral.put(BTC, 2L); // 唯一抵押 BTC；BTC/USDT 现货对存在（setUp）
+
+        scanner.checkUser(up, OPENED_AT_MS);
+
+        ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
+        verify(publisher).submit(captor.capture(), any());
+        ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
+        assertEquals(SYMBOL, cmd.symbol, "回退到有市场的 BTC/USDT 现货对");
+        assertEquals(LOAN_ID + 1, cmd.targetLoanId, "回退到可偿还的 USDT loan（非最高息但有市场）");
+    }
+
     // ================================================================
     // Cross tiebreak selectors: pickCrossCollateralToSell / pickCrossLoanToRepay
     // 全部用 spyWithCrossLtvOverLiquidation 强制进 publishCrossForceSell，

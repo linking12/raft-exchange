@@ -210,7 +210,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
         }
     }
 
-    /** 逐 quote 币种判定全仓联合风险：equity 跌破维持保证金则从最危险仓位起逐仓强平至覆盖亏空；跌破预警线则发预警。 */
+    /** 逐 quote 币种判定全仓联合风险：equity 跌破维持保证金则从最危险仓位起逐仓强平至覆盖亏空；跌破 1.2× 预警线则发预警。 */
     private void checkCross(UserProfile userProfile,
         IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency) {
         if (crossPositionsByCurrency.isEmpty()) {
@@ -229,21 +229,23 @@ public final class LiquidationEngine extends LiquidationScheduledService {
                 final CoreSymbolSpecification spec =
                     symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 final LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                long maintenance = position.calculateMaintenanceMargin(spec, priceRecord);
-                if (maintenance == 0) {
-                    continue;
+                final long rawMaintenance = position.calculateMaintenanceMargin(spec, priceRecord);
+                if (rawMaintenance == 0) {
+                    continue; // 无维持保证金要求：不占账户风险
                 }
                 final long profit =
                     CoreArithmeticUtils.sizePriceToCurrencyScale(position.estimatePnl(priceRecord), spec, currencySpec);
-                maintenance = CoreArithmeticUtils.sizePriceToCurrencyScale(maintenance, spec, currencySpec);
+                final long maintenance =
+                    CoreArithmeticUtils.sizePriceToCurrencyScale(rawMaintenance, spec, currencySpec);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
-                final long risk = Math.multiplyExact(profit - maintenance, 100) / maintenance;
-                riskPairs.add(PrimitiveTuples.pair(risk, position));
+                if (maintenance != 0) { // 缩放后归零不能做除数：PnL 已计入 totals，仅不参与风险排序
+                    riskPairs.add(PrimitiveTuples.pair(Math.multiplyExact(profit - maintenance, 100) / maintenance,
+                        position));
+                }
             }
-            final long balance = userProfile.calculateCrossAvailable(currency, currencySpec,
+            final long equity = totalProfit + userProfile.calculateCrossAvailable(currency, currencySpec,
                 symbolSpecificationProvider::getSymbolSpecification);
-            final long equity = balance + totalProfit;
             final long warningThreshold = Math.multiplyExact(totalMaintenanceMargin, 6) / 5; // 1.2× 维持保证金：预警线
             if (equity >= warningThreshold) {
                 return;

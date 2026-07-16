@@ -200,30 +200,23 @@ public final class LoanLiquidationEngine {
             currencySpecificationProvider, lastPriceCache, loanService.getGlobalConfig().numeraireCurrency);
 
         if (ltvBps >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
-            // 选一对（卖出币, 目标债）出手；单轮只处理一对，靠后续价格事件迭代 deleveraging
+            // 选（卖出抵押, 目标债）出手，单轮一对、靠后续价格事件迭代 deleveraging。抵押与目标债都要求存在 markPrice
+            // 就绪的现货对——否则该对永远成交不了、每轮又重挑同一对，会永久空转、坏账不结算。
             final int sellingCurrency = pickCrossCollateralToSell(userProfile);
             if (sellingCurrency == 0) {
-                log.warn("Cross force-sell abort: no collateral to sell (uid={})", userProfile.uid);
-                return;
-            }
-            final CrossLoanRecord targetLoan = pickCrossLoanToRepay(userProfile);
-            if (targetLoan == null) {
-                log.warn("Cross force-sell abort: no target loan (uid={})", userProfile.uid);
-                return;
-            }
-            final CoreSymbolSpecification spec =
-                LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency, symbolSpecificationProvider);
-            if (spec == null) {
-                log.warn("Cross force-sell abort: no spot pair sellingCurrency={} loanCurrency={} (uid={})",
-                    sellingCurrency, targetLoan.loanCurrency, userProfile.uid);
-                return;
-            }
-            final LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
-            if (priceRecord == null || priceRecord.markPrice <= 0) {
-                log.warn("Cross force-sell abort: markPrice not ready for symbol={} (uid={})", spec.symbolId,
+                log.warn("Cross force-sell abort: no sellable collateral with a ready spot market (uid={})",
                     userProfile.uid);
                 return;
             }
+            final CrossLoanRecord targetLoan = pickCrossLoanToRepay(userProfile, sellingCurrency);
+            if (targetLoan == null) {
+                log.warn("Cross force-sell abort: no repayable target loan (uid={})", userProfile.uid);
+                return;
+            }
+            // pick 已保证该对现货存在且 markPrice 就绪
+            final CoreSymbolSpecification spec =
+                LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency, symbolSpecificationProvider);
+            final LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
             final long availableCollateral = userProfile.crossLoanCollateral.get(sellingCurrency);
             final CoreCurrencySpecification sellingCurrencySpec =
                 currencySpecificationProvider.getCurrencySpecification(sellingCurrency);
@@ -299,18 +292,20 @@ public final class LoanLiquidationEngine {
         }
     }
 
-    /** 选卖出抵押币：权重 DESC → 数量 DESC → 币种 ASC；返回 0 表示无可卖抵押。 */
+    /** 选卖出抵押币：权重 DESC → 数量 DESC → 币种 ASC；且须存在可偿还某笔债、markPrice 就绪的现货对，否则返回 0。 */
     private int pickCrossCollateralToSell(UserProfile up) {
         int bestCurrency = 0;
         int bestWeight = -1;
         long bestAmount = -1;
         for (int currency : up.crossLoanCollateral.keySet().toArray()) {
-            long amount = up.crossLoanCollateral.get(currency);
+            final long amount = up.crossLoanCollateral.get(currency);
             if (amount <= 0)
                 continue;
-            int weight = LoanService.collateralWeightForBase(currency, symbolSpecificationProvider);
+            final int weight = LoanService.collateralWeightForBase(currency, symbolSpecificationProvider);
             if (weight <= 0)
                 continue;
+            if (up.crossLoans.noneSatisfy(l -> l.outstandingPrincipal > 0 && hasReadySpotMarket(currency, l.loanCurrency)))
+                continue; // 卖此币偿不了任何债（无现货对/markPrice 未就绪）→ 跳过，避免选中后每轮空转
             if (weight > bestWeight || (weight == bestWeight && amount > bestAmount)
                 || (weight == bestWeight && amount == bestAmount && currency < bestCurrency)) {
                 bestCurrency = currency;
@@ -321,11 +316,13 @@ public final class LoanLiquidationEngine {
         return bestCurrency;
     }
 
-    /** 选偿还目标 loan：利率 DESC → 本金 DESC → loanId ASC；返回 null 表示无未偿 loan。 */
-    private CrossLoanRecord pickCrossLoanToRepay(UserProfile up) {
+    /** 选偿还目标 loan：利率 DESC → 本金 DESC → loanId ASC；且须与 sellingCurrency 有 markPrice 就绪的现货对，否则返回 null。 */
+    private CrossLoanRecord pickCrossLoanToRepay(UserProfile up, int sellingCurrency) {
         CrossLoanRecord best = null;
         for (CrossLoanRecord loan : up.crossLoans) {
             if (loan.outstandingPrincipal <= 0)
+                continue;
+            if (!hasReadySpotMarket(sellingCurrency, loan.loanCurrency))
                 continue;
             if (best == null || loan.rateBps > best.rateBps
                 || (loan.rateBps == best.rateBps && loan.outstandingPrincipal > best.outstandingPrincipal)
@@ -335,6 +332,16 @@ public final class LoanLiquidationEngine {
             }
         }
         return best;
+    }
+
+    /** 卖 sellingCurrency 偿 loanCurrency 的现货对存在且 markPrice 就绪（可真正成交的前提）。 */
+    private boolean hasReadySpotMarket(int sellingCurrency, int loanCurrency) {
+        final CoreSymbolSpecification spec =
+            LoanService.findSpotSpec(sellingCurrency, loanCurrency, symbolSpecificationProvider);
+        if (spec == null)
+            return false;
+        final LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
+        return priceRecord != null && priceRecord.markPrice > 0;
     }
 
     /** 下单张数 = min(可卖抵押, 覆盖真实债务 + 5% buffer 所需)（均换算成 lot）。buffer 覆盖 fee + 限价容差冗余。 */
