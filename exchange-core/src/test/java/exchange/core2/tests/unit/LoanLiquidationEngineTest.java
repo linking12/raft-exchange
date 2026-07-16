@@ -11,13 +11,15 @@ import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
+import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.processors.FundEventsHelper;
 import org.mockito.ArgumentCaptor;
 import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
 import exchange.core2.core.processors.liquidation.LiquidationCommandSubmitter;
-import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.processors.loan.LoanLiquidationEngine;
 import exchange.core2.core.processors.loan.LoanService;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
@@ -29,20 +31,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import java.util.concurrent.atomic.AtomicReference;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -55,12 +49,12 @@ import static org.mockito.Mockito.when;
  *
  * <p>覆盖：
  * <ul>
- *   <li><b>in-flight 生命周期</b>：publishTrackedIsolated / publishTrackedCross 的加入 / onApplied 清 / 异常回滚。</li>
- *   <li><b>Isolated / Cross 强平判定</b>：LTV / 期限越线 → force-sell IOC，marginCall 预警，容差爬梯 / 卡单节流。</li>
+ *   <li><b>Isolated / Cross 强平判定</b>：LTV / 期限越线 → force-sell IOC，marginCall 预警（无节流），容差爬梯。</li>
+ *   <li><b>targeted 索引维护</b>：onIsolatedLoanOpened / onIsolatedLoanClosed / syncCrossExposure 驱动 checkLoans 命中。</li>
  * </ul>
  *
- * <p>注：动态利率 reprice 心跳已从 check() 移到父类 LiquidationScheduledService.runOneIteration()，
- * 本类不再覆盖 reprice。
+ * <p>注：动态利率 reprice 心跳已从 check 移到父类 LiquidationScheduledService.runOneIteration()，本类不再覆盖 reprice。
+ * in-flight 去重车道（LaneState / publishTracked* / 节流）已从生产代码整体删除，本类不再覆盖。
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -74,7 +68,6 @@ class LoanLiquidationEngineTest {
     // openedAtTs 近似当前时刻（ms）：避免 loanMaxTermDays 期限强平误触发（旧 sentinel 1000L = 1970 年，ms 语义下恒过期）。
     private static final long OPENED_AT_MS = System.currentTimeMillis();
 
-    @Mock private LiquidationEngine engine;
     @Mock private LiquidationCommandSubmitter publisher;
     @Mock private FundEventsHelper eventsHelper;
 
@@ -82,6 +75,7 @@ class LoanLiquidationEngineTest {
     private UserProfile up;
     private SymbolSpecificationProvider specProvider;
     private CurrencySpecificationProvider currencyProvider;
+    private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> priceCache;
     private LoanLiquidationEngine scanner;
 
@@ -91,6 +85,7 @@ class LoanLiquidationEngineTest {
         up = new UserProfile(UID, UserStatus.ACTIVE);
         specProvider = new SymbolSpecificationProvider();
         currencyProvider = new CurrencySpecificationProvider();
+        userProfileService = new UserProfileService();
         priceCache = new IntObjectHashMap<>();
 
         currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(BTC).name("BTC").digit(0).build());
@@ -114,113 +109,27 @@ class LoanLiquidationEngineTest {
         price.markPrice = 50_000L;
         priceCache.put(SYMBOL, price);
 
-        when(engine.getSymbolSpecificationProvider()).thenReturn(specProvider);
-        when(engine.getCurrencySpecificationProvider()).thenReturn(currencyProvider);
-        when(engine.getLastPriceCache()).thenReturn(priceCache);
-        when(engine.getLoanService()).thenReturn(loanService);
-        when(engine.getCommandSubmitter()).thenReturn(publisher);
-        when(engine.getEventsHelper()).thenReturn(eventsHelper);
-        // 默认非 0 shard（LENIENT：check() 不再依赖 shard，此 stub 仅为兼容旧调用点保留）。
-        when(engine.getShardId()).thenReturn(1);
+        userProfileService.getUserProfiles().put(UID, up);
 
-        scanner = new LoanLiquidationEngine(engine);
+        scanner = new LoanLiquidationEngine(eventsHelper, () -> publisher);
+        scanner.updateProvider(specProvider, currencyProvider, userProfileService, priceCache, loanService);
+    }
+
+    private OrderCommand priceEventCmd(int symbol) {
+        return OrderCommand.testBuilder(1)
+                .command(OrderCommandType.MARKPRICE_ADJUSTMENT)
+                .symbol(symbol)
+                .timestamp(OPENED_AT_MS)
+                .build();
     }
 
     // ================================================================
-    // in-flight guard 初始状态
-    // ================================================================
-
-    @Test
-    void inFlight_startsEmpty_forBothLanes() {
-        assertFalse(scanner.isIsolatedLoanInFlight(LOAN_ID));
-        assertFalse(scanner.isCrossLoanInFlight(UID));
-    }
-
-    // ================================================================
-    // publishTrackedIsolated
-    // ================================================================
-
-    @Test
-    void publishTrackedIsolated_addsLoanIdToInFlight() {
-        ApiCommand cmd = mock(ApiCommand.class);
-        scanner.publishTrackedIsolated(cmd, LOAN_ID);
-        assertTrue(scanner.isIsolatedLoanInFlight(LOAN_ID), "publish 后 in-flight");
-        verify(publisher).submit(eq(cmd), any(Runnable.class));
-    }
-
-    @Test
-    void publishTrackedIsolated_onAppliedCallbackClearsInFlight() {
-        ApiCommand cmd = mock(ApiCommand.class);
-        AtomicReference<Runnable> capturedOnApplied = new AtomicReference<>();
-        doAnswer(inv -> {
-            capturedOnApplied.set(inv.getArgument(1));
-            return null;
-        }).when(publisher).submit(any(), any(Runnable.class));
-
-        scanner.publishTrackedIsolated(cmd, LOAN_ID);
-        assertTrue(scanner.isIsolatedLoanInFlight(LOAN_ID));
-        assertNotNull(capturedOnApplied.get());
-
-        // 模拟 raft apply 完成
-        capturedOnApplied.get().run();
-        assertFalse(scanner.isIsolatedLoanInFlight(LOAN_ID), "onApplied 清 in-flight");
-    }
-
-    @Test
-    void publishTrackedIsolated_publisherThrows_cleansUpAndRethrows() {
-        ApiCommand cmd = mock(ApiCommand.class);
-        RuntimeException boom = new RuntimeException("publish failed");
-        doThrow(boom).when(publisher).submit(any(), any(Runnable.class));
-
-        assertThrows(RuntimeException.class, () -> scanner.publishTrackedIsolated(cmd, LOAN_ID));
-        assertFalse(scanner.isIsolatedLoanInFlight(LOAN_ID), "异常路径清 in-flight 避免死值");
-    }
-
-    // ================================================================
-    // publishTrackedCross
-    // ================================================================
-
-    @Test
-    void publishTrackedCross_addsUidToInFlight() {
-        ApiCommand cmd = mock(ApiCommand.class);
-        scanner.publishTrackedCross(cmd, UID);
-        assertTrue(scanner.isCrossLoanInFlight(UID));
-        verify(publisher).submit(eq(cmd), any(Runnable.class));
-    }
-
-    @Test
-    void publishTrackedCross_onAppliedCallbackClearsInFlight() {
-        ApiCommand cmd = mock(ApiCommand.class);
-        AtomicReference<Runnable> capturedOnApplied = new AtomicReference<>();
-        doAnswer(inv -> {
-            capturedOnApplied.set(inv.getArgument(1));
-            return null;
-        }).when(publisher).submit(any(), any(Runnable.class));
-
-        scanner.publishTrackedCross(cmd, UID);
-        assertTrue(scanner.isCrossLoanInFlight(UID));
-
-        capturedOnApplied.get().run();
-        assertFalse(scanner.isCrossLoanInFlight(UID));
-    }
-
-    @Test
-    void publishTrackedCross_publisherThrows_cleansUpAndRethrows() {
-        ApiCommand cmd = mock(ApiCommand.class);
-        doThrow(new RuntimeException("boom")).when(publisher).submit(any(), any(Runnable.class));
-
-        assertThrows(RuntimeException.class, () -> scanner.publishTrackedCross(cmd, UID));
-        assertFalse(scanner.isCrossLoanInFlight(UID));
-    }
-
-    // ================================================================
-    // check() —— skeleton invariant: 从不调 publisher.publish
-    // 未来 force-sell 实装后这些用例会失败作为 pending-work 提示（见 loan.md §7.5 / §7.6）
+    // checkUser() —— skeleton invariant
     // ================================================================
 
     @Test
     void check_emptyProfile_noThrow_noPublish() {
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -235,7 +144,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 30_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -248,7 +157,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         // Isolated force-sell 实装：LTV 触线时 publish 一次 ApiLiquidationOrder
         verify(publisher).submit(any(), any());
     }
@@ -262,7 +171,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 37_500L;
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         // scanner 用正确的 LTV=7500 / 阈值=7000 / mode=0 调 helper 发 MARGIN_CALL
         verify(eventsHelper).sendLoanMarginCallEvent(eq(UID), eq(LOAN_ID), eq((byte) 0), eq(USDT), eq(7500L), eq(7000L));
@@ -277,7 +186,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 45_000L; // LTV 90% ≥ 80% liquidation
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
@@ -312,7 +221,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 140_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
@@ -326,26 +235,6 @@ class LoanLiquidationEngineTest {
     }
 
     @Test
-    void check_isolatedInFlightLoan_skipsWithoutTouchingPriceCache() {
-        // pre-populate in-flight → scanner 应早退，不查 markPrice
-        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
-        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
-        loan.collateralAmount = 1L;
-        loan.outstandingPrincipal = 45_000L;
-        up.isolatedLoans.put(LOAN_ID, loan);
-
-        // 先 publish 一次让 loanId 进 in-flight（真实场景下这是 scanner 上一 tick 触发的）
-        ApiCommand cmd = mock(ApiCommand.class);
-        scanner.publishTrackedIsolated(cmd, LOAN_ID);
-        assertTrue(scanner.isIsolatedLoanInFlight(LOAN_ID));
-
-        // 现在 check —— 该 loan 应被 in-flight guard 跳过
-        scanner.check(up);
-        // 只 publish 过 1 次（setup 那次），check 期间没再 publish
-        verify(publisher).submit(any(), any());  // 1 次总量
-    }
-
-    @Test
     void check_isolatedEmptyLoan_skipped() {
         // isEmpty loan（全零壳）应跳过，不查 spec、不查 markPrice、不触发
         IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 500, OPENED_AT_MS);
@@ -353,7 +242,7 @@ class LoanLiquidationEngineTest {
         // collateralAmount=0, principal=0, interest=0 → isEmpty
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -366,14 +255,14 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 45_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
     @Test
     void check_crossEmpty_earlyExit_noLtvCompute() {
         // 无 crossLoans 应直接返回，不调 getLoanService 的 LTV 计算
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -385,7 +274,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 50_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -400,26 +289,9 @@ class LoanLiquidationEngineTest {
         up.crossLoans.put(LOAN_ID, loan);
         up.crossLoanCollateral.put(BTC, 1L); // 1 BTC 可卖
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         verify(publisher, never()).submit(any(), any());
-    }
-
-    @Test
-    void check_crossInFlight_skipsLtvCompute() {
-        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
-        loan.symbolId = SYMBOL; // symbolId on record：scanner 用它 getSymbolSpecification 拿 spec
-        loan.outstandingPrincipal = 50_000L;
-        up.crossLoans.put(LOAN_ID, loan);
-
-        // 先 publish 让 uid 进 in-flight
-        ApiCommand cmd = mock(ApiCommand.class);
-        scanner.publishTrackedCross(cmd, UID);
-        assertTrue(scanner.isCrossLoanInFlight(UID));
-
-        scanner.check(up);
-        // check 期间不应再 publish
-        verify(publisher).submit(any(), any());  // 1 次总量
     }
 
     @Test
@@ -449,7 +321,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 150_000L;
         up.crossLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
@@ -465,9 +337,8 @@ class LoanLiquidationEngineTest {
 
     @Test
     void failover_freshScanner_reSizesFromReducedState_noDoubleLiquidation() {
-        // failover 幂等：证明 scanner 决策是 replicated loan 状态的纯函数、与 in-flight 记忆无关。
-        // ① 同一 leader：in-flight 去重挡住重复 publish；
-        // ② 新 leader（全新 scanner、空 in-flight）：按"apply 后减少的抵押"重新定 size，不会用原始量过量强平。
+        // failover 幂等：证明 scanner 决策是 replicated loan 状态的纯函数、与任何本地记忆无关——
+        // 部分强平已 apply（抵押 3→1 WBTC，仍 underwater）后，全新 scanner 按剩余抵押重定 size，而非用原始量过量强平。
         final int WBTC = 10;
         final int SYMBOL_NI = 200;
         currencyProvider.addCurrency(CoreCurrencySpecification.builder().id(WBTC).name("WBTC").digit(2).build());
@@ -488,24 +359,20 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 140_000L;  // LTV 93% ≥ 80% → underwater
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        // 原 leader 首次触发：publish 一次，size=3
-        scanner.check(up);
+        // 第一次触发：publish 一次，size=3
+        scanner.checkUser(up, OPENED_AT_MS);
         ArgumentCaptor<ApiCommand> cap = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher, times(1)).submit(cap.capture(), any());
         assertEquals(3L, ((ApiLoanForceLiquidate) cap.getValue()).size);
 
-        // 同一 leader 再扫：loanId 在 in-flight → 不重复 publish
-        scanner.check(up);
-        verify(publisher, times(1)).submit(any(), any());
-
-        // ===== 模拟 failover：一笔部分强平已 apply（抵押 3→1 WBTC，仍 underwater），新 leader 空 in-flight 起步 =====
+        // ===== 模拟 failover：一笔部分强平已 apply（抵押 3→1 WBTC，仍 underwater），新 leader 用全新 scanner 起步 =====
         loan.collateralAmount = 100L;         // 1 WBTC 剩余
         loan.outstandingPrincipal = 45_000L;  // LTV 90% 仍 ≥ 80%
-        LoanLiquidationEngine freshLeaderScanner = new LoanLiquidationEngine(engine);
+        LoanLiquidationEngine freshLeaderScanner = new LoanLiquidationEngine(eventsHelper, () -> publisher);
+        freshLeaderScanner.updateProvider(specProvider, currencyProvider, userProfileService, priceCache, loanService);
 
-        freshLeaderScanner.check(up);
+        freshLeaderScanner.checkUser(up, OPENED_AT_MS);
         // 新 leader 会 publish（第 2 次总量），但 size 必须是剩余的 1 张，而不是原始 3 张。
-        // 用独立 captor，取最后一次 publish（新 leader 那次）。
         ArgumentCaptor<ApiCommand> cap2 = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher, times(2)).submit(cap2.capture(), any());
         ApiLoanForceLiquidate reSized =
@@ -515,7 +382,7 @@ class LoanLiquidationEngineTest {
     }
 
     // ================================================================
-    // P0-3 卡单容差爬梯 + 节流
+    // P0-3 卡单容差爬梯（不再节流，越预警带每次都发）
     // ================================================================
 
     private IsolatedLoanRecord underwaterLoan(long loanId, int stuckAttempts) {
@@ -535,7 +402,7 @@ class LoanLiquidationEngineTest {
         up.isolatedLoans.put(2L, underwaterLoan(2L, 3));  // tier1 → 2%
         up.isolatedLoans.put(3L, underwaterLoan(3L, 6));  // tier2 → 5%
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> cap = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher, times(3)).submit(cap.capture(), any());
@@ -550,27 +417,14 @@ class LoanLiquidationEngineTest {
     }
 
     @Test
-    void stuckLoan_reFireThrottled_withinWindow() {
-        // 卡住的 loan（attempts>0）在节流窗口内不重发。用 onApplied 清 in-flight，隔离出 throttle 逻辑。
-        doAnswer(inv -> {
-            ((Runnable) inv.getArgument(1)).run();
-            return null;
-        }).when(publisher).submit(any(), any(Runnable.class));
-
-        up.isolatedLoans.put(1L, underwaterLoan(1L, 1)); // 已卡 1 次
-
-        scanner.check(up); // 第一次：未节流 → publish，记 lastLiqMs
-        scanner.check(up); // 立即再扫：30s 窗口内 → 节流，不 publish
-
-        verify(publisher, times(1)).submit(any(), any());
-    }
-
-    @Test
     void freshLoan_notThrottled_firesImmediately() {
-        // 未卡的 loan（attempts=0）不走节流，首次即触发
+        // 未卡的 loan（attempts=0）不走节流，首次即触发；现无节流窗口，连续两次扫描各发一次
         up.isolatedLoans.put(1L, underwaterLoan(1L, 0));
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, times(1)).submit(any(), any());
+
+        scanner.checkUser(up, OPENED_AT_MS);
+        verify(publisher, times(2)).submit(any(), any());
     }
 
     // ================================================================
@@ -588,7 +442,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 30_000L; // LTV 30% << liq 80%，仅靠期限触发
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, System.currentTimeMillis());
         verify(publisher).submit(any(), any());
     }
 
@@ -603,7 +457,7 @@ class LoanLiquidationEngineTest {
         loan.outstandingPrincipal = 30_000L;
         up.isolatedLoans.put(LOAN_ID, loan);
 
-        scanner.check(up);
+        scanner.checkUser(up, System.currentTimeMillis());
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -613,7 +467,7 @@ class LoanLiquidationEngineTest {
         LoanService spied = spy(loanService);
         doReturn(9999L).when(spied)
             .calculateCrossAccountLtvBps(any(), anyLong(), any(), any(), any(), anyInt());
-        when(engine.getLoanService()).thenReturn(spied);
+        scanner.updateProvider(specProvider, currencyProvider, userProfileService, priceCache, spied);
         return spied;
     }
 
@@ -628,7 +482,7 @@ class LoanLiquidationEngineTest {
         up.crossLoans.put(LOAN_ID, loan);
         up.crossLoanCollateral.put(BTC, 2L);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher).submit(any(), any());
     }
 
@@ -642,7 +496,7 @@ class LoanLiquidationEngineTest {
         up.crossLoans.put(LOAN_ID, loan);
         // crossLoanCollateral 空
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -656,7 +510,7 @@ class LoanLiquidationEngineTest {
         up.crossLoans.put(LOAN_ID, loan);
         up.crossLoanCollateral.put(BTC, 1L);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -671,7 +525,7 @@ class LoanLiquidationEngineTest {
         up.crossLoans.put(LOAN_ID, loan);
         up.crossLoanCollateral.put(BTC, 1L);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -686,7 +540,7 @@ class LoanLiquidationEngineTest {
         up.crossLoans.put(LOAN_ID, loan);
         up.crossLoanCollateral.put(BTC, 1L);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
         verify(publisher, never()).submit(any(), any());
     }
 
@@ -731,7 +585,7 @@ class LoanLiquidationEngineTest {
         up.crossLoanCollateral.put(BTC, 2L); // weight 9000（setUp 的 BTC/USDT）
         up.crossLoanCollateral.put(ETH, 2L); // weight 5000
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
@@ -754,7 +608,7 @@ class LoanLiquidationEngineTest {
         up.crossLoanCollateral.put(BTC, 1L); // 权重同，量小
         up.crossLoanCollateral.put(ETH, 5L); // 权重同，量大 → 胜
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
@@ -781,7 +635,7 @@ class LoanLiquidationEngineTest {
 
         up.crossLoanCollateral.put(BTC, 2L);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
@@ -808,11 +662,58 @@ class LoanLiquidationEngineTest {
 
         up.crossLoanCollateral.put(BTC, 2L);
 
-        scanner.check(up);
+        scanner.checkUser(up, OPENED_AT_MS);
 
         ArgumentCaptor<ApiCommand> captor = ArgumentCaptor.forClass(ApiCommand.class);
         verify(publisher).submit(captor.capture(), any());
         ApiLoanCrossForceLiquidate cmd = (ApiLoanCrossForceLiquidate) captor.getValue();
         assertEquals(LOAN_BIG, cmd.targetLoanId, "利率相等时高本金(60k)笔优先偿还");
+    }
+
+    // ================================================================
+    // 索引维护：onIsolatedLoanOpened / syncCrossExposure 驱动 checkLoans targeted 命中
+    // ================================================================
+
+    @Test
+    void checkLoans_isolatedIndexed_targetedHitsUnderwaterUser() {
+        // up 有一笔 underwater isolated loan；索引未登记前 checkLoans 不命中，登记后命中。
+        IsolatedLoanRecord loan = new IsolatedLoanRecord(UID, LOAN_ID, BTC, USDT, 0, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.collateralAmount = 1L;
+        loan.outstandingPrincipal = 45_000L; // LTV 90% ≥ 80% liquidation
+        up.isolatedLoans.put(LOAN_ID, loan);
+
+        OrderCommand cmd = priceEventCmd(SYMBOL);
+
+        // 未登记索引：targeted 查不到该 uid，不 publish
+        scanner.checkLoans(cmd);
+        verify(publisher, never()).submit(any(), any());
+
+        // 登记索引后：targeted 命中，publish force-sell
+        scanner.onIsolatedLoanOpened(UID, SYMBOL);
+        scanner.checkLoans(cmd);
+        verify(publisher).submit(any(), any());
+    }
+
+    @Test
+    void checkLoans_crossIndexed_targetedHitsViaCollateralCurrencySymbol() {
+        // up 有 cross 抵押 + 借款，LTV 被 spy 钉在强平线上；抵押币(BTC)所在现货对(SYMBOL=BTC/USDT) 触发的价格事件应命中。
+        spyWithCrossLtvOverLiquidation();
+        CrossLoanRecord loan = new CrossLoanRecord(UID, LOAN_ID, USDT, 500, OPENED_AT_MS);
+        loan.symbolId = SYMBOL;
+        loan.outstandingPrincipal = 50_000L;
+        up.crossLoans.put(LOAN_ID, loan);
+        up.crossLoanCollateral.put(BTC, 2L);
+
+        OrderCommand cmd = priceEventCmd(SYMBOL);
+
+        // syncCrossExposure 之前：索引未登记，targeted 查不到该 uid
+        scanner.checkLoans(cmd);
+        verify(publisher, never()).submit(any(), any());
+
+        // syncCrossExposure 登记后：BTC/USDT 价格事件（base=BTC 命中 crossLoanCurrencyToUsers[BTC]）targeted 命中
+        scanner.syncCrossExposure(up);
+        scanner.checkLoans(cmd);
+        verify(publisher).submit(any(), any());
     }
 }

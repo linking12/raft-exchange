@@ -16,6 +16,8 @@ import exchange.core2.core.processors.CurrencySpecificationProvider;
 import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.processors.loan.LoanLiquidationEngine;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.UserProfileService;
 import exchange.core2.core.processors.loan.LoanCommandHandlers;
@@ -69,6 +71,8 @@ class LoanCommandHandlersTest {
     @Mock private RiskEngine engine;
     @Mock private UserProfileService userProfileService;
     @Mock private FundEventsHelper eventsHelper;
+    @Mock private LiquidationEngine liquidationEngine;
+    @Mock private LoanLiquidationEngine loanLiquidationEngine;
 
     private LoanService loanService;
     private UserProfile up;
@@ -146,6 +150,9 @@ class LoanCommandHandlersTest {
         when(engine.getShardId()).thenReturn(0);
         when(engine.calculateLocked(any(), anyInt())).thenReturn(0L);
         when(engine.uidForThisHandler(anyLong())).thenReturn(true);
+        // LoanCommandHandlers 构造时缓存 loan 强平子引擎（维护 targeted 索引）；mock 掉，维护 hook 调用变 no-op
+        when(engine.getLiquidationEngine()).thenReturn(liquidationEngine);
+        when(liquidationEngine.getLoanLiquidationEngine()).thenReturn(loanLiquidationEngine);
 
         handlers = new LoanCommandHandlers(engine);
     }

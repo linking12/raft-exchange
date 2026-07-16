@@ -9,8 +9,13 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.processors.loan.LoanService;
 import org.eclipse.collections.api.set.primitive.MutableLongSet;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -178,6 +183,10 @@ class LiquidationSymbolIndexTest {
     @Test
     void checkPositions_targetedUnknownSymbol_isNoOp() {
         le = new LiquidationEngine(null, 1, TEST_CFG);
+        // 与生产一致：checkPositions 前必已 updateProvider（futures + loan 子引擎都拿到 provider），
+        // 否则末尾委托的 checkLoans 会解引用 null provider。空 provider 即可，未知 symbol 走 spec-null 守卫。
+        le.updateProvider(new SymbolSpecificationProvider(), new CurrencySpecificationProvider(),
+            new UserProfileService(), new IntObjectHashMap<>(), new LoanService());
         le.setCommandSubmitter((cmd, onApplied) -> {});
         le.start();
         OrderCommand targeted = newCmd(OrderCommandType.MOVE_ORDER, SYMBOL); // 该 symbol 无持有者

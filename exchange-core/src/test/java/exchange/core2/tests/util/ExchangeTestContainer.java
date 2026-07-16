@@ -833,6 +833,14 @@ public final class ExchangeTestContainer implements AutoCloseable {
         submitCommandSync(ApiLiquidationScan.builder().build(), CommandResultCode.SUCCESS);
     }
 
+    /** 只启动各分片 LiquidationEngine（令 isRunning()=true），不发 scan——验证纯 targeted（价格事件）触发。 */
+    public void enableLiquidationEngines() {
+        if (exchangeCore.getLiquidationEngines() == null) {
+            return;
+        }
+        exchangeCore.getLiquidationEngines().forEach(LiquidationEngine::start);
+    }
+
     /**
      * 触发全量强平扫描并驱动 cascade（FORCE→IF→ADL 自驱），轮询 {@code settled} 一旦成立即返回，最长等 timeoutMs。
      * <p>不抛超时异常——真正的判定留给调用方原有断言；这里只是把"固定 sleep 盲等"换成"到点即走"，
