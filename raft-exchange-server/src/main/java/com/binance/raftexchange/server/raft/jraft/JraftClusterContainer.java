@@ -45,7 +45,7 @@ import com.binance.raftexchange.server.util.SerializeHelper;
 import com.google.protobuf.GeneratedMessageV3;
 
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
-import exchange.core2.core.processors.liquidation.SimpleScheduledService;
+import exchange.core2.core.processors.liquidation.LiquidationScheduledService;
 
 /**
  * SOFA-JRaft 作为 raft consensus backend 的容器实现：{@link RaftGroupService} +
@@ -80,13 +80,13 @@ public class JraftClusterContainer implements RaftClusterContainer {
         if (engines == null) {
             return;
         }
-        exchangeRuntime.overrideLiquidationCmdPublisher(jraftExchangeStateMachine::isLeader,
+        exchangeRuntime.overrideLiquidationCommandSubmitter(jraftExchangeStateMachine::isLeader,
             (log, onComplete) -> requestConsensus(log, (resp, err) -> onComplete.accept(err)));
         jraftExchangeStateMachine.addRoleChangeListener(role -> {
             if (role == RaftNode.NodeType.LEADER) {
-                engines.forEach(SimpleScheduledService::start);
+                engines.forEach(LiquidationScheduledService::start);
             } else {
-                engines.forEach(SimpleScheduledService::stop);
+                engines.forEach(LiquidationScheduledService::stop);
             }
         });
     }

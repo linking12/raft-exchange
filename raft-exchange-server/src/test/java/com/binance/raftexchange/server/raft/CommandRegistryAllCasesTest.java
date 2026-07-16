@@ -227,6 +227,9 @@ class CommandRegistryAllCasesTest {
                 exchange.core2.core.common.api.ApiLoanCrossForceLiquidate.class),
             Arguments.of(ApiCommand.newBuilder().setRepriceLoanRates(ApiRepriceLoanRates.newBuilder()).build(),
                 exchange.core2.core.common.api.ApiRepriceLoanRates.class),
+            Arguments.of(ApiCommand.newBuilder()
+                .setLiquidationScan(com.binance.raftexchange.stubs.request.ApiLiquidationScan.newBuilder()).build(),
+                exchange.core2.core.common.api.ApiLiquidationScan.class),
             Arguments.of(
                 ApiCommand.newBuilder()
                     .setInsuranceFundDeposit(ApiInsuranceFundDeposit.newBuilder().setTransactionId(1L).setSymbol(1)

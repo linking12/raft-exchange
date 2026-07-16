@@ -2,18 +2,17 @@ package exchange.core2.core.processors.liquidation;
 
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.function.ToLongFunction;
 
 import org.eclipse.collections.api.map.primitive.MutableIntObjectMap;
-import org.eclipse.collections.api.set.MultiReaderSet;
+import org.eclipse.collections.api.set.primitive.MutableLongSet;
 import org.eclipse.collections.api.tuple.primitive.LongObjectPair;
-import org.eclipse.collections.impl.factory.Sets;
 import org.eclipse.collections.impl.list.mutable.FastList;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
-import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.ObjectLongHashMap;
+import org.eclipse.collections.impl.set.mutable.primitive.LongHashSet;
 import org.eclipse.collections.impl.tuple.primitive.PrimitiveTuples;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
@@ -29,7 +28,6 @@ import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiAutoDeleveraging;
-import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiIFTakeOver;
 import exchange.core2.core.common.api.ApiLiquidationOrder;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
@@ -41,54 +39,48 @@ import exchange.core2.core.processors.FundEventsHelper;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.SymbolSpecificationProvider;
 import exchange.core2.core.processors.UserProfileService;
-import exchange.core2.core.processors.liquidation.LiquidationContext.LiquidationState;
+import exchange.core2.core.processors.liquidation.LiquidationFlow.LiquidationState;
 import exchange.core2.core.processors.loan.LoanLiquidationEngine;
 import exchange.core2.core.processors.loan.LoanService;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 强平引擎，两条独立路径：
- * <p><b>Scanner（off-lane，每 2s）</b>：扫所有持仓，破产则 publish {@code FORCE_LIQUIDATION}，流程卡住则 republish 对应阶段。
- * 只读判断 + publish，不写任何 replicated state（不写 ctx / lastTransitionAt）。
- * <p><b>Apply（on-lane，cmd 落地后）</b>：{@link #nextLiquidationState} 推进状态机
- * （LIQUIDATING → WAIT_IF_EXECUTION → WAIT_ADL_EXECUTION → 闭环置 null）并 publish 后续阶段。
- * <b>所有 {@link LiquidationContext} 写入的唯一入口。</b>
- * <p><b>In-flight 去重</b>：{@link #inFlightLiquidationCmd} 盖住"已 publish 未 apply"的空窗，由 publisher 的 onApplied 回调清理
- * （raft 失败路径也触发，避免死值）。Failover 后新 leader 从空集起步，已 apply 的 ctx 已随 raft 复制到位。
+ * 期货强平引擎，每个 RiskEngine 分片一个。<b>事件驱动、on-lane 检测</b>——强平检查跑在 disruptor 单写者线程的命令 apply 里，只读一致复制态，无跨线程竞态。
+ * <p>
+ * 检测入口 {@link #checkPositions}：{@code cmd.symbol >= 0} 靠 {@link #symbolToUsers} 索引只查该 symbol 的持有者（targeted，价格 /
+ * 资金费触发）；{@code cmd.symbol < 0}（LIQUIDATION_SCAN）全量整扫兜底。 判定破产的仓位经父类 {@code submit} 提交 {@code FORCE_LIQUIDATION}；强平命令
+ * apply 后由 {@link #advanceLiquidation} 推进 FORCE→IF→ADL 状态机。
+ * <p>
+ * <b>leader gate</b>：{@link #checkPositions} / {@link #advanceLiquidation} 用父类 {@link #isRunning()} 门控， follower
+ * no-op。流程态 {@link LiquidationFlow} 挂在 {@code SymbolPositionRecord.liquidationFlow}，纯内存、 不进 snapshot / stateHash——换届后新
+ * leader 侧为空，残余仓被当作破产仓重发 FORCE 恢复，正确性靠 R1 {@code normalizeCmdPositionSize} 对 size 的夹取保证。
+ * <p>
+ * {@link #symbolToUsers}（symbol → uid）索引在开仓 / 平仓 apply 时<b>由所有节点确定性维护（不 gate）</b>， 快照恢复经 {@link #updateProvider} 重建。
  */
 @Slf4j
 @Getter
-public final class LiquidationEngine extends SimpleScheduledService {
-    private final int shardId;
-    private final long stuckThresholdMs;
+public final class LiquidationEngine extends LiquidationScheduledService {
+    private static final ToLongFunction<SymbolPositionRecord> NO_CROSS = p -> 0L;
     private final FundEventsHelper eventsHelper;
-    @Setter
-    private boolean insuranceFundEnabled = true;
+    private final IntObjectHashMap<MutableLongSet> symbolToUsers;
     private SymbolSpecificationProvider symbolSpecificationProvider;
     private CurrencySpecificationProvider currencySpecificationProvider;
     private UserProfileService userProfileService;
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private LoanService loanService;
-    @Setter
-    private LiquidationCmdPublisher liquidationCmdPublisher;
     private LoanLiquidationEngine loanLiquidationEngine;
-
-    private final MultiReaderSet<SymbolPositionRecord> inFlightLiquidationCmd = Sets.multiReader.empty();
-    private final LongObjectHashMap<IntObjectHashMap<ObjectLongHashMap<SymbolPositionRecord>>> tickBpMarginBaseCache =
-        new LongObjectHashMap<>();
 
     public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId,
         ExchangeConfiguration exchangeConfiguration) {
-        super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
-            exchangeConfiguration.getPerformanceCfg().getLiquidationThreadFactory());
-        this.shardId = shardId;
-        this.stuckThresholdMs = Long.parseLong(System.getProperty("raftexchange.liquidation.stuckThresholdMs", "5000"));
+        super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "300")), TimeUnit.SECONDS,
+            exchangeConfiguration.getPerformanceCfg().getLiquidationThreadFactory(), shardId);
         this.eventsHelper = new FundEventsHelper(eventSupplier, shardId);
+        this.symbolToUsers = new IntObjectHashMap<MutableLongSet>();
     }
 
+    /** 注入依赖并从当前用户态重建 {@link #symbolToUsers} 索引（快照恢复后调用）。 */
     public void updateProvider(SymbolSpecificationProvider symbolSpecProvider,
         CurrencySpecificationProvider currencySpecProvider, UserProfileService userService,
         IntObjectHashMap<LastPriceCacheRecord> lastPriceService, LoanService loanSvc) {
@@ -102,115 +94,102 @@ public final class LiquidationEngine extends SimpleScheduledService {
         eventsHelper.setLastPriceCache(lastPriceCache);
         this.loanService = loanSvc;
         this.loanLiquidationEngine = new LoanLiquidationEngine(this);
-    }
-
-    // ============================== 生命周期 ==============================
-
-    @Override
-    public synchronized void start() {
-        Objects.requireNonNull(liquidationCmdPublisher,
-            "liquidationCmdPublisher must be set before LiquidationEngine.start()");
-        super.start();
-    }
-
-    @Override
-    protected void runOneIteration() throws Exception {
-        log.debug("Checking liquidation for shard {}", shardId);
-        try {
-            checkLiquidations();
-        } catch (Throwable e) {
-            log.error("Error during liquidation check for shard {}", shardId, e);
-        }
-    }
-
-    public void triggerOnce() {
-        try {
-            log.info("Manual trigger: Checking liquidation for shard {}", shardId);
-            checkLiquidations();
-        } catch (Throwable e) {
-            log.error("Manual trigger failed for shard {}", shardId, e);
-        }
-    }
-
-    // ============================== Scanner 路径（off-lane） ==============================
-
-    private void checkLiquidations() {
-        long now = System.currentTimeMillis();
-        tickBpMarginBaseCache.clear();
+        symbolToUsers.clear();
         userProfileService.getUserProfiles().forEachValue(userProfile -> {
-            if (userProfile == null)
+            if (userProfile == null) {
                 return;
-            MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
-            IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
-            positions.forEachValue(position -> {
-                if (position == null || position.openVolume == 0) {
+            }
+            userProfile.positions.forEachValue(pos -> {
+                if (pos == null || pos.openVolume == 0) {
                     return;
                 }
-                // 卡住的强平流程检测先于破产检测：流程正在进行中的 position 不应被识别为"新破产"重启，
-                // 否则会重启整轮强平引入额外 fee
-                if (tryRepublishStuckLiquidation(position, now)) {
-                    return;
-                }
-                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
-                if (!SymbolType.isFuturesContract(spec.type)) {
-                    return;
-                }
-                LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-                if (priceRecord == null) {
-                    log.debug("No price record for symbol={}", position.symbol);
-                    return;
-                }
-                // 逐仓直接破产检查；全仓按 currency 聚合后统一处理
-                if (position.marginMode == MarginMode.ISOLATED) {
-                    checkLiquidationIsolated(userProfile, spec, priceRecord, position);
-                } else {
-                    crossPositionsByCurrency.getIfAbsentPut(spec.quoteCurrency, FastList.newList()).add(position);
+                CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(pos.symbol);
+                if (spec != null && SymbolType.isFuturesContract(spec.type)) {
+                    onPositionOpened(userProfile, pos);
                 }
             });
-            checkLiquidationCross(userProfile, crossPositionsByCurrency);
-            // loan 3-lane 二级 scanner：整块委托给 LoanLiquidationEngine（详见 loan.md §7.1）
-            loanLiquidationEngine.check(userProfile);
         });
     }
 
     /**
-     * 检测强平流程是否卡住（ctx 非 null 且超阈值未推进）并 republish 对应阶段命令。 返回 true 表示 position 处于强平流程中（无论是否 republish），caller 应跳过常规破产检测。
+     * 强平检测入口（命令 apply 时调用）。{@code cmd.symbol >= 0} 只查该 symbol 的持有者（targeted）；
+     * {@code cmd.symbol < 0}（LIQUIDATION_SCAN）全量整扫兜底。leader-only。
      */
-    private boolean tryRepublishStuckLiquidation(SymbolPositionRecord position, long now) {
-        LiquidationContext ctx = position.liquidationCtx;
-        if (ctx == null) {
-            return false;
+    public void checkPositions(OrderCommand cmd) {
+        if (!isRunning()) {
+            return;
         }
-        long stuckMs = now - ctx.lastTransitionAt;
-        if (stuckMs <= stuckThresholdMs) {
-            return true;
+        if (cmd.symbol >= 0) {
+            MutableLongSet holders = symbolToUsers.get(cmd.symbol);
+            if (holders != null) {
+                holders.forEach(uid -> checkUser(userProfileService.getUserProfile(uid), cmd.timestamp));
+            }
+        } else {
+            userProfileService.getUserProfiles().forEachValue(userProfile -> {
+                checkUser(userProfile, cmd.timestamp);
+            });
         }
-        if (inFlightLiquidationCmd.contains(position)) {
-            // 已发过 republish，等 callback 清掉再判
-            return true;
-        }
-        ApiCommand cmd = switch (ctx.state) {
-            case WAIT_IF_EXECUTION -> buildIFCmd(position, ctx);
-            case WAIT_ADL_EXECUTION -> buildADLCmd(position, ctx);
-            case LIQUIDATING -> buildForceCmd(position, LiquidationService.generateLiquidationOrderId(position),
-                ctx.price, ctx.size);
-        };
-        log.warn("Republish stuck liquidation cmd={} ctx.state={} uid={} symbol={} stuck_ms={}",
-            cmd.getClass().getSimpleName(), ctx.state, position.uid, position.symbol, stuckMs);
-        publishTracked(cmd, position);
-        return true;
     }
 
-    private void checkLiquidationIsolated(UserProfile userProfile, CoreSymbolSpecification spec,
-        LastPriceCacheRecord priceRecord, SymbolPositionRecord position) {
-        // equity = openInitMarginSum + 未实现盈亏 + extraMargin
+    /** 开仓 apply：把 uid 登记进 symbol → 持有者索引（所有节点确定性维护，不 gate）。 */
+    public void onPositionOpened(UserProfile userProfile, SymbolPositionRecord pos) {
+        symbolToUsers.getIfAbsentPut(pos.symbol, LongHashSet::new).add(userProfile.uid);
+    }
+
+    /**
+     * 平仓 apply：从索引摘除 uid。HEDGE 双向持仓下，仅当该 symbol 已无其它方向仓位时才移除， 避免误删仍有敞口的持有者。
+     */
+    public void onPositionClosed(UserProfile userProfile, SymbolPositionRecord pos) {
+        boolean holdsOther = userProfile.positions.anySatisfy(p -> p != pos && p.symbol == pos.symbol);
+        if (holdsOther) {
+            return;
+        }
+        MutableLongSet s = symbolToUsers.get(pos.symbol);
+        if (s != null) {
+            s.remove(userProfile.uid);
+            if (s.isEmpty()) {
+                symbolToUsers.remove(pos.symbol);
+            }
+        }
+    }
+
+    private void checkUser(UserProfile userProfile, long ts) {
+        if (userProfile == null) {
+            return;
+        }
+        MutableIntObjectMap<SymbolPositionRecord> positions = userProfile.positions.asUnmodifiable();
+        IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency = IntObjectHashMap.newMap();
+        positions.forEachValue(position -> {
+            if (position == null || position.openVolume == 0) {
+                return;
+            }
+            CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+            if (!SymbolType.isFuturesContract(spec.type)) {
+                return;
+            }
+            LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
+            if (priceRecord == null) {
+                log.debug("No price record for symbol={}", position.symbol);
+                return;
+            }
+            if (position.marginMode == MarginMode.ISOLATED) {
+                checkIsolated(userProfile, spec, priceRecord, position);
+            } else {
+                crossPositionsByCurrency.getIfAbsentPut(spec.quoteCurrency, FastList.newList()).add(position);
+            }
+        });
+        checkCross(userProfile, crossPositionsByCurrency);
+        loanLiquidationEngine.check(userProfile);
+    }
+
+    private void checkIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
+        SymbolPositionRecord position) {
         long profit = position.estimateUnrealizedProfit(priceRecord);
         long equity = position.openInitMarginSum + profit + position.extraMargin;
         long maintenanceMargin = position.calculateMaintenanceMargin(spec, priceRecord);
-        // 预警阈值 = 1.2 × 维持保证金，提前提醒用户追加资金
-        long warningThreshold = Math.multiplyExact(maintenanceMargin, 6) / 5;
+        long warningThreshold = Math.multiplyExact(maintenanceMargin, 6) / 5; // 1.2× 维持保证金：预警线
         if (equity < maintenanceMargin) {
-            long price = calculateBankruptcyPrice(position);
+            long price = position.calculateBankruptcyPrice(spec, NO_CROSS);
             long sizeToLiquidate = Math.min(position.openVolume,
                 CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord));
             if (sizeToLiquidate > 0) {
@@ -221,8 +200,17 @@ public final class LiquidationEngine extends SimpleScheduledService {
         }
     }
 
-    private void checkLiquidationCross(UserProfile userProfile,
+    /**
+     * 逐 quote 币种做全仓联合风险判定：equity 低于维持保证金则从最危险仓位起逐仓强平至覆盖亏空， 低于预警线则发预警。
+     */
+    private void checkCross(UserProfile userProfile,
         IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency) {
+        if (crossPositionsByCurrency.isEmpty()) {
+            return;
+        }
+        final ObjectLongHashMap<SymbolPositionRecord> alloc =
+            userProfile.crossMarginBaseAllocation(symbolSpecificationProvider::getSymbolSpecification,
+                currencySpecificationProvider::getCurrencySpecification, lastPriceCache);
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
             CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
             long totalProfit = 0;
@@ -240,22 +228,19 @@ public final class LiquidationEngine extends SimpleScheduledService {
                 maintenance = CoreArithmeticUtils.sizePriceToCurrencyScale(maintenance, spec, currencySpec);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
-                // 每仓位 risk = (profit - maintenance) / maintenance，值越小风险越大
                 long risk = Math.multiplyExact(profit - maintenance, 100) / maintenance;
                 riskPairs.add(PrimitiveTuples.pair(risk, position));
             }
-            // balance 剥离逐仓虚拟锁定 margin，避免 LP 触发时机偏晚，详见 calculateCrossAvailableCurrency
             long balance = userProfile.calculateCrossAvailable(currency, currencySpec,
                 symbolSpecificationProvider::getSymbolSpecification);
             long equity = balance + totalProfit;
-            long warningThreshold = Math.multiplyExact(totalMaintenanceMargin, 6) / 5;
-            // ADL gating 不在这里维护——R1 在 ADL apply 时按需算 candidates，scanner 不需要缓存盈利仓位
+            long warningThreshold = Math.multiplyExact(totalMaintenanceMargin, 6) / 5; // 1.2× 维持保证金：预警线
             if (equity >= warningThreshold) {
                 return;
             }
-            riskPairs.sort(Comparator.comparingLong(LongObjectPair::getOne)); // 升序：risk 小的先平
+            riskPairs.sort(Comparator.comparingLong(LongObjectPair::getOne)); // 风险度升序：最危险的仓位优先强平
             if (equity < totalMaintenanceMargin) {
-                forceCrossLiquidation(userProfile, riskPairs, totalMaintenanceMargin - equity);
+                forceCrossLiquidation(userProfile, riskPairs, totalMaintenanceMargin - equity, alloc);
             } else {
                 sendWarningEvent(userProfile, riskPairs.get(0).getTwo(), equity, warningThreshold);
             }
@@ -263,7 +248,8 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     private void forceCrossLiquidation(UserProfile userProfile,
-        List<LongObjectPair<SymbolPositionRecord>> positionPairs, long deficit) {
+        List<LongObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
+        ObjectLongHashMap<SymbolPositionRecord> alloc) {
         long marginReleased = 0;
         for (LongObjectPair<SymbolPositionRecord> pair : positionPairs) {
             if (marginReleased >= deficit)
@@ -271,11 +257,10 @@ public final class LiquidationEngine extends SimpleScheduledService {
             SymbolPositionRecord position = pair.getTwo();
             CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
             LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
-            long price = calculateBankruptcyPrice(position);
+            long price = position.calculateBankruptcyPrice(spec, alloc::get);
             long sizeToLiquidate = Math.min(position.openVolume,
                 CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord));
             if (sizeToLiquidate > 0) {
-                // 假设能成交，先行更新释放量
                 marginReleased +=
                     CoreArithmeticUtils.calculateDeficitAfterLiquidate(sizeToLiquidate, position, spec, priceRecord);
                 startLiquidationFlow(userProfile, position, price, sizeToLiquidate);
@@ -284,229 +269,106 @@ public final class LiquidationEngine extends SimpleScheduledService {
     }
 
     private void startLiquidationFlow(UserProfile userProfile, SymbolPositionRecord position, long price, long size) {
-        // 双 gate：raft 在飞 + 已 apply 进强平流程。卡住恢复由 scanner stuck-check 分支接管
-        if (inFlightLiquidationCmd.contains(position) || position.liquidationCtx != null) {
+        if (position.liquidationFlow != null) {
             return;
         }
-        // 限价 IOC，price 按市场价算，深度够就能成交；IOC 不进 orderBook
         long orderId = LiquidationService.generateLiquidationOrderId(position);
-        publishTracked(buildForceCmd(position, orderId, price, size), position);
-
+        submit(buildForceCmd(position, orderId, price, size), null);
         FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position);
-        publishUntracked(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+        submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
         log.debug("Liquidated: uid={} symbol={} size={} price={}", userProfile.uid, position.symbol, size, price);
     }
 
     private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, long equity,
         long warningThreshold) {
         FundEvent event = eventsHelper.sendMarginAlertEvent(position);
-        publishUntracked(ApiSystemLiquidationNotify.builder().fundEvent(event).build());
+        submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
         log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity,
             warningThreshold);
     }
 
     /**
-     * 破产价（BP），FORCE / IF / ADL 全流程复用的 {@code ctx.price} seed。ISOLATED 单仓自足；CROSS 按 MM 占比分配 marginBase 后反解。
-     * 兜底不抛异常（下轮 tick 自然恢复）：spec 缺失退 markPrice、UP 缺失退 ISOLATED 公式。
-     * 输入全是 replicated state → 跨节点同 raft offset 算同值，failover 无碍。
+     * 强平命令 apply 后推进 FORCE→IF→ADL 状态机（leader-only）。flow 为空且命令是 FORCE 时新建流程 （含换届后残余仓恢复）；否则按当前 state 校验命令合法性，防重复 / 错序推进。
      */
-    private long calculateBankruptcyPrice(SymbolPositionRecord pos) {
-        final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(pos.symbol);
-        if (spec == null) {
-            // spec 缺失兜底：退 markPrice 让 FORCE 单能挂出去，下轮 scanner tick 若 spec 恢复再算真 BP；
-            // markPrice 也拿不到就退 0（IOC 单被 reject，位置本 tick 跳过，下轮再试）
-            final LastPriceCacheRecord priceRecord = lastPriceCache.get(pos.symbol);
-            final long mark = priceRecord != null ? priceRecord.markPrice : 0L;
-            log.warn("BP fallback (spec missing): uid={} symbol={} → markPrice={}", pos.uid, pos.symbol, mark);
-            return mark;
+    public void advanceLiquidation(OrderCommand cmd, SymbolPositionRecord pos) {
+        if (!isRunning()) {
+            return;
         }
-        if (pos.marginMode == MarginMode.ISOLATED) {
-            return pos.calculateBankruptcyPrice(spec);
-        }
-        final UserProfile up = userProfileService.getUserProfile(pos.uid);
-        if (up == null) {
-            return pos.calculateBankruptcyPrice(spec); // 兜底：UP 缺失退 ISOLATED 公式
-        }
-        final CoreCurrencySpecification currencySpec =
-            currencySpecificationProvider.getCurrencySpecification(pos.currency);
-        // tick-scoped 缓存：同 (uid, currency) 只算一次 marginBase 分配
-        final long marginBaseCurrency = tickBpMarginBaseCache.getIfAbsentPut(pos.uid, IntObjectHashMap::new)
-            .getIfAbsentPut(pos.currency, () -> calculateCrossBpMarginBaseAllocation(up, pos.currency, currencySpec))
-            .get(pos);
-        final long marginBase = CoreArithmeticUtils.currencyToSizePriceScale(marginBaseCurrency, spec, currencySpec);
-        return pos.calculateBankruptcyPrice(spec, marginBase);
-    }
-
-    /**
-     * 账户级 marginBalance 按 MM 占比分给同 currency 的每个 CROSS 仓，返回每仓 EP-基础 marginBase（currency scale），
-     * 直接喂 {@link SymbolPositionRecord#calculateBankruptcyPrice(CoreSymbolSpecification, long)}。
-     *
-     * <pre>
-     *   marginBalance = crossAvailable + Σ UPnL
-     *   allocated_i   = marginBalance × mm_i / Σ MM     （按 MM 占比分账户余额）
-     *   marginBase_i  = allocated_i − UPnL_i            （EP 基础换算）
-     * </pre>
-     * 守恒不变式：{@code Σ marginBase_i = crossAvailable}。单仓时 marginBase=crossAvailable；marginBalance<0 沿用同一公式。
-     * 边界：{@code Σ MM = 0} 返空 Map（caller 取默认 0）；spec/price 缺失的仓跳过、其余照分。
-     */
-    private ObjectLongHashMap<SymbolPositionRecord> calculateCrossBpMarginBaseAllocation(UserProfile up, int currency,
-        CoreCurrencySpecification currencySpec) {
-        final ObjectLongHashMap<SymbolPositionRecord> upnlByPos = new ObjectLongHashMap<>();
-        final ObjectLongHashMap<SymbolPositionRecord> mmByPos = new ObjectLongHashMap<>();
-        long totalUpnl = 0;
-        long totalMm = 0;
-        for (SymbolPositionRecord p : up.positions) {
-            if (p.marginMode != MarginMode.CROSS || p.currency != currency)
-                continue;
-            final CoreSymbolSpecification pSpec = symbolSpecificationProvider.getSymbolSpecification(p.symbol);
-            final LastPriceCacheRecord pPrice = lastPriceCache.get(p.symbol);
-            if (pSpec == null || pPrice == null)
-                continue;
-            final long pnl = CoreArithmeticUtils.sizePriceToCurrencyScale(p.estimatePnl(pPrice), pSpec, currencySpec);
-            final long mm = CoreArithmeticUtils.sizePriceToCurrencyScale(p.calculateMaintenanceMargin(pSpec, pPrice),
-                pSpec, currencySpec);
-            upnlByPos.put(p, pnl);
-            mmByPos.put(p, mm);
-            totalUpnl += pnl;
-            totalMm += mm;
-        }
-        final ObjectLongHashMap<SymbolPositionRecord> marginBaseByPos = new ObjectLongHashMap<>(mmByPos.size());
-        if (totalMm == 0) {
-            return marginBaseByPos;
-        }
-        final long totalMmFinal = totalMm;
-        final long marginBalance = Math.addExact(
-            up.calculateCrossAvailable(currency, currencySpec, symbolSpecificationProvider::getSymbolSpecification),
-            totalUpnl);
-        mmByPos.forEachKeyValue((pos, mm) -> {
-            final long allocated = Math.multiplyExact(marginBalance, mm) / totalMmFinal;
-            marginBaseByPos.put(pos, Math.subtractExact(allocated, upnlByPos.get(pos)));
-        });
-        return marginBaseByPos;
-    }
-
-    // ============================== Apply 路径（on-lane） ==============================
-
-    /**
-     * 由 RiskEngine 在强平类 cmd 的 apply 完成后调用。推进状态机并 publish 后续阶段 cmd。 所有 {@link LiquidationContext} 写入唯一入口都在这里——scanner
-     * 路径只读不写。
-     */
-    public void nextLiquidationState(OrderCommand cmd, SymbolPositionRecord pos) {
-        // 任何强平类 cmd 的 apply 都顺手延寿 lastTransitionAt，卡住判定有确定性时钟
-        if (pos.liquidationCtx != null) {
-            pos.liquidationCtx.lastTransitionAt = cmd.timestamp;
-        }
-        if (pos.liquidationCtx == null) {
-            // 没有进行中的强平流程：仅 FORCE 能开启新一轮；IF/ADL 是非法跳跃
+        LiquidationFlow flow = pos.liquidationFlow;
+        if (flow == null) {
             if (cmd.command != OrderCommandType.FORCE_LIQUIDATION) {
                 log.warn("Illegal liquidation cmd={} on null ctx: skip uid={} symbol={}", cmd.command, pos.uid,
                     pos.symbol);
                 return;
             }
-            pos.liquidationCtx = new LiquidationContext(cmd.price, cmd.size, cmd.orderId, cmd.timestamp);
+            pos.liquidationFlow = new LiquidationFlow(cmd.price, cmd.size, cmd.orderId);
         } else {
-            // 有进行中的强平流程：cmd 必须命中匹配的阶段，否则当重复 cmd 丢
             LiquidationState expected = switch (cmd.command) {
                 case FORCE_LIQUIDATION -> LiquidationState.LIQUIDATING;
                 case IF_TAKEOVER -> LiquidationState.WAIT_IF_EXECUTION;
                 case AUTO_DELEVERAGING -> LiquidationState.WAIT_ADL_EXECUTION;
                 default -> null;
             };
-            if (pos.liquidationCtx.state != expected) {
+            if (flow.state != expected) {
                 log.warn("Duplicate liquidation cmd={} ctx.state={} expected={} uid={} symbol={}: skip", cmd.command,
-                    pos.liquidationCtx.state, expected, pos.uid, pos.symbol);
+                    flow.state, expected, pos.uid, pos.symbol);
                 return;
             }
         }
         switch (cmd.command) {
-            case FORCE_LIQUIDATION -> onMarketDone(cmd, pos);
-            case IF_TAKEOVER -> onIFTakeoverDone(cmd, pos);
-            case AUTO_DELEVERAGING -> onADLDone(pos);
+            case FORCE_LIQUIDATION -> onForceApplied(cmd, pos);
+            case IF_TAKEOVER -> onIfTakeoverApplied(cmd, pos);
+            case AUTO_DELEVERAGING -> pos.liquidationFlow = null;
             default -> {
             }
         }
     }
 
-    /** FORCE 撮合结果：全吃满 → 闭环置 null；有剩余 → IF 接（或绕过 IF 直接走 ADL）。 */
-    private void onMarketDone(OrderCommand cmd, SymbolPositionRecord pos) {
-        LiquidationContext ctx = pos.liquidationCtx;
+    private void onForceApplied(OrderCommand cmd, SymbolPositionRecord pos) {
+        LiquidationFlow flow = pos.liquidationFlow;
         MatcherTradeEvent firstEvent = cmd.matcherEvent;
         if (firstEvent.eventType != MatcherEventType.REJECT) {
-            pos.liquidationCtx = null;
+            pos.liquidationFlow = null;
             return;
         }
-        ctx.size = firstEvent.size;
-        if (isInsuranceFundEnabled()) {
-            ctx.state = LiquidationState.WAIT_IF_EXECUTION;
-            log.warn("Publish IF takeover: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, ctx.size,
-                ctx.price);
-            publishTracked(buildIFCmd(pos, ctx), pos);
-        } else {
-            enterAdlPhase(pos, ctx);
-        }
+        // REJECT 事件携带的剩余量
+        flow.size = firstEvent.size;
+        flow.state = LiquidationState.WAIT_IF_EXECUTION;
+        log.warn("Publish IF takeover: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, flow.size,
+            flow.bankruptcyPrice);
+        submit(buildIFCmd(pos, flow), null);
     }
 
-    /** IF 撮合结果：接成 → 闭环置 null；REJECT → 走 ADL。 */
-    private void onIFTakeoverDone(OrderCommand cmd, SymbolPositionRecord pos) {
-        LiquidationContext ctx = pos.liquidationCtx;
+    private void onIfTakeoverApplied(OrderCommand cmd, SymbolPositionRecord pos) {
+        LiquidationFlow flow = pos.liquidationFlow;
+        // IF 接管成功即闭环；REJECT 表示 IF 无力接管，转 ADL 向对手盘摊派
         if (cmd.matcherEvent.eventType != MatcherEventType.REJECT) {
-            pos.liquidationCtx = null;
+            pos.liquidationFlow = null;
             return;
         }
-        enterAdlPhase(pos, ctx);
-    }
-
-    private void enterAdlPhase(SymbolPositionRecord pos, LiquidationContext ctx) {
-        ctx.state = LiquidationState.WAIT_ADL_EXECUTION;
-        log.warn("Publish ADL: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, ctx.size, ctx.price);
-        publishTracked(buildADLCmd(pos, ctx), pos);
-    }
-
-    /** ADL 完成：整轮强平流程闭环，ctx 置 null。 */
-    private void onADLDone(SymbolPositionRecord pos) {
-        pos.liquidationCtx = null;
-    }
-
-    // ============================== Cmd/action helper ==============================
-
-    // FORCE 用 taker（平仓）视角，IF/ADL 用 counterparty（接管）视角——方向相反
-    private static OrderAction takerActionFor(PositionDirection direction) {
-        return direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID;
-    }
-
-    private static OrderAction counterpartyActionFor(PositionDirection direction) {
-        return direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK;
+        flow.state = LiquidationState.WAIT_ADL_EXECUTION;
+        log.warn("Publish ADL: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, flow.size,
+            flow.bankruptcyPrice);
+        submit(buildADLCmd(pos, flow), null);
     }
 
     private ApiLiquidationOrder buildForceCmd(SymbolPositionRecord pos, long orderId, long price, long size) {
         return ApiLiquidationOrder.builder().orderType(OrderType.IOC).orderId(orderId).uid(pos.uid).symbol(pos.symbol)
-            .price(price).size(size).action(takerActionFor(pos.direction)).build();
+            .price(price).size(size).action(pos.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID)
+            .build();
     }
 
-    private ApiIFTakeOver buildIFCmd(SymbolPositionRecord pos, LiquidationContext ctx) {
-        return ApiIFTakeOver.builder().orderId(LiquidationService.generateIFOrderId(ctx.originalOrderId)).uid(pos.uid)
-            .symbol(pos.symbol).action(counterpartyActionFor(pos.direction)).size(ctx.size).price(ctx.price).build();
+    private ApiIFTakeOver buildIFCmd(SymbolPositionRecord pos, LiquidationFlow flow) {
+        return ApiIFTakeOver.builder().orderId(LiquidationService.generateIFOrderId(flow.originalOrderId)).uid(pos.uid)
+            .symbol(pos.symbol).action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
+            .size(flow.size).price(flow.bankruptcyPrice).build();
     }
 
-    private ApiAutoDeleveraging buildADLCmd(SymbolPositionRecord pos, LiquidationContext ctx) {
-        return ApiAutoDeleveraging.builder().orderId(LiquidationService.generateADLOrderId(ctx.originalOrderId))
-            .uid(pos.uid).symbol(pos.symbol).action(counterpartyActionFor(pos.direction)).size(ctx.size)
-            .price(ctx.price).build();
+    private ApiAutoDeleveraging buildADLCmd(SymbolPositionRecord pos, LiquidationFlow flow) {
+        return ApiAutoDeleveraging.builder().orderId(LiquidationService.generateADLOrderId(flow.originalOrderId))
+            .uid(pos.uid).symbol(pos.symbol)
+            .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK).size(flow.size)
+            .price(flow.bankruptcyPrice).build();
     }
 
-    // ============================== Publisher 辅助 ==============================
-
-    private void publishTracked(ApiCommand cmd, SymbolPositionRecord pos) {
-        inFlightLiquidationCmd.add(pos);
-        try {
-            liquidationCmdPublisher.publish(cmd, () -> inFlightLiquidationCmd.remove(pos));
-        } catch (Throwable t) {
-            inFlightLiquidationCmd.remove(pos);
-            throw t;
-        }
-    }
-
-    private void publishUntracked(ApiCommand cmd) {
-        liquidationCmdPublisher.publish(cmd, null);
-    }
 }

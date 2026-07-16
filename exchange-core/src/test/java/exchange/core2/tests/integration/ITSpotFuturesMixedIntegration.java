@@ -132,7 +132,7 @@ public final class ITSpotFuturesMixedIntegration {
             // BID 挂在 updateCurrentPriceTo 之后，避免被 UPDATE_PRICE_USER2 的 ASK@984 消耗
             container.createBidWithOrderId(orderId++, UID_2, 10, 1001, perp.symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             LatencyTools.waitForCondition(15_000, () -> {
                 try {
                     return container.getUserProfile(UID_1).getPositions().isEmpty();

@@ -1,8 +1,5 @@
 package exchange.core2.core.processors.liquidation;
 
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -10,60 +7,72 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@RequiredArgsConstructor
-@Slf4j
-public abstract class SimpleScheduledService {
+import exchange.core2.core.common.api.ApiCommand;
+import exchange.core2.core.common.api.ApiLiquidationScan;
+import exchange.core2.core.common.api.ApiRepriceLoanRates;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 
+/**
+ * 强平发令器（父类）：off-lane、leader-local 的定时调度。
+ * <p>
+ * <b>只发命令、绝不读用户态</b>——shard 0 每 tick submit {@code LIQUIDATION_SCAN} （全量兜底整扫）与
+ * {@code REPRICE_LOAN_RATES}（动态利率重定价）。真正的检测/扫描都在子类的 on-lane apply 路径里跑（由 {@code cmd.timestamp} 驱动）；命令经 raft 复制后各节点确定性
+ * apply， 从根上消除调度线程与 apply 线程之间的竞态。
+ * <p>
+ * {@link #isRunning()}（start→true / stop→false）复用为 leader gate：server 按 leader 身份 start/stop。
+ */
+@Slf4j
+public abstract class LiquidationScheduledService {
     private final long delay;
     private final TimeUnit unit;
     private final ThreadFactory threadFactory;
-
+    @Getter
+    protected final int shardId;
+    @Setter
+    @Getter
+    protected LiquidationCommandSubmitter commandSubmitter;
     private ScheduledExecutorService scheduler;
     private ScheduledFuture<?> future;
-
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    protected SimpleScheduledService(long delay, TimeUnit unit, String name, ThreadFactory threadFactory) {
-        this(delay, unit, threadFactory);
+    protected LiquidationScheduledService(long delay, TimeUnit unit, ThreadFactory threadFactory, int shardId) {
+        this.delay = delay;
+        this.unit = unit;
+        this.threadFactory = threadFactory;
+        this.shardId = shardId;
     }
 
-    /**
-     * 要实现的业务逻辑
-     */
-    protected abstract void runOneIteration() throws Exception;
+    protected void runOneIteration() {
+        if (shardId != 0) {
+            return;
+        }
+        submit(ApiLiquidationScan.builder().build(), null);
+        submit(ApiRepriceLoanRates.builder().build(), null);
+    }
 
-    /**
-     * 可选：启动前动作
-     */
+    protected final void submit(ApiCommand cmd, Runnable onApplied) {
+        if (commandSubmitter != null) {
+            commandSubmitter.submit(cmd, onApplied);
+        }
+    }
+
     protected void beforeStart() {}
 
-    /**
-     * 可选：停止后动作
-     */
     protected void afterStop() {}
 
-    /**
-     * 异常默认打印，可重写
-     */
     protected void handleError(Throwable t) {
         log.warn("Scheduled service error: ", t);
     }
-
-    /**
-     * ======== 生命周期 ========
-     */
 
     public synchronized void start() {
         if (running.get()) {
             return;
         }
-
         running.set(true);
-
         beforeStart();
-
         scheduler = Executors.newSingleThreadScheduledExecutor(threadFactory);
-
         future = scheduler.scheduleWithFixedDelay(() -> {
             try {
                 runOneIteration();
@@ -81,13 +90,10 @@ public abstract class SimpleScheduledService {
         if (!running.get()) {
             return;
         }
-
         running.set(false);
-
         if (future != null) {
             future.cancel(false);
         }
-
         if (scheduler != null) {
             scheduler.shutdown();
             try {
@@ -99,7 +105,6 @@ public abstract class SimpleScheduledService {
                 Thread.currentThread().interrupt();
             }
         }
-
         afterStop();
     }
 

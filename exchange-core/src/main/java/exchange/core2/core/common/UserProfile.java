@@ -16,6 +16,7 @@
 package exchange.core2.core.common;
 
 import exchange.core2.core.common.cmd.OrderCommandType;
+import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.HashingUtils;
 import exchange.core2.core.utils.SerializationUtils;
@@ -26,12 +27,28 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
+import org.eclipse.collections.impl.map.mutable.primitive.ObjectLongHashMap;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 
+/**
+ * 单用户的账户状态快照，聚合该 uid 在各业务线上的资金与持仓：
+ * <ul>
+ *   <li>通用余额 {@link #accounts}（currency → 物理余额总额）；</li>
+ *   <li>现货挂单冻结 {@link #exchangeLocked}（accounts 中被未成交现货挂单冻结、不可支配的部分）；</li>
+ *   <li>期货持仓 {@link #positions}（symbol → margin position record；HEDGE 模式用 ±symbol 区分多空）；</li>
+ *   <li>借贷 {@link #isolatedLoans}（逐仓单笔）/ {@link #crossLoans} + {@link #crossLoanCollateral}
+ *       （全仓债务凭证 + 账户级抵押池）。</li>
+ * </ul>
+ *
+ * <p>本对象序列化进 raft snapshot 并参与 {@link #stateHash}；enum 字段经 HashingUtils.enumStateHash
+ * 稳定化以保证跨节点收敛。各字段的 scale 与语义详见对应字段注释。
+ */
 @Slf4j
 public final class UserProfile implements WriteBytesMarshallable, StateHash {
 
@@ -201,7 +218,7 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
      * extraMargin 已在 MARGIN_ADJUSTMENT 时从 accounts 扣走，不重复减。逐仓 pending 单占用（含 pending fee）
      * 由 {@link SymbolPositionRecord#calculateRequiredMarginForFutures} 一并扣除。
      *
-     * <p>三条路径共享同一口径：强平触发（LiquidationEngine.checkLiquidationCross）、账户报表
+     * <p>三条路径共享同一口径：强平触发（LiquidationEngine.checkCross）、账户报表
      * （SingleUserReportQuery）、事件下发（FundEventsHelper.calc）—— 避免客户端展示的 LP / marginRatio
      * 跟真实强平点脱节。
      *
@@ -219,6 +236,78 @@ public final class UserProfile implements WriteBytesMarshallable, StateHash {
                 iso.calculateRequiredMarginForFutures(isoSpec), isoSpec, currencySpec);
         }
         return crossAvailable;
+    }
+
+    /**
+     * 一次算好整账户所有 CROSS 仓的破产价基础 {@code marginBase}（pos → marginBase，sizePriceScale，
+     * 与 {@link SymbolPositionRecord#openInitMarginSum} 同 scale），直接喂
+     * {@link SymbolPositionRecord#calculateBankruptcyPrice(CoreSymbolSpecification, java.util.function.ToLongFunction)}
+     * 的 CROSS 回调。承接原 {@code LiquidationEngine.calculateCrossBpMarginBaseAllocation} 的账户级分摊逻辑。
+     *
+     * <p>按 currency 分组，组内账户级 marginBalance 按 MM 占比分给每个 CROSS 仓：
+     * <pre>
+     *   marginBalance = crossAvailable + Σ UPnL
+     *   allocated_i   = marginBalance × mm_i / Σ MM     （按 MM 占比分账户余额）
+     *   marginBase_i  = allocated_i − UPnL_i            （EP 基础换算，currency scale）
+     *   marginBase_i(sizePrice) = currencyToSizePriceScale(marginBase_i, spec_i, currencySpec)
+     * </pre>
+     * 守恒不变式：{@code Σ marginBase_i(currency scale) = crossAvailable}。单仓时 marginBase = crossAvailable；
+     * marginBalance < 0 沿用同一公式。边界：某 currency 组 {@code Σ MM = 0} → 该组不入 map（caller
+     * 取默认 0）；spec/price 缺失的仓跳过、其余照分。
+     *
+     * <p>{@code symbolSpecLookup} / {@code currencySpecLookup} 用函数解耦，避免 common 包反向依赖
+     * processors 里的 provider；caller 通常传 {@code provider::getSymbolSpecification} /
+     * {@code provider::getCurrencySpecification}。
+     */
+    public ObjectLongHashMap<SymbolPositionRecord> crossMarginBaseAllocation(
+        IntFunction<CoreSymbolSpecification> symbolSpecLookup,
+        IntFunction<CoreCurrencySpecification> currencySpecLookup,
+        IntObjectHashMap<LastPriceCacheRecord> lastPriceCache) {
+        final ObjectLongHashMap<SymbolPositionRecord> marginBaseByPos = new ObjectLongHashMap<>();
+        // 账户级 marginBalance 分摊在单一 currency 内闭合，先按 currency 分组
+        final IntObjectHashMap<List<SymbolPositionRecord>> crossByCurrency = new IntObjectHashMap<>();
+        for (SymbolPositionRecord p : positions) {
+            if (p.marginMode == MarginMode.CROSS) {
+                crossByCurrency.getIfAbsentPut(p.currency, ArrayList::new).add(p);
+            }
+        }
+        crossByCurrency.forEachKeyValue((currency, records) -> {
+            final CoreCurrencySpecification currencySpec = currencySpecLookup.apply(currency);
+            final ObjectLongHashMap<SymbolPositionRecord> upnlByPos = new ObjectLongHashMap<>();
+            final ObjectLongHashMap<SymbolPositionRecord> mmByPos = new ObjectLongHashMap<>();
+            long totalUpnl = 0;
+            long totalMm = 0;
+            for (SymbolPositionRecord p : records) {
+                final CoreSymbolSpecification pSpec = symbolSpecLookup.apply(p.symbol);
+                final LastPriceCacheRecord pPrice = lastPriceCache.get(p.symbol);
+                if (pSpec == null || pPrice == null) {
+                    continue;
+                }
+                final long pnl =
+                    CoreArithmeticUtils.sizePriceToCurrencyScale(p.estimatePnl(pPrice), pSpec, currencySpec);
+                final long mm = CoreArithmeticUtils.sizePriceToCurrencyScale(
+                    p.calculateMaintenanceMargin(pSpec, pPrice), pSpec, currencySpec);
+                upnlByPos.put(p, pnl);
+                mmByPos.put(p, mm);
+                totalUpnl += pnl;
+                totalMm += mm;
+            }
+            if (totalMm == 0) {
+                return;
+            }
+            final long totalMmFinal = totalMm;
+            final long marginBalance =
+                Math.addExact(calculateCrossAvailable(currency, currencySpec, symbolSpecLookup), totalUpnl);
+            mmByPos.forEachKeyValue((pos, mm) -> {
+                final long allocated = Math.multiplyExact(marginBalance, mm) / totalMmFinal;
+                final long marginBaseCurrency = Math.subtractExact(allocated, upnlByPos.get(pos));
+                // currency scale → sizePriceScale（喂 SPR.calculateBankruptcyPrice，与 openInitMarginSum 同 scale）
+                final CoreSymbolSpecification posSpec = symbolSpecLookup.apply(pos.symbol);
+                marginBaseByPos.put(pos,
+                    CoreArithmeticUtils.currencyToSizePriceScale(marginBaseCurrency, posSpec, currencySpec));
+            });
+        });
+        return marginBaseByPos;
     }
 
     public SymbolPositionRecord getPositionRecordOrThrowEx(int key) {

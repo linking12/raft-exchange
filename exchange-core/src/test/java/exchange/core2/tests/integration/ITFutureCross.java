@@ -494,7 +494,7 @@ class ITFutureCross extends ITFutureBase {
             // userId3先设置一个单子用于强制平仓, 此时
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             LatencyTools.waitForCondition(60_000, () -> {
                 try {
@@ -560,7 +560,7 @@ class ITFutureCross extends ITFutureBase {
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
             container.createAskWithOrderId(makerOrderId6, userId3, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             // 期待结果makerOrderId6可以被挂出的强平吃掉
             // 9840 → 9540: symbol1 强平 close 时 UID_1 是 taker, dynamic taker fee = ceil(1 * 15000 * 2/100) = 300
             container.validateUserState(userId1, profile -> {
@@ -662,14 +662,14 @@ class ITFutureCross extends ITFutureBase {
             // ADL 路径下 SHORT 持仓在15154价格无盈利 → 无候选 → 死循环；提前挂BID@16000让FORCE直接成交
             container.createBidWithOrderId(makerOrderId6, userId6, size, 16000, symbols.get(1).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
                 assertThat(profile.getPositions().size(), is(2));
             });
-            // BP-based 路径下 FORCE@BP > 盘口 → REJECT → IF → ADL；scanner 已停，用 triggerOnce 主动驱动 stuck-check
-            Runnable triggerOnce = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            // BP-based 路径下 FORCE@BP > 盘口 → REJECT → IF → ADL；scanner 已停，用 triggerLiquidation 主动驱动 stuck-check
+            Runnable trigger = container::triggerLiquidation;
             LatencyTools.waitForCondition(10_000, () -> {
                 try {
                     List<SingleUserReportResult.Position> pos = container.getUserProfile(userId3).getPositions().get(symbols.get(0).symbolId);
@@ -677,7 +677,7 @@ class ITFutureCross extends ITFutureBase {
                 } catch (Exception e) {
                     return false;
                 }
-            }, triggerOnce, 500);
+            }, trigger, 500);
             container.validateUserState(userId3, profile -> {
                 assertThat(profile.getPositions().size(), is(1));
             });
@@ -695,14 +695,14 @@ class ITFutureCross extends ITFutureBase {
                 } catch (Exception e) {
                     return false;
                 }
-            }, triggerOnce, 500);
+            }, trigger, 500);
 
         } catch (ExecutionException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            // userId3/symbol0: FORCE@9920 REJECT → IF → ADL（stuck-check 需多次 triggerOnce）
+            // userId3/symbol0: FORCE@9920 REJECT → IF → ADL（stuck-check 需多次 triggerLiquidation）
             // userId4/symbol1: FORCE@15154 直接成交（userId6 BID@16000 在盘口），无需 ADL
             // 事件总数不固定（≥55），用 atLeast 断言
             verify(handler, atLeast(55)).fundEventReport(fundEventCaptor.capture());
@@ -802,7 +802,7 @@ class ITFutureCross extends ITFutureBase {
                 assertThat(profile.getPositions().size(), is(2));
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));

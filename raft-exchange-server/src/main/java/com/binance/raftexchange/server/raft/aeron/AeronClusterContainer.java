@@ -28,7 +28,7 @@ import com.binance.raftexchange.server.raft.RaftResponse;
 import com.binance.raftexchange.server.util.AppHome;
 
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
-import exchange.core2.core.processors.liquidation.SimpleScheduledService;
+import exchange.core2.core.processors.liquidation.LiquidationScheduledService;
 
 /**
  * Aeron raft backend 容器：封装 {@link AeronClusterServer} + {@link AeronClusterClient}，按 {@link RaftClusterContainer} 对外暴露。
@@ -61,13 +61,13 @@ public class AeronClusterContainer implements RaftClusterContainer {
         if (engines == null) {
             return;
         }
-        exchangeRuntime.overrideLiquidationCmdPublisher(this::isLeader,
+        exchangeRuntime.overrideLiquidationCommandSubmitter(this::isLeader,
             (log, onComplete) -> requestConsensus(log, (resp, err) -> onComplete.accept(err)));
         addRoleChangeListener(role -> {
             if (role == RaftNode.NodeType.LEADER) {
-                engines.forEach(SimpleScheduledService::start);
+                engines.forEach(LiquidationScheduledService::start);
             } else {
-                engines.forEach(SimpleScheduledService::stop);
+                engines.forEach(LiquidationScheduledService::stop);
             }
         });
     }

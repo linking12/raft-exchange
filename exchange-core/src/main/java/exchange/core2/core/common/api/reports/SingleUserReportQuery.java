@@ -128,7 +128,7 @@ public final class SingleUserReportQuery implements ReportQuery<SingleUserReport
                     totalMM += CoreArithmeticUtils.sizePriceToCurrencyScale(mm, spec, quoteCurrency);
                 }
                 // cross 真实可用 = accounts − exchangeLocked − Σ 逐仓虚拟锁定，用 CoreArithmeticUtils 共用 helper
-                // 与 LiquidationEngine#checkLiquidationCross 和 FundEventsHelper#calc 口径完全对齐，
+                // 与 LiquidationEngine#checkCross 和 FundEventsHelper#calc 口径完全对齐，
                 // 否则 user 查询看到的 liquidationPrice / marginRatioScaleK 偏乐观，实际强平会"突然"打掉。
                 long balance = userProfile.calculateCrossAvailable(currency, quoteCurrency,
                     symbolSpecProvider::getSymbolSpecification);

@@ -479,7 +479,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
@@ -497,7 +497,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - extraMarginDeposit));
@@ -598,7 +598,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee));
@@ -617,7 +617,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - fee - marginDeposit));
@@ -708,7 +708,7 @@ class ITExtraMarginIntegration {
             container.createBidWithOrderId(makerOrderId5, userId3, size, price1, symbols.get(0).symbolId, MarginMode.CROSS);
             container.createAskWithOrderId(makerOrderId6, userId3, size, price2, symbols.get(1).symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             // 期待结果makerOrderId6可以被挂出的强平吃掉
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9840L));
@@ -724,7 +724,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(9860L));
                 assertThat(profile.getPositions().size(), is(2));
@@ -812,7 +812,7 @@ class ITExtraMarginIntegration {
 
             long initialBalance = 9840L;
             long marginDeposit = 12L;
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             // 期待结果makerOrderId6可以被挂出的强平吃掉
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(initialBalance));
@@ -828,7 +828,7 @@ class ITExtraMarginIntegration {
                 assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             container.validateUserState(userId1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(initialBalance + marginDeposit));
                 assertThat(profile.getPositions().size(), is(2));
@@ -964,7 +964,7 @@ class ITExtraMarginIntegration {
             });
 
             Runnable triggerAll = () ->
-                container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+                container.triggerLiquidation();
             triggerAll.run();
             LatencyTools.waitForCondition(5_000, () -> {
                 try {

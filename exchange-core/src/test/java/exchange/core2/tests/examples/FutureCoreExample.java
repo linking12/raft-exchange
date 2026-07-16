@@ -97,6 +97,11 @@ public class FutureCoreExample {
         api.submitCommandAsync(cmd);
     }
 
+    private void triggerLiquidation() {
+        exchangeCore.liquidationEngines.forEach(LiquidationEngine::start);
+        api.submitCommandAsync(ApiLiquidationScan.builder().build());
+    }
+
     private void deposit(long userId, long amount) throws ExecutionException, InterruptedException {
         Future<CommandResultCode> future;
         ApiAdjustUserBalance adjustBalance = ApiAdjustUserBalance.builder()
@@ -607,7 +612,7 @@ public class FutureCoreExample {
         updateCurrentPriceTo(8000);
 
         // trigger强平逻辑
-        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+        triggerLiquidation();
         // should raise Margin call warning
     }
 
@@ -632,7 +637,7 @@ public class FutureCoreExample {
         updateCurrentPriceTo(11000);
 
         // trigger强平逻辑
-        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+        triggerLiquidation();
         // should raise Margin call warning
     }
 
@@ -663,7 +668,7 @@ public class FutureCoreExample {
         }
 
         // trigger强平逻辑
-        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+        triggerLiquidation();
         // should trigger liquidate
         // search log Liquidated: uid=
 //        SingleUserReportResult userStatus3 = getUserStatus(userId1);
@@ -727,7 +732,7 @@ public class FutureCoreExample {
         }
 
         // trigger强平逻辑
-        exchangeCore.liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+        triggerLiquidation();
         // should trigger liquidate
         // search log Liquidated: uid=
         // SingleUserReportResult userStatus3 = getUserStatus(userId1);

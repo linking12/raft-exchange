@@ -54,7 +54,6 @@ public final class ITExchangeCoreADL {
     public void testADL() throws Exception {
         try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
-            container.getExchangeCore().getLiquidationEngines().forEach(le -> le.setInsuranceFundEnabled(false));
 
             container.addSymbol(symbol);
             container.addCurrency(symbol.baseCurrency, 0);
@@ -92,7 +91,7 @@ public final class ITExchangeCoreADL {
 
             // 强制触发清算：LiquidationEngine.stop() 后 scheduler 关闭，多步强平 (FORCE→IF→ADL)
             // 需要 caller 通过 onTick 主动 drive；参考 LatencyTools.waitForCondition JavaDoc。
-            Runnable trigger = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = () -> container.triggerLiquidation();
             trigger.run();
             LatencyTools.waitForCondition(5_000, () -> {
                 try {
@@ -161,7 +160,7 @@ public final class ITExchangeCoreADL {
             container.updateCurrentPriceTo(600, symbol.symbolId, symbol.quoteCurrency);
 
             // 手动触发清算（多步强平靠 onTick 重发 drive，同 testFuturesLiquidationFullLifecycleConservation）
-            Runnable trigger = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = () -> container.triggerLiquidation();
             trigger.run();
 
             // 等待 LOSER 清仓
@@ -244,7 +243,7 @@ public final class ITExchangeCoreADL {
 
             // 价格暴跌，触发强平：多步强平靠 onTick 重发 drive
             container.updateCurrentPriceTo(600, symbol.symbolId, symbol.quoteCurrency);
-            Runnable trigger = () -> engines.forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = () -> container.triggerLiquidation();
             trigger.run();
 
             // 等待强平完成。多步流程 (FORCE→IF→ADL) 中 IF 接管后还需 republish 继续推进，
@@ -316,7 +315,7 @@ public final class ITExchangeCoreADL {
 
             // 触发强平（第一次）：多步强平靠 onTick 重发 drive
             container.updateCurrentPriceTo(600, symbol.symbolId, symbol.quoteCurrency);
-            Runnable trigger1 = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger1 = () -> container.triggerLiquidation();
             trigger1.run();
 
             LatencyTools.waitForCondition(5_000, () -> {
@@ -352,7 +351,7 @@ public final class ITExchangeCoreADL {
 
             // 再次暴跌（第二次）：多步强平靠 onTick 重发 drive
             container.updateCurrentPriceTo(400, symbol.symbolId, symbol.quoteCurrency);
-            Runnable trigger2 = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger2 = () -> container.triggerLiquidation();
             trigger2.run();
 
             LatencyTools.waitForCondition(5_000, () -> {
@@ -432,7 +431,7 @@ public final class ITExchangeCoreADL {
 
             // 触发强平：多步强平靠 onTick 重发 drive
             container.updateCurrentPriceTo(600, symbolId, symbol.quoteCurrency);
-            Runnable trigger = () -> container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = () -> container.triggerLiquidation();
             trigger.run();
 
             // 等 LOSER 清仓
@@ -445,8 +444,8 @@ public final class ITExchangeCoreADL {
             }, trigger, 100);
 
             // ====== 强平后断言（snapshot 前）—— 跨 shard 聚合 ======
-            // 注：实际成交价取决于 priceRecord 在 triggerOnce 读取时刻的 bid/ask 状态，
-            // 这是 updateCurrentPriceTo 的 R2 路径和 triggerOnce 之间的 race，因 JVM 时序而异
+            // 注：实际成交价取决于 priceRecord 在 triggerLiquidation 读取时刻的 bid/ask 状态，
+            // 这是 updateCurrentPriceTo 的 R2 路径和 triggerLiquidation 之间的 race，因 JVM 时序而异
             // （bid 价存在时按 600 成交，回落到 openAvg 时按 1000 成交）。
             // 这里只校验：IF 确实接走了 5 张多仓、无 reserved 残留；
             // 具体 openPriceSum/available 用变量保存，留到 recovery 后断言"前后完全一致"。

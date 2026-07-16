@@ -99,7 +99,7 @@ class AeronClusterContainerUnitTest {
         ExchangeRuntime runtime = mock(ExchangeRuntime.class);
         ExchangeCore core = mock(ExchangeCore.class);
         when(runtime.exchangeCore()).thenReturn(core);
-        // getLiquidationEngines returns null → wireLiquidationCmdPublisher 早退
+        // getLiquidationEngines returns null → override liquidation submitter 早退
         when(core.getLiquidationEngines()).thenReturn(null);
         return new AeronClusterContainer(discovery, runtime);
     }

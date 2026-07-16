@@ -223,7 +223,7 @@ public final class ExchangeCore {
             liquidationEngines =
                 riskEngines.values().stream().map(RiskEngine::getLiquidationEngine).collect(Collectors.toList());
             liquidationEngines
-                .forEach(liquidationEngine -> liquidationEngine.setLiquidationCmdPublisher((cmd, onApplied) -> {
+                .forEach(liquidationEngine -> liquidationEngine.setCommandSubmitter((cmd, onApplied) -> {
                     if (onApplied != null) {
                         api.submitCommandAsync(cmd).whenComplete((rc, ex) -> onApplied.run());
                     } else {

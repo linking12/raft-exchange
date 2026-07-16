@@ -139,6 +139,8 @@ public final class ExchangeApi {
             ringBuffer.publishEvent(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
         } else if (cmd instanceof ApiRepriceLoanRates) {
             ringBuffer.publishEvent(REPRICE_LOAN_RATES_TRANSLATOR, (ApiRepriceLoanRates)cmd);
+        } else if (cmd instanceof ApiLiquidationScan) {
+            ringBuffer.publishEvent(LIQUIDATION_SCAN_TRANSLATOR, (ApiLiquidationScan)cmd);
         } else if (cmd instanceof ApiReset) {
             ringBuffer.publishEvent(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -232,6 +234,8 @@ public final class ExchangeApi {
             return submitCommandAsync(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
         } else if (cmd instanceof ApiRepriceLoanRates) {
             return submitCommandAsync(REPRICE_LOAN_RATES_TRANSLATOR, (ApiRepriceLoanRates)cmd);
+        } else if (cmd instanceof ApiLiquidationScan) {
+            return submitCommandAsync(LIQUIDATION_SCAN_TRANSLATOR, (ApiLiquidationScan)cmd);
         } else if (cmd instanceof ApiReset) {
             return submitCommandAsync(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -323,6 +327,8 @@ public final class ExchangeApi {
             return submitCommandAsyncFullResponse(RESET_FEE_TRANSLATOR, (ApiResetFee)cmd);
         } else if (cmd instanceof ApiRepriceLoanRates) {
             return submitCommandAsyncFullResponse(REPRICE_LOAN_RATES_TRANSLATOR, (ApiRepriceLoanRates)cmd);
+        } else if (cmd instanceof ApiLiquidationScan) {
+            return submitCommandAsyncFullResponse(LIQUIDATION_SCAN_TRANSLATOR, (ApiLiquidationScan)cmd);
         } else if (cmd instanceof ApiReset) {
             return submitCommandAsyncFullResponse(RESET_TRANSLATOR, (ApiReset)cmd);
         } else if (cmd instanceof ApiNop) {
@@ -1095,6 +1101,13 @@ public final class ExchangeApi {
         cmd.resultCode = CommandResultCode.NEW;
     };
 
+    private static final EventTranslatorOneArg<OrderCommand, ApiLiquidationScan> LIQUIDATION_SCAN_TRANSLATOR = (cmd, seq, api) -> {
+        cmd.command = OrderCommandType.LIQUIDATION_SCAN;
+        cmd.timestamp = api.timestamp;
+        cmd.resultCode = CommandResultCode.NEW;
+        cmd.symbol = -1;
+    };
+
     private static final EventTranslatorOneArg<OrderCommand, ApiMoveOrder> MOVE_ORDER_TRANSLATOR = (cmd, seq, api) -> {
         cmd.command = OrderCommandType.MOVE_ORDER;
         cmd.price = api.newPrice;
@@ -1402,6 +1415,7 @@ public final class ExchangeApi {
         m.put(ApiSettlePNL.class, SETTLE_PNL_TRANSLATOR);
         m.put(ApiResetFee.class, RESET_FEE_TRANSLATOR);
         m.put(ApiRepriceLoanRates.class, REPRICE_LOAN_RATES_TRANSLATOR);
+        m.put(ApiLiquidationScan.class, LIQUIDATION_SCAN_TRANSLATOR);
         m.put(ApiLiquidationOrder.class, LIQUIDATION_ORDER_TRANSLATOR);
         m.put(ApiLoanForceLiquidate.class, LOAN_FORCE_LIQUIDATE_TRANSLATOR);
         m.put(ApiLoanCrossForceLiquidate.class, LOAN_CROSS_FORCE_LIQUIDATE_TRANSLATOR);

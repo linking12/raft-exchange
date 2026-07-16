@@ -160,7 +160,7 @@ public class FundEventsHelper {
                 }
             }
             // cross 真实可用 = accounts − exchangeLocked − Σ 逐仓虚拟锁定，用 CoreArithmeticUtils 共用 helper
-            // 与 LiquidationEngine#checkLiquidationCross 和 SingleUserReportQuery 口径完全对齐，避免下发的
+            // 与 LiquidationEngine#checkCross 和 SingleUserReportQuery 口径完全对齐，避免下发的
             // liquidationPrice / marginRatioScaleK 偏乐观、跟真实强平触发点脱节。
             balance = userProfile.calculateCrossAvailable(position.currency, currencySpec,
                 symbolSpecificationProvider::getSymbolSpecification);

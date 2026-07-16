@@ -422,7 +422,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 检查用户被强平1手
             container.validateUserState(UID_1, profile -> {
@@ -775,7 +775,7 @@ public final class ITExchangeCoreCustomLeverage {
                     .build(), CommandResultCode.SUCCESS);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             Thread.sleep(200);
 
             // 检查用户被强平1手（BP=1000 收盘，PnL=0）
@@ -836,7 +836,7 @@ public final class ITExchangeCoreCustomLeverage {
             container.updateCurrentPriceTo(981, spec.symbolId, spec.quoteCurrency);
 
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 用户没有被强平
             container.validateUserState(UID_1, profile -> {
@@ -937,7 +937,7 @@ public final class ITExchangeCoreCustomLeverage {
             container.validateUserState(UID_2, profile -> {
                 assertThat(profile.getPositions().getFirst().get(0).openVolume, is(50L));
             });
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             Thread.sleep(200);
 
             // 检查用户被强平清仓

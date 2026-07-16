@@ -72,6 +72,9 @@ public enum OrderCommandType {
     // 动态利率重定价（周期系统命令，两步：R1 收池子 → merge 算全局利用率+曲线 → R2 写 currentRateBps，见 loan.md §13.2）
     REPRICE_LOAN_RATES((byte) 63, true),
 
+    // 期货强平兜底心跳（leader 定时器 off-lane 发令，on-lane 整扫破产仓，见 liquidation 事件驱动计划）
+    LIQUIDATION_SCAN((byte) 64, true),
+
     BINARY_DATA_QUERY((byte) 90, false),
     BINARY_DATA_COMMAND((byte) 91, true),
 

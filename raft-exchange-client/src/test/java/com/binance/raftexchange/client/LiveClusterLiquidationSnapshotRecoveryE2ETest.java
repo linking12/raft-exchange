@@ -52,8 +52,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * 等）、IF 资金、账户余额全部保留； 重启后无残留状态，且 cascade 在恢复的 raft 集群上仍能完整跑通 FORCE→IF→ADL。
  *
  * <p>
- * <b>⚠ ctx 字段没有被 E2E 覆盖</b>。{@code SymbolPositionRecord#liquidationCtx} 只在 cascade 进行中非 null（见
- * {@code LiquidationContext} 注释）；本测试 phase1 故意不触发 cascade（"基础设施就位 → 留给阶段 2 验证恢复后 cascade 能跑"），所以 snapshot 写入那刻 所有
+ * <b>⚠ ctx 字段没有被 E2E 覆盖</b>。{@code SymbolPositionRecord#liquidationFlow} 只在 cascade 进行中非 null（见
+ * {@code LiquidationFlow} 注释）；本测试 phase1 故意不触发 cascade（"基础设施就位 → 留给阶段 2 验证恢复后 cascade 能跑"），所以 snapshot 写入那刻 所有
  * position 的 ctx 都是 null，phase2 的 cascade 是重启后**全新**触发的，跟 snapshot 里的状态无关。要真 E2E 覆盖 "in-flight cascade snapshot"，得能在
  * cascade 某 transition 之间稳定卡住后触发 snapshot——目前没有这种 hook。
  *

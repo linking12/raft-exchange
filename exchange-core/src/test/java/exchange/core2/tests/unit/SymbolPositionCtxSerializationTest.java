@@ -3,96 +3,69 @@ package exchange.core2.tests.unit;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolPositionRecord;
-import exchange.core2.core.processors.liquidation.LiquidationContext;
-import exchange.core2.core.processors.liquidation.LiquidationContext.LiquidationState;
+import exchange.core2.core.processors.liquidation.LiquidationFlow;
+import exchange.core2.core.processors.liquidation.LiquidationFlow.LiquidationState;
 import net.openhft.chronicle.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 
 /**
- * 锁定 {@link LiquidationContext} 跟着 {@link SymbolPositionRecord} 进 raft snapshot 的序列化往返不丢字段。
+ * 锁定不变量：强平流程状态 {@link LiquidationFlow} 是 <b>leader-local、纯内存</b> 字段——
+ * <b>不进 raft snapshot、不进 stateHash</b>，{@code writeMarshallable} / 读构造都不含它。
  *
- * <p>关键场景：cascade 进行中（state=WAIT_IF_EXECUTION 之类）打 snapshot，节点重启 / failover 加载 snapshot
- * 后必须能从 ctx 恢复出原阶段；否则下一条 IF/ADL cmd apply 时会被 {@code nextLiquidationState} 的
- * illegal-jump gate 静默 skip，cascade 永久卡死。
+ * <p>生产已从"ctx 跟随 pos 进 snapshot + stateHash"<b>反转</b>为 depersist：换届后新 leader 侧
+ * {@code liquidationFlow} 为空，残余仓被当作破产仓重发 FORCE 恢复（正确性靠 R1 对 size 的夹取保证），
+ * 因此流程态无需、也不应参与复制态。本测试守住两条反转后的核心不变量：
+ * <ol>
+ *   <li>序列化往返后 {@code restored.liquidationFlow} 恒为 {@code null}（即便原 pos 持有 flow）；</li>
+ *   <li>{@code stateHash()} 与 flow 无关：同一 pos，flow=null vs 持有 flow，hash 必须相等。</li>
+ * </ol>
  */
 class SymbolPositionCtxSerializationTest {
 
     private static final long UID = 9527L;
 
+    /** flow 不序列化：即便原 pos 设了 flow，往返后 restored.liquidationFlow 必为 null。 */
     @Test
-    void ctxRoundTrip_inWaitIfExecution_preservesAllFields() {
-        SymbolPositionRecord pos = newPositionWithCtx(LiquidationState.WAIT_IF_EXECUTION, 12345L, 67L, 88888L, 1700000000L);
+    void roundTrip_dropsLiquidationFlow() {
+        SymbolPositionRecord pos = newPositionWithFlow(LiquidationState.WAIT_IF_EXECUTION, 12345L, 67L, 88888L);
 
         SymbolPositionRecord restored = roundTrip(pos);
 
-        assertNotNull(restored.liquidationCtx, "ctx 不应丢");
-        assertSame(LiquidationState.WAIT_IF_EXECUTION, restored.liquidationCtx.state);
-        assertEquals(12345L, restored.liquidationCtx.price);
-        assertEquals(67L, restored.liquidationCtx.size);
-        assertEquals(88888L, restored.liquidationCtx.originalOrderId);
-        assertEquals(1700000000L, restored.liquidationCtx.lastTransitionAt);
+        assertNull(restored.liquidationFlow, "liquidationFlow 是 leader-local，不进 snapshot，往返后必为 null");
     }
 
+    /** flow=null 的 pos 往返后仍为 null（回归对照）。 */
     @Test
-    void ctxRoundTrip_inWaitAdlExecution_preservesAllFields() {
-        SymbolPositionRecord pos = newPositionWithCtx(LiquidationState.WAIT_ADL_EXECUTION, 700L, 3L, 99999L, 1700001234L);
-
-        SymbolPositionRecord restored = roundTrip(pos);
-
-        assertNotNull(restored.liquidationCtx);
-        assertSame(LiquidationState.WAIT_ADL_EXECUTION, restored.liquidationCtx.state);
-        assertEquals(700L, restored.liquidationCtx.price);
-        assertEquals(3L, restored.liquidationCtx.size);
-        assertEquals(99999L, restored.liquidationCtx.originalOrderId);
-        assertEquals(1700001234L, restored.liquidationCtx.lastTransitionAt);
-    }
-
-    @Test
-    void ctxRoundTrip_inLiquidating_preservesAllFields() {
-        SymbolPositionRecord pos = newPositionWithCtx(LiquidationState.LIQUIDATING, 1000L, 10L, 12345L, 1700002000L);
-
-        SymbolPositionRecord restored = roundTrip(pos);
-
-        assertSame(LiquidationState.LIQUIDATING, restored.liquidationCtx.state);
-        assertEquals(1000L, restored.liquidationCtx.price);
-        assertEquals(10L, restored.liquidationCtx.size);
-    }
-
-    @Test
-    void ctxRoundTrip_nullCtx_staysNull() {
+    void roundTrip_nullFlow_staysNull() {
         SymbolPositionRecord pos = newPosition();
-        pos.liquidationCtx = null;
+        pos.liquidationFlow = null;
 
         SymbolPositionRecord restored = roundTrip(pos);
 
-        assertNull(restored.liquidationCtx, "无 cascade 时 ctx 应保持 null");
+        assertNull(restored.liquidationFlow);
     }
 
-    /** stateHash 必须感知 ctx 状态变化——否则跨节点 cascade 阶段发散无法检测。 */
+    /** stateHash 与 flow 无关：同一 pos，flow=null vs 持有 flow，hash 必须相等（证明 flow 不参与 hash）。 */
     @Test
-    void stateHash_sensitiveToCtxState() {
-        SymbolPositionRecord a = newPositionWithCtx(LiquidationState.WAIT_IF_EXECUTION, 100L, 5L, 1L, 0L);
-        SymbolPositionRecord b = newPositionWithCtx(LiquidationState.WAIT_IF_EXECUTION, 100L, 5L, 1L, 0L);
-        assertEquals(a.stateHash(), b.stateHash(), "同 ctx 状态，hash 必须一致");
+    void stateHash_independentOfFlowPresence() {
+        SymbolPositionRecord noFlow = newPosition();
+        SymbolPositionRecord withFlow = newPositionWithFlow(LiquidationState.LIQUIDATING, 100L, 5L, 1L);
 
-        b.liquidationCtx.state = LiquidationState.WAIT_ADL_EXECUTION;
-        assertNotEquals(a.stateHash(), b.stateHash(), "ctx.state 不同，hash 必须不同");
+        assertEquals(noFlow.stateHash(), withFlow.stateHash(),
+                "liquidationFlow 不进 stateHash：持有 flow 不应改变 hash");
     }
 
-    /** ctx 从 null 变成持有 → hash 必变；不变则 leader/follower 发散无法被发散检测捕获。 */
+    /** stateHash 与 flow.state 无关：同一 pos，不同 flow 状态，hash 必须相等。 */
     @Test
-    void stateHash_sensitiveToCtxPresence() {
-        SymbolPositionRecord noCtx = newPosition();
-        SymbolPositionRecord withCtx = newPositionWithCtx(LiquidationState.LIQUIDATING, 100L, 5L, 1L, 0L);
+    void stateHash_independentOfFlowState() {
+        SymbolPositionRecord a = newPositionWithFlow(LiquidationState.WAIT_IF_EXECUTION, 100L, 5L, 1L);
+        SymbolPositionRecord b = newPositionWithFlow(LiquidationState.WAIT_ADL_EXECUTION, 100L, 5L, 1L);
 
-        assertNotEquals(noCtx.stateHash(), withCtx.stateHash(),
-                "ctx==null vs ctx 持有 必须哈希不同");
+        assertEquals(a.stateHash(), b.stateHash(), "flow.state 不同不应改变 hash");
     }
 
     // ============== helpers ==============
@@ -117,12 +90,12 @@ class SymbolPositionCtxSerializationTest {
         return pos;
     }
 
-    private static SymbolPositionRecord newPositionWithCtx(LiquidationState state, long price, long size,
-            long originalOrderId, long lastTransitionAt) {
+    private static SymbolPositionRecord newPositionWithFlow(LiquidationState state, long bankruptcyPrice, long size,
+            long originalOrderId) {
         SymbolPositionRecord pos = newPosition();
-        LiquidationContext ctx = new LiquidationContext(price, size, originalOrderId, lastTransitionAt);
-        ctx.state = state;
-        pos.liquidationCtx = ctx;
+        LiquidationFlow flow = new LiquidationFlow(bankruptcyPrice, size, originalOrderId);
+        flow.state = state;
+        pos.liquidationFlow = flow;
         return pos;
     }
 

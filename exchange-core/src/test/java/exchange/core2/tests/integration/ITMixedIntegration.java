@@ -429,7 +429,7 @@ class ITMixedIntegration {
             container.updateCurrentPriceTo((int) liquidationTriggerPrice, spec.symbolId, quoteId);
 
             container.createBidWithOrderId(10003L, UID_3, userSize, bpFillPrice, spec.symbolId, MarginMode.CROSS);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 等待强平完成
             Thread.sleep(100);
@@ -594,7 +594,7 @@ class ITMixedIntegration {
             // 强平时会以市价卖出，我们在低价挂买单接住
             container.createBidWithOrderId(10003L, UID_3, userSize, liquidationTriggerPrice, spec.symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 等待强平完成
             Thread.sleep(100);
@@ -780,7 +780,7 @@ class ITMixedIntegration {
             container.createBidWithOrderId(30003L, UID_3, marketCanTake, bpFillPrice, spec.symbolId, MarginMode.CROSS);
 
             log.info("步骤4: 手动触发强平");
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 等待强平和IF接管完成 - 需要更长时间
             LatencyTools.waitForCondition(60_000, () -> {
@@ -933,7 +933,7 @@ class ITMixedIntegration {
             container.createBidWithOrderId(30003L, UID_3, marketCanTake, bpFillPrice, spec.symbolId, MarginMode.CROSS);
 
             log.info("步骤4: 手动触发强平");
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 等待强平和IF接管完成 - 需要更长时间
             LatencyTools.waitForCondition(60_000, () -> {
@@ -1148,7 +1148,7 @@ class ITMixedIntegration {
             });
 
             log.info("步骤4: 手动触发强平");
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 等待强平和IF接管完成 - 需要更长时间
             LatencyTools.waitForCondition(60_000, () -> {
@@ -1783,7 +1783,7 @@ class ITMixedIntegration {
 
             // LTC mark 下降到 with-fix 触发区间；scanner 一次
             container.updateCurrentPriceTo(crossMarkAfterDrop, symbols.get(2).symbolId, quoteId);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -1852,7 +1852,7 @@ class ITMixedIntegration {
             });
 
             container.updateCurrentPriceTo(btcMarkAfterDrop, symbols.get(0).symbolId, quoteId);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 全局对账闭环：分配公式数学总账守恒
             assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));

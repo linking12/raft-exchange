@@ -312,7 +312,7 @@ class SymbolPositionRecordTest {
         SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.LONG, 10);
         pos.openPriceSum = 1000;
         pos.openInitMarginSum = 100;
-        assertEquals(96, pos.calculateBankruptcyPrice(s));
+        assertEquals(96, pos.calculateBankruptcyPrice(s, p -> 0L));
     }
 
     /**
@@ -325,7 +325,7 @@ class SymbolPositionRecordTest {
         SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.SHORT, 10);
         pos.openPriceSum = 1000;
         pos.openInitMarginSum = 100;
-        assertEquals(104, pos.calculateBankruptcyPrice(s));
+        assertEquals(104, pos.calculateBankruptcyPrice(s, p -> 0L));
     }
 
     /**
@@ -339,7 +339,7 @@ class SymbolPositionRecordTest {
         SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.LONG, 10);
         pos.openPriceSum = 1000;
         pos.openInitMarginSum = 100;
-        assertEquals(95, pos.calculateBankruptcyPrice(s));
+        assertEquals(95, pos.calculateBankruptcyPrice(s, p -> 0L));
     }
 
     /**
@@ -354,7 +354,7 @@ class SymbolPositionRecordTest {
         SymbolPositionRecord pos = createPosition(MarginMode.ISOLATED, PositionDirection.SHORT, 10);
         pos.openPriceSum = 1000;
         pos.openInitMarginSum = 100;
-        assertEquals(105, pos.calculateBankruptcyPrice(s));
+        assertEquals(105, pos.calculateBankruptcyPrice(s, p -> 0L));
     }
 
     // =============== 辅助方法 ===============

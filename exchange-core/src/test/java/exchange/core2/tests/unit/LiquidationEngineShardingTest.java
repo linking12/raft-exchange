@@ -144,7 +144,7 @@ class LiquidationEngineShardingTest {
         // 创建引擎
         for (int shardId = 0; shardId < NUM_SHARDS; shardId++) {
             LiquidationEngine engine = new LiquidationEngine(eventSupplier, shardId, testCfg);
-            engine.setLiquidationCmdPublisher((cmd, onApplied) -> {}); // 生命周期测试不触发强平，noop 满足 start fail-fast
+            engine.setCommandSubmitter((cmd, onApplied) -> {}); // 生命周期测试不触发强平，noop 满足 start fail-fast
             engines.add(engine);
         }
 
@@ -184,7 +184,7 @@ class LiquidationEngineShardingTest {
     @Test
     void testSingleShardScenario() {
         LiquidationEngine engine = new LiquidationEngine(eventSupplier, 0, testCfg);
-        engine.setLiquidationCmdPublisher((cmd, onApplied) -> {}); // 生命周期测试不触发强平，noop 满足 start fail-fast
+        engine.setCommandSubmitter((cmd, onApplied) -> {}); // 生命周期测试不触发强平，noop 满足 start fail-fast
         assertNotNull(engine);
 
         // 测试生命周期

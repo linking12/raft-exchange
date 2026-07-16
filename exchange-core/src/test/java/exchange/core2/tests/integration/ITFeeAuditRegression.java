@@ -70,7 +70,7 @@ public final class ITFeeAuditRegression {
             container.addCurrency(quoteId, 0);
             container.addSymbol(spec);
             container.initMarkPrice(spec.symbolId, 10000);
-            // 关掉自动 scanner，下面手动 triggerOnce 触发
+            // 关掉自动 scanner，下面手动 triggerLiquidation 触发
             container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::stop);
 
             final int userSize = 10;
@@ -92,7 +92,7 @@ public final class ITFeeAuditRegression {
             // 跌价触发强平
             container.updateCurrentPriceTo((int) liquidationPrice, spec.symbolId, quoteId);
             container.createBidWithOrderId(60103L, UID_3, userSize + 15, bpFillPrice, spec.symbolId, MarginMode.CROSS);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             Thread.sleep(200);
 
             // 算账（BP=10103，fill 均价 10103）：

@@ -27,31 +27,27 @@ import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.api.ApiCommand;
 import exchange.core2.core.common.api.ApiLoanCrossForceLiquidate;
 import exchange.core2.core.common.api.ApiLoanForceLiquidate;
-import exchange.core2.core.common.api.ApiRepriceLoanRates;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 现货借贷子域 scanner（per-shard），{@link LiquidationEngine} 每 tick 委托 {@link #check(UserProfile)} 进来。扫 Isolated + Cross 两条
- * lane：真实债务(含利息) LTV / 期限判定，越线则 publish force-sell IOC 单，仅越预警线则发 margin call。此外借 tick 心跳,
- * shard 0 按 {@code REPRICE_INTERVAL_MS} 周期发 {@code REPRICE_LOAN_RATES} 驱动动态利率重定价（§13.3）。 provider / service 全经
- * {@link LiquidationEngine} 现取；in-flight 去重 / reprice 节流等运行态是进程级的，不进 raft snapshot，换届重置无碍。
+ * 现货借贷子域 scanner（per-shard），{@link LiquidationEngine} 每次检查用户时委托 {@link #check(UserProfile)} 进来。扫 Isolated + Cross 两条
+ * lane：真实债务(含利息) LTV / 期限判定，越线则 publish force-sell IOC 单，仅越预警线则发 margin call。 provider / service 全经
+ * {@link LiquidationEngine} 现取；in-flight 去重等运行态是进程级的，不进 raft snapshot，换届重置无碍。 （动态利率重定价 {@code REPRICE_LOAN_RATES}
+ * 的心跳已上移到父类 {@code LiquidationScheduledService.runOneIteration} 发令。）
  */
 @Slf4j
 public final class LoanLiquidationEngine {
     private static final long MS_PER_DAY = 86400L * 1_000L; // 期限强平用
     private static final long MARGIN_CALL_THROTTLE_MS = 5L * 60L * 1_000L; // 预警节流 5 min
-    private static final long REPRICE_INTERVAL_MS = 60L * 60L * 1_000L; // 浮动利率重定价间隔 1h
     private static final byte LOAN_MODE_ISOLATED = 0;
     private static final byte LOAN_MODE_CROSS = 1;
     private final LiquidationEngine engine;
-    private long lastRepriceMs; // 上次 reprice 发射时刻（leader-local 进程级，换届重置无碍）
 
-    /** 每条 lane 的进程级运行态；不进 raft snapshot。key = loanId(Isolated) / uid(Cross)。 */
     private static final class LaneState {
-        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty(); // 已 publish 未结算的 key，去重防重复强平
+        final MultiReaderSet<Long> inFlight = Sets.multiReader.empty();
         final LongLongHashMap marginCallThrottleMs = new LongLongHashMap();
         final LongLongHashMap liqRetryThrottleMs = new LongLongHashMap();
     }
@@ -63,15 +59,7 @@ public final class LoanLiquidationEngine {
         this.engine = engine;
     }
 
-    // ---- Scanner 入口 ----
     public void check(UserProfile userProfile) {
-        // 借扫描心跳周期驱动动态利率重定价：仅 shard 0（reprice 是全局命令，单发即可）、按间隔节流，
-        // publisher 自带 leader 门控（follower no-op）。与 userProfile 无关，只是搭 tick 的车。
-        final long nowMs = System.currentTimeMillis();
-        if (engine.getShardId() == 0 && nowMs - lastRepriceMs >= REPRICE_INTERVAL_MS) {
-            lastRepriceMs = nowMs;
-            engine.getLiquidationCmdPublisher().publish(ApiRepriceLoanRates.builder().build(), null);
-        }
         userProfile.isolatedLoans.forEachValue(this::checkIsolatedLoan);
         checkCrossLoan(userProfile);
     }
@@ -281,7 +269,8 @@ public final class LoanLiquidationEngine {
         lane.marginCallThrottleMs.put(throttleKey, nowMs);
         FundEvent event =
             engine.getEventsHelper().sendLoanMarginCallEvent(uid, loanId, mode, loanCurrency, ltvBps, thresholdBps);
-        engine.getLiquidationCmdPublisher().publish(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
+        engine.getCommandSubmitter().submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(),
+            null);
     }
 
     // ---- In-flight 去重 + publish ----
@@ -308,7 +297,7 @@ public final class LoanLiquidationEngine {
     private void publishTracked(LaneState lane, ApiCommand cmd, long key) {
         lane.inFlight.add(key);
         try {
-            engine.getLiquidationCmdPublisher().publish(cmd, () -> lane.inFlight.remove(key));
+            engine.getCommandSubmitter().submit(cmd, () -> lane.inFlight.remove(key));
         } catch (Throwable t) {
             lane.inFlight.remove(key);
             throw t;

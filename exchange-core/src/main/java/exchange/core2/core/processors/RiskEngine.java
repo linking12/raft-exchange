@@ -447,6 +447,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 LastPriceCacheRecord priceRecord = lastPriceCache.getIfAbsentPut(cmd.symbol, LastPriceCacheRecord::new);
                 priceRecord.markPrice = cmd.price;
+                liquidationEngine.checkPositions(cmd);
                 if (shardId == 0) {
                     cmd.resultCode = CommandResultCode.SUCCESS;
                 }
@@ -578,6 +579,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
                 return false;
             }
+            case LIQUIDATION_SCAN:
+                liquidationEngine.checkPositions(cmd);
+                if (shardId == 0) {
+                    cmd.resultCode = CommandResultCode.SUCCESS;
+                }
+                return false;
             case BINARY_DATA_COMMAND:
             case BINARY_DATA_QUERY:
                 binaryCommandsProcessor.acceptBinaryFrame(cmd); // ignore return result, because it should be set by
@@ -754,6 +761,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         // 校验全过，commit 新 position 到 map（再 pendingHold）。
         if (newPosition) {
             userProfile.positions.put(positionRecordKey, position);
+            liquidationEngine.onPositionOpened(userProfile, position);
         }
         // BUDGET 单的 cmd.price 是 product-scale 总预算（= notional），用 pendingHoldBudget；
         // limit 单的 cmd.price 是单价，用原 pendingHold（price × size）。
@@ -1058,8 +1066,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
             return CommandResultCode.SUCCESS;
         }
         // FORCE_LIQUIDATION 用被强平者平仓视角（action 与 position direction 反向）；
-        // IF_TAKEOVER / AUTO_DELEVERAGING 用 counterparty 接管视角（action 与 position direction 同向，参见
-        // LiquidationEngine#tryRepublishStuckLiquidation 注释）。
+        // IF_TAKEOVER / AUTO_DELEVERAGING 用 counterparty 接管视角（action 与 position direction 同向，
+        // 参见 LiquidationEngine 的 buildForceCmd / buildIFCmd / buildADLCmd）。
         // 视角不一致——这里不能套 reduce-only 的方向 guard，纯按 openVolume 收敛 size。
         cmd.size = Math.min(cmd.size, position.openVolume);
         return CommandResultCode.VALID_FOR_MATCHING_ENGINE;
@@ -1211,8 +1219,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final BatchAddLoanCommand.SymbolLoanConfig.Resolved r =
                     s.resolve(gc.ltvLiquidationBufferBps, gc.ltvMarginCallBufferBps);
                 if (spec != null && spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR && r.valid()) {
-                    spec.updateLoanConfig(r.initialLtvBps, r.liquidationLtvBps, r.marginCallLtvBps,
-                        r.maxAmount, r.maxTermDays, r.collateralWeightBps);
+                    spec.updateLoanConfig(r.initialLtvBps, r.liquidationLtvBps, r.marginCallLtvBps, r.maxAmount,
+                        r.maxTermDays, r.collateralWeightBps);
                     log.info("ADD_LOAN symbol config applied (resolved): {}", r);
                 } else {
                     log.warn("ADD_LOAN symbol config rejected: {}", s);
@@ -1377,7 +1385,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 loanRatePricingProcessor.applyEvent(cmd, mte, null, null);
                 mte = mte.nextEvent;
             } while (mte != null);
-            loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp); 
+            loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp);
             return false;
         }
         final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(symbol);
@@ -1388,7 +1396,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
         final UserProfile takerUp =
             uidForThisHandler(cmd.uid) ? userProfileService.getUserProfileOrAddSuspended(cmd.uid) : null;
 
-        // TODO processing order is reversed (matcher events are LIFO-inserted in OrderBookEventsHelper)
         if (spec.type == SymbolType.CURRENCY_EXCHANGE_PAIR) {
             // REJECT always comes first; REDUCE is always single event
             if (mte.eventType == MatcherEventType.REDUCE || mte.eventType == MatcherEventType.REJECT) {
@@ -1447,6 +1454,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     fundingFeeProcessor.applyEvent(cmd, mte, spec, currencySpec);
                     mte = mte.nextEvent;
                 } while (mte != null);
+                liquidationEngine.checkPositions(cmd);
             } else {
                 do {
                     handleMatcherEventMargin(cmd, mte, spec, cmd.action, takerUp, takerSpr, currencySpec,
@@ -1466,7 +1474,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             // 强平类命令推进 liquidation 状态机
             if (takerSpr != null && (cmd.command == OrderCommandType.FORCE_LIQUIDATION
                 || cmd.command == OrderCommandType.IF_TAKEOVER || cmd.command == OrderCommandType.AUTO_DELEVERAGING)) {
-                liquidationEngine.nextLiquidationState(cmd, takerSpr);
+                liquidationEngine.advanceLiquidation(cmd, takerSpr);
             }
         }
 
@@ -2009,6 +2017,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
             long profit = CoreArithmeticUtils.sizePriceToCurrencyScale(record.profit, spec, currencySpec);
             userProfile.accounts.addToValue(record.currency, profit);
         }
+        liquidationEngine.onPositionClosed(userProfile, record);
         userProfile.positions.removeKey(userProfile.createPositionsKey(record));
         objectsPool.put(ObjectsPool.SYMBOL_POSITION_RECORD, record);
     }

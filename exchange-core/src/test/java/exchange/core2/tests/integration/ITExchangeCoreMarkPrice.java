@@ -146,7 +146,7 @@ public final class ITExchangeCoreMarkPrice {
             });
 
             container.updateCurrentPriceTo(2, symbol.symbolId, symbol.quoteCurrency);
-            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             // 还剩8手被对手方吃掉
             // openPriceSum = 680 * 10 = 6800 开仓价格
@@ -301,7 +301,7 @@ public final class ITExchangeCoreMarkPrice {
                     .marginMode(MarginMode.ISOLATED)
                     .build(), CommandResultCode.SUCCESS);
             container.getUserProfile(UID_1); // 触发R2做完，再触发强平检查
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().isEmpty(), is(true));
             });
@@ -384,7 +384,7 @@ public final class ITExchangeCoreMarkPrice {
                     .marginMode(MarginMode.ISOLATED)
                     .leverage(10)
                     .build(), CommandResultCode.SUCCESS);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().isEmpty(), is(true));
             });
@@ -512,7 +512,7 @@ public final class ITExchangeCoreMarkPrice {
 
             container.createBidWithOrderId(orderId++, UID_2, 1, 9054, symbolId, MarginMode.CROSS);
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(UID_1, report -> {
                 assertThat(report.getPositions().isEmpty(), is(true));

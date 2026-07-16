@@ -270,6 +270,12 @@ public final class ApiCommandConverters {
         return cmd;
     }
 
+    public static exchange.core2.core.common.api.ApiLiquidationScan convertLiquidationScan(ApiCommand apiCommand) {
+        var cmd = exchange.core2.core.common.api.ApiLiquidationScan.builder().build();
+        cmd.updateTimestamp(apiCommand.getTimestamp());
+        return cmd;
+    }
+
     // ============================== loan 子域 converter（详见 loan.md §5）==============================
 
     public static ApiLoanCreate convertLoanCreate(ApiCommand apiCommand) {
@@ -475,6 +481,8 @@ public final class ApiCommandConverters {
                     .setOrderTypeValue(cfl.orderType.getCode()));
             case exchange.core2.core.common.api.ApiRepriceLoanRates rlr -> b
                 .setRepriceLoanRates(com.binance.raftexchange.stubs.request.ApiRepriceLoanRates.newBuilder());
+            case exchange.core2.core.common.api.ApiLiquidationScan ls -> b
+                .setLiquidationScan(com.binance.raftexchange.stubs.request.ApiLiquidationScan.newBuilder());
             default -> throw new IllegalArgumentException("unsupported liquidation cmd: " + cmd.getClass().getName());
         }
         return b.build().toByteArray();

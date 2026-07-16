@@ -815,7 +815,7 @@ class ITPerpetualContractIntegration {
                     .build();
             container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
             // 第一次触发强平uid_1 position不会被强平
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
@@ -832,11 +832,10 @@ class ITPerpetualContractIntegration {
             // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
             // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
             // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
-            // triggerOnce 向 ring buffer 投入强平命令后立即返回，多步流程（FORCE→IF→ADL）需要 LiquidationEngine
-            // 多次 republish 推进。取消钉核后 2s scheduler 调度被 OS 抖动 → 主动每 100ms triggerOnce 兜底，
+            // triggerLiquidation 向 ring buffer 投入强平命令后立即返回，多步流程（FORCE→IF→ADL）需要 LiquidationEngine
+            // 多次 republish 推进。取消钉核后 2s scheduler 调度被 OS 抖动 → 主动每 100ms triggerLiquidation 兜底，
             // 绕开 scheduler 延迟保证 5s 内能完成全流程。
-            Runnable trigger = () ->
-                container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = container::triggerLiquidation;
             trigger.run();
             LatencyTools.waitForCondition(5_000, () -> {
                 try {

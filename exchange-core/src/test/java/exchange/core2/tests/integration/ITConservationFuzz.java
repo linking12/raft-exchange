@@ -101,7 +101,7 @@ class ITConservationFuzz {
      *
      * 验证思路：
      *   1) 多 shard 设置（4 shards），每 shard 都有 user 持仓
-     *   2) 关掉自动强平，手动 triggerOnce 控制时序
+     *   2) 关掉自动强平，手动提交 ApiLiquidationScan 控制时序
      *   3) 反复"建仓 → 暴跌/暴涨 → 触发强平 → 验证守恒"
      *   4) 若 race 仍存在，会通过 IF 接管 / ADL 路径漂账 → 守恒断言立刻报错
      */
@@ -190,15 +190,25 @@ class ITConservationFuzz {
                 // 手动触发所有 shard 的 LiquidationEngine —— 这条路径会走 collectIFPreviewData
                 // 写入 ifPreviewCoverByShard，可能进而触发 collectADLProfitablePositions 写
                 // adlUserPositionsByShard
-                container.getExchangeCore().getLiquidationEngines()
-                        .forEach(exchange.core2.core.processors.liquidation.LiquidationEngine::triggerOnce);
+                container.triggerLiquidation();
                 // 多 shard 强平 / IF / ADL 链路：用 ITLiquidationIntegration 的成熟同步模式 ——
                 // sleep 给 pipeline 时间排空 + groupingControl 强制 flush + 二次 sleep 收尾。
                 // 比 waitForCondition 稳：trigger 触发的命令在 disruptor 多 stage 内异步排队，
                 // shard 间触发顺序无保证；groupingControl 才能保证所有 shard 都被推进。
-                Thread.sleep(500L);
-                container.getApi().groupingControl(0, 1);
-                Thread.sleep(500L);
+                // 排空 FORCE→IF→ADL 级联:轮询到 OI 守恒(级联全 apply 完)或超时。
+                // 事件驱动下 crash 价即时触发 + 显式 scan 双重级联更大;固定 sleep 在重负载下不可靠,
+                // 用"flush + 轮询守恒是否达成"对 CPU 竞争鲁棒。totalBalanceReport 只读,轮询无副作用。
+                long drainDeadline = System.currentTimeMillis() + 20_000L;
+                while (System.currentTimeMillis() < drainDeadline) {
+                    container.getApi().groupingControl(0, 1);
+                    Thread.sleep(200L);
+                    try {
+                        container.totalBalanceReport(); // OI 不平会抛 → 级联还在管道里
+                        break;                          // 守恒达成,排空完成
+                    } catch (IllegalStateException cascadeInFlight) {
+                        // 继续排空
+                    }
+                }
 
                 assertConserved(container, "cycle " + cycle + " after liquidation", cycle, seed);
 

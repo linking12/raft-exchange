@@ -317,6 +317,10 @@ message ApiLoanCrossForceLiquidate {
 message ApiRepriceLoanRates {
 }
 
+// LIQUIDATION_SCAN：周期性全量强平扫描（定时器 shard0 触发，走 raft 复制在各节点 on-lane 检测）。无 payload。
+message ApiLiquidationScan {
+}
+
 // Union type for all API commands
 message ApiCommand {
   int64 timestamp = 1;
@@ -359,6 +363,7 @@ message ApiCommand {
     ApiLoanCrossForceLiquidate loan_cross_force_liquidate = 37;
     ApiPoolAbsorbBadDebt pool_absorb_bad_debt = 38;
     ApiRepriceLoanRates reprice_loan_rates = 39;
+    ApiLiquidationScan liquidation_scan = 40;
   }
 }
 

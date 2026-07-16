@@ -12,7 +12,7 @@ import exchange.core2.core.SimpleEventsProcessor;
 import exchange.core2.core.common.api.ApiSystemLiquidationNotify;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.SerializationConfiguration;
-import exchange.core2.core.processors.liquidation.LiquidationCmdPublisher;
+import exchange.core2.core.processors.liquidation.LiquidationCommandSubmitter;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -39,9 +39,9 @@ public class ExchangeRuntime {
         return exchangeCore;
     }
 
-    public void overrideLiquidationCmdPublisher(BooleanSupplier isLeader,
+    public void overrideLiquidationCommandSubmitter(BooleanSupplier isLeader,
         BiConsumer<byte[], Consumer<Throwable>> commit) {
-        LiquidationCmdPublisher publisher = (cmd, onApplied) -> {
+        LiquidationCommandSubmitter submitter = (cmd, onApplied) -> {
             if (!isLeader.getAsBoolean()) {
                 if (onApplied != null)
                     onApplied.run();
@@ -62,6 +62,6 @@ public class ExchangeRuntime {
                     onApplied.run();
             });
         };
-        exchangeCore.getLiquidationEngines().forEach(le -> le.setLiquidationCmdPublisher(publisher));
+        exchangeCore.getLiquidationEngines().forEach(le -> le.setCommandSubmitter(submitter));
     }
 }

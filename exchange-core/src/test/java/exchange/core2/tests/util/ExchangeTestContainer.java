@@ -29,6 +29,7 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.*;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import java.util.concurrent.ThreadFactory;
 import lombok.Builder;
 import lombok.Data;
@@ -43,6 +44,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.ObjLongConsumer;
 import java.util.function.Supplier;
@@ -816,6 +818,89 @@ public final class ExchangeTestContainer implements AutoCloseable {
         Lists.partition(symbols, 10000).forEach(partition -> sendBinaryDataCommandSync(new BatchAddSymbolsCommand(partition), 5000));
     }
 
+    /**
+     * 触发强平：懒启动各分片 LiquidationEngine（幂等，首次真正 start，之后 no-op），
+     * 再同步注入 {@link ApiLiquidationScan} 全量扫命令。命令 apply 时触发各分片
+     * checkPositions 全量扫，后续 FORCE→IF→ADL 级联由 cascade 自驱，本方法不等级联跑完。
+     * <p>懒启动而非构造时启动：避免"只更新价格、不期望强平"的其它测试被价格更新即时触发
+     * 强平意外波及——只有显式调用本方法的测试才启用引擎。
+     */
+    public void triggerLiquidation() {
+        if (exchangeCore.getLiquidationEngines() == null) {
+            return; // spot-only（未开 margin trading）：无强平引擎
+        }
+        exchangeCore.getLiquidationEngines().forEach(LiquidationEngine::start);
+        submitCommandSync(ApiLiquidationScan.builder().build(), CommandResultCode.SUCCESS);
+    }
+
+    /**
+     * 触发全量强平扫描并驱动 cascade（FORCE→IF→ADL 自驱），轮询 {@code settled} 一旦成立即返回，最长等 timeoutMs。
+     * <p>不抛超时异常——真正的判定留给调用方原有断言；这里只是把"固定 sleep 盲等"换成"到点即走"，
+     * 因此收敛在最好情况，绝不会让原本能过的用例变红。每轮末尾 flush 一次 grouping，确保残余命令落地。
+     */
+    public void triggerLiquidationUntil(long timeoutMs, BooleanSupplier settled) {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        do {
+            triggerLiquidation();
+            api.groupingControl(0, 1);
+            if (settled.getAsBoolean()) {
+                break;
+            }
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        } while (System.currentTimeMillis() < deadline);
+        api.groupingControl(0, 1);
+    }
+
+    /**
+     * 触发强平并驱动 cascade，直到给定用户里"已清空持仓"的数量连续若干轮不再增长（收敛）或超时。
+     * <p>适合流动性可能不足、无法保证全部强平的多用户场景——按实际能达成的稳态收敛，而非死等固定时长，
+     * 也不因"没全平"抛异常。结束时 flush 一次 grouping。
+     */
+    public void triggerLiquidationUntilQuiescent(long timeoutMs, long... uids) {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        int prevCleared = -1;
+        int stable = 0;
+        do {
+            triggerLiquidation();
+            api.groupingControl(0, 1);
+            int cleared = 0;
+            for (long uid : uids) {
+                if (noPositions(uid)) {
+                    cleared++;
+                }
+            }
+            if (cleared == prevCleared) {
+                if (cleared > 0 && ++stable >= 3) {
+                    break; // 连续 3 轮无新增且已有强平 → 视为收敛
+                }
+            } else {
+                stable = 0;
+                prevCleared = cleared;
+            }
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        } while (System.currentTimeMillis() < deadline);
+        api.groupingControl(0, 1);
+    }
+
+    /** 轮询用：用户是否已被完全强平（无任何持仓）。checked 异常包成 unchecked，方便用在 lambda 里。 */
+    public boolean noPositions(long uid) {
+        try {
+            return getUserProfile(uid).getPositions().size() == 0;
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public void adjustPositionMode(long uid, PositionMode mode) {
         final ApiAdjustPositionMode cmd = ApiAdjustPositionMode.builder().uid(uid).positionMode(mode).build();
         submitCommandSync(cmd, CommandResultCode.SUCCESS);
@@ -1212,6 +1297,11 @@ public final class ExchangeTestContainer implements AutoCloseable {
                 }
             }
         } finally {
+            // 停掉懒启动的 LiquidationEngine 调度线程，避免 scheduler 线程泄漏。
+            // stop 幂等：未 start（大多数测试）的 engine 调用 stop 也安全。
+            if (exchangeCore.getLiquidationEngines() != null) {
+                exchangeCore.getLiquidationEngines().forEach(LiquidationEngine::stop);
+            }
             exchangeCore.shutdown(3000, TimeUnit.MILLISECONDS);
         }
     }

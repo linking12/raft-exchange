@@ -353,7 +353,7 @@ public class PersistenceTests {
         container.createAskWithOrderId(MAKER_3, UID_LIQ, 100, 11_000, SYMBOL_FUTURES, MarginMode.CROSS);
 
         // 11. 手动触发强平扫描
-        container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+        container.triggerLiquidation();
 
         // 12. 验证全仓用户被强平
         container.validateUserState(UID_CROSS, profile -> {

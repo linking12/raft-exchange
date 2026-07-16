@@ -30,44 +30,33 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
- * 强平流程的核心 service——所有"被动操作"统一入口（state + computation）。
- *
- * <p>
- * 承担三类职责：
+ * 强平流程的核心 service，每个分片一个实例。承担三类职责：
  * <ul>
- * <li><b>IF 资金池状态</b>：notionals (available/reserved) + IF 接管的 positions。 {@link WriteBytesMarshallable} 序列化进 raft
- * snapshot，跨节点强一致。</li>
- * <li><b>强平类 cmd orderId 派生</b>：FORCE / IF / ADL orderId 三个静态生成器，编码方案见类内注释。</li>
- * <li><b>ADL 候选构造</b>：{@link #computeProfitablePositionsBySymbol} R1 入口，按需从 raft-replicated
- * state（{@link #userProfileService} / {@link #lastPriceCache}）算本 shard 候选，跨节点确定。 评分静态方法 {@link #riskScore} /
- * {@link #unrealizedPnl} 给排序用。</li>
+ * <li><b>IF 保险基金池状态</b>：notionals（available / reserved）+ IF 接管的 positions。
+ * 经 {@link WriteBytesMarshallable} 序列化进 raft snapshot，跨节点强一致。</li>
+ * <li><b>强平命令 orderId 编码</b>：FORCE 是根，IF / ADL 从它派生；位布局见下方常量区注释。</li>
+ * <li><b>ADL 候选构造</b>：{@link #computeProfitablePositionsBySymbol} 在 apply 时按需从复制态
+ * （{@link #userProfileService} / {@link #lastPriceCache}）计算，跨节点确定；评分 {@link #riskScore} /
+ * {@link #unrealizedPnl} 供排序用。</li>
  * </ul>
- *
  * <p>
- * 字段分两类——
- * <ul>
- * <li><b>serialized state</b>（{@code final} + 进 snapshot）：{@code notionals} / {@code positions}</li>
- * <li><b>injected dependencies</b>（非 {@code final} + {@link #updateProvider} 注入）： providers +
- * {@code userProfileService} + {@code lastPriceCache}</li>
- * </ul>
- *
- * <p>
- * 每个 shard 一个 LiquidationService 实例。
+ * 字段分两类：<b>序列化状态</b>（{@code final}、进 snapshot）{@code notionals} / {@code positions}；
+ * <b>注入依赖</b>（{@link #updateProvider} 注入，不进 snapshot）providers + {@code userProfileService} +
+ * {@code lastPriceCache}。
  */
 public class LiquidationService implements WriteBytesMarshallable, StateHash {
 
-    // ===== serialized state（进 raft snapshot） =====
+    // ===== 序列化状态（进 raft snapshot） =====
 
-    // symbol -> IFNotional
+    // symbol -> IF 名义资金（available / reserved）
     @Getter
     private final IntObjectHashMap<IFNotional> notionals;
 
-    // symbol -> IFPosition
-    // +symbol -> long; -symbol -> short
+    // key = direction.multiplier * symbol：+symbol 为多头仓，-symbol 为空头仓
     @Getter
     private final IntObjectHashMap<IFPositionRecord> positions;
 
-    // ===== injected dependencies（不进 snapshot，updateProvider 注入） =====
+    // ===== 注入依赖（不进 snapshot，由 updateProvider 注入） =====
 
     private UserProfileService userProfileService;
     private SymbolSpecificationProvider symbolSpecificationProvider;
@@ -170,23 +159,19 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     }
 
     // ============================================================================
-    // 强平类 cmd orderId 编码（FORCE 是根，IF / ADL 都从它派生）
+    // 强平命令 orderId 编码。FORCE 是根，IF / ADL 从它派生（保留低 56 位以便审计回溯）。
     //
-    // FORCE_LIQUIDATION (generateLiquidationOrderId):
-    // | 63........32 | 31..........12 | 11 | 10....0 |
-    // | symbol | uid hash 20 |side| ts 11 | side 区分 LONG/SHORT
-    // （HEDGE 模式同 symbol 同 uid 同秒两侧并发破产防撞）
-    // ts 11 bit ≈ 2048s ≈ 34min 内 (symbol,uid,side) 唯一
+    // FORCE_LIQUIDATION (generateLiquidationOrderId)，64 位布局：
+    //   bit 63..32 : symbol       (高 32)
+    //   bit 31..12 : uid hash     (20 bit)
+    //   bit 11     : side bit     (LONG=0 / SHORT=1；HEDGE 下同 symbol 同 uid 同秒两侧防撞)
+    //   bit 10..0  : 秒级 ts      (11 bit ≈ 2048s ≈ 34min 内 (symbol,uid,side) 唯一)
     //
-    // IF_TAKEOVER (generateIFOrderId, 从 FORCE 派生):
-    // | 63......56 | 55.........................0 |
-    // | 'I' 0x49 | FORCE orderId 低 56 位 | 审计回溯：IF 低 56 ≡ FORCE 低 56
+    // IF_TAKEOVER  (generateIFOrderId)  : 'I' 0x49 << 56 | FORCE 低 56 位
+    // AUTO_DELEVERAGING (generateADLOrderId) : 'A' 0x41 << 56 | FORCE 低 56 位
+    //   两者完全对称：高 8 位是标签，低 56 位 ≡ 对应 FORCE 的低 56 位。
     //
-    // AUTO_DELEVERAGING (generateADLOrderId, 从 FORCE 派生):
-    // | 63......56 | 55.........................0 |
-    // | 'A' 0x41 | FORCE orderId 低 56 位 | 同 IF 完全对称
-    //
-    // 注意：派生丢 FORCE 高 8 位 symbol。symbol < 2^24 (≈16M) 时无损，实际场景成立。
+    // 注意：派生丢弃 FORCE 高 8 位的 symbol。symbol < 2^24 (≈16M) 时无损，实际场景成立。
     // ============================================================================
 
     public static boolean isLiquidationOrderId(long orderId, int symbol, long uid) {
@@ -216,24 +201,29 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     }
 
     // ============================================================================
-    // ADL 评分（静态 pure function，给排序用）
+    // ADL 评分（静态纯函数，供候选排序用）
     // ============================================================================
 
+    /** 按破产价估算浮动盈亏。饱和乘法防止溢出翻转符号（见 {@link #saturatingMultiply}）。 */
     public static long unrealizedPnl(SymbolPositionRecord pos, long bankruptcyPrice) {
         int sign = pos.direction.getMultiplier();
         long notional = saturatingMultiply(bankruptcyPrice, pos.openVolume);
         return saturatingMultiply((long)sign, notional - pos.openPriceSum);
     }
 
+    /** ADL 排序键：浮盈 × 实际杠杆 × 资格因子，越大越优先被摊派。全程饱和乘法。 */
     public static long riskScore(SymbolPositionRecord pos, long bankruptcyPrice) {
         int sign = pos.direction.getMultiplier();
-        // 仅用于 ADL 排序，各步骤均用饱和乘法（溢出截断会翻转符号导致排序反转）
         long notional = saturatingMultiply(bankruptcyPrice, pos.openVolume);
         long unrealizedPnl = saturatingMultiply((long)sign, notional - pos.openPriceSum);
         long actualLeverage = pos.openPriceSum / pos.openInitMarginSum;
         return saturatingMultiply(saturatingMultiply(actualLeverage, unrealizedPnl), pos.adlEligibility);
     }
 
+    /**
+     * 饱和乘法：溢出时钳到 {@link Long#MAX_VALUE} / {@link Long#MIN_VALUE}（按符号）。
+     * WHY：ADL 排序键若用普通乘法，溢出截断会翻转符号导致排序反转，饱和后仍保持单调。
+     */
     private static long saturatingMultiply(long a, long b) {
         try {
             return Math.multiplyExact(a, b);
@@ -247,14 +237,11 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
     // ============================================================================
 
     /**
-     * R1 调用——按需算本 shard 全部 profitable positions（symbol → list）。
-     *
+     * ADL 候选构造：apply 时按需算出本 shard 全部可被 ADL 摊派的仓位（symbol → list）。
      * <p>
-     * 跟 scanner 破产检查同一份 raft state（userProfileService），但只算 ADL 候选， 不做 scanner 的副作用（破产检查、stuck recovery、warning event）。
-     *
-     * <p>
-     * 为什么 R1 不用 scanner 维护的 cache：scanner 只在 leader 端跑，follower 端 cache 永远空 → 同条 ADL cmd 在 leader/follower 上 R1 算出不同
-     * candidates → ADL apply 结果发散。 改成 apply 时按需从 raft-replicated state 算，跨节点确定。
+     * WHY 按需算而非用缓存：ADL apply 必须在所有节点算出相同候选，否则结果发散。若用 leader-only
+     * 维护的缓存，follower 侧为空，同一条 ADL 命令在 leader / follower 上会得到不同候选。改为每次从
+     * raft 复制态（{@code userProfileService} / {@code lastPriceCache}）现算，保证跨节点确定。
      */
     public IntObjectHashMap<MutableList<SymbolPositionRecord>> computeProfitablePositionsBySymbol() {
         IntObjectHashMap<MutableList<SymbolPositionRecord>> result = IntObjectHashMap.newMap();

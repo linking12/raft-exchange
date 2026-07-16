@@ -13,7 +13,7 @@
 package exchange.core2.core.common;
 
 import exchange.core2.core.processors.RiskEngine.LastPriceCacheRecord;
-import exchange.core2.core.processors.liquidation.LiquidationContext;
+import exchange.core2.core.processors.liquidation.LiquidationFlow;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import exchange.core2.core.utils.HashingUtils;
 import lombok.Getter;
@@ -24,10 +24,26 @@ import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 import java.util.Objects;
+import java.util.function.ToLongFunction;
 
+/**
+ * 期货 / 保证金交易的单 symbol、单方向持仓记录。承载 open 仓位状态（volume / 初始保证金 / 成本 /
+ * 已实现盈亏）与 pending 挂单状态，并提供保证金、破产价、强平价等风控计算入口。
+ *
+ * <p>本记录序列化进 raft snapshot 并参与 {@link #stateHash}，因此所有整数运算一律走 {@code Math.*Exact}：
+ * 让溢出在计算点直接抛异常早失败，杜绝 silent wrap 出来的脏值落 raft snapshot 后跨节点污染、导致集群
+ * stateHash 不收敛。各字段的 scale / 语义见字段注释；破产价 / 强平价的定点迭代与单位推导见对应方法 javadoc。
+ *
+ * <p>{@link #liquidationFlow} 是唯一 leader-local、纯内存、不持久化字段：不进 snapshot、不进 stateHash、
+ * writeMarshallable / 读构造都不含它。其余字段全部参与序列化与 stateHash。
+ */
 @Slf4j
 @NoArgsConstructor
 public final class SymbolPositionRecord implements WriteBytesMarshallable, StateHash {
+
+    // ================================================================
+    // 字段
+    // ================================================================
 
     public long uid;
 
@@ -61,10 +77,16 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      **/
     public long pendingADLSize = 0;
 
-    // ===== 强平流程上下文（仅在强平期间存在）=====
-    // 进 snapshot 序列化：强平流程跨 leader failover / 节点重建必须能恢复，否则 follower 重建后流程会
-    // 在 IF/ADL apply 时被 illegal-jump gate 静默 skip → state 永久发散。
-    public LiquidationContext liquidationCtx;
+    /**
+     * 强平流程状态（FORCE→IF→ADL 状态机上下文）。leader-local / 纯内存：不进 snapshot、不进 stateHash，
+     * writeMarshallable/读构造都不含它。只 leader 在 on-lane 的 advanceLiquidation 设置，follower 恒 null；
+     * 换届后新 leader 为空，残余破产仓靠 on-lane 检测重发 FORCE 恢复。
+     **/
+    public LiquidationFlow liquidationFlow;
+
+    // ================================================================
+    // 构造 / 初始化 / 反序列化
+    // ================================================================
 
     public void initialize(long uid, int symbol, int currency, OrderAction orderAction, int leverage,
         MarginMode marginMode) {
@@ -87,7 +109,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.extraMargin = 0;
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
         this.pendingADLSize = 0;
-        this.liquidationCtx = null;
+        this.liquidationFlow = null; // 池化复用清理：纯内存强平流程状态
     }
 
     public void updateLeverage(int leverage) {
@@ -120,7 +142,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         this.extraMargin = bytes.readLong();
         this.adlEligibility = marginMode == MarginMode.ISOLATED ? 100 : 0; // 默认逐仓100 全仓0
         this.pendingADLSize = 0;
-        this.liquidationCtx = bytes.readByte() == 1 ? new LiquidationContext(bytes) : null;
     }
 
     /**
@@ -132,16 +153,16 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return openVolume == 0 && pendingSellSize == 0 && pendingBuySize == 0;
     }
 
+    // ================================================================
+    // pending 挂单占用 / 释放
+    // ================================================================
+
     public void pendingHold(OrderAction orderAction, long size, long price) {
         if (orderAction == OrderAction.ASK) {
             pendingSellAvgPrice = calcAvgPrice(pendingSellAvgPrice, pendingSellSize, price, size);
-            // 原: pendingSellSize += size;
-            // 现: addExact 早抛，对齐 a813aef/22dad71 在 CoreArithmeticUtils 的策略
             pendingSellSize = Math.addExact(pendingSellSize, size);
         } else {
             pendingBuyAvgPrice = calcAvgPrice(pendingBuyAvgPrice, pendingBuySize, price, size);
-            // 原: pendingBuySize += size;
-            // 现: addExact 早抛
             pendingBuySize = Math.addExact(pendingBuySize, size);
         }
     }
@@ -157,27 +178,19 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      */
     public void pendingHoldBudget(OrderAction orderAction, long size, long budgetNotional) {
         if (orderAction == OrderAction.ASK) {
-            // 原: long newSize = pendingSellSize + size;
-            // 现: addExact
             long newSize = Math.addExact(pendingSellSize, size);
             if (newSize <= 0) {
                 return;
             }
-            // 原: pendingSellAvgPrice = ceilDivide(pendingSellAvgPrice * pendingSellSize + budgetNotional, newSize);
-            // 现: 中间 product / sum 都走 *Exact / addExact，避免 silent wrap 让 ceilDivide 拿到脏 numerator
             long pendingNotional =
                 Math.addExact(Math.multiplyExact(pendingSellAvgPrice, pendingSellSize), budgetNotional);
             pendingSellAvgPrice = CoreArithmeticUtils.ceilDivide(pendingNotional, newSize);
             pendingSellSize = newSize;
         } else {
-            // 原: long newSize = pendingBuySize + size;
-            // 现: addExact
             long newSize = Math.addExact(pendingBuySize, size);
             if (newSize <= 0) {
                 return;
             }
-            // 原: pendingBuyAvgPrice = ceilDivide(pendingBuyAvgPrice * pendingBuySize + budgetNotional, newSize);
-            // 现: 拆出 multiplyExact + addExact
             long pendingNotional =
                 Math.addExact(Math.multiplyExact(pendingBuyAvgPrice, pendingBuySize), budgetNotional);
             pendingBuyAvgPrice = CoreArithmeticUtils.ceilDivide(pendingNotional, newSize);
@@ -186,13 +199,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     }
 
     private long calcAvgPrice(long currentAvg, long currentSize, long newPrice, long newSize) {
-        // 原: long totalSize = currentSize + newSize;
-        // 现: addExact
         long totalSize = Math.addExact(currentSize, newSize);
         if (totalSize <= 0)
             return 0;
-        // 原: return ceilDivide(currentAvg * currentSize + newPrice * newSize, totalSize);
-        // 现: 两个 product 各 multiplyExact，再 addExact 汇总
         long totalNotional =
             Math.addExact(Math.multiplyExact(currentAvg, currentSize), Math.multiplyExact(newPrice, newSize));
         return CoreArithmeticUtils.ceilDivide(totalNotional, totalSize);
@@ -216,6 +225,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return released;
     }
 
+    // ================================================================
+    // 盈亏 / 保证金 / 破产价 / 强平价计算
+    // ================================================================
+
     /**
      * 估算Pnl = profit(已实现部分) + 未实现盈亏(以markPrice估价)。
      */
@@ -227,66 +240,36 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * 估算未实现盈亏，基于标记价格。 - 多头：(markPrice - 开仓价格) * 数量 - 空头：(开仓价格 - markPrice) * 数量
      */
     public long estimateUnrealizedProfit(final LastPriceCacheRecord priceRecord) {
-        // 原: return direction.getMultiplier() * (openVolume * priceRecord.markPrice - openPriceSum);
-        // 现: notional / 减法 / 乘符号 三步都早抛。LiquidationEngine 热路径调用，溢出直接传染到强平判定。
+        // notional / 减法 / 乘符号三步都早抛：LiquidationEngine 热路径调用，溢出会直接传染到强平判定。
         long notional = Math.multiplyExact(openVolume, priceRecord.markPrice);
         long delta = Math.subtractExact(notional, openPriceSum);
         return Math.multiplyExact((long)direction.getMultiplier(), delta);
     }
 
     /**
-     * 计算破产价格（即权益归零时对应的价格）—— Isolated 单仓路径。
+     * 计算破产价格（即权益归零时对应的价格）—— ISOLATED / CROSS 统一入口。
+     *
+     * <p>{@code marginBase} 的来源按 {@code marginMode} 分派：
+     * <ul>
+     * <li>ISOLATED：{@code openInitMarginSum + extraMargin}（单仓自足，不看账户其他资源）。</li>
+     * <li>CROSS：{@code crossMarginBaseFn} 回调返回——账户级 marginBalance 按 MM 占比分给每个 CROSS
+     * 仓、再换算到本仓 EP-基础的 marginBase（与 {@code openInitMarginSum} 同 scale）。分摊逻辑见
+     * {@link UserProfile#crossMarginBaseAllocation}：
+     * <pre>
+     *   marginBalance = crossAvailable + Σ UPnL
+     *   allocated_i   = marginBalance × mm_i / Σ MM   （每仓按维持保证金公平分账户余额）
+     *   marginBase_i  = allocated_i − UPnL_i           （MP 基础 → EP 基础）
+     * </pre>
+     * 单仓时 mm_i/ΣMM = 1，marginBase = crossAvailable。position 不反向抓账户——由 caller 注入回调。</li>
+     * </ul>
      *
      * <p>基本方程（权益 = 0 时 mark 价即 BP）：
      * <pre>
-     *   IM + Side × (BP − EP) × Q = 0
-     *   ⇒ BP = EP − Side × IM / Q
+     *   IM + Side × (BP − EP) × Q = 0  ⇒  BP = EP − Side × IM / Q
      * </pre>
-     * 其中 IM = openInitMarginSum + extraMargin，Q = openVolume，
-     * EP = openPriceSum / Q，Side = LONG:+1 / SHORT:−1。
+     * 其中 IM = marginBase，Q = openVolume，EP = openPriceSum / Q，Side = LONG:+1 / SHORT:−1。
      *
-     * <p>含 closing fee（BP 结算时还要扣掉 taker 平仓费）：
-     * <pre>
-     *   Fixed fee：  BP = EP − Side × (IM − takerFee × Q) / Q
-     *   Dynamic fee：BP = feeScaleK × (openPriceSum − Side × IM) / (Q × (feeScaleK − takerFee))
-     * </pre>
-     * 具体拆分见 {@link #calcBankruptcyPriceFromMarginBase}。
-     *
-     * <p>单位说明：
-     * <ul>
-     * <li>{@code openInitMarginSum} — sizePriceScale (= baseScaleK × quoteScaleK)</li>
-     * <li>{@code extraMargin} — sizePriceScale（与 openInitMarginSum 相同，由 {@code RiskEngine.MARGIN_ADJUSTMENT} 通过
-     * {@code currencyToSizePriceScale} 转换写入）</li>
-     * <li>{@code openPriceSum} — sizePriceScale</li>
-     * <li>返回值 — quoteScaleK（价格单位）</li>
-     * </ul>
-     * 三者单位一致，加减运算才有意义；若 extraMargin 单位不一致，破产价将严重偏低。
-     */
-    public long calculateBankruptcyPrice(CoreSymbolSpecification spec) {
-        long totalMargin = Math.addExact(openInitMarginSum, extraMargin);
-        return calcBankruptcyPriceFromMarginBase(spec, totalMargin);
-    }
-
-    /**
-     * 计算破产价格 —— Cross 账户级视角。caller（{@code LiquidationEngine}）按 MM 占比把账户级
-     * marginBalance 分给每个 CROSS 仓，再换算成本方法所需的 EP-基础 {@code marginBase}：
-     * <pre>
-     *   allocated_i  = marginBalance × mm_i / Σ MM   （每仓按维持保证金公平分账户余额）
-     *   marginBase_i = allocated_i − UPnL_i           （MP 基础 → EP 基础）
-     * </pre>
-     * 单仓时 mm_i/ΣMM = 1，marginBase = crossAvailable，跟旧 4 参重载单仓语义代数等价。
-     *
-     * <p>{@code marginBase} 与 openInitMarginSum 同 scale（{@code sizePriceScale = baseScaleK × quoteScaleK}）。
-     * 该重载仅供 Cross 路径调用（caller 已在 marginMode 上分派）；Isolated 走单参重载。
-     */
-    public long calculateBankruptcyPrice(CoreSymbolSpecification spec, long marginBase) {
-        return calcBankruptcyPriceFromMarginBase(spec, marginBase);
-    }
-
-    /**
-     * 单仓 BP 公式共用核。BP 处账户权益归零，marginBase 同时承担价格波动亏损 + taker 平仓费 + 强平费。
-     *
-     * <p>推导（marginBase + sign × (BP − EP) × Q − fee(BP) = 0）：
+     * <p>含 closing fee（BP 处账户权益归零，marginBase 同时承担价格波动亏损 + taker 平仓费 + 强平费）：
      * <pre>
      *   固定 fee（{@code spec.isFixedFee()==true}）：fee(BP) = (takerFee + liquidationFee) × Q
      *     openPriceSum − sign × BP × Q = marginBase − (t + l) × Q
@@ -301,8 +284,21 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * </pre>
      * <b>SHORT 平仓（BID）价格越高 fee 越大——denom 必须用 sign × totalFee 才能覆盖两个方向。</b>
      * ceilMulDiv 走 128-bit slow path 兜住 feeScaleK 极大值的溢出，避免 BigInteger。
+     *
+     * <p>单位说明：
+     * <ul>
+     * <li>{@code openInitMarginSum} / {@code extraMargin} / {@code openPriceSum} / {@code marginBase}
+     * — sizePriceScale (= baseScaleK × quoteScaleK)</li>
+     * <li>{@code openVolume} — baseScaleK</li>
+     * <li>返回值 — quoteScaleK（价格单位）</li>
+     * </ul>
+     * 三者单位一致，加减运算才有意义；若 marginBase 单位不一致，破产价将严重偏低/偏高。
      */
-    private long calcBankruptcyPriceFromMarginBase(CoreSymbolSpecification spec, long marginBase) {
+    public long calculateBankruptcyPrice(CoreSymbolSpecification spec,
+        ToLongFunction<SymbolPositionRecord> crossMarginBaseFn) {
+        final long marginBase = (marginMode == MarginMode.ISOLATED)
+            ? Math.addExact(openInitMarginSum, extraMargin)   // 原 ISOLATED 单参重载
+            : crossMarginBaseFn.applyAsLong(this);            // 原 CROSS 双参重载的 marginBase
         final long sign = direction.getMultiplier();
         final long totalFee = Math.addExact(spec.takerFee, spec.liquidationFee);
         if (spec.isFixedFee()) {
@@ -467,16 +463,10 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (totalMargin <= 0) {
             // 只要totalMargin <= maintenanceMargin就应该被强平了，如果还没有强平，保证金比率会大于100%；
             // 如果依然没有强平，totalMargin <=0 则返回-1，表示强平风险极大。
-            // 原: return spec.maintenanceMarginScaleK * -1;
-            // 现: multiplyExact（理论上 scaleK 不会大到溢出，但对齐策略）
             return Math.multiplyExact(spec.maintenanceMarginScaleK, -1L);
         }
-        // 原: long notional = openVolume * priceRecord.markPrice;
-        // 现: multiplyExact
         long notional = Math.multiplyExact(openVolume, priceRecord.markPrice);
         long maintenanceMargin = spec.calcMaintenanceMargin(notional);
-        // 原: return spec.maintenanceMarginScaleK * maintenanceMargin / totalMargin;
-        // 现: multiplyExact 包住 product，再 / totalMargin 保持 truncation
         return Math.multiplyExact(spec.maintenanceMarginScaleK, maintenanceMargin) / totalMargin;
     }
 
@@ -491,8 +481,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         if (openVolume == 0) {
             return 0;
         }
-        // 原: long notional = openVolume * priceRecord.markPrice;
-        // 现: multiplyExact
         long notional = Math.multiplyExact(openVolume, priceRecord.markPrice);
         return spec.calcMaintenanceMargin(notional);
     }
@@ -586,10 +574,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * 假设pending部分以及新下单的size都能开出来，估算仓位名义价值。
      */
     public long estimateNotionalForOrder(final OrderAction action, final long size, final long price) {
-        // 原: newPendingBuySize = (action==BID ? pendingBuySize + size : pendingBuySize); newPendingSellSize 同
-        // long estimatedSize = openVolume + Math.max(newPendingBuySize, newPendingSellSize);
-        // return estimatedSize * price;
-        // 现: 三处 +/* 全部 addExact / multiplyExact
         long newPendingBuySize = action == OrderAction.BID ? Math.addExact(pendingBuySize, size) : pendingBuySize;
         long newPendingSellSize = action == OrderAction.ASK ? Math.addExact(pendingSellSize, size) : pendingSellSize;
         long estimatedSize = Math.addExact(openVolume, Math.max(newPendingBuySize, newPendingSellSize));
@@ -598,11 +582,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
     public long calculatePendingFeeForOrder(final CoreSymbolSpecification spec, final OrderAction action,
         final long size, final long price) {
-        // 原: newPendingBuySize = pendingBuySize + size; newPendingSellSize 同
-        // 现: addExact
         long newPendingBuySize = action == OrderAction.BID ? Math.addExact(pendingBuySize, size) : pendingBuySize;
         long newPendingSellSize = action == OrderAction.ASK ? Math.addExact(pendingSellSize, size) : pendingSellSize;
-        // avg 价格通过 calcAvgPrice 已经 *Exact / addExact
         long newPendingBuyAvgPrice = action == OrderAction.BID
             ? calcAvgPrice(pendingBuyAvgPrice, pendingBuySize, price, size) : pendingBuyAvgPrice;
         long newPendingSellAvgPrice = action == OrderAction.ASK
@@ -619,13 +600,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      */
     public long calculatePendingFeeForOrderBudget(final CoreSymbolSpecification spec, final OrderAction action,
         final long size, final long budgetNotional) {
-        // 原: newPendingBuySize = pendingBuySize + size; newPendingSellSize 同
-        // 现: addExact
         long newPendingBuySize = action == OrderAction.BID ? Math.addExact(pendingBuySize, size) : pendingBuySize;
         long newPendingSellSize = action == OrderAction.ASK ? Math.addExact(pendingSellSize, size) : pendingSellSize;
-        // 原: ceilDivide(pendingBuyAvgPrice * pendingBuySize + budgetNotional, newPendingBuySize)
-        // ceilDivide(pendingSellAvgPrice * pendingSellSize + budgetNotional, newPendingSellSize)
-        // 现: 内层 product / sum 拆成 multiplyExact + addExact
         long newPendingBuyAvgPrice = action == OrderAction.BID && newPendingBuySize > 0 ? CoreArithmeticUtils
             .ceilDivide(Math.addExact(Math.multiplyExact(pendingBuyAvgPrice, pendingBuySize), budgetNotional),
                 newPendingBuySize)
@@ -640,10 +616,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return Math.max(feePendingBuy, feePendingSell);
     }
 
-    public long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
+    // ================================================================
+    // 成交开 / 平仓
+    // ================================================================
 
-        // log.debug("{} {} {} {} cur:{}-{} profit={}", uid, action, tradeSize, tradePrice, position, totalSize,
-        // profit);
+    public long closeCurrentPositionFutures(final OrderAction action, final long tradeSize, final long tradePrice) {
 
         if (openVolume == 0 || direction == PositionDirection.of(action)) {
             // nothing to close
@@ -652,10 +629,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         if (openVolume > tradeSize) {
             // current position is bigger than trade size - just reduce position accordingly, don't fix profit
-            // 原: openInitMarginSum -= openInitMarginSum * tradeSize / openVolume;
-            // openVolume -= tradeSize;
-            // openPriceSum -= tradeSize * tradePrice;
-            // 现: 所有乘法 multiplyExact、减法 subtractExact。silent wrap 出来的脏值会落 raft snapshot 跨节点污染。
             // `openVolume -= tradeSize` 此处不用 subtractExact，因为 openVolume > tradeSize 已保证不会变负或溢出。
             long marginRelease = CoreArithmeticUtils.truncMulDiv(openInitMarginSum, tradeSize, openVolume);
             openInitMarginSum = Math.subtractExact(openInitMarginSum, marginRelease);
@@ -665,9 +638,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         }
 
         // current position smaller than trade size, can close completely and calculate profit
-        // 原: profit += (openVolume * tradePrice - openPriceSum) * direction.getMultiplier();
-        // final long sizeToOpen = tradeSize - openVolume;
-        // 现: notional / 减法 / 乘符号 / 累加 profit 四步全 *Exact / addExact / subtractExact
         long closeNotional = Math.multiplyExact(openVolume, tradePrice);
         long pnlRaw = Math.subtractExact(closeNotional, openPriceSum);
         long pnlSigned = Math.multiplyExact(pnlRaw, (long)direction.getMultiplier());
@@ -677,18 +647,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         final long sizeToOpen = Math.subtractExact(tradeSize, openVolume);
         openVolume = 0;
 
-        // validateInternalState();
-
         return sizeToOpen;
     }
 
     public void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice, CoreSymbolSpecification spec,
         LastPriceCacheRecord record) {
-        // 原: openVolume += sizeToOpen;
-        // openInitMarginSum += spec.calcInitMargin(record.markPrice * sizeToOpen, leverage);
-        // openPriceSum += tradePrice * sizeToOpen;
-        // 现: 把内部 product 和外层 += 全部换成 *Exact / addExact。
-        // 先算 notional / margin delta，再依次 addExact 累加到 state 字段。
         long openNotional = Math.multiplyExact(record.markPrice, sizeToOpen);
         long initMarginDelta = spec.calcInitMargin(openNotional, leverage);
         long priceNotional = Math.multiplyExact(tradePrice, sizeToOpen);
@@ -696,9 +659,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         openInitMarginSum = Math.addExact(openInitMarginSum, initMarginDelta);
         openPriceSum = Math.addExact(openPriceSum, priceNotional);
         direction = PositionDirection.of(action);
-
-        // validateInternalState();
     }
+
+    // ================================================================
+    // 序列化 / 校验 / stateHash / toString
+    // ================================================================
 
     @Override
     public void writeMarshallable(BytesOut bytes) {
@@ -716,18 +681,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         bytes.writeInt(leverage);
         bytes.writeByte(marginMode.getCode());
         bytes.writeLong(extraMargin);
-        if (liquidationCtx != null) {
-            bytes.writeByte((byte) 1);
-            liquidationCtx.writeMarshallable(bytes);
-        } else {
-            bytes.writeByte((byte) 0);
-        }
     }
 
     public void reset() {
-
-        // log.debug("records: {}, Pending B{} S{} total size: {}", records.size(), pendingBuySize, pendingSellSize,
-        // totalSize);
 
         pendingBuySize = 0;
         pendingSellSize = 0;
@@ -744,7 +700,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         extraMargin = 0;
         adlEligibility = 100;
         pendingADLSize = 0;
-        liquidationCtx = null;
+        liquidationFlow = null; // 池化复用清理：纯内存强平流程状态
     }
 
     public void validateInternalState() {
@@ -763,11 +719,9 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public int stateHash() {
         // marginMode 是 enum，必须用 enumStateHash 否则 identityHashCode 跨 JVM 漂移。
         // direction.getMultiplier() 已是 int，安全。
-        // liquidationCtx 进 raft state：缺失它 hash 不能反映强平流程阶段，发散检测失效。
         return Objects.hash(symbol, currency, direction.getMultiplier(), openVolume, openInitMarginSum, openPriceSum,
             profit, pendingSellSize, pendingBuySize, pendingSellAvgPrice, pendingBuyAvgPrice, leverage,
-            HashingUtils.enumStateHash(marginMode), extraMargin,
-            liquidationCtx == null ? 0 : liquidationCtx.stateHash());
+            HashingUtils.enumStateHash(marginMode), extraMargin);
     }
 
     @Override
@@ -776,6 +730,6 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
             + " ΣinitM=" + openInitMarginSum + " Σp=" + openPriceSum + " pnl=" + profit + " pendingS=" + pendingSellSize
             + " pendingB=" + pendingBuySize + " pendingSP=" + pendingSellAvgPrice + " pendingBP=" + pendingBuyAvgPrice
             + " lev=" + leverage + " mode=" + marginMode + " exM=" + extraMargin + " adl%=" + adlEligibility
-            + " pendingADL=" + pendingADLSize + " Lctx=" + liquidationCtx + '}';
+            + " pendingADL=" + pendingADLSize + '}';
     }
 }

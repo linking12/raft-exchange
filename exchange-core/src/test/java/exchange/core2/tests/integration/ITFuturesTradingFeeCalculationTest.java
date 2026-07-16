@@ -862,12 +862,11 @@ class ITFuturesTradingFeeCalculationTest {
             // ============ 阶段 4：暴跌 + 触发强平 ============
             container.updateCurrentPriceTo((int) crashPrice, symbolId, CURRENECY_USD);
 
-            List<LiquidationEngine> liquidationEngines = container.getExchangeCore().getLiquidationEngines();
             // LiquidationEngine.stop() 后 republish scheduler 被关，强平多步流程 (FORCE→IF→ADL)
-            // 需要 caller 主动 drive。单次 triggerOnce 只起第一拍，后续步骤靠 waitForCondition 的
+            // 需要 caller 主动 drive。单次 triggerLiquidation 只起第一拍，后续步骤靠 waitForCondition 的
             // onTick 重发 — 参考 LatencyTools.waitForCondition JavaDoc + testPerpetualScenario3 同款模式。
             // 内层 5s + tick 100ms（最多 50 次重发），跟 @Timeout(30) 留够余量。
-            Runnable trigger = () -> liquidationEngines.forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = container::triggerLiquidation;
             trigger.run();
             LatencyTools.waitForCondition(5_000L, () -> {
                 try {
@@ -1159,9 +1158,8 @@ class ITFuturesTradingFeeCalculationTest {
                             .build(),
                     CommandResultCode.SUCCESS);
 
-            List<LiquidationEngine> engines = container.getExchangeCore().getLiquidationEngines();
             // 同 testFuturesLiquidationFullLifecycleConservation：多步强平靠 onTick 重发 drive
-            Runnable trigger = () -> engines.forEach(LiquidationEngine::triggerOnce);
+            Runnable trigger = container::triggerLiquidation;
             trigger.run();
             // condition-poll 等 victim LONG 持仓归零（HEDGE 双向中 SHORT 完好保留，所以只看 LONG）。
             LatencyTools.waitForCondition(5_000L, () -> {

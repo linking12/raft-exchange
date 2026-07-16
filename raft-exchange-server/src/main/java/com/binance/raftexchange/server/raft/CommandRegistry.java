@@ -48,6 +48,7 @@ public final class CommandRegistry {
 
         register(ApiCommand.CommandCase.RESET_FEE, ApiCommandConverters::convertResetFee);
         register(ApiCommand.CommandCase.REPRICE_LOAN_RATES, ApiCommandConverters::convertRepriceLoanRates);
+        register(ApiCommand.CommandCase.LIQUIDATION_SCAN, ApiCommandConverters::convertLiquidationScan);
         register(ApiCommand.CommandCase.NOP, ApiCommandConverters::convertNop);
 
         // loan 子域（详见 loan.md §5）；FORCE_LIQUIDATE 两条 scanner 内部触发，暂无 proto，等 force-sell 落地时同批加。

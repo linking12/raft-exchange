@@ -1114,7 +1114,7 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, is(0L));
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(UID_4, report -> {
                 // UID_4吃掉UID_2和UID_1开出来的空单
@@ -1256,7 +1256,7 @@ public class ITExchangeCoreHedgeMode {
                 assertThat(report.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, is(0L));
             });
 
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(UID_4, report -> {
                 // UID_4吃掉UID_2和UID_1开出来的空单
@@ -1388,7 +1388,7 @@ public class ITExchangeCoreHedgeMode {
                     .symbol(BNB_USDT.symbolId)
                     .markPrice(95000000L)
                     .build(), CommandResultCode.SUCCESS);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(size));
@@ -1403,7 +1403,7 @@ public class ITExchangeCoreHedgeMode {
                     .symbol(BNB_USDT.symbolId)
                     .markPrice(55000000L)
                     .build(), CommandResultCode.SUCCESS);
-            container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::triggerOnce);
+            container.triggerLiquidation();
 
             container.validateUserState(UID_1, profile -> {
                 assertThat(profile.getPositions().get(BNB_USDT.symbolId).get(0).openVolume, Is.is(size));
