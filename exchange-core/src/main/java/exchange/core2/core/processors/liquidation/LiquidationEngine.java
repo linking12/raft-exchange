@@ -240,8 +240,8 @@ public final class LiquidationEngine extends LiquidationScheduledService {
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
                 if (maintenance != 0) { // 缩放后归零不能做除数：PnL 已计入 totals，仅不参与风险排序
-                    riskPairs.add(PrimitiveTuples.pair(Math.multiplyExact(profit - maintenance, 100) / maintenance,
-                        position));
+                    riskPairs.add(
+                        PrimitiveTuples.pair(Math.multiplyExact(profit - maintenance, 100) / maintenance, position));
                 }
             }
             final long equity = totalProfit + userProfile.calculateCrossAvailable(currency, currencySpec,
@@ -287,6 +287,9 @@ public final class LiquidationEngine extends LiquidationScheduledService {
             return;
         }
         final long orderId = LiquidationService.generateLiquidationOrderId(position);
+        // 进行中标记提前到 submit-time（而非等 FORCE apply 才建）：单写者线程内，submit→apply 之间后续命令再触发
+        // checkPositions 会被上面的 flow!=null 守卫挡回，杜绝同一仓重复发 FORCE → 避免衍生重复 IF/ADL。
+        position.liquidationFlow = new LiquidationFlow(price, size, orderId);
         submit(buildForceCmd(position, orderId, price, size), null);
         final FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position);
         submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);

@@ -207,18 +207,21 @@ public final class OrderCommand implements IOrder {
                 command == OrderCommandType.CLOSE_POSITION ||
                 command == OrderCommandType.LEVERAGE_ADJUSTMENT ||
                 command == OrderCommandType.MARGIN_ADJUSTMENT ||
-                command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
-                command == OrderCommandType.AUTO_DELEVERAGING;
+                command == OrderCommandType.FORCE_LIQUIDATION ||
+                command == OrderCommandType.IF_TAKEOVER;
     }
 
     /**
-     * 执行前是否必须看到最终 R2（symbol 级别指令）
-     * @return
+     * 执行前是否必须看到最终 R2（symbol 级别指令）。
+     * <p>
+     * AUTO_DELEVERAGING 在此：ADL 的 R1(collectInput) 要挑该 symbol 上的盈利对手接盘，必须先冲完本 shard R2 才能读到对手
+     * 的最终仓位，否则会挑中"已在 R1→R2 间被平掉、R2 尚未 apply"的 stale 对手，到 R2 扑空 → 跨 shard over-close / OI 泄漏。
      */
     public boolean needSyncR2ForSymbol() {
         return command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
                 command == OrderCommandType.SETTLE_FUNDINGFEES ||
-                command == OrderCommandType.SETTLE_PNL;
+                command == OrderCommandType.SETTLE_PNL ||
+                command == OrderCommandType.AUTO_DELEVERAGING;
     }
 
     /**

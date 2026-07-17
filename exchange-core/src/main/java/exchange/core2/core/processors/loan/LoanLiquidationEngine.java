@@ -191,17 +191,40 @@ public final class LoanLiquidationEngine {
         }
     }
 
+    /**
+     * Cross（全仓借贷）账户的强平判定。
+     *
+     * <p>
+     * 全仓与逐仓（isolated）的记账方式完全不同：逐仓是一笔贷款配一份抵押、逐笔算 LTV；全仓则把用户所有抵押汇成一个
+     * 账户级的池子（crossLoanCollateral，可含多个币种），债务是池子上并存的多笔独立借据（crossLoans），风险按整个账户
+     * 的联合 LTV 判定，而不是看某一笔。全仓贷款恒为浮动利率、没有到期日，所以这里唯一的触发条件就是账户 LTV——它由
+     * calculateCrossAccountLtvBps 用一个统一记账币种（numeraire）折算得出；若 numeraire 尚未配置则保守地返回 0，不触发。
+     *
+     * <p>
+     * 当账户 LTV 越过强平线，处理方式不是一次性清空整个账户，而是渐进式去杠杆（deleveraging）：每一轮只卖出一个币种的
+     * 一部分抵押、去偿还其中一笔债，把账户 LTV 往下压一点；后续的价格事件会再次进入本方法，如此反复直到账户回到安全线
+     * 以内。因此每一轮真正的决策，就是"这一轮卖哪个抵押币、还哪一笔债"这一对组合的选取。
+     *
+     * <p>
+     * 这个选取是全仓强平里最容易埋雷的地方。抵押池里有多个币种、账户上又挂着多笔债，而"卖某个币去偿某笔债"这个动作
+     * 必须真的能在市场上成交——也就是必须存在一个已上市、且 markPrice 就绪的现货对（base 为卖出币、quote 为债务币）。
+     * 一个很自然但错误的写法，是让抵押和目标债各自独立地挑"最优"：卖权重最高的抵押、偿利率最高的债；可一旦这两者凑成的
+     * 那一对恰好没有对应现货对，本轮就只能放弃。而由于这套选取只看抵押权重和利率、跟价格无关，是完全确定性的，于是
+     * 下一次价格事件进来会挑出一模一样的一对、再一次放弃——账户就此永久空转，既没被强平、坏账也永远结算不掉。
+     *
+     * <p>
+     * 为此，我们把"该组合必须存在就绪现货对"这个条件，从选取之后的一道校验，前移成选取本身的过滤条件，下沉进下面两个
+     * pick 方法里：一个抵押币只有在"卖它至少能偿到某一笔债"时才会进入候选，一笔债也只有在"与已选定的卖出币之间存在
+     * 就绪现货对"时才会被选中。这样一来，被选出的首选组合一定是可成交的；如果最优的那对没有市场，选取会自动退到次优
+     * 但可成交的组合；只有当账户里确实凑不出任何一对可成交的（抵押 × 债）时，才会真正放弃——那才是真正的坏账，交由后续
+     * 的兜底扫描或坏账流程处理。
+     */
     private void checkCross(UserProfile userProfile, long ts) {
         if (userProfile.crossLoans.isEmpty())
             return;
-
-        // Cross 恒 Floating，无期限，只判账户级 LTV；numeraire 未配则 ltvBps=0，不触发（保守）
         final long ltvBps = loanService.calculateCrossAccountLtvBps(userProfile, ts, symbolSpecificationProvider,
             currencySpecificationProvider, lastPriceCache, loanService.getGlobalConfig().numeraireCurrency);
-
         if (ltvBps >= loanService.getGlobalConfig().crossLiquidationLtvBps) {
-            // 选（卖出抵押, 目标债）出手，单轮一对、靠后续价格事件迭代 deleveraging。抵押与目标债都要求存在 markPrice
-            // 就绪的现货对——否则该对永远成交不了、每轮又重挑同一对，会永久空转、坏账不结算。
             final int sellingCurrency = pickCrossCollateralToSell(userProfile);
             if (sellingCurrency == 0) {
                 log.warn("Cross force-sell abort: no sellable collateral with a ready spot market (uid={})",
@@ -213,7 +236,7 @@ public final class LoanLiquidationEngine {
                 log.warn("Cross force-sell abort: no repayable target loan (uid={})", userProfile.uid);
                 return;
             }
-            // pick 已保证该对现货存在且 markPrice 就绪
+            // pick 的前置约束已保证该现货对存在且 markPrice 就绪，此处直接取用、无需再判空
             final CoreSymbolSpecification spec =
                 LoanService.findSpotSpec(sellingCurrency, targetLoan.loanCurrency, symbolSpecificationProvider);
             final LastPriceCacheRecord priceRecord = lastPriceCache.get(spec.symbolId);
@@ -222,6 +245,7 @@ public final class LoanLiquidationEngine {
                 currencySpecificationProvider.getCurrencySpecification(sellingCurrency);
             final CoreCurrencySpecification loanCurrencySpec =
                 currencySpecificationProvider.getCurrencySpecification(targetLoan.loanCurrency);
+            // 下单张数 = min(可卖抵押, 覆盖债务+buffer 所需)；可卖抵押不足一张 lot（sub-lot 尘埃）时为 0，本轮跳过
             final long sellSize = calculateCrossSellSize(targetLoan, spec, priceRecord.markPrice, availableCollateral,
                 ts, loanService, sellingCurrencySpec, loanCurrencySpec);
             if (sellSize <= 0) {
@@ -292,7 +316,7 @@ public final class LoanLiquidationEngine {
         }
     }
 
-    /** 选卖出抵押币：权重 DESC → 数量 DESC → 币种 ASC；且须存在可偿还某笔债、markPrice 就绪的现货对，否则返回 0。 */
+    /** 选卖出抵押币（见 {@link #checkCross} 说明）：权重 DESC → 数量 DESC → 币种 ASC，且须能偿到某笔债；无合格者返回 0。 */
     private int pickCrossCollateralToSell(UserProfile up) {
         int bestCurrency = 0;
         int bestWeight = -1;
@@ -304,7 +328,8 @@ public final class LoanLiquidationEngine {
             final int weight = LoanService.collateralWeightForBase(currency, symbolSpecificationProvider);
             if (weight <= 0)
                 continue;
-            if (up.crossLoans.noneSatisfy(l -> l.outstandingPrincipal > 0 && hasReadySpotMarket(currency, l.loanCurrency)))
+            if (up.crossLoans
+                .noneSatisfy(l -> l.outstandingPrincipal > 0 && hasReadySpotMarket(currency, l.loanCurrency)))
                 continue; // 卖此币偿不了任何债（无现货对/markPrice 未就绪）→ 跳过，避免选中后每轮空转
             if (weight > bestWeight || (weight == bestWeight && amount > bestAmount)
                 || (weight == bestWeight && amount == bestAmount && currency < bestCurrency)) {
@@ -316,7 +341,7 @@ public final class LoanLiquidationEngine {
         return bestCurrency;
     }
 
-    /** 选偿还目标 loan：利率 DESC → 本金 DESC → loanId ASC；且须与 sellingCurrency 有 markPrice 就绪的现货对，否则返回 null。 */
+    /** 选偿还目标 loan（见 {@link #checkCross} 说明）：利率 DESC → 本金 DESC → loanId ASC，且须与 sellingCurrency 有就绪现货对；无则 null。 */
     private CrossLoanRecord pickCrossLoanToRepay(UserProfile up, int sellingCurrency) {
         CrossLoanRecord best = null;
         for (CrossLoanRecord loan : up.crossLoans) {
