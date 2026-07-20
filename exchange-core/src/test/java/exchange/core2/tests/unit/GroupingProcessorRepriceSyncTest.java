@@ -22,6 +22,7 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.processors.GroupingProcessor;
+import exchange.core2.core.processors.R2Sync;
 import exchange.core2.core.processors.SharedPool;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -31,21 +32,38 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * REPRICE_LOAN_RATES 的 R1(collectInput) 读跨 shard 聚合的按币种 loan pool 算利用率，而池在 R2 被强平结算改写。
- * 若前序 R2 未冲完就读，各副本因 batch 边界随 wall-clock 漂移读到不同池值 → 利率 → 累加器永久分叉。修复靠让 reprice
- * 独占 group：GroupingProcessor 给它单切 eventsGroup，组边界处 master 同步冲完前组全部 R2 再跑 reprice 的 R1。
- * 本测试锁两点：谓词只对 reprice 生效；GroupingProcessor 确实给 reprice 单独切组、而前序强平命令不切。
+ * 锁 R2Sync 的命令分类，及 GroupingProcessor 让 reprice 独占 group（reprice 的 R1 读跨 shard 聚合借贷池，须先冲完前组
+ * 全部 R2 才读到确定值，否则各副本因 batch 边界漂移读到不同池值 → 利率 → 累加器永久分叉）。
  */
 class GroupingProcessorRepriceSyncTest {
 
     @Test
     void needSyncR2Global_onlyReprice() {
-        assertTrue(cmd(OrderCommandType.REPRICE_LOAN_RATES).needSyncR2Global());
-        // 改 loan pool 的强平命令自身不需要（它们是被冲的一方，不是读全局池的一方）
-        assertFalse(cmd(OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE).needSyncR2Global());
-        assertFalse(cmd(OrderCommandType.LOAN_FORCE_LIQUIDATE).needSyncR2Global());
-        assertFalse(cmd(OrderCommandType.PLACE_ORDER).needSyncR2Global());
-        assertFalse(cmd(OrderCommandType.RESET).needSyncR2Global());
+        assertTrue(R2Sync.needSyncR2Global(cmd(OrderCommandType.REPRICE_LOAN_RATES)));
+        assertFalse(R2Sync.needSyncR2Global(cmd(OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE)));
+        assertFalse(R2Sync.needSyncR2Global(cmd(OrderCommandType.LOAN_CREATE)));
+        assertFalse(R2Sync.needSyncR2Global(cmd(OrderCommandType.PLACE_ORDER)));
+    }
+
+    @Test
+    void loanCommands_classification() {
+        // 借款读借贷池 → symbol 级 consumer（key 走哨兵）；自身不是 R2 写方
+        assertTrue(R2Sync.needSyncR2ForSymbol(cmd(OrderCommandType.LOAN_CREATE)));
+        assertTrue(R2Sync.needSyncR2ForSymbol(cmd(OrderCommandType.LOAN_CROSS_BORROW)));
+        assertFalse(R2Sync.takesEffectInR2(cmd(OrderCommandType.LOAN_CREATE)));
+        // loan 强平在 R2 结算借贷池 → 写方；自身不是 symbol consumer
+        assertTrue(R2Sync.takesEffectInR2(cmd(OrderCommandType.LOAN_FORCE_LIQUIDATE)));
+        assertTrue(R2Sync.takesEffectInR2(cmd(OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE)));
+        assertFalse(R2Sync.needSyncR2ForSymbol(cmd(OrderCommandType.LOAN_FORCE_LIQUIDATE)));
+    }
+
+    @Test
+    void futuresCommands_classification() {
+        assertTrue(R2Sync.takesEffectInR2(cmd(OrderCommandType.PLACE_ORDER)));
+        assertTrue(R2Sync.needSyncR2ForSymbol(cmd(OrderCommandType.MARKPRICE_ADJUSTMENT)));
+        assertTrue(R2Sync.needSyncR2ForUidSymbol(cmd(OrderCommandType.CLOSE_POSITION)));
+        assertFalse(R2Sync.needSyncR2ForSymbol(cmd(OrderCommandType.PLACE_ORDER)));
+        assertFalse(R2Sync.needSyncR2ForUidSymbol(cmd(OrderCommandType.PLACE_ORDER))); // 非 reduce-only
     }
 
     @Test
@@ -67,7 +85,7 @@ class GroupingProcessorRepriceSyncTest {
         // 先 publish 全部命令再起消费线程：一次 inner-loop 处理完，命令间零空闲，切组仅由命令类型决定
         final OrderCommandType[] stream = {
             OrderCommandType.PLACE_ORDER,
-            OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE, // R2 改 loan pool，但自身不切组
+            OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE, // 在 R2 结算借贷池，但自身不切组
             OrderCommandType.REPRICE_LOAN_RATES,         // 切组：独占新 group
             OrderCommandType.PLACE_ORDER,                // 归入 reprice 的新 group
         };

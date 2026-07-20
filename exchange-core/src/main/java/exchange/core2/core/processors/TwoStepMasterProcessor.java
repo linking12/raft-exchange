@@ -21,7 +21,6 @@ import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.collections.impl.set.mutable.primitive.LongHashSet;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -104,8 +103,7 @@ public final class TwoStepMasterProcessor implements EventProcessor {
 
         long currentSequenceGroup = 0;
 
-        LongHashSet pendingR2Symbols = new LongHashSet();
-        LongHashSet pendingR2UidSymbols = new LongHashSet(); // (uid, symbol)
+        final R2Sync pendingR2 = new R2Sync();
 
         // wait until slave processor has instructed to run
         while (!slaveProcessor.isRunning()) {
@@ -127,27 +125,17 @@ public final class TwoStepMasterProcessor implements EventProcessor {
                         if (cmd.eventsGroup != currentSequenceGroup) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                             currentSequenceGroup = cmd.eventsGroup;
-                            pendingR2Symbols.clear();
-                            pendingR2UidSymbols.clear();
+                            pendingR2.clearGroup();
                         }
-                        /**
-                         * @Modified 因为单子撮完后是延迟在R2更新position信息的，因此在这些cmd执行前，需要让R2先执行完
-                         */
-                        if (cmd.needSyncR2ForSymbol() && pendingR2Symbols.remove(cmd.symbol)) {
-                            publishProgressAndTriggerSlaveProcessor(nextSequence);
-                        }
-                        if (cmd.needSyncR2ForUidSymbol() && pendingR2UidSymbols.remove(uidSymbolKey(cmd.uid, cmd.symbol))) {
+                        // 读方 R1 前，先冲完它要读的、尚未生效的 R2
+                        if (pendingR2.flushNeededBefore(cmd)) {
                             publishProgressAndTriggerSlaveProcessor(nextSequence);
                         }
 
                         boolean forcedPublish = eventHandler.onEvent(nextSequence, cmd);
                         nextSequence++;
 
-                        //  标记 R2 sideEffect
-                        if (cmd.hasR2SideEffect()) {
-                            pendingR2Symbols.add(cmd.symbol);
-                            pendingR2UidSymbols.add(uidSymbolKey(cmd.uid, cmd.symbol));
-                        }
+                        pendingR2.record(cmd);
 
                         if (forcedPublish) {
                             sequence.set(nextSequence - 1);
@@ -175,10 +163,6 @@ public final class TwoStepMasterProcessor implements EventProcessor {
             }
 
         }
-    }
-
-    private long uidSymbolKey(long uid, int symbol) {
-        return (uid << 32) | (symbol & 0xffffffffL);
     }
 
     private void publishProgressAndTriggerSlaveProcessor(final long nextSequence) {
