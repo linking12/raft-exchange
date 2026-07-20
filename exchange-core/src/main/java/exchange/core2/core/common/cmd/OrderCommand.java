@@ -225,6 +225,18 @@ public final class OrderCommand implements IOrder {
     }
 
     /**
+     * 执行前是否必须看到最终 R2（全局级指令，非 symbol/uid 键控）。
+     * <p>
+     * REPRICE_LOAN_RATES 在此：R1(collectInput) 读跨 shard 聚合的按币种 loan 池算利用率，而池在 R2 被强平结算
+     * （settleLiquidationProceeds / takeOverCrossLoan，来自任意 symbol）改写。若前序 R2 未冲完就读，会读到强平前的
+     * 中间池值——batch 边界随 wall-clock 漂移使各副本读到不同值 → util → 利率 → 累加器永久分叉。故须独占 group、
+     * 组边界同步 flush 前组全部 R2 再跑 R1。全局读，无法用 symbol/uid 键控的 {@link #needSyncR2ForSymbol}。
+     */
+    public boolean needSyncR2Global() {
+        return command == OrderCommandType.REPRICE_LOAN_RATES;
+    }
+
+    /**
      * Handles full MatcherTradeEvent chain, without removing/revoking them
      *
      * @param handler - MatcherTradeEvent handler
