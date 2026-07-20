@@ -369,6 +369,30 @@ public abstract class LiveClusterE2EBase {
     // 节点生命周期（E2E 故障注入：shell 调 start-local-cluster.sh stop-node/start-node）
     // ================================================================
 
+    /**
+     * 轮询直到 {@code /raft/cluster} 报告 state_hash_converged=true，或超时抛错（打印分叉明细）。
+     * 比"各节点余额相等"强得多：覆盖全部 submodule（订单簿/手续费/用户档案/loan…）的 stateHash 严格一致。
+     */
+    protected static void awaitStateHashConverged(long timeoutMs) {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        JsonObject last = null;
+        while (System.currentTimeMillis() < deadline) {
+            last = fetchClusterJson();
+            if (last != null && last.has("state_hash_converged") && last.get("state_hash_converged").getAsBoolean()) {
+                return;
+            }
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        final Object div =
+            last != null && last.has("state_hash_divergences") ? last.get("state_hash_divergences") : "(无集群响应)";
+        throw new AssertionError("stateHash 在 " + timeoutMs + "ms 内未收敛，分叉: " + div);
+    }
+
     /** 停单节点（1/2/3）。 */
     protected static void stopNode(int nodeIndex) {
         runClusterScript("stop-node", String.valueOf(nodeIndex));
@@ -377,6 +401,11 @@ public abstract class LiveClusterE2EBase {
     /** 起单节点（沿用集群 mode/consensus）。 */
     protected static void startNode(int nodeIndex) {
         runClusterScript("start-node", String.valueOf(nodeIndex));
+    }
+
+    /** 删单节点 raft 数据目录（log+snapshot+meta），逼其重启后从 leader 全量 install-snapshot（诊断用）。 */
+    protected static void clearNodeData(int nodeIndex) {
+        runClusterScript("clear-node", String.valueOf(nodeIndex));
     }
 
     private static void runClusterScript(String... args) {

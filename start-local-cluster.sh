@@ -136,6 +136,13 @@ case "${1:-start}" in
         n="${2:?usage: $0 stop-node <1|2|3>}"
         stop_node "$n"
         ;;
+    clear-node)
+        # 删单节点 raft 数据目录（log+snapshot+meta），逼其重启后从 leader 全量 install-snapshot；E2E 诊断用
+        n="${2:?usage: $0 clear-node <1|2|3>}"
+        member="$LOCAL_IP:$(raft_port $n)"
+        rm -rf "$APP_HOME_ROOT/RAFT-EXCHANGE-DATA/$member"
+        echo "[node$n] cleared raft data dir: RAFT-EXCHANGE-DATA/$member"
+        ;;
     start-node)
         n="${2:?usage: $0 start-node <1|2|3>}"
         # 复用集群启动时落盘的 mode/consensus，保证重启节点与集群一致

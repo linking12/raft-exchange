@@ -212,14 +212,16 @@ class LiveClusterRaftInfraE2ETest extends LiveClusterE2EBase {
 
         try {
             stopNode(followerIdx);
+            clearNodeData(followerIdx); // 诊断：清本地快照/日志，逼重启后从 leader 全量 install-snapshot
             // 3 节点挂 1 仍达 quorum(2/3)，写入应成功（client 收到 NEED_MOVE 自动指向 leader）
             ok(api.adjustUserBalance(userA, nextTxId(), USDT_ID, +7.0), "杀 follower 后仍可写(quorum 2/3)");
         } finally {
             startNode(followerIdx); // 无论断言成败都把节点拉起来，别污染后续用例
         }
-        // 重启的 follower 需从快照 + 日志恢复并追平；收敛即证明它正确加载了状态
+        // 重启的 follower 需从快照 + 日志恢复并追平；先等余额、再等全 submodule stateHash 严格收敛
         awaitBalanceConvergence(userA, 60_000L);
-        log("✓ follower 重启后三节点重新收敛");
+        awaitStateHashConverged(90_000L); // 强判据：重启后所有 submodule 必须一致（隔离"重启本身是否分叉"）
+        log("✓ follower 重启后三节点 stateHash 严格收敛");
     }
 
     @Test
@@ -243,7 +245,8 @@ class LiveClusterRaftInfraE2ETest extends LiveClusterE2EBase {
         }
         assertNotEquals(oldLeader, newLeader, "stepdown 后应选出新 leader");
         ok(api.adjustUserBalance(userA, nextTxId(), USDT_ID, +1.0), "换届后写入仍成功");
-        log("✓ leader " + oldLeader + " → " + newLeader + "，写入未中断");
+        awaitStateHashConverged(60_000L); // 换届不应引入分叉
+        log("✓ leader " + oldLeader + " → " + newLeader + "，写入未中断且 stateHash 收敛");
     }
 
     @Test
@@ -262,7 +265,8 @@ class LiveClusterRaftInfraE2ETest extends LiveClusterE2EBase {
         }
         long cleanupFailures = raftLag(leaderMgmt).get("snapshot_cleanup_failures").getAsLong();
         assertEquals(0, cleanupFailures, "连续快照不应有清理失败(旧快照目录泄漏)");
-        log("✓ 连续 3 次快照，cleanup 失败数 = 0");
+        awaitStateHashConverged(60_000L); // 连续快照不应引入分叉
+        log("✓ 连续 3 次快照，cleanup 失败数 = 0 且 stateHash 收敛");
     }
 
     /** 轮询直到三节点对 uid 的 USDT 余额一致，或超时 fail（重启节点追平后的收敛判据）。 */
