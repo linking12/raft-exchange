@@ -1,0 +1,165 @@
+/*
+ * Copyright 2019 Maksim Zheravin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package exchange.core2.core.common;
+
+import exchange.core2.core.common.cmd.OrderCommandType;
+import exchange.core2.core.utils.HashingUtils;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import net.openhft.chronicle.bytes.BytesIn;
+import net.openhft.chronicle.bytes.BytesOut;
+import net.openhft.chronicle.bytes.WriteBytesMarshallable;
+
+import java.util.Objects;
+
+/**
+ * Extending OrderCommand allows to avoid creating new objects
+ * for instantly matching orders (MARKET or marketable LIMIT orders)
+ * as well as use same code for matching moved orders
+ * <p>
+ * No external references allowed to such object - order objects only live inside OrderBook.
+ */
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public final class Order implements WriteBytesMarshallable, IOrder {
+
+    @Getter
+    public long orderId;
+
+    @Getter
+    public long price;
+
+    @Getter
+    public long size;
+
+    @Getter
+    public long filled;
+
+    @Getter
+    public long filledNotional;
+
+    // new orders - reserved price for fast moves of GTC bid orders in exchange mode
+    @Getter
+    public long reserveBidPrice;
+
+    // required for PLACE_ORDER only;
+    @Getter
+    public OrderAction action;
+
+    @Getter
+    public OrderType orderType;
+
+    @Getter
+    public OrderCommandType command;
+
+    @Getter
+    public long uid;
+
+    @Getter
+    public long timestamp;
+
+    @Getter
+    public int userCookie;
+
+    public Order(BytesIn bytes) {
+
+
+        this.orderId = bytes.readLong(); // orderId
+        this.price = bytes.readLong();  // price
+        this.size = bytes.readLong(); // size
+        this.filled = bytes.readLong(); // filled
+        this.filledNotional = bytes.readLong(); // filledNotional
+        this.reserveBidPrice = bytes.readLong(); // price2
+        this.action = OrderAction.of(bytes.readByte());
+        this.orderType = OrderType.of(bytes.readByte());
+        byte commandByte = bytes.readByte();
+        this.command = commandByte == 0 ? null : OrderCommandType.fromCode(commandByte);
+        this.uid = bytes.readLong(); // uid
+        this.timestamp = bytes.readLong(); // timestamp
+        this.userCookie = bytes.readInt();  // userCookie
+
+    }
+
+    @Override
+    public void writeMarshallable(BytesOut bytes) {
+        bytes.writeLong(orderId);
+        bytes.writeLong(price);
+        bytes.writeLong(size);
+        bytes.writeLong(filled);
+        bytes.writeLong(filledNotional);
+        bytes.writeLong(reserveBidPrice);
+        bytes.writeByte(action.getCode());
+        bytes.writeByte(orderType.getCode());
+        bytes.writeByte(command == null ? 0 : command.getCode());
+        bytes.writeLong(uid);
+        bytes.writeLong(timestamp);
+        bytes.writeInt(userCookie);
+    }
+
+    @Override
+    public String toString() {
+        return "[" + orderId + " " + (action == OrderAction.ASK ? 'A' : 'B')
+                + " " + orderType + " " + command + " "
+                + price + ":" + size + "F" + filled + "FN" + filledNotional
+                + " C" + userCookie
+                + " U" + uid + "]";
+    }
+
+    @Override
+    public int hashCode() {
+        // action/orderType/command 是 enum：直接进 Objects.hash 会走 identityHashCode（跨 JVM 漂移）；
+        // 这个 hashCode 同时被 OrderBookNaive 的 stateHash 链路用，必须跨节点稳定。
+        return Objects.hash(orderId,
+                HashingUtils.enumStateHash(action),
+                HashingUtils.enumStateHash(orderType),
+                HashingUtils.enumStateHash(command),
+                price, size, reserveBidPrice, filled, filledNotional, uid, userCookie);
+    }
+
+
+    /**
+     * timestamp is not included into hashCode() and equals() for repeatable results
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (o == this) return true;
+        if (o == null) return false;
+        if (!(o instanceof Order)) return false;
+
+        Order other = (Order) o;
+
+        // ignore timestamp and userCookie
+        return orderId == other.orderId
+                && action == other.action
+                && orderType == other.orderType
+                && command == other.command
+                && price == other.price
+                && size == other.size
+                && reserveBidPrice == other.reserveBidPrice
+                && filled == other.filled
+                && filledNotional == other.filledNotional
+                && uid == other.uid
+                && userCookie == other.userCookie;
+    }
+
+    @Override
+    public int stateHash() {
+        return hashCode();
+    }
+}

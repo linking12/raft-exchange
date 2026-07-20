@@ -1,0 +1,23 @@
+{
+  "servers": [
+    {
+      "name": "local-filesystem",
+      "type": "filesystem",
+      "root": "/Users/bcg83269/project/java/osl/osl-mm-match",
+      "read_only": false
+    },
+    {
+      "name": "github-mcp",
+      "type": "github",
+      "repo": "git@gitlab.glb.osl-nucleus.com:tech/dev/be/lp/osl-mm-match.git",
+      "token_env": "GITHUB_TOKEN",
+      "read_only": true
+    },
+    {
+      "name": "git-local",
+      "type": "git",
+      "root": "/Users/bcg83269/project/java/osl/osl-mm-match",
+      "read_only": true
+    }
+  ]
+}

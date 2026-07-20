@@ -1,0 +1,468 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs.request;
+
+option java_package = "com.binance.raftexchange.stubs.request";
+option java_multiple_files = true;
+
+import "message/common.proto";
+
+// ========================= API Commands =========================
+
+// Binary Data Command
+message ApiBinaryDataCommand {
+  int32 transferId = 1;
+  BinaryDataCommand data = 2;
+}
+
+// Place Order Command
+message ApiPlaceOrder {
+  int64 price = 1;
+  int64 size = 2;
+  int64 orderId = 3;
+  OrderAction action = 4;
+  OrderType orderType = 5;
+  int64 uid = 6;
+  int32 symbol = 7;
+  int32 userCookie = 8;
+  int32 leverage = 9;
+  MarginMode marginMode = 10;
+  int64 reservePrice = 11;
+  bool reduceOnly = 12;
+}
+
+// 用户间同币种原子转账（fromUid→toUid，跨 shard；transactionId 幂等，走 UserProfile.processedTransactionIds）
+message ApiInternalTransfer {
+  int64 fromUid = 1;
+  int64 toUid = 2;
+  int32 currency = 3;
+  int64 amount = 4;
+  int64 transactionId = 5;
+}
+
+// Adjust User Balance Command
+message ApiAdjustUserBalance {
+  int64 uid = 1;
+  int32 currency = 2;
+  int64 amount = 3;
+  int64 transactionId = 4;
+  BalanceAdjustmentType adjustmentType = 5;
+}
+
+message ApiClosePosition {
+  int64 price = 1;
+  int64 size = 2;
+  int64 orderId = 3;
+  OrderAction action = 4;
+  int64 uid = 5;
+  int32 symbol = 6;
+}
+
+// Order Book Request Command
+message ApiOrderBookRequest {
+  int32 symbol = 1;
+  int32 size = 2;
+}
+
+// No Operation Command
+message ApiNop {
+}
+
+// Move Order Command
+message ApiMoveOrder {
+  int64 orderId = 1;
+  int64 newPrice = 2;
+  int64 uid = 3;
+  int32 symbol = 4;
+}
+
+// Cancel Order Command
+message ApiCancelOrder {
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+}
+
+// Add User Command
+message ApiAddUser {
+  int64 uid = 1;
+}
+
+// Reduce Order Command
+message ApiReduceOrder {
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+  int64 reduceSize = 4;
+}
+
+// Suspend User Command
+message ApiSuspendUser {
+  int64 uid = 1;
+}
+
+// Resume User Command
+message ApiResumeUser {
+  int64 uid = 1;
+}
+
+message ApiAdjustLeverage {
+  int64 uid = 1;
+  int32 symbol = 2;
+  int32 leverage = 3;
+}
+
+message ApiAdjustPositionMode {
+  int64 uid = 1;
+  PositionMode positionMode = 2;
+}
+
+message ApiAdjustMargin {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+  int32 currency = 4;
+  int64 amount = 5;
+  MarginMode marginMode = 6;
+}
+
+message ApiAdjustMarkPrice {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 markPrice = 3;
+}
+
+message ApiSettleFundingFees {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  OrderAction action = 3;
+  int64 fundingRate = 4;
+  int64 rateScaleK = 5;
+}
+
+message ApiSettlePNL {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 settlePrice = 3;
+}
+
+message ApiResetFee {
+}
+
+// 强平/IF/ADL 经 raft 复制到所有节点 FSM apply，避免 follower 与 leader 状态分叉。
+message ApiLiquidationOrder {
+  int64 price = 1;
+  int64 size = 2;
+  int64 orderId = 3;
+  OrderAction action = 4;
+  OrderType orderType = 5;
+  int64 uid = 6;
+  int32 symbol = 7;
+}
+
+message ApiIFTakeOver {
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+  OrderAction action = 4;
+  int64 size = 5;
+  int64 price = 6;
+}
+
+message ApiAutoDeleveraging {
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+  OrderAction action = 4;
+  int64 size = 5;
+  int64 price = 6;
+}
+
+// Admin: top up per-symbol Insurance Fund pool, denominated in the symbol's quote-currency scale.
+message ApiInsuranceFundDeposit {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 currencyAmount = 3;
+  int32 shardId = 4;
+}
+
+// Admin: withdraw from per-symbol Insurance Fund available pool on a specific shard.
+// currencyAmount 用 quote-currency scale。available 不足返回 RISK_IF_INSUFFICIENT。
+message ApiInsuranceFundWithdraw {
+  int64 transactionId = 1;
+  int32 symbol = 2;
+  int64 currencyAmount = 3;
+  int32 shardId = 4;
+}
+
+// ============================================================================
+// Loan（现货借贷，详见 loan.md §5）——
+//   transactionId：幂等 key（走 UserProfile.processedTransactionIds）
+//   loanId：业务主键，per-user 唯一，Isolated / Cross 命名空间独立
+//   scale：所有金额都在 currency scale（跟 CoreCurrencySpecification.digit 一致）
+// ============================================================================
+
+// LOAN_CREATE：单笔 Isolated loan 建仓（详见 loan.md §5.2）。
+// symbol 指现货 pair 的 symbolId，服务器端反推 collateralCcy = spec.baseCurrency / loanCcy = spec.quoteCurrency。
+message ApiLoanCreate {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int64 loanId = 3;
+  int32 symbol = 4;
+  int64 collateralAmount = 5;
+  int64 principal = 6;
+  int32 rateMode = 7;               // 0=LOCKED(Fixed，默认) / 1=FLOATING(Flexible)，见 loan.md §13.2
+}
+
+// LOAN_REPAY：Isolated 还款（详见 loan.md §5.3）。repayAmount=0 表示 payoff 全部本息。
+message ApiLoanRepay {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int64 loanId = 3;
+  int64 repayAmount = 4;
+}
+
+// LOAN_ADD_COLLATERAL：Isolated 补抵押降 LTV（详见 loan.md §5.4）。
+message ApiLoanAddCollateral {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int64 loanId = 3;
+  int64 amount = 4;
+}
+
+// LOAN_RELEASE_COLLATERAL：Isolated 减抵押；减后 LTV < 强平线才允许（详见 loan.md §5.5）。
+message ApiLoanReleaseCollateral {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int64 loanId = 3;
+  int64 amount = 4;
+}
+
+// LOAN_CROSS_ADD_COLLATERAL：Cross 账户级抵押池增（详见 loan.md §5.6）。
+message ApiLoanCrossAddCollateral {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int32 currency = 3;
+  int64 amount = 4;
+}
+
+// LOAN_CROSS_WITHDRAW_COLLATERAL：Cross 抵押池减；撤后账户级 LTV < 强平线才允许（详见 loan.md §5.7）。
+message ApiLoanCrossWithdrawCollateral {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int32 currency = 3;
+  int64 amount = 4;
+}
+
+// LOAN_CROSS_BORROW：Cross 借新债；共享账户级抵押池（详见 loan.md §5.8）。
+// symbolId 指现货 pair，服务器端反推 loanCcy = spec.quoteCurrency（与 ADD_LOAN/其余 loan 命令口径一致）。
+message ApiLoanCrossBorrow {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int64 loanId = 3;
+  int32 symbolId = 4;
+  int64 principal = 5;
+}
+
+// LOAN_CROSS_REPAY：Cross 还款；逻辑同 Isolated REPAY 但不释放抵押（详见 loan.md §5.9）。
+message ApiLoanCrossRepay {
+  int64 transactionId = 1;
+  int64 uid = 2;
+  int64 loanId = 3;
+  int64 repayAmount = 4;
+}
+
+// POOL_DEPOSIT：借贷池注资（运营）。shardId 承载定向 shard（跟 IF_DEPOSIT 同款 pattern）。
+message ApiPoolDeposit {
+  int32 shardId = 1;
+  int32 currency = 2;
+  int64 amount = 3;
+}
+
+// POOL_WITHDRAW：借贷池提现（运营）。
+message ApiPoolWithdraw {
+  int32 shardId = 1;
+  int32 currency = 2;
+  int64 amount = 3;
+}
+
+// LOAN_IF_DEPOSIT：借贷保险基金（LIF）注资（运营）。
+message ApiLoanIfDeposit {
+  int32 shardId = 1;
+  int32 currency = 2;
+  int64 amount = 3;
+}
+
+// LOAN_IF_WITHDRAW：借贷保险基金（LIF）提取（运营，处置接管来的抵押库存）。
+message ApiLoanIfWithdraw {
+  int32 shardId = 1;
+  int32 currency = 2;
+  int64 amount = 3;
+}
+
+// LOAN_FORCE_LIQUIDATE：Isolated 强平（scanner 内部触发；详见 loan.md §7.5）。
+// symbol 指现货 pair 的 symbolId（base=collateralCcy, quote=loanCcy）；orderId 走 LoanService 独立编码
+// （顶字节 'L'，跟 futures 强平 orderId 编码空间隔离）。size 是要卖的 collateral 量，price 是 IOC 限价。
+message ApiLoanForceLiquidate {
+  int64 uid = 1;
+  int32 symbol = 2;
+  int64 loanId = 3;
+  int64 price = 4;
+  int64 size = 5;
+  int64 orderId = 6;
+  OrderAction action = 7;
+  OrderType orderType = 8;
+}
+
+// LOAN_CROSS_FORCE_LIQUIDATE：Cross 账户级强平（scanner 触发；详见 loan.md §7.6）。
+// symbol 指现货 pair (base=sellingCcy, quote=targetLoanCcy)；targetLoanId 是要偿还的 Cross loan。
+message ApiLoanCrossForceLiquidate {
+  int64 uid = 1;
+  int32 symbol = 2;
+  int64 targetLoanId = 3;
+  int64 price = 4;
+  int64 size = 5;
+  int64 orderId = 6;
+  OrderAction action = 7;
+  OrderType orderType = 8;
+}
+
+// REPRICE_LOAN_RATES：动态利率周期重定价（scanner 每 shard0 周期触发，走 raft 复制；详见 loan.md §13.3）。无 payload。
+message ApiRepriceLoanRates {
+}
+
+// LIQUIDATION_SCAN：周期性全量强平扫描（定时器 shard0 触发，走 raft 复制在各节点 on-lane 检测）。无 payload。
+message ApiLiquidationScan {
+  // 轮转扫描分片：本次扫 uid % slice_count == scan_slice 的用户。slice_count <= 0 表示整扫（旧日志）。
+  int32 scan_slice = 1;
+  int32 slice_count = 2;
+}
+
+// Union type for all API commands
+message ApiCommand {
+  reserved 38;  // 曾用 pool_absorb_bad_debt，badDebt 已废除（loan.md §18.8），勿复用
+  reserved "pool_absorb_bad_debt";
+
+  int64 timestamp = 1;
+  oneof command {
+    ApiBinaryDataCommand binary_data = 2;
+    ApiPlaceOrder place_order = 3;
+    ApiAdjustUserBalance adjust_balance = 4;
+    ApiClosePosition close_position = 5;
+    ApiOrderBookRequest order_book_request = 6;
+    ApiNop nop = 7;
+    ApiMoveOrder move_order = 8;
+    ApiCancelOrder cancel_order = 9;
+    ApiAddUser add_user = 10;
+    ApiReduceOrder reduce_order = 11;
+    ApiSuspendUser suspend_user = 12;
+    ApiResumeUser resume_user = 13;
+    ApiAdjustLeverage adjust_leverage = 14;
+    ApiAdjustPositionMode adjust_position_mode = 15;
+    ApiAdjustMargin adjust_margin = 16;
+    ApiAdjustMarkPrice adjust_markprice = 17;
+    ApiSettleFundingFees settle_funding_fees = 18;
+    ApiSettlePNL settle_pnl = 19;
+    ApiResetFee reset_fee = 20;
+    ApiLiquidationOrder liquidation_order = 21;
+    ApiIFTakeOver if_takeover = 22;
+    ApiAutoDeleveraging auto_deleveraging = 23;
+    ApiInsuranceFundDeposit insurance_fund_deposit = 24;
+    ApiInsuranceFundWithdraw insurance_fund_withdraw = 25;
+    ApiLoanCreate loan_create = 26;
+    ApiLoanRepay loan_repay = 27;
+    ApiLoanAddCollateral loan_add_collateral = 28;
+    ApiLoanReleaseCollateral loan_release_collateral = 29;
+    ApiLoanCrossAddCollateral loan_cross_add_collateral = 30;
+    ApiLoanCrossWithdrawCollateral loan_cross_withdraw_collateral = 31;
+    ApiLoanCrossBorrow loan_cross_borrow = 32;
+    ApiLoanCrossRepay loan_cross_repay = 33;
+    ApiPoolDeposit pool_deposit = 34;
+    ApiPoolWithdraw pool_withdraw = 35;
+    ApiLoanForceLiquidate loan_force_liquidate = 36;
+    ApiLoanCrossForceLiquidate loan_cross_force_liquidate = 37;
+    ApiRepriceLoanRates reprice_loan_rates = 39;
+    ApiLiquidationScan liquidation_scan = 40;
+    ApiInternalTransfer internal_transfer = 41;
+    ApiLoanIfDeposit loan_if_deposit = 42;
+    ApiLoanIfWithdraw loan_if_withdraw = 43;
+  }
+}
+
+
+// ==================== Batch / Binary Data Commands ====================
+
+enum BinaryCommandType {
+  BINARY_COMMAND_TYPE_UNSPECIFIED = 0;
+  ADD_ACCOUNTS = 1002;
+  ADD_SYMBOLS = 1003;
+  ADD_CURRENCIES = 1004;
+  ADD_LOAN = 1005;
+}
+
+message BatchAddAccountsCommand {
+  map<int64, AccountBalanceMap> users = 1;
+}
+
+message AccountBalanceMap {
+  // <currency, balance> in RiskEngine
+  map<int32, int64> balances = 1;
+}
+
+message BatchAddSymbolsCommand {
+  map<int32, CoreSymbolSpecification> symbols = 1;
+}
+
+message BatchAddCurrenciesCommand {
+  map<int32, CoreCurrencySpecification> currencies = 1;
+}
+
+// Spot Loan Config (per-symbol)
+message SpotLoanConfig {
+  int32 symbolId = 1;
+  int32 loanInitialLtvBps = 2;   // 0 = 关闭 loan
+  reserved 3, 4, 5, 6, 7, 8;
+}
+
+// Spot Loan Global Config
+message SpotLoanGlobalConfig {
+  int32 numeraireCcy = 1;
+  int32 crossLiquidationLtvBps = 2;
+  int32 crossMarginCallLtvBps = 3;
+  int32 loanPoolUtilizationCapBps = 4;
+  int32 loanLiquidationFeeBps = 5;
+}
+
+enum SpotLoanRatePreset {
+  RATE_PRESET_UNSPECIFIED = 0;   // 视为 STANDARD
+  RATE_PRESET_CONSERVATIVE = 1;
+  RATE_PRESET_STANDARD = 2;
+  RATE_PRESET_AGGRESSIVE = 3;
+}
+
+// Spot Loan Rate Curve Config
+message SpotLoanRateCurveConfig {
+  SpotLoanRatePreset preset = 1;
+}
+
+// Add Loan Command
+message BatchAddLoanCommand {
+  SpotLoanGlobalConfig global = 1;
+  SpotLoanConfig symbol = 2;
+  SpotLoanRateCurveConfig rateCurve = 3;
+}
+
+message BinaryDataCommand {
+  reserved 4, 5;
+  oneof command {
+    BatchAddAccountsCommand add_accounts = 1;
+    BatchAddSymbolsCommand add_symbols = 2;
+    BatchAddCurrenciesCommand add_currencies = 3;
+    BatchAddLoanCommand add_loan = 6;
+  }
+}
+
+//只是请求Node列表 似乎也不需要有什么字段
+message NodeListCommand {
+
+}

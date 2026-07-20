@@ -1,0 +1,359 @@
+/*
+ * Copyright 2019 Maksim Zheravin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package exchange.core2.tests.util;
+
+import com.google.common.collect.Sets;
+import exchange.core2.core.common.CoreSymbolSpecification;
+import exchange.core2.core.common.SymbolType;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
+
+import java.util.HashSet;
+import java.util.Set;
+
+public final class TestConstants {
+
+    public static final int BASE_CURRENCY_ID = 1;
+    public static final int SYMBOL_MARGIN = 5991;
+    public static final int SYMBOL_EXCHANGE = 9269;
+    public static final int SYMBOL_EXCHANGE_FEE = 9340;
+    public static final int SYMBOL_MARGIN_FEE = 9341;
+    public static final int SYMBOL_ETH_MARGIN_FEE = 9341;
+
+    public static final long UID_1 = 1440001;
+    public static final long UID_2 = 1440002;
+    public static final long UID_3 = 1440003;
+    public static final long UID_4 = 1440004;
+    public static final long UID_5 = 1440005;
+    public static final long UID_6 = 1440006;
+    public static final long UID_7 = 1440007;
+    public static final long UID_8 = 1440008;
+    public static final long UID_9 = 1440008;
+    public static final long UID_10 = 1440008;
+
+    public static final long MAKER_1 = 13000L;
+    public static final long MAKER_2 = 13001L;
+    public static final long MAKER_3 = 13002L;
+    public static final long MAKER_4 = 13003L;
+    public static final long MAKER_5 = 13004L;
+    public static final long MAKER_6 = 13005L;
+    public static final long MAKER_7 = 13006L;
+    public static final long MAKER_8 = 13007L;
+    public static final long MAKER_9 = 13008L;
+    public static final long MAKER_10 = 13010L;
+    public static final long MAKER_11 = 13011L;
+    public static final long MAKER_12 = 13012L;
+    public static final long MAKER_13 = 13013L;
+    public static final long MAKER_14 = 13014L;
+    public static final long MAKER_15 = 13015L;
+    public static final long MAKER_16 = 13016L;
+    public static final long MAKER_17 = 13017L;
+    public static final long MAKER_18 = 13018L;
+    public static final long MAKER_19 = 13019L;
+    public static final long MAKER_20 = 13020L;
+    public static final long TAKER_1 = 14000L;
+    public static final long TAKER_2 = 14001L;
+    public static final long TAKER_3 = 14002L;
+    public static final long TAKER_4 = 14003L;
+    public static final long TAKER_5 = 14004L;
+    public static final long TAKER_6 = 14005L;
+    public static final long TAKER_7 = 14006L;
+    public static final long TAKER_8 = 14007L;
+    public static final long TAKER_9 = 14008L;
+    public static final long TAKER_10 = 14010L;
+    public static final long TAKER_11 = 14011L;
+    public static final long TAKER_12 = 14012L;
+    public static final long TAKER_13 = 14013L;
+    public static final long TAKER_14 = 14014L;
+    public static final long TAKER_15 = 14015L;
+    public static final long TAKER_16 = 14016L;
+    public static final long TAKER_17 = 14017L;
+    public static final long TAKER_18 = 14018L;
+    public static final long TAKER_19 = 14019L;
+    public static final long TAKER_20 = 14020L;
+    public static final long UPDATE_PRICE_USER1 = 19000L;
+    public static final long UPDATE_PRICE_USER2 = 19001L;
+    public static final Set<Long> ALL_USERS = Sets.newHashSet(
+            UID_1,
+            UID_2,
+            UID_3,
+            UID_4,
+            UID_5,
+            UID_6,
+            UID_7,
+            UID_8,
+            UID_9,
+            UID_10,
+            MAKER_1,
+            MAKER_2,
+            MAKER_3,
+            MAKER_4,
+            MAKER_5,
+            MAKER_6,
+            MAKER_7,
+            MAKER_8,
+            MAKER_9,
+            MAKER_10,
+            MAKER_11,
+            MAKER_12,
+            MAKER_13,
+            MAKER_14,
+            MAKER_15,
+            MAKER_16,
+            MAKER_17,
+            MAKER_18,
+            MAKER_19,
+            MAKER_20,
+            TAKER_1,
+            TAKER_2,
+            TAKER_3,
+            TAKER_4,
+            TAKER_5,
+            TAKER_6,
+            TAKER_7,
+            TAKER_8,
+            TAKER_9,
+            TAKER_10,
+            TAKER_11,
+            TAKER_12,
+            TAKER_13,
+            TAKER_14,
+            TAKER_15,
+            TAKER_16,
+            TAKER_17,
+            TAKER_18,
+            TAKER_19,
+            TAKER_20,
+            UPDATE_PRICE_USER1,
+            UPDATE_PRICE_USER2
+    );
+
+    public static final long MAX_VALUE = 4000000L;
+
+    public static final int SYMBOL_AUTOGENERATED_RANGE_START = 40000;
+
+    public static final int CURRENECY_AUD = 36;
+    public static final int CURRENECY_BRL = 986;
+    public static final int CURRENECY_CAD = 124;
+    public static final int CURRENECY_CHF = 756;
+    public static final int CURRENECY_CNY = 156;
+    public static final int CURRENECY_CZK = 203;
+    public static final int CURRENECY_DKK = 208;
+    public static final int CURRENECY_EUR = 978;
+    public static final int CURRENECY_GBP = 826;
+    public static final int CURRENECY_HKD = 344;
+    public static final int CURRENECY_JPY = 392;
+    public static final int CURRENECY_KRW = 410;
+    public static final int CURRENECY_MXN = 484;
+    public static final int CURRENECY_MYR = 458;
+    public static final int CURRENECY_NOK = 578;
+    public static final int CURRENECY_NZD = 554;
+    public static final int CURRENECY_PLN = 985;
+    public static final int CURRENECY_RUB = 643;
+    public static final int CURRENECY_SEK = 752;
+    public static final int CURRENECY_SGD = 702;
+    public static final int CURRENECY_THB = 764;
+    public static final int CURRENECY_TRY = 949;
+    public static final int CURRENECY_UAH = 980;
+    public static final int CURRENECY_USD = 840;
+    public static final int CURRENECY_VND = 704;
+    public static final int CURRENECY_XAG = 961;
+    public static final int CURRENECY_XAU = 959;
+    public static final int CURRENECY_ZAR = 710;
+
+    public static final int CURRENECY_XBT = 3762; // satoshi, 1E-8
+    public static final int CURRENECY_ETH = 3928; // szabo, 1E-6
+    public static final int CURRENECY_LTC = 4141; // litoshi, 1E-8
+    public static final int CURRENECY_XDG = 4142;
+    public static final int CURRENECY_GRC = 4143;
+    public static final int CURRENECY_XPM = 4144;
+    public static final int CURRENECY_XRP = 4145;
+    public static final int CURRENECY_DASH = 4146;
+    public static final int CURRENECY_XMR = 4147;
+    public static final int CURRENECY_XLM = 4148;
+    public static final int CURRENECY_ETC = 4149;
+    public static final int CURRENECY_ZEC = 4150;
+
+
+    public static final Set<Integer> CURRENCIES_FUTURES = Sets.newHashSet(
+            CURRENECY_USD,
+            CURRENECY_EUR);
+
+    public static final Set<Integer> CURRENCIES_EXCHANGE = Sets.newHashSet(
+            CURRENECY_ETH,
+            CURRENECY_XBT);
+
+
+    public static final Set<Integer> ALL_CURRENCIES = Sets.newHashSet(
+            CURRENECY_AUD,
+            CURRENECY_BRL,
+            CURRENECY_CAD,
+            CURRENECY_CHF,
+            CURRENECY_CNY,
+            CURRENECY_CZK,
+            CURRENECY_DKK,
+            CURRENECY_EUR,
+            CURRENECY_GBP,
+            CURRENECY_HKD,
+            CURRENECY_JPY,
+            CURRENECY_KRW,
+            CURRENECY_MXN,
+            CURRENECY_MYR,
+            CURRENECY_NOK,
+            CURRENECY_NZD,
+            CURRENECY_PLN,
+            CURRENECY_RUB,
+            CURRENECY_SEK,
+            CURRENECY_SGD,
+            CURRENECY_THB,
+            CURRENECY_TRY,
+            CURRENECY_UAH,
+            CURRENECY_USD,
+            CURRENECY_VND,
+            CURRENECY_XAG,
+            CURRENECY_XAU,
+            CURRENECY_ZAR,
+
+            CURRENECY_XBT,
+            CURRENECY_ETH,
+            CURRENECY_LTC,
+            CURRENECY_XDG,
+            CURRENECY_GRC,
+            CURRENECY_XPM,
+            CURRENECY_XRP,
+            CURRENECY_DASH,
+            CURRENECY_XMR,
+            CURRENECY_XLM,
+            CURRENECY_ETC,
+            CURRENECY_ZEC);
+
+    public static final CoreSymbolSpecification SYMBOLSPEC_EUR_USD = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_MARGIN)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+            .baseCurrency(CURRENECY_EUR)
+            .quoteCurrency(CURRENECY_USD)
+            .baseScaleK(1)
+            .quoteScaleK(1)
+//            .marginBuy(2200)
+//            .marginSell(3210)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+            .takerFee(0)
+            .makerFee(0)
+            .build();
+
+    public static final CoreSymbolSpecification SYMBOLSPECFEE_USD_JPY = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_MARGIN)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+            .baseCurrency(CURRENECY_USD)
+            .quoteCurrency(CURRENECY_JPY)
+            .baseScaleK(1_000_00) // 1K USD "micro" lot
+            .quoteScaleK(10) // 10 JPY step
+            .initMargin(1)
+            .initMarginScaleK(21)
+//            .marginBuy(5_000) // effective leverage ~21
+//            .marginSell(6_000) // effective leverage ~18
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+            .takerFee(3)
+            .makerFee(2)
+            .build();
+
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_XBT_USD = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_MARGIN_FEE)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+            .baseCurrency(1)
+            .quoteCurrency(CURRENECY_USD)
+            .baseScaleK(1)
+            .quoteScaleK(1)
+            .initMargin(1)
+            .initMarginScaleK(100)
+            .takerFee(2)
+            .makerFee(1)
+            .feeScaleK(100)
+//            .maintenanceMargin(1000L)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+            .build();
+
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_ETH_USD = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_ETH_MARGIN_FEE)
+            .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+            .baseCurrency(2)
+            .quoteCurrency(CURRENECY_USD)
+            .baseScaleK(1)
+            .quoteScaleK(1)
+            .initMargin(1)
+            .initMarginScaleK(200)
+//            .marginBuy(200)
+//            .marginSell(200)
+            .takerFee(3)
+            .makerFee(2)
+            .feeScaleK(100)
+//            .maintenanceMargin(1000L)
+//            .maxLeverage(50)
+            .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+            .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+            .build();
+
+    public static final CoreSymbolSpecification SYMBOLSPEC_ETH_XBT = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_EXCHANGE)
+            .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(CURRENECY_ETH)    // base = szabo
+            .quoteCurrency(CURRENECY_XBT)   // quote = satoshi
+            .baseScaleK(1)            // 1 lot = 100K szabo (0.1 ETH)
+            .quoteScaleK(1)                // 1 step = 10 satoshi
+            .takerFee(0)
+            .makerFee(0)
+            .build();
+
+    // symbol with fees
+    public static final CoreSymbolSpecification SYMBOLSPECFEE_XBT_LTC = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_EXCHANGE_FEE)
+            .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(CURRENECY_XBT)    // base = satoshi
+            .quoteCurrency(CURRENECY_LTC)   // quote = litoshi
+            .baseScaleK(1_000_000)          // 1 lot = 1M satoshi (0.01 BTC)
+            .quoteScaleK(10_000)            // 1 step = 10K litoshi
+            .takerFee(1900)                 // taker fee 1900 litoshi per 1 lot
+            .makerFee(700)                  // maker fee 700 litoshi per 1 lot
+            .build();
+
+    public static final CoreSymbolSpecification SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC = CoreSymbolSpecification.builder()
+            .symbolId(SYMBOL_EXCHANGE_FEE)
+            .type(SymbolType.CURRENCY_EXCHANGE_PAIR)
+            .baseCurrency(CURRENECY_XBT)    // base = satoshi
+            .quoteCurrency(CURRENECY_LTC)   // quote = litoshi
+            .baseScaleK(1)          // 1 lot = 1M satoshi (0.01 BTC)
+            .quoteScaleK(1)            // 1 step = 10K litoshi
+            .takerFee(2)
+            .makerFee(1)
+            .feeScaleK(100)               // taker 1%, maker 2% fee rate
+            .build();
+
+    public static int getCurrency(String currency) {
+
+        switch (currency) {
+            case "USD":
+                return CURRENECY_USD;
+            case "XBT":
+                return CURRENECY_XBT;
+            case "ETH":
+                return CURRENECY_ETH;
+        }
+
+        throw new RuntimeException("Unknown currency [" + currency + "]");
+    }
+}
