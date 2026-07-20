@@ -188,55 +188,6 @@ public final class OrderCommand implements IOrder {
     }
 
     /**
-     * 是否会在 R2 产生延迟副作用
-     * @return
-     */
-    public boolean hasR2SideEffect() {
-        return command == OrderCommandType.PLACE_ORDER || command == OrderCommandType.CANCEL_ORDER ||
-                command == OrderCommandType.REDUCE_ORDER || command == OrderCommandType.CLOSE_POSITION ||
-                command == OrderCommandType.FORCE_LIQUIDATION || command == OrderCommandType.IF_TAKEOVER ||
-                command == OrderCommandType.AUTO_DELEVERAGING || command == OrderCommandType.SETTLE_FUNDINGFEES;
-    }
-
-    /**
-     * 执行前是否必须看到最终 R2（uid,symbol 级别指令）
-     * @return
-     */
-    public boolean needSyncR2ForUidSymbol() {
-        return (command == OrderCommandType.PLACE_ORDER && isReduceOnly()) ||
-                command == OrderCommandType.CLOSE_POSITION ||
-                command == OrderCommandType.LEVERAGE_ADJUSTMENT ||
-                command == OrderCommandType.MARGIN_ADJUSTMENT ||
-                command == OrderCommandType.FORCE_LIQUIDATION ||
-                command == OrderCommandType.IF_TAKEOVER;
-    }
-
-    /**
-     * 执行前是否必须看到最终 R2（symbol 级别指令）。
-     * <p>
-     * AUTO_DELEVERAGING 在此：ADL 的 R1(collectInput) 要挑该 symbol 上的盈利对手接盘，必须先冲完本 shard R2 才能读到对手
-     * 的最终仓位，否则会挑中"已在 R1→R2 间被平掉、R2 尚未 apply"的 stale 对手，到 R2 扑空 → 跨 shard over-close / OI 泄漏。
-     */
-    public boolean needSyncR2ForSymbol() {
-        return command == OrderCommandType.MARKPRICE_ADJUSTMENT ||
-                command == OrderCommandType.SETTLE_FUNDINGFEES ||
-                command == OrderCommandType.SETTLE_PNL ||
-                command == OrderCommandType.AUTO_DELEVERAGING;
-    }
-
-    /**
-     * 执行前是否必须看到最终 R2（全局级指令，非 symbol/uid 键控）。
-     * <p>
-     * REPRICE_LOAN_RATES 在此：R1(collectInput) 读跨 shard 聚合的按币种 loan 池算利用率，而池在 R2 被强平结算
-     * （settleLiquidationProceeds / takeOverCrossLoan，来自任意 symbol）改写。若前序 R2 未冲完就读，会读到强平前的
-     * 中间池值——batch 边界随 wall-clock 漂移使各副本读到不同值 → util → 利率 → 累加器永久分叉。故须独占 group、
-     * 组边界同步 flush 前组全部 R2 再跑 R1。全局读，无法用 symbol/uid 键控的 {@link #needSyncR2ForSymbol}。
-     */
-    public boolean needSyncR2Global() {
-        return command == OrderCommandType.REPRICE_LOAN_RATES;
-    }
-
-    /**
      * Handles full MatcherTradeEvent chain, without removing/revoking them
      *
      * @param handler - MatcherTradeEvent handler

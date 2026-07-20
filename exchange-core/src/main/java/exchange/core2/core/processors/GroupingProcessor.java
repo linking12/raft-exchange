@@ -179,7 +179,7 @@ public final class GroupingProcessor implements EventProcessor {
                         }
 
                         // 读全局 R2 改动态（loan pool 等）的命令须独占 group：组边界同步冲完前组 R2，R1 才读到确定值
-                        if (cmd.needSyncR2Global()) {
+                        if (R2Sync.needSyncR2Global(cmd)) {
                             groupCounter++;
                             msgsInGroup = 0;
                         }
