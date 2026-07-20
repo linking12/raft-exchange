@@ -1,0 +1,272 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs.report;
+
+option java_package = "com.binance.raftexchange.stubs.report";
+option java_multiple_files = true;
+
+import "message/common.proto";
+
+// Report Type Enum
+enum ReportType {
+  REPORT_TYPE_INVALID = 0; // proto3 enum必须从0开始
+  STATE_HASH = 10001;
+  SINGLE_USER_REPORT = 10002;
+  TOTAL_CURRENCY_BALANCE = 10003;
+  SYMBOL_CURRENCY_REPORT = 10004;
+  FEE_REPORT = 10005;
+  INSURANCE_FUND = 10006;
+  LOAN_PLATFORM = 10007;
+}
+
+// Base Report Query Message
+message ReportQuery {
+  int32 transfer_id = 1;
+  oneof type {
+    SingleUserReportQuery single_user_report = 2;
+    StateHashReportQuery state_hash = 3;
+    TotalCurrencyBalanceReportQuery total_currency_balance = 4;
+    SymbolCurrencyReportQuery symbol_currency_report = 5;
+    FeeReportQuery fee_report = 6;
+    InsuranceFundReportQuery insurance_fund = 7;
+    LoanPlatformReportQuery loan_platform = 8;
+  }
+}
+
+// Single User Report Query
+message SingleUserReportQuery {
+  int64 user_id = 1;
+}
+
+// State Hash Report Query
+message StateHashReportQuery {
+}
+
+// Total Currency Balance Report Query
+message TotalCurrencyBalanceReportQuery {
+}
+
+// Symbol Currency Report Query
+message SymbolCurrencyReportQuery {
+}
+
+// Fee Report Query
+message FeeReportQuery {
+}
+
+// 保险基金查询（期货 IF + 借贷 LIF，无参数）
+message InsuranceFundReportQuery {
+}
+
+// 借贷平台侧账本查询（无参数）
+message LoanPlatformReportQuery {
+}
+
+// Base Report Result Message
+message ReportResult {
+  oneof result {
+    SingleUserReportResult single_user_report = 1;
+    StateHashReportResult state_hash = 2;
+    TotalCurrencyBalanceReportResult total_currency_balance = 3;
+    SymbolCurrencyReportResult symbol_currency_report = 4;
+    FeeReportResult fee_report = 5;
+    InsuranceFundReportResult insurance_fund = 6;
+    LoanPlatformReportResult loan_platform = 7;
+  }
+}
+
+enum UserStatus {
+  ACTIVE = 0; // normal user
+  SUSPENDED = 1;
+}
+
+message Position {
+  int32 quote_currency = 1;
+  PositionDirection direction = 2;
+  int64 open_volume = 3;
+  int64 open_init_margin_sum = 4;
+  int64 open_price_sum = 5;
+  int64 profit = 6;
+  int64 pending_sell_size = 7;
+  int64 pending_buy_size = 8;
+  int64 pending_sell_avg_price = 9;
+  int64 pending_buy_avg_price = 10;
+  int32 leverage = 11;
+  MarginMode margin_mode = 12;
+  int64 extra_margin = 13;
+  int64 unrealized_profit = 14;
+  int64 liquidation_price = 15;
+  int64 margin_ratio_scale_k = 16;
+  int64 mark_price = 17;
+}
+
+message PositionList {
+  repeated Position positions = 1;
+}
+
+message Order {
+  int64 order_id = 1;
+  int64 price = 2;
+  int64 size = 3;
+  int64 filled = 4;
+  int64 reserve_bid_price = 5;
+  OrderAction action = 6;
+  int64 uid = 7;
+  int64 timestamp = 8;
+}
+
+message OrderList {
+  repeated Order orders = 1;
+}
+
+// 现货借贷 Isolated 逐仓 loan：抵押与本笔 1:1 绑定，带 per-loan 实时 LTV
+message IsolatedLoan {
+  int64 loan_id = 1;
+  int32 symbol_id = 2;
+  int32 collateral_currency = 3;
+  int32 loan_currency = 4;
+  int32 rate_bps = 5;
+  int64 opened_at_ts = 6;
+  int64 collateral_amount = 7;
+  int64 outstanding_principal = 8;
+  int64 accumulated_interest = 9;
+  int64 display_interest = 10; // 含未落账 pending 利息
+  int64 ltv_bps = 11;          // spec/markPrice 缺失时为 0（不可信）
+  int64 mark_price = 12;       // 0 = 喂价缺失
+}
+
+// 现货借贷 Cross 全仓 loan：抵押账户级共享（见 cross_loan_collateral / cross_account_ltv_bps），单笔无 LTV
+message CrossLoan {
+  int64 loan_id = 1;
+  int32 symbol_id = 2;
+  int32 loan_currency = 3;
+  int32 rate_bps = 4;
+  int64 opened_at_ts = 5;
+  int64 outstanding_principal = 6;
+  int64 accumulated_interest = 7;
+  int64 display_interest = 8;
+}
+
+enum QueryExecutionStatus {
+  OK = 0;
+  USER_NOT_FOUND = 1;
+}
+
+// Single User Report Result
+message SingleUserReportResult {
+  int64 user_id = 1;
+  UserStatus user_status = 2;
+  map<int32, int64> accounts = 3;
+  map<int32, PositionList> positions = 4;
+  map<int32, OrderList> orders = 5;
+  QueryExecutionStatus query_execution_status = 6;
+  map<int32, int64> exchange_locked = 7;
+  repeated IsolatedLoan isolated_loans = 8;
+  repeated CrossLoan cross_loans = 9;
+  map<int32, int64> cross_loan_collateral = 10; // Cross 账户级抵押池 currency -> 数量
+  int64 cross_account_ltv_bps = 11;              // Cross 账户级 LTV（numeraire 未配/无 cross loan → 0）
+}
+
+enum SubmoduleType {
+  RISK_SYMBOL_SPEC_PROVIDER = 0;
+  RISK_USER_PROFILE_SERVICE = 1;
+  RISK_BINARY_CMD_PROCESSOR = 2;
+  RISK_LAST_PRICE_CACHE = 3;
+  RISK_FEES = 4;
+  RISK_ADJUSTMENTS = 5;
+  RISK_SUSPENDS = 6;
+  RISK_SHARD_MASK = 7;
+  RISK_IF_SERVICE = 8;
+  MATCHING_BINARY_CMD_PROCESSOR = 64;
+  MATCHING_ORDER_BOOKS = 65;
+  MATCHING_SHARD_MASK = 66;
+}
+
+message SubmoduleKey {
+  int32 module_id = 1;
+  SubmoduleType submodule_type = 2;
+}
+
+message HashCodeEntry {
+  SubmoduleKey key = 1;
+  int32 value = 2;
+}
+
+// State Hash Report Result
+message StateHashReportResult {
+  repeated HashCodeEntry hash_codes = 1;
+}
+
+// Total Currency Balance Report Result
+message TotalCurrencyBalanceReportResult {
+  map<int32, int64> account_balances = 1;
+  map<int32, int64> fees = 2;
+  map<int32, int64> adjustments = 3;
+  map<int32, int64> suspends = 4;
+  reserved 5;
+  reserved "orders_balances";
+  map<int32, int64> open_interest_long = 6;
+  map<int32, int64> open_interest_short = 7;
+  map<int32, int64> if_balances = 8;
+  map<int32, int64> if_open_interest_long = 9;
+  map<int32, int64> if_open_interest_short = 10;
+  map<int32, int64> extra_margin = 11;
+  map<int32, int64> exchange_locked = 12;
+  // loan 平台桶 = 池可用 + 利息收入 + LIF，均平台持有现金，参与全局对账。
+  // 不含 loanPoolBorrowed —— 那是追踪器，对应的钱已在借款人 account_balances 里。
+  map<int32, int64> loan_balances = 15;
+  // currency id -> spec（含 name）。仅展示用，对账/state hash 不依赖。
+  map<int32, CoreCurrencySpecification> currency_specs = 13;
+  // symbol id -> spec（含 base/quote currency），给 open_interest_* 翻译可读名用。
+  map<int32, CoreSymbolSpecification> symbol_specs = 14;
+}
+
+message SymbolCurrencyReportResult {
+  map<int32, CoreSymbolSpecification> symbolSpecs = 1;
+  map<int32, CoreCurrencySpecification> currencySpecs = 2;
+}
+
+// Fee Report Result
+// currency -> 跨所有 shard 聚合后的 totalFee（= riskEngine.getFees() 跨 shard mergeSum）。
+// 与 TotalCurrencyBalanceReportResult.fees 同源同口径，不参与对账方程。
+message FeeReportResult {
+  map<int32, int64> fees = 1;
+  // currency id -> spec（含 name），仅展示用
+  map<int32, CoreCurrencySpecification> currency_specs = 2;
+}
+
+// 两个保险基金池的 per-shard 明细，一次查询覆盖。
+message InsuranceFundReportResult {
+  // shardId -> 该 shard 的两池明细
+  map<int32, InsuranceFundPerShard> by_shard = 1;
+}
+
+message InsuranceFundPerShard {
+  // 期货 IF：symbolId -> 现金 + 接管仓位 MtM（quote-currency scale）
+  map<int32, FuturesIfEntry> futures_insurance_fund = 1;
+  // 借贷 LIF：currency -> 余额（currency scale）。可为负——负值即平台已垫资额，非损失
+  map<int32, int64> loan_insurance_fund = 2;
+  // symbolId -> markPrice 最后更新时间（引擎命令时间戳）。喂价中断的唯一可观测信号：
+  // 引擎不据此改变行为，由外部监控比对当前时间判陈旧并告警。从未喂过价的 symbol 不在此 map 中。
+  // symbolId -> markPrice 最后更新时间：期货是喂价时间，现货是最后成交时间。
+  // 价格陈旧的唯一可观测信号，引擎不据此改变行为；从未有过价格的 symbol 不在此 map 中。
+  map<int32, int64> mark_price_ts = 3;
+}
+
+message FuturesIfEntry {
+  int64 available = 1;       // IF 现金余额
+  int64 position_value = 2;  // IF 接管仓位 mark-to-market
+}
+
+// 借贷平台侧账本的 per-shard × per-currency 明细。
+message LoanPlatformReportResult {
+  // shardId -> 该 shard 的 loan 平台桶
+  map<int32, LoanPlatformPerShard> by_shard = 1;
+}
+
+message LoanPlatformPerShard {
+  map<int32, int64> interest_revenue = 1;      // 累计利息收入
+  map<int32, int64> loan_insurance_fund = 2;   // LIF 余额，可为负
+  map<int32, int64> pool_available = 3;        // 借贷池可借余额
+  map<int32, int64> pool_borrowed = 4;         // 借贷池已借出（= Σ outstandingPrincipal）
+}

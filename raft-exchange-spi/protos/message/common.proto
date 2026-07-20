@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs;
+
+option java_package = "com.binance.raftexchange.stubs";
+option java_multiple_files = true;
+
+
+//@see exchange.core2.core.common.BalanceAdjustmentType
+enum BalanceAdjustmentType {
+  ADJUSTMENT = 0;
+  SUSPEND = 1;//exchange.core2.core.common.api.ApiAdjustUserBalance目前不支持suspend
+}
+
+//@see exchange.core2.core.common.Action
+enum OrderAction {
+  ASK = 0;
+  BID = 1;
+}
+
+//@see exchange.core2.core.common.OrderType
+enum OrderType {
+  GTC = 0;
+  IOC = 1;
+  IOC_BUDGET = 2;
+  FOK = 3;
+  FOK_BUDGET = 4;
+}
+
+//@see exchange.core2.core.common.SymbolType
+enum SymbolType {
+  CURRENCY_EXCHANGE_PAIR = 0;
+  FUTURES_CONTRACT_PERPETUAL = 1;
+  FUTURES_CONTRACT_DELIVERY = 2;
+  OPTION = 3;
+}
+
+enum PositionDirection {
+  EMPTY = 0;
+  LONG = 1;
+  SHORT = 255;  // -1 in byte becomes 255 in unsigned context
+}
+
+enum PositionMode {
+  ONEWAY = 0;
+  HEDGE = 1;
+}
+
+enum MarginMode {
+  ISOLATED = 0;
+  CROSS = 1;
+}
+
+message CoreSymbolSpecification {
+  int32 symbol_id = 1;
+  SymbolType type = 2;
+  int32 base_currency = 3;
+  int32 quote_currency = 4;
+  int64 base_scale_k = 5;
+  int64 quote_scale_k = 6;
+  int64 taker_fee = 7;
+  int64 maker_fee = 8;
+  int64 liquidation_fee = 9;
+  int64 fee_scale_k = 10;
+  int64 init_margin = 11;
+  int64 init_margin_scale_k = 12;
+  map<int64, int64> maintenance_margin = 13;
+  int64 maintenance_margin_scale_k = 14;
+  map<int64, int64> max_leverage = 15;
+}
+
+message CoreCurrencySpecification {
+  int32 id = 1;
+  string name = 2;
+  int32 digit = 3;
+}

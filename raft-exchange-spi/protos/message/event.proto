@@ -1,0 +1,196 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs;
+
+option java_package = "com.binance.raftexchange.stubs";
+option java_multiple_files = true;
+
+import "message/common.proto";
+
+message SpotExecutionReportPB {
+  int64 executionId = 1;
+  ExecType executionType = 2;
+  OrderStatus orderStatus = 3;
+  int32 symbol = 4;
+  int64 baseScaleK = 5;
+  int64 quoteScaleK = 6;
+  int64 accountId = 7;
+  int64 clOrdId = 8;
+  int64 orderId = 9;
+  OrderType orderType = 10;
+  OrderAction side = 11;
+  int64 qty = 12;
+  int64 price = 13;
+  int64 quoteOrderQty = 14;
+  int64 orderCreationTime = 15;
+  int64 tradeId = 16;
+  int64 lastQty = 17;
+  int64 lastPrice = 18;
+  int64 lastQuoteQty = 19;
+  int64 cumulativeQty = 20;
+  int64 cumulativeQuoteQty = 21;
+  int64 commission = 22;
+  int32 commissionAsset = 23;
+  bool isMaker = 24;
+  bool workingIndicator = 25;
+}
+
+enum ExecType {
+  NEW = 0;
+  TRADE = 1;
+  REDUCE = 2;
+  CANCEL = 3;
+  REJECT = 4;
+}
+
+enum OrderStatus {
+  NEWED = 0;
+  PARTIALLY_FILLED = 1;
+  FILLED = 2;
+  CANCELED = 3;
+  REJECTED = 4;
+}
+
+message FuturesExecutionReportPB {
+  int64 uniId = 1;
+  ExecType executionType = 2;
+  OrderStatus orderStatus = 3;
+  int32 symbol = 4;
+  int64 orderQtyScale = 5;
+  int64 priceScale = 6;
+  int64 userId = 7;
+  int64 clOrdId = 8;
+  int64 orderId = 9;
+  OrderType orderType = 10;
+  OrderAction side = 11;
+  int64 counterpartyId = 12;
+  int64 price = 13;
+  int64 orderQty = 14;
+  int64 createTime = 15;
+  int64 execId = 16;
+  SymbolType contractType = 17;
+  PositionMode positionSide = 18;
+  int64 lastQty = 19;
+  int64 lastPx = 20;
+  int64 cumQty = 21;
+  int64 cumQuoteQty = 22;
+  int64 avgPx = 23;
+  int64 fee = 24;
+  int32 feeAssetId = 25;
+  bool isMaker = 26;
+}
+
+message OrderBookRecordPB {
+  int64 price = 1;
+  int64 volume = 2;
+  int32 orders = 3;
+}
+
+// OrderBook message definition
+message OrderBookPB {
+  int32 symbol = 1;
+  repeated OrderBookRecordPB asks = 2;
+  repeated OrderBookRecordPB bids = 3;
+  int64 timestamp = 4;
+  int64 baseScaleK = 5;
+  int64 quoteScaleK = 6;
+}
+
+message FundEventReportPB {
+  int64 accountId = 1;
+  FundEventType eventType = 2;
+  BalanceSnapshot balances = 3;
+  PositionSnapshot positions = 4;
+  LoanSnapshot loan = 5;   // loan 用户维度事件载荷（LOAN_* 事件才有意义）
+}
+
+// loan 用户维度事件快照（非 loan 事件全 0）。字段一律为操作后状态，不含增量；
+// interestPaidTotal 是单调递增的累计量，相邻两条相减即得本次量。
+message LoanSnapshot {
+  reserved 3, 4, 5, 6, 8, 9, 11;  // 曾用字段号，勿复用
+  reserved "outstandingPrincipal", "accumulatedInterest", "collateralAmount", "rateBps", "principalDelta", "collateralDelta", "badDebtTotal";
+
+  int32 mode = 1;                 // 0=Isolated，1=Cross
+
+  // ── 借贷侧：币种/精度/可用/冻结见外层 balances(BalanceSnapshot)，金额按 balances.currencyScaleK 还原
+  int64 debtPrincipal = 16;       // 操作后未偿本金（负债）；放款时已计入 balances.free，勿相加
+  int64 debtInterest = 17;        // 操作后未付利息（负债）
+  int64 interestPaidTotal = 10;   // 本笔贷款累计已付利息（单调递增）
+  int64 ltvBps = 7;               // 操作后 LTV =（未偿本金 + 应计利息）/ 抵押物市值，bps（10000 = 100%）
+  int64 thresholdBps = 12;        // 仅 MARGIN_CALL：触发本次预警的 LTV 阈值（bps）
+
+  // ── 抵押侧：金额按 collateralCurrencyScaleK 还原；Cross 的 BORROW / REPAY 与 MARGIN_CALL 整组为 0。
+  // 抵押币 == 借款币时本组与 balances 指向同一账户，勿重复计入。
+  int32 collateralCurrency = 2;        // Isolated = 该 loan 的抵押币；Cross = 本次操作涉及的抵押币
+  int64 collateralCurrencyScaleK = 13; // 抵押币 scale
+  int64 collateralPledged = 18;        // 操作后已质押抵押物；已含在 collateralLocked 内
+  int64 collateralFree = 14;           // 抵押币账户可用余额
+  int64 collateralLocked = 15;         // 抵押币账户冻结额
+}
+
+message BalanceSnapshot {
+  int32 currency = 1;
+  int64 currencyScaleK = 2;
+  int64 free = 3;
+  int64 locked = 4;
+}
+
+message PositionSnapshot {
+  int32 symbolId = 1;
+  int64 baseScaleK = 2;
+  int64 quoteScaleK = 3;
+  PositionDirection direction = 4;
+  int64 quantity = 5;
+  int64 openPriceSum = 6;
+  int64 cumRealized = 7;
+  bool isolated = 8;
+  int64 isolatedWallet = 9;
+  int32 leverage = 10;
+  int64 openInitMarginSum = 11;
+  int64 markPrice = 12;
+  int64 unrealizedProfit = 13;
+  int64 liquidationPrice = 14;
+  int64 marginRatioScaleK = 15;
+  int64 bidsNotional = 16;
+  int64 asksNotional = 17;
+  int64 bidsQty = 18;
+  int64 asksQty = 19;
+}
+
+enum FundEventType {
+  FUND_EVENT_TYPE_INVALID = 0; // proto3 enum必须从0开始
+
+  DEPOSIT = 1;
+  LOCKED = 2;
+  TRANSFER = 3;
+  UNLOCKED = 4;
+  WITHDRAW = 5;
+
+  LOCK_PENDING = 6;
+  UNLOCK_PENDING = 7;
+  OPEN_POSITION = 8;
+  CLOSE_POSITION = 9;
+  LIQUIDATION_CLOSE = 10;
+  LIQUIDATION_FEE = 11;
+  FUNDINGFEE_SETTLEMENT = 12;
+  PNL_SETTLEMENT = 13;
+  MARGIN_ADJUST = 14;
+  MARGIN_REFUND = 15;
+  IF_POSITION_CLOSE = 16;
+  ADL_ORIGIN_CLOSE = 17;
+  ADL_POSITION_CLOSE = 18;
+
+  MARGIN_ALERT = 20;
+  LIQUIDATION_ALERT = 21;
+
+  RESET_FEE = 30;
+
+  // 现货借贷 loan 用户维度事件（码值须与 exchange-core FundEvent.FundEventType 一致；映射用 setEventTypeValue(getCode())）
+  LOAN_MARGIN_CALL = 40;        // LTV 达到 marginCall 阈值预警（Cross 账户级 / Isolated 单笔）
+  LOAN_BORROW = 41;             // 借款（放款 + 抵押锁定）
+  LOAN_REPAY = 42;              // 还款（利息优先 → 本金）
+  LOAN_COLLATERAL_CHANGE = 43;  // 加/减抵押
+  LOAN_LIQUIDATED = 44;         // 强平核销：卖抵押抵债；市场按破产价接不住则由 LIF 承接
+
+  INTERNAL_TRANSFER = 50;       // 用户间内部转账（付款方 / 收款方共用，方向由 uid 区分）
+}

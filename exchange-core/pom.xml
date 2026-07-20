@@ -1,0 +1,287 @@
+<project xmlns="https://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="https://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="https://maven.apache.org/POM/4.0.0 https://maven.apache.org/maven-v4_0_0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>com.binance.raft-exchange</groupId>
+		<artifactId>raft-exchange</artifactId>
+		<version>1.0.0-SNAPSHOT</version>
+	</parent>
+	<artifactId>exchange-core</artifactId>
+	<dependencies>
+		<dependency>
+			<groupId>net.java.dev.jna</groupId>
+			<artifactId>jna-platform</artifactId>
+			<version>5.12.1</version>
+		</dependency>
+		<dependency>
+			<groupId>net.java.dev.jna</groupId>
+			<artifactId>jna</artifactId>
+			<version>5.12.1</version>
+		</dependency>
+		<!-- LMAX Disruptor -->
+		<dependency>
+			<groupId>com.lmax</groupId>
+			<artifactId>disruptor</artifactId>
+			<version>3.4.2</version>
+		</dependency>
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<version>1.18.38</version>
+			<scope>provided</scope>
+		</dependency>
+		<!-- logging -->
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>2.0.17</version>
+		</dependency>
+		<!-- OpenHFT -->
+		<dependency>
+			<groupId>net.openhft</groupId>
+			<artifactId>affinity</artifactId>
+			<version>3.27ea1</version>
+		</dependency>
+		<dependency>
+			<groupId>net.openhft</groupId>
+			<artifactId>chronicle-wire</artifactId>
+			<version>2.27ea12</version>
+		</dependency>
+		<dependency>
+			<groupId>org.jetbrains</groupId>
+			<artifactId>annotations</artifactId>
+			<version>26.0.2-1</version>
+		</dependency>
+		<!-- Real Logic Agrona -->
+		<dependency>
+			<groupId>org.agrona</groupId>
+			<artifactId>agrona</artifactId>
+			<version>1.15.1</version>
+		</dependency>
+		<!-- Eclipse (Goldman Sachs) collections -->
+		<dependency>
+			<groupId>org.eclipse.collections</groupId>
+			<artifactId>eclipse-collections-api</artifactId>
+			<version>13.0.0</version>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.collections</groupId>
+			<artifactId>eclipse-collections</artifactId>
+			<version>13.0.0</version>
+		</dependency>
+		<!-- lz4-java -->
+		<dependency>
+			<groupId>org.lz4</groupId>
+			<artifactId>lz4-java</artifactId>
+			<version>1.8.0</version>
+		</dependency>
+
+		<!-- test scope -->
+		<dependency>
+			<groupId>com.paritytrading.juncture</groupId>
+			<artifactId>juncture-nasdaq</artifactId>
+			<version>1.0.0</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.paritytrading.nassau</groupId>
+			<artifactId>nassau-util</artifactId>
+			<version>1.0.0</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.mockito</groupId>
+			<artifactId>mockito-junit-jupiter</artifactId>
+			<version>5.19.0</version>
+			<scope>test</scope>
+		</dependency>
+		<!-- HDR Histogram -->
+		<dependency>
+			<groupId>org.hdrhistogram</groupId>
+			<artifactId>HdrHistogram</artifactId>
+			<version>2.1.12</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-classic</artifactId>
+			<version>1.5.18</version>
+			<scope>test</scope>
+			<exclusions>
+				<exclusion>
+					<artifactId>slf4j-api</artifactId>
+					<groupId>org.slf4j</groupId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<!-- FastUtil
+        <dependency>
+            <groupId>it.unimi.dsi</groupId>
+            <artifactId>fastutil</artifactId>
+            <version>8.2.1</version>
+        </dependency>
+        -->
+		<!-- HPPC
+        <dependency>
+            <groupId>com.carrotsearch</groupId>
+            <artifactId>hppc</artifactId>
+            <version>0.8.1</version>
+        </dependency>
+        -->
+		<!-- Google Guava -->
+		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>31.1-jre</version>
+			<scope>test</scope>
+		</dependency>
+		<!-- Apache Commons -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>3.12.0</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-math3</artifactId>
+			<version>3.6.1</version>
+			<scope>test</scope>
+		</dependency>
+		<!-- unit tests -->
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<version>5.12.2</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-params</artifactId>
+			<version>5.12.2</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.mockito</groupId>
+			<artifactId>mockito-core</artifactId>
+			<version>5.19.0</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.hamcrest</groupId>
+			<artifactId>hamcrest-library</artifactId>
+			<version>1.3</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.cucumber</groupId>
+			<artifactId>cucumber-java8</artifactId>
+			<version>7.2.3</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.cucumber</groupId>
+			<artifactId>cucumber-junit-platform-engine</artifactId>
+			<version>7.2.3</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-suite</artifactId>
+			<version>1.8.2</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.cucumber</groupId>
+			<artifactId>cucumber-picocontainer</artifactId>
+			<version>7.2.3</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>junit</groupId>
+			<artifactId>junit</artifactId>
+			<version>RELEASE</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-deploy-plugin</artifactId>
+				<version>2.8.2</version>
+				<configuration>
+					<skip>true</skip>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>2.22.2</version>
+				<configuration>
+					<argLine>-Xms512m -Xmx6g --add-exports java.base/sun.nio.ch=ALL-UNNAMED --add-exports java.base/jdk.internal.ref=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED</argLine>
+				</configuration>
+				<!--
+					Surefire 按声明顺序串行执行 2 段 execution：
+
+					1) unit-shared-jvm   纯逻辑单测；单 fork + reuseForks=true 共享 JVM，最快
+					2) isolated-jvm      功能 IT（含 ITLiquidation/ITPerpetual）；3 fork 并行 + 每类独立 JVM，跨类零污染；rerun=2 兜底
+
+					perf micro-benchmark 太慢（NaiveImpl ~100s / DirectImpl ~32s）默认排除，
+					需要时单独 `-Dtest='perf/**/IT*'` 跑。
+				-->
+				<executions>
+					<execution>
+						<id>default-test</id>
+						<configuration>
+							<skip>true</skip>
+						</configuration>
+					</execution>
+
+					<execution>
+						<id>unit-shared-jvm</id>
+						<phase>test</phase>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<forkCount>1</forkCount>
+							<reuseForks>true</reuseForks>
+							<includes>
+								<include>**/unit/*Test.java</include>
+								<include>**/unit/*Tests.java</include>
+								<include>**/orderbook/*Test.java</include>
+								<include>**/event/*Test.java</include>
+								<include>**/RunCukeNaiveTests.java</include>
+							</includes>
+						</configuration>
+					</execution>
+
+					<execution>
+						<id>isolated-jvm</id>
+						<phase>test</phase>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<forkCount>3</forkCount>
+							<reuseForks>false</reuseForks>
+							<includes>
+								<include>**/IT*.java</include>
+								<include>**/PersistenceTests.java</include>
+								<include>**/RunCukesDirectLatencyTests.java</include>
+								<include>**/RunCukesDirectThroughputTests.java</include>
+							</includes>
+							<excludes>
+								<exclude>**/perf/**</exclude>
+							</excludes>
+							<rerunFailingTestsCount>2</rerunFailingTestsCount>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

@@ -1,0 +1,239 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs.response;
+
+option java_package = "com.binance.raftexchange.stubs.response";
+option java_multiple_files = true;
+
+import "message/common.proto";
+
+// Enum for Command Result Codes
+enum CommandResultCode {
+    NEW = 0;
+    VALID_FOR_MATCHING_ENGINE = 1;
+    SUCCESS = 100;
+    ACCEPTED = 110;
+
+    AUTH_INVALID_USER = 1001;           // Negative values prefixed as positive
+    AUTH_TOKEN_EXPIRED = 1002;
+
+    INVALID_SYMBOL = 1201;
+    INVALID_PRICE_STEP = 1202;
+    UNSUPPORTED_SYMBOL_TYPE = 1203;
+
+    RISK_NSF = 2001;
+    RISK_INVALID_RESERVE_BID_PRICE = 2002;
+    RISK_ASK_PRICE_LOWER_THAN_FEE = 2003;
+    RISK_MARGIN_TRADING_DISABLED = 2004;
+    RISK_INVALID_AMOUNT = 2005;
+    RISK_INVALID_LEVERAGE = 2006;
+    RISK_LEVERAGE_MISMATCH = 2007;
+    RISK_MARGIN_MODE_MISMATCH = 2008;
+    RISK_MARGIN_POSITION_NOT_EXISTS = 2009;
+    RISK_MARGIN_POSITION_EXISTS = 2010;
+    RISK_MARKPRICE_NOT_AVAILABLE = 2011;
+    RISK_IF_INSUFFICIENT = 2012;
+
+    MATCHING_UNKNOWN_ORDER_ID = 3002;
+    MATCHING_UNSUPPORTED_COMMAND = 3004;
+    MATCHING_INVALID_ORDER_BOOK_ID = 3005;
+    MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT = 3041;
+    MATCHING_REDUCE_FAILED_WRONG_SIZE = 3051;
+
+    USER_MGMT_USER_ALREADY_EXISTS = 4001;
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME = 4101;
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF = 4103;
+    USER_MGMT_NON_ZERO_ACCOUNT_BALANCE = 4104;
+    USER_MGMT_USER_NOT_SUSPENDABLE_HAS_POSITIONS = 4130;
+    USER_MGMT_USER_NOT_SUSPENDABLE_NON_EMPTY_ACCOUNTS = 4131;
+    USER_MGMT_USER_NOT_SUSPENDED = 4132;
+    USER_MGMT_USER_ALREADY_SUSPENDED = 4133;
+    USER_MGMT_USER_NOT_FOUND = 4201;
+
+    INTERNAL_TRANSFER_INVALID_SELF = 4301;
+
+    SYMBOL_MGMT_SYMBOL_ALREADY_EXISTS = 5001;
+
+    // loan 子域（详见 loan.md §5）—— 值 = |exchange-core 侧负值|，跟 SerializeHelper 侧 abs 映射一致
+    LOAN_NOT_ENABLED = 6001;
+    LOAN_ALREADY_EXISTS = 6002;
+    LOAN_NOT_FOUND = 6003;
+    LOAN_UID_MISMATCH = 6004;
+    LOAN_USER_SUSPENDED = 6005;
+    LOAN_INVALID_AMOUNT = 6010;
+    LOAN_PRINCIPAL_EXCEEDS_LIMIT = 6011;
+    LOAN_MARKPRICE_NOT_READY = 6012;
+    LOAN_LTV_TOO_HIGH = 6020;
+    LOAN_LTV_TOO_HIGH_AFTER_BORROW = 6021;
+    LOAN_LTV_TOO_HIGH_AFTER_RELEASE = 6022;
+    LOAN_CROSS_LTV_TOO_HIGH_AFTER_WITHDRAW = 6023;
+    LOAN_COLLATERAL_INSUFFICIENT = 6030;
+    LOAN_COLLATERAL_NOT_ALLOWED = 6031;
+    LOAN_COLLATERAL_EXCEEDS_LOAN = 6032;
+    LOAN_ACCOUNT_INSUFFICIENT = 6040;
+    LOAN_POOL_INSUFFICIENT = 6050;
+    LOAN_POOL_UTILIZATION_EXCEEDED = 6051;
+    LOAN_POOL_WRONG_SHARD = 6052;
+    LOAN_IF_INSUFFICIENT = 6053;
+    // UPDATE_SYMBOL_LOAN_CONFIG 配置类拒绝码
+    LOAN_INVALID_CONFIG = 6060;
+    LOAN_INVALID_SYMBOL_TYPE = 6070;
+    LOAN_NUMERAIRE_NOT_CONFIGURED = 6080;
+    LOAN_NOT_IMPLEMENTED = 6099;
+
+    INTERNAL_ERROR = 8000;
+    BINARY_COMMAND_FAILED = 8001;
+    REPORT_QUERY_UNKNOWN_TYPE = 8003;
+    STATE_PERSIST_RISK_ENGINE_FAILED = 8010;
+    STATE_PERSIST_MATCHING_ENGINE_FAILED = 8020;
+    STATE_RECOVER_RISK_ENGINE_FAILED = 8021;
+    STATE_RECOVER_MATCHING_ENGINE_FAILED = 8022;
+
+    NO_LEADER = 9997;
+    NEED_MOVE = 9998;
+    DROP = 9999;
+}
+
+enum NodeType {
+    LEADER = 0;
+    FOLLOW = 1;
+}
+
+message ServerNode {
+    NodeType type = 1;
+    string host = 2;
+    int32 port = 3;
+}
+
+//pb这个编译器不允许returns(stream Enum) 这样
+// 所以需要包一下
+message CommandResult {
+    oneof mainMessages {
+        CommandResultCode resultCode = 1;
+        OrderCommand orderCommand = 2;
+    }
+    oneof extMessage {
+        ServerNode leaderNode = 3; //当前的操作不允许在follow上执行的时候 才会返回这个
+    }
+}
+
+// Enum for Order Command Types
+enum OrderCommandType {
+    ORDER_COMMAND_INVALID = 0; // proto3 enum必须从0开始
+    PLACE_ORDER = 1;
+    CANCEL_ORDER = 2;
+    MOVE_ORDER = 3;
+    REDUCE_ORDER = 4;
+    CLOSE_POSITION = 5;
+    ORDER_BOOK_REQUEST = 6;
+    ADD_USER = 10;
+    BALANCE_ADJUSTMENT = 11;
+    SUSPEND_USER = 12;
+    RESUME_USER = 13;
+    LEVERAGE_ADJUSTMENT = 21;
+    POSITION_MODE_ADJUSTMENT = 22;
+    MARGIN_ADJUSTMENT = 23;
+    MARKPRICE_ADJUSTMENT = 24;
+    SETTLE_FUNDINGFEES = 25;
+    SETTLE_PNL = 26;
+    RESET_FEE = 27;
+    SYSTEM_LIQUIDATION_NOTIFY = 31;
+    IF_TAKEOVER = 40;
+    AUTO_DELEVERAGING = 41;
+    IF_DEPOSIT = 42;
+    IF_WITHDRAW = 43;
+    // loan 子域（详见 loan.md §5）
+    LOAN_CREATE = 50;
+    LOAN_REPAY = 51;
+    LOAN_ADD_COLLATERAL = 52;
+    LOAN_RELEASE_COLLATERAL = 53;
+    LOAN_FORCE_LIQUIDATE = 54;
+    LOAN_CROSS_ADD_COLLATERAL = 55;
+    LOAN_CROSS_WITHDRAW_COLLATERAL = 56;
+    LOAN_CROSS_BORROW = 57;
+    LOAN_CROSS_REPAY = 58;
+    LOAN_CROSS_FORCE_LIQUIDATE = 59;
+    POOL_DEPOSIT = 60;
+    POOL_WITHDRAW = 61;
+    BINARY_DATA_QUERY = 90;
+    BINARY_DATA_COMMAND = 91;
+    PERSIST_STATE_MATCHING = 110;
+    PERSIST_STATE_RISK = 111;
+    GROUPING_CONTROL = 118;
+    NOP = 120;
+    RESET = 124;
+    SHUTDOWN_SIGNAL = 127;
+    RESERVED_COMPRESSED = 255;  // -1 in byte becomes 255 in unsigned context
+}
+
+enum MatcherEventType {
+    TRADE = 0;
+    REJECT = 1;
+    REDUCE = 2;
+    BINARY_EVENT = 3;
+    IF_EVENT = 4;
+    ADL_EVENT = 5;
+    FUNDING_EVENT = 6;
+}
+
+// Message for MatcherTradeEvent
+message MatcherTradeEvent {
+    MatcherEventType eventType = 1;
+    int32 section = 2;
+    bool activeOrderCompleted = 3;
+    int64 matchedOrderId = 4;
+    int64 matchedOrderUid = 5;
+    bool matchedOrderCompleted = 6;
+    int64 price = 7;
+    int64 size = 8;
+    int64 bidderHoldPrice = 9;
+    int64 baseScaleK = 10;
+    int64 quoteScaleK = 11;
+    MatcherTradeEvent next_event = 12;
+}
+
+// Message for L2MarketData
+message L2MarketData {
+    int32 ask_sizes = 1;
+    int32 bid_sizes = 2;
+    repeated int64 ask_prices = 3;
+    repeated int64 ask_volumes = 4;
+    repeated int64 ask_orders = 5;
+    repeated int64 bid_prices = 6;
+    repeated int64 bid_volumes = 7;
+    repeated int64 bid_orders = 8;
+}
+
+// Main Order Command message
+message OrderCommand {
+    OrderCommandType command = 1;
+    int64 order_id = 2;
+    int32 symbol = 3;
+    int64 price = 4;
+    int64 size = 5;
+    int64 reserve_bid_price = 6;
+    oneof order_action_present {
+        OrderAction action = 7;
+    }
+    oneof order_type_present{
+       OrderType order_type = 8;
+    }
+    int64 uid = 9;
+    int64 timestamp = 10;
+    int32 user_cookie = 11;
+    int32 leverage = 12;
+    MarginMode margin_mode = 13;
+    int64 events_group = 14;
+    int32 service_flags = 15;
+    CommandResultCode result_code = 16;
+    oneof matcher_event_present {
+      MatcherTradeEvent matcher_event = 17;
+    }
+    oneof market_data_present {
+      L2MarketData market_data = 18;
+    }
+}
+
+message NodeList {
+    repeated ServerNode nodes = 1;
+}
