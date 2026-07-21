@@ -79,6 +79,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         final IntLongHashMap currencyBalance = new IntLongHashMap();
         final IntLongHashMap extraMargin = new IntLongHashMap();
         final IntLongHashMap exchangeLockedTotal = new IntLongHashMap();
+        final IntLongHashMap loanCollateralTotal = new IntLongHashMap();
 
         final IntLongHashMap symbolOpenInterestLong = new IntLongHashMap();
         final IntLongHashMap symbolOpenInterestShort = new IntLongHashMap();
@@ -97,11 +98,22 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         riskEngine.getUserProfileService().getUserProfiles().forEach(userProfile -> {
             // 对账采用 OLD 风格的 bucket 拆分：accountBalances 报告"可支配"部分，
             // exchangeLocked 单独作为独立 bucket 参与对账求和。
-            // 这样全局守恒等式：accountBalances + extraMargin + exchangeLocked + fees + adjustments + suspends + ifBalances = 0
+            // 这样全局守恒等式：accountBalances + extraMargin + exchangeLocked + loanCollateral + loanBalances + fees + adjustments + suspends + ifBalances = 0
             userProfile.accounts.forEachKeyValue(currencyBalance::addToValue);
             userProfile.exchangeLocked.forEachKeyValue((c, v) -> {
                 currencyBalance.addToValue(c, -v); // accountBalances 减去冻结部分
                 exchangeLockedTotal.addToValue(c, v); // 独立 bucket
+            });
+            // loan 抵押物：物理仍在 accounts 但被 loan 占用（cross 账户级 + isolated 单笔），从可支配剥出作独立 bucket
+            userProfile.crossLoanCollateral.forEachKeyValue((c, v) -> {
+                currencyBalance.addToValue(c, -v);
+                loanCollateralTotal.addToValue(c, v);
+            });
+            userProfile.isolatedLoans.forEachValue(loan -> {
+                if (loan.collateralAmount != 0) {
+                    currencyBalance.addToValue(loan.collateralCurrency, -loan.collateralAmount);
+                    loanCollateralTotal.addToValue(loan.collateralCurrency, loan.collateralAmount);
+                }
             });
             userProfile.positions.forEachValue(positionRecord -> {
                 final LastPriceCacheRecord avgPrice =
@@ -225,7 +237,7 @@ public final class TotalCurrencyBalanceReportQuery implements ReportQuery<TotalC
         return Optional.of(
             new TotalCurrencyBalanceReportResult(currencyBalance, extraMargin, new IntLongHashMap(riskEngine.getFees()),
                 new IntLongHashMap(riskEngine.getAdjustments()), new IntLongHashMap(riskEngine.getSuspends()),
-                exchangeLockedTotal, loanBalances, symbolOpenInterestLong, symbolOpenInterestShort, ifBalance,
+                exchangeLockedTotal, loanBalances, loanCollateralTotal, symbolOpenInterestLong, symbolOpenInterestShort, ifBalance,
                 ifOpenInterestLong, ifOpenInterestShort, riskEngine.getCurrencySpecificationProvider().getCurrencySpecs(),
                 riskEngine.getSymbolSpecificationProvider().getSymbolSpecs()));
     }

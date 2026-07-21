@@ -348,6 +348,7 @@ public class SerializeHelper {
                 .putAllExtraMargin(convertToHashMap(totalCurrencyBalanceReportResult.getExtraMargin()))
                 .putAllExchangeLocked(convertToHashMap(totalCurrencyBalanceReportResult.getExchangeLocked()))
                 .putAllLoanBalances(convertToHashMap(totalCurrencyBalanceReportResult.getLoanBalances()))
+                .putAllLoanCollateral(convertToHashMap(totalCurrencyBalanceReportResult.getLoanCollateral()))
                 .putAllCurrencySpecs(
                     totalCurrencyBalanceReportResult.getCurrencySpecs() == null ? java.util.Collections.emptyMap()
                         : convertToHashMap(totalCurrencyBalanceReportResult.getCurrencySpecs(), currencySpecMapping))

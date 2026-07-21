@@ -281,42 +281,66 @@ public class RaftEndpoint {
         }
     }
 
+    /**
+     * 整体资金视图，按归属分三层 user / platform / system，层内再按产品线细分；conservation 为各币种全桶净额（= 0）。
+     * currency 桶按 digit 缩放成可读小数，持仓量（open_interest / if_positions）是合约张数保持 raw；空桶/空组一律略去。
+     */
     private static Map<String, Object> balancesToMap(TotalCurrencyBalanceReportResult r) {
         Map<Integer, String> ccy = currencyNames(r);
         Map<Integer, Integer> dig = currencyDigits(r);
         Map<Integer, String> sym = symbolNames(r, ccy);
 
-        // 账户/通用：cash、手续费、充提调整、冻结——现货/期货/loan 共用
-        Map<String, Object> account = new LinkedHashMap<>();
-        putScaled(account, "account_balances", r.getAccountBalancesMap(), ccy, dig);
-        putScaled(account, "fees", r.getFeesMap(), ccy, dig);
-        putScaled(account, "adjustments", r.getAdjustmentsMap(), ccy, dig);
-        putScaled(account, "suspends", r.getSuspendsMap(), ccy, dig);
+        Map<String, Object> userFutures = new LinkedHashMap<>();
+        putScaled(userFutures, "margin", r.getExtraMarginMap(), ccy, dig);
+        putGroup(userFutures, "open_interest", openInterest(r.getOpenInterestLongMap(), r.getOpenInterestShortMap(), sym));
+        Map<String, Object> user = new LinkedHashMap<>();
+        putGroup(user, "common", scaledGroup("balances", r.getAccountBalancesMap(), ccy, dig));
+        putGroup(user, "spot", scaledGroup("locked", r.getExchangeLockedMap(), ccy, dig));
+        putGroup(user, "loan", scaledGroup("collateral", r.getLoanCollateralMap(), ccy, dig)); // 虚拟锁定，钱仍在 user
+        putGroup(user, "futures", userFutures);
 
-        // 现货：挂单锁定
-        Map<String, Object> spot = new LinkedHashMap<>();
-        putScaled(spot, "exchange_locked", r.getExchangeLockedMap(), ccy, dig);
+        Map<String, Object> platformFutures = new LinkedHashMap<>();
+        putScaled(platformFutures, "insurance_fund", r.getIfBalancesMap(), ccy, dig);
+        putGroup(platformFutures, "if_positions",
+            openInterest(r.getIfOpenInterestLongMap(), r.getIfOpenInterestShortMap(), sym));
+        Map<String, Object> platform = new LinkedHashMap<>();
+        putGroup(platform, "common", scaledGroup("fees", r.getFeesMap(), ccy, dig));
+        putGroup(platform, "loan", scaledGroup("pool", r.getLoanBalancesMap(), ccy, dig)); // 池可用 + 利息 + LIF
+        putGroup(platform, "futures", platformFutures);
 
-        // 期货：额外保证金、保险基金、持仓量（OI 是合约张数、保持 raw）
-        Map<String, Object> futures = new LinkedHashMap<>();
-        putScaled(futures, "extra_margin", r.getExtraMarginMap(), ccy, dig);
-        putScaled(futures, "if_balances", r.getIfBalancesMap(), ccy, dig);
-        putRaw(futures, "open_interest_long", r.getOpenInterestLongMap(), sym);
-        putRaw(futures, "open_interest_short", r.getOpenInterestShortMap(), sym);
-        putRaw(futures, "if_open_interest_long", r.getIfOpenInterestLongMap(), sym);
-        putRaw(futures, "if_open_interest_short", r.getIfOpenInterestShortMap(), sym);
-
-        // loan：平台桶（池可用 + 利息 + LIF），不含 loanPoolBorrowed（钱在借款人 account）
-        Map<String, Object> loan = new LinkedHashMap<>();
-        putScaled(loan, "loan_balances", r.getLoanBalancesMap(), ccy, dig);
+        Map<String, Object> system = new LinkedHashMap<>();
+        putScaled(system, "adjustments", r.getAdjustmentsMap(), ccy, dig);
+        putScaled(system, "suspends", r.getSuspendsMap(), ccy, dig);
 
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("account", account);
-        m.put("spot", spot);
-        m.put("futures", futures);
-        m.put("loan", loan);
-        m.put("balance_zero", computeGlobalSum(r, ccy, dig)); // 各币种跨全部现金桶净额 = 0
+        putGroup(m, "user", user);
+        putGroup(m, "platform", platform);
+        putGroup(m, "system", system);
+        m.put("conservation", computeGlobalSum(r, ccy, dig));
         return m;
+    }
+
+    /** 单桶分组：非空则 {key: 缩放值}，空则空 map（由 putGroup 略去）。 */
+    private static Map<String, Object> scaledGroup(String key, Map<Integer, Long> raw,
+        Map<Integer, String> names, Map<Integer, Integer> digits) {
+        Map<String, Object> g = new LinkedHashMap<>();
+        putScaled(g, key, raw, names, digits);
+        return g;
+    }
+
+    /** 子分组非空才挂到父级。 */
+    private static void putGroup(Map<String, Object> parent, String key, Map<String, Object> child) {
+        if (!child.isEmpty())
+            parent.put(key, child);
+    }
+
+    /** long/short 两个 symbol→volume 桶合成 {long, short}。 */
+    private static Map<String, Object> openInterest(Map<Integer, Long> longs, Map<Integer, Long> shorts,
+        Map<Integer, String> sym) {
+        Map<String, Object> oi = new LinkedHashMap<>();
+        putRaw(oi, "long", longs, sym);
+        putRaw(oi, "short", shorts, sym);
+        return oi;
     }
 
     /** currency 桶：非空则按 digit 缩放成可读小数放入 out。 */
@@ -377,16 +401,14 @@ public class RaftEndpoint {
         return out;
     }
 
-    /**
-     * 守恒方程 accountBalances + extraMargin + exchangeLocked + loanBalances + fees + adjustments + suspends + ifBalances
-     * = 0（同 core isGlobalBalancesAllZero；同币种同 scale，先按 raw 求和再缩放）。open_interest_* 是 symbol→volume，不参与。
-     */
+    /** 守恒：全部现金桶按币种求和 = 0（同 core isGlobalBalancesAllZero，先 raw 求和再缩放）；持仓量是张数不参与。 */
     private static Map<String, BigDecimal> computeGlobalSum(TotalCurrencyBalanceReportResult r,
         Map<Integer, String> names, Map<Integer, Integer> digits) {
         Map<Integer, Long> sum = new TreeMap<>();
         Stream
             .<Map<Integer, Long>>of(r.getAccountBalancesMap(), r.getExtraMarginMap(), r.getExchangeLockedMap(),
-                r.getLoanBalancesMap(), r.getFeesMap(), r.getAdjustmentsMap(), r.getSuspendsMap(), r.getIfBalancesMap())
+                r.getLoanCollateralMap(), r.getLoanBalancesMap(), r.getFeesMap(), r.getAdjustmentsMap(),
+                r.getSuspendsMap(), r.getIfBalancesMap())
             .forEach(m -> m.forEach((c, v) -> sum.merge(c, v, Long::sum)));
         return scaledByCurrency(sum, names, digits);
     }
