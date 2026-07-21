@@ -215,6 +215,9 @@ message TotalCurrencyBalanceReportResult {
   // loan 平台桶 = 池可用 + 利息收入 + LIF，均平台持有现金，参与全局对账。
   // 不含 loanPoolBorrowed —— 那是追踪器，对应的钱已在借款人 account_balances 里。
   map<int32, int64> loan_balances = 15;
+  // loan 抵押物（cross 账户级 + isolated 单笔）。物理仍在用户 account，但被 loan 占用不可支配，
+  // 从 account_balances 剥出作独立 bucket，参与全局对账。
+  map<int32, int64> loan_collateral = 16;
   // currency id -> spec（含 name）。仅展示用，对账/state hash 不依赖。
   map<int32, CoreCurrencySpecification> currency_specs = 13;
   // symbol id -> spec（含 base/quote currency），给 open_interest_* 翻译可读名用。
