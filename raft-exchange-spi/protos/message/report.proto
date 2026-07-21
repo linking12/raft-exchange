@@ -7,7 +7,6 @@ option java_multiple_files = true;
 
 import "message/common.proto";
 
-// Report Type Enum
 enum ReportType {
   REPORT_TYPE_INVALID = 0; // proto3 enum必须从0开始
   STATE_HASH = 10001;
@@ -19,7 +18,6 @@ enum ReportType {
   LOAN_PLATFORM = 10007;
 }
 
-// Base Report Query Message
 message ReportQuery {
   int32 transfer_id = 1;
   oneof type {
@@ -33,24 +31,19 @@ message ReportQuery {
   }
 }
 
-// Single User Report Query
 message SingleUserReportQuery {
   int64 user_id = 1;
 }
 
-// State Hash Report Query
 message StateHashReportQuery {
 }
 
-// Total Currency Balance Report Query
 message TotalCurrencyBalanceReportQuery {
 }
 
-// Symbol Currency Report Query
 message SymbolCurrencyReportQuery {
 }
 
-// Fee Report Query
 message FeeReportQuery {
 }
 
@@ -62,7 +55,6 @@ message InsuranceFundReportQuery {
 message LoanPlatformReportQuery {
 }
 
-// Base Report Result Message
 message ReportResult {
   oneof result {
     SingleUserReportResult single_user_report = 1;
@@ -152,7 +144,6 @@ enum QueryExecutionStatus {
   USER_NOT_FOUND = 1;
 }
 
-// Single User Report Result
 message SingleUserReportResult {
   int64 user_id = 1;
   UserStatus user_status = 2;
@@ -192,12 +183,10 @@ message HashCodeEntry {
   int32 value = 2;
 }
 
-// State Hash Report Result
 message StateHashReportResult {
   repeated HashCodeEntry hash_codes = 1;
 }
 
-// Total Currency Balance Report Result
 message TotalCurrencyBalanceReportResult {
   map<int32, int64> account_balances = 1;
   map<int32, int64> fees = 2;
@@ -229,7 +218,6 @@ message SymbolCurrencyReportResult {
   map<int32, CoreCurrencySpecification> currencySpecs = 2;
 }
 
-// Fee Report Result
 // currency -> 跨所有 shard 聚合后的 totalFee（= riskEngine.getFees() 跨 shard mergeSum）。
 // 与 TotalCurrencyBalanceReportResult.fees 同源同口径，不参与对账方程。
 message FeeReportResult {
@@ -249,10 +237,8 @@ message InsuranceFundPerShard {
   map<int32, FuturesIfEntry> futures_insurance_fund = 1;
   // 借贷 LIF：currency -> 余额（currency scale）。可为负——负值即平台已垫资额，非损失
   map<int32, int64> loan_insurance_fund = 2;
-  // symbolId -> markPrice 最后更新时间（引擎命令时间戳）。喂价中断的唯一可观测信号：
-  // 引擎不据此改变行为，由外部监控比对当前时间判陈旧并告警。从未喂过价的 symbol 不在此 map 中。
-  // symbolId -> markPrice 最后更新时间：期货是喂价时间，现货是最后成交时间。
-  // 价格陈旧的唯一可观测信号，引擎不据此改变行为；从未有过价格的 symbol 不在此 map 中。
+  // symbolId -> markPrice 最后更新时间（期货=喂价时间，现货=最后成交时间）。价格陈旧的唯一可观测信号，
+  // 引擎不据此改变行为，由外部监控比对当前时间判陈旧告警；从未有过价格的 symbol 不在此 map 中。
   map<int32, int64> mark_price_ts = 3;
 }
 

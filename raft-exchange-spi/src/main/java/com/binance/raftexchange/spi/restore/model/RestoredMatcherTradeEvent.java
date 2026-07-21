@@ -18,16 +18,16 @@ import java.math.BigDecimal;
  */
 public final class RestoredMatcherTradeEvent {
 
-    public MatcherEventType eventType;
-    public int              section;
-    public boolean          activeOrderCompleted;
-    public long             matchedOrderId;
-    public long             matchedOrderUid;
-    public boolean          matchedOrderCompleted;
+    public MatcherEventType eventType;             // 撮合事件类型（TRADE/REDUCE/REJECT…）
+    public int              section;               // 事件分段（taker / maker 桶归属）
+    public boolean          activeOrderCompleted;  // 主动单（taker）是否已完全成交
+    public long             matchedOrderId;        // 被撮合的对手单 id
+    public long             matchedOrderUid;       // 对手单 uid
+    public boolean          matchedOrderCompleted; // 对手单是否已完全成交
 
-    public BigDecimal price          = BigDecimal.ZERO;  // quote scale
-    public BigDecimal size           = BigDecimal.ZERO;  // base scale
-    public BigDecimal bidderHoldPrice = BigDecimal.ZERO; // quote scale
+    public BigDecimal price          = BigDecimal.ZERO;  // 成交价（quote scale）
+    public BigDecimal size           = BigDecimal.ZERO;  // 成交量（base scale）
+    public BigDecimal bidderHoldPrice = BigDecimal.ZERO; // 买方冻结价，撤单返还差价用（quote scale）
 
     /** 链表下一项；链尾为 null。 */
     public RestoredMatcherTradeEvent next;

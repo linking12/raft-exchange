@@ -7,20 +7,23 @@ option java_multiple_files = true;
 
 import "message/common.proto";
 
-// Enum for Command Result Codes
 enum CommandResultCode {
+    // ===== 通用状态 =====
     NEW = 0;
     VALID_FOR_MATCHING_ENGINE = 1;
     SUCCESS = 100;
     ACCEPTED = 110;
 
+    // ===== 鉴权 =====
     AUTH_INVALID_USER = 1001;           // Negative values prefixed as positive
     AUTH_TOKEN_EXPIRED = 1002;
 
+    // ===== symbol / 价格校验 =====
     INVALID_SYMBOL = 1201;
     INVALID_PRICE_STEP = 1202;
     UNSUPPORTED_SYMBOL_TYPE = 1203;
 
+    // ===== 风控 =====
     RISK_NSF = 2001;
     RISK_INVALID_RESERVE_BID_PRICE = 2002;
     RISK_ASK_PRICE_LOWER_THAN_FEE = 2003;
@@ -34,12 +37,14 @@ enum CommandResultCode {
     RISK_MARKPRICE_NOT_AVAILABLE = 2011;
     RISK_IF_INSUFFICIENT = 2012;
 
+    // ===== 撮合 =====
     MATCHING_UNKNOWN_ORDER_ID = 3002;
     MATCHING_UNSUPPORTED_COMMAND = 3004;
     MATCHING_INVALID_ORDER_BOOK_ID = 3005;
     MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT = 3041;
     MATCHING_REDUCE_FAILED_WRONG_SIZE = 3051;
 
+    // ===== 用户管理 =====
     USER_MGMT_USER_ALREADY_EXISTS = 4001;
     USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME = 4101;
     USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF = 4103;
@@ -50,11 +55,13 @@ enum CommandResultCode {
     USER_MGMT_USER_ALREADY_SUSPENDED = 4133;
     USER_MGMT_USER_NOT_FOUND = 4201;
 
+    // ===== 内部转账 =====
     INTERNAL_TRANSFER_INVALID_SELF = 4301;
 
+    // ===== symbol 管理 =====
     SYMBOL_MGMT_SYMBOL_ALREADY_EXISTS = 5001;
 
-    // loan 子域（详见 loan.md §5）—— 值 = |exchange-core 侧负值|，跟 SerializeHelper 侧 abs 映射一致
+    // ===== Loan（详见 loan.md §5）—— 值 = |exchange-core 侧负值|，跟 SerializeHelper 侧 abs 映射一致 =====
     LOAN_NOT_ENABLED = 6001;
     LOAN_ALREADY_EXISTS = 6002;
     LOAN_NOT_FOUND = 6003;
@@ -81,6 +88,7 @@ enum CommandResultCode {
     LOAN_NUMERAIRE_NOT_CONFIGURED = 6080;
     LOAN_NOT_IMPLEMENTED = 6099;
 
+    // ===== 内部错误 / 状态持久化 =====
     INTERNAL_ERROR = 8000;
     BINARY_COMMAND_FAILED = 8001;
     REPORT_QUERY_UNKNOWN_TYPE = 8003;
@@ -89,6 +97,7 @@ enum CommandResultCode {
     STATE_RECOVER_RISK_ENGINE_FAILED = 8021;
     STATE_RECOVER_MATCHING_ENGINE_FAILED = 8022;
 
+    // ===== raft 路由 =====
     NO_LEADER = 9997;
     NEED_MOVE = 9998;
     DROP = 9999;
@@ -117,19 +126,21 @@ message CommandResult {
     }
 }
 
-// Enum for Order Command Types
 enum OrderCommandType {
     ORDER_COMMAND_INVALID = 0; // proto3 enum必须从0开始
+    // ===== 订单（现货 & 期货共用）=====
     PLACE_ORDER = 1;
     CANCEL_ORDER = 2;
     MOVE_ORDER = 3;
     REDUCE_ORDER = 4;
     CLOSE_POSITION = 5;
     ORDER_BOOK_REQUEST = 6;
+    // ===== 账户 / 用户 =====
     ADD_USER = 10;
     BALANCE_ADJUSTMENT = 11;
     SUSPEND_USER = 12;
     RESUME_USER = 13;
+    // ===== 期货（保证金 / 结算 / 强平 / IF / ADL）=====
     LEVERAGE_ADJUSTMENT = 21;
     POSITION_MODE_ADJUSTMENT = 22;
     MARGIN_ADJUSTMENT = 23;
@@ -142,7 +153,7 @@ enum OrderCommandType {
     AUTO_DELEVERAGING = 41;
     IF_DEPOSIT = 42;
     IF_WITHDRAW = 43;
-    // loan 子域（详见 loan.md §5）
+    // ===== Loan（详见 loan.md §5）=====
     LOAN_CREATE = 50;
     LOAN_REPAY = 51;
     LOAN_ADD_COLLATERAL = 52;
@@ -155,6 +166,7 @@ enum OrderCommandType {
     LOAN_CROSS_FORCE_LIQUIDATE = 59;
     POOL_DEPOSIT = 60;
     POOL_WITHDRAW = 61;
+    // ===== 系统 / 二进制 =====
     BINARY_DATA_QUERY = 90;
     BINARY_DATA_COMMAND = 91;
     PERSIST_STATE_MATCHING = 110;
@@ -176,7 +188,6 @@ enum MatcherEventType {
     FUNDING_EVENT = 6;
 }
 
-// Message for MatcherTradeEvent
 message MatcherTradeEvent {
     MatcherEventType eventType = 1;
     int32 section = 2;
@@ -192,7 +203,6 @@ message MatcherTradeEvent {
     MatcherTradeEvent next_event = 12;
 }
 
-// Message for L2MarketData
 message L2MarketData {
     int32 ask_sizes = 1;
     int32 bid_sizes = 2;
@@ -204,7 +214,6 @@ message L2MarketData {
     repeated int64 bid_orders = 8;
 }
 
-// Main Order Command message
 message OrderCommand {
     OrderCommandType command = 1;
     int64 order_id = 2;

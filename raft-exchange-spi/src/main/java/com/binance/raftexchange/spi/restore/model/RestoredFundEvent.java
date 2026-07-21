@@ -7,60 +7,64 @@ import java.math.BigDecimal;
 
 /**
  * {@link com.binance.raftexchange.spi.restore.FundEventRestorer} 从 FundEventReportPB 还原出的
- * 资金事件业务视图：触发事件时的账户余额（Balance）与持仓（Position）状态，所有金额已按对应
- * scale 体系从 long 还原为 BigDecimal。
+ * 资金事件业务视图：触发事件时的账户余额（Balance）、持仓（Position）与借贷（Loan）状态，所有金额已按对应
+ * scale 体系从 long 还原为 BigDecimal。字段语义以此类为准，PB 侧只保留字段声明。
+ *
+ * <p>所有字段均为「操作后」的状态快照，不含增量；与本事件无关的域字段为 0（如非 loan 事件的 loan 组全 0）。
+ * interestPaidTotal 是单调递增的累计量，相邻两条相减即得本次量。</p>
  *
  * <p>命名上以「Restored」前缀区别于代码库其他地方表示 long 编码态的
  * BalanceSnapshot / PositionSnapshot / FundEventReport。</p>
  */
 public final class RestoredFundEvent {
 
-    public long              accountId;
-    public FundEventType     eventType;
+    public long              accountId;   // 账户 uid
+    public FundEventType     eventType;   // 事件类型
 
-    // Balance（currency scale）
-    public int        currency;
-    public BigDecimal free   = BigDecimal.ZERO;
-    public BigDecimal locked = BigDecimal.ZERO;
+    // ── Balance（currency scale）
+    public int        currency;                     // 币种 id
+    public BigDecimal free   = BigDecimal.ZERO;     // 可用余额
+    public BigDecimal locked = BigDecimal.ZERO;     // 冻结余额（挂单 / 保证金占用）
 
-    // Position - 基础
-    public int               symbolId;
-    public PositionDirection direction;
-    public int               leverage;
-    public boolean           isolated;
+    // ── Position - 基础
+    public int               symbolId;   // 合约 symbol id
+    public PositionDirection direction;  // 持仓方向
+    public int               leverage;   // 杠杆倍数
+    public boolean           isolated;   // true = 逐仓，false = 全仓
 
-    // Position - base scale
-    public BigDecimal quantity = BigDecimal.ZERO;
-    public BigDecimal bidsQty  = BigDecimal.ZERO;
-    public BigDecimal asksQty  = BigDecimal.ZERO;
+    // ── Position - base scale
+    public BigDecimal quantity = BigDecimal.ZERO;   // 持仓数量
+    public BigDecimal bidsQty  = BigDecimal.ZERO;   // 未成交买单数量
+    public BigDecimal asksQty  = BigDecimal.ZERO;   // 未成交卖单数量
 
-    // Position - quote scale
-    public BigDecimal markPrice        = BigDecimal.ZERO;
-    public BigDecimal liquidationPrice = BigDecimal.ZERO;
+    // ── Position - quote scale
+    public BigDecimal markPrice        = BigDecimal.ZERO; // 标记价格
+    public BigDecimal liquidationPrice = BigDecimal.ZERO; // 强平价格
 
-    // Position - product scale
-    public BigDecimal openPriceSum      = BigDecimal.ZERO;
-    public BigDecimal openInitMarginSum = BigDecimal.ZERO;
-    public BigDecimal cumRealized       = BigDecimal.ZERO;
-    public BigDecimal unrealizedProfit  = BigDecimal.ZERO;
-    public BigDecimal isolatedWallet    = BigDecimal.ZERO;
-    public BigDecimal bidsNotional      = BigDecimal.ZERO;
-    public BigDecimal asksNotional      = BigDecimal.ZERO;
+    // ── Position - product scale（base × quote）
+    public BigDecimal openPriceSum      = BigDecimal.ZERO; // 开仓价总和
+    public BigDecimal openInitMarginSum = BigDecimal.ZERO; // 开仓初始保证金总和
+    public BigDecimal cumRealized       = BigDecimal.ZERO; // 累计已实现盈亏
+    public BigDecimal unrealizedProfit  = BigDecimal.ZERO; // 未实现盈亏
+    public BigDecimal isolatedWallet    = BigDecimal.ZERO; // 逐仓追加保证金钱包
+    public BigDecimal bidsNotional      = BigDecimal.ZERO; // 未成交买单名义价值
+    public BigDecimal asksNotional      = BigDecimal.ZERO; // 未成交卖单名义价值
 
-    // Position - ratio
-    public BigDecimal marginRatio = BigDecimal.ZERO; // 保证金率 = marginRatioScaleK / maintenanceMarginScaleK
+    // ── Position - ratio
+    public BigDecimal marginRatio = BigDecimal.ZERO;  // 保证金率 = 维持保证金 / 资金占用
 
-    // 衍生
-    public BigDecimal avgOpenPrice = BigDecimal.ZERO;
+    // ── 衍生（非 PB 原生，restorer 计算）
+    public BigDecimal avgOpenPrice = BigDecimal.ZERO; // 平均开仓价 = openPriceSum /（quote × quantity）
 
-    // ── Loan - 借贷侧（按 balances 的 currency scale 还原）
-    public boolean    loanIsolated;                     // true = Isolated，false = Cross
-    public BigDecimal debtPrincipal = BigDecimal.ZERO;  // 操作后未偿本金（负债）；放款时已计入 free，勿相加
-    public BigDecimal debtInterest  = BigDecimal.ZERO;  // 操作后未付利息（负债）
+    // ── Loan - 借贷侧（按 Balance 的 currency scale 还原）
+    public boolean    loanIsolated;                        // true = Isolated，false = Cross
+    public BigDecimal debtPrincipal = BigDecimal.ZERO;     // 操作后未偿本金（负债）；放款时已计入 free，勿相加
+    public BigDecimal debtInterest  = BigDecimal.ZERO;     // 操作后未付利息（负债）
     public BigDecimal interestPaidTotal = BigDecimal.ZERO; // 累计已付利息（单调递增，相减得本次量）
 
-    // ── Loan - 抵押侧（按 collateralCurrencyScaleK 还原；Cross 的 BORROW/REPAY 与 MARGIN_CALL 整组为 0）
-    public int        collateralCurrency;
+    // ── Loan - 抵押侧（按抵押币 scale 还原；Cross 的 BORROW/REPAY 与 MARGIN_CALL 整组为 0；
+    //    抵押币 == 借款币时与 Balance 指向同一账户，勿重复计入）
+    public int        collateralCurrency;                  // 抵押币 id
     public BigDecimal collateralPledged = BigDecimal.ZERO; // 操作后已质押抵押物；已含在 collateralLocked 内
     public BigDecimal collateralFree    = BigDecimal.ZERO; // 抵押币账户可用余额
     public BigDecimal collateralLocked  = BigDecimal.ZERO; // 抵押币账户冻结额
