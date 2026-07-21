@@ -173,6 +173,7 @@ public class FundEventsHelper {
         event.unrealizedProfit = position.estimateUnrealizedProfit(priceRecord);
         event.liquidationPrice = position.estimateLiquidationPrice(spec, priceRecord, balance, totalPnl, totalMM);
         event.marginRatioScaleK = position.estimateMarginRatioScaleK(spec, priceRecord, totalMargin);
+        event.maintenanceMarginScaleK = spec.maintenanceMarginScaleK;
     }
 
     /* ============================== 现货 ============================== */

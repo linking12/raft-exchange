@@ -22,11 +22,10 @@ import java.math.MathContext;
  *                                     / unrealizedProfit / isolatedWallet / *Notional
  *   collateral currency scale       → loan 抵押侧 collateralPledged / collateralFree / collateralLocked
  *   bps (10000 = 100%)              → ltv / ltvThreshold
+ *   marginRatioScaleK / maintenanceMarginScaleK → marginRatio（比例，两者相除）
  *
  * loan 借贷侧金额与 free/locked 同属借款币，共用 balances.currencyScaleK；抵押侧是另一个币种，
  * 用 LoanSnapshot 自带的 collateralCurrencyScaleK。
- *
- * 不还原 marginRatio（需要 spec.maintenanceMarginScaleK，PB 未携带）。
  */
 public final class FundEventRestorer {
 
@@ -82,6 +81,9 @@ public final class FundEventRestorer {
             v.isolatedWallet    = div(p.getIsolatedWallet(),    product);
             v.bidsNotional      = div(p.getBidsNotional(),      product);
             v.asksNotional      = div(p.getAsksNotional(),      product);
+
+            // ratio：marginRatio = marginRatioScaleK / maintenanceMarginScaleK
+            v.marginRatio = div(p.getMarginRatioScaleK(), p.getMaintenanceMarginScaleK());
 
             // 衍生 avgOpenPrice = openPriceSum / (quote × quantity_long)
             // 推导：openPriceSum 在 product scale，quantity 在 base scale，
