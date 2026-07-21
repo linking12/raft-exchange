@@ -86,7 +86,6 @@ message OrderBookRecordPB {
   int32 orders = 3;
 }
 
-// OrderBook message definition
 message OrderBookPB {
   int32 symbol = 1;
   repeated OrderBookRecordPB asks = 2;
@@ -96,36 +95,30 @@ message OrderBookPB {
   int64 quoteScaleK = 6;
 }
 
+// 载荷字段含义见 spi.restore.model.RestoredFundEvent（还原后的业务视图）。
 message FundEventReportPB {
   int64 accountId = 1;
   FundEventType eventType = 2;
   BalanceSnapshot balances = 3;
   PositionSnapshot positions = 4;
-  LoanSnapshot loan = 5;   // loan 用户维度事件载荷（LOAN_* 事件才有意义）
+  LoanSnapshot loan = 5;
 }
 
-// loan 用户维度事件快照（非 loan 事件全 0）。字段一律为操作后状态，不含增量；
-// interestPaidTotal 是单调递增的累计量，相邻两条相减即得本次量。
 message LoanSnapshot {
-  reserved 3, 4, 5, 6, 8, 9, 11;  // 曾用字段号，勿复用
+  reserved 3, 4, 5, 6, 8, 9, 11;
   reserved "outstandingPrincipal", "accumulatedInterest", "collateralAmount", "rateBps", "principalDelta", "collateralDelta", "badDebtTotal";
 
-  int32 mode = 1;                 // 0=Isolated，1=Cross
-
-  // ── 借贷侧：币种/精度/可用/冻结见外层 balances(BalanceSnapshot)，金额按 balances.currencyScaleK 还原
-  int64 debtPrincipal = 16;       // 操作后未偿本金（负债）；放款时已计入 balances.free，勿相加
-  int64 debtInterest = 17;        // 操作后未付利息（负债）
-  int64 interestPaidTotal = 10;   // 本笔贷款累计已付利息（单调递增）
-  int64 ltvBps = 7;               // 操作后 LTV =（未偿本金 + 应计利息）/ 抵押物市值，bps（10000 = 100%）
-  int64 thresholdBps = 12;        // 仅 MARGIN_CALL：触发本次预警的 LTV 阈值（bps）
-
-  // ── 抵押侧：金额按 collateralCurrencyScaleK 还原；Cross 的 BORROW / REPAY 与 MARGIN_CALL 整组为 0。
-  // 抵押币 == 借款币时本组与 balances 指向同一账户，勿重复计入。
-  int32 collateralCurrency = 2;        // Isolated = 该 loan 的抵押币；Cross = 本次操作涉及的抵押币
-  int64 collateralCurrencyScaleK = 13; // 抵押币 scale
-  int64 collateralPledged = 18;        // 操作后已质押抵押物；已含在 collateralLocked 内
-  int64 collateralFree = 14;           // 抵押币账户可用余额
-  int64 collateralLocked = 15;         // 抵押币账户冻结额
+  int32 mode = 1;
+  int64 debtPrincipal = 16;
+  int64 debtInterest = 17;
+  int64 interestPaidTotal = 10;
+  int64 ltvBps = 7;
+  int64 thresholdBps = 12;
+  int32 collateralCurrency = 2;
+  int64 collateralCurrencyScaleK = 13;
+  int64 collateralPledged = 18;
+  int64 collateralFree = 14;
+  int64 collateralLocked = 15;
 }
 
 message BalanceSnapshot {
@@ -151,12 +144,11 @@ message PositionSnapshot {
   int64 unrealizedProfit = 13;
   int64 liquidationPrice = 14;
   int64 marginRatioScaleK = 15;
-  // marginRatioScaleK 的还原除数（= spec.maintenanceMarginScaleK）：marginRatio = marginRatioScaleK / maintenanceMarginScaleK
-  int64 maintenanceMarginScaleK = 20;
   int64 bidsNotional = 16;
   int64 asksNotional = 17;
   int64 bidsQty = 18;
   int64 asksQty = 19;
+  int64 maintenanceMarginScaleK = 20;
 }
 
 enum FundEventType {

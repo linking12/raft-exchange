@@ -33,37 +33,37 @@ import java.math.BigDecimal;
  */
 public final class RestoredSpotExecution {
 
-    public long        executionId;
-    public ExecType    executionType;
-    public OrderStatus orderStatus;
-    public int         symbol;
-    public long        accountId;
-    public long        clOrdId;
-    public long        orderId;
-    public OrderType   orderType;
-    public OrderAction side;
-    public long        orderCreationTime;
-    public long        tradeId;
-    public boolean     isMaker;
-    public boolean     workingIndicator;
+    public long        executionId;       // 执行报告唯一 id
+    public ExecType    executionType;     // 执行类型（NEW/TRADE/REDUCE/CANCEL/REJECT）
+    public OrderStatus orderStatus;       // 订单状态
+    public int         symbol;            // 现货 symbol id
+    public long        accountId;         // 账户 uid
+    public long        clOrdId;           // 客户端订单 id
+    public long        orderId;           // 引擎订单 id
+    public OrderType   orderType;         // 订单类型（GTC/IOC/FOK/…）
+    public OrderAction side;              // 买 / 卖
+    public long        orderCreationTime; // 下单时间（ms）
+    public long        tradeId;           // 成交 id（仅 TRADE 事件有意义）
+    public boolean     isMaker;           // 本次成交是否为 maker
+    public boolean     workingIndicator;  // 订单是否仍挂在盘口
 
     // base scale
-    public BigDecimal qty           = BigDecimal.ZERO;
-    public BigDecimal lastQty       = BigDecimal.ZERO;
-    public BigDecimal cumulativeQty = BigDecimal.ZERO;
+    public BigDecimal qty           = BigDecimal.ZERO; // 委托数量
+    public BigDecimal lastQty       = BigDecimal.ZERO; // 本次成交数量
+    public BigDecimal cumulativeQty = BigDecimal.ZERO; // 累计成交数量
 
     // quote scale
-    public BigDecimal price         = BigDecimal.ZERO;
-    public BigDecimal lastPrice     = BigDecimal.ZERO;
-    public BigDecimal quoteOrderQty = BigDecimal.ZERO;
+    public BigDecimal price         = BigDecimal.ZERO; // 委托价
+    public BigDecimal lastPrice     = BigDecimal.ZERO; // 本次成交价
+    public BigDecimal quoteOrderQty = BigDecimal.ZERO; // 报价币计的订单额（budget 单，实为 product scale，见类注释）
 
     // product scale
-    public BigDecimal lastQuoteQty       = BigDecimal.ZERO;
-    public BigDecimal cumulativeQuoteQty = BigDecimal.ZERO;
-    public BigDecimal commission         = BigDecimal.ZERO;
+    public BigDecimal lastQuoteQty       = BigDecimal.ZERO; // 本次成交额（quote）
+    public BigDecimal cumulativeQuoteQty = BigDecimal.ZERO; // 累计成交额（quote）
+    public BigDecimal commission         = BigDecimal.ZERO; // 手续费（quote 币结算）
 
     // currency ID，pass-through
-    public int commissionAsset;
+    public int commissionAsset; // 手续费币种 id
 
     @Override
     public String toString() {

@@ -13,17 +13,17 @@ import java.util.List;
  */
 public final class RestoredOrderBook {
 
-    public int  symbol;
-    public long timestamp;
+    public int  symbol;    // symbol id
+    public long timestamp; // 盘口快照时间（ms）
 
-    public List<Record> asks = new ArrayList<>();
-    public List<Record> bids = new ArrayList<>();
+    public List<Record> asks = new ArrayList<>(); // 卖档
+    public List<Record> bids = new ArrayList<>(); // 买档
 
     /** 单档行情记录：价格、累计挂单量、订单数。 */
     public static final class Record {
-        public BigDecimal price  = BigDecimal.ZERO;  // quote scale
-        public BigDecimal volume = BigDecimal.ZERO;  // base scale
-        public int        orders;                    // 订单数，无 scale
+        public BigDecimal price  = BigDecimal.ZERO;  // 档位价格（quote scale）
+        public BigDecimal volume = BigDecimal.ZERO;  // 该档累计挂单量（base scale）
+        public int        orders;                    // 该档订单数，无 scale
 
         @Override
         public String toString() {

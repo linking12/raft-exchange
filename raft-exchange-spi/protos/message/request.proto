@@ -9,13 +9,55 @@ import "message/common.proto";
 
 // ========================= API Commands =========================
 
-// Binary Data Command
+// ===================== 账户 / 通用 =====================
+
+message ApiAddUser {
+  int64 uid = 1;
+}
+
+message ApiSuspendUser {
+  int64 uid = 1;
+}
+
+message ApiResumeUser {
+  int64 uid = 1;
+}
+
+message ApiAdjustUserBalance {
+  int64 uid = 1;
+  int32 currency = 2;
+  int64 amount = 3;
+  int64 transactionId = 4;
+  BalanceAdjustmentType adjustmentType = 5;
+}
+
+// 用户间同币种原子转账（fromUid→toUid，跨 shard；transactionId 幂等，走 UserProfile.processedTransactionIds）
+message ApiInternalTransfer {
+  int64 fromUid = 1;
+  int64 toUid = 2;
+  int32 currency = 3;
+  int64 amount = 4;
+  int64 transactionId = 5;
+}
+
+message ApiNop {
+}
+
 message ApiBinaryDataCommand {
   int32 transferId = 1;
   BinaryDataCommand data = 2;
 }
 
-// Place Order Command
+message ApiResetFee {
+}
+
+message ApiOrderBookRequest {
+  int32 symbol = 1;
+  int32 size = 2;
+}
+
+// ===================== 现货 & 通用交易 =====================
+
 message ApiPlaceOrder {
   int64 price = 1;
   int64 size = 2;
@@ -31,23 +73,27 @@ message ApiPlaceOrder {
   bool reduceOnly = 12;
 }
 
-// 用户间同币种原子转账（fromUid→toUid，跨 shard；transactionId 幂等，走 UserProfile.processedTransactionIds）
-message ApiInternalTransfer {
-  int64 fromUid = 1;
-  int64 toUid = 2;
-  int32 currency = 3;
-  int64 amount = 4;
-  int64 transactionId = 5;
+message ApiMoveOrder {
+  int64 orderId = 1;
+  int64 newPrice = 2;
+  int64 uid = 3;
+  int32 symbol = 4;
 }
 
-// Adjust User Balance Command
-message ApiAdjustUserBalance {
-  int64 uid = 1;
-  int32 currency = 2;
-  int64 amount = 3;
-  int64 transactionId = 4;
-  BalanceAdjustmentType adjustmentType = 5;
+message ApiCancelOrder {
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
 }
+
+message ApiReduceOrder {
+  int64 orderId = 1;
+  int64 uid = 2;
+  int32 symbol = 3;
+  int64 reduceSize = 4;
+}
+
+// ===================== 期货 =====================
 
 message ApiClosePosition {
   int64 price = 1;
@@ -56,54 +102,6 @@ message ApiClosePosition {
   OrderAction action = 4;
   int64 uid = 5;
   int32 symbol = 6;
-}
-
-// Order Book Request Command
-message ApiOrderBookRequest {
-  int32 symbol = 1;
-  int32 size = 2;
-}
-
-// No Operation Command
-message ApiNop {
-}
-
-// Move Order Command
-message ApiMoveOrder {
-  int64 orderId = 1;
-  int64 newPrice = 2;
-  int64 uid = 3;
-  int32 symbol = 4;
-}
-
-// Cancel Order Command
-message ApiCancelOrder {
-  int64 orderId = 1;
-  int64 uid = 2;
-  int32 symbol = 3;
-}
-
-// Add User Command
-message ApiAddUser {
-  int64 uid = 1;
-}
-
-// Reduce Order Command
-message ApiReduceOrder {
-  int64 orderId = 1;
-  int64 uid = 2;
-  int32 symbol = 3;
-  int64 reduceSize = 4;
-}
-
-// Suspend User Command
-message ApiSuspendUser {
-  int64 uid = 1;
-}
-
-// Resume User Command
-message ApiResumeUser {
-  int64 uid = 1;
 }
 
 message ApiAdjustLeverage {
@@ -144,9 +142,6 @@ message ApiSettlePNL {
   int64 transactionId = 1;
   int32 symbol = 2;
   int64 settlePrice = 3;
-}
-
-message ApiResetFee {
 }
 
 // 强平/IF/ADL 经 raft 复制到所有节点 FSM apply，避免 follower 与 leader 状态分叉。
@@ -389,7 +384,6 @@ message ApiCommand {
   }
 }
 
-
 // ==================== Batch / Binary Data Commands ====================
 
 enum BinaryCommandType {
@@ -417,14 +411,12 @@ message BatchAddCurrenciesCommand {
   map<int32, CoreCurrencySpecification> currencies = 1;
 }
 
-// Spot Loan Config (per-symbol)
 message SpotLoanConfig {
   int32 symbolId = 1;
   int32 loanInitialLtvBps = 2;   // 0 = 关闭 loan
   reserved 3, 4, 5, 6, 7, 8;
 }
 
-// Spot Loan Global Config
 message SpotLoanGlobalConfig {
   int32 numeraireCcy = 1;
   int32 crossLiquidationLtvBps = 2;
@@ -440,12 +432,10 @@ enum SpotLoanRatePreset {
   RATE_PRESET_AGGRESSIVE = 3;
 }
 
-// Spot Loan Rate Curve Config
 message SpotLoanRateCurveConfig {
   SpotLoanRatePreset preset = 1;
 }
 
-// Add Loan Command
 message BatchAddLoanCommand {
   SpotLoanGlobalConfig global = 1;
   SpotLoanConfig symbol = 2;
