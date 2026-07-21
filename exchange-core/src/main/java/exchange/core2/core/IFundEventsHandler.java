@@ -136,6 +136,7 @@ public interface IFundEventsHandler {
             private long unrealizedProfit;
             private long liquidationPrice;
             private long marginRatioScaleK;
+            private long maintenanceMarginScaleK; // marginRatioScaleK 的还原除数
             private long bidsNotional; // 未成交部分名义价值，pendingBuySize * pendingBuyAvgPrice
             private long asksNotional;
             private long bidsQty;  // 剩余买单数量，pendingBuySize
@@ -173,6 +174,7 @@ public interface IFundEventsHandler {
                 unrealizedProfit = 0L;
                 liquidationPrice = 0L;
                 marginRatioScaleK = 0L;
+                maintenanceMarginScaleK = 0L;
                 bidsNotional = 0L;
                 asksNotional = 0L;
                 bidsQty = 0L;
@@ -195,6 +197,7 @@ public interface IFundEventsHandler {
                 this.unrealizedProfit = fundEvent.unrealizedProfit;
                 this.liquidationPrice = fundEvent.liquidationPrice;
                 this.marginRatioScaleK = fundEvent.marginRatioScaleK;
+                this.maintenanceMarginScaleK = fundEvent.maintenanceMarginScaleK;
                 this.bidsNotional = Math.multiplyExact(fundEvent.pendingBuySize, fundEvent.pendingBuyAvgPrice);
                 this.asksNotional = Math.multiplyExact(fundEvent.pendingSellSize, fundEvent.pendingSellAvgPrice);
                 this.bidsQty = fundEvent.pendingBuySize;

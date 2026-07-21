@@ -189,7 +189,9 @@ public class IEventsHandlerByKafka implements ITradeEventsHandler, IFundEventsHa
                 .setLeverage(position.getLeverage()).setOpenInitMarginSum(position.getOpenInitMarginSum())
                 .setMarkPrice(position.getMarkPrice()).setUnrealizedProfit(position.getUnrealizedProfit())
                 .setLiquidationPrice(position.getLiquidationPrice())
-                .setMarginRatioScaleK(position.getMarginRatioScaleK()).setBidsNotional(position.getBidsNotional())
+                .setMarginRatioScaleK(position.getMarginRatioScaleK())
+                .setMaintenanceMarginScaleK(position.getMaintenanceMarginScaleK())
+                .setBidsNotional(position.getBidsNotional())
                 .setAsksNotional(position.getAsksNotional()).setBidsQty(position.getBidsQty())
                 .setAsksQty(position.getAsksQty()));
         }

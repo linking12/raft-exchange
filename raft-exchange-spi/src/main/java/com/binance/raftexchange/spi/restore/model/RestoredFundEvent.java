@@ -47,6 +47,9 @@ public final class RestoredFundEvent {
     public BigDecimal bidsNotional      = BigDecimal.ZERO;
     public BigDecimal asksNotional      = BigDecimal.ZERO;
 
+    // Position - ratio
+    public BigDecimal marginRatio = BigDecimal.ZERO; // 保证金率 = marginRatioScaleK / maintenanceMarginScaleK
+
     // 衍生
     public BigDecimal avgOpenPrice = BigDecimal.ZERO;
 
@@ -79,6 +82,7 @@ public final class RestoredFundEvent {
             + ", cumRealized=" + cumRealized + ", unrealizedProfit=" + unrealizedProfit
             + ", isolatedWallet=" + isolatedWallet
             + ", markPrice=" + markPrice + ", liquidationPrice=" + liquidationPrice
+            + ", marginRatio=" + marginRatio
             + ", bidsQty=" + bidsQty + ", asksQty=" + asksQty
             + ", bidsNotional=" + bidsNotional + ", asksNotional=" + asksNotional
             + ", loanIsolated=" + loanIsolated

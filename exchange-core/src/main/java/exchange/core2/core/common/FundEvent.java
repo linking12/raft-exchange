@@ -91,6 +91,7 @@ public class FundEvent {
     public long liquidationPrice;       // 强平价格
     public long marginRatioScaleK;      // 保证金率 = 维持保证金 / 资金占用 × 缩放系数。
                                         // 全仓资金占用 = 当前币种余额 + 该币种总未实现盈亏；逐仓 = 开仓保证金 + extraMargin
+    public long maintenanceMarginScaleK; // marginRatioScaleK 的还原除数（= spec.maintenanceMarginScaleK）
     public long markPrice;              // 标记价格
 
     // ==================== 现货借贷 loan（orderId = loanId、uid = 借款人）====================
@@ -214,6 +215,7 @@ public class FundEvent {
         unrealizedProfit = 0;
         liquidationPrice = 0;
         marginRatioScaleK = 0;
+        maintenanceMarginScaleK = 0;
         markPrice = 0;
         loanMode = 0;
         loanCollateralCurrency = 0;
@@ -234,7 +236,7 @@ public class FundEvent {
         return Objects.hash(processed, eventType, orderId, uid, currency, currencyScaleK, free, locked, symbol, baseScaleK,
                 quoteScaleK, direction, openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize,
                 pendingSellAvgPrice, pendingBuyAvgPrice, leverage, marginMode, extraMargin, unrealizedProfit, liquidationPrice,
-                marginRatioScaleK, markPrice, loanMode, loanCollateralCurrency, loanDebtPrincipal,
+                marginRatioScaleK, maintenanceMarginScaleK, markPrice, loanMode, loanCollateralCurrency, loanDebtPrincipal,
                 loanDebtInterest, loanCollateralPledged, loanLtvBps, loanInterestPaidTotal, loanThresholdBps, loanCollateralCurrencyScaleK,
                 loanCollateralFree, loanCollateralLocked, nextEvent);
     }
@@ -253,7 +255,8 @@ public class FundEvent {
             && openPriceSum == other.openPriceSum && profit == other.profit && pendingSellSize == other.pendingSellSize
             && pendingBuySize == other.pendingBuySize && pendingSellAvgPrice == other.pendingSellAvgPrice && pendingBuyAvgPrice == other.pendingBuyAvgPrice
             && leverage == other.leverage && marginMode == other.marginMode && extraMargin == other.extraMargin && unrealizedProfit == other.unrealizedProfit
-            && liquidationPrice == other.liquidationPrice && marginRatioScaleK == other.marginRatioScaleK && markPrice == other.markPrice
+            && liquidationPrice == other.liquidationPrice && marginRatioScaleK == other.marginRatioScaleK
+            && maintenanceMarginScaleK == other.maintenanceMarginScaleK && markPrice == other.markPrice
             && loanMode == other.loanMode && loanCollateralCurrency == other.loanCollateralCurrency
             && loanDebtPrincipal == other.loanDebtPrincipal && loanDebtInterest == other.loanDebtInterest
             && loanCollateralPledged == other.loanCollateralPledged && loanLtvBps == other.loanLtvBps
@@ -272,7 +275,8 @@ public class FundEvent {
             + ", openPriceSum=" + openPriceSum + ", profit=" + profit + ", pendingSellSize=" + pendingSellSize
             + ", pendingBuySize=" + pendingBuySize + ", pendingSellAvgPrice=" + pendingSellAvgPrice + ", pendingBuyAvgPrice=" + pendingBuyAvgPrice
             + ", leverage=" + leverage + ", marginMode=" + marginMode + ", extraMargin=" + extraMargin + ", unrealizedProfit=" + unrealizedProfit
-            + ", liquidationPrice=" + liquidationPrice + ", marginRatioScaleK=" + marginRatioScaleK + ", markPrice=" + markPrice
+            + ", liquidationPrice=" + liquidationPrice + ", marginRatioScaleK=" + marginRatioScaleK
+            + ", maintenanceMarginScaleK=" + maintenanceMarginScaleK + ", markPrice=" + markPrice
             + ", loanMode=" + loanMode + ", loanCollateralCurrency=" + loanCollateralCurrency
             + ", loanDebtPrincipal=" + loanDebtPrincipal + ", loanDebtInterest=" + loanDebtInterest
             + ", loanCollateralPledged=" + loanCollateralPledged + ", loanLtvBps=" + loanLtvBps

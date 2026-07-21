@@ -151,6 +151,8 @@ message PositionSnapshot {
   int64 unrealizedProfit = 13;
   int64 liquidationPrice = 14;
   int64 marginRatioScaleK = 15;
+  // marginRatioScaleK 的还原除数（= spec.maintenanceMarginScaleK）：marginRatio = marginRatioScaleK / maintenanceMarginScaleK
+  int64 maintenanceMarginScaleK = 20;
   int64 bidsNotional = 16;
   int64 asksNotional = 17;
   int64 bidsQty = 18;
