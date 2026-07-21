@@ -549,8 +549,8 @@ class LiveClusterLoanE2ETest extends LiveClusterE2EBase {
         var report = api.queryTotalCurrencyBalanceReport().join();
         long sum = 0;
         for (var bucket : List.of(report.getAccountBalancesMap(), report.getExtraMarginMap(),
-            report.getExchangeLockedMap(), report.getLoanBalancesMap(), report.getFeesMap(),
-            report.getAdjustmentsMap(), report.getSuspendsMap(), report.getIfBalancesMap())) {
+            report.getExchangeLockedMap(), report.getLoanBalancesMap(), report.getLoanCollateralMap(),
+            report.getFeesMap(), report.getAdjustmentsMap(), report.getSuspendsMap(), report.getIfBalancesMap())) {
             for (long v : bucket.values()) {
                 sum += v;
             }
