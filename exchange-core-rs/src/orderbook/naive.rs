@@ -38,6 +38,11 @@ impl OrdersBucketNaive {
         self.entries.is_empty()
     }
 
+    /// 桶内挂单数量。对应 Java `OrdersBucketNaive.getNumOrders`。
+    pub fn num_orders(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn put(&mut self, order: Order) {
         self.total_volume += order.remaining();
         let seq = self.next_seq;
@@ -68,6 +73,12 @@ impl OrdersBucketNaive {
         o.size -= reduce_by;
         self.total_volume -= reduce_by;
         Some(o.clone())
+    }
+
+    /// 按 FIFO（挂单顺序）只读遍历桶内订单。对应 Java `OrdersBucketNaive.forEachOrder` /
+    /// `getAllOrders`（用于 `state_hash` 的确定性折叠，只读、不改变桶状态）。
+    pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
+        self.entries.values()
     }
 
     /// 从桶头 FIFO 撮合 `to_collect`，返回剩余未撮合量。
@@ -101,11 +112,12 @@ impl OrdersBucketNaive {
 ///
 /// - `ask_buckets`：升序（`BTreeMap` 自然序），最优价 = 最小 key。
 /// - `bid_buckets`：存储用升序 key，但按买方最优价（最高价）遍历时用 `.iter().rev()` / `.range(..).rev()`。
-/// - `id_index`：order_id -> (side, price)，用于 O(log n) 定位挂单所在的桶（cancel/reduce/move 在 Task 6 补全）。
+/// - `id_index`：order_id -> (side, price, uid)，用于 O(log n) 定位挂单所在的桶（cancel/reduce/move），
+///   `uid` 用于复刻 Java `idMap.get(orderId).uid != cmd.uid` 的所有权校验（Task 7 补全，此前 Task 6 遗留）。
 pub struct OrderBookNaive {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,
-    id_index: BTreeMap<i64, (OrderAction, i64)>,
+    id_index: BTreeMap<i64, (OrderAction, i64, i64)>,
 }
 
 impl OrderBookNaive {
@@ -139,8 +151,10 @@ impl OrderBookNaive {
 
         let order_id = cmd.order_id;
         if self.id_index.contains_key(&order_id) {
-            // 重复 order id：能撮合但不能挂单（对应 Java 的 duplicate-id 分支）
-            // TODO(Task 7): emit Java reject event for duplicate order id
+            // 重复 order id：能撮合但不能挂单。对应 Java `OrderBookNaiveImpl.newOrderPlaceGtc`：
+            // `if (idMap.containsKey(newOrderId)) { attachRejectEvent(cmd, cmd.size - filledSize); return; }`
+            // 走到这里已确定 filled < size（filled == size 的完全成交分支在上面已经 return 过）。
+            Self::attach_reject_event(cmd, size - filled);
             return;
         }
 
@@ -159,7 +173,7 @@ impl OrderBookNaive {
             .entry(price)
             .or_insert_with(|| OrdersBucketNaive::new(price))
             .put(order);
-        self.id_index.insert(order_id, (action, price));
+        self.id_index.insert(order_id, (action, price, cmd.uid));
     }
 
     /// 即时撮合 taker（GTC / IOC / FOK 共用主循环，价格受限）。对应 Java `tryMatchInstantly`。
@@ -236,7 +250,7 @@ impl OrderBookNaive {
     /// 预算已由调用方预先校验足够覆盖 `taker_size`）。
     fn match_against(
         buckets: &mut BTreeMap<i64, OrdersBucketNaive>,
-        id_index: &mut BTreeMap<i64, (OrderAction, i64)>,
+        id_index: &mut BTreeMap<i64, (OrderAction, i64, i64)>,
         taker_price_limit: Option<i64>,
         taker_size: i64,
         taker_action: OrderAction,
@@ -311,7 +325,7 @@ impl OrderBookNaive {
     /// 预算耗尽即停（未吃满的剩余量由调用方走 reject）。
     fn match_against_budget(
         buckets: &mut BTreeMap<i64, OrdersBucketNaive>,
-        id_index: &mut BTreeMap<i64, (OrderAction, i64)>,
+        id_index: &mut BTreeMap<i64, (OrderAction, i64, i64)>,
         taker_size: i64,
         mut remaining_budget: i64,
         taker_action: OrderAction,
@@ -535,15 +549,17 @@ impl IOrderBook for OrderBookNaive {
     /// 发一枚 REDUCE 事件代表释放的剩余量（`active_order_completed=true`）。
     /// 对应 Java `OrderBookNaiveImpl.cancelOrder` + `OrderBookEventsHelper.sendReduceEvent`。
     /// 未知 order_id → `MatchingUnknownOrderId`（对应 Java `idMap.get == null`）。
-    ///
-    /// 注：Java 还会校验 `order.uid == cmd.uid`（防止撤销他人订单）；本移植阶段 `id_index` 尚未
-    /// 携带 uid（见 Task 6 报告 concerns），暂未复刻该所有权校验。
+    /// 同样地，`order.uid != cmd.uid`（撤销他人订单）也复用 `MatchingUnknownOrderId`——
+    /// 对应 Java `if (order == null || order.uid != cmd.uid) return MATCHING_UNKNOWN_ORDER_ID;`。
     fn cancel_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
-        let (action, price) = match self.id_index.get(&order_id) {
+        let (action, price, uid) = match self.id_index.get(&order_id) {
             Some(&v) => v,
             None => return CommandResultCode::MatchingUnknownOrderId,
         };
+        if uid != cmd.uid {
+            return CommandResultCode::MatchingUnknownOrderId;
+        }
 
         let buckets = self.buckets_by_action_mut(action);
         let order = buckets
@@ -575,7 +591,9 @@ impl IOrderBook for OrderBookNaive {
     /// 部分撤销：把订单剩余量减少 `cmd.size`（超过剩余量则整单撤销，等价 cancel）。
     /// 发一枚 REDUCE 事件，`size` = 实际减少量，`active_order_completed` = 是否整单移除。
     /// 对应 Java `OrderBookNaiveImpl.reduceOrder`。
-    /// 未知 order_id → `MatchingUnknownOrderId`；请求量 <= 0 → `MatchingReduceFailedWrongSize`。
+    /// 未知 order_id → `MatchingUnknownOrderId`；请求量 <= 0 → `MatchingReduceFailedWrongSize`；
+    /// `order.uid != cmd.uid`（减他人订单）同样归为 `MatchingUnknownOrderId`（对应 Java 语义，见 cancel_order 注释）。
+    /// 注意顺序：Java 先判 `requestedReduceSize <= 0`，再查订单是否存在/属主——此处保持一致。
     fn reduce_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let requested = cmd.size;
@@ -583,10 +601,13 @@ impl IOrderBook for OrderBookNaive {
             return CommandResultCode::MatchingReduceFailedWrongSize;
         }
 
-        let (action, price) = match self.id_index.get(&order_id) {
+        let (action, price, uid) = match self.id_index.get(&order_id) {
             Some(&v) => v,
             None => return CommandResultCode::MatchingUnknownOrderId,
         };
+        if uid != cmd.uid {
+            return CommandResultCode::MatchingUnknownOrderId;
+        }
 
         let buckets = self.buckets_by_action_mut(action);
         let remaining = buckets
@@ -630,7 +651,8 @@ impl IOrderBook for OrderBookNaive {
 
     /// 移价：撤旧价（桶空则删桶），按新价重新走即时撮合主路径（可能立即成交，也可能挂在新价）。
     /// 对应 Java `OrderBookNaiveImpl.moveOrder`（`subtreeForMatching` + `tryMatchInstantly`）。
-    /// 未知 order_id → `MatchingUnknownOrderId`。
+    /// 未知 order_id → `MatchingUnknownOrderId`；`order.uid != cmd.uid`（移他人订单）同样归为
+    /// `MatchingUnknownOrderId`（对应 Java 语义，见 cancel_order 注释）。
     ///
     /// 注（deferred）：Java 对 `CURRENCY_EXCHANGE_PAIR` 类型 symbol 的 BID 移价会额外校验
     /// `newPrice <= order.reserveBidPrice`（否则 `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`）。
@@ -641,10 +663,13 @@ impl IOrderBook for OrderBookNaive {
         let order_id = cmd.order_id;
         let new_price = cmd.price;
 
-        let (action, old_price) = match self.id_index.get(&order_id) {
+        let (action, old_price, uid) = match self.id_index.get(&order_id) {
             Some(&v) => v,
             None => return CommandResultCode::MatchingUnknownOrderId,
         };
+        if uid != cmd.uid {
+            return CommandResultCode::MatchingUnknownOrderId;
+        }
 
         let buckets = self.buckets_by_action_mut(action);
         let mut order = buckets
@@ -676,7 +701,7 @@ impl IOrderBook for OrderBookNaive {
             .entry(new_price)
             .or_insert_with(|| OrdersBucketNaive::new(new_price))
             .put(order);
-        self.id_index.insert(order_id, (action, new_price));
+        self.id_index.insert(order_id, (action, new_price, uid));
 
         CommandResultCode::Success
     }
@@ -714,9 +739,45 @@ impl IOrderBook for OrderBookNaive {
         L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
     }
 
-    /// 占位实现：确定性折叠 hash（Task 7 会最终确定真正的 state_hash 算法）。
+    /// 确定性状态 hash：按撮合优先级顺序折叠簿内每张挂单的关键字段。
+    /// 对应 Java `IOrderBook.stateHash`（`Objects.hash(stateHashStream(askOrdersStream), stateHashStream(bidOrdersStream), symbolSpec.stateHash())`）
+    /// 的整体形状——ask 侧按价格升序、bid 侧按价格降序遍历（各自再按 FIFO 挂单序），
+    /// 用 `h = h*31 + orderHash` 滚动折叠（对应 Java `HashingUtils.stateHashStream`）。
+    ///
+    /// 与 Java 的差异（有意，任务书允许）：
+    /// - 不折叠 `symbolSpec.stateHash()`——P1 阶段尚无 `CoreSymbolSpecification`；
+    /// - `orderHash` 只取我们目前持有的字段（order_id/action/price/size/filled/uid），
+    ///   Java 版还含 orderType/command/reserveBidPrice/filledNotional/userCookie——这些字段本移植阶段
+    ///   要么不存在、要么恒为默认值，纳入不会增加确定性/敏感性，故略去。
+    /// 因此不保证与 Java 侧数值相等，只保证「同操作序列 → 同 hash，不同状态 → 不同 hash」。
     fn state_hash(&self) -> i32 {
-        0
+        fn order_hash(o: &Order) -> i64 {
+            let mut h: i64 = 17;
+            h = h.wrapping_mul(31).wrapping_add(o.order_id);
+            h = h.wrapping_mul(31).wrapping_add(o.action.code() as i64);
+            h = h.wrapping_mul(31).wrapping_add(o.price);
+            h = h.wrapping_mul(31).wrapping_add(o.size);
+            h = h.wrapping_mul(31).wrapping_add(o.filled);
+            h = h.wrapping_mul(31).wrapping_add(o.reserve_bid_price);
+            h = h.wrapping_mul(31).wrapping_add(o.uid);
+            h
+        }
+
+        let mut h: i64 = 0;
+        // ask 侧：BTreeMap 天然升序 == 最优价（最低价）优先。
+        for bucket in self.ask_buckets.values() {
+            for order in bucket.iter_orders() {
+                h = h.wrapping_mul(31).wrapping_add(order_hash(order));
+            }
+        }
+        // bid 侧：按买方最优价（最高价）优先，即降序遍历。
+        for bucket in self.bid_buckets.values().rev() {
+            for order in bucket.iter_orders() {
+                h = h.wrapping_mul(31).wrapping_add(order_hash(order));
+            }
+        }
+        // 折叠 i64 -> i32（对应 Java `Long.hashCode`: high ^ low 32 位）。
+        ((h >> 32) as i32) ^ (h as i32)
     }
 }
 
@@ -951,6 +1012,40 @@ mod ob_tests {
         assert!(book.fill_l2(10).ask_prices.is_empty());
     }
 
+    // ---- Task 7: uid 所有权校验（补 Task 6 遗留的 concerns）----
+
+    #[test]
+    fn cancel_other_users_order_returns_unknown() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10); // uid=1（place() 用 order_id 当 uid）
+
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, uid: 999, ..Default::default() };
+        assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+        // 订单未被撤销，仍在簿上
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn reduce_other_users_order_returns_unknown() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, size: 3, uid: 999, ..Default::default() };
+        assert_eq!(book.reduce_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn move_other_users_order_returns_unknown() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 105, uid: 999, ..Default::default() };
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+        // 未被移价
+        assert_eq!(book.fill_l2(10).ask_prices, vec![100]);
+    }
+
     #[test]
     fn move_unknown_returns_error() {
         let mut book = OrderBookNaive::new();
@@ -1023,6 +1118,106 @@ mod ob_tests {
         assert!(l2.bid_volumes.is_empty());
     }
 
+    // ---- Task 7: dup-id reject + state_hash ----
+
+    /// 对应 Java `OrderBookNaiveImpl.newOrderPlaceGtc` 的 duplicate-id 分支
+    /// （`OrderBookBaseTest.shouldIgnoredDuplicateOrder` 覆盖同语义，但那边用的是"零撮合"场景；
+    /// 这里额外覆盖"先撮合、再因重复 id 拒绝剩余"的分支，确保 dup-id 检查在 `try_match_instantly`
+    /// 之后触发，且不影响已发生的撮合）。
+    ///
+    /// 关键构造：order_id=1 的挂单价格设在 taker 撮合价范围之外（不会被这次撮合吃掉），
+    /// 因此撮合结束后 id_index 里 order_id=1 依然存在 —— 触发 dup-id 拒绝剩余量。
+    #[test]
+    fn duplicate_order_id_matches_then_rejects_remainder_and_does_not_place() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10); // 占用 order_id=1，价格 100（本次撮合吃不到）
+        place(&mut book, 2, OrderAction::Ask, 90, 6);   // 会被撮合掉的另一张挂单
+
+        // 复用 order_id=1（重复 id）下买单：价格 95 只能吃到 90 这一档（6），吃不到 100 那档
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 95, size: 10,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 99, ..Default::default() };
+        book.new_order(&mut cmd);
+
+        let head = cmd.matcher_event.as_ref().expect("应有事件链：先撮合，再 reject 剩余");
+        assert_eq!(head.event_type, MatcherEventType::Reject);
+        assert_eq!(head.size, 4); // 10 - 6 撮合 = 4 被拒绝
+        let trade = head.next.as_ref().expect("reject 之后应有先前的成交事件");
+        assert_eq!(trade.event_type, MatcherEventType::Trade);
+        assert_eq!(trade.maker_order_id, 2);
+        assert_eq!(trade.size, 6);
+
+        // 原 order_id=1 的挂单（100@10）完好未变；被吃掉的 order_id=2 已消失；新买单未挂簿
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100]);
+        assert_eq!(l2.ask_volumes, vec![10]);
+        assert!(l2.bid_prices.is_empty());
+    }
+
+    /// 未匹配到任何对手单时，重复 id 同样被 reject 整个剩余量（未成交部分即整单）。
+    #[test]
+    fn duplicate_order_id_full_reject_when_no_match() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10); // 挂卖 10 @100，占用 order_id=1
+
+        // 再次用 order_id=1 挂买单，价格不交叉（不会撮合到 order_id=1 自己，因为买价<卖价）
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 50, size: 7,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 99, ..Default::default() };
+        book.new_order(&mut cmd);
+
+        let ev = cmd.matcher_event.as_ref().expect("应有 reject 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, 7);
+        assert!(ev.next.is_none());
+
+        // 原挂单（卖 10 @100）未受影响
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn state_hash_deterministic_for_same_operation_sequence() {
+        let build = || {
+            let mut book = OrderBookNaive::new();
+            place(&mut book, 1, OrderAction::Ask, 100, 10);
+            place(&mut book, 2, OrderAction::Ask, 101, 5);
+            place(&mut book, 3, OrderAction::Bid, 90, 7);
+            book
+        };
+        let a = build();
+        let b = build();
+        assert_eq!(a.state_hash(), b.state_hash());
+    }
+
+    #[test]
+    fn state_hash_changes_with_different_book_state() {
+        let mut base = OrderBookNaive::new();
+        place(&mut base, 1, OrderAction::Ask, 100, 10);
+        let h1 = base.state_hash();
+
+        // 不同价格
+        let mut diff_price = OrderBookNaive::new();
+        place(&mut diff_price, 1, OrderAction::Ask, 101, 10);
+        assert_ne!(h1, diff_price.state_hash());
+
+        // 不同 size
+        let mut diff_size = OrderBookNaive::new();
+        place(&mut diff_size, 1, OrderAction::Ask, 100, 11);
+        assert_ne!(h1, diff_size.state_hash());
+
+        // 多一张挂单
+        let mut diff_extra = OrderBookNaive::new();
+        place(&mut diff_extra, 1, OrderAction::Ask, 100, 10);
+        place(&mut diff_extra, 2, OrderAction::Bid, 90, 3);
+        assert_ne!(h1, diff_extra.state_hash());
+
+        // 部分撮合后剩余量变化也应改变 hash
+        let mut partially_filled = OrderBookNaive::new();
+        place(&mut partially_filled, 1, OrderAction::Ask, 100, 10);
+        let mut taker = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 3,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Ioc), uid: 2, ..Default::default() };
+        partially_filled.new_order(&mut taker);
+        assert_ne!(h1, partially_filled.state_hash());
+    }
+
     #[test]
     fn fill_l2_large_size_returns_all_levels() {
         let mut book = OrderBookNaive::new();
@@ -1068,4 +1263,1203 @@ mod tests {
         assert_eq!(collected, vec![(1, 10), (2, 2)]);
         assert_eq!(b.total_volume(), 3);
     }
+
+    // ===================================================================
+    // 翻译自 Java OrdersBucketNaiveTest（exchange-core/src/test/java/.../orderbook/OrdersBucketNaiveTest.java）
+    // 适配：Java `remove(orderId, uid)` -> 我们的 `remove(order_id)`（uid 归属校验在 OrderBookNaive::id_index
+    // 层做，桶层本身不持有 uid 校验职责，见 Task 6/7）；Java `Collections.shuffle(..., new Random(1))` 打乱移除
+    // 顺序 -> 这里简化为固定顺序（顺序不影响这些测试断言的计数/总量结果，因为都是按 id 精确移除+动态重算期望值，
+    // 不依赖具体哪个 id 被移除），不额外引入 RNG 依赖。
+    // ===================================================================
+
+    const JAVA_UID_1: i64 = 412;
+    const JAVA_UID_2: i64 = 413;
+
+    fn mk_u(order_id: i64, uid: i64, size: i64) -> Order {
+        Order {
+            order_id,
+            price: 1000,
+            size,
+            filled: 0,
+            reserve_bid_price: 0,
+            action: OrderAction::Ask,
+            uid,
+            timestamp: 0,
+        }
+    }
+
+    /// 对应 Java `@BeforeEach beforeGlobal`。
+    fn setup_bucket() -> OrdersBucketNaive {
+        let mut bucket = OrdersBucketNaive::new(1000);
+
+        bucket.put(mk_u(1, JAVA_UID_1, 100));
+        assert_eq!(bucket.num_orders(), 1);
+        assert_eq!(bucket.total_volume(), 100);
+
+        bucket.put(mk_u(2, JAVA_UID_2, 40));
+        assert_eq!(bucket.num_orders(), 2);
+        assert_eq!(bucket.total_volume(), 140);
+
+        bucket.put(mk_u(3, JAVA_UID_1, 1));
+        assert_eq!(bucket.num_orders(), 3);
+        assert_eq!(bucket.total_volume(), 141);
+
+        bucket.remove(2);
+        assert_eq!(bucket.num_orders(), 2);
+        assert_eq!(bucket.total_volume(), 101);
+
+        bucket.put(mk_u(4, JAVA_UID_1, 200));
+        assert_eq!(bucket.num_orders(), 3);
+        assert_eq!(bucket.total_volume(), 301);
+
+        bucket
+    }
+
+    /// Java `shouldAddOrder`
+    #[test]
+    fn java_should_add_order() {
+        let mut bucket = setup_bucket();
+        bucket.put(mk_u(5, JAVA_UID_2, 240));
+        assert_eq!(bucket.num_orders(), 4);
+        assert_eq!(bucket.total_volume(), 541);
+    }
+
+    /// Java `shouldRemoveOrders`
+    #[test]
+    fn java_should_remove_orders() {
+        let mut bucket = setup_bucket();
+
+        let removed = bucket.remove(1);
+        assert!(removed.is_some());
+        assert_eq!(bucket.num_orders(), 2);
+        assert_eq!(bucket.total_volume(), 201);
+
+        let removed = bucket.remove(4);
+        assert!(removed.is_some());
+        assert_eq!(bucket.num_orders(), 1);
+        assert_eq!(bucket.total_volume(), 1);
+
+        // can not remove existing order (already removed earlier)
+        let removed = bucket.remove(4);
+        assert!(removed.is_none());
+        assert_eq!(bucket.num_orders(), 1);
+        assert_eq!(bucket.total_volume(), 1);
+
+        let removed = bucket.remove(3);
+        assert!(removed.is_some());
+        assert_eq!(bucket.num_orders(), 0);
+        assert_eq!(bucket.total_volume(), 0);
+    }
+
+    /// Java `shouldAddManyOrders`
+    #[test]
+    fn java_should_add_many_orders() {
+        let mut bucket = setup_bucket();
+        let num_to_add: i64 = 100_000;
+        let mut expected_volume = bucket.total_volume();
+        let expected_num_orders = bucket.num_orders() + num_to_add as usize;
+        for i in 0..num_to_add {
+            bucket.put(mk_u(i + 5, JAVA_UID_2, i));
+            expected_volume += i;
+        }
+        assert_eq!(bucket.num_orders(), expected_num_orders);
+        assert_eq!(bucket.total_volume(), expected_volume);
+    }
+
+    /// Java `shouldAddAndRemoveManyOrders`
+    #[test]
+    fn java_should_add_and_remove_many_orders() {
+        let mut bucket = setup_bucket();
+        let num_to_add: i64 = 100;
+        let mut expected_volume = bucket.total_volume();
+        let mut expected_num_orders = bucket.num_orders() + num_to_add as usize;
+
+        let mut ids: Vec<(i64, i64)> = Vec::with_capacity(num_to_add as usize);
+        for i in 0..num_to_add {
+            let id = i + 5;
+            bucket.put(mk_u(id, JAVA_UID_2, i));
+            ids.push((id, i));
+            expected_volume += i;
+        }
+        assert_eq!(bucket.num_orders(), expected_num_orders);
+        assert_eq!(bucket.total_volume(), expected_volume);
+
+        for (id, size) in ids.into_iter().rev() {
+            bucket.remove(id);
+            expected_num_orders -= 1;
+            expected_volume -= size;
+            assert_eq!(bucket.num_orders(), expected_num_orders);
+            assert_eq!(bucket.total_volume(), expected_volume);
+        }
+    }
+
+    /// Java `shouldMatchAllOrders`
+    #[test]
+    fn java_should_match_all_orders() {
+        let mut bucket = setup_bucket();
+        let num_to_add: i64 = 100;
+        let mut expected_volume = bucket.total_volume();
+        let mut expected_num_orders = bucket.num_orders() + num_to_add as usize;
+
+        let mut order_id: i64 = 5;
+        let mut ids: Vec<(i64, i64)> = Vec::with_capacity(num_to_add as usize);
+        for i in 0..num_to_add {
+            bucket.put(mk_u(order_id, JAVA_UID_2, i));
+            ids.push((order_id, i));
+            order_id += 1;
+            expected_volume += i;
+        }
+        assert_eq!(bucket.num_orders(), expected_num_orders);
+        assert_eq!(bucket.total_volume(), expected_volume);
+
+        // Java 打乱后取前 80 个移除；这里简化为固定取前 80 个插入的（不影响后续动态重算的断言）。
+        for (id, size) in ids.into_iter().take(80) {
+            bucket.remove(id);
+            expected_num_orders -= 1;
+            expected_volume -= size;
+            assert_eq!(bucket.num_orders(), expected_num_orders);
+            assert_eq!(bucket.total_volume(), expected_volume);
+        }
+
+        let mut events_count = 0usize;
+        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed| {
+            events_count += 1;
+        });
+        assert_eq!(events_count, expected_num_orders);
+        assert_eq!(remaining, 0);
+        assert_eq!(bucket.num_orders(), 0);
+        assert_eq!(bucket.total_volume(), 0);
+    }
+
+    /// Java `shouldMatchAllOrders2`
+    #[test]
+    fn java_should_match_all_orders_2() {
+        let mut bucket = setup_bucket();
+        let num_to_add: i64 = 1000;
+        let mut expected_volume = bucket.total_volume();
+        let mut expected_num_orders = bucket.num_orders();
+
+        let mut order_id: i64 = 5;
+
+        for _round in 0..100 {
+            let mut ids: Vec<(i64, i64)> = Vec::with_capacity(num_to_add as usize);
+            for i in 0..num_to_add {
+                bucket.put(mk_u(order_id, JAVA_UID_2, i));
+                ids.push((order_id, i));
+                order_id += 1;
+                expected_num_orders += 1;
+                expected_volume += i;
+            }
+
+            assert_eq!(bucket.num_orders(), expected_num_orders);
+            assert_eq!(bucket.total_volume(), expected_volume);
+
+            for (id, size) in ids.into_iter().take(900) {
+                bucket.remove(id);
+                expected_num_orders -= 1;
+                expected_volume -= size;
+                assert_eq!(bucket.num_orders(), expected_num_orders);
+                assert_eq!(bucket.total_volume(), expected_volume);
+            }
+
+            let to_match = expected_volume / 2;
+            let mut collected_volume: i64 = 0;
+            let remaining = bucket.match_forward(to_match, &mut |_maker_id, trade, _completed| {
+                collected_volume += trade;
+            });
+            assert_eq!(collected_volume, to_match);
+            assert_eq!(remaining, 0);
+            expected_volume -= collected_volume;
+            assert_eq!(bucket.total_volume(), expected_volume);
+            expected_num_orders = bucket.num_orders();
+        }
+
+        let mut events_count = 0usize;
+        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed| {
+            events_count += 1;
+        });
+        assert_eq!(events_count, expected_num_orders);
+        assert_eq!(remaining, 0);
+        assert_eq!(bucket.num_orders(), 0);
+        assert_eq!(bucket.total_volume(), 0);
+    }
+}
+
+// =======================================================================================
+// 翻译自 Java OrderBookBaseTest（exchange-core/.../orderbook/OrderBookBaseTest.java，40 个 @Test）。
+//
+// 范围（Ruling E）：翻译我们当前引擎能支撑的子集——L2 快照、GTC/IOC/FOK(_BUDGET)/IOC_BUDGET 撮合
+// （含跨多桶/多单事件链）、cancel/reduce/move、未知 id 错误、他人订单所有权错误。跳过的用例见
+// 本模块末尾注释（对应 task-7-report.md 的 skip 表）。
+//
+// 适配（不算"跳过"，是按 Ruling E 允许的接口精简做的忠实翻译）：
+// - Java `checkEventRejection(event, size, price, bidderHoldPrice)` / `checkEventReduce(..., bidderHoldPrice)`
+//   的 bidderHoldPrice 参数——我们的 MatcherTradeEvent 是 P1 简化结构，没有该字段（Ruling E 明确禁止
+//   本任务扩展该结构），故我们的 check_reject/check_reduce helper 不比对这个字段。
+// - Java `orderBook.getOrderById(id)` / `orderBook.validateInternalState()`——我们的 IOrderBook trait
+//   未收录这两个查询/校验方法（P1 精简接口），涉及它们的具体断言行被跳过，测试其余部分照常翻译。
+// =======================================================================================
+#[cfg(test)]
+mod ob_base_tests {
+    use super::*;
+
+    const UID_1: i64 = 412;
+    const UID_2: i64 = 413;
+    const INITIAL_PRICE: i64 = 81600;
+    const MAX_PRICE: i64 = 400000;
+
+    // ---------------- 测试专用最小 harness（对应 Java OrderCommandFactory / L2MarketDataHelper）----------------
+
+    fn place_order(
+        book: &mut OrderBookNaive,
+        order_type: OrderType,
+        order_id: i64,
+        uid: i64,
+        price: i64,
+        reserve_bid_price: i64,
+        size: i64,
+        action: OrderAction,
+    ) -> OrderCommand {
+        let mut cmd = OrderCommand {
+            order_id,
+            symbol: 1,
+            price,
+            size,
+            reserve_bid_price,
+            action: Some(action),
+            order_type: Some(order_type),
+            uid,
+            ..Default::default()
+        };
+        book.new_order(&mut cmd);
+        cmd
+    }
+
+    fn cancel_cmd(book: &mut OrderBookNaive, order_id: i64, uid: i64) -> (CommandResultCode, OrderCommand) {
+        let mut cmd = OrderCommand { order_id, uid, ..Default::default() };
+        let rc = book.cancel_order(&mut cmd);
+        (rc, cmd)
+    }
+
+    fn reduce_cmd(book: &mut OrderBookNaive, order_id: i64, uid: i64, size: i64) -> (CommandResultCode, OrderCommand) {
+        let mut cmd = OrderCommand { order_id, uid, size, ..Default::default() };
+        let rc = book.reduce_order(&mut cmd);
+        (rc, cmd)
+    }
+
+    fn move_cmd(book: &mut OrderBookNaive, order_id: i64, uid: i64, new_price: i64) -> (CommandResultCode, OrderCommand) {
+        let mut cmd = OrderCommand { order_id, uid, price: new_price, ..Default::default() };
+        let rc = book.move_order(&mut cmd);
+        (rc, cmd)
+    }
+
+    /// 把 `cmd.matcher_event` 单链表展开成 `Vec`，方便按下标断言（对应 Java `cmd.extractEvents()`）。
+    fn events_list(cmd: &OrderCommand) -> Vec<&MatcherTradeEvent> {
+        let mut v = Vec::new();
+        let mut cur = cmd.matcher_event.as_deref();
+        while let Some(ev) = cur {
+            v.push(ev);
+            cur = ev.next.as_deref();
+        }
+        v
+    }
+
+    fn check_trade(ev: &MatcherTradeEvent, maker_id: i64, price: i64, size: i64) {
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.maker_order_id, maker_id);
+        assert_eq!(ev.price, price);
+        assert_eq!(ev.size, size);
+    }
+
+    /// 对应 Java `checkEventRejection`，略去 bidderHoldPrice 比对（见模块头注释）。
+    fn check_reject(ev: &MatcherTradeEvent, size: i64, price: i64) {
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, size);
+        assert_eq!(ev.price, price);
+        assert!(ev.active_order_completed);
+    }
+
+    /// 对应 Java `checkEventReduce`，略去 bidderHoldPrice 比对（Java 该套用例里这个参数其实也一直传 null）。
+    fn check_reduce(ev: &MatcherTradeEvent, reduce_size: i64, price: i64, completed: bool) {
+        assert_eq!(ev.event_type, MatcherEventType::Reduce);
+        assert_eq!(ev.size, reduce_size);
+        assert_eq!(ev.price, price);
+        assert_eq!(ev.active_order_completed, completed);
+        assert!(ev.next.is_none());
+    }
+
+    /// 对应 Java `L2MarketDataHelper`：只维护 prices/volumes 两侧数组（不含 order 计数——我们的
+    /// `L2MarketData` 本身就没有该字段，Ruling E 只锁定 MatcherTradeEvent 不让扩，L2MarketData 维持
+    /// Task 5/6 已定的精简形状，故这里也不引入计数跟踪）。
+    #[derive(Debug, Clone, PartialEq)]
+    struct ExpectedL2 {
+        ask_prices: Vec<i64>,
+        ask_volumes: Vec<i64>,
+        bid_prices: Vec<i64>,
+        bid_volumes: Vec<i64>,
+    }
+
+    impl ExpectedL2 {
+        fn new(ask_prices: Vec<i64>, ask_volumes: Vec<i64>, bid_prices: Vec<i64>, bid_volumes: Vec<i64>) -> Self {
+            Self { ask_prices, ask_volumes, bid_prices, bid_volumes }
+        }
+
+        fn to_l2(&self) -> L2MarketData {
+            L2MarketData {
+                ask_prices: self.ask_prices.clone(),
+                ask_volumes: self.ask_volumes.clone(),
+                bid_prices: self.bid_prices.clone(),
+                bid_volumes: self.bid_volumes.clone(),
+            }
+        }
+
+        fn insert_ask(&mut self, idx: usize, price: i64, vol: i64) -> &mut Self {
+            self.ask_prices.insert(idx, price);
+            self.ask_volumes.insert(idx, vol);
+            self
+        }
+        fn insert_bid(&mut self, idx: usize, price: i64, vol: i64) -> &mut Self {
+            self.bid_prices.insert(idx, price);
+            self.bid_volumes.insert(idx, vol);
+            self
+        }
+        fn set_ask_volume(&mut self, idx: usize, vol: i64) -> &mut Self {
+            self.ask_volumes[idx] = vol;
+            self
+        }
+        fn set_bid_volume(&mut self, idx: usize, vol: i64) -> &mut Self {
+            self.bid_volumes[idx] = vol;
+            self
+        }
+        fn decrement_bid_volume(&mut self, idx: usize, diff: i64) -> &mut Self {
+            self.bid_volumes[idx] -= diff;
+            self
+        }
+        fn remove_ask(&mut self, idx: usize) -> &mut Self {
+            self.ask_prices.remove(idx);
+            self.ask_volumes.remove(idx);
+            self
+        }
+        fn remove_bid(&mut self, idx: usize) -> &mut Self {
+            self.bid_prices.remove(idx);
+            self.bid_volumes.remove(idx);
+            self
+        }
+        fn remove_all_asks(&mut self) -> &mut Self {
+            self.ask_prices.clear();
+            self.ask_volumes.clear();
+            self
+        }
+
+        /// 对应 Java `L2MarketDataHelper.aggregateBuyBudget`：沿 ask 侧升序累加至吃满 `size`。
+        fn aggregate_buy_budget(&self, mut size: i64) -> i64 {
+            let mut budget = 0i64;
+            for i in 0..self.ask_prices.len() {
+                let v = self.ask_volumes[i];
+                let p = self.ask_prices[i];
+                if v < size {
+                    budget += v * p;
+                    size -= v;
+                } else {
+                    return budget + size * p;
+                }
+            }
+            panic!("Can not collect size {size}");
+        }
+
+        /// 对应 Java `L2MarketDataHelper.aggregateSellExpectation`：沿 bid 侧（降序存储）累加至吃满 `size`。
+        fn aggregate_sell_expectation(&self, mut size: i64) -> i64 {
+            let mut expectation = 0i64;
+            for i in 0..self.bid_prices.len() {
+                let v = self.bid_volumes[i];
+                let p = self.bid_prices[i];
+                if v < size {
+                    expectation += v * p;
+                    size -= v;
+                } else {
+                    return expectation + size * p;
+                }
+            }
+            panic!("Can not collect size {size}");
+        }
+    }
+
+    /// 对应 Java `OrderBookBaseTest.before()`：搭好共享初始簿状态 + 校验初始 L2 快照。
+    fn setup_book() -> (OrderBookNaive, ExpectedL2) {
+        let mut book = OrderBookNaive::new();
+
+        place_order(&mut book, OrderType::Gtc, 0, UID_2, INITIAL_PRICE, 0, 13, OrderAction::Ask);
+        let (rc, _) = cancel_cmd(&mut book, 0, UID_2);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        place_order(&mut book, OrderType::Gtc, 1, UID_1, 81600, 0, 100, OrderAction::Ask);
+        place_order(&mut book, OrderType::Gtc, 2, UID_1, 81599, 0, 50, OrderAction::Ask);
+        place_order(&mut book, OrderType::Gtc, 3, UID_1, 81599, 0, 25, OrderAction::Ask);
+        place_order(&mut book, OrderType::Gtc, 8, UID_1, 201000, 0, 28, OrderAction::Ask);
+        place_order(&mut book, OrderType::Gtc, 9, UID_1, 201000, 0, 32, OrderAction::Ask);
+        place_order(&mut book, OrderType::Gtc, 10, UID_1, 200954, 0, 10, OrderAction::Ask);
+
+        place_order(&mut book, OrderType::Gtc, 4, UID_1, 81593, 82000, 40, OrderAction::Bid);
+        place_order(&mut book, OrderType::Gtc, 5, UID_1, 81590, 82000, 20, OrderAction::Bid);
+        place_order(&mut book, OrderType::Gtc, 6, UID_1, 81590, 82000, 1, OrderAction::Bid);
+        place_order(&mut book, OrderType::Gtc, 7, UID_1, 81200, 82000, 20, OrderAction::Bid);
+        place_order(&mut book, OrderType::Gtc, 11, UID_1, 10000, 12000, 12, OrderAction::Bid);
+        place_order(&mut book, OrderType::Gtc, 12, UID_1, 10000, 12000, 1, OrderAction::Bid);
+        place_order(&mut book, OrderType::Gtc, 13, UID_1, 9136, 12000, 2, OrderAction::Bid);
+
+        let expected = ExpectedL2::new(
+            vec![81599, 81600, 200954, 201000],
+            vec![75, 100, 10, 60],
+            vec![81593, 81590, 81200, 10000, 9136],
+            vec![40, 21, 20, 13, 2],
+        );
+
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        (book, expected)
+    }
+
+    /// 对应 Java `@AfterEach clearOrderBook`：用两笔吃光全部流动性的 IOC 单把簿清空，验证不留残余状态。
+    fn clear_order_book(book: &mut OrderBookNaive) {
+        let snap = book.fill_l2(i32::MAX);
+        let ask_sum: i64 = snap.ask_volumes.iter().sum();
+        if ask_sum > 0 {
+            place_order(book, OrderType::Ioc, 100_000_000_000, -1, MAX_PRICE, MAX_PRICE, ask_sum, OrderAction::Bid);
+        }
+
+        let snap = book.fill_l2(i32::MAX);
+        let bid_sum: i64 = snap.bid_volumes.iter().sum();
+        if bid_sum > 0 {
+            place_order(book, OrderType::Ioc, 100_000_000_001, -2, 1, 0, bid_sum, OrderAction::Ask);
+        }
+
+        let snap = book.fill_l2(i32::MAX);
+        assert!(snap.ask_prices.is_empty());
+        assert!(snap.bid_prices.is_empty());
+    }
+
+    // ------------------------ TESTS WITHOUT MATCHING -----------------------
+
+    #[test]
+    fn should_initialize_without_errors() {
+        let (mut book, expected) = setup_book();
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldAddGtcOrders`
+    #[test]
+    fn should_add_gtc_orders() {
+        let (mut book, mut expected) = setup_book();
+
+        place_order(&mut book, OrderType::Gtc, 93, UID_1, 81598, 0, 1, OrderAction::Ask);
+        expected.insert_ask(0, 81598, 1);
+
+        place_order(&mut book, OrderType::Gtc, 94, UID_1, 81594, MAX_PRICE, 9_000_000_000, OrderAction::Bid);
+        expected.insert_bid(0, 81594, 9_000_000_000);
+
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+
+        place_order(&mut book, OrderType::Gtc, 95, UID_1, 130000, 0, 13_000_000_000, OrderAction::Ask);
+        expected.insert_ask(3, 130000, 13_000_000_000);
+
+        place_order(&mut book, OrderType::Gtc, 96, UID_1, 1000, MAX_PRICE, 4, OrderAction::Bid);
+        expected.insert_bid(6, 1000, 4);
+
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldIgnoredDuplicateOrder`：非交叉重复 id，整单 reject（不撮合、不挂簿）。
+    #[test]
+    fn should_ignored_duplicate_order() {
+        let (mut book, expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 1, UID_1, 81600, 0, 100, OrderAction::Ask);
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reject(events[0], 100, 81600);
+
+        // 簿完全未变
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldRemoveBidOrder`
+    #[test]
+    fn should_remove_bid_order() {
+        let (mut book, mut expected) = setup_book();
+
+        let (rc, cmd) = cancel_cmd(&mut book, 5, UID_1);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.set_bid_volume(1, 1);
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        assert_eq!(cmd.action, Some(OrderAction::Bid));
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reduce(events[0], 20, 81590, true);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldRemoveAskOrder`
+    #[test]
+    fn should_remove_ask_order() {
+        let (mut book, mut expected) = setup_book();
+
+        let (rc, cmd) = cancel_cmd(&mut book, 2, UID_1);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.set_ask_volume(0, 25);
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        assert_eq!(cmd.action, Some(OrderAction::Ask));
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reduce(events[0], 50, 81599, true);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReduceBidOrder`
+    #[test]
+    fn should_reduce_bid_order() {
+        let (mut book, mut expected) = setup_book();
+
+        let (rc, cmd) = reduce_cmd(&mut book, 5, UID_1, 3);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.decrement_bid_volume(1, 3);
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        assert_eq!(cmd.action, Some(OrderAction::Bid));
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reduce(events[0], 3, 81590, false);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReduceAskOrder`（减量超过剩余量 -> 等价整单撤销）
+    #[test]
+    fn should_reduce_ask_order() {
+        let (mut book, mut expected) = setup_book();
+
+        let (rc, cmd) = reduce_cmd(&mut book, 1, UID_1, 300);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.remove_ask(1);
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        assert_eq!(cmd.action, Some(OrderAction::Ask));
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reduce(events[0], 100, 81600, true);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldRemoveOrderAndEmptyBucket`
+    #[test]
+    fn should_remove_order_and_empty_bucket() {
+        let (mut book, mut expected) = setup_book();
+
+        let (rc2, cmd2) = cancel_cmd(&mut book, 2, UID_1);
+        assert_eq!(rc2, CommandResultCode::Success);
+        assert_eq!(cmd2.action, Some(OrderAction::Ask));
+        let events2 = events_list(&cmd2);
+        assert_eq!(events2.len(), 1);
+        check_reduce(events2[0], 50, 81599, true);
+
+        let (rc3, cmd3) = cancel_cmd(&mut book, 3, UID_1);
+        assert_eq!(rc3, CommandResultCode::Success);
+        assert_eq!(cmd3.action, Some(OrderAction::Ask));
+
+        expected.remove_ask(0);
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+
+        let events3 = events_list(&cmd3);
+        assert_eq!(events3.len(), 1);
+        check_reduce(events3[0], 25, 81599, true);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenDeletingUnknownOrder`
+    #[test]
+    fn should_return_error_when_deleting_unknown_order() {
+        let (mut book, expected) = setup_book();
+        let (rc, cmd) = cancel_cmd(&mut book, 5291, UID_1);
+        assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        assert_eq!(events_list(&cmd).len(), 0);
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenDeletingOtherUserOrder`
+    #[test]
+    fn should_return_error_when_deleting_other_user_order() {
+        let (mut book, expected) = setup_book();
+        let (rc, cmd) = cancel_cmd(&mut book, 3, UID_2);
+        assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
+        assert!(cmd.matcher_event.is_none());
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenUpdatingOtherUserOrder`
+    #[test]
+    fn should_return_error_when_updating_other_user_order() {
+        let (mut book, expected) = setup_book();
+
+        let (rc, cmd) = move_cmd(&mut book, 2, UID_2, 100);
+        assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
+        assert!(cmd.matcher_event.is_none());
+
+        let (rc2, cmd2) = move_cmd(&mut book, 8, UID_2, 100);
+        assert_eq!(rc2, CommandResultCode::MatchingUnknownOrderId);
+        assert!(cmd2.matcher_event.is_none());
+
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenUpdatingUnknownOrder`
+    #[test]
+    fn should_return_error_when_updating_unknown_order() {
+        let (mut book, expected) = setup_book();
+        let (rc, cmd) = move_cmd(&mut book, 2433, UID_1, 300);
+        assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+        assert_eq!(events_list(&cmd).len(), 0);
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenReducingUnknownOrder`
+    #[test]
+    fn should_return_error_when_reducing_unknown_order() {
+        let (mut book, expected) = setup_book();
+        let (rc, cmd) = reduce_cmd(&mut book, 3, UID_2, 1);
+        assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
+        assert!(cmd.matcher_event.is_none());
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenReducingByZeroOrNegativeSize`
+    #[test]
+    fn should_return_error_when_reducing_by_zero_or_negative_size() {
+        let (mut book, expected) = setup_book();
+
+        let (rc, cmd) = reduce_cmd(&mut book, 4, UID_1, 0);
+        assert_eq!(rc, CommandResultCode::MatchingReduceFailedWrongSize);
+        assert!(cmd.matcher_event.is_none());
+
+        let (rc2, cmd2) = reduce_cmd(&mut book, 8, UID_1, -1);
+        assert_eq!(rc2, CommandResultCode::MatchingReduceFailedWrongSize);
+        assert!(cmd2.matcher_event.is_none());
+
+        let (rc3, cmd3) = reduce_cmd(&mut book, 8, UID_1, i64::MIN);
+        assert_eq!(rc3, CommandResultCode::MatchingReduceFailedWrongSize);
+        assert!(cmd3.matcher_event.is_none());
+
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldReturnErrorWhenReducingOtherUserOrder`
+    #[test]
+    fn should_return_error_when_reducing_other_user_order() {
+        let (mut book, expected) = setup_book();
+        let (rc, cmd) = reduce_cmd(&mut book, 8, UID_2, 3);
+        assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
+        assert!(cmd.matcher_event.is_none());
+        assert_eq!(book.fill_l2(25), expected.to_l2());
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMoveOrderExistingBucket`
+    #[test]
+    fn should_move_order_existing_bucket() {
+        let (mut book, mut expected) = setup_book();
+        let (rc, cmd) = move_cmd(&mut book, 7, UID_1, 81590);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.set_bid_volume(1, 41).remove_bid(2);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+        assert_eq!(events_list(&cmd).len(), 0);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMoveOrderNewBucket`
+    #[test]
+    fn should_move_order_new_bucket() {
+        let (mut book, mut expected) = setup_book();
+        let (rc, cmd) = move_cmd(&mut book, 7, UID_1, 81594);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.remove_bid(2).insert_bid(0, 81594, 20);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+        assert_eq!(events_list(&cmd).len(), 0);
+
+        clear_order_book(&mut book);
+    }
+
+    // ------------------------ MATCHING TESTS -----------------------
+
+    /// Java `shouldMatchIocOrderPartialBBO`
+    #[test]
+    fn should_match_ioc_order_partial_bbo() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, 1, 0, 10, OrderAction::Ask);
+
+        expected.set_bid_volume(0, 30);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_trade(events[0], 4, 81593, 10);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchIocOrderFullBBO`
+    #[test]
+    fn should_match_ioc_order_full_bbo() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, 1, 0, 40, OrderAction::Ask);
+
+        expected.remove_bid(0);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_trade(events[0], 4, 81593, 40);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchIocOrderWithTwoLimitOrdersPartial`（略过 `getOrderById` 断言，见模块头注释）
+    #[test]
+    fn should_match_ioc_order_with_two_limit_orders_partial() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, 1, 0, 41, OrderAction::Ask);
+
+        expected.remove_bid(0).set_bid_volume(0, 20);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 2);
+        check_trade(events[0], 4, 81593, 40);
+        check_trade(events[1], 5, 81590, 1);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchIocOrderFullLiquidity` —— 跨 2 个价位桶（81599/81600）、3 笔成交事件，
+    /// 覆盖任务书要求的"跨桶事件链 + active_order_completed 时序"（第三笔成交后 taker 才完全成交）。
+    /// 略过 `getOrderById` 断言（见模块头注释）。
+    #[test]
+    fn should_match_ioc_order_full_liquidity_crosses_multiple_buckets() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, MAX_PRICE, MAX_PRICE, 175, OrderAction::Bid);
+
+        expected.remove_ask(0).remove_ask(0);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 3);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 100);
+        // 只有最后一笔（跨到第二个价位桶 81600 之后）taker 才完全成交
+        assert!(!events[0].active_order_completed);
+        assert!(!events[1].active_order_completed);
+        assert!(events[2].active_order_completed);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchIocOrderWithRejection`
+    #[test]
+    fn should_match_ioc_order_with_rejection() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, MAX_PRICE, MAX_PRICE + 1, 270, OrderAction::Bid);
+
+        expected.remove_all_asks();
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 7);
+        check_reject(events[0], 25, MAX_PRICE);
+
+        clear_order_book(&mut book);
+    }
+
+    // ---------------------- FOK BUDGET ORDERS ---------------------------
+
+    /// Java `shouldRejectFokBidOrderOutOfBudget`
+    #[test]
+    fn should_reject_fok_bid_order_out_of_budget() {
+        let (mut book, expected) = setup_book();
+        let size = 180i64;
+        let buy_budget = expected.aggregate_buy_budget(size) - 1;
+        assert_eq!(buy_budget, 81599 * 75 + 81600 * 100 + 200954 * 5 - 1);
+
+        let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
+
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reject(events[0], size, buy_budget);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchFokBidOrderExactBudget` —— 跨 3 个价位桶（81599/81600/200954）。
+    #[test]
+    fn should_match_fok_bid_order_exact_budget_crosses_multiple_buckets() {
+        let (mut book, mut expected) = setup_book();
+        let size = 180i64;
+        let buy_budget = expected.aggregate_buy_budget(size);
+        assert_eq!(buy_budget, 81599 * 75 + 81600 * 100 + 200954 * 5);
+
+        let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
+
+        expected.remove_ask(0).remove_ask(0).set_ask_volume(0, 5);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 4);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 100);
+        check_trade(events[3], 10, 200954, 5);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchFokBidOrderExtraBudget`
+    #[test]
+    fn should_match_fok_bid_order_extra_budget() {
+        let (mut book, mut expected) = setup_book();
+        let size = 176i64;
+        let buy_budget = expected.aggregate_buy_budget(size) + 1;
+        assert_eq!(buy_budget, 81599 * 75 + 81600 * 100 + 200954 + 1);
+
+        let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
+
+        expected.remove_ask(0).remove_ask(0).set_ask_volume(0, 9);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 4);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 100);
+        check_trade(events[3], 10, 200954, 1);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldRejectFokAskOrderBelowExpectation`
+    #[test]
+    fn should_reject_fok_ask_order_below_expectation() {
+        let (mut book, expected) = setup_book();
+        let size = 60i64;
+        let sell_expectation = expected.aggregate_sell_expectation(size) + 1;
+        assert_eq!(sell_expectation, 81593 * 40 + 81590 * 20 + 1);
+
+        let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
+
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reject(events[0], size, sell_expectation);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchFokAskOrderExactExpectation`
+    #[test]
+    fn should_match_fok_ask_order_exact_expectation() {
+        let (mut book, mut expected) = setup_book();
+        let size = 60i64;
+        let sell_expectation = expected.aggregate_sell_expectation(size);
+        assert_eq!(sell_expectation, 81593 * 40 + 81590 * 20);
+
+        let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
+
+        expected.remove_bid(0).set_bid_volume(0, 1);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 2);
+        check_trade(events[0], 4, 81593, 40);
+        check_trade(events[1], 5, 81590, 20);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMatchFokAskOrderExtraBudget`
+    #[test]
+    fn should_match_fok_ask_order_extra_budget() {
+        let (mut book, mut expected) = setup_book();
+        let size = 61i64;
+        let sell_expectation = expected.aggregate_sell_expectation(size) - 1;
+        assert_eq!(sell_expectation, 81593 * 40 + 81590 * 21 - 1);
+
+        let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
+
+        expected.remove_bid(0).remove_bid(0);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 3);
+        check_trade(events[0], 4, 81593, 40);
+        check_trade(events[1], 5, 81590, 20);
+        check_trade(events[2], 6, 81590, 1);
+
+        clear_order_book(&mut book);
+    }
+
+    // ---------------------- IOC_BUDGET ORDERS ---------------------------
+
+    /// Java `shouldFullyMatchIocBudgetWithSufficientBudget`
+    #[test]
+    fn should_fully_match_ioc_budget_with_sufficient_budget() {
+        let (mut book, mut expected) = setup_book();
+        let size = 180i64;
+        let buy_budget = expected.aggregate_buy_budget(size);
+
+        let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
+
+        expected.remove_ask(0).remove_ask(0).set_ask_volume(0, 5);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 4);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 100);
+        check_trade(events[3], 10, 200954, 5);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldPartiallyMatchIocBudgetWhenBudgetRunsOut`
+    #[test]
+    fn should_partially_match_ioc_budget_when_budget_runs_out() {
+        let (mut book, mut expected) = setup_book();
+        let size = 180i64;
+        let buy_budget = 81599 * 75;
+
+        let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
+
+        expected.remove_ask(0);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 3);
+        check_reject(events[0], 105, buy_budget);
+        check_trade(events[1], 2, 81599, 50);
+        check_trade(events[2], 3, 81599, 25);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldRejectIocBudgetWhenBudgetTooSmallForOneUnit`
+    #[test]
+    fn should_reject_ioc_budget_when_budget_too_small_for_one_unit() {
+        let (mut book, expected) = setup_book();
+        let size = 100i64;
+        let buy_budget = 81598i64;
+
+        let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
+
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reject(events[0], size, buy_budget);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldRejectAskIocBudget`
+    #[test]
+    fn should_reject_ask_ioc_budget() {
+        let (mut book, expected) = setup_book();
+        let size = 50i64;
+        let sell_expectation = 81593 * 40;
+
+        let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
+
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_reject(events[0], size, sell_expectation);
+
+        clear_order_book(&mut book);
+    }
+
+    // MARKETABLE GTC ORDERS
+
+    /// Java `shouldFullyMatchMarketableGtcOrder`
+    #[test]
+    fn should_fully_match_marketable_gtc_order() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 81599, MAX_PRICE, 1, OrderAction::Bid);
+
+        expected.set_ask_volume(0, 74);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 1);
+        check_trade(events[0], 2, 81599, 1);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldPartiallyMatchMarketableGtcOrderAndPlace`
+    #[test]
+    fn should_partially_match_marketable_gtc_order_and_place() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 81599, MAX_PRICE, 77, OrderAction::Bid);
+
+        expected.remove_ask(0).insert_bid(0, 81599, 2);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 2);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldFullyMatchMarketableGtcOrder2Prices`
+    #[test]
+    fn should_fully_match_marketable_gtc_order_2_prices() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 81600, MAX_PRICE, 77, OrderAction::Bid);
+
+        expected.remove_ask(0).set_ask_volume(0, 98);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 3);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 2);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldFullyMatchMarketableGtcOrderWithAllLiquidity` —— 跨全部 4 个价位桶
+    /// （81599/81600/200954/201000），6 笔成交事件，任务书要求的"多桶多单事件链"主力覆盖用例之一。
+    #[test]
+    fn should_fully_match_marketable_gtc_order_with_all_liquidity_crosses_four_buckets() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 220000, MAX_PRICE, 1000, OrderAction::Bid);
+
+        expected.remove_all_asks().insert_bid(0, 220000, 755);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd);
+        assert_eq!(events.len(), 6);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 100);
+        check_trade(events[3], 10, 200954, 10);
+        check_trade(events[4], 8, 201000, 28);
+        check_trade(events[5], 9, 201000, 32);
+        // taker size=1000 远超总流动性 245，全程未完全成交（剩余 755 转为挂单，见下方 L2 断言的
+        // `insert_bid(0, 220000, 755)`）——因此全部 6 笔事件的 active_order_completed 都应为 false。
+        for ev in &events {
+            assert!(!ev.active_order_completed);
+        }
+
+        clear_order_book(&mut book);
+    }
+
+    // Move GTC order to marketable price
+
+    /// Java `shouldMoveOrderFullyMatchAsMarketable`
+    #[test]
+    fn should_move_order_fully_match_as_marketable() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 83, UID_2, 81200, MAX_PRICE, 20, OrderAction::Bid);
+        assert_eq!(events_list(&cmd).len(), 0);
+
+        expected.set_bid_volume(2, 40);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let (rc, cmd2) = move_cmd(&mut book, 83, UID_2, 81602);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.set_bid_volume(2, 20).set_ask_volume(0, 55);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd2);
+        assert_eq!(events.len(), 1);
+        check_trade(events[0], 2, 81599, 20);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMoveOrderFullyMatchAsMarketable2Prices`
+    #[test]
+    fn should_move_order_fully_match_as_marketable_2_prices() {
+        let (mut book, mut expected) = setup_book();
+        let cmd = place_order(&mut book, OrderType::Gtc, 83, UID_2, 81594, MAX_PRICE, 100, OrderAction::Bid);
+        assert_eq!(events_list(&cmd).len(), 0);
+
+        let (rc, cmd2) = move_cmd(&mut book, 83, UID_2, 81600);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.remove_ask(0).set_ask_volume(0, 75);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd2);
+        assert_eq!(events.len(), 3);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 25);
+
+        clear_order_book(&mut book);
+    }
+
+    /// Java `shouldMoveOrderMatchesAllLiquidity` —— move 触发的撮合同样跨全部 4 个价位桶。
+    #[test]
+    fn should_move_order_matches_all_liquidity_crosses_four_buckets() {
+        let (mut book, mut expected) = setup_book();
+        let _cmd = place_order(&mut book, OrderType::Gtc, 83, UID_2, 81594, MAX_PRICE, 246, OrderAction::Bid);
+
+        let (rc, cmd2) = move_cmd(&mut book, 83, UID_2, 201000);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        expected.remove_all_asks().insert_bid(0, 201000, 1);
+        assert_eq!(book.fill_l2(10), expected.to_l2());
+
+        let events = events_list(&cmd2);
+        assert_eq!(events.len(), 6);
+        check_trade(events[0], 2, 81599, 50);
+        check_trade(events[1], 3, 81599, 25);
+        check_trade(events[2], 1, 81600, 100);
+        check_trade(events[3], 10, 200954, 10);
+        check_trade(events[4], 8, 201000, 28);
+        check_trade(events[5], 9, 201000, 32);
+
+        clear_order_book(&mut book);
+    }
+
+    // `multipleCommandsKeepInternalStateTest` 跳过：需要 Java 侧 `TestOrdersGenerator`
+    // （带种子的随机命令生成器）+ `IOrderBook.validateInternalState()`——两者都是测试基础设施而非
+    // 核心撮合逻辑，本任务未复刻该 harness（见 task-7-report.md skip 表）。
 }
