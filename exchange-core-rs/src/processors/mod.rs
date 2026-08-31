@@ -16,7 +16,8 @@
 pub mod risk;
 
 // TODO(port): RiskEngine risk_release（R2）—— reject/reduce 释放（Task 5，已完成）；
-// buy/sell TRADE 链结算（Task 6/7，占位 TODO 留在 risk.rs::handler_risk_release）
+// sell TRADE 链结算（Task 6，已完成，risk.rs::handle_matcher_events_exchange_sell）；
+// buy TRADE 链结算（Task 7，占位 TODO 留在 risk.rs::handler_risk_release）
 // TODO(port): MatchingEngineRouter
 // TODO(port): liquidation / ADL / funding / loan
 // TODO(port): internal transfer / user profile / symbol & currency spec
