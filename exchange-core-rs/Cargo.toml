@@ -1,0 +1,16 @@
+# exchange-core Rust 移植 · 单 crate
+# 设计文档: docs/superpowers/specs/2026-08-31-exchange-core-rust-port-design.md
+# 参考骨架: https://github.com/llc-993/matching-core
+[package]
+name = "exchange-core-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
