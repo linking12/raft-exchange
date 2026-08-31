@@ -11,3 +11,4 @@ pub mod book;
 pub mod naive;
 
 pub use book::IOrderBook;
+pub use naive::OrderBookNaive;
