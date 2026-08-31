@@ -13,7 +13,9 @@
 //! 确定性铁律（设计文档 §5）：uid→profile、symbol→spec 等映射用有序容器；
 //! 任何影响输出的迭代禁用 `HashMap` 迭代序。
 
-// TODO(port): RiskEngine（pre_process / risk_release）
+pub mod risk;
+
+// TODO(port): RiskEngine risk_release（R2，Task 5+）
 // TODO(port): MatchingEngineRouter
 // TODO(port): liquidation / ADL / funding / loan
 // TODO(port): internal transfer / user profile / symbol & currency spec
