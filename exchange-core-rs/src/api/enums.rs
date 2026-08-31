@@ -74,6 +74,7 @@ pub enum CommandResultCode {
     Success,                // 100
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
+    MatchingReduceFailedWrongSize, // -3051（Task 6: reduceOrder 请求量 <= 0）
 }
 
 impl CommandResultCode {
@@ -83,6 +84,7 @@ impl CommandResultCode {
             CommandResultCode::Success => 100,
             CommandResultCode::MatchingUnknownOrderId => -3002,
             CommandResultCode::MatchingUnsupportedCommand => -3004,
+            CommandResultCode::MatchingReduceFailedWrongSize => -3051,
         }
     }
 }
