@@ -82,23 +82,25 @@ impl OrdersBucketNaive {
     }
 
     /// 从桶头 FIFO 撮合 `to_collect`，返回剩余未撮合量。
+    /// 回调额外携带 maker 的 `uid`/`reserve_bid_price`（Task 3 新增，供调用方按 Java
+    /// `OrdersBucketNaive.match` 的语义算出 `MatcherTradeEvent.matchedOrderUid`/`bidderHoldPrice`）。
     pub fn match_forward(&mut self, mut to_collect: i64,
-                         on_trade: &mut impl FnMut(i64, i64, bool)) -> i64 {
+                         on_trade: &mut impl FnMut(i64, i64, bool, i64, i64)) -> i64 {
         let seqs: Vec<i64> = self.entries.keys().copied().collect();
         for seq in seqs {
             if to_collect == 0 {
                 break;
             }
-            let (maker_id, trade, completed) = {
+            let (maker_id, trade, completed, maker_uid, maker_reserve_bid_price) = {
                 let o = self.entries.get_mut(&seq).unwrap();
                 let avail = o.remaining();
                 let trade = to_collect.min(avail);
                 o.filled += trade;
-                (o.order_id, trade, o.remaining() == 0)
+                (o.order_id, trade, o.remaining() == 0, o.uid, o.reserve_bid_price)
             };
             to_collect -= trade;
             self.total_volume -= trade;
-            on_trade(maker_id, trade, completed);
+            on_trade(maker_id, trade, completed, maker_uid, maker_reserve_bid_price);
             if completed {
                 self.entries.remove(&seq);
                 self.id_to_seq.remove(&maker_id);
@@ -270,6 +272,11 @@ impl OrderBookNaive {
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut emptied: Vec<i64> = Vec::new();
 
+        // taker 侧的 reserve_bid_price：taker 是 BID 时才有意义（对照 Java
+        // `OrdersBucketNaive.match`：`activeOrder.getReserveBidPrice()`），先取出来避免在
+        // 下面的闭包里与 `cmd`（结尾要写 `cmd.matcher_event`）产生借用冲突。
+        let taker_reserve_bid_price = cmd.reserve_bid_price;
+
         for p in prices {
             if filled == taker_size {
                 break;
@@ -280,9 +287,17 @@ impl OrderBookNaive {
             // remaining_in_call 从 size_left 递减；归零即代表 taker 整体成交完毕
             // （size_left 就是 taker 当前总剩余量，与 Java `volumeToCollect == 0` 语义一致）。
             let mut remaining_in_call = size_left;
-            bucket.match_forward(size_left, &mut |maker_id, trade, maker_completed| {
+            bucket.match_forward(size_left, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price| {
                 remaining_in_call -= trade;
                 let active_order_completed = remaining_in_call == 0;
+                // bidderHoldPrice = 成交双方中 BID 那一方的 reserve_bid_price（对照 Java
+                // `OrdersBucketNaive.match`: `order.action == ASK ? activeOrder.getReserveBidPrice() : order.reserveBidPrice`）。
+                // 对手侧 buckets 里的挂单方向恒为 taker_action 的反面，故 maker 是 ASK <=> taker 是 BID。
+                let bidder_hold_price = if taker_action == OrderAction::Bid {
+                    taker_reserve_bid_price
+                } else {
+                    maker_reserve_bid_price
+                };
                 events.push(MatcherTradeEvent {
                     event_type: MatcherEventType::Trade,
                     active_order_completed,
@@ -291,6 +306,8 @@ impl OrderBookNaive {
                     price: p, // 成交价 = maker 挂单价（对照 Java: event.price = matchingOrder.getPrice()）
                     size: trade,
                     bid_gt_ask: taker_action == OrderAction::Bid,
+                    bidder_hold_price,
+                    matched_order_uid: maker_uid,
                     next: None,
                 });
                 if maker_completed {
@@ -337,6 +354,9 @@ impl OrderBookNaive {
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut emptied: Vec<i64> = Vec::new();
 
+        // 同 match_against：先取出 taker 的 reserve_bid_price，避免与结尾的 `cmd.matcher_event` 借用冲突。
+        let taker_reserve_bid_price = cmd.reserve_bid_price;
+
         for p in prices {
             if filled == taker_size {
                 break;
@@ -351,9 +371,15 @@ impl OrderBookNaive {
             let bucket = buckets.get_mut(&p).expect("bucket must exist for collected price");
 
             let mut remaining_in_call = size_cap;
-            bucket.match_forward(size_cap, &mut |maker_id, trade, maker_completed| {
+            bucket.match_forward(size_cap, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price| {
                 remaining_in_call -= trade;
                 let active_order_completed = remaining_in_call == 0;
+                // 同 match_against 的 bidderHoldPrice 语义（见该处注释）。
+                let bidder_hold_price = if taker_action == OrderAction::Bid {
+                    taker_reserve_bid_price
+                } else {
+                    maker_reserve_bid_price
+                };
                 events.push(MatcherTradeEvent {
                     event_type: MatcherEventType::Trade,
                     active_order_completed,
@@ -362,6 +388,8 @@ impl OrderBookNaive {
                     price: p,
                     size: trade,
                     bid_gt_ask: taker_action == OrderAction::Bid,
+                    bidder_hold_price,
+                    matched_order_uid: maker_uid,
                     next: None,
                 });
                 remaining_budget -= trade * p;
@@ -402,6 +430,11 @@ impl OrderBookNaive {
             price: cmd.price,
             size: rejected_size,
             bid_gt_ask: false,
+            // 对应 Java `attachRejectEvent`: `event.bidderHoldPrice = cmd.reserveBidPrice;`
+            // （ASK 命令的 reserve_bid_price 恒为 0，语义上不会被读取）。
+            bidder_hold_price: cmd.reserve_bid_price,
+            // 对应 Java 注释 "matchedOrderUid; // 0 for rejection"：REJECT 无 maker，恒为 0。
+            matched_order_uid: 0,
             next: cmd.matcher_event.take(),
         };
         cmd.matcher_event = Some(Box::new(event));
@@ -586,6 +619,11 @@ impl IOrderBook for OrderBookNaive {
             price: order.price,
             size: remaining,
             bid_gt_ask: false,
+            // 对应 Java `sendReduceEvent`: `event.bidderHoldPrice = order.getReserveBidPrice();`
+            // （ASK 挂单的 reserve_bid_price 恒为 0）。
+            bidder_hold_price: order.reserve_bid_price,
+            // 对应 Java `sendReduceEvent` 未赋值 matchedOrderUid（恒为默认 0）。
+            matched_order_uid: 0,
             next: None,
         }));
         cmd.action = Some(order.action);
@@ -647,6 +685,9 @@ impl IOrderBook for OrderBookNaive {
             price: order.price,
             size: reduce_by,
             bid_gt_ask: false,
+            // 同 cancel_order：对应 Java `sendReduceEvent` 的 bidderHoldPrice/matchedOrderUid 语义。
+            bidder_hold_price: order.reserve_bid_price,
+            matched_order_uid: 0,
             next: None,
         }));
         cmd.action = Some(order.action);
@@ -908,6 +949,68 @@ mod ob_tests {
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![4]);
+    }
+
+    // ---- Task 3: MatcherTradeEvent.bidder_hold_price / matched_order_uid ----
+    //
+    // 对照 Java `OrdersBucketNaive.match`：
+    //   `bidderHoldPrice = order.action == ASK ? activeOrder.getReserveBidPrice() : order.reserveBidPrice`
+    // 其中 `order` 是 maker（挂单方），`activeOrder` 是 taker。`matchedOrderUid` 恒为 maker 的 uid。
+
+    /// maker 是 BID 一方：taker 卖(ASK)吃进挂着的买单。
+    /// bidder_hold_price 应取 **maker** 的 reserve_bid_price（taker 的 reserve_bid_price 无关，故意设为
+    /// 一个不同的哨兵值，若实现读错了这个测试会失败）。
+    #[test]
+    fn trade_event_bidder_hold_price_when_maker_is_bid() {
+        let mut book = OrderBookNaive::new();
+        // 挂买单：uid=501，reserve_bid_price=12345（> price，模拟风控预留的保守价）
+        let mut maker_cmd = OrderCommand {
+            order_id: 1, symbol: 1, price: 100, size: 10, reserve_bid_price: 12345,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 501,
+            ..Default::default()
+        };
+        book.new_order(&mut maker_cmd);
+
+        // taker 卖单吃进：uid=777，reserve_bid_price 设一个哨兵值（ASK 单本不应被读取）。
+        let mut taker_cmd = OrderCommand {
+            order_id: 2, symbol: 1, price: 100, size: 4, reserve_bid_price: 999_999,
+            action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), uid: 777,
+            ..Default::default()
+        };
+        book.new_order(&mut taker_cmd);
+
+        let ev = taker_cmd.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.matched_order_uid, 501); // maker 的 uid
+        assert_eq!(ev.bidder_hold_price, 12345); // maker（BID 方）自己的 reserve_bid_price
+    }
+
+    /// taker 是 BID 一方：taker 买(BID)吃进挂着的卖单。
+    /// bidder_hold_price 应取 **taker** 的 reserve_bid_price（maker 的 reserve_bid_price 无关，故意设为
+    /// 一个不同的哨兵值）。
+    #[test]
+    fn trade_event_bidder_hold_price_when_taker_is_bid() {
+        let mut book = OrderBookNaive::new();
+        // 挂卖单：uid=502。ASK 单的 reserve_bid_price 语义上不冻结价格，设哨兵值证明未被读取。
+        let mut maker_cmd = OrderCommand {
+            order_id: 1, symbol: 1, price: 200, size: 10, reserve_bid_price: 999_999,
+            action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), uid: 502,
+            ..Default::default()
+        };
+        book.new_order(&mut maker_cmd);
+
+        // taker 买单吃进：uid=888，reserve_bid_price=20000（风控预留的保守价）。
+        let mut taker_cmd = OrderCommand {
+            order_id: 2, symbol: 1, price: 200, size: 4, reserve_bid_price: 20000,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 888,
+            ..Default::default()
+        };
+        book.new_order(&mut taker_cmd);
+
+        let ev = taker_cmd.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.matched_order_uid, 502); // maker 的 uid
+        assert_eq!(ev.bidder_hold_price, 20000); // taker（BID 方）自己的 reserve_bid_price
     }
 
     #[test]
@@ -1282,7 +1385,7 @@ mod tests {
         assert_eq!(b.total_volume(), 15);
         // 先进先出：撮合 12 → 全吃 order1(10) + order2 部分(2)
         let mut collected: Vec<(i64, i64)> = vec![]; // (maker_id, trade_size)
-        let remaining = b.match_forward(12, &mut |maker_id, sz, _completed| {
+        let remaining = b.match_forward(12, &mut |maker_id, sz, _completed, _maker_uid, _maker_reserve_bid_price| {
             collected.push((maker_id, sz));
         });
         assert_eq!(remaining, 0); // 请求量全部撮合
@@ -1448,7 +1551,7 @@ mod tests {
         }
 
         let mut events_count = 0usize;
-        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed| {
+        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed, _maker_uid, _maker_reserve_bid_price| {
             events_count += 1;
         });
         assert_eq!(events_count, expected_num_orders);
@@ -1490,7 +1593,7 @@ mod tests {
 
             let to_match = expected_volume / 2;
             let mut collected_volume: i64 = 0;
-            let remaining = bucket.match_forward(to_match, &mut |_maker_id, trade, _completed| {
+            let remaining = bucket.match_forward(to_match, &mut |_maker_id, trade, _completed, _maker_uid, _maker_reserve_bid_price| {
                 collected_volume += trade;
             });
             assert_eq!(collected_volume, to_match);
@@ -1501,7 +1604,7 @@ mod tests {
         }
 
         let mut events_count = 0usize;
-        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed| {
+        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed, _maker_uid, _maker_reserve_bid_price| {
             events_count += 1;
         });
         assert_eq!(events_count, expected_num_orders);
@@ -1520,8 +1623,10 @@ mod tests {
 //
 // 适配（不算"跳过"，是按 Ruling E 允许的接口精简做的忠实翻译）：
 // - Java `checkEventRejection(event, size, price, bidderHoldPrice)` / `checkEventReduce(..., bidderHoldPrice)`
-//   的 bidderHoldPrice 参数——我们的 MatcherTradeEvent 是 P1 简化结构，没有该字段（Ruling E 明确禁止
-//   本任务扩展该结构），故我们的 check_reject/check_reduce helper 不比对这个字段。
+//   的 bidderHoldPrice 参数——`MatcherTradeEvent` 自 Task 3 起已带 `bidder_hold_price`/`matched_order_uid`
+//   字段（见 event.rs），但这批（Task 7 翻译自 Java `OrderBookBaseTest`）测试当初翻译时该字段尚不存在，
+//   故 check_reject/check_reduce helper 仍不比对；专门覆盖该字段语义的测试见 ob_tests 模块的
+//   `trade_event_bidder_hold_price_when_maker_is_bid` / `..._when_taker_is_bid`。
 // - Java `orderBook.getOrderById(id)` / `orderBook.validateInternalState()`——我们的 IOrderBook trait
 //   未收录这两个查询/校验方法（P1 精简接口），涉及它们的具体断言行被跳过，测试其余部分照常翻译。
 // =======================================================================================
