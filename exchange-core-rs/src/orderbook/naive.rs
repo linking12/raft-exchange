@@ -53,6 +53,23 @@ impl OrdersBucketNaive {
         Some(o)
     }
 
+    /// 按 order_id 只读定位订单，不移除（cancel/reduce 判定剩余量用）。
+    pub fn get(&self, order_id: i64) -> Option<&Order> {
+        let seq = *self.id_to_seq.get(&order_id)?;
+        self.entries.get(&seq)
+    }
+
+    /// 原地减少某挂单的 size（不移除），同步扣减桶的 total_volume。
+    /// 对应 Java `order.size -= reduceBy; ordersBucket.reduceSize(reduceBy);`。
+    /// 返回减量后的订单快照（用于构造 REDUCE 事件）；未找到返回 `None`。
+    pub fn reduce(&mut self, order_id: i64, reduce_by: i64) -> Option<Order> {
+        let seq = *self.id_to_seq.get(&order_id)?;
+        let o = self.entries.get_mut(&seq)?;
+        o.size -= reduce_by;
+        self.total_volume -= reduce_by;
+        Some(o.clone())
+    }
+
     /// 从桶头 FIFO 撮合 `to_collect`，返回剩余未撮合量。
     pub fn match_forward(&mut self, mut to_collect: i64,
                          on_trade: &mut impl FnMut(i64, i64, bool)) -> i64 {
@@ -514,25 +531,165 @@ impl IOrderBook for OrderBookNaive {
         }
     }
 
-    fn cancel_order(&mut self, _cmd: &mut OrderCommand) -> CommandResultCode {
-        // TODO(Task 6): 按 id_index 定位桶并移除、发 Reduce 事件。占位实现先保证可编译。
-        CommandResultCode::MatchingUnknownOrderId
+    /// 撤单：按 `id_index` 定位桶并移除，桶空则删桶，最后从 `id_index` 摘除。
+    /// 发一枚 REDUCE 事件代表释放的剩余量（`active_order_completed=true`）。
+    /// 对应 Java `OrderBookNaiveImpl.cancelOrder` + `OrderBookEventsHelper.sendReduceEvent`。
+    /// 未知 order_id → `MatchingUnknownOrderId`（对应 Java `idMap.get == null`）。
+    ///
+    /// 注：Java 还会校验 `order.uid == cmd.uid`（防止撤销他人订单）；本移植阶段 `id_index` 尚未
+    /// 携带 uid（见 Task 6 报告 concerns），暂未复刻该所有权校验。
+    fn cancel_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let order_id = cmd.order_id;
+        let (action, price) = match self.id_index.get(&order_id) {
+            Some(&v) => v,
+            None => return CommandResultCode::MatchingUnknownOrderId,
+        };
+
+        let buckets = self.buckets_by_action_mut(action);
+        let order = buckets
+            .get_mut(&price)
+            .and_then(|b| b.remove(order_id))
+            .expect("id_index/bucket invariant violated");
+        let bucket_empty = buckets.get(&price).map(|b| b.is_empty()).unwrap_or(true);
+        if bucket_empty {
+            buckets.remove(&price);
+        }
+        self.id_index.remove(&order_id);
+
+        let remaining = order.remaining();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: true,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price: order.price,
+            size: remaining,
+            bid_gt_ask: false,
+            next: None,
+        }));
+        cmd.action = Some(order.action);
+
+        CommandResultCode::Success
     }
 
-    fn reduce_order(&mut self, _cmd: &mut OrderCommand) -> CommandResultCode {
-        // TODO(Task 6): 部分撤销。占位实现先保证可编译。
-        CommandResultCode::MatchingUnknownOrderId
+    /// 部分撤销：把订单剩余量减少 `cmd.size`（超过剩余量则整单撤销，等价 cancel）。
+    /// 发一枚 REDUCE 事件，`size` = 实际减少量，`active_order_completed` = 是否整单移除。
+    /// 对应 Java `OrderBookNaiveImpl.reduceOrder`。
+    /// 未知 order_id → `MatchingUnknownOrderId`；请求量 <= 0 → `MatchingReduceFailedWrongSize`。
+    fn reduce_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let order_id = cmd.order_id;
+        let requested = cmd.size;
+        if requested <= 0 {
+            return CommandResultCode::MatchingReduceFailedWrongSize;
+        }
+
+        let (action, price) = match self.id_index.get(&order_id) {
+            Some(&v) => v,
+            None => return CommandResultCode::MatchingUnknownOrderId,
+        };
+
+        let buckets = self.buckets_by_action_mut(action);
+        let remaining = buckets
+            .get(&price)
+            .and_then(|b| b.get(order_id))
+            .map(|o| o.remaining())
+            .expect("id_index/bucket invariant violated");
+
+        let reduce_by = requested.min(remaining);
+        let can_remove = reduce_by == remaining;
+
+        let order = if can_remove {
+            buckets.get_mut(&price).and_then(|b| b.remove(order_id))
+        } else {
+            buckets.get_mut(&price).and_then(|b| b.reduce(order_id, reduce_by))
+        }
+        .expect("id_index/bucket invariant violated");
+
+        if can_remove {
+            let bucket_empty = buckets.get(&price).map(|b| b.is_empty()).unwrap_or(true);
+            if bucket_empty {
+                buckets.remove(&price);
+            }
+            self.id_index.remove(&order_id);
+        }
+
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: can_remove,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price: order.price,
+            size: reduce_by,
+            bid_gt_ask: false,
+            next: None,
+        }));
+        cmd.action = Some(order.action);
+
+        CommandResultCode::Success
     }
 
-    fn move_order(&mut self, _cmd: &mut OrderCommand) -> CommandResultCode {
-        // TODO(Task 6): 移价 + 重新撮合。占位实现先保证可编译。
-        CommandResultCode::MatchingUnknownOrderId
+    /// 移价：撤旧价（桶空则删桶），按新价重新走即时撮合主路径（可能立即成交，也可能挂在新价）。
+    /// 对应 Java `OrderBookNaiveImpl.moveOrder`（`subtreeForMatching` + `tryMatchInstantly`）。
+    /// 未知 order_id → `MatchingUnknownOrderId`。
+    ///
+    /// 注（deferred）：Java 对 `CURRENCY_EXCHANGE_PAIR` 类型 symbol 的 BID 移价会额外校验
+    /// `newPrice <= order.reserveBidPrice`（否则 `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`）。
+    /// 本移植阶段尚未引入 `SymbolType`/`CoreSymbolSpecification`（见 processors/mod.rs 的 TODO），
+    /// 无法区分现货/期货 symbol，因此该守卫推迟到该基础设施落地后再补——现在对所有 BID 移价一律放行。
+    /// 见 Task 6 报告 concerns。
+    fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let order_id = cmd.order_id;
+        let new_price = cmd.price;
+
+        let (action, old_price) = match self.id_index.get(&order_id) {
+            Some(&v) => v,
+            None => return CommandResultCode::MatchingUnknownOrderId,
+        };
+
+        let buckets = self.buckets_by_action_mut(action);
+        let mut order = buckets
+            .get_mut(&old_price)
+            .and_then(|b| b.remove(order_id))
+            .expect("id_index/bucket invariant violated");
+        let bucket_empty = buckets.get(&old_price).map(|b| b.is_empty()).unwrap_or(true);
+        if bucket_empty {
+            buckets.remove(&old_price);
+        }
+
+        cmd.action = Some(order.action);
+        order.price = new_price;
+
+        // 重新走撮合主路径：taker_size = 订单剩余量（对应 Java `tryMatchInstantly` 以
+        // `activeOrder.getFilled()` 为起点累加，此处等价地只喂剩余量、再把返回值叠加到既有 filled 上）。
+        let remaining = order.size - order.filled;
+        let matched_now = self.try_match_instantly(action, new_price, remaining, cmd);
+        let total_filled = order.filled + matched_now;
+
+        if total_filled == order.size {
+            // 完全成交（100% marketable）：无需挂单
+            self.id_index.remove(&order_id);
+            return CommandResultCode::Success;
+        }
+
+        order.filled = total_filled;
+        self.buckets_by_action_mut(action)
+            .entry(new_price)
+            .or_insert_with(|| OrdersBucketNaive::new(new_price))
+            .put(order);
+        self.id_index.insert(order_id, (action, new_price));
+
+        CommandResultCode::Success
     }
 
-    /// L2 快照：ask 升序、bid 降序，各取前 `size` 档；`size <= 0` 视为取全部档位（Ruling C）。
-    /// 对应 Java `fillAsks` / `fillBids`。
+    /// L2 快照：ask 升序、bid 降序，各取前 `size` 档。
+    /// `size == 0` → 两侧均取 0 档（对应 Java `fillAsks`/`fillBids`: `if (size == 0) { askSize = 0; return; }`）；
+    /// `size < 0` 或极大值 → 取全部档位（Java 的 `++i == size` 在 size 为负数时永不成立，等价于遍历到底）。
     fn fill_l2(&self, size: i32) -> L2MarketData {
-        let take: usize = if size <= 0 { usize::MAX } else { size as usize };
+        let take: usize = match size {
+            0 => 0,
+            s if s < 0 => usize::MAX,
+            s => s as usize,
+        };
 
         let mut ask_prices = Vec::new();
         let mut ask_volumes = Vec::new();
@@ -685,6 +842,196 @@ mod ob_tests {
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![4]);
+    }
+
+    // ---- Task 6: cancel / reduce / move + fill_l2(0) ----
+
+    #[test]
+    fn cancel_unknown_returns_error() {
+        let mut book = OrderBookNaive::new();
+        let mut cmd = OrderCommand { order_id: 999, symbol: 1, uid: 1, ..Default::default() };
+        assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn l2_prices_sorted() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 102, 1);
+        place(&mut book, 2, OrderAction::Ask, 100, 1);
+        place(&mut book, 3, OrderAction::Ask, 101, 1);
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100, 101, 102]); // 卖侧升序
+    }
+
+    #[test]
+    fn cancel_removes_resting_order() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, uid: 1, ..Default::default() };
+        let rc = book.cancel_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        let ev = cmd.matcher_event.as_ref().expect("应有 REDUCE 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reduce);
+        assert_eq!(ev.size, 10);
+        assert!(ev.active_order_completed);
+        assert!(ev.next.is_none());
+
+        // 订单和空桶都已从簿上移除
+        let l2 = book.fill_l2(10);
+        assert!(l2.ask_prices.is_empty());
+
+        // 二次撤销 → 未知订单
+        let mut again = OrderCommand { order_id: 1, symbol: 1, uid: 1, ..Default::default() };
+        assert_eq!(book.cancel_order(&mut again), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn cancel_one_of_two_orders_keeps_bucket() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+        place(&mut book, 2, OrderAction::Ask, 100, 5);
+
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, uid: 1, ..Default::default() };
+        assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::Success);
+
+        // 桶未空（order 2 还在），价位仍在
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100]);
+        assert_eq!(l2.ask_volumes, vec![5]);
+    }
+
+    #[test]
+    fn reduce_unknown_returns_error() {
+        let mut book = OrderBookNaive::new();
+        let mut cmd = OrderCommand { order_id: 999, symbol: 1, size: 1, uid: 1, ..Default::default() };
+        assert_eq!(book.reduce_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn reduce_wrong_size_rejected() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, size: 0, uid: 1, ..Default::default() };
+        assert_eq!(book.reduce_order(&mut cmd), CommandResultCode::MatchingReduceFailedWrongSize);
+    }
+
+    #[test]
+    fn reduce_partial_keeps_order_resting() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, size: 4, uid: 1, ..Default::default() };
+        let rc = book.reduce_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        let ev = cmd.matcher_event.as_ref().expect("应有 REDUCE 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reduce);
+        assert_eq!(ev.size, 4);
+        assert!(!ev.active_order_completed);
+
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![6]);
+    }
+
+    #[test]
+    fn reduce_beyond_remaining_removes_order_like_cancel() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        // 请求减 100，但剩余只有 10 → clamp 到 10，整单移除
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, size: 100, uid: 1, ..Default::default() };
+        let rc = book.reduce_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        let ev = cmd.matcher_event.as_ref().expect("应有 REDUCE 事件");
+        assert_eq!(ev.size, 10);
+        assert!(ev.active_order_completed);
+
+        assert!(book.fill_l2(10).ask_prices.is_empty());
+    }
+
+    #[test]
+    fn move_unknown_returns_error() {
+        let mut book = OrderBookNaive::new();
+        let mut cmd = OrderCommand { order_id: 999, symbol: 1, price: 100, uid: 1, ..Default::default() };
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn move_reprices_resting_order() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        // 移到 105，不与任何对手方交叉，应原样搬到新价位挂单
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 105, uid: 1, ..Default::default() };
+        let rc = book.move_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+        assert!(cmd.matcher_event.is_none()); // 未成交，无事件
+
+        let l2 = book.fill_l2(10);
+        assert!(l2.ask_prices.iter().all(|&p| p != 100)); // 旧价已清空
+        assert_eq!(l2.ask_prices, vec![105]);
+        assert_eq!(l2.ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn move_crosses_and_trades_immediately() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Bid, 90, 10); // 挂买 @90
+        place(&mut book, 2, OrderAction::Ask, 100, 5); // 挂卖 @100，稍后移到 80 应与买单立即成交
+
+        let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 80, uid: 2, ..Default::default() };
+        let rc = book.move_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+
+        let ev = cmd.matcher_event.as_ref().expect("移价交叉后应立即成交");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.maker_order_id, 1);
+        assert_eq!(ev.size, 5);
+
+        // 卖单 5 全部成交，不再挂簿；买单剩 5
+        assert!(book.fill_l2(10).ask_prices.is_empty());
+        assert_eq!(book.fill_l2(10).bid_volumes, vec![5]);
+    }
+
+    #[test]
+    fn move_fully_filled_order_is_removed_from_id_index() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Bid, 90, 5);
+        place(&mut book, 2, OrderAction::Ask, 100, 5);
+
+        // 移到 80，恰好与买单 5 全部成交
+        let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 80, uid: 2, ..Default::default() };
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::Success);
+
+        // 完全成交的订单不该再能被撤销
+        let mut cancel = OrderCommand { order_id: 2, symbol: 1, uid: 2, ..Default::default() };
+        assert_eq!(book.cancel_order(&mut cancel), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn fill_l2_zero_size_returns_empty() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+        place(&mut book, 2, OrderAction::Bid, 90, 5);
+
+        let l2 = book.fill_l2(0);
+        assert!(l2.ask_prices.is_empty());
+        assert!(l2.ask_volumes.is_empty());
+        assert!(l2.bid_prices.is_empty());
+        assert!(l2.bid_volumes.is_empty());
+    }
+
+    #[test]
+    fn fill_l2_large_size_returns_all_levels() {
+        let mut book = OrderBookNaive::new();
+        place(&mut book, 1, OrderAction::Ask, 102, 1);
+        place(&mut book, 2, OrderAction::Ask, 100, 1);
+        place(&mut book, 3, OrderAction::Ask, 101, 1);
+
+        let l2 = book.fill_l2(i32::MAX);
+        assert_eq!(l2.ask_prices, vec![100, 101, 102]);
     }
 }
 
