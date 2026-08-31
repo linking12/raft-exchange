@@ -532,7 +532,7 @@ impl Default for OrderBookNaive {
 }
 
 impl IOrderBook for OrderBookNaive {
-    fn new_order(&mut self, cmd: &mut OrderCommand) {
+    fn new_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         match cmd.order_type {
             Some(OrderType::Gtc) => self.new_order_place_gtc(cmd),
             Some(OrderType::Ioc) => self.new_order_match_ioc(cmd),
@@ -540,9 +540,14 @@ impl IOrderBook for OrderBookNaive {
             Some(OrderType::Fok) => self.new_order_match_fok(cmd),
             Some(OrderType::FokBudget) => self.new_order_match_fok_budget(cmd),
             None => {
-                // 未设置 order_type：本任务不处理（无来源，测试契约不覆盖）。
+                // 未设置 order_type：不支持的命令类型，整单拒绝但不 panic（对应 Java
+                // `MatchingEngineRouter` 遇到未知/不支持类型时的 resultCode 报告语义）。
+                cmd.result_code = Some(CommandResultCode::MatchingUnsupportedCommand);
+                return CommandResultCode::MatchingUnsupportedCommand;
             }
         }
+        cmd.result_code = Some(CommandResultCode::Success);
+        CommandResultCode::Success
     }
 
     /// 撤单：按 `id_index` 定位桶并移除，桶空则删桶，最后从 `id_index` 摘除。
@@ -746,8 +751,8 @@ impl IOrderBook for OrderBookNaive {
     ///
     /// 与 Java 的差异（有意，任务书允许）：
     /// - 不折叠 `symbolSpec.stateHash()`——P1 阶段尚无 `CoreSymbolSpecification`；
-    /// - `orderHash` 只取我们目前持有的字段（order_id/action/price/size/filled/uid），
-    ///   Java 版还含 orderType/command/reserveBidPrice/filledNotional/userCookie——这些字段本移植阶段
+    /// - `orderHash` 取我们目前持有的字段（order_id/action/price/size/filled/reserve_bid_price/uid），
+    ///   Java 版还含 orderType/command/filledNotional/userCookie——这些字段本移植阶段
     ///   要么不存在、要么恒为默认值，纳入不会增加确定性/敏感性，故略去。
     /// 因此不保证与 Java 侧数值相等，只保证「同操作序列 → 同 hash，不同状态 → 不同 hash」。
     fn state_hash(&self) -> i32 {
@@ -903,6 +908,27 @@ mod ob_tests {
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![4]);
+    }
+
+    #[test]
+    fn new_order_reports_result_code() {
+        let mut book = OrderBookNaive::new();
+        // 正常路径（挂单成交/挂簿）：result_code 置 Success，返回值同步。
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 100, size: 10,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 1, ..Default::default() };
+        let rc = book.new_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+        assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+        assert_eq!(book.fill_l2(10).bid_volumes, vec![10]); // 确实挂上了簿
+
+        // 不支持的 order_type（None）：不 panic，result_code 报 MatchingUnsupportedCommand，且不改簿。
+        let mut unsupported = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 5,
+            action: Some(OrderAction::Bid), order_type: None, uid: 2, ..Default::default() };
+        let rc2 = book.new_order(&mut unsupported);
+        assert_eq!(rc2, CommandResultCode::MatchingUnsupportedCommand);
+        assert_eq!(unsupported.result_code, Some(CommandResultCode::MatchingUnsupportedCommand));
+        // 簿未受影响：仍只有 order_id=1 那笔挂单。
+        assert_eq!(book.fill_l2(10).bid_volumes, vec![10]);
     }
 
     // ---- Task 6: cancel / reduce / move + fill_l2(0) ----
