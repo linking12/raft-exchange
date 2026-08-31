@@ -652,3 +652,30 @@ git commit -am "test(orderbook): 翻译 OrderBookNaiveImplTest 全量用例 + st
 - **spec §1 全量范围**：期货/loan/LIF/ADL/funding/内部转账 —— 路线图 P4-P6 覆盖，各自出计划。✓
 - **占位符扫描**：Task 4 的 `new_order` body 与 Task 7 的翻译用例交由执行者对照 Java 源产出——已用"行为契约测试 + Java 行号参照"约束，非空泛 TODO。
 - **类型一致性**：`OrdersBucketNaive::match_forward` 回调签名 `(i64,i64,bool)`、`IOrderBook` 方法名在 Task 3 定义后于 Task 4-6 沿用一致。✓
+
+---
+
+## P1 完成状态（2026-08-31）
+
+7/7 任务完成，逐任务评审 + 全分支终审（opus）+ 修复波 re-review 全部 clean。**79/79 lib 测试绿**，`-D warnings` 无告警。提交范围 `81a906fc..b8a1a79e`。
+- OrdersBucketNaiveTest 6/6；OrderBookBaseTest 39/40（跳 `multipleCommandsKeepInternalStateTest`，需随机命令 harness）。
+- 确定性底座核验通过：全 `BTreeMap`，输出路径零 `HashMap`，`i64` 定点无浮点。
+- 终审后修复：`new_order` 统一返回 `CommandResultCode` 并置 `cmd.result_code`（趁单实现者时改，避免 P2 Direct 出现后跨切）。
+
+### 执行中确立的裁定（Rulings，供 P2/P3 参考）
+- **Ruling A**：`L2MarketData` 提前到 Task 2 定义（完整字段），因 command.rs 与 orderbook trait 都引用。
+- **Ruling B**：Task 3 不 re-export `OrderBookNaive`（Task 4 才定义），保每任务独立编译。
+- **Ruling C**：`fill_l2` 提前到 Task 4 实现（其测试需要），修正 `fill_l2(0)` 语义=零档对齐 Java。
+- **Ruling D**：`MatcherTradeEvent` 为 P1 简化结构；Java 事件字段 `bidderHoldPrice/matchedOrderUid/filled/filledNotional/matchedOrderPrice/section` **推迟到 P3**（风控消费事件时倒逼）。终审确认简化结构对 39/40 base 用例足够，未半接线。
+- **Ruling E**：Task 7 收窄为"state_hash + 完整 OrdersBucketNaiveTest + OrderBookBaseTest 支持子集 + dup-id reject"，非"翻译全量"。
+
+### P3 carry-forward（务必进 P3 计划，勿遗漏）
+1. **`MatcherTradeEvent` 字段补全**到 Java 全集（Ruling D 解除）：`bidderHoldPrice`（bid 保留价，风控 balance-release 用）、`matchedOrderUid`、`filled`、`filledNotional`、`matchedOrderPrice`、`section`。届时回补 FOK/IOC_BUDGET reject 用例中丢弃的 `bidderHoldPrice` 断言、及 3 处 `getOrderById` 断言。
+2. **`move_order` 现货 reserveBidPrice 上限**：Java 对 `CURRENCY_EXCHANGE_PAIR` 在 `newPrice > reserveBidPrice` 时返回 `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`；P1 缺 `SymbolType`/`CoreSymbolSpecification` 故推迟。真实 Java 行为，必须回补。
+3. **`IOrderBook` trait 增长**：`getOrderById` + `validate_internal_state`（跳过的随机命令测试需要，也是 P3 调试利器）。
+4. **plain FOK 语义复核**：P1 的 plain FOK 是 Rust 原创（Java 仅 TODO 桩），按 IOC 限价类比设计；P3/API 定义 FOK 期望时复核其事件语义。
+5. **uid 归属校验**：已在 Task 7 提前落地（cancel/reduce/move 校验 `order.uid == cmd.uid`），P3 无需回补。
+6. **ART / 对象池 / 多线程分片**：性能优化，P1 用 BTreeMap 替代，按需再议。
+
+### 下一阶段
+P2（`OrderBookDirectImpl` + 与 Naive 随机命令对拍 proptest）另出独立详细计划。
