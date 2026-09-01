@@ -19,14 +19,22 @@ use crate::api::event::MatcherTradeEvent;
 use crate::api::spec::{CoreCurrencySpecification, CoreSymbolSpecification};
 use crate::utils::arithmetic;
 
-/// 对应 Java `RiskEngine`（现货子集）。本任务尚无需要持久化的字段——费率调整/手续费累计桶
-/// 属 Task 8，届时在此结构体上新增字段。
+/// 对应 Java `RiskEngine`（现货子集）。shard 全局守恒桶（参考文档 §5/§6）：
+/// - `adjustments`：`BALANCE_ADJUSTMENT`（充提）的对冲桶——`accounts[cur] += amountDiff` 的同时
+///   `adjustments[cur] -= amountDiff`，使 `Σ accounts[cur] + adjustments[cur]` 恒定。
+/// - `fees`：现货成交平台手续费累计桶（Task 6/7 `handle_matcher_events_exchange_sell/buy` 写入）。
+///
+/// Java 还有 `suspends`（`BalanceAdjustmentType::Suspend` 型对冲桶）——本任务按 brief 明确延后
+/// （SUSPEND_USER 命令未移植），故不建该字段，避免无命令路径写入的死字段。
 #[derive(Debug, Default)]
-pub struct RiskEngine {}
+pub struct RiskEngine {
+    pub adjustments: BTreeMap<i32, i64>,
+    pub fees: BTreeMap<i32, i64>,
+}
 
 impl RiskEngine {
     pub fn new() -> Self {
-        RiskEngine {}
+        RiskEngine { adjustments: BTreeMap::new(), fees: BTreeMap::new() }
     }
 
     /// 对应 Java `placeOrderRiskCheck`（399–420）：加载 user profile（缺失 → `AuthInvalidUser`）、
@@ -149,15 +157,18 @@ impl RiskEngine {
     /// 现取，且只在各自需要的短作用域内持有——taker 与 maker（甚至自成交时同一 uid）都不会
     /// 出现两个 `&mut` 同时借用同一 `UserProfile` 的冲突。
     ///
-    /// `fees` 对应 Java 的平台手续费累计桶（`RiskEngine.fees`）：本任务先以 `&mut` 参数形式
-    /// 接收（调用方持有），Task 8 落地为 `RiskEngine` 自身字段后原地接线。
+    /// `fees` 对应 Java 的平台手续费累计桶（`RiskEngine.fees`），Task 8 落地为本结构体字段
+    /// （之前以 `&mut` 参数形式由调用方持有）。`handle_matcher_events_exchange_sell/buy` 仍是
+    /// 关联函数、以 `&mut BTreeMap<i32,i64>` 参数接收 fees（Task 8 brief 的推荐做法）——这里
+    /// 用 `&mut self.fees` 分裂借用后传入，与 `ups`/`ssp`（调用方另行传入、非 `self` 字段）互不冲突，
+    /// 避免 `&mut self` 方法内部再借 `&mut UserProfileService` 时产生自借用冲突。
     pub fn handler_risk_release(
         &mut self,
         cmd: &mut OrderCommand,
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
-        fees: &mut BTreeMap<i32, i64>,
     ) {
+        let fees = &mut self.fees;
         let mut mte = match cmd.matcher_event.take() {
             Some(m) => m,
             None => return,
@@ -692,6 +703,69 @@ impl RiskEngine {
             *fees.entry(quote_currency).or_insert(0) += fee_scaled;
         }
     }
+
+    /// 对应 Java `RiskEngineCommandDispatcher.addUser`（177–181）：`UserProfileService
+    /// .addEmptyUserProfile` 建空 `UserProfile(uid, ACTIVE)`；已存在 → `UserMgmtUserAlreadyExists`。
+    /// `uidForThisHandler` 分片门本期未移植（单 shard、恒真），由调用方（Task 10 引擎）决定是否
+    /// 派发到这里。
+    pub fn add_user(&mut self, cmd: &OrderCommand, ups: &mut UserProfileService) -> CommandResultCode {
+        ups.add_empty_user_profile(cmd.uid)
+    }
+
+    /// 对应 Java `RiskEngineCommandDispatcher.adjustBalance`（183–211）+ `UserProfileService
+    /// .balanceAdjustment`（71–89）两层校验叠加；参考文档 §5：
+    /// - `currency = cmd.symbol`、`amount_diff = cmd.price`；用户不存在 → `AuthInvalidUser`。
+    /// - **外层（dispatcher）现货 NSF**：`withdrawable = account(cur) - locked(cur)`；提现
+    ///   （`amount_diff < 0`）时 `withdrawable + amount_diff < 0` → `RiskNsf`。
+    /// - **内层（`UserProfileService.balanceAdjustment`）NSF**：`amount_diff < 0 &&
+    ///   account(cur) + amount_diff < 0` → `UserMgmtAccountBalanceAdjustmentNsf`。给定外层已通过，
+    ///   此内层对 `BALANCE_ADJUSTMENT` 恒不可达（`locked >= 0` ⟹ `account + amount_diff =
+    ///   account - withdrawal_amount >= locked >= 0`）——Java 两层都在（内层是 `UserProfileService`
+    ///   的通用防线，供 `MARGIN_ADJUSTMENT`/`INTERNAL_TRANSFER` 等未经过外层现货 NSF 的调用方共用，
+    ///   本移植未含那些调用方），逐字复刻两层顺序而非合并，为未来接线这些调用方留出正确的插入点。
+    /// - **幂等**：`cmd.order_id` 在 `UserProfile.processed_tx_ids` 里 claim；已存在 →
+    ///   `UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame`。**两条 NSF 路径都在 claim 之前
+    ///   return，不 claim id**——NSF 后调用方用修正过的金额重试同一 `order_id` 必须放行（Java
+    ///   注释："NSF 时不 claim id，避免污染后续修正重试"）。
+    /// - **成功**：`account(cur) += amount_diff`；随后（对应 dispatcher `applyBalanceAdjustment`
+    ///   的 `ADJUSTMENT` 分支）`adjustments[cur] -= amount_diff`——`Σ account[cur] + adjustments[cur]`
+    ///   恒定。`BalanceAdjustmentType::Suspend` 对冲桶延后（`RiskEngine` 无 `suspends` 字段，
+    ///   见结构体注释），本任务恒按 `Adjustment` 型处理。
+    pub fn balance_adjustment(
+        &mut self,
+        cmd: &OrderCommand,
+        ups: &mut UserProfileService,
+    ) -> CommandResultCode {
+        let currency = cmd.symbol;
+        let amount_diff = cmd.price;
+
+        let user_profile = match ups.get_mut(cmd.uid) {
+            Some(u) => u,
+            None => return CommandResultCode::AuthInvalidUser,
+        };
+
+        if amount_diff < 0 {
+            let withdrawal_amount = -amount_diff;
+            let withdrawable = user_profile.account(currency) - user_profile.locked(currency);
+            if withdrawable - withdrawal_amount < 0 {
+                return CommandResultCode::RiskNsf;
+            }
+        }
+
+        if amount_diff < 0 && user_profile.account(currency) + amount_diff < 0 {
+            return CommandResultCode::UserMgmtAccountBalanceAdjustmentNsf;
+        }
+
+        if !user_profile.try_claim_tx(cmd.order_id) {
+            return CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame;
+        }
+
+        user_profile.add_to_account(currency, amount_diff);
+
+        *self.adjustments.entry(currency).or_insert(0) -= amount_diff;
+
+        CommandResultCode::Success
+    }
 }
 
 #[cfg(test)]
@@ -1013,7 +1087,7 @@ mod tests {
         cmd.matcher_event =
             Some(reject_or_reduce_event(MatcherEventType::Reject, 1000, 50, 50, None));
 
-        engine.handler_risk_release(&mut cmd, &mut ups, &ssp, &mut BTreeMap::new());
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
         let p = ups.get(UID).unwrap();
         assert_eq!(p.locked(QUOTE), 0, "纯 REJECT 应把冻结全额释放回 0");
@@ -1037,7 +1111,7 @@ mod tests {
         cmd.matcher_event =
             Some(reject_or_reduce_event(MatcherEventType::Reduce, 300, 50, 0, None));
 
-        engine.handler_risk_release(&mut cmd, &mut ups, &ssp, &mut BTreeMap::new());
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
         let p = ups.get(UID).unwrap();
         assert_eq!(p.locked(BASE), locked_after_place - 300, "REDUCE 只释放剩余量对应的锁定");
@@ -1060,7 +1134,7 @@ mod tests {
         cmd.matcher_event =
             Some(reject_or_reduce_event(MatcherEventType::Reject, 1000, 60_000, 0, None));
 
-        engine.handler_risk_release(&mut cmd, &mut ups, &ssp, &mut BTreeMap::new());
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
         assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 0, "全拒应释放整份预算冻结");
     }
@@ -1087,7 +1161,7 @@ mod tests {
             Some(trailing_trade),
         ));
 
-        engine.handler_risk_release(&mut cmd, &mut ups, &ssp, &mut BTreeMap::new());
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
         // 端到端一致性：REDUCE 释放 0（不重复释放）+ 紧接着 buy 结算（Task 7）把整份
         // held_total(60030) 全额释放 → taker quote 冻结最终清零。Task 5 的 release_sp=0
@@ -1222,8 +1296,7 @@ mod tests {
 
         // 唯一一笔 TRADE：size=1000 @ 50，maker(BUYER1) 的保守价 55。
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 55, BUYER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
         // maker：quote 净变动 = quote_refund(7000) - hold_quote(58000) = -51000；base += 1000；锁定清零。
         let buyer = ups.get(BUYER1).unwrap();
@@ -1238,7 +1311,7 @@ mod tests {
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 47_000);
 
         // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
-        assert_eq!(*fees.get(&QUOTE).unwrap(), 4000);
+        assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 4000);
 
         assert!(seller_cmd.matcher_event.is_none(), "TRADE 链结算后应清空");
 
@@ -1273,8 +1346,7 @@ mod tests {
 
         // 成交价改善到 50（< holdPrice 60）。
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 60, BUYER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
         // quoteRefund = tradeAmountDiff(10000) + feeDiff(ceil(1000*(60*100-50*20)/10000)=ceil(5_000_000/10000)=500) = 10500。
         // maker quote 净变动 = 10500 - 60600 = -50100。
@@ -1290,7 +1362,7 @@ mod tests {
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_500);
 
         // makerFee(avg price=50) = ceil(1000*50*20/10000) = 100；fees[quote] = 500+100 = 600。
-        assert_eq!(*fees.get(&QUOTE).unwrap(), 600);
+        assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 600);
 
         assert_conserved(&[-1000, 1000], &[49_500, -50_100], 600);
     }
@@ -1336,8 +1408,7 @@ mod tests {
         // event2 对 BUYER2（size1000@60，holdPrice60，无改善）。
         let event2 = trade_event(1000, 60, 60, BUYER2, None);
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 55, BUYER1, Some(event2)));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
         let buyer1 = ups.get(BUYER1).unwrap();
         assert_eq!(buyer1.locked(QUOTE), 0);
@@ -1364,7 +1435,7 @@ mod tests {
         assert_eq!(seller_quote_delta, 104_000);
 
         // avgMakerPrice=55；makerFee=2000*1=2000；fees[quote]=6000+2000=8000。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 8000);
 
         assert_conserved(
@@ -1414,8 +1485,7 @@ mod tests {
 
         let event2 = trade_event(1000, 60, 60, BUYER2, None);
         seller_cmd.matcher_event = Some(trade_event(1000, 40, 40, BUYER1, Some(event2)));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
         let buyer1 = ups.get(BUYER1).unwrap();
         assert_eq!(buyer1.locked(QUOTE), 0);
@@ -1445,7 +1515,7 @@ mod tests {
         assert_eq!(seller_quote_delta, 99_000);
 
         // avgMakerPrice=50；makerFee=ceil(2000*50*20/10000)=200；fees[quote]=1000+200=1200。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 1200);
 
         assert_conserved(
@@ -1524,8 +1594,7 @@ mod tests {
 
         // 唯一一笔 TRADE：size=1000 @ 50，taker(买方) 的保守价 55。
         buyer_cmd.matcher_event = Some(trade_event(1000, 50, 55, SELLER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         // maker(seller)：base 释放/实付 = size(1000)；quote += notional(50000) - makerFee(1000) = 49000。
         let seller = ups.get(SELLER1).unwrap();
@@ -1540,7 +1609,7 @@ mod tests {
         assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
 
         // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
-        assert_eq!(*fees.get(&QUOTE).unwrap(), 4000);
+        assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 4000);
 
         assert!(buyer_cmd.matcher_event.is_none(), "TRADE 链结算后应清空");
 
@@ -1575,8 +1644,7 @@ mod tests {
 
         // 成交价改善到 50（< holdPrice 60）。
         buyer_cmd.matcher_event = Some(trade_event(1000, 50, 60, SELLER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         // makerFee(price=50) = ceil(1000*50*20/10000) = 100；maker quote += 50000-100 = 49900。
         let seller = ups.get(SELLER1).unwrap();
@@ -1593,7 +1661,7 @@ mod tests {
         assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
 
         // fees[quote] = takerFee(500) + makerFee(avg=50→100) = 600。
-        assert_eq!(*fees.get(&QUOTE).unwrap(), 600);
+        assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 600);
 
         assert_conserved(&[1000, -1000], &[-50_500, 49_900], 600);
     }
@@ -1639,8 +1707,7 @@ mod tests {
         // 两笔 TRADE：event1 对 SELLER1（size1000@50，价格改善）；event2 对 SELLER2（size1000@60，无改善）。
         let event2 = trade_event(1000, 60, 60, SELLER2, None);
         buyer_cmd.matcher_event = Some(trade_event(1000, 50, 60, SELLER1, Some(event2)));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         let seller1 = ups.get(SELLER1).unwrap();
         assert_eq!(seller1.locked(BASE), 0);
@@ -1668,7 +1735,7 @@ mod tests {
         assert_eq!(buyer_base_delta, 2000);
 
         // avgMakerPrice=55；makerFee=2000*1=2000；fees[quote]=6000+2000=8000。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 8000);
 
         assert_conserved(
@@ -1718,8 +1785,7 @@ mod tests {
         // event1 大幅价格改善（40 vs holdPrice 60），event2 无改善（60 vs holdPrice 60）。
         let event2 = trade_event(1000, 60, 60, SELLER2, None);
         buyer_cmd.matcher_event = Some(trade_event(1000, 40, 60, SELLER1, Some(event2)));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         let seller1 = ups.get(SELLER1).unwrap();
         assert_eq!(seller1.locked(BASE), 0);
@@ -1748,7 +1814,7 @@ mod tests {
         assert_eq!(buyer_base_delta, 2000);
 
         // avgMakerPrice=50；makerFee=ceil(2000*50*20/10000)=200；fees[quote]=1000+200=1200。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 1200);
 
         assert_conserved(
@@ -1798,8 +1864,7 @@ mod tests {
         // 只成交 400（原始 1000 的 40%）；bidder_hold_price 对 BUDGET 分支无意义（被
         // taker_hold_notional=taker_notional 覆盖），此处填 60000 仅表示"字段存在但未被读取"。
         buyer_cmd.matcher_event = Some(trade_event(400, 50, 60_000, SELLER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         // 核心断言：taker quote 冻结应清零——即本函数释放的 hold_quote 恰好等于 held_total 全额，
         // 与部分成交量(400)无关。这正是 Task 5 IOC_BUDGET+prior-trade 分支 release_sp=0 的前提。
@@ -1826,7 +1891,7 @@ mod tests {
         assert_eq!(buyer_base_delta, 400);
 
         // fees[quote] = takerFee(10) + makerFee(2) = 12。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 12);
 
         assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
@@ -1861,8 +1926,7 @@ mod tests {
 
         // 全额成交：size=1000（原始 size 全部），价格 55。
         buyer_cmd.matcher_event = Some(trade_event(1000, 55, 60_000, SELLER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         // maker：makerFee=ceil(1000*55*100/1_000_000)=6；quote += 55000-6=54994。
         let seller = ups.get(SELLER1).unwrap();
@@ -1881,7 +1945,7 @@ mod tests {
         assert_eq!(buyer_base_delta, 1000);
 
         // fees[quote] = takerFee(28) + makerFee(6) = 34。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 34);
 
         assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
@@ -1915,8 +1979,7 @@ mod tests {
         let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
 
         buyer_cmd.matcher_event = Some(trade_event(1000, 55, 60_000, SELLER1, None));
-        let mut fees = BTreeMap::new();
-        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         // maker：makerFee(固定)=1000*1=1000；quote += 55000-1000=54000。
         let seller = ups.get(SELLER1).unwrap();
@@ -1936,9 +1999,150 @@ mod tests {
         assert_eq!(buyer_base_delta, 1000);
 
         // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
-        let fees_delta = *fees.get(&QUOTE).unwrap();
+        let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 4000);
 
         assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
+    }
+
+    // ========================================================================================
+    // Task 8 — ADD_USER / BALANCE_ADJUSTMENT + adjustments 守恒桶（参考文档 §5）
+    // ========================================================================================
+
+    fn add_user_cmd(uid: i64) -> OrderCommand {
+        OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() }
+    }
+
+    fn balance_adjustment_cmd(uid: i64, currency: i32, amount: i64, order_id: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::BalanceAdjustment,
+            uid,
+            symbol: currency,
+            price: amount,
+            order_id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn add_user_creates_empty_account() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        let cmd = add_user_cmd(UID);
+        assert_eq!(engine.add_user(&cmd, &mut ups), CommandResultCode::Success);
+        let profile = ups.get(UID).unwrap();
+        assert_eq!(profile.account(QUOTE), 0);
+        assert_eq!(profile.locked(QUOTE), 0);
+    }
+
+    #[test]
+    fn add_user_rejects_duplicate_uid() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        assert_eq!(engine.add_user(&add_user_cmd(UID), &mut ups), CommandResultCode::Success);
+        assert_eq!(
+            engine.add_user(&add_user_cmd(UID), &mut ups),
+            CommandResultCode::UserMgmtUserAlreadyExists
+        );
+    }
+
+    #[test]
+    fn balance_adjustment_deposit_increases_account_and_conserves_globally() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        engine.add_user(&add_user_cmd(UID), &mut ups);
+
+        let cmd = balance_adjustment_cmd(UID, QUOTE, 1000, 1);
+        assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::Success);
+
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1000);
+        // Σ account[cur] + adjustments[cur] 从空账户起恒为 0。
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE) + engine.adjustments.get(&QUOTE).unwrap(), 0);
+    }
+
+    #[test]
+    fn balance_adjustment_withdrawal_exceeding_withdrawable_is_nsf_and_noop() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        engine.add_user(&add_user_cmd(UID), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups);
+        // 500 冻结在挂单里，可提余额只剩 500。
+        ups.get_mut(UID).unwrap().add_to_locked(QUOTE, 500);
+
+        let before_account = ups.get(UID).unwrap().account(QUOTE);
+        let before_adjustments = *engine.adjustments.get(&QUOTE).unwrap_or(&0);
+
+        let withdraw_cmd = balance_adjustment_cmd(UID, QUOTE, -600, 2);
+        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups), CommandResultCode::RiskNsf);
+
+        // NSF：账户与守恒桶都不应变化。
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), before_account);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap_or(&0), before_adjustments);
+    }
+
+    #[test]
+    fn balance_adjustment_withdrawal_within_withdrawable_succeeds() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        engine.add_user(&add_user_cmd(UID), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups);
+
+        let withdraw_cmd = balance_adjustment_cmd(UID, QUOTE, -400, 2);
+        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups), CommandResultCode::Success);
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 600);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -600);
+    }
+
+    #[test]
+    fn balance_adjustment_duplicate_order_id_is_already_applied_same_noop() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        engine.add_user(&add_user_cmd(UID), &mut ups);
+
+        let cmd = balance_adjustment_cmd(UID, QUOTE, 1000, 42);
+        assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::Success);
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
+
+        // 同 order_id 重复 → AlreadyAppliedSame，账户/adjustments 均不再变化（no-op）。
+        let repeat = balance_adjustment_cmd(UID, QUOTE, 1000, 42);
+        assert_eq!(
+            engine.balance_adjustment(&repeat, &mut ups),
+            CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame
+        );
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1000);
+
+        // 不同 order_id 正常再次生效。
+        let different_id = balance_adjustment_cmd(UID, QUOTE, 500, 43);
+        assert_eq!(engine.balance_adjustment(&different_id, &mut ups), CommandResultCode::Success);
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1500);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1500);
+    }
+
+    #[test]
+    fn balance_adjustment_nsf_does_not_claim_id_so_same_id_retry_after_funding_succeeds() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        engine.add_user(&add_user_cmd(UID), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 500, 1), &mut ups);
+
+        // 提现 600 超过可提余额 500 → NSF，order_id=99 未被 claim。
+        let nsf_attempt = balance_adjustment_cmd(UID, QUOTE, -600, 99);
+        assert_eq!(engine.balance_adjustment(&nsf_attempt, &mut ups), CommandResultCode::RiskNsf);
+
+        // 补充资金后用同一 order_id=99 重试，必须放行（NSF 路径未 claim id）。
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 2), &mut ups);
+        let retry = balance_adjustment_cmd(UID, QUOTE, -600, 99);
+        assert_eq!(engine.balance_adjustment(&retry, &mut ups), CommandResultCode::Success);
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 900); // 500 + 1000 - 600
+    }
+
+    #[test]
+    fn balance_adjustment_unknown_user_is_auth_invalid_user() {
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        let cmd = balance_adjustment_cmd(999, QUOTE, 100, 1);
+        assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::AuthInvalidUser);
     }
 }

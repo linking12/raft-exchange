@@ -1,6 +1,8 @@
 //! 对应 Java: exchange.core2.core.common.UserProfile（现货子集：
-//! `uid`/`userStatus`/`accounts`/`exchangeLocked`——positions/loans/dedup/margin 方法本期不移植）。
-use std::collections::BTreeMap;
+//! `uid`/`userStatus`/`accounts`/`exchangeLocked`——positions/loans/margin 方法本期不移植；
+//! `processedTransactionIds` 按 Task 8 brief 简化为不带过期窗口的 `BTreeSet<i64>`，
+//! 对应 Java `TimeWindowDedupSet`的最小子集：只保留"claim 一次，重复即拒"语义，不做时间淘汰）。
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::api::enums::UserStatus;
 
@@ -12,6 +14,9 @@ pub struct UserProfile {
     pub accounts: BTreeMap<i32, i64>,
     /// currency -> locked amount（对应 Java `IntLongHashMap exchangeLocked`；现货挂单冻结）。
     pub exchange_locked: BTreeMap<i32, i64>,
+    /// 对应 Java `UserProfile.processedTransactionIds`（简化：无过期窗口）。用于
+    /// `BALANCE_ADJUSTMENT`/`INTERNAL_TRANSFER`/loan 等命令的按 `orderId` 幂等去重。
+    pub processed_tx_ids: BTreeSet<i64>,
 }
 
 impl UserProfile {
@@ -21,7 +26,14 @@ impl UserProfile {
             user_status,
             accounts: BTreeMap::new(),
             exchange_locked: BTreeMap::new(),
+            processed_tx_ids: BTreeSet::new(),
         }
+    }
+
+    /// 对应 Java `TimeWindowDedupSet.tryClaim(id, nowMs)`（简化：省略时间窗口淘汰）：
+    /// 首次见到该 `tx_id` → 记录并返回 `true`；已见过 → 返回 `false`，不重复记录。
+    pub fn try_claim_tx(&mut self, tx_id: i64) -> bool {
+        self.processed_tx_ids.insert(tx_id)
     }
 
     /// 对应 Java `accounts.get(currency)`：Eclipse Collections 原始类型 map 缺省值语义，缺省 0。
