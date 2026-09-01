@@ -247,3 +247,25 @@
 - 设计文档 §4 单线程确定性管线→Task 10；§5 i64/有序容器→Global Constraints + 各 task；§6 snapshot→P7 延后。
 - 范围裁定（现货 only、跳 binary 组帧用直接 API、单 shard 无分片、futures/loan 桩占位）已在 Global Constraints/Task 4/8 明示。
 - 类型一致性：`fees: &mut BTreeMap<i32,i64>` 于 Task 6/7 引入、Task 8 拥有、Task 10 接线一致；`RiskEngine` 方法签名跨 Task 4-8 沿用。
+
+---
+
+## P3 完成状态（2026-09-01）
+
+11/11 任务完成，逐任务 TDD + 双评审。现货引擎端到端跑通：建币/建 symbol/建用户/充值 → 下单(GTC/IOC/FOK) → 撮合 → 双方按 名义±费 结算 → 撤单释放冻结；单线程确定性 R1→ME→R2 管线 + ExchangeApi。`cargo test --lib` 211 绿（含 5 e2e 场景 + 256-case 守恒 proptest + 2 个继承缺陷 characterization），`-D warnings` 无告警。
+
+### 决策裁定
+- **用户决策：两个继承缺陷均"保 Java 一致"（不改生产代码）** —— 理由：都是 Java 参考实现自身的既有缺陷、Rust 逐字对等；且若将来做 Rust↔Java 差分对拍验证，必须逐位匹配 Java（含这些 bug）。
+
+### ⚠ 继承自 Java 的守恒缺陷（忠实复现，未修，务必知悉）
+两者均为 Java `exchange-core` 参考实现自身的既有缺陷（经取证确认），Rust 逐字对等复现，**非移植错误**，按用户决策刻意保留：
+
+1. **缺陷#1 — exchange_locked 可变负（比例费 BID 跨多次释放）**：`ceil(a)+ceil(b) ≥ ceil(a+b)` 超可加性。比例费 BID 挂单被拆成 ≥2 次释放（两 taker 分吃 / reduce+cancel）时释放总额超原始冻结额，`exchange_locked[quote]` 变负 → 虚高可用余额（偿付会计暴露）。**真资金守恒 Σaccounts+adjustments+fees 仍成立**（只破 locked>=0 标记）。Java: `RiskEngine.java:1154-1163/1094-1120`, `CoreArithmeticUtils.java:96-101`；Java 自身守恒检查对此恒等失明。Rust characterization test 记录之。
+2. **缺陷#2 — Σaccounts+fees 单笔漂 ±1（比例费 + maker_fee≠0）**：`calculateAmountBidReleaseCorrMaker` 合并 ceil(takerFee,makerFee) 与 fees 桶独立 `calculateMakerFee` ceil 不一致（`ceil(a)−ceil(b)≠ceil(a−b)`）。maker_fee≠0 时**单笔**成交即破**真守恒** Σaccounts+fees ±1（会累积）。Java: `RiskEngine.java:1222` + `CoreArithmeticUtils.java:126-140/175-178`。Rust: `arithmetic.rs:273-292/230-237`, `risk.rs` sell 结算。proptest 比例费生成器 pin `maker_fee=0` 规避（test-param-only，已注释）。
+
+**若未来要"修得比 Java 更正确"**：新开一期，dust→fees 桶 + per-order 剩余冻结追踪、末笔精确释放（参考文档 §6 已预告方向）；但那会破坏 Rust↔Java 差分对拍的逐位一致性，需权衡。
+
+### P4+ carry-forward（承 P1 未了 + P3 新增）
+- （P1 承接）MatcherTradeEvent 未补的 Java 全字段（futures 用）、move_order 现货 reserveBidPrice 上限（需 SymbolType 已在 P3 有 spec 可做但未做）、IOrderBook 的 getOrderById/validate_internal_state。
+- （P3 新增）上述两个继承守恒缺陷；processed_tx_ids 无时间窗去重且未入 state_hash（raft/快照需处理）；suspends 桶 + SUSPEND 型 balance-adjust；binary 组帧（当前走直接 API）；多线程分片；snapshot。
+- 下一阶段可选：P2（OrderBookDirectImpl，链表→slab+索引，另出计划）或直接 P4（期货/统一账户）。
