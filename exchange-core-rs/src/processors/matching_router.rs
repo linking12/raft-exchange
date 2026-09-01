@@ -41,7 +41,21 @@ impl MatchingEngineRouter {
 
     /// 对应 Java `MatchingEngineRouter.processMatchingCommand`（291–312 行）
     /// + `IOrderBook.processCommand`（176–227 行）。写 `cmd.result_code` 并返回同一个值。
+    ///
+    /// # 非交易命令 no-op 守卫（管线结构对齐 Java 之后新增）
+    /// `ExchangeCore::process_command` 重构后，所有命令都依次流过 R1→ME→R2（对齐 Java 全命令
+    /// 过 disruptor 三阶段的结构），非交易命令（`AddUser`/`BalanceAdjustment` 等）也会流经这里。
+    /// 非交易命令的 `cmd.symbol` 语义不是 symbol id（例如 `BalanceAdjustment` 是币种 id），若不
+    /// 提前拦截，下面 `self.books.get_mut(&cmd.symbol)` 会用错误的键去查 book——大概率查不到，
+    /// 命中 `MATCHING_INVALID_ORDER_BOOK_ID` 分支，**覆盖掉 R1 已经写好的正确 `result_code`**
+    /// （即使凑巧命中某个 symbol id 相同的 book，也会做一次无意义甚至有害的撮合尝试）。因此在
+    /// 最前面显式短路：不查 book、不碰 `cmd.result_code`，原样保留 R1（`preProcessCommand`）写
+    /// 下的结果——对应 Java `MatchingEngineRouter` 里非订单类命令根本不会被路由到这里的效果。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        if cmd.command.is_non_trading() {
+            return cmd.result_code.unwrap_or(CommandResultCode::MatchingUnsupportedCommand);
+        }
+
         let Some(book) = self.books.get_mut(&cmd.symbol) else {
             // 对应 Java: `orderBook == null` → `MATCHING_INVALID_ORDER_BOOK_ID`（-3005）。
             let rc = CommandResultCode::MatchingInvalidOrderBookId;

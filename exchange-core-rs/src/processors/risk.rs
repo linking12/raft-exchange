@@ -37,6 +37,41 @@ impl RiskEngine {
         RiskEngine { adjustments: BTreeMap::new(), fees: BTreeMap::new() }
     }
 
+    /// 对应 Java `RiskEngine.preProcessCommand`（管线结构对齐重构新增）：R1 入口，按
+    /// `cmd.command` 路由，镜像 Java `preProcessCommand` 的主 switch 结构：
+    /// - 非交易命令（`is_non_trading()`）：整块委托（原 `ExchangeCore::dispatch_non_trading`
+    ///   的逻辑搬迁至此）——`AddUser`→[`Self::add_user`]、`BalanceAdjustment`→
+    ///   [`Self::balance_adjustment`]，其余（本移植子集里只有 `BinaryDataCommand`）→
+    ///   `MatchingUnsupportedCommand`（未移植该命令的处理器，不 panic）。
+    /// - `PlaceOrder`：调用 [`Self::place_order_risk_check`] 做风控冻结（R1 hold）。
+    /// - `CancelOrder`/`MoveOrder`/`ReduceOrder`/`OrderBookRequest`（以及本移植子集里的
+    ///   `Reset`/`Nop`）：R1 无动作，直落 ME，`cmd.result_code` 留给 ME/R2 决定——对应 Java
+    ///   `preProcessCommand` 里这些分支没有风控前置校验。
+    ///
+    /// Java `preProcessCommand` 返回 `boolean`（disruptor 批次控制信号：是否结束当前 grouping
+    /// batch），本移植单线程、无 grouping/批边界概念，该返回值无单线程语义，故此处返回 `()`。
+    pub fn pre_process_command(
+        &mut self,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        if cmd.command.is_non_trading() {
+            let rc = match cmd.command {
+                OrderCommandType::AddUser => self.add_user(cmd, ups),
+                OrderCommandType::BalanceAdjustment => self.balance_adjustment(cmd, ups),
+                _ => CommandResultCode::MatchingUnsupportedCommand,
+            };
+            cmd.result_code = Some(rc);
+            return;
+        }
+
+        if cmd.command == OrderCommandType::PlaceOrder {
+            cmd.result_code = Some(self.place_order_risk_check(cmd, ups, ssp));
+        }
+        // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
+    }
+
     /// 对应 Java `placeOrderRiskCheck`（399–420）：加载 user profile（缺失 → `AuthInvalidUser`）、
     /// 加载 symbol spec（缺失 → `InvalidSymbol`），现货分支转 [`Self::place_exchange_order`]。
     /// 非现货 symbol（期货/期权）本期未移植，`unimplemented!`（对应 Java `placeOrder` 434 行以下
@@ -150,6 +185,17 @@ impl RiskEngine {
     /// 参考文档 §3。链头 REJECT/REDUCE 释放（Task 5）+ TRADE 链 sell 结算（Task 6，
     /// `handle_matcher_events_exchange_sell`）已落地；buy 结算留给 Task 7（`// TODO` 占位）。
     ///
+    /// # 非交易命令 no-op 守卫（管线结构对齐 Java 之后新增）
+    /// `ExchangeCore::process_command` 重构后，**所有**命令（含 `AddUser`/`BalanceAdjustment` 等
+    /// 非交易命令）都会依次流过 R1→ME→R2 三段（对齐 Java 全命令过 disruptor 三阶段的结构）。
+    /// 非交易命令没有 symbol/matcher_event 语义——`cmd.symbol` 对 `BalanceAdjustment` 是**币种 id**
+    /// 而非 symbol id，若不提前拦截，下面 `ssp.get_symbol(cmd.symbol)` 会用币种 id 当 symbol id
+    /// 查（大概率 panic 或查到无关 symbol）。因此在最前面显式短路：非交易命令在 R1
+    /// （`pre_process_command`）已经把结果写进 `cmd.result_code`，R2 在这里直接返回、不做任何
+    /// 改动。（备注：即使没有这条显式 guard，非交易命令因为从未被设置过 `matcher_event`，也会被
+    /// 紧随其后的 `cmd.matcher_event.take() == None` 分支挡住——这条 guard 是双保险 + 把"非交易
+    /// 命令在 R2 无意义"这件事写进代码里，而非依赖一个巧合成立的空值检查。）
+    ///
     /// 借用设计（vs. Java `takerUp = getUserProfileOrAddSuspended(cmd.uid)` 提前一次性取）：本期
     /// 单 shard 恒 `uidForThisHandler == true`，但如果在这里先 `ups.get_or_add_suspended(cmd.uid)`
     /// 拿到 `&mut UserProfile` 再传给下游 helper，sell 结算里额外借出 maker profile 时会与这个
@@ -168,6 +214,9 @@ impl RiskEngine {
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) {
+        if cmd.command.is_non_trading() {
+            return;
+        }
         let fees = &mut self.fees;
         let mut mte = match cmd.matcher_event.take() {
             Some(m) => m,
