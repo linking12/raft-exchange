@@ -1,4 +1,4 @@
-//! ME（Matching Engine）路由：按 symbol 把命令分派到对应的 `OrderBookNaive`。
+//! ME（Matching Engine）路由：按 symbol 把命令分派到对应的 `OrderBookNaiveImpl`。
 //! 对应 Java: `exchange.core2.core.processors.MatchingEngineRouter`（329 行，`processOrder`/`processMatchingCommand`）
 //! + `orderbook/IOrderBook.processCommand`（静态分派，182–227 行）。
 //!
@@ -16,16 +16,18 @@
 //! ME 绝不覆盖 R1 的拒绝结果。
 use std::collections::BTreeMap;
 
-use crate::api::command::OrderCommand;
-use crate::api::enums::{CommandResultCode, OrderCommandType};
-use crate::api::spec::CoreSymbolSpecification;
-use crate::orderbook::{IOrderBook, OrderBookNaive};
+use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::orderbook::i_order_book::IOrderBook;
+use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
 /// 对应 Java `MatchingEngineRouter`（现货子集：只保留 symbol→book 路由 + 撮合分派，
 /// 序列化/对象池/分片/二进制命令等本期不移植）。
 #[derive(Default)]
 pub struct MatchingEngineRouter {
-    books: BTreeMap<i32, OrderBookNaive>,
+    books: BTreeMap<i32, OrderBookNaiveImpl>,
 }
 
 impl MatchingEngineRouter {
@@ -96,7 +98,9 @@ impl MatchingEngineRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::enums::{OrderAction, OrderType, SymbolType};
+    use crate::core::common::order_action::OrderAction;
+    use crate::core::common::order_type::OrderType;
+    use crate::core::common::symbol_type::SymbolType;
 
     fn spec(symbol_id: i32) -> CoreSymbolSpecification {
         CoreSymbolSpecification {

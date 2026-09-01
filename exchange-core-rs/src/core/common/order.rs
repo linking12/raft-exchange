@@ -1,5 +1,5 @@
 //! 对应 Java: exchange.core2.core.common.Order（撮合所需字段子集）
-use crate::api::enums::OrderAction;
+use crate::core::common::order_action::OrderAction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Order {
@@ -23,7 +23,7 @@ impl Order {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::enums::OrderAction;
+    use crate::core::common::order_action::OrderAction;
 
     #[test]
     fn order_remaining_size() {

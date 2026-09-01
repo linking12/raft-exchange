@@ -1,5 +1,5 @@
 //! 对应 Java: exchange.core2.core.common.MatcherTradeEvent（撮合事件单链表）
-use crate::api::enums::MatcherEventType;
+use crate::core::common::matcher_event_type::MatcherEventType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatcherTradeEvent {

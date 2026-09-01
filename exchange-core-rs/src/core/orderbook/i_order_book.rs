@@ -1,7 +1,7 @@
 //! 订单簿接口。对应 Java: orderbook/IOrderBook.java
-use crate::api::command::OrderCommand;
-use crate::api::enums::CommandResultCode;
-use crate::api::l2::L2MarketData;
+use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::l2_market_data::L2MarketData;
 
 /// 订单簿 trait，定义撮合引擎与订单簿的交互接口。
 pub trait IOrderBook {

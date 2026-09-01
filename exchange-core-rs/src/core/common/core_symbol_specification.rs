@@ -1,14 +1,7 @@
-//! 对应 Java: exchange.core2.core.common.{CoreCurrencySpecification, CoreSymbolSpecification}
+//! 对应 Java: exchange.core2.core.common.CoreSymbolSpecification
 //! （现货子集：symbolId/type/base+quote currency/base+quoteScaleK/taker+makerFee/feeScaleK；
 //! margin/loan 相关字段本期不移植）。
-use crate::api::enums::SymbolType;
-
-/// 对应 Java `CoreCurrencySpecification`（现货子集：`id` → `currency`，`getCurrencyScaleK()` → `currency_scale_k`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreCurrencySpecification {
-    pub currency: i32,
-    pub currency_scale_k: i64,
-}
+use crate::core::common::symbol_type::SymbolType;
 
 /// 对应 Java `CoreSymbolSpecification`（现货子集）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,12 +50,5 @@ mod tests {
     #[test]
     fn is_fixed_fee_false_when_fee_scale_k_positive() {
         assert!(!spot_spec(10_000).is_fixed_fee());
-    }
-
-    #[test]
-    fn currency_spec_holds_scale() {
-        let cur = CoreCurrencySpecification { currency: 1, currency_scale_k: 100 };
-        assert_eq!(cur.currency, 1);
-        assert_eq!(cur.currency_scale_k, 100);
     }
 }
