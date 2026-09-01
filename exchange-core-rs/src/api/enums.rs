@@ -80,6 +80,7 @@ pub enum CommandResultCode {
     RiskAskPriceLowerThanFee,   // -2003
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
+    MatchingInvalidOrderBookId, // -3005（Task 9: MatchingEngineRouter 未知 symbol）
     MatchingReduceFailedWrongSize, // -3051（Task 6: reduceOrder 请求量 <= 0）
     UserMgmtUserAlreadyExists, // -4001
     UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame, // -4101
@@ -99,6 +100,7 @@ impl CommandResultCode {
             CommandResultCode::RiskAskPriceLowerThanFee => -2003,
             CommandResultCode::MatchingUnknownOrderId => -3002,
             CommandResultCode::MatchingUnsupportedCommand => -3004,
+            CommandResultCode::MatchingInvalidOrderBookId => -3005,
             CommandResultCode::MatchingReduceFailedWrongSize => -3051,
             CommandResultCode::UserMgmtUserAlreadyExists => -4001,
             CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame => -4101,
@@ -304,6 +306,7 @@ mod tests {
         assert_eq!(CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame.code(), -4101);
         assert_eq!(CommandResultCode::UserMgmtAccountBalanceAdjustmentNsf.code(), -4103);
         assert_eq!(CommandResultCode::SymbolMgmtSymbolAlreadyExists.code(), -5001);
+        assert_eq!(CommandResultCode::MatchingInvalidOrderBookId.code(), -3005);
     }
 
     #[test]
