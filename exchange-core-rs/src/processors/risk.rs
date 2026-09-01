@@ -224,8 +224,28 @@ impl RiskEngine {
                 );
                 // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 REJECT/REDUCE 消费后清空的模式）。
             } else {
-                // TODO(Task 7): handle_matcher_events_exchange_buy(cmd, remaining, &spec, ups, fees)
-                cmd.matcher_event = Some(remaining);
+                let base_currency_spec = ssp
+                    .get_currency(spec.base_currency)
+                    .unwrap_or_else(|| {
+                        panic!("currency spec missing for currency {}", spec.base_currency)
+                    })
+                    .clone();
+                let quote_currency_spec = ssp
+                    .get_currency(spec.quote_currency)
+                    .unwrap_or_else(|| {
+                        panic!("currency spec missing for currency {}", spec.quote_currency)
+                    })
+                    .clone();
+                Self::handle_matcher_events_exchange_buy(
+                    cmd,
+                    remaining,
+                    &spec,
+                    &base_currency_spec,
+                    &quote_currency_spec,
+                    ups,
+                    fees,
+                );
+                // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 sell 分支）。
             }
         }
     }
@@ -436,6 +456,217 @@ impl RiskEngine {
             // 避免 per-event ceil + 多次 scale 转换累积 dust（与 maker 块的 per-event 截断不对称是
             // 有意的：单笔 dust 沉积在 exchangeLocked，SUSPEND 时 sweep 到 fees，全局守恒——
             // sweep 路径属 Task 8+，本任务不处理）。
+            let avg_maker_price = if maker_size > 0 {
+                i64::try_from(maker_notional / maker_size as i128)
+                    .unwrap_or_else(|_| panic!("overflow narrowing avg_maker_price"))
+            } else {
+                0
+            };
+            let maker_fee = arithmetic::calculate_maker_fee(
+                maker_size,
+                avg_maker_price,
+                spec.maker_fee,
+                spec.fee_scale_k,
+            );
+
+            let fee_sum = taker_fee
+                .checked_add(maker_fee)
+                .unwrap_or_else(|| panic!("overflow: taker_fee + maker_fee"));
+            let fee_scaled = arithmetic::size_price_to_currency_scale(
+                fee_sum,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                quote_currency_spec.currency_scale_k,
+            );
+            *fees.entry(quote_currency).or_insert(0) += fee_scaled;
+        }
+    }
+
+    /// 对应 Java `handleMatcherEventsExchangeBuy`（1238–1343）：taker 买(BID)、maker 卖(ASK) 的
+    /// 现货成交结算——`handle_matcher_events_exchange_sell` 的镜像。参考文档 §3c。两阶段：
+    /// 1. 逐 TRADE 事件结算本 shard maker（释放 base 冻结 + 扣 base 实付 + 入 quote = 名义 −
+    ///    maker 费），同时把 `size`/`size*price`/`size*bidder_hold_price` 累加进 taker/maker 的
+    ///    notional/size 局部变量（`i128`，理由同 sell：防多笔累加溢出 `i64`，单笔算术仍是
+    ///    `i64` `mul_exact`）。
+    /// 2. 循环结束后一次性结算 taker（BUDGET 与普通限价两条子路径分别算 `leftover`/`hold_quote`，
+    ///    见下）+ 用 `avg_maker_price` 重算一次平台费入账（与 sell 对称：dust 沉 exchange_locked，
+    ///    不在本任务处理）。
+    ///
+    /// taker 两条子路径（Java 1310–1325）：
+    /// - BUDGET（`PLACE_ORDER` + `FOK_BUDGET`/`IOC_BUDGET`）：下单时冻结的是预算上限
+    ///   `held_total = calculate_amount_bid_taker_fee_for_budget(cmd.size, cmd.price, ...)`
+    ///   （`cmd.price` 是总预算，非单价）——本次 `hold_quote` 就是这个 `held_total` 的原样缩放，
+    ///   即**释放当初锁定的全部预算**（无论本次是否全部成交）。`leftover = held_total −
+    ///   (taker_notional + taker_fee)` 是"预算 − 实际花费"的剩余部分；同时把
+    ///   `taker_hold_notional` 重赋值为 `taker_notional`（BUDGET 单没有逐笔 `bidder_hold_price`
+    ///   概念，退款公式统一走 `hold_notional − notional + leftover`）。
+    /// - 普通限价：冻结是"逐笔 `bidder_hold_price`"的聚合（`taker_hold_notional`），按
+    ///   `taker_hold_notional/taker_size` 均价重算一次 `fee_held`，`leftover = fee_held −
+    ///   taker_fee` 是"冻结费 − 实收费"的差额，`hold_quote = scale(taker_hold_notional +
+    ///   fee_held)`。
+    ///
+    /// 两条路径统一收尾：`quote_refund = scale(taker_hold_notional − taker_notional +
+    /// leftover)`（价差 + leftover）；`exchange_locked[quote] −= hold_quote`；
+    /// `accounts[quote] += quote_refund − hold_quote`（净 = `−(notional + taker_fee)`）；
+    /// `accounts[base] += scale(taker_size)`（taker 买方得 base，base 腿无费）。
+    ///
+    /// **Task 5/7 一致性**（`handle_matcher_reject_reduce_event_exchange` 的 IOC_BUDGET
+    /// "有前置 TRADE → release_sp=0" 分支依赖的前提）：上面 BUDGET 子路径的 `hold_quote` 恒等于
+    /// `scale(held_total)`——即 Task 4 下单时锁定的**整份预算**，与本次是否部分成交无关。因此
+    /// IOC_BUDGET 部分成交后，这里已经把整份预算的锁定全额释放（连同价内差额一起退回
+    /// `quote_refund`），Task 5 链头 REDUCE 若再释放非零金额就是双重释放——`release_sp=0` 与此处
+    /// 严格对齐，见下方 `bid_ioc_budget_partial_fill_full_budget_release_matches_task5_zero_release`
+    /// 测试的显式验证。
+    fn handle_matcher_events_exchange_buy(
+        cmd: &OrderCommand,
+        first_trade_mte: Box<MatcherTradeEvent>,
+        spec: &CoreSymbolSpecification,
+        base_currency_spec: &CoreCurrencySpecification,
+        quote_currency_spec: &CoreCurrencySpecification,
+        ups: &mut UserProfileService,
+        fees: &mut BTreeMap<i32, i64>,
+    ) {
+        let base_currency = spec.base_currency;
+        let quote_currency = spec.quote_currency;
+
+        let mut taker_notional: i128 = 0;
+        let mut taker_hold_notional: i128 = 0;
+        let mut taker_size: i64 = 0;
+        let mut maker_notional: i128 = 0;
+        let mut maker_size: i64 = 0;
+
+        let mut node = Some(first_trade_mte);
+        while let Some(ev) = node {
+            debug_assert_eq!(ev.event_type, MatcherEventType::Trade);
+
+            // taker 恒本 shard（单 shard 简化，对应 Java 的 `takerUp != null` 恒真）。
+            taker_notional += ev.size as i128 * ev.price as i128;
+            taker_hold_notional += ev.size as i128 * ev.bidder_hold_price as i128;
+            taker_size += ev.size;
+
+            // maker 恒本 shard（单 shard 简化，对应 Java 的 `uidForThisHandler` 恒真）。
+            {
+                let maker_up = ups.get_or_add_suspended(ev.matched_order_uid);
+
+                // calculateAmountBid(size, price) = size × price：原始成交对价（未扣 maker fee）。
+                let quote_gained = arithmetic::calculate_amount_bid(ev.size, ev.price);
+
+                // maker 是卖方，下单时按 base 数量直接冻结（calculateAmountAsk(size) = size），
+                // 这里全释放并实际扣 base。
+                let base_paid = arithmetic::symbol_to_currency_scale(
+                    arithmetic::calculate_amount_ask(ev.size),
+                    spec.base_scale_k,
+                    base_currency_spec.currency_scale_k,
+                );
+                maker_up.add_to_locked(base_currency, -base_paid);
+                maker_up.add_to_account(base_currency, -base_paid);
+
+                // maker 收到 quote = 成交对价 − maker fee。
+                let fee = arithmetic::calculate_maker_fee(
+                    ev.size,
+                    ev.price,
+                    spec.maker_fee,
+                    spec.fee_scale_k,
+                );
+                let to_be_added = arithmetic::size_price_to_currency_scale(
+                    quote_gained - fee,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    quote_currency_spec.currency_scale_k,
+                );
+                maker_up.add_to_account(quote_currency, to_be_added);
+            }
+
+            maker_notional += ev.size as i128 * ev.price as i128;
+            maker_size += ev.size;
+
+            node = ev.next;
+        }
+
+        // hoist：taker_fee 在 taker 结算块和下面 fees 池都要用，避免重复算一次 ceil。
+        let avg_taker_price = if taker_size > 0 {
+            i64::try_from(taker_notional / taker_size as i128)
+                .unwrap_or_else(|_| panic!("overflow narrowing avg_taker_price"))
+        } else {
+            0
+        };
+        let taker_fee = arithmetic::calculate_taker_fee(
+            taker_size,
+            avg_taker_price,
+            spec.taker_fee,
+            spec.fee_scale_k,
+        );
+
+        {
+            let taker_notional_i64 = i64::try_from(taker_notional)
+                .unwrap_or_else(|_| panic!("overflow narrowing taker_notional"));
+
+            let is_budget = cmd.command == OrderCommandType::PlaceOrder
+                && matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
+
+            // effective_hold_notional：BUDGET 路径重赋值为 taker_notional（见下），普通路径保持
+            // 逐笔 bidder_hold_price 聚合——两条路径收尾用同一条 quote_refund 公式。
+            let (leftover, hold_quote, effective_hold_notional) = if is_budget {
+                // FOK_BUDGET/IOC_BUDGET：冻结的是预算上限 heldTotal，未匹配部分 leftover 原样退。
+                let held_total = arithmetic::calculate_amount_bid_taker_fee_for_budget(
+                    cmd.size,
+                    cmd.price,
+                    spec.taker_fee,
+                    spec.fee_scale_k,
+                );
+                let leftover = held_total - (taker_notional_i64 + taker_fee);
+                let hold_quote = arithmetic::size_price_to_currency_scale(
+                    held_total,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    quote_currency_spec.currency_scale_k,
+                );
+                (leftover, hold_quote, taker_notional_i64)
+            } else {
+                // 普通单：feeHeld 按 bidderHoldPrice 均价冻、takerFee 按实际成交均价收，差额
+                // leftover 退给用户。
+                let taker_hold_notional_i64 = i64::try_from(taker_hold_notional)
+                    .unwrap_or_else(|_| panic!("overflow narrowing taker_hold_notional"));
+                let avg_hold_price = taker_hold_notional_i64 / taker_size;
+                let fee_held = arithmetic::calculate_taker_fee(
+                    taker_size,
+                    avg_hold_price,
+                    spec.taker_fee,
+                    spec.fee_scale_k,
+                );
+                let leftover = fee_held - taker_fee;
+                let hold_quote = arithmetic::size_price_to_currency_scale(
+                    taker_hold_notional_i64 + fee_held,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    quote_currency_spec.currency_scale_k,
+                );
+                (leftover, hold_quote, taker_hold_notional_i64)
+            };
+
+            // 价差(holdNotional − notional) + leftover = 应退 quote。
+            let quote_refund = arithmetic::size_price_to_currency_scale(
+                effective_hold_notional - taker_notional_i64 + leftover,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                quote_currency_spec.currency_scale_k,
+            );
+
+            let taker_up = ups.get_or_add_suspended(cmd.uid);
+
+            taker_up.add_to_locked(quote_currency, -hold_quote);
+            // 净 +(refund − hold) = −实付 = −(notional + takerFee)。
+            taker_up.add_to_account(quote_currency, quote_refund - hold_quote);
+
+            let to_be_added = arithmetic::symbol_to_currency_scale(
+                taker_size,
+                spec.base_scale_k,
+                base_currency_spec.currency_scale_k,
+            );
+            taker_up.add_to_account(base_currency, to_be_added);
+        }
+
+        if taker_size != 0 || maker_size != 0 {
             let avg_maker_price = if maker_size > 0 {
                 i64::try_from(maker_notional / maker_size as i128)
                     .unwrap_or_else(|_| panic!("overflow narrowing avg_maker_price"))
@@ -844,8 +1075,8 @@ mod tests {
         let locked_after_place = ups.get(UID).unwrap().locked(QUOTE);
         assert!(locked_after_place > 0);
 
-        // 部分成交：REJECT/REDUCE 链头后面挂着一个 TRADE（哨兵占位，字段内容对本测试无关，
-        // 只用来让 mte.next.is_some()，触发"有前置成交"分支）。
+        // 部分成交：REJECT/REDUCE 链头后面挂着一个 TRADE（400/1000 成交，matched_order_uid=0——
+        // 本测试不关心 maker 侧记账，只关心 taker 侧 quote 冻结的完整生命周期）。
         let trailing_trade =
             reject_or_reduce_event(MatcherEventType::Trade, 400, 55, 60_000, None);
         cmd.matcher_event = Some(reject_or_reduce_event(
@@ -858,14 +1089,16 @@ mod tests {
 
         engine.handler_risk_release(&mut cmd, &mut ups, &ssp, &mut BTreeMap::new());
 
-        // release_sp = 0：BUY 结算（Task 7）已释放整份预算，这里不能重复释放；locked 不变。
+        // 端到端一致性：REDUCE 释放 0（不重复释放）+ 紧接着 buy 结算（Task 7）把整份
+        // held_total(60030) 全额释放 → taker quote 冻结最终清零。Task 5 的 release_sp=0
+        // 正是建立在"Task 7 会把整份预算释放干净"这个前提上，这里端到端验证该前提成立。
         assert_eq!(
             ups.get(UID).unwrap().locked(QUOTE),
-            locked_after_place,
-            "部分成交残量的 REDUCE 在 IOC_BUDGET 下必须释放 0，避免双重释放"
+            0,
+            "REDUCE 不重复释放 + buy 结算全额释放 held_total，taker quote 冻结应归零"
         );
-        // 链头 REDUCE 被消费，剩余 TRADE 链是 buy 结算，交给 Task 7（占位保留在 cmd.matcher_event 上）。
-        assert!(cmd.matcher_event.is_some(), "剩余 TRADE 链应保留给 Task 7");
+        // 剩余 TRADE 链已被 buy 结算（Task 7）完全消费。
+        assert!(cmd.matcher_event.is_none(), "TRADE 链应被 buy 结算完全消费");
     }
 
     // ------------------------------------------------------------------
@@ -1220,5 +1453,492 @@ mod tests {
             &[seller_quote_delta, buyer1_quote_delta, buyer2_quote_delta],
             fees_delta,
         );
+    }
+
+    // ------------------------------------------------------------------
+    // R2 — handler_risk_release / handle_matcher_events_exchange_buy：
+    // taker 买(BID)结算，逐 maker(卖方) + 聚合 taker + 平台费，全程守恒断言。
+    // 与上面 sell 测试组镜像（角色对调：taker=买方锁 quote，maker=卖方锁 base）。
+    // ------------------------------------------------------------------
+
+    const SELLER1: i64 = 10;
+    const SELLER2: i64 = 11;
+
+    /// 搭建：一个 buyer（taker，已建档 + quote 余额）+ 若干 seller（maker，已建档 + base 余额）。
+    fn setup_buy(
+        taker_fee: i64,
+        maker_fee: i64,
+        fee_scale_k: i64,
+        taker_quote_balance: i64,
+        sellers_base_balance: &[(i64, i64)],
+    ) -> (UserProfileService, SymbolSpecificationProvider) {
+        let mut ssp = SymbolSpecificationProvider::new();
+        assert_eq!(
+            ssp.add_symbol(spec_with_fees(taker_fee, maker_fee, fee_scale_k)),
+            CommandResultCode::Success
+        );
+        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100 });
+        ssp.add_currency(CoreCurrencySpecification {
+            currency: QUOTE,
+            currency_scale_k: 100 * 1_000_000,
+        });
+
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        ups.get_mut(UID).unwrap().add_to_account(QUOTE, taker_quote_balance);
+        for &(uid, base_balance) in sellers_base_balance {
+            assert_eq!(ups.add_empty_user_profile(uid), CommandResultCode::Success);
+            ups.get_mut(uid).unwrap().add_to_account(BASE, base_balance);
+        }
+        (ups, ssp)
+    }
+
+    #[test]
+    fn buy_single_maker_fixed_fee_price_improvement_refund_and_conservation() {
+        // taker_fee=3（固定）、maker_fee=1（固定）。
+        let (mut ups, ssp) = setup_buy(3, 1, 0, 1_000_000, &[(SELLER1, 1_000_000)]);
+        let mut engine = RiskEngine::new();
+
+        // maker：seller ASK size=1000。
+        let mut seller_cmd = ask_cmd(1000, 50);
+        seller_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        assert_eq!(ups.get(SELLER1).unwrap().locked(BASE), 1000);
+
+        // taker：buyer BID size=1000 @ 55（own 保守价 55，成交价改善到 50）。
+        let mut buyer_cmd = bid_cmd(1000, 55, 55, OrderType::Gtc);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        let hold_quote = ups.get(UID).unwrap().locked(QUOTE);
+        assert_eq!(hold_quote, 58_000, "58000 = size*holdPrice(55000) + size*takerFee(3000)");
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
+
+        // 唯一一笔 TRADE：size=1000 @ 50，taker(买方) 的保守价 55。
+        buyer_cmd.matcher_event = Some(trade_event(1000, 50, 55, SELLER1, None));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        // maker(seller)：base 释放/实付 = size(1000)；quote += notional(50000) - makerFee(1000) = 49000。
+        let seller = ups.get(SELLER1).unwrap();
+        assert_eq!(seller.locked(BASE), 0, "maker base 冻结应全额释放");
+        assert_eq!(seller.account(BASE) - seller_base_before, -1000);
+        assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_000);
+
+        // taker(buyer)：quote 净变动 = quoteRefund(5000) - holdQuote(58000) = -53000；base += 1000；锁定清零。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(buyer.locked(QUOTE), 0, "taker quote 冻结应全额释放");
+        assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -53_000);
+        assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
+
+        // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
+        assert_eq!(*fees.get(&QUOTE).unwrap(), 4000);
+
+        assert!(buyer_cmd.matcher_event.is_none(), "TRADE 链结算后应清空");
+
+        assert_conserved(&[1000, -1000], &[-53_000, 49_000], 4000);
+    }
+
+    #[test]
+    fn buy_single_maker_proportional_fee_and_conservation() {
+        // taker_fee=100/10000=1%，maker_fee=20/10000=0.2%。
+        let (mut ups, ssp) = setup_buy(100, 20, 10_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
+        let mut engine = RiskEngine::new();
+
+        let mut seller_cmd = ask_cmd(1000, 2000); // price(2000) >= ceil(10000/100)=100，不触发 too-low
+        seller_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        let mut buyer_cmd = bid_cmd(1000, 60, 60, OrderType::Gtc);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        // holdQuote = size*price(60000) + ceil(size*price*takerFee/scale)=ceil(6_000_000/10000)=600 → 60600。
+        assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 60_600);
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
+
+        // 成交价改善到 50（< holdPrice 60）。
+        buyer_cmd.matcher_event = Some(trade_event(1000, 50, 60, SELLER1, None));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        // makerFee(price=50) = ceil(1000*50*20/10000) = 100；maker quote += 50000-100 = 49900。
+        let seller = ups.get(SELLER1).unwrap();
+        assert_eq!(seller.locked(BASE), 0);
+        assert_eq!(seller.account(BASE) - seller_base_before, -1000);
+        assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_900);
+
+        // takerFee(avgPrice=50) = ceil(1000*50*100/10000) = 500；feeHeld(holdPrice=60) =
+        // ceil(1000*60*100/10000) = 600；leftover = 600-500 = 100；
+        // quoteRefund = (60000-50000+100) = 10100；净 = 10100-60600 = -50500。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(buyer.locked(QUOTE), 0);
+        assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -50_500);
+        assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
+
+        // fees[quote] = takerFee(500) + makerFee(avg=50→100) = 600。
+        assert_eq!(*fees.get(&QUOTE).unwrap(), 600);
+
+        assert_conserved(&[1000, -1000], &[-50_500, 49_900], 600);
+    }
+
+    #[test]
+    fn buy_two_makers_fixed_fee_avg_price_platform_fee_and_conservation() {
+        let (mut ups, ssp) = setup_buy(
+            3,
+            1,
+            0,
+            1_000_000,
+            &[(SELLER1, 1_000_000), (SELLER2, 1_000_000)],
+        );
+        let mut engine = RiskEngine::new();
+
+        let mut seller1_cmd = ask_cmd(1000, 50);
+        seller1_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller1_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        let mut seller2_cmd = ask_cmd(1000, 60);
+        seller2_cmd.uid = SELLER2;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller2_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        // taker：单笔 BID size=2000 @ 60（own 保守价 60），走两个 maker。
+        let mut buyer_cmd = bid_cmd(2000, 60, 60, OrderType::Gtc);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller1_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller1_base_before = ups.get(SELLER1).unwrap().account(BASE);
+        let seller2_quote_before = ups.get(SELLER2).unwrap().account(QUOTE);
+        let seller2_base_before = ups.get(SELLER2).unwrap().account(BASE);
+
+        // 两笔 TRADE：event1 对 SELLER1（size1000@50，价格改善）；event2 对 SELLER2（size1000@60，无改善）。
+        let event2 = trade_event(1000, 60, 60, SELLER2, None);
+        buyer_cmd.matcher_event = Some(trade_event(1000, 50, 60, SELLER1, Some(event2)));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        let seller1 = ups.get(SELLER1).unwrap();
+        assert_eq!(seller1.locked(BASE), 0);
+        let seller1_quote_delta = seller1.account(QUOTE) - seller1_quote_before;
+        assert_eq!(seller1_quote_delta, 49_000); // 同单 maker fixed 用例
+        let seller1_base_delta = seller1.account(BASE) - seller1_base_before;
+        assert_eq!(seller1_base_delta, -1000);
+
+        let seller2 = ups.get(SELLER2).unwrap();
+        assert_eq!(seller2.locked(BASE), 0);
+        // quoteGained=1000*60=60000；makerFee(固定)=1000；quote += 60000-1000=59000。
+        let seller2_quote_delta = seller2.account(QUOTE) - seller2_quote_before;
+        assert_eq!(seller2_quote_delta, 59_000);
+        let seller2_base_delta = seller2.account(BASE) - seller2_base_before;
+        assert_eq!(seller2_base_delta, -1000);
+
+        // taker：avgTakerPrice=(1000*50+1000*60)/2000=55；takerFee=2000*3=6000（固定与价格无关）；
+        // holdPrice 恒60（own 保守价）：feeHeld=2000*3=6000；leftover=0；holdQuote=126000（匹配下单锁定）；
+        // quoteRefund=(120000-110000+0)=10000；净=10000-126000=-116000。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(buyer.locked(QUOTE), 0);
+        let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
+        assert_eq!(buyer_quote_delta, -116_000);
+        let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
+        assert_eq!(buyer_base_delta, 2000);
+
+        // avgMakerPrice=55；makerFee=2000*1=2000；fees[quote]=6000+2000=8000。
+        let fees_delta = *fees.get(&QUOTE).unwrap();
+        assert_eq!(fees_delta, 8000);
+
+        assert_conserved(
+            &[buyer_base_delta, seller1_base_delta, seller2_base_delta],
+            &[buyer_quote_delta, seller1_quote_delta, seller2_quote_delta],
+            fees_delta,
+        );
+    }
+
+    #[test]
+    fn buy_two_makers_proportional_fee_avg_price_platform_fee_and_conservation() {
+        let (mut ups, ssp) = setup_buy(
+            100,
+            20,
+            10_000,
+            1_000_000_000,
+            &[(SELLER1, 1_000_000), (SELLER2, 1_000_000)],
+        );
+        let mut engine = RiskEngine::new();
+
+        let mut seller1_cmd = ask_cmd(1000, 2000);
+        seller1_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller1_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        let mut seller2_cmd = ask_cmd(1000, 2000);
+        seller2_cmd.uid = SELLER2;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller2_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        let mut buyer_cmd = bid_cmd(2000, 60, 60, OrderType::Gtc);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller1_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller1_base_before = ups.get(SELLER1).unwrap().account(BASE);
+        let seller2_quote_before = ups.get(SELLER2).unwrap().account(QUOTE);
+        let seller2_base_before = ups.get(SELLER2).unwrap().account(BASE);
+
+        // event1 大幅价格改善（40 vs holdPrice 60），event2 无改善（60 vs holdPrice 60）。
+        let event2 = trade_event(1000, 60, 60, SELLER2, None);
+        buyer_cmd.matcher_event = Some(trade_event(1000, 40, 60, SELLER1, Some(event2)));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        let seller1 = ups.get(SELLER1).unwrap();
+        assert_eq!(seller1.locked(BASE), 0);
+        // makerFee(price=40)=ceil(1000*40*20/10000)=80；quote += 40000-80=39920。
+        let seller1_quote_delta = seller1.account(QUOTE) - seller1_quote_before;
+        assert_eq!(seller1_quote_delta, 39_920);
+        let seller1_base_delta = seller1.account(BASE) - seller1_base_before;
+        assert_eq!(seller1_base_delta, -1000);
+
+        let seller2 = ups.get(SELLER2).unwrap();
+        assert_eq!(seller2.locked(BASE), 0);
+        // makerFee(price=60)=ceil(1000*60*20/10000)=120；quote += 60000-120=59880。
+        let seller2_quote_delta = seller2.account(QUOTE) - seller2_quote_before;
+        assert_eq!(seller2_quote_delta, 59_880);
+        let seller2_base_delta = seller2.account(BASE) - seller2_base_before;
+        assert_eq!(seller2_base_delta, -1000);
+
+        // avgTakerPrice=(1000*40+1000*60)/2000=50；takerFee=ceil(2000*50*100/10000)=1000；
+        // holdPrice 恒60：feeHeld=ceil(2000*60*100/10000)=1200；leftover=200；holdQuote=121200
+        // （匹配下单锁定）；quoteRefund=(120000-100000+200)=20200；净=20200-121200=-101000。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(buyer.locked(QUOTE), 0);
+        let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
+        assert_eq!(buyer_quote_delta, -101_000);
+        let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
+        assert_eq!(buyer_base_delta, 2000);
+
+        // avgMakerPrice=50；makerFee=ceil(2000*50*20/10000)=200；fees[quote]=1000+200=1200。
+        let fees_delta = *fees.get(&QUOTE).unwrap();
+        assert_eq!(fees_delta, 1200);
+
+        assert_conserved(
+            &[buyer_base_delta, seller1_base_delta, seller2_base_delta],
+            &[buyer_quote_delta, seller1_quote_delta, seller2_quote_delta],
+            fees_delta,
+        );
+    }
+
+    /// **Task 5/7 一致性证明**：IOC_BUDGET 部分成交时，本函数（Task 7）必须释放**整份**
+    /// `held_total`（用 `cmd.size`/`cmd.price` 算出的原始预算，而非本次成交量），因为 Task 5 的
+    /// `handle_matcher_reject_reduce_event_exchange` 在"IOC_BUDGET 有前置 TRADE"分支上releases 0
+    /// （见 `bid_ioc_budget_partial_fill_then_reduce_releases_zero_to_avoid_double_release`），
+    /// 假设这里已经把整份预算释放干净。本测试显式断言 `hold_quote`（本函数内部释放的量）等于
+    /// 下单时 Task 4 锁定的 `locked_after_place`，即使只成交了原始 size 的 40%。
+    #[test]
+    fn buy_ioc_budget_partial_fill_releases_full_held_total_matching_task5_assumption() {
+        // taker_fee=500/1_000_000=0.05%，maker_fee=100/1_000_000=0.01%。
+        let (mut ups, ssp) = setup_buy(500, 100, 1_000_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
+        let mut engine = RiskEngine::new();
+
+        // maker：seller ASK size=400（本次成交量，等于 maker 挂单全部数量）。
+        // price(2000) >= ceil(1_000_000/500)=2000，不触发 too-low。
+        let mut seller_cmd = ask_cmd(400, 2000);
+        seller_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        // taker：IOC_BUDGET，cmd.size=1000（上限）、cmd.price=60000（预算总额，非单价）。
+        let mut buyer_cmd = bid_cmd(1000, 60_000, 60_000, OrderType::IocBudget);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        let held_total = arithmetic::calculate_amount_bid_taker_fee_for_budget(1000, 60_000, 500, 1_000_000);
+        assert_eq!(held_total, 60_030);
+        let locked_after_place = ups.get(UID).unwrap().locked(QUOTE);
+        assert_eq!(locked_after_place, held_total, "下单锁定 = held_total（乘积 scale 恒等）");
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
+
+        // 只成交 400（原始 1000 的 40%）；bidder_hold_price 对 BUDGET 分支无意义（被
+        // taker_hold_notional=taker_notional 覆盖），此处填 60000 仅表示"字段存在但未被读取"。
+        buyer_cmd.matcher_event = Some(trade_event(400, 50, 60_000, SELLER1, None));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        // 核心断言：taker quote 冻结应清零——即本函数释放的 hold_quote 恰好等于 held_total 全额，
+        // 与部分成交量(400)无关。这正是 Task 5 IOC_BUDGET+prior-trade 分支 release_sp=0 的前提。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(
+            buyer.locked(QUOTE),
+            0,
+            "IOC_BUDGET 部分成交后 taker quote 冻结必须清零（全额释放 held_total，Task 5 依赖此前提）"
+        );
+
+        // maker：quoteGained=400*50=20000；makerFee=ceil(400*50*100/1_000_000)=2；quote+=19998。
+        let seller = ups.get(SELLER1).unwrap();
+        assert_eq!(seller.locked(BASE), 0);
+        let seller_base_delta = seller.account(BASE) - seller_base_before;
+        assert_eq!(seller_base_delta, -400);
+        let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
+        assert_eq!(seller_quote_delta, 19_998);
+
+        // taker：takerFee(avg=50)=ceil(400*50*500/1_000_000)=10；leftover=heldTotal-(20000+10)=40020；
+        // quoteRefund=(20000-20000+40020)=40020；净=40020-60030=-20010；base+=400。
+        let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
+        assert_eq!(buyer_quote_delta, -20_010);
+        let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
+        assert_eq!(buyer_base_delta, 400);
+
+        // fees[quote] = takerFee(10) + makerFee(2) = 12。
+        let fees_delta = *fees.get(&QUOTE).unwrap();
+        assert_eq!(fees_delta, 12);
+
+        assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
+    }
+
+    #[test]
+    fn buy_fok_budget_full_fill_proportional_fee_releases_held_total_and_conservation() {
+        let (mut ups, ssp) = setup_buy(500, 100, 1_000_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
+        let mut engine = RiskEngine::new();
+
+        // price(2000) >= ceil(1_000_000/500)=2000，不触发 too-low。
+        let mut seller_cmd = ask_cmd(1000, 2000);
+        seller_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        let mut buyer_cmd = bid_cmd(1000, 60_000, 60_000, OrderType::FokBudget);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        let held_total = arithmetic::calculate_amount_bid_taker_fee_for_budget(1000, 60_000, 500, 1_000_000);
+        assert_eq!(held_total, 60_030);
+        assert_eq!(ups.get(UID).unwrap().locked(QUOTE), held_total);
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
+
+        // 全额成交：size=1000（原始 size 全部），价格 55。
+        buyer_cmd.matcher_event = Some(trade_event(1000, 55, 60_000, SELLER1, None));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        // maker：makerFee=ceil(1000*55*100/1_000_000)=6；quote += 55000-6=54994。
+        let seller = ups.get(SELLER1).unwrap();
+        assert_eq!(seller.locked(BASE), 0);
+        let seller_base_delta = seller.account(BASE) - seller_base_before;
+        assert_eq!(seller_base_delta, -1000);
+        let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
+        assert_eq!(seller_quote_delta, 54_994);
+
+        // taker：即使全额成交，holdQuote 仍是 held_total 原样缩放（60030），非按实际成交价重算。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(buyer.locked(QUOTE), 0, "全额成交也应把整份预算冻结全部释放");
+        let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
+        assert_eq!(buyer_quote_delta, -55_028);
+        let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
+        assert_eq!(buyer_base_delta, 1000);
+
+        // fees[quote] = takerFee(28) + makerFee(6) = 34。
+        let fees_delta = *fees.get(&QUOTE).unwrap();
+        assert_eq!(fees_delta, 34);
+
+        assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
+    }
+
+    #[test]
+    fn buy_fok_budget_full_fill_fixed_fee_releases_held_total_and_conservation() {
+        let (mut ups, ssp) = setup_buy(3, 1, 0, 1_000_000, &[(SELLER1, 1_000_000)]);
+        let mut engine = RiskEngine::new();
+
+        let mut seller_cmd = ask_cmd(1000, 50);
+        seller_cmd.uid = SELLER1;
+        assert_eq!(
+            engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        // 固定费预算路径：fee = size*taker_fee(与 budget 无关) = 1000*3 = 3000；held_total=63000。
+        let mut buyer_cmd = bid_cmd(1000, 60_000, 60_000, OrderType::FokBudget);
+        assert_eq!(
+            engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        let held_total = arithmetic::calculate_amount_bid_taker_fee_for_budget(1000, 60_000, 3, 0);
+        assert_eq!(held_total, 63_000);
+        assert_eq!(ups.get(UID).unwrap().locked(QUOTE), held_total);
+
+        let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
+        let buyer_base_before = ups.get(UID).unwrap().account(BASE);
+        let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
+        let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
+
+        buyer_cmd.matcher_event = Some(trade_event(1000, 55, 60_000, SELLER1, None));
+        let mut fees = BTreeMap::new();
+        engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp, &mut fees);
+
+        // maker：makerFee(固定)=1000*1=1000；quote += 55000-1000=54000。
+        let seller = ups.get(SELLER1).unwrap();
+        assert_eq!(seller.locked(BASE), 0);
+        let seller_base_delta = seller.account(BASE) - seller_base_before;
+        assert_eq!(seller_base_delta, -1000);
+        let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
+        assert_eq!(seller_quote_delta, 54_000);
+
+        // taker：takerFee=1000*3=3000；leftover=63000-(55000+3000)=5000；quoteRefund=5000；
+        // 净=5000-63000=-58000。
+        let buyer = ups.get(UID).unwrap();
+        assert_eq!(buyer.locked(QUOTE), 0);
+        let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
+        assert_eq!(buyer_quote_delta, -58_000);
+        let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
+        assert_eq!(buyer_base_delta, 1000);
+
+        // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
+        let fees_delta = *fees.get(&QUOTE).unwrap();
+        assert_eq!(fees_delta, 4000);
+
+        assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
     }
 }
