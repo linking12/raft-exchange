@@ -34,6 +34,7 @@ use crate::core::common::matcher_event_type::MatcherEventType;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
+use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 
 /// 挂单节点（slab 元素）。对应 Java `OrderBookDirectImpl.DirectOrder`(`:960-1093`)。
@@ -136,6 +137,13 @@ impl OrderBookDirectImpl {
             best_bid: None,
             symbol_spec: None,
         }
+    }
+
+    /// 建空簿并注入 `symbolSpec`（P2 Task 5：`moveOrder` 的现货 BID 风控守卫需要它，见
+    /// `move_order`）。对应 Java 构造函数的 `symbolSpec` 入参；`ObjectsPool`/`OrderBookEventsHelper`/
+    /// `LoggingConfiguration` 仍不落地。
+    pub fn with_symbol_spec(symbol_spec: CoreSymbolSpecification) -> Self {
+        Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
 
     /// 访问器：symbol spec（对应 Java `getSymbolSpec`）。
@@ -310,6 +318,74 @@ impl OrderBookDirectImpl {
                 o.prev = old_best;
             }
         }
+    }
+
+    /// 摘链摘桶：cancel/reduce(全删)/move 共用的核心手术。对应 Java `removeOrder`(`:599-635`)。
+    ///
+    /// 1. `bucket.volume -= (size-filled)`、`bucket.num_orders -= 1`（在读 `bucket.tail`/桶内
+    ///    其它字段前——Java 同样先扣量再判断 tail）。
+    /// 2. 若 `order` 正是它所在桶的 `tail`：
+    ///    - 若 `order.next` 为空 **或** `order.next` 属于别的桶（本桶只剩这一个 order）→
+    ///      从价位索引（按 `order.action` 选 ask/bid 侧）摘除该价位、**返回该 Bucket 的 slab
+    ///      索引交给调用方处理**（cancel/reduce 直接 `free_bucket`；move 传给
+    ///      `insert_order` 复用或按情况释放，见 `move_order`）——本函数自己不释放。
+    ///    - 否则（桶内还有别的 order）：`bucket.tail = order.next`（`next` 必非空，上面已
+    ///      判过）。
+    /// 3. 通用双向链摘除：`order.next` 存在则其 `.prev` 接到 `order.prev`；`order.prev` 存在
+    ///    则其 `.next` 接到 `order.next`（两者互不依赖，Java 也是分别独立判断）。
+    /// 4. best 修复：`order_idx==best_ask` → `best_ask=order.prev`；否则
+    ///    `order_idx==best_bid` → `best_bid=order.prev`（`else if`——两个 best 不可能同时
+    ///    指向同一个 order，因为 ask/bid 是两条独立的链）。
+    ///
+    /// 不释放 `order` 自身的 slab 槽——调用方在读完仍需要的字段后再 `free_order`
+    /// （cancel/reduce(全删) 立即释放；move 视是否需要重挂决定）。
+    fn remove_order(&mut self, order_idx: usize) -> Option<usize> {
+        let (size, filled, action, price, next, prev, parent) = {
+            let o = self.order(order_idx);
+            (o.size, o.filled, o.action, o.price, o.next, o.prev, o.parent.expect("order must have parent bucket"))
+        };
+
+        {
+            let b = self.bucket_mut(parent);
+            b.volume -= size - filled;
+            b.num_orders -= 1;
+        }
+
+        let mut bucket_removed: Option<usize> = None;
+
+        if self.bucket(parent).tail == order_idx {
+            let next_shares_bucket = next.and_then(|n| self.order(n).parent) == Some(parent);
+            if !next_shares_bucket {
+                // next 为空，或 next 已属于别的桶 -> 本桶只剩这一个 order -> 从价位索引摘除。
+                let is_ask = action == OrderAction::Ask;
+                if is_ask {
+                    self.ask_price_buckets.remove(&price);
+                } else {
+                    self.bid_price_buckets.remove(&price);
+                }
+                bucket_removed = Some(parent);
+            } else {
+                // 桶内还有别的 order（next 必非空）-> tail 前移到 next。
+                self.bucket_mut(parent).tail = next.expect("next_shares_bucket implies next.is_some()");
+            }
+        }
+
+        // 通用双向链摘除。
+        if let Some(n) = next {
+            self.order_mut(n).prev = prev;
+        }
+        if let Some(p) = prev {
+            self.order_mut(p).next = next;
+        }
+
+        // best 修复：ask/bid 是两条独立的链，同一个 order 不可能同时是两侧的 best。
+        if Some(order_idx) == self.best_ask {
+            self.best_ask = prev;
+        } else if Some(order_idx) == self.best_bid {
+            self.best_bid = prev;
+        }
+
+        bucket_removed
     }
 
     /// GTC 下单：先 `try_match_instantly`，全成则不挂、重复 order_id 则拒绝剩余、否则挂簿。
@@ -984,19 +1060,211 @@ impl IOrderBook for OrderBookDirectImpl {
         rc
     }
 
-    /// 占位（Task 4 补全，镜像 Java `cancelOrder`）：簿目前恒空，统一按"未知订单"处理。
-    fn cancel_order(&mut self, _cmd: &mut OrderCommand) -> CommandResultCode {
-        CommandResultCode::MatchingUnknownOrderId
+    /// 撤单。对应 Java `cancelOrder`(`:491-512`)：未知 id / `uid` 不符 → `MatchingUnknownOrderId`；
+    /// 否则从 `order_id_index` 摘除、`remove_order` 摘链摘桶（§4.4），发一枚
+    /// `completed=true` 的 REDUCE 事件覆盖整个剩余量，`cmd.action` 回填。
+    ///
+    /// **`free_bucket` 处理**：`remove_order` 返回的桶已经从价位索引里摘出、不再被任何 order
+    /// 引用——Java 用对象池 `objectsPool.put` 回收；这里直接 `free_bucket` 释放回 slab
+    /// 空闲栈（对应，纯内部资源管理，不影响外部可观测行为）。
+    fn cancel_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let order_id = cmd.order_id;
+        let order_idx = match self.order_id_index.get(&order_id) {
+            Some(&idx) => idx,
+            None => return CommandResultCode::MatchingUnknownOrderId,
+        };
+        if self.order(order_idx).uid != cmd.uid {
+            return CommandResultCode::MatchingUnknownOrderId;
+        }
+
+        self.order_id_index.remove(&order_id);
+        let free_bucket = self.remove_order(order_idx);
+        if let Some(b) = free_bucket {
+            self.free_bucket(b);
+        }
+
+        // order slab 槽此时仍存活（remove_order 只摘链摘桶，不动 order 自身字段）——读完
+        // 事件需要的字段后再释放槽位。
+        let (action, size, filled, price, reserve_bid_price) = {
+            let o = self.order(order_idx);
+            (o.action, o.size, o.filled, o.price, o.reserve_bid_price)
+        };
+
+        cmd.action = Some(action);
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: true,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price,
+            size: size - filled,
+            bid_gt_ask: false,
+            bidder_hold_price: reserve_bid_price,
+            matched_order_uid: 0,
+            next: None,
+        }));
+
+        self.free_order(order_idx);
+
+        CommandResultCode::Success
     }
 
-    /// 占位（Task 4 补全，镜像 Java `reduceOrder`）：簿目前恒空，统一按"未知订单"处理。
-    fn reduce_order(&mut self, _cmd: &mut OrderCommand) -> CommandResultCode {
-        CommandResultCode::MatchingUnknownOrderId
+    /// 部分/全部减量。对应 Java `reduceOrder`(`:515-553`)：`cmd.size<=0` →
+    /// `MatchingReduceFailedWrongSize`（先于查单，同 Naive）；未知 id / uid 不符 →
+    /// `MatchingUnknownOrderId`；`reduce_by = min(remaining, requested)`，
+    /// `can_remove = (reduce_by == remaining)`：
+    /// - `can_remove`：等价整单 cancel（`remove_order` 摘链摘桶 + 摘 index + 释放槽）。
+    /// - 否则：仅改 `order.size -= reduce_by` 与 `bucket.volume -= reduce_by`（不动
+    ///   `num_orders`/链——挂单原地留在同一 FIFO 位置，价格不变）。
+    ///
+    /// 发一枚 REDUCE 事件（`size=reduce_by`，`active_order_completed=can_remove`），
+    /// `cmd.action` 回填。
+    fn reduce_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let order_id = cmd.order_id;
+        let requested = cmd.size;
+        if requested <= 0 {
+            return CommandResultCode::MatchingReduceFailedWrongSize;
+        }
+
+        let order_idx = match self.order_id_index.get(&order_id) {
+            Some(&idx) => idx,
+            None => return CommandResultCode::MatchingUnknownOrderId,
+        };
+        if self.order(order_idx).uid != cmd.uid {
+            return CommandResultCode::MatchingUnknownOrderId;
+        }
+
+        let (size, filled) = {
+            let o = self.order(order_idx);
+            (o.size, o.filled)
+        };
+        let remaining = size - filled;
+        let reduce_by = requested.min(remaining);
+        let can_remove = reduce_by == remaining;
+
+        if can_remove {
+            self.order_id_index.remove(&order_id);
+            let free_bucket = self.remove_order(order_idx);
+            if let Some(b) = free_bucket {
+                self.free_bucket(b);
+            }
+        } else {
+            let parent = self.order(order_idx).parent.expect("order must have parent bucket");
+            self.order_mut(order_idx).size -= reduce_by;
+            self.bucket_mut(parent).volume -= reduce_by;
+        }
+
+        let (action, price, reserve_bid_price) = {
+            let o = self.order(order_idx);
+            (o.action, o.price, o.reserve_bid_price)
+        };
+
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: can_remove,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price,
+            size: reduce_by,
+            bid_gt_ask: false,
+            bidder_hold_price: reserve_bid_price,
+            matched_order_uid: 0,
+            next: None,
+        }));
+        cmd.action = Some(action);
+
+        if can_remove {
+            self.free_order(order_idx);
+        }
+
+        CommandResultCode::Success
     }
 
-    /// 占位（Task 4 补全，镜像 Java `moveOrder`）：簿目前恒空，统一按"未知订单"处理。
-    fn move_order(&mut self, _cmd: &mut OrderCommand) -> CommandResultCode {
-        CommandResultCode::MatchingUnknownOrderId
+    /// 改价（可能引发即时撮合）。对应 Java `moveOrder`(`:556-596`)：未知 id / uid 不符 →
+    /// `MatchingUnknownOrderId`；现货 BID 风控（Ruling P2-3，`:565`）：`symbol_spec` 存在且
+    /// `symbol_type==CurrencyExchangePair && action==BID && cmd.price>order.reserve_bid_price`
+    /// → `MatchingMoveFailedPriceOverRiskLimit`（不改任何状态）——`symbol_spec` 为 `None` 时
+    /// 该守卫天然不生效（惰性——同 Naive 无此风控）。
+    ///
+    /// 否则：`remove_order` 摘链摘桶（保留摘出的 `free_bucket` 供复用/清理）、原地改价、
+    /// **以该 order 为 taker** 在新价重新撮合。**已有 `filled`/`filled_notional` 的延续**：
+    /// `try_match_instantly` 的 `taker_size` 参数语义本就是"本次调用要吃的剩余量"（GTC/IOC
+    /// 调用方之所以能直接传 `cmd.size` 是因为全新挂单 `filled` 恒为 0，`remaining==size`
+    /// 只是这个通用规则的特例），返回值同样是"本次调用撮合掉的量"（增量，不是累计总量，
+    /// 函数内部从 0 开始累加只是因为它对每次调用而言本来就是从 0 开始的独立累加器）。
+    /// 因此这里按 Naive `move_order` 同款写法在**调用方（本函数）侧**把已有 `filled` 累加
+    /// 到返回的增量上（`total_filled = existing_filled + matched_now`），无需改
+    /// `try_match_instantly` 的签名——它不依赖"起点"参数，GTC/IOC 调用方继续原样传
+    /// `cmd.size`/隐式 0 起点，不受影响。
+    ///
+    /// `total_filled==existing_size` → 完全成交，摘 index + 释放槽（不重挂）；否则
+    /// `order.filled/filled_notional` 更新为新的累计值，`insert_order(order_idx, free_bucket)`
+    /// 重挂新价（复用摘桶）。
+    fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let order_id = cmd.order_id;
+        let order_idx = match self.order_id_index.get(&order_id) {
+            Some(&idx) => idx,
+            None => return CommandResultCode::MatchingUnknownOrderId,
+        };
+        if self.order(order_idx).uid != cmd.uid {
+            return CommandResultCode::MatchingUnknownOrderId;
+        }
+
+        let (action, reserve_bid_price) = {
+            let o = self.order(order_idx);
+            (o.action, o.reserve_bid_price)
+        };
+
+        // 现货 BID 风控守卫（Ruling P2-3）：`symbol_spec` 缺省时天然不生效。
+        if let Some(spec) = &self.symbol_spec {
+            if spec.symbol_type == SymbolType::CurrencyExchangePair
+                && action == OrderAction::Bid
+                && cmd.price > reserve_bid_price
+            {
+                return CommandResultCode::MatchingMoveFailedPriceOverRiskLimit;
+            }
+        }
+
+        let free_bucket = self.remove_order(order_idx);
+
+        let new_price = cmd.price;
+        self.order_mut(order_idx).price = new_price;
+        cmd.action = Some(action);
+
+        let (existing_size, existing_filled, existing_filled_notional) = {
+            let o = self.order(order_idx);
+            (o.size, o.filled, o.filled_notional)
+        };
+        let remaining = existing_size - existing_filled;
+
+        let (matched_now, matched_notional_now) =
+            self.try_match_instantly(action, remaining, reserve_bid_price, Some(new_price), cmd);
+
+        let total_filled = existing_filled + matched_now;
+
+        if total_filled == existing_size {
+            // 完全成交 -> 摘 index + 释放槽，不重挂。
+            self.order_id_index.remove(&order_id);
+            self.free_order(order_idx);
+            // `free_bucket`（若有）此时已从价位索引摘出且不再被任何 order 引用——不释放会
+            // 永久滞留在 slab 里成为孤儿槽（Java 对象池同一场景下也不会把它放回池，但那只是
+            // "不复用"，不是真正的内存泄漏；我们的 slab 没有 GC，放着不管才是真泄漏）。
+            // 释放它不影响任何外部可观测行为（价位索引/order_id_index/事件/结果码均已在上面
+            // 处理完毕），故补上这一步。
+            if let Some(b) = free_bucket {
+                self.free_bucket(b);
+            }
+            return CommandResultCode::Success;
+        }
+
+        {
+            let o = self.order_mut(order_idx);
+            o.filled = total_filled;
+            o.filled_notional = existing_filled_notional + matched_notional_now;
+        }
+        self.insert_order(order_idx, free_bucket);
+
+        CommandResultCode::Success
     }
 
     /// L2 快照。对应 Java `fillAsks`/`fillBids`(`:916-935`)：**纯桶图迭代、不走链**——ask 按
@@ -1969,5 +2237,501 @@ mod tests {
         assert_eq!(direct.fill_l2(10).ask_prices, vec![200]);
         assert_eq!(direct.fill_l2(10).ask_volumes, vec![97]);
         direct.validate_internal_state();
+    }
+
+    // ---- P2 Task 5: cancel / reduce / move + removeOrder（对拍 Naive） ----
+
+    fn cancel_cmd(order_id: i64, uid: i64) -> OrderCommand {
+        OrderCommand { order_id, symbol: 1, uid, ..Default::default() }
+    }
+
+    fn reduce_cmd(order_id: i64, uid: i64, size: i64) -> OrderCommand {
+        OrderCommand { order_id, symbol: 1, size, uid, ..Default::default() }
+    }
+
+    fn move_cmd(order_id: i64, uid: i64, new_price: i64) -> OrderCommand {
+        OrderCommand { order_id, symbol: 1, price: new_price, uid, ..Default::default() }
+    }
+
+    #[test]
+    fn cancel_unknown_order_id_returns_error() {
+        let mut book = OrderBookDirectImpl::new();
+        let mut cmd = cancel_cmd(999, 1);
+        assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn cancel_wrong_uid_returns_unknown_order_id_and_order_untouched() {
+        let mut book = OrderBookDirectImpl::new();
+        book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10)); // uid=1 (gtc_cmd 用 order_id 当 uid)
+
+        let mut cmd = cancel_cmd(1, 999);
+        assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+        // 订单未被撤销，仍在簿上
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
+        book.validate_internal_state();
+    }
+
+    #[test]
+    fn cancel_releases_resting_order_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = cancel_cmd(1, 1);
+        let d_rc = direct.cancel_order(&mut d);
+        let mut n = cancel_cmd(1, 1);
+        let n_rc = naive.cancel_order(&mut n);
+
+        assert_eq!(d_rc, n_rc);
+        assert_eq!(d_rc, CommandResultCode::Success);
+        assert_eq!(d.matcher_event, n.matcher_event, "cancel REDUCE 事件须与 Naive 逐位一致");
+        assert_eq!(d.action, n.action);
+
+        let ev = d.matcher_event.as_ref().expect("应有 REDUCE 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reduce);
+        assert_eq!(ev.size, 10);
+        assert!(ev.active_order_completed);
+        assert!(ev.next.is_none());
+
+        assert!(direct.fill_l2(10).ask_prices.is_empty());
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert!(!direct.order_id_index.contains_key(&1));
+        direct.validate_internal_state();
+
+        // 二次撤销 -> 未知订单（对拍 Naive 同样行为）。
+        let mut again_d = cancel_cmd(1, 1);
+        let mut again_n = cancel_cmd(1, 1);
+        assert_eq!(direct.cancel_order(&mut again_d), CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(naive.cancel_order(&mut again_n), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn cancel_one_of_two_orders_keeps_bucket_and_sibling_chain_matches_naive() {
+        // order_id=1 是桶内最老(best)，order_id=2 是 tail(最新)——撤最老的那个，练到
+        // removeOrder 的"非 tail"分支（`bucket.tail != order`）。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+
+        let mut d = cancel_cmd(1, 1);
+        assert_eq!(direct.cancel_order(&mut d), CommandResultCode::Success);
+        let mut n = cancel_cmd(1, 1);
+        assert_eq!(naive.cancel_order(&mut n), CommandResultCode::Success);
+
+        // 桶未空（order 2 还在），价位仍在，volume/num_orders 正确聚合。
+        let l2 = direct.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100]);
+        assert_eq!(l2.ask_volumes, vec![5]);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+
+        // order 2 现在应是该侧唯一 order，也是新 best。
+        let best = direct.best_ask.expect("best_ask must be set");
+        assert_eq!(direct.order(best).order_id, 2);
+        assert!(direct.order(best).next.is_none());
+        assert!(direct.order(best).prev.is_none());
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn cancel_tail_order_when_it_is_only_order_removes_bucket() {
+        // order_id=1 既是桶内唯一 order 也是 tail——练到 removeOrder"整桶清空"分支。
+        let mut direct = OrderBookDirectImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Bid, 90, 4));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Bid, 80, 2)); // 另一个价位，防止两侧全空的退化情形
+
+        let mut d = cancel_cmd(1, 1);
+        assert_eq!(direct.cancel_order(&mut d), CommandResultCode::Success);
+
+        assert!(!direct.bid_price_buckets.contains_key(&90), "空桶必须从价位索引摘除");
+        assert_eq!(direct.fill_l2(10).bid_prices, vec![80]);
+        let best = direct.best_bid.expect("best_bid must be set");
+        assert_eq!(direct.order(best).order_id, 2);
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn reduce_wrong_size_rejected() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = reduce_cmd(1, 1, 0);
+        let mut n = reduce_cmd(1, 1, 0);
+        assert_eq!(direct.reduce_order(&mut d), CommandResultCode::MatchingReduceFailedWrongSize);
+        assert_eq!(naive.reduce_order(&mut n), CommandResultCode::MatchingReduceFailedWrongSize);
+
+        let mut d2 = reduce_cmd(1, 1, -5);
+        assert_eq!(direct.reduce_order(&mut d2), CommandResultCode::MatchingReduceFailedWrongSize);
+    }
+
+    #[test]
+    fn reduce_unknown_order_id_returns_error() {
+        let mut book = OrderBookDirectImpl::new();
+        let mut cmd = reduce_cmd(999, 1, 1);
+        assert_eq!(book.reduce_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn reduce_wrong_uid_returns_unknown_order_id_and_order_untouched() {
+        let mut book = OrderBookDirectImpl::new();
+        book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut cmd = reduce_cmd(1, 999, 3);
+        assert_eq!(book.reduce_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn reduce_partial_leaves_order_resting_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = reduce_cmd(1, 1, 4);
+        let d_rc = direct.reduce_order(&mut d);
+        let mut n = reduce_cmd(1, 1, 4);
+        let n_rc = naive.reduce_order(&mut n);
+
+        assert_eq!(d_rc, n_rc);
+        assert_eq!(d.matcher_event, n.matcher_event, "部分 reduce 的 REDUCE 事件须与 Naive 逐位一致");
+        let ev = d.matcher_event.as_ref().expect("应有 REDUCE 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reduce);
+        assert_eq!(ev.size, 4);
+        assert!(!ev.active_order_completed);
+
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![6]);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        // 订单仍在 index 里，FIFO 位置/价格不变，num_orders 不受影响。
+        assert!(direct.order_id_index.contains_key(&1));
+        let idx = direct.order_id_index[&1];
+        assert_eq!(direct.order(idx).size, 6);
+        assert_eq!(direct.order(idx).filled, 0);
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn reduce_beyond_remaining_removes_order_like_cancel_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        // 请求减 100，但剩余只有 10 -> clamp 到 10，整单移除。
+        let mut d = reduce_cmd(1, 1, 100);
+        let mut n = reduce_cmd(1, 1, 100);
+        assert_eq!(direct.reduce_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.reduce_order(&mut n), CommandResultCode::Success);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有 REDUCE 事件");
+        assert_eq!(ev.size, 10);
+        assert!(ev.active_order_completed);
+
+        assert!(direct.fill_l2(10).ask_prices.is_empty());
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert!(!direct.order_id_index.contains_key(&1));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn move_unknown_order_id_returns_error() {
+        let mut book = OrderBookDirectImpl::new();
+        let mut cmd = move_cmd(999, 1, 100);
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn move_wrong_uid_returns_unknown_order_id_and_order_untouched() {
+        let mut book = OrderBookDirectImpl::new();
+        book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut cmd = move_cmd(1, 999, 105);
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(book.fill_l2(10).ask_prices, vec![100]);
+    }
+
+    #[test]
+    fn move_reprices_resting_order_without_crossing_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = move_cmd(1, 1, 105);
+        let mut n = move_cmd(1, 1, 105);
+        assert_eq!(direct.move_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.move_order(&mut n), CommandResultCode::Success);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        assert!(d.matcher_event.is_none(), "未交叉，无成交事件");
+        assert_eq!(d.action, n.action);
+
+        let l2 = direct.fill_l2(10);
+        assert!(l2.ask_prices.iter().all(|&p| p != 100), "旧价已清空");
+        assert_eq!(l2.ask_prices, vec![105]);
+        assert_eq!(l2.ask_volumes, vec![10]);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn move_reprices_into_existing_bucket_matches_naive() {
+        // 移到一个已有挂单的价位（insert_order 情形 A），检查 tail/volume/num_orders 聚合正确。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 110, 5));
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 110, 5));
+
+        let mut d = move_cmd(1, 1, 110);
+        let mut n = move_cmd(1, 1, 110);
+        assert_eq!(direct.move_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.move_order(&mut n), CommandResultCode::Success);
+        assert_eq!(d.matcher_event, n.matcher_event);
+
+        let l2 = direct.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![110]);
+        assert_eq!(l2.ask_volumes, vec![15]);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn move_crosses_and_trades_immediately_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Bid, 90, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Bid, 90, 10));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+
+        // order 2（ask@100)移到 80，应与 order 1(bid@90) 立即成交。
+        let mut d = move_cmd(2, 2, 80);
+        let mut n = move_cmd(2, 2, 80);
+        assert_eq!(direct.move_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.move_order(&mut n), CommandResultCode::Success);
+        assert_eq!(d.matcher_event, n.matcher_event, "移价交叉后的 TRADE 事件须与 Naive 逐位一致");
+
+        let ev = d.matcher_event.as_ref().expect("移价交叉后应立即成交");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.maker_order_id, 1);
+        assert_eq!(ev.price, 90, "成交价=maker(bid)价，非移价目标价 80");
+        assert_eq!(ev.size, 5);
+        assert!(!ev.maker_order_completed, "bid(maker) 只吃 5/10，未完成");
+        assert!(ev.active_order_completed, "ask(taker) 5 全部成交");
+
+        // ask 全部成交不再挂簿；bid 剩 5。
+        assert!(direct.fill_l2(10).ask_prices.is_empty());
+        assert_eq!(direct.fill_l2(10).bid_volumes, vec![5]);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert!(!direct.order_id_index.contains_key(&2));
+        direct.validate_internal_state();
+
+        // 完全成交的订单不该再能被撤销。
+        let mut cancel_d = cancel_cmd(2, 2);
+        let mut cancel_n = cancel_cmd(2, 2);
+        assert_eq!(direct.cancel_order(&mut cancel_d), CommandResultCode::MatchingUnknownOrderId);
+        assert_eq!(naive.cancel_order(&mut cancel_n), CommandResultCode::MatchingUnknownOrderId);
+    }
+
+    #[test]
+    fn move_carries_over_existing_filled_when_fully_matching_matches_naive() {
+        // 关键场景（规格 §"move's carried-over filled"）：order 1 在移价前已被部分成交
+        // （filled=4，留簿剩 6），移价后与另一侧挂单恰好撮合剩余 6——验证 Direct 与 Naive
+        // 都能正确地把"移价前已有的 filled"与"移价撮合产生的新增量"相加。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10)); // 待移价的订单
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Bid, 100, 4)); // 先吃掉 order1 的 4/10
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Bid, 100, 4));
+        direct.new_order(&mut gtc_cmd(3, OrderAction::Bid, 85, 6)); // 移价目标价的对手方，恰好吃满剩余 6
+        naive.new_order(&mut gtc_cmd(3, OrderAction::Bid, 85, 6));
+
+        // 移价前内部状态核对：order1 filled=4，剩 6，仍挂在 100。
+        let idx1 = direct.order_id_index[&1];
+        assert_eq!(direct.order(idx1).filled, 4);
+        assert_eq!(direct.order(idx1).size, 10);
+
+        let mut d = move_cmd(1, 1, 85);
+        let mut n = move_cmd(1, 1, 85);
+        assert_eq!(direct.move_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.move_order(&mut n), CommandResultCode::Success);
+        assert_eq!(
+            d.matcher_event, n.matcher_event,
+            "携带既有 filled 的移价撮合事件须与 Naive 逐位一致"
+        );
+
+        let ev = d.matcher_event.as_ref().expect("移价后应立即撮合剩余 6");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.maker_order_id, 3);
+        assert_eq!(ev.size, 6, "剩余量(10-4)全部撮合，而非按订单总 size 重新撮合");
+        assert!(ev.active_order_completed, "order1 总计 4+6=10=size，完全成交");
+
+        // order1 完全成交（4 之前 + 6 现在 = 10），不再挂簿。
+        assert!(!direct.order_id_index.contains_key(&1));
+        assert!(direct.fill_l2(10).ask_prices.is_empty());
+        assert!(direct.fill_l2(10).bid_prices.is_empty(), "order3 也被吃满");
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn move_carries_over_existing_filled_when_partially_matching_rests_with_combined_filled() {
+        // 同上场景变体：移价后只撮合到一部分，订单带着"旧 filled + 新增量"重新挂簿。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Bid, 100, 3)); // order1: filled=3，剩 7
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Bid, 100, 3));
+        direct.new_order(&mut gtc_cmd(3, OrderAction::Bid, 85, 2)); // 移价后只够吃 2
+        naive.new_order(&mut gtc_cmd(3, OrderAction::Bid, 85, 2));
+
+        let mut d = move_cmd(1, 1, 85);
+        let mut n = move_cmd(1, 1, 85);
+        assert_eq!(direct.move_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.move_order(&mut n), CommandResultCode::Success);
+        assert_eq!(d.matcher_event, n.matcher_event);
+
+        let ev = d.matcher_event.as_ref().expect("应有一笔成交");
+        assert_eq!(ev.size, 2);
+        assert!(!ev.active_order_completed, "order1 仍剩 5 (10-3-2) 未成交");
+
+        // order1 应以 filled=5(3+2)、剩 5 重新挂在新价 85。
+        let idx1 = direct.order_id_index[&1];
+        assert_eq!(direct.order(idx1).filled, 5);
+        assert_eq!(direct.order(idx1).price, 85);
+        assert_eq!(direct.order(idx1).size, 10);
+
+        let l2 = direct.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![85]);
+        assert_eq!(l2.ask_volumes, vec![5]); // size(10) - filled(5)
+        assert!(l2.bid_prices.is_empty(), "order3 也被吃满");
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    fn exchange_pair_spec() -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id: 1,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: 1,
+            quote_currency: 2,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            taker_fee: 0,
+            maker_fee: 0,
+            fee_scale_k: 0,
+        }
+    }
+
+    fn gtc_bid_with_reserve(order_id: i64, price: i64, size: i64, reserve_bid_price: i64) -> OrderCommand {
+        OrderCommand {
+            order_id,
+            symbol: 1,
+            price,
+            size,
+            reserve_bid_price,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: order_id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn move_bid_over_reserve_price_rejected_on_exchange_pair_spec() {
+        // Ruling P2-3：现货 BID 移价不得超过挂单时锁定的 reserve_bid_price。
+        let mut book = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
+        book.new_order(&mut gtc_bid_with_reserve(1, 90, 5, 95)); // reserve=95
+
+        let mut cmd = move_cmd(1, 1, 96); // 96 > 95 -> 越限
+        let rc = book.move_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::MatchingMoveFailedPriceOverRiskLimit);
+        assert!(cmd.action.is_none(), "失败分支不应回填 cmd.action（对应 Java 提前 return）");
+        assert!(cmd.matcher_event.is_none(), "失败分支不应产生任何事件");
+
+        // 状态完全未变：仍挂在原价 90。
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.bid_prices, vec![90]);
+        assert_eq!(l2.bid_volumes, vec![5]);
+        book.validate_internal_state();
+    }
+
+    #[test]
+    fn move_bid_within_reserve_price_succeeds_on_exchange_pair_spec() {
+        let mut book = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
+        book.new_order(&mut gtc_bid_with_reserve(1, 90, 5, 95)); // reserve=95
+
+        let mut cmd = move_cmd(1, 1, 95); // 恰好等于 reserve -> 放行（Java: `cmd.price > reserveBidPrice` 严格大于才拒）
+        let rc = book.move_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+        assert_eq!(cmd.action, Some(OrderAction::Bid));
+
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.bid_prices, vec![95]);
+        assert_eq!(l2.bid_volumes, vec![5]);
+        book.validate_internal_state();
+    }
+
+    #[test]
+    fn move_ask_ignores_reserve_price_guard_even_on_exchange_pair_spec() {
+        // 风控只针对 BID（Java `:565`：`orderToMove.action == OrderAction.BID` 是必要条件）。
+        let mut book = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
+        book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 5)); // ASK，reserve_bid_price 恒 0
+
+        let mut cmd = move_cmd(1, 1, 200); // 远超 0，但 ASK 不受该守卫约束
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::Success);
+        assert_eq!(book.fill_l2(10).ask_prices, vec![200]);
+    }
+
+    #[test]
+    fn move_bid_over_reserve_price_allowed_when_symbol_spec_absent() {
+        // 未注入 symbol_spec 时守卫天然不生效（同 Naive——Naive 从不做这个风控）。
+        let mut direct = OrderBookDirectImpl::new(); // symbol_spec == None
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_bid_with_reserve(1, 90, 5, 95));
+        naive.new_order(&mut gtc_bid_with_reserve(1, 90, 5, 95));
+
+        let mut d = move_cmd(1, 1, 999); // 远超 reserve=95，但无 spec -> 放行
+        let mut n = move_cmd(1, 1, 999);
+        assert_eq!(direct.move_order(&mut d), CommandResultCode::Success);
+        assert_eq!(naive.move_order(&mut n), CommandResultCode::Success);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn cancel_reduce_move_sequence_keeps_internal_state_valid() {
+        // 组合场景：多次 cancel/reduce/move 交替操作，每一步后都跑 validate_internal_state。
+        let mut book = OrderBookDirectImpl::new();
+        book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        book.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+        book.new_order(&mut gtc_cmd(3, OrderAction::Ask, 105, 8));
+        book.new_order(&mut gtc_cmd(4, OrderAction::Bid, 90, 6));
+        book.validate_internal_state();
+
+        assert_eq!(book.reduce_order(&mut reduce_cmd(1, 1, 3)), CommandResultCode::Success);
+        book.validate_internal_state();
+
+        assert_eq!(book.move_order(&mut move_cmd(3, 3, 100)), CommandResultCode::Success);
+        book.validate_internal_state();
+
+        assert_eq!(book.cancel_order(&mut cancel_cmd(2, 2)), CommandResultCode::Success);
+        book.validate_internal_state();
+
+        assert_eq!(book.move_order(&mut move_cmd(4, 4, 100)), CommandResultCode::Success);
+        book.validate_internal_state();
     }
 }

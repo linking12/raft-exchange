@@ -10,6 +10,7 @@ pub enum CommandResultCode {
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
     MatchingInvalidOrderBookId, // -3005（Task 9: MatchingEngineRouter 未知 symbol）
+    MatchingMoveFailedPriceOverRiskLimit, // -3041（P2 Task 5: moveOrder 现货 BID 超出 reserveBidPrice 风控）
     MatchingReduceFailedWrongSize, // -3051（Task 6: reduceOrder 请求量 <= 0）
     UserMgmtUserAlreadyExists, // -4001
     UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame, // -4101
@@ -30,6 +31,7 @@ impl CommandResultCode {
             CommandResultCode::MatchingUnknownOrderId => -3002,
             CommandResultCode::MatchingUnsupportedCommand => -3004,
             CommandResultCode::MatchingInvalidOrderBookId => -3005,
+            CommandResultCode::MatchingMoveFailedPriceOverRiskLimit => -3041,
             CommandResultCode::MatchingReduceFailedWrongSize => -3051,
             CommandResultCode::UserMgmtUserAlreadyExists => -4001,
             CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame => -4101,
@@ -55,5 +57,7 @@ mod tests {
         assert_eq!(CommandResultCode::UserMgmtAccountBalanceAdjustmentNsf.code(), -4103);
         assert_eq!(CommandResultCode::SymbolMgmtSymbolAlreadyExists.code(), -5001);
         assert_eq!(CommandResultCode::MatchingInvalidOrderBookId.code(), -3005);
+        assert_eq!(CommandResultCode::MatchingMoveFailedPriceOverRiskLimit.code(), -3041);
+        assert_eq!(CommandResultCode::MatchingReduceFailedWrongSize.code(), -3051);
     }
 }
