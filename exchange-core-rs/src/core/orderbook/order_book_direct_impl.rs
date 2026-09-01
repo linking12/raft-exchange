@@ -30,6 +30,8 @@ use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::l2_market_data::L2MarketData;
+use crate::core::common::matcher_event_type::MatcherEventType;
+use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
 use crate::core::orderbook::i_order_book::IOrderBook;
@@ -310,18 +312,43 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// GTC **无撮合**挂单路径。对应 Java `newOrderPlaceGtc`(`:148-189`)——本任务不撮合
-    /// （Task 3 补 `tryMatchInstantly` + 全成不挂 + dup-id 拒绝剩余），假设 `cmd` 不会与簿内
-    /// 挂单交叉。建 `DirectOrder`（`filled=0`）、登记 `order_id_index`、`insert_order`。
-    fn new_order_place_gtc(&mut self, cmd: &OrderCommand) {
+    /// GTC 下单：先 `try_match_instantly`，全成则不挂、重复 order_id 则拒绝剩余、否则挂簿。
+    /// 对应 Java `newOrderPlaceGtc`(`:148-189`)（P2 Task 3）。
+    ///
+    /// - `filled_size == size`：完全成交，不挂单，直接返回（已发的 TRADE 事件链留在 `cmd.matcher_event`）。
+    /// - `order_id_index` 已存在该 `order_id`（重复下单）：能撮合但不能挂，对未成交剩余量
+    ///   `size - filled_size` 发 REJECT 事件（前插到已有的 TRADE 事件链前，见 `attach_reject_event`）。
+    /// - 否则：建 `DirectOrder`（`filled`/`filled_notional` = 撮合产生的累计值）、登记
+    ///   `order_id_index`、`insert_order` 挂簿。
+    fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
+        let size = cmd.size;
+        let action = cmd.action.expect("GTC order requires action");
+        let price = cmd.price;
+        let reserve_bid_price = cmd.reserve_bid_price;
+
+        let (filled_size, filled_notional) =
+            self.try_match_instantly(action, price, size, reserve_bid_price, cmd);
+
+        if filled_size == size {
+            // 完全成交，无需挂单（对应 Java: filledSize == size -> return）。
+            return;
+        }
+
+        let order_id = cmd.order_id;
+        if self.order_id_index.contains_key(&order_id) {
+            // 重复 order id：能撮合但不能挂——对未成交剩余发 REJECT（已发的成交事件不回滚）。
+            Self::attach_reject_event(cmd, size - filled_size);
+            return;
+        }
+
         let order = DirectOrder {
-            order_id: cmd.order_id,
-            price: cmd.price,
-            size: cmd.size,
-            filled: 0,
-            filled_notional: 0,
-            reserve_bid_price: cmd.reserve_bid_price,
-            action: cmd.action.expect("GTC order requires action"),
+            order_id,
+            price,
+            size,
+            filled: filled_size,
+            filled_notional,
+            reserve_bid_price,
+            action,
             order_type: cmd.order_type.expect("GTC order requires order_type"),
             command: cmd.command,
             uid: cmd.uid,
@@ -332,8 +359,213 @@ impl OrderBookDirectImpl {
             prev: None,
         };
         let idx = self.alloc_order(order);
-        self.order_id_index.insert(cmd.order_id, idx);
+        self.order_id_index.insert(order_id, idx);
         self.insert_order(idx, None);
+    }
+
+    /// 撮合核心。对应 Java `tryMatchInstantly(:253-372)`（GTC/IOC/FOK_BUDGET/move 共用；本任务
+    /// 只有 GTC 调用它，taker 起始 `filled`/`filled_notional` 恒为 0）。
+    ///
+    /// 无撮合（对手侧无挂单 / 价格越限 / `taker_size==0`）→ 不发事件、不改任何状态，返回
+    /// `(0, 0)`（对应 Java `EMPTY_LONGS`；GTC 起始 filled 恒 0，故与"返回 taker 起始值"退化为同一形式）。
+    ///
+    /// 循环（§2.1(a)-(j)）：`maker` 从 `best_ask`(BID taker)/`best_bid`(ASK taker) 起沿 `.prev` 走
+    /// （桶内老到新、跨桶更优到更差）。每轮一个 maker：
+    /// - `trade_size=min(remaining, maker.size-maker.filled)`，成交价=maker.price；
+    /// - 更新 taker 累计 + maker.filled/filled_notional + `maker.parent.volume -= trade_size`；
+    /// - `maker_completed = maker.filled==maker.size`：完成则 `parent.num_orders -= 1`（发事件前）；
+    /// - `remaining -= trade_size`（发事件前，使 `active_order_completed` 反映扣减后的状态）；
+    /// - 发 TRADE 事件、追加到本次调用的事件链；
+    /// - 若 maker 未完成 → break（它留簿，taker 已耗尽）；
+    /// - 若完成：从 `order_id_index` 摘除，**推迟 slab 槽的实际回收到循环结束+best 修复之后**
+    ///   （`freed_orders`，对应 §2.1(h) 的"防止同一次撮合调用内新分配复用刚释放的槽"约束——
+    ///   本函数内不会新分配 order，纯防御性保留该顺序以匹配 Java 的对象池释放时机）；
+    ///   若 maker 是其桶的 `tail` → 从价位索引摘桶+释放 Bucket，`price_bucket_tail` 推进到
+    ///   `maker.prev` 所在桶的 tail（若存在）；
+    /// - 前进 `maker = maker.prev`，价格/剩余量条件不满足则退出循环。
+    ///
+    /// 循环后：`maker` 非空则 `maker.next = None`（它成为新链头）；`best_ask`/`best_bid = maker`
+    /// （可能为 `None`）。返回 `(taker_filled, taker_filled_notional)`。
+    pub fn try_match_instantly(
+        &mut self,
+        taker_action: OrderAction,
+        taker_price: i64,
+        taker_size: i64,
+        taker_reserve_bid_price: i64,
+        cmd: &mut OrderCommand,
+    ) -> (i64, i64) {
+        let is_bid = taker_action == OrderAction::Bid;
+        let limit_price = taker_price;
+
+        let mut maker = if is_bid { self.best_ask } else { self.best_bid };
+        let maker_idx0 = match maker {
+            Some(idx) => idx,
+            None => return (0, 0),
+        };
+        let first_price = self.order(maker_idx0).price;
+        let first_out_of_limit = if is_bid { first_price > limit_price } else { first_price < limit_price };
+        if first_out_of_limit {
+            return (0, 0);
+        }
+
+        let mut remaining = taker_size;
+        if remaining == 0 {
+            return (0, 0);
+        }
+
+        // `priceBucketTail`(Java `:270`)：起始 maker 所在桶的 tail，撮合到该 order 即整桶清空。
+        let mut price_bucket_tail: usize = {
+            let parent = self.order(maker_idx0).parent.expect("maker must have parent bucket");
+            self.bucket(parent).tail
+        };
+
+        let mut taker_filled: i64 = 0;
+        let mut taker_filled_notional: i64 = 0;
+        let mut events: Vec<MatcherTradeEvent> = Vec::new();
+        // 完成的 maker 槽位：先摘 order_id_index，槽本身推迟到循环结束+best 修复之后才真正 free
+        // （§2.1(h)：本函数内不重新分配 order，纯粹保持与 Java 对象池释放时机一致的顺序）。
+        let mut freed_orders: Vec<usize> = Vec::new();
+
+        loop {
+            let midx = maker.expect("loop body only runs while maker is Some");
+
+            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_reserve_bid_price) = {
+                let o = self.order(midx);
+                (
+                    o.size,
+                    o.filled,
+                    o.price,
+                    o.parent.expect("maker must have parent bucket"),
+                    o.prev,
+                    o.uid,
+                    o.order_id,
+                    o.reserve_bid_price,
+                )
+            };
+
+            let trade_size = remaining.min(m_size - m_filled_before);
+            let trade_price = m_price;
+
+            taker_filled += trade_size;
+            taker_filled_notional += trade_size * trade_price;
+
+            {
+                let o = self.order_mut(midx);
+                o.filled += trade_size;
+                o.filled_notional += trade_size * trade_price;
+            }
+            self.bucket_mut(m_parent).volume -= trade_size;
+
+            let maker_completed = m_filled_before + trade_size == m_size;
+            if maker_completed {
+                self.bucket_mut(m_parent).num_orders -= 1;
+            }
+
+            remaining -= trade_size;
+            let active_order_completed = remaining == 0;
+
+            // bidderHoldPrice：BID 那一方的 reserve_bid_price（taker 是 BID 用 taker 自己的，
+            // 否则 maker 是 BID、用 maker 的）——同 Naive §6。
+            let bidder_hold_price = if is_bid { taker_reserve_bid_price } else { m_reserve_bid_price };
+
+            events.push(MatcherTradeEvent {
+                event_type: MatcherEventType::Trade,
+                active_order_completed,
+                maker_order_id: m_order_id,
+                maker_order_completed: maker_completed,
+                price: trade_price,
+                size: trade_size,
+                bid_gt_ask: is_bid,
+                bidder_hold_price,
+                matched_order_uid: m_uid,
+                next: None,
+            });
+
+            if !maker_completed {
+                // maker 未成交完 -> taker 已无剩余量可分配，退出撮合循环（maker 留簿）。
+                break;
+            }
+
+            // maker 完成：摘 order_id_index，槽位推迟到循环后才 free。
+            self.order_id_index.remove(&m_order_id);
+            freed_orders.push(midx);
+
+            if midx == price_bucket_tail {
+                // 撮到了当前价位桶的 tail -> 整桶已清空，从价位索引摘桶+释放 Bucket。
+                if is_bid {
+                    self.ask_price_buckets.remove(&m_price);
+                } else {
+                    self.bid_price_buckets.remove(&m_price);
+                }
+                self.free_bucket(m_parent);
+
+                if let Some(p) = m_prev {
+                    let pp = self.order(p).parent.expect("prev order must have parent bucket");
+                    price_bucket_tail = self.bucket(pp).tail;
+                }
+            }
+
+            maker = m_prev;
+
+            match maker {
+                None => break,
+                Some(next_idx) => {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let np = self.order(next_idx).price;
+                    let within_limit = if is_bid { np <= limit_price } else { np >= limit_price };
+                    if !within_limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 循环后：断开新链头的前向指针，更新 best。
+        if let Some(midx) = maker {
+            self.order_mut(midx).next = None;
+        }
+        if is_bid {
+            self.best_ask = maker;
+        } else {
+            self.best_bid = maker;
+        }
+
+        // 现在才真正回收完成的 order 槽（best 指针已修复，槽内数据此前一直有效可读）。
+        for idx in freed_orders {
+            self.free_order(idx);
+        }
+
+        // 按撮合发生顺序拼成单链表，整体覆盖 cmd.matcher_event（对应 Java 首事件直接赋值
+        // triggerCmd.matcherEvent，不与调用前已有的链拼接——与 Naive 的 match_against 一致）。
+        let mut chain: Option<Box<MatcherTradeEvent>> = None;
+        for mut ev in events.into_iter().rev() {
+            ev.next = chain.take();
+            chain = Some(Box::new(ev));
+        }
+        cmd.matcher_event = chain;
+
+        (taker_filled, taker_filled_notional)
+    }
+
+    /// 不挂单、不改簿的 REJECT 事件，前插到 `cmd.matcher_event` 链头。对应 Java
+    /// `OrderBookEventsHelper.attachRejectEvent`（同 Naive 的 `attach_reject_event`：已有的成交
+    /// 事件链——如部分撮合后 dup-id 拒绝剩余——被接到 REJECT 之后）。
+    fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
+        let event = MatcherTradeEvent {
+            event_type: MatcherEventType::Reject,
+            active_order_completed: true,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price: cmd.price,
+            size: rejected_size,
+            bid_gt_ask: false,
+            bidder_hold_price: cmd.reserve_bid_price,
+            matched_order_uid: 0,
+            next: cmd.matcher_event.take(),
+        };
+        cmd.matcher_event = Some(Box::new(event));
     }
 
     /// 内部状态校验（测试/对拍用）。对应 Java `validateInternalState`(`:738-849`) 的核心子集
@@ -848,5 +1080,190 @@ mod tests {
         place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
         book.order_id_index.insert(999, 0); // 人为造孤儿索引项
         book.validate_internal_state();
+    }
+
+    // ---- Task 3: tryMatchInstantly 撮合主循环 + GTC 撮合（对拍 Naive） ----
+
+    use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
+
+    fn gtc_cmd(order_id: i64, action: OrderAction, price: i64, size: i64) -> OrderCommand {
+        OrderCommand {
+            order_id,
+            symbol: 1,
+            price,
+            size,
+            action: Some(action),
+            order_type: Some(OrderType::Gtc),
+            uid: order_id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn two_orders_cross_produce_single_trade_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d_taker = gtc_cmd(2, OrderAction::Bid, 100, 6);
+        direct.new_order(&mut d_taker);
+        let mut n_taker = gtc_cmd(2, OrderAction::Bid, 100, 6);
+        naive.new_order(&mut n_taker);
+
+        assert_eq!(d_taker.result_code, n_taker.result_code);
+        assert_eq!(
+            d_taker.matcher_event, n_taker.matcher_event,
+            "Direct 事件链须与 Naive 逐位一致"
+        );
+
+        let ev = d_taker.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.maker_order_id, 1);
+        assert_eq!(ev.matched_order_uid, 1);
+        assert_eq!(ev.price, 100);
+        assert_eq!(ev.size, 6);
+        assert!(!ev.maker_order_completed, "maker 只部分成交(10 中吃 6)，应留簿");
+        assert!(ev.active_order_completed, "taker 6 全部成交");
+        assert!(ev.next.is_none(), "只应有一笔成交");
+
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn multi_bucket_sweep_matches_naive_event_chain_and_completion_timing() {
+        // taker 吃穿两个价位桶（100 全部 5 + 101 部分 3/7），第三个价位 102 留在簿上未被触碰。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        for (id, price, size) in [(1i64, 100i64, 5i64), (2, 101, 7), (3, 102, 4)] {
+            direct.new_order(&mut gtc_cmd(id, OrderAction::Ask, price, size));
+            naive.new_order(&mut gtc_cmd(id, OrderAction::Ask, price, size));
+        }
+
+        let mut d_taker = gtc_cmd(10, OrderAction::Bid, 101, 8); // 5(全) + 3(部分,101 桶剩 4)
+        direct.new_order(&mut d_taker);
+        let mut n_taker = gtc_cmd(10, OrderAction::Bid, 101, 8);
+        naive.new_order(&mut n_taker);
+
+        assert_eq!(
+            d_taker.matcher_event, n_taker.matcher_event,
+            "多桶扫单事件链须与 Naive 逐位一致"
+        );
+
+        // 事件链应为 2 笔：先 100(全成,5)，后 101(部分,3)。
+        let ev1 = d_taker.matcher_event.as_ref().expect("应有第一笔成交");
+        assert_eq!(ev1.maker_order_id, 1);
+        assert_eq!(ev1.price, 100);
+        assert_eq!(ev1.size, 5);
+        assert!(ev1.maker_order_completed);
+        assert!(!ev1.active_order_completed, "taker 剩余量还没吃完(8中吃5)");
+
+        let ev2 = ev1.next.as_ref().expect("应有第二笔成交");
+        assert_eq!(ev2.maker_order_id, 2);
+        assert_eq!(ev2.price, 101);
+        assert_eq!(ev2.size, 3);
+        assert!(!ev2.maker_order_completed, "101 桶只吃 3/7，maker 留簿");
+        assert!(ev2.active_order_completed, "taker 已全部成交(5+3=8)");
+        assert!(ev2.next.is_none());
+
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        // 100 桶清空，101 桶剩 4，102 桶原样 4。
+        let l2 = direct.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![101, 102]);
+        assert_eq!(l2.ask_volumes, vec![4, 4]);
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn gtc_partial_fill_rests_remainder_and_l2_reflects() {
+        let mut direct = OrderBookDirectImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 5));
+
+        let mut taker = gtc_cmd(2, OrderAction::Bid, 100, 12);
+        direct.new_order(&mut taker);
+        assert_eq!(taker.result_code, Some(CommandResultCode::Success));
+
+        let ev = taker.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.size, 5);
+        assert!(ev.maker_order_completed);
+        assert!(!ev.active_order_completed, "taker 剩余 7 未成交，需挂簿");
+
+        // taker 剩余 7 应挂在 bid 侧、ask 侧已清空。
+        let l2 = direct.fill_l2(10);
+        assert!(l2.ask_prices.is_empty());
+        assert_eq!(l2.bid_prices, vec![100]);
+        assert_eq!(l2.bid_volumes, vec![7]);
+
+        // 挂单确实登记进 order_id_index，可被后续操作（如撤单）定位到。
+        assert!(direct.order_id_index.contains_key(&2));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn gtc_full_fill_does_not_rest() {
+        let mut direct = OrderBookDirectImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut taker = gtc_cmd(2, OrderAction::Bid, 100, 10);
+        direct.new_order(&mut taker);
+        assert_eq!(taker.result_code, Some(CommandResultCode::Success));
+
+        let ev = taker.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.size, 10);
+        assert!(ev.maker_order_completed);
+        assert!(ev.active_order_completed);
+
+        // taker 全部成交，不应挂簿，也不应出现在 order_id_index 里。
+        assert!(!direct.order_id_index.contains_key(&2));
+        let l2 = direct.fill_l2(10);
+        assert!(l2.ask_prices.is_empty());
+        assert!(l2.bid_prices.is_empty());
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn dup_id_rejects_remaining_after_partial_match_matching_naive() {
+        // order_id=1 已被一笔远离成交价的挂单占用(bid@50)；taker 复用同一 order_id=1 去吃 ask@100，
+        // 部分成交后因 order_id 已存在而拒绝剩余——被吃的 maker(ask, order_id=2)与占位的 order_id=1
+        // 是两个不同订单，match 过程不会碰到 order_id=1 的挂单，故 dup 检测在 match 后仍能命中。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Bid, 50, 5)); // 占位，order_id=1，不参与撮合
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Bid, 50, 5));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 10)); // 真正的 maker
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 10));
+
+        let mut d_taker = gtc_cmd(1, OrderAction::Bid, 100, 15); // 复用 order_id=1（dup）
+        direct.new_order(&mut d_taker);
+        let mut n_taker = gtc_cmd(1, OrderAction::Bid, 100, 15);
+        naive.new_order(&mut n_taker);
+
+        assert_eq!(
+            d_taker.matcher_event, n_taker.matcher_event,
+            "dup-id 拒绝剩余的事件链须与 Naive 逐位一致"
+        );
+
+        // 事件链头应是 REJECT（剩余 5 = 15 - 10），其后接已发生的 TRADE(10)。
+        let head = d_taker.matcher_event.as_ref().expect("应有事件链");
+        assert_eq!(head.event_type, MatcherEventType::Reject);
+        assert_eq!(head.size, 5);
+        assert!(head.active_order_completed);
+        let trade = head.next.as_ref().expect("reject 之后应有成交事件");
+        assert_eq!(trade.event_type, MatcherEventType::Trade);
+        assert_eq!(trade.size, 10);
+        assert_eq!(trade.maker_order_id, 2);
+        assert!(trade.next.is_none());
+
+        // taker 未被挂簿（重复 id 不能挂）；order_id=1 仍只对应最早那笔占位挂单(bid@50)。
+        let l2 = direct.fill_l2(10);
+        assert_eq!(l2.ask_prices, Vec::<i64>::new(), "ask@100 已被吃满清空");
+        assert_eq!(l2.bid_prices, vec![50]);
+        assert_eq!(l2.bid_volumes, vec![5]);
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
     }
 }
