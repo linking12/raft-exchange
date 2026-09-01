@@ -19,7 +19,11 @@
 //!     risk[rshard].risk_release(cmd);  // R2（含 R2Sync）
 //! }
 //! ```
+//!
+//! 本期单 shard、单线程，`rshard`/`sshard` 恒为 0——具体实现见 [`exchange_core::ExchangeCore`]。
 
-// TODO(port): ExchangeCore（确定性顺序管线 + grouping 批边界）
-// TODO(port): ExchangeApi
-// TODO(port): 事件处理 handler
+pub mod api;
+pub mod exchange_core;
+
+pub use api::{CancelOrderRequest, ExchangeApi, MoveOrderRequest, PlaceOrderRequest, ReduceOrderRequest};
+pub use exchange_core::ExchangeCore;
