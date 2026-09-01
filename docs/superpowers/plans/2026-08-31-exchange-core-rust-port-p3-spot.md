@@ -261,11 +261,15 @@
 两者均为 Java `exchange-core` 参考实现自身的既有缺陷（经取证确认），Rust 逐字对等复现，**非移植错误**，按用户决策刻意保留：
 
 1. **缺陷#1 — exchange_locked 可变负（比例费 BID 跨多次释放）**：`ceil(a)+ceil(b) ≥ ceil(a+b)` 超可加性。比例费 BID 挂单被拆成 ≥2 次释放（两 taker 分吃 / reduce+cancel）时释放总额超原始冻结额，`exchange_locked[quote]` 变负 → 虚高可用余额（偿付会计暴露）。**真资金守恒 Σaccounts+adjustments+fees 仍成立**（只破 locked>=0 标记）。Java: `RiskEngine.java:1154-1163/1094-1120`, `CoreArithmeticUtils.java:96-101`；Java 自身守恒检查对此恒等失明。Rust characterization test 记录之。
-2. **缺陷#2 — Σaccounts+fees 单笔漂 ±1（比例费 + maker_fee≠0）**：`calculateAmountBidReleaseCorrMaker` 合并 ceil(takerFee,makerFee) 与 fees 桶独立 `calculateMakerFee` ceil 不一致（`ceil(a)−ceil(b)≠ceil(a−b)`）。maker_fee≠0 时**单笔**成交即破**真守恒** Σaccounts+fees ±1（会累积）。Java: `RiskEngine.java:1222` + `CoreArithmeticUtils.java:126-140/175-178`。Rust: `arithmetic.rs:273-292/230-237`, `risk.rs` sell 结算。proptest 比例费生成器 pin `maker_fee=0` 规避（test-param-only，已注释）。
+2. **缺陷#2 — Σaccounts+fees 单笔漂 ±1（比例费 + maker_fee≠0，卖方与买方两侧都有）**：`calculateAmountBidReleaseCorrMaker` 合并 ceil(takerFee,makerFee) 与 fees 桶独立 `calculateMakerFee` ceil 不一致（`ceil(a)−ceil(b)≠ceil(a−b)`）。maker_fee≠0 时**单笔**成交即破**真守恒** Σaccounts+fees ±1（会累积）。
+   - **卖方侧**（taker=ASK，maker=BID）：Java `RiskEngine.java:1222` + `CoreArithmeticUtils.java:126-140/175-178`；Rust `arithmetic.rs:273-292/230-237` + `risk.rs` sell 结算。
+   - **买方侧**（taker=BID，maker=ASK，终审确认同类忠实缺陷）：maker fee 按 `mte.price` 逐事件收、按 `avg_maker_price` 单 ceil 入 fees（Java `RiskEngine.java:1274` vs `:1338`；Rust `risk.rs:576` vs `:687`）。
+   - proptest 比例费生成器 pin `maker_fee=0` 同时规避两侧（test-param-only，已注释）。**未来修复须同时覆盖买卖两侧**（勿只修卖方那一处表达式）。
 
 **若未来要"修得比 Java 更正确"**：新开一期，dust→fees 桶 + per-order 剩余冻结追踪、末笔精确释放（参考文档 §6 已预告方向）；但那会破坏 Rust↔Java 差分对拍的逐位一致性，需权衡。
 
 ### P4+ carry-forward（承 P1 未了 + P3 新增）
-- （P1 承接）MatcherTradeEvent 未补的 Java 全字段（futures 用）、move_order 现货 reserveBidPrice 上限（需 SymbolType 已在 P3 有 spec 可做但未做）、IOrderBook 的 getOrderById/validate_internal_state。
+- （P1 承接）MatcherTradeEvent 未补的 Java 全字段（futures 用）、IOrderBook 的 getOrderById/validate_internal_state。
+- **⚠ move_order 未验证（P4 必做）**：`ExchangeApi::move_order` 已暴露为公开方法，但 (a) 缺 Java 的 reserve-bid-price 上限守卫（BID 移到 > reserveBidPrice 应返回 `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`，现无条件重撮合 → 可能对未冻结的 quote 结算、欠抵押，真守恒风险）；(b) e2e 场景与 proptest 均**未覆盖** move 路径（GenCmd 无 Move 变体）。**P3 中 move_order 视为未验证、非生产就绪**。P4 补守卫（P3 已有 SymbolType/spec 可做）+ 给 proptest 加 Move 臂。
 - （P3 新增）上述两个继承守恒缺陷；processed_tx_ids 无时间窗去重且未入 state_hash（raft/快照需处理）；suspends 桶 + SUSPEND 型 balance-adjust；binary 组帧（当前走直接 API）；多线程分片；snapshot。
 - 下一阶段可选：P2（OrderBookDirectImpl，链表→slab+索引，另出计划）或直接 P4（期货/统一账户）。
