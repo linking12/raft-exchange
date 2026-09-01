@@ -672,16 +672,25 @@ impl OrderBookDirectImpl {
     ///   撮合（对应 Naive `if size_cap<=0 {break}` 跳出整个外层循环）。
     /// - 批次内（同价位，可能跨多个 FIFO 挂单）逐单成交，直到批次上限耗尽或该价位挂单耗尽。
     ///
-    /// **正确性论证（为何不需要"跳过同价位剩余挂单"的显式 skip 逻辑）**：ask 价格链严格递增、
-    /// `remaining_budget` 只减不增。若某次 `batch_remaining` 归零是因为**预算耗尽**（`size_cap`
-    /// 由 `affordable` 而非 `remaining` 决定），则 `remaining_budget_new = remaining_budget -
-    /// size_cap*price < price`（地板除的余数恒小于除数）；无论下一次遇到的 maker 价格与刚才
-    /// 相同还是更差（更高），都满足 `remaining_budget_new < 该价`，故 `affordable=0`、
-    /// `size_cap<=0`，重新计算必然立即整体停止——与 Naive"该价位批次已用完、永不重试"的效果
-    /// **逐位等价**（都不会再产生任何成交），因此可以放心地"每次 `batch_remaining==0` 就直接
-    /// 用当前 maker 重新算一批"，不需要额外记录/跳过"已访问过的价位"。若 `batch_remaining`
-    /// 归零是因为 `remaining`（taker 整体剩余）耗尽，则本轮循环顶部的 `remaining==0` 检查已在
-    /// 下一次迭代前拦下，同样不会误重试。
+    /// **`batch_remaining` 归零的三种方式，必须逐一都能触发"下一价位重新计算"**（这是曾经的
+    /// 一个真实 bug 的教训——第 3 种最初被漏掉，见下）：
+    /// 1. **预算耗尽**：`size_cap` 由 `affordable` 决定，trade 后 `remaining_budget_new =
+    ///    remaining_budget - size_cap*price < price`（地板除余数恒小于除数）。ask 价格链严格
+    ///    递增、`remaining_budget` 只减不增，故无论下一个 maker 价格相同还是更差(更高)，都有
+    ///    `remaining_budget_new < 该价`，`affordable=0`，重新计算必然立即 `size_cap<=0` 而
+    ///    整体停止——与 Naive"该价位批次已用完、永不重试"的效果逐位等价。这种情形 trade 数学
+    ///    本身就会让 `batch_remaining` 精确归零，无需额外干预。
+    /// 2. **taker 整体剩余耗尽**：`size_cap` 由 `remaining` 决定，trade 后 `remaining==0`，
+    ///    本轮循环顶部的 `if remaining==0 {break}` 已在下一次迭代前拦下，不会走到重新计算。
+    /// 3. **本价位流动性耗尽（桶内货比批次上限少）**：`size_cap` 由 `affordable`/`remaining`
+    ///    的 min 决定，但**该价位桶的总量比 size_cap 还小**——吃穿整个桶（`midx ==
+    ///    price_bucket_tail`）跨到下一个（更差）价位时，`batch_remaining` 可能仍 **>0**（预算
+    ///    或量都还没花完，只是这一档没货了）！trade 数学不会自动把它归零，必须在桶被吃穿、
+    ///    `maker` 跨桶时**显式**把 `batch_remaining` 置 0，强迫下一轮用新价位重新算一次
+    ///    `size_cap`（否则会把按旧价位算出的 leftover 原封不动地套到更差价位上继续吃、跳过了
+    ///    对新价位的 affordability 检查——这正是 Naive 严禁的"预算批次跨桶延续"，对应 Naive
+    ///    `for p in prices` 对每个价位独立调用 `size_cap = size_left.min(affordable)`，从不
+    ///    带着上一价位的余量进入下一价位）。见下方 `if midx == price_bucket_tail` 分支。
     ///
     /// 因此 `active_order_completed` 语义是"**当前批次**是否耗尽"而非"taker 整体是否成交完"——
     /// 批次上限 < taker 整体剩余量时两者不同，这是本函数与 `try_match_instantly` 的关键差异。
@@ -785,8 +794,17 @@ impl OrderBookDirectImpl {
                 freed_orders.push(midx);
 
                 if midx == price_bucket_tail {
+                    // 吃穿了整个桶（本桶流动性 < 批次上限）——跨到下一个（更差）价位。
+                    // `batch_remaining` 可能仍 >0（本批次的钱/量并未真正花完，只是这一价位没
+                    // 货了），必须强制清零，强迫下一轮循环顶部重新为"新价位"计算一次全新的
+                    // `size_cap`（否则会把这笔按旧价位算出的 leftover 预算原封不动地套到更差
+                    // 价位上继续吃，等于没有对新价位做 affordability 检查——这正是 Naive 严禁
+                    // 的"预算批次跨桶延续"）。对应 Naive `for p in prices` 对每个价位都独立
+                    // 调用 `size_cap = size_left.min(affordable)`，从不把上一个价位的余量带
+                    // 到下一个价位。
                     self.ask_price_buckets.remove(&m_price);
                     self.free_bucket(m_parent);
+                    batch_remaining = 0;
                 }
                 maker = m_prev;
             }
@@ -1890,6 +1908,66 @@ mod tests {
         let best = direct.order_id_index.get(&2).copied().expect("order2 应仍在索引中");
         assert_eq!(direct.order(best).order_id, 2);
         assert_eq!(direct.order(best).filled, 0, "order2 未被触碰");
+        direct.validate_internal_state();
+    }
+
+    /// 回归测试（code review 发现的严重 bug）：`match_against_budget_ioc` 曾经在"吃穿整个桶、
+    /// 跨到下一个（更差）价位"（`midx == price_bucket_tail`）时忘记把 `batch_remaining` 清零，
+    /// 导致把按*旧*价位算出的预算余量（`batch_remaining` 仍 >0，因为这一档是被"流动性耗尽"
+    /// 而非"预算/量耗尽"截断的）原封不动地套到*新*价位上继续吃，完全跳过了对新价位的
+    /// affordability 检查——这与 Naive 对每个价位都独立重新计算 `size_cap`（`match_against_budget`,
+    /// `order_book_naive_impl.rs:261-271`）不一致，会产生比预算实际能负担的更多成交（复现：
+    /// asks `100 -> {size 3}` 后 `200 -> {size 100}`，taker BID IOC_BUDGET `size=10`
+    /// `budget(price)=1000`；旧 bug 版本会在跨桶后继续用价位 100 算出的 `size_cap=10` 里剩下
+    /// 的 `7` 去吃 200 那一档而不重新核对 700 的预算，得到 filled=10、notional=1700>1000）。
+    ///
+    /// 正确结果（Naive 与修复后的 Direct 都应如此）：价位 100 的 `size_cap=min(10,1000/100=10)
+    /// =10`，但该桶只有 3 → 吃 3（`maker_completed=true`），花掉 300，剩预算 700；跨桶后为
+    /// 价位 200 **重新计算** `size_cap=min(7,700/200=3)=3` → 只吃 3（`maker_completed=false`，
+    /// 97 留簿），花掉 600，剩预算 100；100/200 都不够再买 1 单位 → 停止。总成交 6
+    /// （3@100+3@200），剩 4 走 REJECT。
+    #[test]
+    fn ioc_budget_recomputes_budget_cap_fresh_across_bucket_boundary_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 3));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 3));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 200, 100));
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 200, 100));
+
+        let mut d = taker_cmd(3, OrderAction::Bid, OrderType::IocBudget, 1000, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(3, OrderAction::Bid, OrderType::IocBudget, 1000, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(
+            d.matcher_event, n.matcher_event,
+            "跨价位桶的 IOC_BUDGET 事件链（含每笔的 active_order_completed）须与 Naive 逐位一致"
+        );
+
+        let head = d.matcher_event.as_ref().expect("应有事件链");
+        assert_eq!(head.event_type, MatcherEventType::Reject);
+        assert_eq!(head.size, 4, "10 - 6 = 4 未成交");
+
+        let trade1 = head.next.as_ref().expect("应有第一笔成交(@100)");
+        assert_eq!(trade1.event_type, MatcherEventType::Trade);
+        assert_eq!(trade1.price, 100);
+        assert_eq!(trade1.size, 3);
+        assert!(trade1.maker_order_completed, "价位100仅有的3个单位被吃满");
+        assert!(!trade1.active_order_completed, "批次上限(10)未耗尽——只是这一档没货了");
+
+        let trade2 = trade1.next.as_ref().expect("应有第二笔成交(@200)");
+        assert_eq!(trade2.event_type, MatcherEventType::Trade);
+        assert_eq!(trade2.price, 200);
+        assert_eq!(trade2.size, 3, "跨桶后必须用700(剩余预算)/200=3重新计算，而非沿用旧批次的7");
+        assert!(!trade2.maker_order_completed, "100单位的挂单只吃了3");
+        assert!(trade2.active_order_completed, "价位200的新批次上限(3)恰好耗尽");
+        assert!(trade2.next.is_none());
+
+        // 簿状态：100 桶被吃穿清空，200 桶剩 97（100-3）。
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert_eq!(direct.fill_l2(10).ask_prices, vec![200]);
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![97]);
         direct.validate_internal_state();
     }
 }
