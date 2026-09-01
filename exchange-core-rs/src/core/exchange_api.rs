@@ -12,12 +12,17 @@
 //! 写入注册表，也不会在 matching router 里建 order book——避免出现"symbol 存在但引用的
 //! currency spec 缺失"这种下单时才会 panic 的悬空状态（R1 `place_order_risk_check` 用
 //! `ssp.get_currency(..).unwrap_or_else(|| panic!(..))` 假定 currency 必存在）。
-use crate::account::registry::{SymbolSpecificationProvider, UserProfileService};
-use crate::api::command::OrderCommand;
-use crate::api::enums::{CommandResultCode, OrderAction, OrderCommandType, OrderType};
-use crate::api::l2::L2MarketData;
-use crate::api::spec::{CoreCurrencySpecification, CoreSymbolSpecification};
-use crate::processors::risk::RiskEngine;
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+use crate::core::processors::user_profile_service::UserProfileService;
+use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::order_action::OrderAction;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::order_type::OrderType;
+use crate::core::common::l2_market_data::L2MarketData;
+use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::processors::risk_engine::RiskEngine;
 
 use super::exchange_core::ExchangeCore;
 
@@ -225,7 +230,7 @@ impl ExchangeApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::enums::SymbolType;
+    use crate::core::common::symbol_type::SymbolType;
 
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;

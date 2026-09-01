@@ -14,10 +14,11 @@
 //! 再在内部重新借用各字段的中间方法（那样借用检查器只看到一次对整个 `self` 的借用，
 //! 无法证明字段级别不重叠）。因此本文件的 `process_command` 刻意不拆分成
 //! `fn r1(&mut self, ..)` / `fn r2(&mut self, ..)` 这类私有辅助方法。
-use crate::account::registry::{SymbolSpecificationProvider, UserProfileService};
-use crate::api::command::OrderCommand;
-use crate::processors::matching_router::MatchingEngineRouter;
-use crate::processors::risk::RiskEngine;
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+use crate::core::processors::user_profile_service::UserProfileService;
+use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::processors::matching_engine_router::MatchingEngineRouter;
+use crate::core::processors::risk_engine::RiskEngine;
 
 /// 对应 Java `ExchangeCore`（现货子集，单 shard）。
 #[derive(Default)]
@@ -68,9 +69,14 @@ impl ExchangeCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::command::OrderCommand;
-    use crate::api::enums::{CommandResultCode, OrderAction, OrderCommandType, OrderType, SymbolType};
-    use crate::api::spec::{CoreCurrencySpecification, CoreSymbolSpecification};
+    use crate::core::common::cmd::order_command::OrderCommand;
+    use crate::core::common::cmd::command_result_code::CommandResultCode;
+    use crate::core::common::order_action::OrderAction;
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+    use crate::core::common::order_type::OrderType;
+    use crate::core::common::symbol_type::SymbolType;
+    use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;

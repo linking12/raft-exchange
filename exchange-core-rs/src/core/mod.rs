@@ -1,9 +1,4 @@
-//! 引擎编排与对外 API。
-//!
-//! 对应 Java: `exchange.core2.core.*`
-//! - `ExchangeCore`（Disruptor 五段编排）
-//! - `ExchangeApi` / `SimpleEventsProcessor`
-//! - `ITradeEventsHandler` / `IFundEventsHandler`
+//! 引擎核心。对应 Java 包 `exchange.core2.core`。
 //!
 //! 并发模型（设计文档 §4）：Java 的 Disruptor 五段
 //!   `Grouping → [R1 ∥ Journal] → ME → R2`
@@ -22,10 +17,13 @@
 //!
 //! 本期单 shard、单线程，`rshard`/`sshard` 恒为 0——具体实现见 [`exchange_core::ExchangeCore`]。
 
-pub mod api;
+pub mod common;
+pub mod orderbook;
+pub mod processors;
+pub mod utils;
+
+pub mod exchange_core;
+pub mod exchange_api;
+
 #[cfg(test)]
 mod e2e_tests;
-pub mod exchange_core;
-
-pub use api::{CancelOrderRequest, ExchangeApi, MoveOrderRequest, PlaceOrderRequest, ReduceOrderRequest};
-pub use exchange_core::ExchangeCore;

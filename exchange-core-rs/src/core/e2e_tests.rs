@@ -16,10 +16,13 @@
 
 use proptest::prelude::*;
 
-use crate::api::enums::{CommandResultCode, OrderAction, OrderType, SymbolType};
-use crate::api::spec::CoreSymbolSpecification;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::order_action::OrderAction;
+use crate::core::common::order_type::OrderType;
+use crate::core::common::symbol_type::SymbolType;
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 
-use super::api::{CancelOrderRequest, ExchangeApi, PlaceOrderRequest, ReduceOrderRequest};
+use super::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceOrderRequest, ReduceOrderRequest};
 
 const BASE: i32 = 1;
 const QUOTE: i32 = 2;

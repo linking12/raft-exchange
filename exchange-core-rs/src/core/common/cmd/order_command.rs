@@ -1,7 +1,10 @@
 //! 对应 Java: exchange.core2.core.common.cmd.OrderCommand（P1：撮合相关字段 + Task 2：现货路由所需字段）
-use crate::api::enums::{CommandResultCode, OrderAction, OrderCommandType, OrderType};
-use crate::api::event::MatcherTradeEvent;
-use crate::api::l2::L2MarketData;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::order_action::OrderAction;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::order_type::OrderType;
+use crate::core::common::matcher_trade_event::MatcherTradeEvent;
+use crate::core::common::l2_market_data::L2MarketData;
 
 #[derive(Debug, Clone, Default)]
 pub struct OrderCommand {

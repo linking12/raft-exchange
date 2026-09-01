@@ -4,7 +4,7 @@
 //! 对应 Java `TimeWindowDedupSet`的最小子集：只保留"claim 一次，重复即拒"语义，不做时间淘汰）。
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::api::enums::UserStatus;
+use crate::core::common::user_status::UserStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserProfile {
@@ -58,7 +58,7 @@ impl UserProfile {
 
     /// 确定性状态 hash：折叠 `uid` + `user_status` + 排序后的 `accounts`/`exchange_locked`
     /// （`BTreeMap` 天然按 key 升序，天然满足"排序"要求）。风格对齐
-    /// `orderbook::naive::OrderBookNaive::state_hash`（`h = h*31 + field`滚动折叠 + i64->i32 fold，
+    /// `orderbook::order_book_naive_impl::OrderBookNaiveImpl::state_hash`（`h = h*31 + field`滚动折叠 + i64->i32 fold，
     /// 对应 Java `Long.hashCode`）。不保证与 Java `Objects.hash(...)` 数值相等（现货子集未含
     /// positions/loans/processedTransactionIds 字段），只保证「同状态 → 同 hash，不同状态 → 不同 hash」。
     pub fn state_hash(&self) -> i32 {

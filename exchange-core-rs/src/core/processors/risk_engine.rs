@@ -9,15 +9,20 @@
 
 use std::collections::BTreeMap;
 
-use crate::account::profile::UserProfile;
-use crate::account::registry::{SymbolSpecificationProvider, UserProfileService};
-use crate::api::command::OrderCommand;
-use crate::api::enums::{
-    CommandResultCode, MatcherEventType, OrderAction, OrderCommandType, OrderType, SymbolType,
-};
-use crate::api::event::MatcherTradeEvent;
-use crate::api::spec::{CoreCurrencySpecification, CoreSymbolSpecification};
-use crate::utils::arithmetic;
+use crate::core::common::user_profile::UserProfile;
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+use crate::core::processors::user_profile_service::UserProfileService;
+use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::matcher_event_type::MatcherEventType;
+use crate::core::common::order_action::OrderAction;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::order_type::OrderType;
+use crate::core::common::symbol_type::SymbolType;
+use crate::core::common::matcher_trade_event::MatcherTradeEvent;
+use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::utils::core_arithmetic_utils as arithmetic;
 
 /// 对应 Java `RiskEngine`（现货子集）。shard 全局守恒桶（参考文档 §5/§6）：
 /// - `adjustments`：`BALANCE_ADJUSTMENT`（充提）的对冲桶——`accounts[cur] += amountDiff` 的同时
@@ -820,8 +825,9 @@ impl RiskEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::command::OrderCommand;
-    use crate::api::enums::{OrderCommandType, SymbolType};
+    use crate::core::common::cmd::order_command::OrderCommand;
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+    use crate::core::common::symbol_type::SymbolType;
 
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;
