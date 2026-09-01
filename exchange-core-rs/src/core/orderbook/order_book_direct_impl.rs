@@ -327,7 +327,7 @@ impl OrderBookDirectImpl {
         let reserve_bid_price = cmd.reserve_bid_price;
 
         let (filled_size, filled_notional) =
-            self.try_match_instantly(action, price, size, reserve_bid_price, cmd);
+            self.try_match_instantly(action, size, reserve_bid_price, Some(price), cmd);
 
         if filled_size == size {
             // 完全成交，无需挂单（对应 Java: filledSize == size -> return）。
@@ -363,11 +363,16 @@ impl OrderBookDirectImpl {
         self.insert_order(idx, None);
     }
 
-    /// 撮合核心。对应 Java `tryMatchInstantly(:253-372)`（GTC/IOC/FOK_BUDGET/move 共用；本任务
-    /// 只有 GTC 调用它，taker 起始 `filled`/`filled_notional` 恒为 0）。
+    /// 撮合核心。对应 Java `tryMatchInstantly(:253-372)`（GTC/IOC/FOK_BUDGET/move 共用；GTC/IOC
+    /// 调用它时 taker 起始 `filled`/`filled_notional` 恒为 0）。
+    ///
+    /// `limit_price`：`Some(p)` 按价格过滤对手侧（GTC/IOC 主路径，BID 要求 `maker.price<=p`、
+    /// ASK 要求 `maker.price>=p`）；`None` 表示不限价——**仅 FOK_BUDGET 使用**。按 Ruling P2-1，
+    /// Rust 侧 BID/ASK FOK_BUDGET 一律不设价格上限，镜像 Naive 的 `try_match_full`，不复刻
+    /// Java Direct "BID FOK_BUDGET 复用 cmd.price 当每单价上限"的巧合（见 §8/模块头 Ruling 说明）。
     ///
     /// 无撮合（对手侧无挂单 / 价格越限 / `taker_size==0`）→ 不发事件、不改任何状态，返回
-    /// `(0, 0)`（对应 Java `EMPTY_LONGS`；GTC 起始 filled 恒 0，故与"返回 taker 起始值"退化为同一形式）。
+    /// `(0, 0)`（对应 Java `EMPTY_LONGS`；GTC/IOC 起始 filled 恒 0，故与"返回 taker 起始值"退化为同一形式）。
     ///
     /// 循环（§2.1(a)-(j)）：`maker` 从 `best_ask`(BID taker)/`best_bid`(ASK taker) 起沿 `.prev` 走
     /// （桶内老到新、跨桶更优到更差）。每轮一个 maker：
@@ -389,23 +394,24 @@ impl OrderBookDirectImpl {
     pub fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
-        taker_price: i64,
         taker_size: i64,
         taker_reserve_bid_price: i64,
+        limit_price: Option<i64>,
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
         let is_bid = taker_action == OrderAction::Bid;
-        let limit_price = taker_price;
 
         let mut maker = if is_bid { self.best_ask } else { self.best_bid };
         let maker_idx0 = match maker {
             Some(idx) => idx,
             None => return (0, 0),
         };
-        let first_price = self.order(maker_idx0).price;
-        let first_out_of_limit = if is_bid { first_price > limit_price } else { first_price < limit_price };
-        if first_out_of_limit {
-            return (0, 0);
+        if let Some(limit) = limit_price {
+            let first_price = self.order(maker_idx0).price;
+            let first_out_of_limit = if is_bid { first_price > limit } else { first_price < limit };
+            if first_out_of_limit {
+                return (0, 0);
+            }
         }
 
         let mut remaining = taker_size;
@@ -513,10 +519,12 @@ impl OrderBookDirectImpl {
                     if remaining == 0 {
                         break;
                     }
-                    let np = self.order(next_idx).price;
-                    let within_limit = if is_bid { np <= limit_price } else { np >= limit_price };
-                    if !within_limit {
-                        break;
+                    if let Some(limit) = limit_price {
+                        let np = self.order(next_idx).price;
+                        let within_limit = if is_bid { np <= limit } else { np >= limit };
+                        if !within_limit {
+                            break;
+                        }
                     }
                 }
             }
@@ -539,6 +547,265 @@ impl OrderBookDirectImpl {
 
         // 按撮合发生顺序拼成单链表，整体覆盖 cmd.matcher_event（对应 Java 首事件直接赋值
         // triggerCmd.matcherEvent，不与调用前已有的链拼接——与 Naive 的 match_against 一致）。
+        let mut chain: Option<Box<MatcherTradeEvent>> = None;
+        for mut ev in events.into_iter().rev() {
+            ev.next = chain.take();
+            chain = Some(Box::new(ev));
+        }
+        cmd.matcher_event = chain;
+
+        (taker_filled, taker_filled_notional)
+    }
+
+    /// IOC：即时撮合（价格受限），未成交剩余（`size - filled`）直接 REJECT，从不挂簿。
+    /// 对应 Java `newOrderMatchIoc`(`:191-202`)。
+    fn new_order_match_ioc(&mut self, cmd: &mut OrderCommand) {
+        let action = cmd.action.expect("IOC order requires action");
+        let price = cmd.price;
+        let size = cmd.size;
+        let reserve_bid_price = cmd.reserve_bid_price;
+
+        let (filled, _) = self.try_match_instantly(action, size, reserve_bid_price, Some(price), cmd);
+        let rejected_size = size - filled;
+        if rejected_size != 0 {
+            Self::attach_reject_event(cmd, rejected_size);
+        }
+    }
+
+    /// 无价格限制地探测撮合满 `size` 所需的总预算。对应 Java `checkBudgetToFill`(`:222-250`)。
+    ///
+    /// 从对侧链头起**按桶粒度**走（不逐 order）：`available = bucket.volume`（该桶剩余总量），
+    /// `size<=available` 时直接返回 `budget + size*price`；否则 `budget += available*price`、
+    /// `size -= available`，用 `bucket.tail.prev` 跳到下一个（更差价）桶继续。链走尽仍未凑够
+    /// `size` → 流动性不足，返回 `i64::MAX` 哨兵（对应 Java `Long.MAX_VALUE`）。
+    ///
+    /// 累加用 `i128` 防止 `available*price`/`budget` 溢出 `i64`（对应 Java `Math.multiplyExact`
+    /// 在溢出时抛异常；这里选择饱和到 `i64::MAX`——效果上等价于"预算不可能满足"，与
+    /// `is_budget_limit_satisfied` 对哨兵值的显式排除语义一致，见下）。
+    fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
+        let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
+        let mut budget: i128 = 0;
+
+        while let Some(idx) = maker {
+            let o = self.order(idx);
+            let price = o.price;
+            let parent = o.parent.expect("maker must have parent bucket");
+            let bucket = self.bucket(parent);
+            let available = bucket.volume;
+
+            if size > available {
+                size -= available;
+                budget += (available as i128) * (price as i128);
+            } else {
+                let total = budget + (size as i128) * (price as i128);
+                return if total > i64::MAX as i128 { i64::MAX } else { total as i64 };
+            }
+
+            // 跳到下一个（更差价）桶：桶内其余 order 已被 `bucket.volume` 一次性计入，
+            // 无需逐 order 遍历（对应 Java `makerOrder = bucket.tail.prev`）。
+            maker = self.order(bucket.tail).prev;
+        }
+
+        i64::MAX // 流动性不足以吃满 size（对应 Java `Long.MAX_VALUE` 哨兵）
+    }
+
+    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本 `calculated<=limit`，
+    /// ASK 要求收入 `calculated>=limit`；`calculated==i64::MAX`（`check_budget_to_fill` 的
+    /// "流动性不足"哨兵）恒不满足——即使 ASK 分支的 `calculated>=limit` 数值上会成立。
+    fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
+        calculated != i64::MAX
+            && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
+    }
+
+    /// FOK_BUDGET：`check_budget_to_fill` 探测吃满 `size` 所需总预算，`is_budget_limit_satisfied`
+    /// 判定满足则整单撮合（`limit_price=None`，见 Ruling P2-1：镜像 Naive、不设每单价上限），
+    /// 不满足则整单 REJECT（不改簿）。对应 Java `newOrderMatchFokBudget`(`:204-215`)。
+    fn new_order_match_fok_budget(&mut self, cmd: &mut OrderCommand) {
+        let action = cmd.action.expect("FOK_BUDGET order requires action");
+        let size = cmd.size;
+        let limit = cmd.price;
+        let reserve_bid_price = cmd.reserve_bid_price;
+
+        let budget = self.check_budget_to_fill(action, size);
+
+        if Self::is_budget_limit_satisfied(action, budget, limit) {
+            // 预算已证足够吃满 size：调用不限价的 try_match_instantly（"满足即全成"不变式），
+            // 之后不再 reject。
+            self.try_match_instantly(action, size, reserve_bid_price, None, cmd);
+        } else {
+            Self::attach_reject_event(cmd, size);
+        }
+    }
+
+    /// IOC_BUDGET：仅支持 BID（用预算上限买）；ASK 语义模糊，整单 REJECT（同 Naive）。
+    /// 对应 Java `newOrderMatchIocBudget`(`:133-145`)。
+    fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
+        let action = cmd.action.expect("IOC_BUDGET order requires action");
+        if action != OrderAction::Bid {
+            Self::attach_reject_event(cmd, cmd.size);
+            return;
+        }
+
+        let size = cmd.size;
+        let budget = cmd.price; // product-scale 总预算
+        let reserve_bid_price = cmd.reserve_bid_price;
+
+        let (filled, _) = self.match_against_budget_ioc(size, reserve_bid_price, budget, cmd);
+        let rejected_size = size - filled;
+        if rejected_size != 0 {
+            Self::attach_reject_event(cmd, rejected_size);
+        }
+    }
+
+    /// IOC_BUDGET 专用撮合。**不对应 Java `tryMatchInstantlyWithBudget`(`:381-488`) 的结构**——
+    /// 那个 Java 版本用"每单价<=limitPrice(=cmd.price 复用) + 预算连续递减"的单一 do-while，
+    /// 但已定案、不可回退的 Naive Rust 移植（`OrderBookNaiveImpl::match_against_budget` 配合
+    /// `OrdersBucketNaive::match_forward`）用了完全不同的算法：**无价格上限，且预算上限按
+    /// "每个价位一个独立批次"分配、批次之间不延续、也不重试**。既然规格明确"Direct 必须与
+    /// Naive 外部结果逐位一致"，本函数镜像 Naive 的算法而非 Java 的（在实现过程中通过对拍
+    /// 测试发现两者在"预算批次是否跨桶延续"上存在真实分歧，而非仅是 Ruling P2-1 提到的
+    /// FOK_BUDGET 那种"巧合但等价"——这里不镜像 Naive 会导致真实的成交量/事件分歧，已用
+    /// `ioc_budget_partial_fill_capped_by_budget_matches_naive` 覆盖）：
+    /// - **无价格上限**（对应 Naive `match_against_budget` 没有 `taker_price_limit` 参数）。
+    /// - `batch_remaining==0`（尚未开始，或上一批已耗尽）时，才用"当前 maker 的价 + 当前剩余
+    ///   预算/剩余量"重新计算 `size_cap = remaining.min(affordable)`；`size_cap<=0` → 整体停止
+    ///   撮合（对应 Naive `if size_cap<=0 {break}` 跳出整个外层循环）。
+    /// - 批次内（同价位，可能跨多个 FIFO 挂单）逐单成交，直到批次上限耗尽或该价位挂单耗尽。
+    ///
+    /// **正确性论证（为何不需要"跳过同价位剩余挂单"的显式 skip 逻辑）**：ask 价格链严格递增、
+    /// `remaining_budget` 只减不增。若某次 `batch_remaining` 归零是因为**预算耗尽**（`size_cap`
+    /// 由 `affordable` 而非 `remaining` 决定），则 `remaining_budget_new = remaining_budget -
+    /// size_cap*price < price`（地板除的余数恒小于除数）；无论下一次遇到的 maker 价格与刚才
+    /// 相同还是更差（更高），都满足 `remaining_budget_new < 该价`，故 `affordable=0`、
+    /// `size_cap<=0`，重新计算必然立即整体停止——与 Naive"该价位批次已用完、永不重试"的效果
+    /// **逐位等价**（都不会再产生任何成交），因此可以放心地"每次 `batch_remaining==0` 就直接
+    /// 用当前 maker 重新算一批"，不需要额外记录/跳过"已访问过的价位"。若 `batch_remaining`
+    /// 归零是因为 `remaining`（taker 整体剩余）耗尽，则本轮循环顶部的 `remaining==0` 检查已在
+    /// 下一次迭代前拦下，同样不会误重试。
+    ///
+    /// 因此 `active_order_completed` 语义是"**当前批次**是否耗尽"而非"taker 整体是否成交完"——
+    /// 批次上限 < taker 整体剩余量时两者不同，这是本函数与 `try_match_instantly` 的关键差异。
+    ///
+    /// 仅 BID 会调用本函数（IOC_BUDGET 对 ASK 已在调用方 `new_order_match_ioc_budget` 整单
+    /// reject），故硬编码吃 `ask_price_buckets`/`best_ask`、`bid_gt_ask=true`、
+    /// `bidder_hold_price=taker_reserve_bid_price`（同 Naive 对 taker=BID 的字段选择）。
+    /// 允许部分成交、从不挂单；未成交剩余由调用方走 REJECT。
+    fn match_against_budget_ioc(
+        &mut self,
+        taker_size: i64,
+        taker_reserve_bid_price: i64,
+        mut remaining_budget: i64,
+        cmd: &mut OrderCommand,
+    ) -> (i64, i64) {
+        let mut maker = self.best_ask;
+        if maker.is_none() {
+            return (0, 0);
+        }
+        let mut remaining = taker_size;
+        if remaining == 0 {
+            return (0, 0);
+        }
+
+        let mut taker_filled: i64 = 0;
+        let mut taker_filled_notional: i64 = 0;
+        let mut events: Vec<MatcherTradeEvent> = Vec::new();
+        let mut freed_orders: Vec<usize> = Vec::new();
+
+        // 批次状态：`batch_remaining`=当前批次还能买多少（0 表示尚未开始或上一批已耗尽，
+        // 下一轮循环顶部要用"当前 maker"重新计算）；`price_bucket_tail`=当前批次所在桶的
+        // tail（判断"是否吃穿整个桶"用，每次重新计算批次时刷新）。
+        let mut batch_remaining: i64 = 0;
+        let mut price_bucket_tail: usize = 0;
+
+        loop {
+            if remaining == 0 {
+                break;
+            }
+            let midx = match maker {
+                Some(idx) => idx,
+                None => break,
+            };
+
+            if batch_remaining == 0 {
+                let m_price = self.order(midx).price;
+                let affordable = if m_price == 0 { i64::MAX } else { remaining_budget / m_price };
+                let size_cap = remaining.min(affordable);
+                if size_cap <= 0 {
+                    break;
+                }
+                batch_remaining = size_cap;
+                let parent = self.order(midx).parent.expect("maker must have parent bucket");
+                price_bucket_tail = self.bucket(parent).tail;
+            }
+
+            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id) = {
+                let o = self.order(midx);
+                (o.size, o.filled, o.price, o.parent.expect("maker must have parent bucket"), o.prev, o.uid, o.order_id)
+            };
+
+            let trade_price = m_price;
+            // batch_remaining>0（上面已保证）且挂单必有剩余量（挂单不变式）：trade_size 恒>0。
+            let trade_size = batch_remaining.min(m_size - m_filled_before);
+
+            taker_filled += trade_size;
+            taker_filled_notional += trade_size * trade_price;
+            {
+                let o = self.order_mut(midx);
+                o.filled += trade_size;
+                o.filled_notional += trade_size * trade_price;
+            }
+            self.bucket_mut(m_parent).volume -= trade_size;
+
+            let maker_completed = m_filled_before + trade_size == m_size;
+            if maker_completed {
+                self.bucket_mut(m_parent).num_orders -= 1;
+            }
+
+            remaining -= trade_size;
+            remaining_budget -= trade_size * trade_price;
+            batch_remaining -= trade_size;
+            // 本批次是否耗尽（≠ taker 整体是否成交完——见函数文档）。
+            let active_order_completed = batch_remaining == 0;
+
+            events.push(MatcherTradeEvent {
+                event_type: MatcherEventType::Trade,
+                active_order_completed,
+                maker_order_id: m_order_id,
+                maker_order_completed: maker_completed,
+                price: trade_price,
+                size: trade_size,
+                bid_gt_ask: true,
+                bidder_hold_price: taker_reserve_bid_price,
+                matched_order_uid: m_uid,
+                next: None,
+            });
+
+            if maker_completed {
+                self.order_id_index.remove(&m_order_id);
+                freed_orders.push(midx);
+
+                if midx == price_bucket_tail {
+                    self.ask_price_buckets.remove(&m_price);
+                    self.free_bucket(m_parent);
+                }
+                maker = m_prev;
+            }
+            // !maker_completed：maker 原地不动（留簿、部分成交）；此时 batch_remaining 必为 0
+            // （trade_size=batch_remaining.min(avail)，avail>batch_remaining 时 trade_size=
+            // batch_remaining，减完后归零）；`maker` 保留在这个仍合法、未被摘除的挂单上，
+            // 循环顶部的 `remaining==0` 检查/下一轮的"批次耗尽重算"会按上面的论证正确处理
+            // （重算必然 size_cap<=0 而 break，`maker` 原样成为新 best，绝不会被误"跳过"丢失）。
+        }
+
+        if let Some(midx) = maker {
+            self.order_mut(midx).next = None;
+        }
+        self.best_ask = maker;
+
+        for idx in freed_orders {
+            self.free_order(idx);
+        }
+
         let mut chain: Option<Box<MatcherTradeEvent>> = None;
         for mut ev in events.into_iter().rev() {
             ev.next = chain.take();
@@ -671,13 +938,26 @@ impl Default for OrderBookDirectImpl {
 }
 
 impl IOrderBook for OrderBookDirectImpl {
-    /// 分派 `newOrder`（对应 Java `:106-126`）。本任务（Task 2）只落地 **GTC 无撮合挂单路径**
-    /// （`new_order_place_gtc`）；IOC/IOC_BUDGET/FOK/FOK_BUDGET 及撮合本身留 Task 3，此前恒报
-    /// `MatchingUnsupportedCommand`（同步写回 `cmd.result_code`），保证不 panic。
+    /// 分派 `newOrder`（对应 Java `:106-126`）。Task 2/3 落地了 GTC（挂单+撮合）；本任务
+    /// （Task 4）补齐 IOC/FOK_BUDGET/IOC_BUDGET。裸 FOK 在 Java Direct 侧本身也未落地
+    /// （源码标注 `// TODO FOK support`），故仍走 `_` 分支报 `MatchingUnsupportedCommand`
+    /// （同步写回 `cmd.result_code`），保证不 panic。
     fn new_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let rc = match cmd.order_type {
             Some(OrderType::Gtc) => {
                 self.new_order_place_gtc(cmd);
+                CommandResultCode::Success
+            }
+            Some(OrderType::Ioc) => {
+                self.new_order_match_ioc(cmd);
+                CommandResultCode::Success
+            }
+            Some(OrderType::FokBudget) => {
+                self.new_order_match_fok_budget(cmd);
+                CommandResultCode::Success
+            }
+            Some(OrderType::IocBudget) => {
+                self.new_order_match_ioc_budget(cmd);
                 CommandResultCode::Success
             }
             _ => CommandResultCode::MatchingUnsupportedCommand,
@@ -859,8 +1139,9 @@ mod tests {
 
     #[test]
     fn skeleton_new_order_reports_unsupported_for_unimplemented_types() {
-        // GTC 从本任务起有真实实现（见下方 gtc_* 测试），此处覆盖 Task 2 仍占位的类型
-        // （IOC/IOC_BUDGET/FOK/FOK_BUDGET 撮合留 Task 3），保证骨架不 panic。
+        // GTC/IOC/FOK_BUDGET/IOC_BUDGET 从 Task 2/3/4 起都有真实实现（见下方 gtc_*/ioc_*/
+        // fok_budget_*/ioc_budget_* 测试）；裸 FOK 在 Java Direct 侧本身未落地
+        // （`// TODO FOK support`），此处覆盖它仍占位、保证骨架不 panic。
         let mut book = OrderBookDirectImpl::new();
         let mut cmd = OrderCommand {
             order_id: 1,
@@ -868,7 +1149,7 @@ mod tests {
             price: 100,
             size: 10,
             action: Some(OrderAction::Bid),
-            order_type: Some(OrderType::Ioc),
+            order_type: Some(OrderType::Fok),
             uid: 1,
             ..Default::default()
         };
@@ -1264,6 +1545,351 @@ mod tests {
         assert_eq!(l2.bid_prices, vec![50]);
         assert_eq!(l2.bid_volumes, vec![5]);
         assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    // ---- Task 4: IOC / FOK_BUDGET / IOC_BUDGET（对拍 Naive） ----
+
+    fn taker_cmd(order_id: i64, action: OrderAction, order_type: OrderType, price: i64, size: i64) -> OrderCommand {
+        OrderCommand {
+            order_id,
+            symbol: 1,
+            price,
+            size,
+            action: Some(action),
+            order_type: Some(order_type),
+            uid: order_id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ioc_discards_unfilled_remainder_never_rests_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 5));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 5));
+
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::Ioc, 100, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::Ioc, 100, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event, "IOC 部分成交+拒绝剩余的事件链须与 Naive 逐位一致");
+        assert_eq!(d.result_code, Some(CommandResultCode::Success));
+
+        // 成交 5，剩 5 丢弃、不挂簿。
+        let l2 = direct.fill_l2(10);
+        assert!(l2.ask_prices.is_empty());
+        assert!(l2.bid_prices.is_empty());
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert!(!direct.order_id_index.contains_key(&2));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn ioc_full_fill_leaves_no_reject_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::Ioc, 100, 6);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::Ioc, 100, 6);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert!(ev.next.is_none(), "全部成交不应带 REJECT");
+
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn ioc_no_liquidity_rejects_whole_size_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        let mut d = taker_cmd(1, OrderAction::Bid, OrderType::Ioc, 100, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(1, OrderAction::Bid, OrderType::Ioc, 100, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有 REJECT 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, 10);
+        assert!(!direct.order_id_index.contains_key(&1));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn fok_budget_rejects_when_budget_insufficient_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10)); // 需要 10*100=1000 才能吃满
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::FokBudget, 500, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::FokBudget, 500, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有 REJECT 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, 10);
+        // 簿未改变
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![10]);
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn fok_budget_matches_when_budget_sufficient_crosses_buckets_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        for (id, price, size) in [(1i64, 100i64, 5i64), (2, 200, 5)] {
+            direct.new_order(&mut gtc_cmd(id, OrderAction::Ask, price, size));
+            naive.new_order(&mut gtc_cmd(id, OrderAction::Ask, price, size));
+        }
+        // 需要 5*100 + 5*200 = 1500 才能吃满 size=10。
+        let budget = 1500;
+        let mut d = taker_cmd(3, OrderAction::Bid, OrderType::FokBudget, budget, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(3, OrderAction::Bid, OrderType::FokBudget, budget, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event, "FOK_BUDGET 跨桶成交事件链须与 Naive 逐位一致");
+        let ev1 = d.matcher_event.as_ref().expect("应有第一笔成交");
+        assert_eq!(ev1.price, 100);
+        assert_eq!(ev1.size, 5);
+        let ev2 = ev1.next.as_ref().expect("应有第二笔成交");
+        assert_eq!(ev2.price, 200);
+        assert_eq!(ev2.size, 5);
+        assert!(ev2.next.is_none());
+
+        assert!(direct.fill_l2(10).ask_prices.is_empty());
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn fok_budget_insufficient_liquidity_rejects_matching_naive() {
+        // 总量不足(3<10)，checkBudgetToFill 应返回哨兵(流动性不足)而非某个有限预算值。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 3));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 3));
+
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::FokBudget, i64::MAX, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::FokBudget, i64::MAX, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有 REJECT 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, 10);
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![3]); // 簿未改变
+        direct.validate_internal_state();
+    }
+
+    /// Ruling P2-1 专测：BID FOK_BUDGET 小总预算 vs 高价 ask。Direct 必须镜像 Naive（不复刻
+    /// Java Direct "BID FOK_BUDGET 复用 cmd.price 当每单价上限"的巧合，见 `try_match_instantly`
+    /// 文档 + 规格 §8）。两个子案例都要求 Direct 与 Naive 产生完全一致的结果（同 fill 或同 reject）：
+    /// - 案例 A：预算(500) 远小于唯一 ask 单价(1000)——连 1 个单位都买不起，两者应一致整单 REJECT。
+    /// - 案例 B：预算(5200)恰好覆盖"便宜档(100*2=200)+贵档(5000*1=5000)"，贵档单价(5000)远高于
+    ///   案例 A 的预算量级，验证跨桶后半段仍被正确撮合（FOK_BUDGET 撮合走 `limit_price=None`
+    ///   不设每单价上限），两者应一致整单成交。
+    #[test]
+    fn ruling_p2_1_fok_budget_small_budget_vs_high_priced_ask_matches_naive() {
+        {
+            let mut direct = OrderBookDirectImpl::new();
+            let mut naive = OrderBookNaiveImpl::new();
+            direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 1000, 5));
+            naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 1000, 5));
+
+            let mut d = taker_cmd(2, OrderAction::Bid, OrderType::FokBudget, 500, 1);
+            direct.new_order(&mut d);
+            let mut n = taker_cmd(2, OrderAction::Bid, OrderType::FokBudget, 500, 1);
+            naive.new_order(&mut n);
+
+            assert_eq!(d.matcher_event, n.matcher_event, "案例A：Direct 须与 Naive 一致地整单拒绝");
+            let ev = d.matcher_event.as_ref().expect("应有 REJECT 事件");
+            assert_eq!(ev.event_type, MatcherEventType::Reject);
+            assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+            direct.validate_internal_state();
+        }
+        {
+            let mut direct = OrderBookDirectImpl::new();
+            let mut naive = OrderBookNaiveImpl::new();
+            direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 2));
+            naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 2));
+            direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 5000, 1));
+            naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 5000, 1));
+
+            let budget = 100 * 2 + 5000; // 5200，恰好足够
+            let mut d = taker_cmd(3, OrderAction::Bid, OrderType::FokBudget, budget, 3);
+            direct.new_order(&mut d);
+            let mut n = taker_cmd(3, OrderAction::Bid, OrderType::FokBudget, budget, 3);
+            naive.new_order(&mut n);
+
+            assert_eq!(d.matcher_event, n.matcher_event, "案例B：Direct 须与 Naive 逐位一致地整单成交");
+            let ev1 = d.matcher_event.as_ref().expect("应有第一笔成交");
+            assert_eq!(ev1.event_type, MatcherEventType::Trade);
+            assert_eq!(ev1.price, 100);
+            assert_eq!(ev1.size, 2);
+            let ev2 = ev1.next.as_ref().expect("应有第二笔成交");
+            assert_eq!(ev2.price, 5000);
+            assert_eq!(ev2.size, 1);
+            assert!(ev2.next.is_none());
+
+            assert!(direct.fill_l2(10).ask_prices.is_empty(), "两档全部吃满");
+            assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+            direct.validate_internal_state();
+        }
+    }
+
+    #[test]
+    fn check_budget_to_fill_saturates_on_overflow_instead_of_panicking() {
+        let mut direct = OrderBookDirectImpl::new();
+        // price * size 远超 i64::MAX，验证 i128 累加 + 饱和转换不 panic。
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, i64::MAX / 2, 4));
+        let budget = direct.check_budget_to_fill(OrderAction::Bid, 4);
+        assert_eq!(budget, i64::MAX);
+        // 哨兵值必须被 is_budget_limit_satisfied 显式排除（不因数值恰好 >= limit 而"意外满足"）。
+        assert!(!OrderBookDirectImpl::is_budget_limit_satisfied(OrderAction::Bid, budget, i64::MAX));
+    }
+
+    #[test]
+    fn ioc_budget_partial_fill_capped_by_budget_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10)); // 10 @ 100 = notional 1000 max
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        // 预算 250 只够买 2 个单位（2*100=200 <= 250 < 300）。
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::IocBudget, 250, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::IocBudget, 250, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event, "IOC_BUDGET 预算限量事件链须与 Naive 逐位一致");
+        let head = d.matcher_event.as_ref().expect("应有事件链");
+        assert_eq!(head.event_type, MatcherEventType::Reject);
+        assert_eq!(head.size, 8);
+        let trade = head.next.as_ref().expect("reject 之后应有成交事件");
+        assert_eq!(trade.event_type, MatcherEventType::Trade);
+        assert_eq!(trade.size, 2);
+        assert!(trade.next.is_none());
+
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![8]);
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn ioc_budget_rejects_when_budget_too_small_for_one_unit_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::IocBudget, 99, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::IocBudget, 99, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有 REJECT 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, 10);
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![10]); // 簿未改变
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn ioc_budget_rejects_ask_action_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Bid, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Bid, 100, 10));
+
+        let mut d = taker_cmd(2, OrderAction::Ask, OrderType::IocBudget, 100, 5);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Ask, OrderType::IocBudget, 100, 5);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有 REJECT 事件");
+        assert_eq!(ev.event_type, MatcherEventType::Reject);
+        assert_eq!(ev.size, 5);
+        // 簿未改变(仍是 bid@100 x10)
+        assert_eq!(direct.fill_l2(10).bid_volumes, vec![10]);
+        direct.validate_internal_state();
+    }
+
+    #[test]
+    fn ioc_budget_full_fill_with_sufficient_budget_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+
+        let mut d = taker_cmd(2, OrderAction::Bid, OrderType::IocBudget, 1000, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(2, OrderAction::Bid, OrderType::IocBudget, 1000, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event);
+        let ev = d.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert!(ev.next.is_none(), "全部成交、无 REJECT");
+        assert!(direct.fill_l2(10).ask_prices.is_empty());
+        direct.validate_internal_state();
+    }
+
+    /// 覆盖 `match_against_budget_ioc` 文档中论证的"批次耗尽后同价位剩余挂单不重试"场景：
+    /// 同一价位桶内有两个 FIFO 挂单，预算恰好只够吃完第一个，第二个应原样留簿（不被触碰），
+    /// 且必须成为新的 best_ask（不能因内部实现细节丢失引用）。Direct 与 Naive 须逐位一致。
+    #[test]
+    fn ioc_budget_leaves_untouched_sibling_order_in_same_bucket_as_new_best_matches_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        // 同价 100 两单：order1(size2) 先挂，order2(size5) 后挂（FIFO：先吃 order1）。
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 2));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 2));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+
+        // 预算 200 恰好只够吃 order1(2*100=200)，之后 remaining_budget=0 < 100，批次关闭。
+        let mut d = taker_cmd(3, OrderAction::Bid, OrderType::IocBudget, 200, 10);
+        direct.new_order(&mut d);
+        let mut n = taker_cmd(3, OrderAction::Bid, OrderType::IocBudget, 200, 10);
+        naive.new_order(&mut n);
+
+        assert_eq!(d.matcher_event, n.matcher_event, "同桶内批次关闭后事件链须与 Naive 逐位一致");
+        let head = d.matcher_event.as_ref().expect("应有事件链");
+        assert_eq!(head.event_type, MatcherEventType::Reject);
+        assert_eq!(head.size, 8); // 10 - 2
+        let trade = head.next.as_ref().expect("reject 之后应有成交事件");
+        assert_eq!(trade.event_type, MatcherEventType::Trade);
+        assert_eq!(trade.maker_order_id, 1);
+        assert_eq!(trade.size, 2);
+        assert!(trade.maker_order_completed);
+        assert!(trade.next.is_none(), "order2 不应被触碰");
+
+        // order2 必须原样留在簿上（未被吃、未丢失引用），且成为新的 best_ask。
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
+        assert_eq!(direct.fill_l2(10).ask_prices, vec![100]);
+        assert_eq!(direct.fill_l2(10).ask_volumes, vec![5]);
+        let best = direct.order_id_index.get(&2).copied().expect("order2 应仍在索引中");
+        assert_eq!(direct.order(best).order_id, 2);
+        assert_eq!(direct.order(best).filled, 0, "order2 未被触碰");
         direct.validate_internal_state();
     }
 }
