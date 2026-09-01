@@ -46,7 +46,7 @@ impl OrderBookNaiveImpl {
         let price = cmd.price;
         let size = cmd.size;
 
-        let filled = self.try_match_instantly(action, price, size, cmd);
+        let filled = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
         if filled == size {
             // 完全成交，无需挂单（对应 Java: filledSize == size -> return）
             return;
@@ -79,17 +79,26 @@ impl OrderBookNaiveImpl {
         self.id_index.insert(order_id, (action, price, cmd.uid));
     }
 
-    /// 即时撮合 taker（GTC / IOC / FOK 共用主循环，价格受限）。对应 Java `tryMatchInstantly`。
+    /// 即时撮合 taker（GTC / IOC / FOK / move 共用主循环，价格受限）。对应 Java `tryMatchInstantly`。
     ///
     /// - Bid taker 吃 `ask_buckets` 中价 <= `taker_price`，从最低价开始。
     /// - Ask taker 吃 `bid_buckets` 中价 >= `taker_price`，从最高价开始。
     ///
-    /// 返回 taker 已成交量；撮合产生的 `MatcherTradeEvent` 链（按撮合发生顺序）写入 `cmd.matcher_event`。
+    /// `taker_reserve_bid_price`：taker **自己**的 `reserve_bid_price`（`bidder_hold_price`
+    /// 字段在 taker 是 BID 时取它，见 `match_against` 文档）——**必须显式传入而非从
+    /// `cmd.reserve_bid_price` 读取**：GTC/IOC/FOK 的 taker 就是 `cmd` 本身代表的新单，两者
+    /// 恰好相等，但 `move_order`（P2 Task 7 差分对拍发现的 P1 bug，2026-09-01 修复）的 taker
+    /// 是**已挂在簿上的旧单**，它的 `reserve_bid_price` 与触发 move 的 `cmd`（`MoveOrder`
+    /// 命令，生产环境从不填 `reserve_bid_price`，恒为 0）毫无关系——对照 Java
+    /// `OrderBookNaiveImpl.moveOrder`/`OrdersBucketNaive.match`：`bidderHoldPrice` 恒取
+    /// **taker 自己**（`activeOrder`/`order`）的 `reserveBidPrice`，从不读触发命令的字段，
+    /// `OrderBookDirectImpl::move_order` 的 Rust 移植一直是这样做的，此处对齐。
     fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
         taker_price: i64,
         taker_size: i64,
+        taker_reserve_bid_price: i64,
         cmd: &mut OrderCommand,
     ) -> i64 {
         match taker_action {
@@ -100,6 +109,7 @@ impl OrderBookNaiveImpl {
                 Some(taker_price),
                 taker_size,
                 taker_action,
+                taker_reserve_bid_price,
                 true,
                 cmd,
             ),
@@ -110,6 +120,7 @@ impl OrderBookNaiveImpl {
                 Some(taker_price),
                 taker_size,
                 taker_action,
+                taker_reserve_bid_price,
                 false,
                 cmd,
             ),
@@ -118,10 +129,14 @@ impl OrderBookNaiveImpl {
 
     /// 无价格上限的全量撮合（对应 Java `FOK_BUDGET` 路径：预算已在调用方校验足够，
     /// 直接吃对手侧全部 buckets 直到 `taker_size` 撮合完毕，不做价格过滤）。
+    /// `taker_reserve_bid_price`：同 `try_match_instantly` 文档——taker 自己的 reserve 价
+    /// （当前唯一调用方 `new_order_match_fok_budget` 的 taker 就是 `cmd` 本身，恒等于
+    /// `cmd.reserve_bid_price`，不涉及 move 场景）。
     fn try_match_full(
         &mut self,
         taker_action: OrderAction,
         taker_size: i64,
+        taker_reserve_bid_price: i64,
         cmd: &mut OrderCommand,
     ) -> i64 {
         match taker_action {
@@ -131,6 +146,7 @@ impl OrderBookNaiveImpl {
                 None,
                 taker_size,
                 taker_action,
+                taker_reserve_bid_price,
                 true,
                 cmd,
             ),
@@ -140,6 +156,7 @@ impl OrderBookNaiveImpl {
                 None,
                 taker_size,
                 taker_action,
+                taker_reserve_bid_price,
                 false,
                 cmd,
             ),
@@ -151,12 +168,17 @@ impl OrderBookNaiveImpl {
     ///
     /// `taker_price_limit`：`Some(p)` 表示按价格过滤（GTC/IOC/FOK 主路径）；`None` 表示不限价（FOK_BUDGET，
     /// 预算已由调用方预先校验足够覆盖 `taker_size`）。
+    /// `taker_reserve_bid_price`：taker 自己的 `reserve_bid_price`，由调用方显式传入（见
+    /// `try_match_instantly`/`try_match_full` 文档——不再从 `cmd.reserve_bid_price` 读取，
+    /// 这正是 2026-09-01 修复的 P1 bug：move 场景下两者不相等）。
+    #[allow(clippy::too_many_arguments)]
     fn match_against(
         buckets: &mut BTreeMap<i64, OrdersBucketNaive>,
         id_index: &mut BTreeMap<i64, (OrderAction, i64, i64)>,
         taker_price_limit: Option<i64>,
         taker_size: i64,
         taker_action: OrderAction,
+        taker_reserve_bid_price: i64,
         ascending: bool,
         cmd: &mut OrderCommand,
     ) -> i64 {
@@ -172,11 +194,6 @@ impl OrderBookNaiveImpl {
         let mut filled: i64 = 0;
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut emptied: Vec<i64> = Vec::new();
-
-        // taker 侧的 reserve_bid_price：taker 是 BID 时才有意义（对照 Java
-        // `OrdersBucketNaive.match`：`activeOrder.getReserveBidPrice()`），先取出来避免在
-        // 下面的闭包里与 `cmd`（结尾要写 `cmd.matcher_event`）产生借用冲突。
-        let taker_reserve_bid_price = cmd.reserve_bid_price;
 
         for p in prices {
             if filled == taker_size {
@@ -385,7 +402,7 @@ impl OrderBookNaiveImpl {
         let price = cmd.price;
         let size = cmd.size;
 
-        let filled = self.try_match_instantly(action, price, size, cmd);
+        let filled = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
         let rejected_size = size - filled;
         if rejected_size != 0 {
             Self::attach_reject_event(cmd, rejected_size);
@@ -426,7 +443,7 @@ impl OrderBookNaiveImpl {
 
         let available = self.available_volume_for_match(action, price);
         if available >= size {
-            self.try_match_instantly(action, price, size, cmd);
+            self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
         } else {
             Self::attach_reject_event(cmd, size);
         }
@@ -452,7 +469,7 @@ impl OrderBookNaiveImpl {
 
         match budget {
             Some(calculated) if Self::is_budget_limit_satisfied(action, calculated, limit) => {
-                self.try_match_full(action, size, cmd);
+                self.try_match_full(action, size, cmd.reserve_bid_price, cmd);
             }
             _ => Self::attach_reject_event(cmd, size),
         }
@@ -606,6 +623,19 @@ impl IOrderBook for OrderBookNaiveImpl {
     /// 本移植阶段尚未引入 `SymbolType`/`CoreSymbolSpecification`（见 processors/mod.rs 的 TODO），
     /// 无法区分现货/期货 symbol，因此该守卫推迟到该基础设施落地后再补——现在对所有 BID 移价一律放行。
     /// 见 Task 6 报告 concerns。
+    ///
+    /// **P1 bug 修复（2026-09-01，由 P2 Task 7 Naive↔Direct 差分对拍发现）**：重新撮合时
+    /// taker 是**这笔已挂在簿上的旧单本身**（`order`），它的 `reserve_bid_price` 与触发这次
+    /// move 的 `cmd`（`MoveOrder` 命令）毫无关系——生产环境的 `ExchangeApi::move_order`
+    /// 构造 `MoveOrderRequest` 时压根不填 `reserve_bid_price`（恒为 `Default` 的 0），
+    /// `RiskEngine` R1 对 `MoveOrder` 也无动作。此前误传 `cmd.reserve_bid_price`（恒 0）给
+    /// `try_match_instantly`，导致任何"移价后立即成交"的 BID 单在 TRADE 事件里的
+    /// `bidder_hold_price` 被错误地报成 0（而非该单实际预留的价），进而污染 `RiskEngine`
+    /// 用它计算的 quote 释放/扣费金额（`calculate_amount_bid_taker_fee` 等）——一个真实的
+    /// 资金核算隐患，只是 P3 conservation proptest 的生成器没有 `Move` 变体，此前从未被测到。
+    /// Java `OrderBookNaiveImpl.moveOrder`/`OrdersBucketNaive.match` 与本仓库
+    /// `OrderBookDirectImpl::move_order` 都是传 taker（即被移动的这笔订单）**自己**的
+    /// `reserveBidPrice`——这里改传 `order.reserve_bid_price`，对齐两者。
     fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let new_price = cmd.price;
@@ -634,7 +664,8 @@ impl IOrderBook for OrderBookNaiveImpl {
         // 重新走撮合主路径：taker_size = 订单剩余量（对应 Java `tryMatchInstantly` 以
         // `activeOrder.getFilled()` 为起点累加，此处等价地只喂剩余量、再把返回值叠加到既有 filled 上）。
         let remaining = order.size - order.filled;
-        let matched_now = self.try_match_instantly(action, new_price, remaining, cmd);
+        let matched_now =
+            self.try_match_instantly(action, new_price, remaining, order.reserve_bid_price, cmd);
         let total_filled = order.filled + matched_now;
 
         if total_filled == order.size {
