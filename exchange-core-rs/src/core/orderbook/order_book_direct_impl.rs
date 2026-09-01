@@ -14,11 +14,16 @@
 //! - `symbol_spec`：仅 `moveOrder` 的 `CURRENCY_EXCHANGE_PAIR` 现货风控读取（`:565`）+ 访问器；
 //!   `objectsPool`/`eventsHelper`/`loggingCfg`（纯 Java 对象池/日志）本移植不落地。
 //!
-//! 本任务（P2 Task 1）只落地数据结构 + slab 原语 + 可编译的 `IOrderBook` 骨架：所有撮合/
-//! cancel/reduce/move/L2/hash 逻辑均为占位（Task 2-6 补全），保证 crate 编译、既有 211 个
-//! `cargo test --lib` 用例不受影响。
+//! P2 Task 1 落地了数据结构 + slab 原语 + 可编译的 `IOrderBook` 骨架（撮合/cancel/reduce/move/
+//! hash 仍占位）。**P2 Task 2** 在此基础上补齐：`insert_order`（对应 Java `insertOrder`
+//! `:638-715`，挂单入链+入桶的核心指针手术）、`new_order` 的 GTC **无撮合**挂单路径（对应
+//! Java `newOrderPlaceGtc:148-189`，撮合与 dup-id 拒绝留 Task 3）、`fill_l2`（对应 Java
+//! `fillAsks/fillBids:916-935`，纯桶图迭代不走链，与 `OrderBookNaiveImpl::fill_l2` 逐位一致）、
+//! `validate_internal_state`（对应 Java `validateInternalState:738-849` 的核心子集，供测试/
+//! 后续任务当对拍 oracle 用）。cancel/reduce/move/IOC/FOK*/state_hash 仍占位，留 Task 3-6。
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -193,6 +198,238 @@ impl OrderBookDirectImpl {
     pub fn bucket_mut(&mut self, idx: usize) -> &mut Bucket {
         self.buckets[idx].as_mut().expect("dangling bucket slab index")
     }
+
+    // ---- 挂单入链/入桶 ----
+
+    /// 挂单入链+入桶。对应 Java `insertOrder(order, freeBucket)`(`:638-715`)。
+    ///
+    /// `free_bucket`：仅 moveOrder（Task 4）会传入——`removeOrder` 摘链时若整桶被清空，会把该
+    /// Bucket 槽位"摘出 BTreeMap 但不释放"传回来复用；本任务的 GTC 挂单路径恒传 `None`。
+    ///
+    /// - **情形 A（价位已有桶）**（`:646-669`）：新 order 成为桶的新 `tail`（FIFO 最新）：
+    ///   `old_tail.prev` 指向新 order、`prev_order.next`（若存在）指向新 order、新 order 自己的
+    ///   `next=old_tail, prev=prev_order, parent=bucket`；`bucket.volume += remaining`、
+    ///   `num_orders += 1`。若调用方传了 `free_bucket`（本情形用不上），直接释放回 slab
+    ///   （对应 Java `objectsPool.put`）。
+    /// - **情形 B（价位无桶）**（`:670-714`）：新建/复用一个 Bucket（`tail/volume/num_orders`
+    ///   全部对应新 order），登记进 `ask_price_buckets`/`bid_price_buckets`。然后查"最近的更优价
+    ///   邻桶"：ask 更优=更低价→`range(..price).next_back()`（Java `getLowerValue`）；
+    ///   bid 更优=更高价→`range(price+1..).next()`（Java `getHigherValue`）。
+    ///   - 找到邻桶：插在该邻桶 `tail` 的边界前（`:683-694`），global best 不动。
+    ///   - 没找到：新 order 成为该侧新的 global best（`:696-713`）。
+    ///
+    /// **borrow 处理**：先把需要的标量（`is_ask/price/remaining/old_tail/prev_order` 等）读出到
+    /// 局部变量，再逐个 `order_mut`/`bucket_mut` 写回——不同时持有两个 slab 元素的 `&mut`。
+    pub fn insert_order(&mut self, order_idx: usize, free_bucket: Option<usize>) {
+        let (is_ask, price, remaining) = {
+            let o = self.order(order_idx);
+            (o.action == OrderAction::Ask, o.price, o.size - o.filled)
+        };
+
+        let existing_bucket = if is_ask {
+            self.ask_price_buckets.get(&price).copied()
+        } else {
+            self.bid_price_buckets.get(&price).copied()
+        };
+
+        if let Some(bucket_idx) = existing_bucket {
+            // 情形 A：价位已有桶——新 order 成为新 tail。
+            if let Some(fb) = free_bucket {
+                self.free_bucket(fb);
+            }
+
+            let old_tail = self.bucket(bucket_idx).tail;
+            let prev_order = self.order(old_tail).prev;
+
+            {
+                let b = self.bucket_mut(bucket_idx);
+                b.volume += remaining;
+                b.num_orders += 1;
+                b.tail = order_idx;
+            }
+            self.order_mut(old_tail).prev = Some(order_idx);
+            if let Some(p) = prev_order {
+                self.order_mut(p).next = Some(order_idx);
+            }
+            {
+                let o = self.order_mut(order_idx);
+                o.next = Some(old_tail);
+                o.prev = prev_order;
+                o.parent = Some(bucket_idx);
+            }
+        } else {
+            // 情形 B：价位无桶——新建/复用桶，再接边界。
+            let new_bucket = Bucket { volume: remaining, num_orders: 1, tail: order_idx };
+            let bucket_idx = if let Some(fb) = free_bucket {
+                *self.bucket_mut(fb) = new_bucket;
+                fb
+            } else {
+                self.alloc_bucket(new_bucket)
+            };
+            self.order_mut(order_idx).parent = Some(bucket_idx);
+
+            if is_ask {
+                self.ask_price_buckets.insert(price, bucket_idx);
+            } else {
+                self.bid_price_buckets.insert(price, bucket_idx);
+            }
+
+            let neighbor_bucket = if is_ask {
+                self.ask_price_buckets.range(..price).next_back().map(|(_, &b)| b)
+            } else {
+                self.bid_price_buckets.range((price + 1)..).next().map(|(_, &b)| b)
+            };
+
+            if let Some(neighbor_idx) = neighbor_bucket {
+                // 邻近更优桶存在：插到它的 tail 边界前，best 不动。
+                let lower_tail = self.bucket(neighbor_idx).tail;
+                let prev_order = self.order(lower_tail).prev;
+
+                self.order_mut(lower_tail).prev = Some(order_idx);
+                if let Some(p) = prev_order {
+                    self.order_mut(p).next = Some(order_idx);
+                }
+                let o = self.order_mut(order_idx);
+                o.next = Some(lower_tail);
+                o.prev = prev_order;
+            } else {
+                // 没有更优邻桶：新 order 成为该侧新的 global best。
+                let old_best = if is_ask { self.best_ask } else { self.best_bid };
+                if let Some(ob) = old_best {
+                    self.order_mut(ob).next = Some(order_idx);
+                }
+                if is_ask {
+                    self.best_ask = Some(order_idx);
+                } else {
+                    self.best_bid = Some(order_idx);
+                }
+                let o = self.order_mut(order_idx);
+                o.next = None;
+                o.prev = old_best;
+            }
+        }
+    }
+
+    /// GTC **无撮合**挂单路径。对应 Java `newOrderPlaceGtc`(`:148-189`)——本任务不撮合
+    /// （Task 3 补 `tryMatchInstantly` + 全成不挂 + dup-id 拒绝剩余），假设 `cmd` 不会与簿内
+    /// 挂单交叉。建 `DirectOrder`（`filled=0`）、登记 `order_id_index`、`insert_order`。
+    fn new_order_place_gtc(&mut self, cmd: &OrderCommand) {
+        let order = DirectOrder {
+            order_id: cmd.order_id,
+            price: cmd.price,
+            size: cmd.size,
+            filled: 0,
+            filled_notional: 0,
+            reserve_bid_price: cmd.reserve_bid_price,
+            action: cmd.action.expect("GTC order requires action"),
+            order_type: cmd.order_type.expect("GTC order requires order_type"),
+            command: cmd.command,
+            uid: cmd.uid,
+            timestamp: cmd.timestamp,
+            user_cookie: 0, // OrderCommand（本移植子集）未含 userCookie 字段
+            parent: None,
+            next: None,
+            prev: None,
+        };
+        let idx = self.alloc_order(order);
+        self.order_id_index.insert(cmd.order_id, idx);
+        self.insert_order(idx, None);
+    }
+
+    /// 内部状态校验（测试/对拍用）。对应 Java `validateInternalState`(`:738-849`) 的核心子集
+    /// （§7 不变式 1/2/3/5/7/8/9 的等价形式；完整版留 Task 6）：
+    /// - 每侧 `best.next == None`（若 best 存在）；
+    /// - 从 best 沿 `.prev` 走访问该侧每个 order 恰一次，且相邻两者 `X.prev==Y ⟺ Y.next==X`；
+    /// - 链上每个 order 的 `action` 与所属侧一致；
+    /// - 按 `parent` 聚合：在其 `tail` 处 `bucket.volume == Σ(size-filled)` 且
+    ///   `num_orders == count`，`bucket.tail.price` 与 price-map 的 key 一致；
+    /// - 每价 ↔ 恰一个 Bucket（BTreeMap 图与链可达桶 1:1，用长度比对判定无孤儿/无缺失）；
+    /// - `order_id_index` 的 key 集合 == 两条链上 order_id 的并集（无孤儿）。
+    ///
+    /// 违反任一条直接 panic（清晰消息），供测试当断言用，不在生产路径调用。
+    pub fn validate_internal_state(&self) {
+        self.validate_side(true);
+        self.validate_side(false);
+
+        let mut chain_ids: BTreeSet<i64> = BTreeSet::new();
+        for is_ask in [true, false] {
+            let mut cur = if is_ask { self.best_ask } else { self.best_bid };
+            while let Some(idx) = cur {
+                let o = self.order(idx);
+                assert!(chain_ids.insert(o.order_id), "duplicate order_id {} across chains", o.order_id);
+                cur = o.prev;
+            }
+        }
+        let index_ids: BTreeSet<i64> = self.order_id_index.keys().copied().collect();
+        assert_eq!(
+            chain_ids, index_ids,
+            "order_id_index must exactly equal the union of both chains (no orphans)"
+        );
+    }
+
+    fn validate_side(&self, is_ask: bool) {
+        let side_name = if is_ask { "ask" } else { "bid" };
+        let best = if is_ask { self.best_ask } else { self.best_bid };
+        let buckets_map = if is_ask { &self.ask_price_buckets } else { &self.bid_price_buckets };
+
+        if let Some(best_idx) = best {
+            assert!(
+                self.order(best_idx).next.is_none(),
+                "{side_name} best.next must be None, order_id={}",
+                self.order(best_idx).order_id
+            );
+        }
+
+        let mut visited: BTreeSet<usize> = BTreeSet::new();
+        let mut bucket_volume: BTreeMap<usize, i64> = BTreeMap::new();
+        let mut bucket_count: BTreeMap<usize, i32> = BTreeMap::new();
+
+        let mut cur = best;
+        let mut closer: Option<usize> = None; // 上一轮访问的 order（更靠近 best）
+        while let Some(idx) = cur {
+            assert!(visited.insert(idx), "{side_name} chain revisits slab idx {idx} (cycle?)");
+            let o = self.order(idx);
+
+            if let Some(c) = closer {
+                assert_eq!(
+                    o.next,
+                    Some(c),
+                    "{side_name} chain broken: idx {idx}.next must equal {c} (X.prev==Y ⟺ Y.next==X)"
+                );
+            }
+            assert_eq!(
+                o.action,
+                if is_ask { OrderAction::Ask } else { OrderAction::Bid },
+                "{side_name} chain order_id={} has wrong action",
+                o.order_id
+            );
+
+            let parent = o.parent.unwrap_or_else(|| panic!("{side_name} order_id={} has no parent bucket", o.order_id));
+            *bucket_volume.entry(parent).or_insert(0) += o.size - o.filled;
+            *bucket_count.entry(parent).or_insert(0) += 1;
+
+            closer = Some(idx);
+            cur = o.prev;
+        }
+
+        for (&price, &bucket_idx) in buckets_map.iter() {
+            let b = self.bucket(bucket_idx);
+            assert_eq!(
+                self.order(b.tail).price,
+                price,
+                "{side_name} bucket at price {price} tail.price mismatch"
+            );
+            let vol = bucket_volume.get(&bucket_idx).copied().unwrap_or(0);
+            let cnt = bucket_count.get(&bucket_idx).copied().unwrap_or(0);
+            assert_eq!(b.volume, vol, "{side_name} bucket at price {price} volume mismatch");
+            assert_eq!(b.num_orders, cnt, "{side_name} bucket at price {price} num_orders mismatch");
+        }
+        assert_eq!(
+            buckets_map.len(),
+            bucket_volume.len(),
+            "{side_name} price-bucket map and chain-reachable buckets must be 1:1"
+        );
+    }
 }
 
 impl Default for OrderBookDirectImpl {
@@ -202,12 +439,19 @@ impl Default for OrderBookDirectImpl {
 }
 
 impl IOrderBook for OrderBookDirectImpl {
-    /// 占位（Task 2-6 补全撮合/挂单分派，镜像 Java `newOrder`/`newOrderPlaceGtc`/...）。
-    /// 当前不改动任何簿状态，恒报 `MatchingUnsupportedCommand`（同步写回 `cmd.result_code`），
-    /// 保证编译期骨架不 panic。
+    /// 分派 `newOrder`（对应 Java `:106-126`）。本任务（Task 2）只落地 **GTC 无撮合挂单路径**
+    /// （`new_order_place_gtc`）；IOC/IOC_BUDGET/FOK/FOK_BUDGET 及撮合本身留 Task 3，此前恒报
+    /// `MatchingUnsupportedCommand`（同步写回 `cmd.result_code`），保证不 panic。
     fn new_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
-        cmd.result_code = Some(CommandResultCode::MatchingUnsupportedCommand);
-        CommandResultCode::MatchingUnsupportedCommand
+        let rc = match cmd.order_type {
+            Some(OrderType::Gtc) => {
+                self.new_order_place_gtc(cmd);
+                CommandResultCode::Success
+            }
+            _ => CommandResultCode::MatchingUnsupportedCommand,
+        };
+        cmd.result_code = Some(rc);
+        rc
     }
 
     /// 占位（Task 4 补全，镜像 Java `cancelOrder`）：簿目前恒空，统一按"未知订单"处理。
@@ -225,9 +469,41 @@ impl IOrderBook for OrderBookDirectImpl {
         CommandResultCode::MatchingUnknownOrderId
     }
 
-    /// 占位（Task 5 补全，镜像 Java `fillAsks`/`fillBids`）：恒返回空快照。
-    fn fill_l2(&self, _size: i32) -> L2MarketData {
-        L2MarketData::default()
+    /// L2 快照。对应 Java `fillAsks`/`fillBids`(`:916-935`)：**纯桶图迭代、不走链**——ask 按
+    /// `ask_price_buckets` 升序（最优价最先）、bid 按 `bid_price_buckets` 降序（`.rev()`，最优价
+    /// 最先），每档取 `bucket.tail.price`/`bucket.volume`，按 `size` 截断。`size==0`→零档、
+    /// 负数→不限档、正数→截断到该档数——与 `OrderBookNaiveImpl::fill_l2` 语义逐位一致
+    /// （L2MarketData 本移植未含 `ask_orders`/`bid_orders` 字段，故不填 `num_orders`）。
+    fn fill_l2(&self, size: i32) -> L2MarketData {
+        let take: usize = match size {
+            0 => 0,
+            s if s < 0 => usize::MAX,
+            s => s as usize,
+        };
+
+        let mut ask_prices = Vec::new();
+        let mut ask_volumes = Vec::new();
+        for &bucket_idx in self.ask_price_buckets.values() {
+            if ask_prices.len() == take {
+                break;
+            }
+            let b = self.bucket(bucket_idx);
+            ask_prices.push(self.order(b.tail).price);
+            ask_volumes.push(b.volume);
+        }
+
+        let mut bid_prices = Vec::new();
+        let mut bid_volumes = Vec::new();
+        for &bucket_idx in self.bid_price_buckets.values().rev() {
+            if bid_prices.len() == take {
+                break;
+            }
+            let b = self.bucket(bucket_idx);
+            bid_prices.push(self.order(b.tail).price);
+            bid_volumes.push(b.volume);
+        }
+
+        L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
     }
 
     /// 占位（Task 6 补全，镜像 Java `IOrderBook.stateHash`）：恒返回 0。
@@ -350,7 +626,9 @@ mod tests {
     // ---- IOrderBook 骨架占位：编译 + 不 panic，不做行为断言（Task 2-6 补全后再断言真实语义）----
 
     #[test]
-    fn skeleton_new_order_reports_unsupported_and_does_not_panic() {
+    fn skeleton_new_order_reports_unsupported_for_unimplemented_types() {
+        // GTC 从本任务起有真实实现（见下方 gtc_* 测试），此处覆盖 Task 2 仍占位的类型
+        // （IOC/IOC_BUDGET/FOK/FOK_BUDGET 撮合留 Task 3），保证骨架不 panic。
         let mut book = OrderBookDirectImpl::new();
         let mut cmd = OrderCommand {
             order_id: 1,
@@ -358,7 +636,7 @@ mod tests {
             price: 100,
             size: 10,
             action: Some(OrderAction::Bid),
-            order_type: Some(OrderType::Gtc),
+            order_type: Some(OrderType::Ioc),
             uid: 1,
             ..Default::default()
         };
@@ -394,5 +672,181 @@ mod tests {
     fn skeleton_state_hash_returns_zero() {
         let book = OrderBookDirectImpl::new();
         assert_eq!(book.state_hash(), 0);
+    }
+
+    // ---- Task 2: insertOrder + GTC 挂单 + fill_l2 + validate_internal_state ----
+
+    fn place_gtc(
+        book: &mut OrderBookDirectImpl,
+        order_id: i64,
+        action: OrderAction,
+        price: i64,
+        size: i64,
+    ) {
+        let mut cmd = OrderCommand {
+            order_id,
+            symbol: 1,
+            price,
+            size,
+            action: Some(action),
+            order_type: Some(OrderType::Gtc),
+            uid: 1,
+            ..Default::default()
+        };
+        let rc = book.new_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::Success);
+        assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+    }
+
+    #[test]
+    fn gtc_place_single_ask_becomes_best_and_validates() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+
+        assert_eq!(book.order_id_index.get(&1).copied(), book.best_ask);
+        let best = book.best_ask.expect("best_ask must be set");
+        assert!(book.order(best).next.is_none());
+        assert_eq!(book.order(best).prev, None);
+        book.validate_internal_state();
+    }
+
+    #[test]
+    fn gtc_three_asks_out_of_order_fill_l2_ascending_with_correct_volumes() {
+        // 乱序挂：110 -> 100(best) -> 120，fill_l2 必须按价升序返回。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 110, 5);
+        place_gtc(&mut book, 2, OrderAction::Ask, 100, 7);
+        place_gtc(&mut book, 3, OrderAction::Ask, 120, 3);
+        book.validate_internal_state();
+
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100, 110, 120]);
+        assert_eq!(l2.ask_volumes, vec![7, 5, 3]);
+        assert!(l2.bid_prices.is_empty());
+        assert!(l2.bid_volumes.is_empty());
+
+        // best_ask 必须是价格最低（100）的那个 order。
+        let best = book.best_ask.expect("best_ask must be set");
+        assert_eq!(book.order(best).price, 100);
+        assert!(book.order(best).next.is_none());
+    }
+
+    #[test]
+    fn gtc_bids_out_of_order_fill_l2_descending_with_correct_volumes() {
+        // 乱序挂：90 -> 100(best) -> 80，fill_l2 必须按价降序返回（最高价最优先）。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Bid, 90, 4);
+        place_gtc(&mut book, 2, OrderAction::Bid, 100, 6);
+        place_gtc(&mut book, 3, OrderAction::Bid, 80, 2);
+        book.validate_internal_state();
+
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.bid_prices, vec![100, 90, 80]);
+        assert_eq!(l2.bid_volumes, vec![6, 4, 2]);
+        assert!(l2.ask_prices.is_empty());
+
+        let best = book.best_bid.expect("best_bid must be set");
+        assert_eq!(book.order(best).price, 100);
+        assert!(book.order(best).next.is_none());
+    }
+
+    #[test]
+    fn gtc_same_price_multiple_orders_fifo_tail_and_bucket_aggregation() {
+        // 同价三单依次挂：桶内 tail 必须是最后一个挂入的（FIFO 最新），
+        // num_orders/volume 必须聚合正确。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 5);
+        place_gtc(&mut book, 2, OrderAction::Ask, 100, 7);
+        place_gtc(&mut book, 3, OrderAction::Ask, 100, 3);
+        book.validate_internal_state();
+
+        let bucket_idx = *book.ask_price_buckets.get(&100).expect("bucket at 100 must exist");
+        let bucket = book.bucket(bucket_idx);
+        assert_eq!(bucket.volume, 15);
+        assert_eq!(bucket.num_orders, 3);
+        // tail = 最新挂入 = order_id 3。
+        assert_eq!(book.order(bucket.tail).order_id, 3);
+
+        // 撮合序（沿 .prev 从 best 起）= 最老先撮合：best = 1(最老) -> 2 -> 3(最新/tail)。
+        // 注意：`insertOrder` 情形 A（价位已有桶）从不改写 `bestAsk`/`bestBid`——同价挂多单时
+        // best 恒是该价位第一次建桶时的那个 order（最老），新单只接到桶的“远端”（tail）。
+        let best = book.best_ask.expect("best_ask must be set");
+        assert_eq!(book.order(best).order_id, 1);
+        let second = book.order(best).prev.expect("second order must exist");
+        assert_eq!(book.order(second).order_id, 2);
+        let third = book.order(second).prev.expect("third order must exist");
+        assert_eq!(book.order(third).order_id, 3);
+        assert!(book.order(third).prev.is_none());
+
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100]);
+        assert_eq!(l2.ask_volumes, vec![15]);
+    }
+
+    #[test]
+    fn gtc_mixed_ask_and_bid_chains_are_independent_and_both_validate() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 105, 5);
+        place_gtc(&mut book, 2, OrderAction::Bid, 95, 5);
+        place_gtc(&mut book, 3, OrderAction::Ask, 100, 5);
+        place_gtc(&mut book, 4, OrderAction::Bid, 99, 5);
+        book.validate_internal_state();
+
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.ask_prices, vec![100, 105]);
+        assert_eq!(l2.bid_prices, vec![99, 95]);
+    }
+
+    #[test]
+    fn fill_l2_truncates_to_requested_size() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 1);
+        place_gtc(&mut book, 2, OrderAction::Ask, 101, 1);
+        place_gtc(&mut book, 3, OrderAction::Ask, 102, 1);
+
+        let l2 = book.fill_l2(2);
+        assert_eq!(l2.ask_prices, vec![100, 101]);
+    }
+
+    #[test]
+    fn fill_l2_zero_size_returns_empty_matches_naive_semantics() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        place_gtc(&mut book, 2, OrderAction::Bid, 90, 5);
+
+        let l2 = book.fill_l2(0);
+        assert!(l2.ask_prices.is_empty());
+        assert!(l2.ask_volumes.is_empty());
+        assert!(l2.bid_prices.is_empty());
+        assert!(l2.bid_volumes.is_empty());
+    }
+
+    #[test]
+    fn fill_l2_negative_size_means_unlimited_matches_naive_semantics() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 1);
+        place_gtc(&mut book, 2, OrderAction::Ask, 101, 1);
+
+        let l2 = book.fill_l2(-1);
+        assert_eq!(l2.ask_prices, vec![100, 101]);
+    }
+
+    #[test]
+    #[should_panic(expected = "volume mismatch")]
+    fn validate_internal_state_catches_corrupted_bucket_volume() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        let bucket_idx = *book.ask_price_buckets.get(&100).unwrap();
+        book.bucket_mut(bucket_idx).volume = 999; // 人为破坏不变式
+        book.validate_internal_state();
+    }
+
+    #[test]
+    #[should_panic(expected = "order_id_index must exactly equal")]
+    fn validate_internal_state_catches_orphan_in_order_id_index() {
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        book.order_id_index.insert(999, 0); // 人为造孤儿索引项
+        book.validate_internal_state();
     }
 }
