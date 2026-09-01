@@ -13,11 +13,12 @@
 //! 确定性铁律（设计文档 §5）：uid→profile、symbol→spec 等映射用有序容器；
 //! 任何影响输出的迭代禁用 `HashMap` 迭代序。
 
+pub mod matching_router;
 pub mod risk;
 
 // TODO(port): RiskEngine risk_release（R2）—— reject/reduce 释放（Task 5，已完成）；
 // sell TRADE 链结算（Task 6，已完成，risk.rs::handle_matcher_events_exchange_sell）；
 // buy TRADE 链结算（Task 7，占位 TODO 留在 risk.rs::handler_risk_release）
-// TODO(port): MatchingEngineRouter
+// TODO(port): MatchingEngineRouter（Task 9，已完成，matching_router.rs）
 // TODO(port): liquidation / ADL / funding / loan
 // TODO(port): internal transfer / user profile / symbol & currency spec
