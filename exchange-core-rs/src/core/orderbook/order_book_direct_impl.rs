@@ -284,10 +284,15 @@ impl OrderBookDirectImpl {
                 self.bid_price_buckets.insert(price, bucket_idx);
             }
 
+            // `price.checked_add(1)`：`price==i64::MAX` 时没有更高价可能存在，`range` 应视为
+            // 空区间而非 panic/环绕（P2 Task 2 审阅遗留的 i64::MAX 溢出隐患，Task 6 补上）。
             let neighbor_bucket = if is_ask {
                 self.ask_price_buckets.range(..price).next_back().map(|(_, &b)| b)
             } else {
-                self.bid_price_buckets.range((price + 1)..).next().map(|(_, &b)| b)
+                price
+                    .checked_add(1)
+                    .and_then(|p1| self.bid_price_buckets.range(p1..).next())
+                    .map(|(_, &b)| b)
             };
 
             if let Some(neighbor_idx) = neighbor_bucket {
@@ -929,15 +934,23 @@ impl OrderBookDirectImpl {
         cmd.matcher_event = Some(Box::new(event));
     }
 
-    /// 内部状态校验（测试/对拍用）。对应 Java `validateInternalState`(`:738-849`) 的核心子集
-    /// （§7 不变式 1/2/3/5/7/8/9 的等价形式；完整版留 Task 6）：
-    /// - 每侧 `best.next == None`（若 best 存在）；
-    /// - 从 best 沿 `.prev` 走访问该侧每个 order 恰一次，且相邻两者 `X.prev==Y ⟺ Y.next==X`；
-    /// - 链上每个 order 的 `action` 与所属侧一致；
-    /// - 按 `parent` 聚合：在其 `tail` 处 `bucket.volume == Σ(size-filled)` 且
-    ///   `num_orders == count`，`bucket.tail.price` 与 price-map 的 key 一致；
-    /// - 每价 ↔ 恰一个 Bucket（BTreeMap 图与链可达桶 1:1，用长度比对判定无孤儿/无缺失）；
-    /// - `order_id_index` 的 key 集合 == 两条链上 order_id 的并集（无孤儿）。
+    /// 内部状态校验（测试/对拍用）。对应 Java `validateInternalState`(`:738-849`)，落地 §7
+    /// 全部 10 条不变式（P2 Task 2 只做了子集——3 只查了 tail、4/6/10 缺失——本任务补全）：
+    /// 1. 每侧 `best.next == None`（若 best 存在）；
+    /// 2. 从 best 沿 `.prev` 走访问该侧每个 order 恰一次（无环），且相邻两者
+    ///    `X.prev==Y ⟺ Y.next==X`（价、时严格序由 4/6/10 结构性保证：桶间价格单调 + 桶内
+    ///    FIFO 位置即插入序，见下）；
+    /// 3. **每个** order（不只是 tail）都满足 `order.parent.tail.price == order.price`；
+    /// 4. 跨桶边界价格严格单调（ask 沿 `.prev` 升、bid 沿 `.prev` 降），不允许同价相邻两个
+    ///    order 分属不同桶；
+    /// 5. 每个桶：`bucket.volume == Σ(size-filled)`、`num_orders == count`（聚合整条链后比对，
+    ///    等价于"在 tail 处核对"）；
+    /// 6. 桶边界处 `.prev` 指向的价格与当前桶不同（4 的边界情形，一并验证）；
+    /// 7. 每价 ↔ 恰一个 Bucket——ART 价位图（`ask/bid_price_buckets`）与链可达桶集合**逐个**
+    ///    相同（不仅长度相等，用集合比对防"数量凑巧相等但内容不同"的漏判）；
+    /// 8. `order_id_index` 的 key 集合 == 两条链上 order_id 的并集（无孤儿，双向）；
+    /// 9. 链上每个 order 的 `action` 与所属侧一致；
+    /// 10. 每条链上"即将跨出某个桶"的那个 order（含链尾最后一个）确实是该桶的 `tail`。
     ///
     /// 违反任一条直接 panic（清晰消息），供测试当断言用，不在生产路径调用。
     pub fn validate_internal_state(&self) {
@@ -960,11 +973,15 @@ impl OrderBookDirectImpl {
         );
     }
 
+    /// 单侧（ask 或 bid）不变式 1/2/3/4/5/6/7/9/10 的校验（8 是跨侧的，在
+    /// `validate_internal_state` 里做）。单趟遍历该侧的链，边走边聚合/边比对相邻关系，
+    /// 走完后再核对每个价位桶的聚合值与 ART 图。
     fn validate_side(&self, is_ask: bool) {
         let side_name = if is_ask { "ask" } else { "bid" };
         let best = if is_ask { self.best_ask } else { self.best_bid };
         let buckets_map = if is_ask { &self.ask_price_buckets } else { &self.bid_price_buckets };
 
+        // 不变式 1：best.next == None（若存在）。
         if let Some(best_idx) = best {
             assert!(
                 self.order(best_idx).next.is_none(),
@@ -976,20 +993,27 @@ impl OrderBookDirectImpl {
         let mut visited: BTreeSet<usize> = BTreeSet::new();
         let mut bucket_volume: BTreeMap<usize, i64> = BTreeMap::new();
         let mut bucket_count: BTreeMap<usize, i32> = BTreeMap::new();
+        let mut discovered_buckets: BTreeSet<usize> = BTreeSet::new();
 
         let mut cur = best;
-        let mut closer: Option<usize> = None; // 上一轮访问的 order（更靠近 best）
+        // "closer" 三元组 = 上一轮访问的 order（更靠近 best 一侧）的 (slab idx, parent bucket, price)。
+        let mut closer: Option<(usize, usize, i64)> = None;
         while let Some(idx) = cur {
+            // 不变式 2（前半）：不重复访问同一个 order（无环）。
             assert!(visited.insert(idx), "{side_name} chain revisits slab idx {idx} (cycle?)");
             let o = self.order(idx);
 
-            if let Some(c) = closer {
+            // 不变式 2（后半）：X.prev==Y ⟺ Y.next==X。遍历本身用 `X.prev` 找到 `Y=idx`，
+            // 这里核对反向指针 `Y.next` 确实指回 `X`。
+            if let Some((c_idx, _, _)) = closer {
                 assert_eq!(
                     o.next,
-                    Some(c),
-                    "{side_name} chain broken: idx {idx}.next must equal {c} (X.prev==Y ⟺ Y.next==X)"
+                    Some(c_idx),
+                    "{side_name} chain broken: idx {idx}.next must equal {c_idx} (X.prev==Y ⟺ Y.next==X)"
                 );
             }
+
+            // 不变式 9：链上每个 order 的 action 与所属侧一致。
             assert_eq!(
                 o.action,
                 if is_ask { OrderAction::Ask } else { OrderAction::Bid },
@@ -998,13 +1022,73 @@ impl OrderBookDirectImpl {
             );
 
             let parent = o.parent.unwrap_or_else(|| panic!("{side_name} order_id={} has no parent bucket", o.order_id));
+            discovered_buckets.insert(parent);
             *bucket_volume.entry(parent).or_insert(0) += o.size - o.filled;
             *bucket_count.entry(parent).or_insert(0) += 1;
 
-            closer = Some(idx);
+            // 不变式 3：EVERY order（不只是 tail）都满足 `order.parent.tail.price == order.price`。
+            let tail_idx = self.bucket(parent).tail;
+            assert_eq!(
+                self.order(tail_idx).price,
+                o.price,
+                "{side_name} order_id={} price {} disagrees with its bucket's tail price",
+                o.order_id,
+                o.price
+            );
+
+            if let Some((c_idx, c_parent, c_price)) = closer {
+                if c_parent != parent {
+                    // 跨桶边界：4（价格严格单调 + 不允许同价异桶相邻）+ 6（边界处价格必不同）
+                    // + 10（刚离开的 order 必须正是它所在桶的 tail）。
+                    assert_ne!(
+                        c_price,
+                        o.price,
+                        "{side_name} adjacent orders in different buckets must not share price {}",
+                        o.price
+                    );
+                    if is_ask {
+                        assert!(
+                            o.price > c_price,
+                            "{side_name} price must strictly increase away from best across bucket boundary ({c_price} -> {})",
+                            o.price
+                        );
+                    } else {
+                        assert!(
+                            o.price < c_price,
+                            "{side_name} price must strictly decrease away from best across bucket boundary ({c_price} -> {})",
+                            o.price
+                        );
+                    }
+                    assert_eq!(
+                        self.bucket(c_parent).tail,
+                        c_idx,
+                        "{side_name} bucket-boundary order idx {c_idx} must be its bucket's tail"
+                    );
+                } else {
+                    // 同桶内相邻 order：价格必须一致（桶内不该混价）。
+                    assert_eq!(
+                        c_price, o.price,
+                        "{side_name} orders sharing a bucket must share the same price"
+                    );
+                }
+            }
+
+            closer = Some((idx, parent, o.price));
             cur = o.prev;
         }
 
+        // 不变式 10（链尾）：走到链尽头，最后一个 order 也必须是它所在桶的 tail
+        // （对应链上最远离 best 的那个桶的边界，循环体内的"跨桶边界"分支覆盖不到链尾这一次）。
+        if let Some((last_idx, last_parent, _)) = closer {
+            assert_eq!(
+                self.bucket(last_parent).tail,
+                last_idx,
+                "{side_name} farthest-from-best order idx {last_idx} must be its bucket's tail"
+            );
+        }
+
+        // 不变式 5：每个价位桶的聚合 volume/num_orders 与整条链上归属该桶的 order 汇总一致；
+        // 同时核对 `bucket.tail.price` 与 ART 价位图的 key 自洽。
         for (&price, &bucket_idx) in buckets_map.iter() {
             let b = self.bucket(bucket_idx);
             assert_eq!(
@@ -1017,10 +1101,14 @@ impl OrderBookDirectImpl {
             assert_eq!(b.volume, vol, "{side_name} bucket at price {price} volume mismatch");
             assert_eq!(b.num_orders, cnt, "{side_name} bucket at price {price} num_orders mismatch");
         }
+
+        // 不变式 7：每价 ↔ 恰一个 Bucket——ART 价位图与链可达桶集合逐个相同（集合比对，
+        // 而非仅比较长度，防"数量凑巧相等但内容不同"的漏判：一侧有孤儿桶、另一侧缺桶
+        // 但总数恰好相等的退化情形）。
+        let map_bucket_set: BTreeSet<usize> = buckets_map.values().copied().collect();
         assert_eq!(
-            buckets_map.len(),
-            bucket_volume.len(),
-            "{side_name} price-bucket map and chain-reachable buckets must be 1:1"
+            map_bucket_set, discovered_buckets,
+            "{side_name} price-bucket map and chain-reachable buckets must be exactly 1:1 (orphan bucket either direction)"
         );
     }
 }
@@ -1304,9 +1392,54 @@ impl IOrderBook for OrderBookDirectImpl {
         L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
     }
 
-    /// 占位（Task 6 补全，镜像 Java `IOrderBook.stateHash`）：恒返回 0。
+    /// 确定性状态 hash。**Ruling P2-2（约束）**：必须与 `OrderBookNaiveImpl::state_hash` 对同一
+    /// 逻辑订单簿（相同挂单集合）产出**同一个值**——Task 7 差分属性测试用
+    /// `direct.state_hash() == naive.state_hash()` 当 oracle。
+    ///
+    /// **做法：镜像 Naive 现成公式，不引入共享函数**（Naive 见
+    /// `order_book_naive_impl.rs::state_hash`，其字段选取/常量/折叠方式的取舍原样照抄）：
+    /// `order_hash = ((((17*31+order_id)*31+action.code())*31+price)*31+size)*31+filled)*31
+    /// +reserve_bid_price)*31+uid`（`wrapping_*`，`i64` 全程），外层用同一 `h=h*31+order_hash`
+    /// 滚动折叠，最终 `((h>>32) as i32) ^ (h as i32)` 折成 `i32`（对应 Java `Long.hashCode`）。
+    ///
+    /// 之所以能直接照抄而不用额外适配：Direct 的单链**天然**产出与 Naive 逐位相同的遍历序——
+    /// - ask 侧：`best_ask` 就是最优（最低）ask 价；沿 `.prev` 走是"离 best 越来越远"，即价格
+    ///   单调**上升**；`insert_order` 恒把新 order 接成所在桶的新 `tail`、旧 tail 的 `.prev`
+    ///   指向新 order，故桶内沿 `.prev` 走 = 最老 → 最新（FIFO 插入序）。因此
+    ///   "从 `best_ask` 沿 `.prev` 走"逐位等价于 Naive 的
+    ///   "`ask_buckets.values()`（BTreeMap 升序）× 各桶 `iter_orders()`（FIFO 旧→新）"。
+    /// - bid 侧对称：`best_bid` 是最高价，`.prev` 走向更差（更低）价，等价于 Naive
+    ///   `bid_buckets.values().rev()`（降序）× 同样 FIFO 旧→新。
+    /// - 两侧折叠顺序也一致：先 ask 后 bid，与 Naive 相同。
+    ///
+    /// 因此本函数不必、也没有从 ART/桶图重新构造遍历——直接用两条链的天然遍历序即可。
     fn state_hash(&self) -> i32 {
-        0
+        fn order_hash(o: &DirectOrder) -> i64 {
+            let mut h: i64 = 17;
+            h = h.wrapping_mul(31).wrapping_add(o.order_id);
+            h = h.wrapping_mul(31).wrapping_add(o.action.code() as i64);
+            h = h.wrapping_mul(31).wrapping_add(o.price);
+            h = h.wrapping_mul(31).wrapping_add(o.size);
+            h = h.wrapping_mul(31).wrapping_add(o.filled);
+            h = h.wrapping_mul(31).wrapping_add(o.reserve_bid_price);
+            h = h.wrapping_mul(31).wrapping_add(o.uid);
+            h
+        }
+
+        let mut h: i64 = 0;
+        let mut cur = self.best_ask;
+        while let Some(idx) = cur {
+            let o = self.order(idx);
+            h = h.wrapping_mul(31).wrapping_add(order_hash(o));
+            cur = o.prev;
+        }
+        let mut cur = self.best_bid;
+        while let Some(idx) = cur {
+            let o = self.order(idx);
+            h = h.wrapping_mul(31).wrapping_add(order_hash(o));
+            cur = o.prev;
+        }
+        ((h >> 32) as i32) ^ (h as i32)
     }
 }
 
@@ -2732,6 +2865,179 @@ mod tests {
         book.validate_internal_state();
 
         assert_eq!(book.move_order(&mut move_cmd(4, 4, 100)), CommandResultCode::Success);
+        book.validate_internal_state();
+    }
+
+    // ---- P2 Task 6: state_hash（与 Naive 对齐）+ 完整 validate_internal_state §7 ----
+
+    /// 在同一本 `IOrderBook` 上敲入一批混合 ask/bid、同价多单（FIFO）、跨桶的挂单，
+    /// 再用一笔会穿价的 taker 制造部分成交（非零 `filled`）——用于 state_hash 的
+    /// 确定性/一致性测试：Naive 与 Direct 分别喂同一序列应落在逐位相同的逻辑状态。
+    fn seed_mixed_book<B: IOrderBook>(book: &mut B) {
+        book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        book.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5)); // 同价 FIFO 第二单
+        book.new_order(&mut gtc_cmd(3, OrderAction::Ask, 105, 8));
+        book.new_order(&mut gtc_cmd(4, OrderAction::Bid, 90, 6));
+        book.new_order(&mut gtc_cmd(5, OrderAction::Bid, 90, 3)); // 同价 FIFO 第二单
+        book.new_order(&mut gtc_cmd(6, OrderAction::Bid, 85, 2));
+        // 部分成交：taker 吃掉 order 1 的一部分（size 10 里吃 4），产生非零 filled。
+        book.new_order(&mut taker_cmd(7, OrderAction::Bid, OrderType::Ioc, 100, 4));
+    }
+
+    #[test]
+    fn state_hash_deterministic_for_same_operation_sequence() {
+        let mut a = OrderBookDirectImpl::new();
+        let mut b = OrderBookDirectImpl::new();
+        seed_mixed_book(&mut a);
+        seed_mixed_book(&mut b);
+        a.validate_internal_state();
+        b.validate_internal_state();
+        assert_eq!(a.state_hash(), b.state_hash());
+    }
+
+    #[test]
+    fn state_hash_changes_with_different_book_state() {
+        let mut base = OrderBookDirectImpl::new();
+        seed_mixed_book(&mut base);
+        let h_base = base.state_hash();
+
+        let mut diff_price = OrderBookDirectImpl::new();
+        diff_price.new_order(&mut gtc_cmd(1, OrderAction::Ask, 101, 10)); // 100 -> 101
+        assert_ne!(h_base, diff_price.state_hash());
+
+        let mut diff_size = OrderBookDirectImpl::new();
+        diff_size.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 11)); // 10 -> 11
+        assert_ne!(diff_price.state_hash(), diff_size.state_hash());
+
+        let empty = OrderBookDirectImpl::new();
+        assert_eq!(empty.state_hash(), 0, "空簿两条链都为空，滚动折叠恒为 0");
+        assert_ne!(h_base, empty.state_hash());
+    }
+
+    #[test]
+    fn state_hash_matches_naive_on_identical_logical_book() {
+        // Ruling P2-2：Direct 与 Naive 对同一逻辑订单簿（同一操作序列喂两侧）必须产出同一个
+        // state_hash——Task 7 差分属性测试拿它当 oracle。见 `state_hash` 文档：Direct 天然的
+        // 单链遍历序（best 沿 .prev 走）与 Naive 的桶图遍历序（BTreeMap 升/降序 × FIFO
+        // iter_orders）逐位相同，故直接镜像 Naive 现成公式，不必新增共享函数。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        seed_mixed_book(&mut direct);
+        seed_mixed_book(&mut naive);
+        direct.validate_internal_state();
+
+        assert_eq!(direct.fill_l2(10), naive.fill_l2(10), "先确认两本簿的可观测快照一致");
+        assert_eq!(
+            direct.state_hash(),
+            naive.state_hash(),
+            "Direct 与 Naive 对同一逻辑订单簿必须产出相同 state_hash（Ruling P2-2）"
+        );
+    }
+
+    #[test]
+    fn state_hash_matches_naive_after_only_asks_seeded() {
+        // 单独覆盖"只有一侧非空"的退化情形（另一侧两条链都是 None，折叠不应引入偏差）。
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+        direct.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        direct.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+        direct.new_order(&mut gtc_cmd(3, OrderAction::Ask, 105, 8));
+        naive.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+        naive.new_order(&mut gtc_cmd(2, OrderAction::Ask, 100, 5));
+        naive.new_order(&mut gtc_cmd(3, OrderAction::Ask, 105, 8));
+        assert_eq!(direct.state_hash(), naive.state_hash());
+    }
+
+    /// 定位一个已挂 order 的 slab idx（测试专用，走 `order_id_index`）。
+    fn slab_idx_of(book: &OrderBookDirectImpl, order_id: i64) -> usize {
+        *book.order_id_index.get(&order_id).unwrap()
+    }
+
+    #[test]
+    #[should_panic(expected = "disagrees with its bucket's tail price")]
+    fn validate_internal_state_catches_non_tail_order_price_disagreeing_with_bucket() {
+        // 不变式 3 要求"每个" order（不只是 tail）都满足 parent.tail.price==order.price。
+        // Task 2 版本只在 ART 图遍历里核对 tail 自己，故这里专门破坏一个**非 tail** 的
+        // order（order 1，桶内两单中先挂入、更靠近 best 的那个）的 price 字段。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        place_gtc(&mut book, 2, OrderAction::Ask, 100, 5); // 同价第二单，成为新 tail
+        let idx1 = slab_idx_of(&book, 1);
+        book.order_mut(idx1).price = 999; // 只改字段，不动桶/索引——制造"非 tail 价格不一致"
+        book.validate_internal_state();
+    }
+
+    #[test]
+    #[should_panic(expected = "price must strictly increase away from best across bucket boundary")]
+    fn validate_internal_state_catches_price_monotonic_violation_across_bucket_boundary() {
+        // 不变式 4：跨桶边界价格必须严格单调（ask 沿 .prev 应该递增）。构造两个各自独占一个
+        // 桶的 ask（100 是 best，200 更差），然后把 best 那个 order 的 price 字段改成比
+        // 200 还大——它仍是自己桶的唯一 order（tail==自己），不变式 3 对它自身平凡成立，
+        // 但跨到下一个桶时价格反而变小，触发不变式 4。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10); // best，独占一桶
+        place_gtc(&mut book, 2, OrderAction::Ask, 200, 5); // 更差价，独占另一桶
+        let idx1 = slab_idx_of(&book, 1);
+        book.order_mut(idx1).price = 300; // 300 > 200，破坏"离 best 越远价越高"
+        book.validate_internal_state();
+    }
+
+    #[test]
+    #[should_panic(expected = "adjacent orders in different buckets must not share price")]
+    fn validate_internal_state_catches_same_price_adjacent_different_buckets() {
+        // 不变式 4 的另一半：不允许同价的两个 order 分属不同桶（本该合并成同一个桶）。
+        // 构造两个独立的单 order 桶（100、200），把后一个的 price 字段改成与前一个相同，
+        // 但不动 ART 图 key/parent——制造"同价却挂在两个不同桶对象上"的结构性矛盾。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        place_gtc(&mut book, 2, OrderAction::Ask, 200, 5);
+        let idx2 = slab_idx_of(&book, 2);
+        book.order_mut(idx2).price = 100; // 与 order 1 撞价，但仍挂在各自原来的桶上
+        book.validate_internal_state();
+    }
+
+    #[test]
+    #[should_panic(expected = "must be its bucket's tail")]
+    fn validate_internal_state_catches_bucket_tail_pointing_at_wrong_order() {
+        // 不变式 10：每条链上"即将跨出桶"的那个 order 必须真的是 bucket.tail。构造同一桶内
+        // 两单（1 更早/更靠近 best，2 更晚/真正的 tail），然后把 bucket.tail 错指回 1。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        place_gtc(&mut book, 2, OrderAction::Ask, 100, 5); // 真正的 tail
+        let idx1 = slab_idx_of(&book, 1);
+        let idx2 = slab_idx_of(&book, 2);
+        let bucket_idx = *book.ask_price_buckets.get(&100).unwrap();
+        assert_eq!(book.bucket(bucket_idx).tail, idx2, "构造前提：2 才是真正的 tail");
+        book.bucket_mut(bucket_idx).tail = idx1; // 错指回更靠近 best 的那个
+        book.validate_internal_state();
+    }
+
+    #[test]
+    #[should_panic(expected = "price-bucket map and chain-reachable buckets must be exactly 1:1")]
+    fn validate_internal_state_catches_bucket_orphaned_in_art_map() {
+        // 不变式 7：ART 价位图与链可达桶集合必须逐个相同。构造一个"游离"桶——分配了槽位、
+        // 挂进 `ask_price_buckets`，但它的 tail 指向一个从未接入任何链（next/prev 均为
+        // None）的 order，因此永远不会被 best->.prev 遍历发现，属于纯粹的图侧孤儿。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10); // 建立一个正常、可达的桶做对照
+
+        let orphan_order_idx = book.alloc_order(sample_order(999, 12345, 0));
+        let orphan_bucket_idx = book.alloc_bucket(sample_bucket(orphan_order_idx));
+        // volume/num_orders 都留 0——不接入任何链，聚合值天然是 0，不会在"每桶聚合值"那一步
+        // 先被拦下，专门用来触达不变式 7 的集合比对。
+        book.ask_price_buckets.insert(12345, orphan_bucket_idx);
+        book.validate_internal_state();
+    }
+
+    #[test]
+    #[should_panic(expected = "has wrong action")]
+    fn validate_internal_state_catches_wrong_action_in_chain() {
+        // 不变式 9：链上每个 order 的 action 必须与所属侧一致。直接改一个挂在 ask 链上的
+        // order 的 action 字段为 Bid，制造"挂错侧"的矛盾。
+        let mut book = OrderBookDirectImpl::new();
+        place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);
+        let idx1 = slab_idx_of(&book, 1);
+        book.order_mut(idx1).action = OrderAction::Bid;
         book.validate_internal_state();
     }
 }
