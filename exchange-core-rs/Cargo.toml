@@ -10,6 +10,9 @@ rust-version = "1.75"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+proptest = "1"
+
 [profile.release]
 lto = true
 codegen-units = 1

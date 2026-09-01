@@ -23,6 +23,8 @@
 //! 本期单 shard、单线程，`rshard`/`sshard` 恒为 0——具体实现见 [`exchange_core::ExchangeCore`]。
 
 pub mod api;
+#[cfg(test)]
+mod e2e_tests;
 pub mod exchange_core;
 
 pub use api::{CancelOrderRequest, ExchangeApi, MoveOrderRequest, PlaceOrderRequest, ReduceOrderRequest};
