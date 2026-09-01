@@ -1,7 +1,10 @@
 //! 对应 Java: `exchange.core2.core.ExchangeCore`（Disruptor 五段编排入口）。
-//! 设计文档 §4：本期塌缩为**单线程确定性顺序管线**——`process_command` 就是
-//! Java `for cmd in group { risk.preProcess; matching.process; risk.riskRelease }`
-//! 的单命令等价物（单 shard，无 grouping 批边界、无 Journal 落盘）。
+//! 设计文档 §4：本期塌缩为**单线程确定性顺序管线**——`process_command` 镜像 Java
+//! disruptor 的业务阶段编排：`RiskEngine.preProcessCommand`（R1）→
+//! `MatchingEngineRouter.processOrder`（ME）→ `RiskEngine.handlerRiskRelease`（R2）
+//! 的单命令等价物（单 shard，无 grouping 批边界、无 Journal 落盘；`GroupingProcessor`/
+//! `TwoStepMasterProcessor`/`TwoStepSlaveProcessor` 是纯 disruptor 线程编排构造，单线程
+//! 确定性管道下无对应语义，刻意不建模——见 `process_command` 方法文档）。
 //!
 //! # Ruling P3-B（borrow 结构）
 //! `ExchangeCore` 把 `risk`/`matching`/`ups`/`ssp` 都作为**平级字段**直接持有（非
@@ -13,7 +16,6 @@
 //! `fn r1(&mut self, ..)` / `fn r2(&mut self, ..)` 这类私有辅助方法。
 use crate::account::registry::{SymbolSpecificationProvider, UserProfileService};
 use crate::api::command::OrderCommand;
-use crate::api::enums::OrderCommandType;
 use crate::processors::matching_router::MatchingEngineRouter;
 use crate::processors::risk::RiskEngine;
 
@@ -36,45 +38,30 @@ impl ExchangeCore {
         }
     }
 
-    /// 确定性顺序管线（设计文档 §4）。对应 Java 主循环单命令处理：
-    /// - 非交易命令（`is_non_trading()`）→ 整块委托 `RiskEngine` 非交易处理，**不进 ME**
-    ///   （Task 9 review 修复点：非交易命令曾误路由进 matching router）。
-    /// - 交易命令：R1（仅 `PlaceOrder` 调用 `place_order_risk_check`，其余
-    ///   Cancel/Move/Reduce/OrderBookRequest 是 R1 no-op，直落 ME）→ ME
-    ///   （`matching.process_order`，`PlaceOrder` 只有 R1 放行才真正撮合）→ R2
-    ///   （`handler_risk_release`，读 `cmd.matcher_event` 结算/释放冻结）。
+    /// 确定性顺序管线（设计文档 §4）。镜像 Java `ExchangeCore` 的 disruptor 阶段编排——
+    /// Grouping → R1(`RiskEngine.preProcessCommand`) → ME(`MatchingEngineRouter.processOrder`)
+    /// → R2(`RiskEngine.handlerRiskRelease`) → ResultsHandler：
+    /// - **Grouping**：Java 里是 disruptor 的批边界处理器（决定一批命令何时切段落盘/发布），
+    ///   纯线程编排概念，单线程确定性管道下没有对应语义，本移植不建模。
+    /// - **R1** [`RiskEngine::pre_process_command`]：主 switch 路由——非交易命令
+    ///   （`AddUser`/`BalanceAdjustment`/...）整块委托处理；`PlaceOrder` 走风控冻结；
+    ///   Cancel/Move/Reduce/OrderBookRequest 等 R1 无动作。
+    /// - **ME** [`MatchingEngineRouter::process_order`]：按 symbol 路由到 order book；
+    ///   非交易命令在这里 no-op 短路（不查 book、不碰 `result_code`）；`PlaceOrder` 只有
+    ///   R1 放行（`result_code == ValidForMatchingEngine`）才真正撮合。
+    /// - **R2** [`RiskEngine::handler_risk_release`]：结算成交/释放冻结，读 `cmd.matcher_event`
+    ///   并消费之；非交易命令在这里同样 no-op 短路。
+    /// - **ResultsHandler**：Java 里是 disruptor 消费者，把结果发布/回调给调用方；本移植是
+    ///   同步调用模型，`cmd.result_code`/`market_data` 等字段处理完就地可读，调用方
+    ///   （`ExchangeApi`）直接读 `cmd`，无需独立的结果分发阶段。
+    ///
+    /// 现在**所有**命令都依次流过 R1→ME→R2 这三段（不再有"非交易命令整体跳过 ME/R2"的分支），
+    /// 对齐 Java 全部命令都过 disruptor 三个处理器的结构；非交易命令在 ME/R2 各自的 no-op
+    /// 守卫下与旧版"直接跳过"完全等价（见 `matching_router.rs`/`risk.rs` 对应守卫的注释）。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
-        if cmd.command.is_non_trading() {
-            self.dispatch_non_trading(cmd);
-            return;
-        }
-
-        // R1：仅 PlaceOrder 走风控冻结；Cancel/Move/Reduce/OrderBookRequest 无 R1 动作。
-        if cmd.command == OrderCommandType::PlaceOrder {
-            let rc = self.risk.place_order_risk_check(cmd, &mut self.ups, &self.ssp);
-            cmd.result_code = Some(rc);
-        }
-
-        // ME：按 symbol 路由到 order book；PlaceOrder 只有 result_code==ValidForMatchingEngine
-        // 才真正撮合（MatchingEngineRouter 内部门守，Task 9）。
-        self.matching.process_order(cmd);
-
-        // R2：结算成交 / 释放冻结，读 cmd.matcher_event 并消费之。
-        self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
-    }
-
-    /// 对应 Java `RiskEngineCommandDispatcher.dispatch` 非交易分支（现货子集：
-    /// `ADD_USER` / `BALANCE_ADJUSTMENT`）。`BINARY_DATA_COMMAND` 本移植未落地任何处理器
-    /// （P3 现货子集未含二进制批量指令），归为 `MatchingUnsupportedCommand`，不 panic。
-    fn dispatch_non_trading(&mut self, cmd: &mut OrderCommand) {
-        use crate::api::enums::CommandResultCode;
-
-        let rc = match cmd.command {
-            OrderCommandType::AddUser => self.risk.add_user(cmd, &mut self.ups),
-            OrderCommandType::BalanceAdjustment => self.risk.balance_adjustment(cmd, &mut self.ups),
-            _ => CommandResultCode::MatchingUnsupportedCommand,
-        };
-        cmd.result_code = Some(rc);
+        self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
+        self.matching.process_order(cmd); // ME
+        self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
     }
 }
 
@@ -82,7 +69,7 @@ impl ExchangeCore {
 mod tests {
     use super::*;
     use crate::api::command::OrderCommand;
-    use crate::api::enums::{CommandResultCode, OrderAction, OrderType, SymbolType};
+    use crate::api::enums::{CommandResultCode, OrderAction, OrderCommandType, OrderType, SymbolType};
     use crate::api::spec::{CoreCurrencySpecification, CoreSymbolSpecification};
 
     const BASE: i32 = 1;
