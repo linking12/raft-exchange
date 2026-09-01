@@ -7,4 +7,7 @@ pub mod order_book_direct_impl;
 pub mod order_book_naive_impl;
 pub mod orders_bucket_naive;
 
+#[cfg(test)]
+mod direct_naive_diff_tests;
+
 pub use order_book_direct_impl::OrderBookDirectImpl;
