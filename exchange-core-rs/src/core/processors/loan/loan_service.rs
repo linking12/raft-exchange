@@ -408,6 +408,203 @@ impl LoanService {
         self.cross_ltv_bps(up, now, ssp, price_cache, false, false)
     }
 
+    // ================================================================
+    // Task 7：force-liquidate 结算原语 + Cross LIF 接管 —— 参考文档 §2.5/§2.10/§6.3，
+    // Java `LoanService.java:154-166,287-385,412-464`
+    // ================================================================
+
+    /// 对应 Java 静态 `lotsToCollateralAmount`（`:429-432`）：强平张数（lot，base symbolScale）→
+    /// 抵押金额（base currencyScale）——R1 pre-move 记账用，[`Self::collateral_amount_to_lots`]
+    /// 的反向。
+    pub fn lots_to_collateral_amount(
+        lots: i64,
+        spec: &CoreSymbolSpecification,
+        base_spec: &CoreCurrencySpecification,
+    ) -> i64 {
+        arithmetic::symbol_to_currency_scale(lots, spec.base_scale_k, base_spec.currency_scale_k)
+    }
+
+    /// 对应 Java 静态 `collateralAmountToLots`（`:422-426`）：抵押金额（base currencyScale）→
+    /// 强平下单张数（lot，base symbolScale）；不足一张截断为 0——R2 用"是否还有可卖整张"而非
+    /// `collateralAmount==0` 判定尘埃，见参考文档 §2.5。
+    pub fn collateral_amount_to_lots(
+        amount: i64,
+        spec: &CoreSymbolSpecification,
+        base_spec: &CoreCurrencySpecification,
+    ) -> i64 {
+        arithmetic::convert_scale(amount, base_spec.currency_scale_k, spec.base_scale_k)
+    }
+
+    /// 对应 Java `settleLiquidationProceeds`（`:159-166`）：强平所得 `received_quote`（已扣撮合
+    /// takerFee）的统一去向——先按 `loanLiquidationFeeBps` 抽强平费（ceil 向交易所取整，不少收）
+    /// 进 `loan_insurance_fund`，再 `accrue_to` 补计利息后走 [`Self::apply_debt_payment`] 抵债，
+    /// 剩余 overpay 留在 `account`。返回本次结算的利息部分（≥ 0）。Isolated / Cross 强平共用。
+    pub fn settle_liquidation_proceeds<L: LoanRecord>(
+        &mut self,
+        loan: &mut L,
+        account: &mut BTreeMap<i32, i64>,
+        received_quote: i64,
+        now: i64,
+    ) -> i64 {
+        let fee_by_rate = arithmetic::ceil_mul_div(received_quote, self.global_config.loan_liquidation_fee_bps as i64, BPS_SCALE);
+        let liq_fee = received_quote.min(fee_by_rate);
+        let currency = loan.loan_currency();
+        *account.entry(currency).or_insert(0) -= liq_fee;
+        self.add_to_loan_insurance_fund(currency, liq_fee);
+        self.accrue_to(loan, now);
+        self.apply_debt_payment(loan, account, received_quote - liq_fee)
+    }
+
+    /// 对应 Java 静态 `isStructurallySellable`（`:446-464`）：该抵押币是否**结构上可变现**——只看
+    /// 永久能力，不看 `markPrice` 这类临时状态。`collateral_weight_bps > 0`（币种级白名单）且存在
+    /// base=该币、quote=本账户某笔未偿 Cross 债币种的现货对、量够 ≥1 lot（卖了能真的还上债）。
+    /// 与 `LoanLiquidationEngine.pickCrossCollateralToSell` 的永久性条件同源（P6 范围，未移植，
+    /// 本函数独立成立）。
+    pub fn is_structurally_sellable(
+        currency: i32,
+        amount: i64,
+        up: &UserProfile,
+        ssp: &SymbolSpecificationProvider,
+    ) -> bool {
+        if amount <= 0 {
+            return false;
+        }
+        let currency_spec = match ssp.get_currency(currency) {
+            Some(s) if s.collateral_weight_bps > 0 => s,
+            _ => return false,
+        };
+        for loan in up.cross_loans.values() {
+            if loan.outstanding_principal <= 0 {
+                continue;
+            }
+            if let Some(spec) = ssp.find_spot_symbol(currency, loan.loan_currency) {
+                if Self::collateral_amount_to_lots(amount, spec, currency_spec) > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 对应 Java `takeOverCrossLoan`（`:287-385`）：Cross LIF 承接——按 `target_loan_id` 债务占
+    /// 账户总债的比例，从共享抵押池按 `collateralWeightBps` 降序、同权重按 currency 升序**定额**
+    /// 扣走等值抵押（不逐币种等比切，避免尘埃碎片化，见参考文档 §6.3）。**fail-closed**：任一
+    /// 价格/spec 缺失 → 返回 `false`，调用方须保留 loan 原样、不使用失真价格。
+    ///
+    /// 只触碰 `up.cross_loan_collateral`/`up.accounts`（真实扣抵押）与 `self` 的 3 个资金桶
+    /// （LIF/poolAvailable/poolBorrowed/interestRevenue）——**不**清零 `targetLoan` 本身的
+    /// 本金/利息字段，那是调用方（`LoanCommandDispatcher::close_and_recycle_cross_loan`）的职责，
+    /// 逐字对齐 Java：`takeOverCrossLoan` 只管钱，调用方决定何时清账 + 摘出 map。
+    ///
+    /// 排序确定性是硬要求（R2 在所有副本执行，哈希序会导致状态分叉）——`BTreeMap` 天然升序
+    /// 迭代 + 显式按 weight 降序/currency 升序排序，逐字对齐 Java `Arrays.sort` 的比较器。
+    pub fn take_over_cross_loan(
+        &mut self,
+        up: &mut UserProfile,
+        target_loan_id: i64,
+        now: i64,
+        ssp: &SymbolSpecificationProvider,
+        price_cache: &BTreeMap<i32, i64>,
+    ) -> bool {
+        let numeraire_currency = self.global_config.numeraire_currency;
+        if numeraire_currency == 0 {
+            return false;
+        }
+        let numeraire_spec = match ssp.get_currency(numeraire_currency) {
+            Some(s) => s,
+            None => return false,
+        };
+
+        let (target_loan_currency, target_outstanding_principal) = match up.cross_loans.get(&target_loan_id) {
+            Some(l) => (l.loan_currency, l.outstanding_principal),
+            None => return false, // caller guarantees existence; fail-closed if it somehow doesn't
+        };
+        let target_debt = {
+            let loan = up.cross_loans.get(&target_loan_id).expect("checked above");
+            add_exact(loan.outstanding_principal, self.calculate_display_interest(loan, now))
+        };
+        let target_debt_in_num =
+            Self::value_in_numeraire(target_loan_currency, target_debt, numeraire_currency, numeraire_spec, ssp, price_cache);
+        if target_debt_in_num < 0 {
+            return false;
+        }
+
+        let mut total_debt_in_num: i64 = 0;
+        for loan in up.cross_loans.values() {
+            let debt = add_exact(loan.outstanding_principal, self.calculate_display_interest(loan, now));
+            if debt <= 0 {
+                continue;
+            }
+            let v = Self::value_in_numeraire(loan.loan_currency, debt, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if v < 0 {
+                return false;
+            }
+            total_debt_in_num = add_exact(total_debt_in_num, v);
+        }
+        if total_debt_in_num <= 0 {
+            return false;
+        }
+
+        // 抵押币按 weight 降序、currency 升序排定，保证各副本扣减顺序一致。
+        let mut ordered: Vec<i32> = up.cross_loan_collateral.keys().copied().collect();
+        ordered.sort_by(|&a, &b| {
+            let wa = Self::collateral_weight_for_base(a, ssp);
+            let wb = Self::collateral_weight_for_base(b, ssp);
+            wb.cmp(&wa).then(a.cmp(&b))
+        });
+
+        let mut total_collateral_in_num: i64 = 0;
+        for &currency in &ordered {
+            let amount = *up.cross_loan_collateral.get(&currency).unwrap_or(&0);
+            // 零权重币不撑 LTV（口径同 calculateCrossAccountLtvBps），接管也不能取。
+            if amount <= 0 || Self::collateral_weight_for_base(currency, ssp) <= 0 {
+                continue;
+            }
+            let v = Self::value_in_numeraire(currency, amount, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if v < 0 {
+                return false;
+            }
+            total_collateral_in_num = add_exact(total_collateral_in_num, v);
+        }
+
+        // 应取估值 = 账户抵押总值 × 该笔债占比。不足一张的尘埃在 numeraire 估值中截断为 0，
+        // 因而分摊不到、留给借款人——LIF 不囤无法变现的碎屑。
+        let mut remaining_to_take =
+            arithmetic::trunc_mul_div(total_collateral_in_num, target_debt_in_num, total_debt_in_num);
+        for &currency in &ordered {
+            if remaining_to_take <= 0 {
+                break;
+            }
+            let amount = *up.cross_loan_collateral.get(&currency).unwrap_or(&0);
+            if amount <= 0 {
+                continue;
+            }
+            let value_in_num = Self::value_in_numeraire(currency, amount, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if value_in_num <= 0 {
+                continue;
+            }
+            let take = if value_in_num <= remaining_to_take {
+                amount
+            } else {
+                arithmetic::trunc_mul_div(amount, remaining_to_take, value_in_num)
+            };
+            if take <= 0 {
+                continue;
+            }
+            up.add_to_cross_loan_collateral(currency, -take);
+            up.add_to_account(currency, -take); // 抵押原为虚拟锁定，接管时真实扣走
+            self.add_to_loan_insurance_fund(currency, take);
+            remaining_to_take -= value_in_num.min(remaining_to_take);
+        }
+
+        // LIF 代偿债务：池子回血、利息落收入，LIF 转负（负值即已垫资额，非损失）。
+        self.add_to_loan_insurance_fund(target_loan_currency, -target_debt);
+        self.add_to_loan_pool_available(target_loan_currency, target_outstanding_principal);
+        self.add_to_loan_pool_borrowed(target_loan_currency, -target_outstanding_principal);
+        self.add_to_interest_revenue(target_loan_currency, add_exact(target_debt, -target_outstanding_principal));
+        true
+    }
+
     /// 确定性状态 hash：折叠排序后的 4 个资金桶 + `global_config`/`floating_rate`/`fixed_rate`
     /// 各自的 `state_hash()`。风格对齐 `UserProfile::state_hash`（`h=h*31+field` 滚动折叠）；
     /// 不保证与 Java `Objects.hash(...)`-style 数值相等，只保证「同状态 -> 同 hash，不同状态 ->
@@ -884,5 +1081,219 @@ mod tests {
 
         assert_eq!(s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, true), i64::MAX); // fail-closed
         assert_eq!(s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, false), 0); // fail-open
+    }
+
+    // ====================================================================================
+    // Task 7：lots_to_collateral_amount / collateral_amount_to_lots / settle_liquidation_proceeds /
+    // is_structurally_sellable / take_over_cross_loan —— 参考文档 §2.5/§2.10/§6.3
+    // ====================================================================================
+
+    fn spec_scaled(base_scale_k: i64, quote_scale_k: i64) -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id: SPOT_SYMBOL,
+            symbol_type: crate::core::common::symbol_type::SymbolType::CurrencyExchangePair,
+            base_currency: COLLATERAL_CUR,
+            quote_currency: NUMERAIRE_CUR,
+            base_scale_k,
+            quote_scale_k,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn lots_to_collateral_amount_and_back_round_trip_at_scale_identity() {
+        let spec = spec_scaled(1, 1);
+        let base_spec = CoreCurrencySpecification { currency: COLLATERAL_CUR, currency_scale_k: 1, ..Default::default() };
+        assert_eq!(LoanService::lots_to_collateral_amount(10, &spec, &base_spec), 10);
+        assert_eq!(LoanService::collateral_amount_to_lots(10, &spec, &base_spec), 10);
+    }
+
+    /// `base_scale_k=1 < currency_scale_k=100`：1 lot = 100 currency 单位；不足一张的余量
+    /// （dust）在 `collateral_amount_to_lots` 里截断为 0，逐字对齐 Java `currencyToSymbolScale`
+    /// 的整除截断语义（参考文档 §2.5 "用是否还有可卖整张而非 collateralAmount==0 判定"）。
+    #[test]
+    fn collateral_amount_to_lots_truncates_sub_lot_dust() {
+        let spec = spec_scaled(1, 1);
+        let base_spec = CoreCurrencySpecification { currency: COLLATERAL_CUR, currency_scale_k: 100, ..Default::default() };
+        assert_eq!(LoanService::lots_to_collateral_amount(10, &spec, &base_spec), 1_000); // 10 lots -> 1000 units
+        assert_eq!(LoanService::collateral_amount_to_lots(1_050, &spec, &base_spec), 10); // 50 units dust truncated
+        assert_eq!(LoanService::collateral_amount_to_lots(50, &spec, &base_spec), 0); // pure dust -> 0 lots
+    }
+
+    /// 对应 Java `settleLiquidationProceeds`（`:159-166`）：ceil 强平费先抽进 LIF，再
+    /// accrue+applyDebtPayment 抵债，overpay 留 account。
+    #[test]
+    fn settle_liquidation_proceeds_skims_ceil_fee_before_debt_payment() {
+        let mut s = LoanService::new();
+        assert_eq!(s.global_config.loan_liquidation_fee_bps, 200); // 2% default
+        let mut loan = IsolatedLoanRecord::new(1, 1, SPOT_SYMBOL, COLLATERAL_CUR, NUMERAIRE_CUR, 0, 0);
+        loan.outstanding_principal = 500;
+        let mut account: BTreeMap<i32, i64> = BTreeMap::new();
+        account.insert(NUMERAIRE_CUR, 10_000); // pre-existing free balance, unrelated to this settlement
+
+        // received_quote=1000 -> feeByRate=ceil(1000*200/10000)=20 -> liqFee=20 -> fund=980,
+        // principal_part=min(980,500)=500 (capped at outstanding debt) -> 480 overpay stays in account.
+        let interest_paid = s.settle_liquidation_proceeds(&mut loan, &mut account, 1_000, 0);
+
+        assert_eq!(interest_paid, 0);
+        assert_eq!(loan.outstanding_principal, 0);
+        assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), 20); // fee skimmed to LIF
+        assert_eq!(s.get_loan_pool_available(NUMERAIRE_CUR), 500);
+        assert_eq!(*account.get(&NUMERAIRE_CUR).unwrap(), 10_000 - 20 - 500); // fee + principal debited, overpay kept
+    }
+
+    #[test]
+    fn settle_liquidation_proceeds_caps_fee_at_received_quote_when_rate_would_exceed_it() {
+        // Degenerate guard: liqFee = min(receivedQuote, feeByRate) never exceeds what was received.
+        let mut s = LoanService::new();
+        s.global_config.loan_liquidation_fee_bps = 20_000; // pathological >100% rate, still capped
+        let mut loan = IsolatedLoanRecord::new(1, 1, SPOT_SYMBOL, COLLATERAL_CUR, NUMERAIRE_CUR, 0, 0);
+        loan.outstanding_principal = 5;
+        let mut account: BTreeMap<i32, i64> = BTreeMap::new();
+
+        s.settle_liquidation_proceeds(&mut loan, &mut account, 100, 0);
+
+        assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), 100); // fee capped at receivedQuote, not 200
+        assert_eq!(loan.outstanding_principal, 5); // nothing left over to pay debt
+    }
+
+    #[test]
+    fn is_structurally_sellable_requires_positive_weight_and_a_ready_spot_pair_to_outstanding_debt() {
+        let (ssp, _) = cross_fixture(5_000);
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000)); // debt in NUMERAIRE_CUR
+
+        assert!(LoanService::is_structurally_sellable(COLLATERAL_CUR, 1_000, &up, &ssp));
+        assert!(!LoanService::is_structurally_sellable(COLLATERAL_CUR, 0, &up, &ssp)); // amount<=0
+        assert!(!LoanService::is_structurally_sellable(999, 1_000, &up, &ssp)); // no spot pair to any debt currency
+
+        let (ssp0, _) = cross_fixture(0); // weight=0 -> permanently ineligible, regardless of amount/pair
+        assert!(!LoanService::is_structurally_sellable(COLLATERAL_CUR, 1_000, &up, &ssp0));
+    }
+
+    #[test]
+    fn is_structurally_sellable_false_when_no_outstanding_cross_debt() {
+        let (ssp, _) = cross_fixture(5_000);
+        let up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active); // no cross_loans at all
+        assert!(!LoanService::is_structurally_sellable(COLLATERAL_CUR, 1_000, &up, &ssp));
+    }
+
+    #[test]
+    fn take_over_cross_loan_fails_closed_when_numeraire_unconfigured_and_leaves_state_untouched() {
+        let (ssp, price_cache) = cross_fixture(5_000);
+        let mut s = LoanService::new(); // numeraire_currency left at NUMERAIRE_UNSET
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000));
+        up.cross_loan_collateral.insert(COLLATERAL_CUR, 1_000);
+
+        let taken = s.take_over_cross_loan(&mut up, 1, 1_000, &ssp, &price_cache);
+
+        assert!(!taken);
+        assert_eq!(up.cross_loans.get(&1).unwrap().outstanding_principal, 400); // untouched
+        assert_eq!(up.cross_loan_collateral.get(&COLLATERAL_CUR), Some(&1_000)); // untouched
+        assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), 0);
+    }
+
+    #[test]
+    fn take_over_cross_loan_fails_closed_when_a_debt_currency_price_is_missing() {
+        let mut ssp = SymbolSpecificationProvider::new();
+        ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
+        // debt_currency (3) != NUMERAIRE_CUR and has no registered spot pair to it at all ->
+        // value_in_numeraire returns -1 (unlike using NUMERAIRE_CUR itself as the debt currency,
+        // which would hit the same-currency identity shortcut and never need a price at all).
+        let debt_currency = 3;
+        let price_cache: BTreeMap<i32, i64> = BTreeMap::new();
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        let mut loan = CrossLoanRecord::new(1, 1, SPOT_SYMBOL, debt_currency, 0, 1_000);
+        loan.outstanding_principal = 400;
+        up.cross_loans.insert(1, loan);
+
+        let taken = s.take_over_cross_loan(&mut up, 1, 1_000, &ssp, &price_cache);
+
+        assert!(!taken);
+        assert_eq!(up.cross_loans.get(&1).unwrap().outstanding_principal, 400); // untouched
+    }
+
+    /// 完整承接路径：**账户内有第二笔（未被清算的）Cross 债**，让 target 只占总债务的一部分
+    /// （400/1000=40%），从而定额扣抵押只取走"该笔债占比"而非账户全部抵押——展示
+    /// pro-rata 分摊而非"取走恰好覆盖 target 债务的量"（单笔账户=100% 占比时会取走全部抵押，
+    /// 见下一条 `..._takes_the_whole_pool_when_it_is_the_sole_debt` 测试对照）。LIF 两币变化
+    /// （loanCcy 变负 = 已垫资，collateralCcy 变正 = 收到抵押），`up.accounts`/
+    /// `cross_loan_collateral` 真实扣减，不触碰 `targetLoan` 自身字段（那是调用方
+    /// `close_and_recycle_cross_loan` 的职责）。
+    #[test]
+    fn take_over_cross_loan_moves_lif_two_currencies_and_physically_debits_collateral() {
+        let (ssp, price_cache) = cross_fixture(5_000); // markPrice=1, scale-identity
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000)); // target: debt=400 in NUMERAIRE_CUR
+        up.cross_loans.insert(2, cross_loan(1, 2, 600, 1_000)); // other, unaffected loan: debt=600
+        up.cross_loan_collateral.insert(COLLATERAL_CUR, 1_000); // total collateral value = 1000 (debt sum)
+        up.add_to_account(COLLATERAL_CUR, 1_000); // virtual-locked collateral physically still sits in accounts
+
+        let taken = s.take_over_cross_loan(&mut up, 1, 1_000, &ssp, &price_cache);
+
+        assert!(taken);
+        // targetLoan itself untouched by design (caller's job to zero/remove):
+        assert_eq!(up.cross_loans.get(&1).unwrap().outstanding_principal, 400);
+        // The OTHER (non-target) loan is completely untouched — takeover is per-loan, not per-account.
+        assert_eq!(up.cross_loans.get(&2).unwrap().outstanding_principal, 600);
+        // LIF: -400 loanCcy (advanced target's debt only), +400 collateralCcy (target's 40% pro-rata share).
+        assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), -400);
+        assert_eq!(s.get_loan_insurance_fund(COLLATERAL_CUR), 400);
+        // Pool made whole immediately for target's principal only; interestRevenue += (debt-principal) = 0.
+        assert_eq!(s.get_loan_pool_available(NUMERAIRE_CUR), 400);
+        assert_eq!(s.get_loan_pool_borrowed(NUMERAIRE_CUR), -400);
+        assert_eq!(s.get_interest_revenue(NUMERAIRE_CUR), 0);
+        // Physical debit: real accounts + cross_loan_collateral both drop by exactly target's share (400),
+        // leaving the other loan's 60% share (600) untouched in the shared pool.
+        assert_eq!(up.cross_loan_collateral.get(&COLLATERAL_CUR), Some(&600));
+        assert_eq!(up.account(COLLATERAL_CUR), 1_000 - 400);
+    }
+
+    /// 对照：账户只有这一笔 Cross 债时，target 占总债务 100%，pro-rata 公式取走**全部**抵押
+    /// （不封顶在"恰好覆盖自身债务"）——单笔债务即代表整户份额，loan.md §18 "不整户接管"指的是
+    /// 不牵连其他债，而非把 target 的取用额限制在自身债务名义值。
+    #[test]
+    fn take_over_cross_loan_takes_the_whole_pool_when_it_is_the_sole_debt() {
+        let (ssp, price_cache) = cross_fixture(5_000);
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000)); // sole debt=400
+        up.cross_loan_collateral.insert(COLLATERAL_CUR, 1_000); // collateral value far exceeds the debt
+        up.add_to_account(COLLATERAL_CUR, 1_000);
+
+        let taken = s.take_over_cross_loan(&mut up, 1, 1_000, &ssp, &price_cache);
+
+        assert!(taken);
+        assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), -400); // debt absorbed is still just 400
+        assert_eq!(s.get_loan_insurance_fund(COLLATERAL_CUR), 1_000); // but 100% debt-share takes 100% collateral
+        assert_eq!(up.cross_loan_collateral.get(&COLLATERAL_CUR), Some(&0));
+        assert_eq!(up.account(COLLATERAL_CUR), 0);
+    }
+
+    /// 抵押不足以覆盖全部债务时：只取走全部可得抵押（不会扣成负数/超额），剩余债务仍全额记入 LIF
+    /// 亏空——`take_over_cross_loan` 不做"部分接管"，只做"抵押定额封顶"。
+    #[test]
+    fn take_over_cross_loan_caps_collateral_take_at_available_amount_when_undercollateralized() {
+        let (ssp, price_cache) = cross_fixture(10_000); // weight=100%: full raw value counts
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 1_000, 1_000)); // debt=1000, way more than collateral
+        up.cross_loan_collateral.insert(COLLATERAL_CUR, 300); // only 300 available
+        up.add_to_account(COLLATERAL_CUR, 300);
+
+        let taken = s.take_over_cross_loan(&mut up, 1, 1_000, &ssp, &price_cache);
+
+        assert!(taken);
+        assert_eq!(up.cross_loan_collateral.get(&COLLATERAL_CUR), Some(&0)); // fully drained, not negative
+        assert_eq!(up.account(COLLATERAL_CUR), 0);
+        assert_eq!(s.get_loan_insurance_fund(COLLATERAL_CUR), 300); // only what existed
+        assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), -1_000); // full debt still absorbed
     }
 }
