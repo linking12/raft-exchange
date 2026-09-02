@@ -14,6 +14,7 @@
 //! 任何影响输出的迭代禁用 `HashMap` 迭代序。
 
 pub mod journaling;
+pub mod loan;
 pub mod matching_engine_router;
 pub mod risk_engine;
 pub mod symbol_specification_provider;

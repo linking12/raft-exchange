@@ -99,8 +99,8 @@ mod tests {
 
     fn seeded_core() -> ExchangeCore {
         let mut core = ExchangeCore::new();
-        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1 });
-        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1 });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
         assert_eq!(core.ssp.add_symbol(spot_spec()), CommandResultCode::Success);
         core.matching.add_symbol(&spot_spec());
         core

@@ -1,7 +1,7 @@
 /// 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`（现货子集 + P4 Task 1 期货
 /// `create_positions_key` 所需的 `CLOSE_POSITION`/`FORCE_LIQUIDATION` 两个变体 + P4 Task 6
-/// 新增 `LEVERAGE_ADJUSTMENT`/`MARGIN_ADJUSTMENT`/`MARKPRICE_ADJUSTMENT` 三个非交易命令；
-/// 其余期货/借贷/清算变体本移植尚未列入）。
+/// 新增 `LEVERAGE_ADJUSTMENT`/`MARGIN_ADJUSTMENT`/`MARKPRICE_ADJUSTMENT` 三个非交易命令 + P5
+/// Task 1 新增 14 个 loan/pool 变体 + `RepriceLoanRates`；其余期货/清算变体本移植尚未列入）。
 /// `is_non_trading()` / `is_loan()` 对照 Java 的二级 dispatch 门守分类语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
@@ -29,6 +29,45 @@ pub enum OrderCommandType {
     /// （`RiskEngineCommandDispatcher.adjustMarkPrice`；本移植未含 `liquidationEngine
     /// .checkPositions` 清算钩子，P6 落地）。
     MarkpriceAdjustment,
+
+    // ================================================================
+    // P5 Task 1：现货借贷 —— `isLoan()` 恰好覆盖的 14 个码（参考文档 §0/§2.11）。
+    // handler 本身（`LoanCommandDispatcher`）留 Task 2+，这里只落变体 + 分类。
+    // ================================================================
+    /// 码 50：Isolated 开仓。
+    LoanCreate,
+    /// 码 51：Isolated 还款。
+    LoanRepay,
+    /// 码 52：Isolated 追加抵押。
+    LoanAddCollateral,
+    /// 码 53：Isolated 释放抵押。
+    LoanReleaseCollateral,
+    /// 码 54：Isolated 强平（R1 预挪抵押后转入现货撮合，R2 结算见参考文档 §2.5/§5.2）。
+    LoanForceLiquidate,
+    /// 码 55：Cross 追加抵押。
+    LoanCrossAddCollateral,
+    /// 码 56：Cross 提取抵押。
+    LoanCrossWithdrawCollateral,
+    /// 码 57：Cross 借款。
+    LoanCrossBorrow,
+    /// 码 58：Cross 还款。
+    LoanCrossRepay,
+    /// 码 59：Cross 强平（同 `LoanForceLiquidate` 的 R1/R2 两段式，见参考文档 §2.10/§5.2）。
+    LoanCrossForceLiquidate,
+    /// 码 60：借贷池运营充值（`cmd.uid` 携带 shardId，非真实 uid，见参考文档 §2.11）。
+    PoolDeposit,
+    /// 码 61：借贷池运营提取。
+    PoolWithdraw,
+    /// 码 64：保险基金运营充值。
+    LoanIfDeposit,
+    /// 码 65：保险基金运营提取。
+    LoanIfWithdraw,
+
+    /// 对应 Java `REPRICE_LOAN_RATES`（码 63）：**不属于** `isLoan()` 的 14 码；走
+    /// `isNonTrading()` → `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`
+    /// （TwoStep reprice 管线，参考文档 §4.2；本 Task 只落分类，管线本体留 Task 3+）。
+    RepriceLoanRates,
+
     Reset,
     Nop,
 }
@@ -48,18 +87,38 @@ impl OrderCommandType {
             OrderCommandType::LeverageAdjustment => 21,
             OrderCommandType::MarginAdjustment => 23,
             OrderCommandType::MarkpriceAdjustment => 24,
+            OrderCommandType::LoanCreate => 50,
+            OrderCommandType::LoanRepay => 51,
+            OrderCommandType::LoanAddCollateral => 52,
+            OrderCommandType::LoanReleaseCollateral => 53,
+            OrderCommandType::LoanForceLiquidate => 54,
+            OrderCommandType::LoanCrossAddCollateral => 55,
+            OrderCommandType::LoanCrossWithdrawCollateral => 56,
+            OrderCommandType::LoanCrossBorrow => 57,
+            OrderCommandType::LoanCrossRepay => 58,
+            OrderCommandType::LoanCrossForceLiquidate => 59,
+            OrderCommandType::PoolDeposit => 60,
+            OrderCommandType::PoolWithdraw => 61,
+            OrderCommandType::RepriceLoanRates => 63,
+            // 注意：Java 源码里 `LOAN_IF_DEPOSIT` 与尚未移植的 `LIQUIDATION_SCAN` 同码 64——
+            // 这是 Java 既有的重复码（`OrderCommandType.java:49,70`），本移植现货子集未含
+            // `LIQUIDATION_SCAN`，故此处赋值不产生实际冲突；逐字保留该数值，不做"修正"。
+            OrderCommandType::LoanIfDeposit => 64,
+            OrderCommandType::LoanIfWithdraw => 65,
             OrderCommandType::BinaryDataCommand => 91,
             OrderCommandType::Nop => 120,
             OrderCommandType::Reset => 124,
         }
     }
 
-    /// 对应 Java `OrderCommandType.isNonTrading()`：命中即整块委托
+    /// 对应 Java `OrderCommandType.isNonTrading()`（`:110-134`）：命中即整块委托
     /// `RiskEngineCommandDispatcher.dispatch`，主 switch 只留交易/结算/引擎自身生命周期。
     /// 现货子集 + P4 Task 6 期货非交易命令里命中的有 `ADD_USER` / `BALANCE_ADJUSTMENT` /
     /// `BINARY_DATA_COMMAND` / `LEVERAGE_ADJUSTMENT` / `MARGIN_ADJUSTMENT` /
     /// `MARKPRICE_ADJUSTMENT`（Java 全集还含 INTERNAL_TRANSFER/POSITION_MODE_ADJUSTMENT 等
-    /// 未移植变体）。
+    /// 未移植变体）+ P5 Task 1 新增 `RepriceLoanRates`（**不含** 14 个 `is_loan()` 码——
+    /// reprice 走 `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`，loan 命令走独立
+    /// `LoanCommandDispatcher`，两条门守互斥，见参考文档 §0）。
     pub fn is_non_trading(self) -> bool {
         matches!(
             self,
@@ -69,13 +128,32 @@ impl OrderCommandType {
                 | OrderCommandType::LeverageAdjustment
                 | OrderCommandType::MarginAdjustment
                 | OrderCommandType::MarkpriceAdjustment
+                | OrderCommandType::RepriceLoanRates
         )
     }
 
-    /// 对应 Java `OrderCommandType.isLoan()`：本移植现货子集未包含任何 `LOAN_*`/`POOL_*` 变体，
-    /// 因此恒为 `false`（并非分类简化，而是这些变体尚未移植）。
+    /// 对应 Java `OrderCommandType.isLoan()`（`:141-161`）：`RiskEngine.preProcessCommand` 的
+    /// 二级 dispatch 门守，命中则整块委托 `LoanCommandDispatcher.dispatch`，主 switch 里永远看
+    /// 不到 loan 命令。恰好覆盖 14 码（参考文档 §0 清单）；`RepriceLoanRates`（码 63）**不**在
+    /// 其中——它属于 `is_non_trading()`。
     pub fn is_loan(self) -> bool {
-        false
+        matches!(
+            self,
+            OrderCommandType::LoanCreate
+                | OrderCommandType::LoanRepay
+                | OrderCommandType::LoanAddCollateral
+                | OrderCommandType::LoanReleaseCollateral
+                | OrderCommandType::LoanForceLiquidate
+                | OrderCommandType::LoanCrossAddCollateral
+                | OrderCommandType::LoanCrossWithdrawCollateral
+                | OrderCommandType::LoanCrossBorrow
+                | OrderCommandType::LoanCrossRepay
+                | OrderCommandType::LoanCrossForceLiquidate
+                | OrderCommandType::PoolDeposit
+                | OrderCommandType::PoolWithdraw
+                | OrderCommandType::LoanIfDeposit
+                | OrderCommandType::LoanIfWithdraw
+        )
     }
 }
 
@@ -105,6 +183,21 @@ mod tests {
         assert_eq!(OrderCommandType::LeverageAdjustment.code(), 21);
         assert_eq!(OrderCommandType::MarginAdjustment.code(), 23);
         assert_eq!(OrderCommandType::MarkpriceAdjustment.code(), 24);
+        assert_eq!(OrderCommandType::LoanCreate.code(), 50);
+        assert_eq!(OrderCommandType::LoanRepay.code(), 51);
+        assert_eq!(OrderCommandType::LoanAddCollateral.code(), 52);
+        assert_eq!(OrderCommandType::LoanReleaseCollateral.code(), 53);
+        assert_eq!(OrderCommandType::LoanForceLiquidate.code(), 54);
+        assert_eq!(OrderCommandType::LoanCrossAddCollateral.code(), 55);
+        assert_eq!(OrderCommandType::LoanCrossWithdrawCollateral.code(), 56);
+        assert_eq!(OrderCommandType::LoanCrossBorrow.code(), 57);
+        assert_eq!(OrderCommandType::LoanCrossRepay.code(), 58);
+        assert_eq!(OrderCommandType::LoanCrossForceLiquidate.code(), 59);
+        assert_eq!(OrderCommandType::PoolDeposit.code(), 60);
+        assert_eq!(OrderCommandType::PoolWithdraw.code(), 61);
+        assert_eq!(OrderCommandType::RepriceLoanRates.code(), 63);
+        assert_eq!(OrderCommandType::LoanIfDeposit.code(), 64);
+        assert_eq!(OrderCommandType::LoanIfWithdraw.code(), 65);
         assert_eq!(OrderCommandType::BinaryDataCommand.code(), 91);
         assert_eq!(OrderCommandType::Nop.code(), 120);
         assert_eq!(OrderCommandType::Reset.code(), 124);
@@ -120,6 +213,8 @@ mod tests {
         assert!(OrderCommandType::LeverageAdjustment.is_non_trading());
         assert!(OrderCommandType::MarginAdjustment.is_non_trading());
         assert!(OrderCommandType::MarkpriceAdjustment.is_non_trading());
+        // P5：REPRICE_LOAN_RATES 是 isNonTrading，不是 isLoan。
+        assert!(OrderCommandType::RepriceLoanRates.is_non_trading());
         // 主 switch 交易 / 撮合直落命令：不命中。
         assert!(!OrderCommandType::PlaceOrder.is_non_trading());
         assert!(!OrderCommandType::CancelOrder.is_non_trading());
@@ -128,13 +223,41 @@ mod tests {
         assert!(!OrderCommandType::OrderBookRequest.is_non_trading());
         assert!(!OrderCommandType::Reset.is_non_trading());
         assert!(!OrderCommandType::Nop.is_non_trading());
+        // loan 14 码本身不属于 isNonTrading（走独立的 isLoan 门守）。
+        assert!(!OrderCommandType::LoanCreate.is_non_trading());
     }
 
     #[test]
-    fn order_command_type_is_loan_always_false_in_spot_subset() {
-        // 本移植未含 loan 命令变体（Task 2 现货子集），is_loan 恒 false。
+    fn order_command_type_is_loan_covers_exactly_fourteen_codes() {
+        // 恰好 14 个 loan/pool 命令码命中（参考文档 §0 清单）。
+        let loan_codes = [
+            OrderCommandType::LoanCreate,
+            OrderCommandType::LoanRepay,
+            OrderCommandType::LoanAddCollateral,
+            OrderCommandType::LoanReleaseCollateral,
+            OrderCommandType::LoanForceLiquidate,
+            OrderCommandType::LoanCrossAddCollateral,
+            OrderCommandType::LoanCrossWithdrawCollateral,
+            OrderCommandType::LoanCrossBorrow,
+            OrderCommandType::LoanCrossRepay,
+            OrderCommandType::LoanCrossForceLiquidate,
+            OrderCommandType::PoolDeposit,
+            OrderCommandType::PoolWithdraw,
+            OrderCommandType::LoanIfDeposit,
+            OrderCommandType::LoanIfWithdraw,
+        ];
+        assert_eq!(loan_codes.len(), 14);
+        for code in loan_codes {
+            assert!(code.is_loan(), "{code:?} should be is_loan()");
+        }
+
+        // REPRICE_LOAN_RATES 不在 isLoan 的 14 码内——它是 isNonTrading。
+        assert!(!OrderCommandType::RepriceLoanRates.is_loan());
+        // 主 switch 交易 / 非借贷非交易命令：不命中。
         assert!(!OrderCommandType::PlaceOrder.is_loan());
         assert!(!OrderCommandType::BalanceAdjustment.is_loan());
+        assert!(!OrderCommandType::AddUser.is_loan());
+        assert!(!OrderCommandType::MarkpriceAdjustment.is_loan());
     }
 
     #[test]

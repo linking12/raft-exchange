@@ -24,6 +24,35 @@ pub enum CommandResultCode {
     UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame, // -4101
     UserMgmtAccountBalanceAdjustmentNsf,                // -4103
     SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
+
+    // ================================================================
+    // P5 Task 1：现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`
+    // （handler 本身留 Task 2+，这里先落码值，供后续 Task 直接引用）。
+    // ================================================================
+    LoanNotEnabled,          // -6001，spec.loanConfig.initialLtvBps == 0
+    LoanAlreadyExists,       // -6002，loanId 已存在（Isolated / Cross 命名空间独立）
+    LoanNotFound,            // -6003，loanId 不存在
+    LoanUidMismatch,         // -6004，loan.uid ≠ cmd.uid
+    LoanUserSuspended,       // -6005，userStatus == SUSPEND 后拒绝所有 LOAN_* 命令
+    LoanInvalidAmount,       // -6010，amount ≤ 0
+    LoanPrincipalExceedsLimit, // -6011，principal > spec.loanConfig.maxAmount
+    LoanMarkpriceNotReady,   // -6012，markPrice 缺失或 0
+    LoanLtvTooHigh,          // -6020，开仓 LTV 超线（LOAN_CREATE Isolated）
+    LoanLtvTooHighAfterBorrow, // -6021，Cross 借后账户级 LTV 超线（LOAN_CROSS_BORROW）
+    LoanLtvTooHighAfterRelease, // -6022，减 Isolated 抵押后 LTV 超线
+    LoanCrossLtvTooHighAfterWithdraw, // -6023，撤 Cross 抵押后账户级 LTV 超线
+    LoanCollateralInsufficient, // -6030，accounts − calculateLocked 不足以覆盖新抵押量
+    LoanCollateralNotAllowed,  // -6031，currencySpec.collateralWeightBps == 0（Cross 抵押白名单）
+    LoanCollateralExceedsLoan, // -6032，减 Isolated 抵押量 > loan.collateralAmount
+    LoanAccountInsufficient,   // -6040，还款时 accounts − calculateLocked < 应还金额
+    LoanPoolInsufficient,      // -6050，池子不够 / POOL_WITHDRAW 抽资超
+    LoanPoolUtilizationExceeded, // -6051，借出后池子利用率超 loanPoolUtilizationCapBps
+    LoanPoolWrongShard,        // -6052，POOL_DEPOSIT/WITHDRAW 参数级路由错（cmd.uid ∉ [0, N)）
+    LoanIfInsufficient,        // -6053，LOAN_IF_WITHDRAW 提取超过 LIF 该币种余额
+    LoanInvalidConfig,         // -6060，阈值序 / 范围违规（initial 应 < liquidation < 10000 等）
+    LoanInvalidSymbolType,     // -6070，试图给非-CURRENCY_EXCHANGE_PAIR（期货/交割）配置 loan
+    LoanNumeraireNotConfigured, // -6080，Cross BORROW / WITHDRAW fail-close：numeraireCurrency 未设
+    LoanNotImplemented,        // -6099，reserved
 }
 
 impl CommandResultCode {
@@ -53,6 +82,30 @@ impl CommandResultCode {
             CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame => -4101,
             CommandResultCode::UserMgmtAccountBalanceAdjustmentNsf => -4103,
             CommandResultCode::SymbolMgmtSymbolAlreadyExists => -5001,
+            CommandResultCode::LoanNotEnabled => -6001,
+            CommandResultCode::LoanAlreadyExists => -6002,
+            CommandResultCode::LoanNotFound => -6003,
+            CommandResultCode::LoanUidMismatch => -6004,
+            CommandResultCode::LoanUserSuspended => -6005,
+            CommandResultCode::LoanInvalidAmount => -6010,
+            CommandResultCode::LoanPrincipalExceedsLimit => -6011,
+            CommandResultCode::LoanMarkpriceNotReady => -6012,
+            CommandResultCode::LoanLtvTooHigh => -6020,
+            CommandResultCode::LoanLtvTooHighAfterBorrow => -6021,
+            CommandResultCode::LoanLtvTooHighAfterRelease => -6022,
+            CommandResultCode::LoanCrossLtvTooHighAfterWithdraw => -6023,
+            CommandResultCode::LoanCollateralInsufficient => -6030,
+            CommandResultCode::LoanCollateralNotAllowed => -6031,
+            CommandResultCode::LoanCollateralExceedsLoan => -6032,
+            CommandResultCode::LoanAccountInsufficient => -6040,
+            CommandResultCode::LoanPoolInsufficient => -6050,
+            CommandResultCode::LoanPoolUtilizationExceeded => -6051,
+            CommandResultCode::LoanPoolWrongShard => -6052,
+            CommandResultCode::LoanIfInsufficient => -6053,
+            CommandResultCode::LoanInvalidConfig => -6060,
+            CommandResultCode::LoanInvalidSymbolType => -6070,
+            CommandResultCode::LoanNumeraireNotConfigured => -6080,
+            CommandResultCode::LoanNotImplemented => -6099,
         }
     }
 }
@@ -87,5 +140,33 @@ mod tests {
         assert_eq!(CommandResultCode::RiskMarginModeMismatch.code(), -2008);
         assert_eq!(CommandResultCode::RiskMarginPositionNotExists.code(), -2009);
         assert_eq!(CommandResultCode::RiskMarkpriceNotAvailable.code(), -2011);
+    }
+
+    #[test]
+    fn loan_command_result_codes_match_java() {
+        assert_eq!(CommandResultCode::LoanNotEnabled.code(), -6001);
+        assert_eq!(CommandResultCode::LoanAlreadyExists.code(), -6002);
+        assert_eq!(CommandResultCode::LoanNotFound.code(), -6003);
+        assert_eq!(CommandResultCode::LoanUidMismatch.code(), -6004);
+        assert_eq!(CommandResultCode::LoanUserSuspended.code(), -6005);
+        assert_eq!(CommandResultCode::LoanInvalidAmount.code(), -6010);
+        assert_eq!(CommandResultCode::LoanPrincipalExceedsLimit.code(), -6011);
+        assert_eq!(CommandResultCode::LoanMarkpriceNotReady.code(), -6012);
+        assert_eq!(CommandResultCode::LoanLtvTooHigh.code(), -6020);
+        assert_eq!(CommandResultCode::LoanLtvTooHighAfterBorrow.code(), -6021);
+        assert_eq!(CommandResultCode::LoanLtvTooHighAfterRelease.code(), -6022);
+        assert_eq!(CommandResultCode::LoanCrossLtvTooHighAfterWithdraw.code(), -6023);
+        assert_eq!(CommandResultCode::LoanCollateralInsufficient.code(), -6030);
+        assert_eq!(CommandResultCode::LoanCollateralNotAllowed.code(), -6031);
+        assert_eq!(CommandResultCode::LoanCollateralExceedsLoan.code(), -6032);
+        assert_eq!(CommandResultCode::LoanAccountInsufficient.code(), -6040);
+        assert_eq!(CommandResultCode::LoanPoolInsufficient.code(), -6050);
+        assert_eq!(CommandResultCode::LoanPoolUtilizationExceeded.code(), -6051);
+        assert_eq!(CommandResultCode::LoanPoolWrongShard.code(), -6052);
+        assert_eq!(CommandResultCode::LoanIfInsufficient.code(), -6053);
+        assert_eq!(CommandResultCode::LoanInvalidConfig.code(), -6060);
+        assert_eq!(CommandResultCode::LoanInvalidSymbolType.code(), -6070);
+        assert_eq!(CommandResultCode::LoanNumeraireNotConfigured.code(), -6080);
+        assert_eq!(CommandResultCode::LoanNotImplemented.code(), -6099);
     }
 }

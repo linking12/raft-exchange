@@ -134,7 +134,7 @@ impl ExchangeApi {
     /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。
     /// **必须先于引用它的 symbol 调用**（见模块级文档）。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
-        self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k });
+        self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
     }
 
     /// 直接注册 symbol spec：写 [`SymbolSpecificationProvider`] 并在
