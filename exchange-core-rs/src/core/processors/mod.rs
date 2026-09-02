@@ -15,6 +15,7 @@
 
 pub mod journaling;
 pub mod loan;
+pub mod loan_rate_pricing_processor;
 pub mod matching_engine_router;
 pub mod risk_engine;
 pub mod symbol_specification_provider;

@@ -46,6 +46,15 @@ pub struct OrderCommand {
     pub result_code: Option<CommandResultCode>,
     pub matcher_event: Option<Box<MatcherTradeEvent>>,
     pub market_data: Option<L2MarketData>,
+    /// P5 Task 8 新增：`REPRICE_LOAN_RATES` 专属的 R1→R2 载体（`(currency, util_bps)`，
+    /// currency 升序）。对应 Java 版本靠 `commonByShard[..].amounts`（R1 写）+ `matcherEvent`
+    /// 单链表（merge 写、R2 读）横跨 R1/ME/R2 传递数据；本移植的 `MatcherEventType`/
+    /// `MatcherTradeEvent` 是撮合专用共享类型（多处对其做穷尽匹配），且 ME 层
+    /// （`MatchingEngineRouter`）不持有 `LoanService`，故改用这个命令专属字段承载
+    /// `LoanRatePricingProcessor` R1 collect_input + merge build_matcher_events 的合并结果
+    /// （详见 `loan_rate_pricing_processor.rs` 模块文档"事件载体的移植偏差"）。其余命令类型
+    /// 恒为空 `Vec`，不产生任何影响。
+    pub loan_reprice_events: Vec<(i32, i64)>,
 }
 
 impl OrderCommand {

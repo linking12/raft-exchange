@@ -32,6 +32,7 @@ use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
 use crate::core::processors::loan::loan_service::LoanService;
+use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
 /// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（`CoreArithmeticUtils` 里的
@@ -139,6 +140,7 @@ impl RiskEngine {
                 OrderCommandType::MarginAdjustment => self.margin_adjustment(cmd, ups, ssp),
                 OrderCommandType::LeverageAdjustment => self.leverage_adjustment(cmd, ups, ssp),
                 OrderCommandType::MarkpriceAdjustment => self.markprice_adjustment(cmd, ssp),
+                OrderCommandType::RepriceLoanRates => self.reprice_loan_rates_collect(cmd),
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
             cmd.result_code = Some(rc);
@@ -759,6 +761,15 @@ impl RiskEngine {
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) {
+        // `REPRICE_LOAN_RATES` 是 `is_non_trading()`（见 `OrderCommandType::is_non_trading`），
+        // 但它是本移植目前唯一需要真正 R2 处理的非交易命令（其余非交易命令的最终结果已在 R1
+        // 落定）——必须在下面的通用 `is_non_trading()` 早退**之前**特判，否则 R2 永远跑不到。
+        // 对应 Java `RiskEngine.handlerRiskRelease`（`:906-913`），见 `reprice_loan_rates_apply`
+        // 文档。
+        if cmd.command == OrderCommandType::RepriceLoanRates {
+            self.reprice_loan_rates_apply(cmd);
+            return;
+        }
         if cmd.command.is_non_trading() {
             return;
         }
@@ -1939,6 +1950,47 @@ impl RiskEngine {
     /// 直接写 `last_price_cache`。命令路径请走 [`Self::markprice_adjustment`]。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
         self.last_price_cache.insert(symbol, price);
+    }
+
+    /// `REPRICE_LOAN_RATES` R1：对应 Java `RiskEngineCommandDispatcher` 的
+    /// `case REPRICE_LOAN_RATES: engine.getLoanRatePricingProcessor().collectInput(cmd);`
+    /// （参考文档 §4.2）。
+    ///
+    /// # 路由偏差（相对 Java，刻意记录）
+    /// Java 版本 R1 只做 `collectInput`，随后交给 `MatchingEngineRouter` 的独立
+    /// `LoanRatePricingProcessor` 实例在 ME 段调用 `buildMatcherEvents`（merge）。本移植的
+    /// `MatchingEngineRouter`（`matching_engine_router.rs`）按现有设计只持有各 symbol 的
+    /// order book，不持有 `LoanService`——没有数据可做归并，且它对所有 `is_non_trading()`
+    /// 命令（`REPRICE_LOAN_RATES` 在其中）统一 no-op 短路（详见该文件模块文档）。单 shard 下
+    /// "跨 shard 归并"本身是恒等操作，因此在这里把 R1 `collect_input` 与 merge
+    /// `build_matcher_events` 一次性做完，结果写入 `cmd.loan_reprice_events`（Task 8 新增字段，
+    /// 见 `OrderCommand` 文档），供 R2（[`Self::handler_risk_release`]）消费——数值/顺序/语义
+    /// 与 Java 完全一致，只是"谁在哪一段调用 build_matcher_events"这件事不同。
+    fn reprice_loan_rates_collect(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let shard_data = LoanRatePricingProcessor::collect_input(&self.loan_service);
+        cmd.loan_reprice_events = LoanRatePricingProcessor::build_matcher_events(&[shard_data]);
+        CommandResultCode::Success
+    }
+
+    /// `REPRICE_LOAN_RATES` R2：对应 Java `RiskEngine.handlerRiskRelease`（`:906-913`）。逐个
+    /// `(currency, util_bps)` 事件调用 [`LoanRatePricingProcessor::apply_event`]（内部先
+    /// `advance_accumulator` 后 `reprice_currency`，顺序不可颠倒——见该函数文档），事件循环
+    /// **结束后**统一调用一次 `set_last_reprice_ts`（不是每个事件调一次）。
+    ///
+    /// **空事件早退**：`cmd.loan_reprice_events` 为空（借贷池全空，`build_matcher_events` 没有
+    /// 任何 currency 可报）时**完全不做任何事**，包括不推进 `last_reprice_ts`——对应 Java
+    /// `buildMatcherEvents` 把 `cmd.matcherEvent` 置 `null`，`handlerRiskRelease` 顶层
+    /// `if (mte == null || ...) return false;` 早退，`REPRICE_LOAN_RATES` 专属分支（含
+    /// `setLastRepriceTs`）根本没机会执行。
+    fn reprice_loan_rates_apply(&mut self, cmd: &mut OrderCommand) {
+        let events = std::mem::take(&mut cmd.loan_reprice_events);
+        if events.is_empty() {
+            return;
+        }
+        for (currency, util_bps) in events {
+            LoanRatePricingProcessor::apply_event(&mut self.loan_service, currency, util_bps, cmd.timestamp);
+        }
+        self.loan_service.floating_rate.set_last_reprice_ts(cmd.timestamp);
     }
 
     /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage`（`ADD_LOAN` 分支，
@@ -5413,6 +5465,143 @@ mod tests {
             assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, 25);
             // The invalid symbol section left the spec untouched.
             assert_eq!(ssp.symbols.get(&SYMBOL).unwrap().loan_config, Default::default());
+        }
+    }
+
+    // ================================================================================
+    // P5 Task 8: REPRICE_LOAN_RATES 全管线（R1 pre_process_command → R2
+    // handler_risk_release），对应参考文档 §4.2 + `RiskEngine.java:906-913`。
+    // ================================================================================
+    mod reprice_loan_rates_tests {
+        use super::*;
+        use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
+
+        fn reprice_cmd(timestamp: i64) -> OrderCommand {
+            OrderCommand { command: OrderCommandType::RepriceLoanRates, timestamp, ..Default::default() }
+        }
+
+        fn run_full_pipeline(engine: &mut RiskEngine, cmd: &mut OrderCommand) {
+            let mut ups = UserProfileService::new();
+            let ssp = SymbolSpecificationProvider::new();
+            engine.pre_process_command(cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            engine.handler_risk_release(cmd, &mut ups, &ssp);
+        }
+
+        #[test]
+        fn single_currency_borrowed_and_available_reprices_to_curve_rate_for_computed_utilization() {
+            let mut engine = RiskEngine::new();
+            let cur = 5;
+            engine.loan_service.loan_pool_borrowed.insert(cur, 8_000);
+            engine.loan_service.loan_pool_available.insert(cur, 2_000); // util = 8000 bps (80%)
+            let expected_rate = engine.loan_service.floating_rate.curve_rate_bps(8_000);
+
+            let mut cmd = reprice_cmd(1_000);
+            run_full_pipeline(&mut engine, &mut cmd);
+
+            assert_eq!(
+                engine.loan_service.floating_rate.current_rate_bps_or_base(cur),
+                expected_rate as i32,
+                "R2 必须把 util 过曲线写成新生效利率"
+            );
+            assert_eq!(engine.loan_service.floating_rate.last_reprice_ts, 1_000);
+        }
+
+        #[test]
+        fn advance_accumulator_runs_before_reprice_settling_the_old_interval_at_the_old_rate() {
+            // 冷启动先设一个"旧"生效利率与 last_reprice_ts，模拟"上一次 reprice 之后经过了一段
+            // 时间才做本次 reprice"——`advance_accumulator` 必须用旧利率结清这段旧区间，若顺序
+            // 反了会错误按新利率结算（对应 `FloatingRateModel::advance_accumulator` 文档 + 参考
+            // 文档 §4.2 "must happen before repricing"）。
+            let mut engine = RiskEngine::new();
+            let cur = 3;
+            engine.loan_service.floating_rate.last_reprice_ts = 1_000;
+            engine.loan_service.floating_rate.current_rate_bps.insert(cur, 300); // old rate 3%
+            // util after reprice will be above kink -> new rate very different from 300.
+            engine.loan_service.loan_pool_borrowed.insert(cur, 9_000);
+            engine.loan_service.loan_pool_available.insert(cur, 1_000);
+
+            let mut cmd = reprice_cmd(2_000); // 1000ms elapsed since last_reprice_ts
+            run_full_pipeline(&mut engine, &mut cmd);
+
+            let acc = *engine.loan_service.floating_rate.acc_rate_bps_ms.get(&cur).unwrap();
+            assert_eq!(acc, 300 * 1_000, "旧区间必须按旧利率（300bps）结清");
+
+            let new_rate = engine.loan_service.floating_rate.current_rate_bps_or_base(cur);
+            assert_ne!(new_rate as i64, 300, "sanity: reprice 必须真正改变利率，测试才有意义");
+        }
+
+        #[test]
+        fn multiple_currencies_all_reprice_correctly_regardless_of_processing_order() {
+            let mut engine = RiskEngine::new();
+            // 3 币种，构造成升序处理时互不影响（各自独立的池子/累加器）。
+            for &(cur, borrowed, available) in &[(9, 100, 900), (2, 500, 500), (5, 9_000, 1_000)] {
+                engine.loan_service.loan_pool_borrowed.insert(cur, borrowed);
+                engine.loan_service.loan_pool_available.insert(cur, available);
+            }
+            let expected: Vec<(i32, i64)> = vec![
+                (2, FloatingRateModel::utilization_bps(500, 500)),
+                (5, FloatingRateModel::utilization_bps(9_000, 1_000)),
+                (9, FloatingRateModel::utilization_bps(100, 900)),
+            ];
+
+            let mut cmd = reprice_cmd(4_000);
+            run_full_pipeline(&mut engine, &mut cmd);
+
+            for (cur, util) in expected {
+                let expected_rate = engine.loan_service.floating_rate.curve_rate_bps(util);
+                assert_eq!(
+                    engine.loan_service.floating_rate.current_rate_bps_or_base(cur),
+                    expected_rate as i32,
+                    "currency {cur} 的生效利率必须按其自身 util 算出，不受其它币种/处理顺序影响"
+                );
+            }
+            assert_eq!(engine.loan_service.floating_rate.last_reprice_ts, 4_000, "全部事件处理完后只设一次");
+        }
+
+        #[test]
+        fn last_reprice_ts_is_set_exactly_once_after_the_loop_not_stale_from_before() {
+            let mut engine = RiskEngine::new();
+            engine.loan_service.floating_rate.last_reprice_ts = 1; // pre-existing stale value
+            for &cur in &[1, 2, 3] {
+                engine.loan_service.loan_pool_borrowed.insert(cur, 100);
+                engine.loan_service.loan_pool_available.insert(cur, 100);
+            }
+            let mut cmd = reprice_cmd(9_999);
+            run_full_pipeline(&mut engine, &mut cmd);
+            assert_eq!(engine.loan_service.floating_rate.last_reprice_ts, 9_999);
+        }
+
+        #[test]
+        fn empty_pool_does_not_advance_last_reprice_ts_mirroring_java_null_matcher_event_early_return() {
+            // 借贷池全空 -> build_matcher_events 无 currency 可报 -> R2 完全不做任何事，含不推进
+            // last_reprice_ts（对应 Java `buildMatcherEvents` 空事件时 `cmd.matcherEvent = null`，
+            // `handlerRiskRelease` 顶层 `mte == null` 早退，REPRICE_LOAN_RATES 专属分支根本没机会
+            // 执行——见参考文档 §4.2 及 `reprice_loan_rates_apply` 文档）。
+            let mut engine = RiskEngine::new();
+            engine.loan_service.floating_rate.last_reprice_ts = 42;
+
+            let mut cmd = reprice_cmd(9_000);
+            run_full_pipeline(&mut engine, &mut cmd);
+
+            assert_eq!(engine.loan_service.floating_rate.last_reprice_ts, 42, "空事件早退：last_reprice_ts 保持不变");
+            assert!(cmd.loan_reprice_events.is_empty());
+        }
+
+        #[test]
+        fn cold_start_before_any_reprice_current_rate_falls_back_to_base_then_reprice_sets_real_rate() {
+            let mut engine = RiskEngine::new();
+            let cur = 1;
+            assert_eq!(engine.loan_service.floating_rate.current_rate_bps_or_base(cur), engine.loan_service.floating_rate.base_bps);
+
+            engine.loan_service.loan_pool_borrowed.insert(cur, 4_000);
+            engine.loan_service.loan_pool_available.insert(cur, 4_000); // util = 5000 bps
+            let mut cmd = reprice_cmd(500);
+            run_full_pipeline(&mut engine, &mut cmd);
+
+            let expected_rate = engine.loan_service.floating_rate.curve_rate_bps(5_000);
+            assert_eq!(engine.loan_service.floating_rate.current_rate_bps_or_base(cur), expected_rate as i32);
+            assert_ne!(expected_rate as i32, engine.loan_service.floating_rate.base_bps, "sanity: util=5000 必须偏离 base");
         }
     }
 }
