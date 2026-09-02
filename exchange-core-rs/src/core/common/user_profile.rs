@@ -318,6 +318,18 @@ impl UserProfile {
         *self.exchange_locked.entry(currency).or_insert(0) += delta;
     }
 
+    /// 对应 Java `crossLoanCollateral.addToValue(currency, delta)`（P5 Task 5）：账户级 Cross
+    /// 抵押池缺省 0 起累加，`delta` 可为负（`LOAN_CROSS_WITHDRAW_COLLATERAL` 的 subtract-then-check
+    /// 与其失败回滚都走这一个入口）。
+    pub fn add_to_cross_loan_collateral(&mut self, currency: i32, delta: i64) {
+        *self.cross_loan_collateral.entry(currency).or_insert(0) += delta;
+    }
+
+    /// 对应 Java `crossLoanCollateral.get(currency)`：缺省 0。
+    pub fn cross_loan_collateral(&self, currency: i32) -> i64 {
+        *self.cross_loan_collateral.get(&currency).unwrap_or(&0)
+    }
+
     /// 确定性状态 hash：折叠 `uid`、`user_status`、排序后的 `accounts`/`exchange_locked`、
     /// `position_mode`、排序后的 `positions`（`BTreeMap` 天然按 key 升序，天然满足"排序"要求）。
     /// 风格对齐 `orderbook::order_book_naive_impl::OrderBookNaiveImpl::state_hash`

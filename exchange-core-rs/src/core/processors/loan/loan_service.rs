@@ -15,6 +15,7 @@ use crate::core::common::user_profile::UserProfile;
 use crate::core::processors::loan::loan_global_config::LoanGlobalConfig;
 use crate::core::processors::loan::rate::fixed_rate_model::FixedRateModel;
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
 /// 对应 Java `LoanService.YEAR_MS`（`:41`）：1 年（ms），跨节点唯一确定性形式，不依赖日历/闰年。
@@ -31,6 +32,14 @@ fn mul_exact(a: i64, b: i64) -> i64 {
 /// 对应 Java `Math.addExact(long, long)`。
 fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
+}
+
+/// 对应 Java `Math.addExact(long, long)` 的 try/catch 用法（`crossLtvBps`，`:220-263`）：Java 侧
+/// 在 Cross LTV 累加路径里显式 `catch (ArithmeticException e)` 把溢出折成一个哨兵值而非崩溃
+/// （见 `cross_ltv_bps` 三处调用点），与仓内其余 `add_exact`（panic-on-overflow）语义不同，故
+/// 单独起名，不复用上面的 `add_exact`。
+fn checked_add_i64(a: i64, b: i64) -> Option<i64> {
+    i64::try_from(a as i128 + b as i128).ok()
 }
 
 /// 对应 Java `LoanService`（字段子集，`:51-59`）。
@@ -233,6 +242,170 @@ impl LoanService {
             spec.quote_scale_k,
             quote_spec.currency_scale_k,
         )
+    }
+
+    // ================================================================
+    // Task 5：Cross 账户级 LTV —— 参考文档 §3.2/§3.3，Java `LoanService.java:168-269,395-410,467-470`
+    // ================================================================
+
+    /// 对应 Java 静态 `collateralWeightForBase`（`:467-470`）：币种作 Cross 抵押的折价率
+    /// （bps），直接读币种级 `CoreCurrencySpecification.collateral_weight_bps`；未配置/spec 缺失
+    /// 返回 `0`（= 不可作抵押，`LOAN_COLLATERAL_NOT_ALLOWED`）。
+    pub fn collateral_weight_for_base(currency: i32, ssp: &SymbolSpecificationProvider) -> i32 {
+        ssp.get_currency(currency).map(|s| s.collateral_weight_bps).unwrap_or(0)
+    }
+
+    /// 对应 Java 私有静态 `valueInNumeraire`（`:395-410`）：把 `amount`（`currency` 的
+    /// currencyScale）折算成 `numeraireCurrency` 的 currencyScale，经 `findSpotSymbol(currency,
+    /// numeraireCurrency)` 的现货对 markPrice 折算；`currency == numeraireCurrency` 直接返回
+    /// `amount`（同币种恒等）。任一 spec / markPrice 缺失 → `-1` 哨兵（"价格未就绪"，由调用方
+    /// 按 `failClosedOnMissingPrice` 决定取舍）。`price_cache` 对应 Java
+    /// `IntObjectHashMap<LastPriceCacheRecord> priceCache`——本移植 `RiskEngine.last_price_cache`
+    /// 直接就是 `symbol -> markPrice`（无 record 包装），故这里签名比 Java 简单一层。
+    pub fn value_in_numeraire(
+        currency: i32,
+        amount: i64,
+        numeraire_currency: i32,
+        numeraire_spec: &CoreCurrencySpecification,
+        ssp: &SymbolSpecificationProvider,
+        price_cache: &std::collections::BTreeMap<i32, i64>,
+    ) -> i64 {
+        if currency == numeraire_currency {
+            return amount;
+        }
+        let spec = match ssp.find_spot_symbol(currency, numeraire_currency) {
+            Some(s) => s,
+            None => return -1,
+        };
+        let mark_price = match price_cache.get(&spec.symbol_id) {
+            Some(&p) if p > 0 => p,
+            _ => return -1,
+        };
+        // currency 视作 base、numeraire 视作 quote，复用 Isolated LTV 同一套折算（Java 注释同）。
+        let currency_spec = ssp.get_currency(currency);
+        Self::collateral_value_in_quote_currency(amount, spec, mark_price, currency_spec, Some(numeraire_spec))
+    }
+
+    /// 对应 Java 私有 `crossLtvBps`（`:208-269`）：账户级 LTV 核心，`calculateCrossAccountLtvBps`
+    /// （`apply_weight=true`，触发/BORROW/WITHDRAW 用）与 `calculateCrossRawLtvBps`
+    /// （`apply_weight=false`，仅定价用）共享。
+    ///
+    /// `numeraireCurrency` 直接读 `self.global_config.numeraire_currency`——Java 版把它作为显式
+    /// 参数传入，但两个公开重载的调用方（`LoanCommandDispatcher`）永远传
+    /// `loanService.getGlobalConfig().numeraireCurrency`，即调用方与被调用方本就是同一个
+    /// `LoanService` 实例；本移植是 `LoanService` 自己的方法，直接读自身字段更省一次参数传递，
+    /// 无行为差异。
+    ///
+    /// `crossLoans.isEmpty() || numeraireCurrency==0` → `0`（无债或未配置 numeraire，LTV 恒安全）；
+    /// numeraireSpec 缺失 → `unevaluable`（`fail_closed_on_missing_price ? i64::MAX : 0`）。
+    ///
+    /// 三处溢出捕获逐字对齐 Java 的 `try { Math.addExact(...) } catch (ArithmeticException)`：
+    /// ①②（debt 侧：单笔 realDebt 相加、累加进 totalDebt）溢出 → **恒定** `i64::MAX`（不受
+    /// `fail_closed_on_missing_price` 影响——溢出视作无限大 LTV，倾向拒绝/强平而非放行）；
+    /// ③（collateral 侧：weight 折算后累加进 totalCollateral）溢出 → `unevaluable`（溢出不放大
+    /// 抵押，保守按不可估值处理）。用 [`checked_add_i64`] 而非 panic-on-overflow 的 `add_exact`
+    /// 复刻这个"捕获而非崩溃"的语义。
+    ///
+    /// `totalCollateral<=0`（无合格抵押币，或全被 `weight<=0` 过滤掉）→ `i64::MAX`（无抵押则
+    /// LTV 无穷大，同样不受 `fail_closed_on_missing_price` 影响）。
+    fn cross_ltv_bps(
+        &self,
+        up: &UserProfile,
+        now: i64,
+        ssp: &SymbolSpecificationProvider,
+        price_cache: &std::collections::BTreeMap<i32, i64>,
+        fail_closed_on_missing_price: bool,
+        apply_weight: bool,
+    ) -> i64 {
+        let numeraire_currency = self.global_config.numeraire_currency;
+        if up.cross_loans.is_empty() || numeraire_currency == 0 {
+            return 0;
+        }
+        let unevaluable = if fail_closed_on_missing_price { i64::MAX } else { 0 };
+        let numeraire_spec = match ssp.get_currency(numeraire_currency) {
+            Some(s) => s,
+            None => return unevaluable,
+        };
+
+        // 债务侧：逐笔折算成 numeraire 后求和（pending-interest-inclusive）。
+        let mut total_debt: i64 = 0;
+        for loan in up.cross_loans.values() {
+            if loan.outstanding_principal <= 0 {
+                continue;
+            }
+            let display_interest = self.calculate_display_interest(loan, now);
+            let real_debt = match checked_add_i64(loan.outstanding_principal, display_interest) {
+                Some(v) => v,
+                None => return i64::MAX,
+            };
+            let value_in_num =
+                Self::value_in_numeraire(loan.loan_currency, real_debt, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if value_in_num < 0 {
+                return unevaluable; // 缺 markPrice / spec
+            }
+            total_debt = match checked_add_i64(total_debt, value_in_num) {
+                Some(v) => v,
+                None => return i64::MAX,
+            };
+        }
+
+        // 抵押侧：折算 numeraire 后求和，apply_weight 决定是否再打 collateralWeightBps 折。
+        let mut total_collateral: i64 = 0;
+        for (&currency, &amount) in up.cross_loan_collateral.iter() {
+            if amount <= 0 {
+                continue;
+            }
+            let weight = Self::collateral_weight_for_base(currency, ssp);
+            if weight <= 0 {
+                continue; // 非抵押白名单币：两种口径都不计入
+            }
+            let value_in_num = Self::value_in_numeraire(currency, amount, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if value_in_num < 0 {
+                return unevaluable;
+            }
+            let contribution =
+                if apply_weight { arithmetic::trunc_mul_div(value_in_num, weight as i64, BPS_SCALE) } else { value_in_num };
+            total_collateral = match checked_add_i64(total_collateral, contribution) {
+                Some(v) => v,
+                None => return unevaluable, // 溢出不放大抵押，保守按不可估值处理
+            };
+        }
+
+        if total_collateral <= 0 {
+            return i64::MAX;
+        }
+        arithmetic::trunc_mul_div(total_debt, BPS_SCALE, total_collateral)
+    }
+
+    /// 对应 Java 公开 `calculateCrossAccountLtvBps(..., boolean failClosedOnMissingPrice)`
+    /// （`:184-195`）：**加权**分母口径（`applyWeight=true`），trigger 决策与 Cross
+    /// BORROW/WITHDRAW 前置 guard 共用。`fail_closed_on_missing_price`：`true` = 缺价 →
+    /// `i64::MAX`（拒绝，BORROW/WITHDRAW 用，防超借/提空）；`false` = 缺价 → `0`（保守 skip，
+    /// scanner/展示用）。Java 另有一个 6 参"默认 `failClosedOnMissingPrice=false`"的重载——本
+    /// 移植不做重载，调用方必须对这个安全相关的 flag 显式表态。
+    pub fn calculate_cross_account_ltv_bps(
+        &self,
+        up: &UserProfile,
+        now: i64,
+        ssp: &SymbolSpecificationProvider,
+        price_cache: &std::collections::BTreeMap<i32, i64>,
+        fail_closed_on_missing_price: bool,
+    ) -> i64 {
+        self.cross_ltv_bps(up, now, ssp, price_cache, fail_closed_on_missing_price, true)
+    }
+
+    /// 对应 Java 公开 `calculateCrossRawLtvBps`（`:201-206`）：**不加权**市值口径
+    /// （`applyWeight=false`），仅供破产价定价用（Task 7）——用加权口径定价会把破产价抬高
+    /// `1/weight` 倍（loan.md §18.3）。`fail_closed_on_missing_price` 恒 `false`（同 Java 该重载
+    /// 固定传 `false`，缺价保守返 0，由调用方兜底）。
+    pub fn calculate_cross_raw_ltv_bps(
+        &self,
+        up: &UserProfile,
+        now: i64,
+        ssp: &SymbolSpecificationProvider,
+        price_cache: &std::collections::BTreeMap<i32, i64>,
+    ) -> i64 {
+        self.cross_ltv_bps(up, now, ssp, price_cache, false, false)
     }
 
     /// 确定性状态 hash：折叠排序后的 4 个资金桶 + `global_config`/`floating_rate`/`fixed_rate`
@@ -553,5 +726,163 @@ mod tests {
         assert_eq!(LoanService::collateral_value_in_quote_currency(10, &spec, 5, Some(&base_spec), None), -1);
         assert_eq!(LoanService::collateral_value_in_quote_currency(10, &spec, 5, None, Some(&base_spec)), -1);
         assert_eq!(LoanService::collateral_value_in_quote_currency(10, &spec, 5, None, None), -1);
+    }
+
+    // ====================================================================
+    // Task 5：Cross 账户级 LTV —— collateral_weight_for_base / value_in_numeraire /
+    // calculate_cross_account_ltv_bps (weighted) / calculate_cross_raw_ltv_bps (unweighted)
+    // ====================================================================
+
+    use crate::core::common::cross_loan_record::CrossLoanRecord;
+
+    const COLLATERAL_CUR: i32 = 1; // base，Cross 抵押币，weight<100%
+    const NUMERAIRE_CUR: i32 = 2; // quote，同时充作 loanCurrency，免去 debt 侧折算
+    const SPOT_SYMBOL: i32 = 100; // base=COLLATERAL_CUR / quote=NUMERAIRE_CUR
+
+    fn cross_fixture(weight_bps: i32) -> (SymbolSpecificationProvider, std::collections::BTreeMap<i32, i64>) {
+        let mut ssp = SymbolSpecificationProvider::new();
+        ssp.add_symbol(CoreSymbolSpecification {
+            symbol_id: SPOT_SYMBOL,
+            symbol_type: crate::core::common::symbol_type::SymbolType::CurrencyExchangePair,
+            base_currency: COLLATERAL_CUR,
+            quote_currency: NUMERAIRE_CUR,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            ..Default::default()
+        });
+        ssp.add_currency(CoreCurrencySpecification {
+            currency: COLLATERAL_CUR,
+            currency_scale_k: 1,
+            collateral_weight_bps: weight_bps,
+        });
+        ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
+        let mut price_cache = std::collections::BTreeMap::new();
+        price_cache.insert(SPOT_SYMBOL, 1); // markPrice=1, scale-identity -> value_in_numeraire 恒等于 amount
+        (ssp, price_cache)
+    }
+
+    /// 开一笔 Cross 债务，`opened_at_ts == now` 且从不 reprice（`last_reprice_ts` 恒 0，冷启动），
+    /// 令 `calculateDisplayInterest` 恒为 0（`FloatingRateModel::live_acc_rate_bps_ms` 文档），
+    /// 借此把测试焦点收在 LTV 分母（抵押）而不是利息累加上。
+    fn cross_loan(uid: i64, loan_id: i64, principal: i64, now: i64) -> CrossLoanRecord {
+        let mut loan = CrossLoanRecord::new(uid, loan_id, SPOT_SYMBOL, NUMERAIRE_CUR, 0, now);
+        loan.outstanding_principal = principal;
+        loan
+    }
+
+    #[test]
+    fn collateral_weight_for_base_reads_spec_and_defaults_to_zero_when_missing() {
+        let (ssp, _) = cross_fixture(5_000);
+        assert_eq!(LoanService::collateral_weight_for_base(COLLATERAL_CUR, &ssp), 5_000);
+        assert_eq!(LoanService::collateral_weight_for_base(999, &ssp), 0); // 未注册币种
+    }
+
+    #[test]
+    fn value_in_numeraire_identity_for_same_currency() {
+        let (ssp, price_cache) = cross_fixture(5_000);
+        let numeraire_spec = ssp.get_currency(NUMERAIRE_CUR).unwrap();
+        assert_eq!(
+            LoanService::value_in_numeraire(NUMERAIRE_CUR, 12_345, NUMERAIRE_CUR, numeraire_spec, &ssp, &price_cache),
+            12_345
+        );
+    }
+
+    #[test]
+    fn value_in_numeraire_converts_through_spot_symbol_and_mark_price() {
+        let (ssp, price_cache) = cross_fixture(5_000);
+        let numeraire_spec = ssp.get_currency(NUMERAIRE_CUR).unwrap();
+        // amount=1000 (COLLATERAL_CUR) * markPrice=1, scale-identity -> 1000 (NUMERAIRE_CUR).
+        assert_eq!(
+            LoanService::value_in_numeraire(COLLATERAL_CUR, 1_000, NUMERAIRE_CUR, numeraire_spec, &ssp, &price_cache),
+            1_000
+        );
+    }
+
+    #[test]
+    fn value_in_numeraire_returns_negative_one_sentinel_when_spot_symbol_or_price_missing() {
+        let (ssp, price_cache) = cross_fixture(5_000);
+        let numeraire_spec = ssp.get_currency(NUMERAIRE_CUR).unwrap();
+        // 无 base=999/quote=NUMERAIRE_CUR 现货对。
+        assert_eq!(LoanService::value_in_numeraire(999, 1_000, NUMERAIRE_CUR, numeraire_spec, &ssp, &price_cache), -1);
+        // 有现货对，但 price_cache 里没有该 symbol 的 markPrice。
+        let empty_price_cache: std::collections::BTreeMap<i32, i64> = std::collections::BTreeMap::new();
+        assert_eq!(
+            LoanService::value_in_numeraire(COLLATERAL_CUR, 1_000, NUMERAIRE_CUR, numeraire_spec, &ssp, &empty_price_cache),
+            -1
+        );
+    }
+
+    #[test]
+    fn calculate_cross_account_ltv_bps_zero_when_no_cross_loans_or_numeraire_unset() {
+        let (ssp, price_cache) = cross_fixture(5_000);
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+        let up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active); // no cross_loans
+        assert_eq!(s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, true), 0);
+
+        let s2 = LoanService::new(); // numeraire_currency left at NUMERAIRE_UNSET (0)
+        let mut up2 = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up2.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000));
+        assert_eq!(s2.calculate_cross_account_ltv_bps(&up2, 1_000, &ssp, &price_cache, true), 0);
+    }
+
+    /// 核心分歧断言（brief Step1 要求）：同一账户状态下，加权口径（`applyWeight=true`，
+    /// `collateralWeightBps=5000`=50%）与不加权口径（`applyWeight=false`，pricing 用）必须给出
+    /// 不同的 LTV 数值——分母打了 5 折，加权 LTV 应恰好是不加权 LTV 的 2 倍。
+    #[test]
+    fn weighted_and_raw_cross_ltv_diverge_when_collateral_weight_below_full() {
+        let (ssp, price_cache) = cross_fixture(5_000); // 50% weight
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000)); // debt=400 (numeraire == loanCurrency, no conversion needed)
+        up.cross_loan_collateral.insert(COLLATERAL_CUR, 1_000); // collateral value in numeraire = 1000 (markPrice=1)
+
+        let weighted = s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, false);
+        let raw = s.calculate_cross_raw_ltv_bps(&up, 1_000, &ssp, &price_cache);
+
+        // weighted: denom = 1000*5000/10000 = 500 -> ltv = 400*10000/500 = 8000 (80%).
+        assert_eq!(weighted, 8_000);
+        // raw: denom = 1000 (no discount) -> ltv = 400*10000/1000 = 4000 (40%).
+        assert_eq!(raw, 4_000);
+        assert_ne!(weighted, raw);
+        assert_eq!(weighted, raw * 2); // weight=50% halves the denominator -> doubles the LTV
+    }
+
+    #[test]
+    fn calculate_cross_account_ltv_bps_ignores_collateral_currency_with_zero_weight() {
+        let (ssp, price_cache) = cross_fixture(0); // weight=0 -> not eligible as Cross collateral
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        up.cross_loans.insert(1, cross_loan(1, 1, 400, 1_000));
+        up.cross_loan_collateral.insert(COLLATERAL_CUR, 1_000); // present but weight=0 -> excluded from both denominators
+
+        // No eligible collateral counted -> totalCollateral<=0 -> Long.MAX_VALUE sentinel (unconditional).
+        assert_eq!(s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, false), i64::MAX);
+        assert_eq!(s.calculate_cross_raw_ltv_bps(&up, 1_000, &ssp, &price_cache), i64::MAX);
+    }
+
+    /// `fail_closed_on_missing_price`：BORROW/WITHDRAW guard 传 `true`（缺价 -> `i64::MAX` 拒绝）；
+    /// scanner/展示传 `false`（缺价 -> `0` 保守跳过）。这里用"debt 侧现货对缺失"制造缺价场景。
+    #[test]
+    fn calculate_cross_account_ltv_bps_fail_closed_flag_controls_missing_price_sentinel() {
+        let mut ssp = SymbolSpecificationProvider::new();
+        // 只注册 numeraire 币种 spec；debt currency 用一个没有对应现货对的另一个币种，逼 valueInNumeraire 返回 -1。
+        let debt_currency = 3;
+        ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
+        let price_cache: std::collections::BTreeMap<i32, i64> = std::collections::BTreeMap::new();
+
+        let mut s = LoanService::new();
+        s.global_config.numeraire_currency = NUMERAIRE_CUR;
+        let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
+        let mut loan = CrossLoanRecord::new(1, 1, SPOT_SYMBOL, debt_currency, 0, 1_000);
+        loan.outstanding_principal = 400;
+        up.cross_loans.insert(1, loan);
+
+        assert_eq!(s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, true), i64::MAX); // fail-closed
+        assert_eq!(s.calculate_cross_account_ltv_bps(&up, 1_000, &ssp, &price_cache, false), 0); // fail-open
     }
 }

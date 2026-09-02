@@ -35,6 +35,7 @@ use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::cross_loan_record::CrossLoanRecord;
 use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::user_profile::UserProfile;
@@ -77,7 +78,16 @@ impl LoanCommandDispatcher {
             OrderCommandType::LoanReleaseCollateral => {
                 Self::handle_loan_release_collateral(engine, cmd, ups, ssp)
             }
-            // 不可达于本任务测试集：Task 5-7 落地前, 调用方从不构造这些 cmd.command。
+            OrderCommandType::LoanCrossAddCollateral => {
+                Self::handle_loan_cross_add_collateral(engine, cmd, ups, ssp)
+            }
+            OrderCommandType::LoanCrossWithdrawCollateral => {
+                Self::handle_loan_cross_withdraw_collateral(engine, cmd, ups, ssp)
+            }
+            OrderCommandType::LoanCrossBorrow => Self::handle_loan_cross_borrow(engine, cmd, ups, ssp),
+            OrderCommandType::LoanCrossRepay => Self::handle_loan_cross_repay(engine, cmd, ups, ssp),
+            // 不可达于本任务测试集：Task 6-7 落地前（Cross/Isolated FORCE_LIQUIDATE、
+            // POOL_DEPOSIT/WITHDRAW、LOAN_IF_DEPOSIT/WITHDRAW），调用方从不构造这些 cmd.command。
             _ => CommandResultCode::LoanNotImplemented,
         }
     }
@@ -457,12 +467,266 @@ impl LoanCommandDispatcher {
         }
         CommandResultCode::Success
     }
+
+    // ====================================================================================
+    // Cross 用户命令：加减抵押 / 借款 / 还款 —— 参考文档 §2.6-2.9，Java
+    // `LoanCommandDispatcher.java:532-705`
+    // ====================================================================================
+
+    /// Cross 账户级追加抵押（不校验 LTV，越多抵押越安全）。字段映射：`cmd.symbol` = currency，
+    /// `cmd.size` = amount。校验顺序对应 Java `handleLoanCrossAddCollateral`（`:532-556`）：
+    /// `amount>0`；币种级 `collateral_weight_for_base(currency) > 0` 否则
+    /// `LoanCollateralNotAllowed`（Cross 抵押白名单，参考文档 §3.3）；自由余额
+    /// `accounts−calculateLocked ≥ amount` 否则 `LoanCollateralInsufficient`。通过后
+    /// `cross_loan_collateral.add(currency, amount)`——`calculate_locked` 已经把
+    /// `cross_loan_collateral` 计入锁定额（`loan_collateral_locked`，Task 4 前既有），所以这里的
+    /// free-balance 校验天然读到"加之前"的锁定值，逐字对齐 Java 的先算 free 后 addToValue 顺序。
+    ///
+    /// **事件缺口**：同 Isolated 各 handler 的文档说明，本任务不发送事件。
+    fn handle_loan_cross_add_collateral(
+        engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let up = match Self::preamble(cmd, ups) {
+            Ok(u) => u,
+            Err(rc) => return rc,
+        };
+
+        let currency = cmd.symbol;
+        let amount = cmd.size;
+        if amount <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+        if LoanService::collateral_weight_for_base(currency, ssp) <= 0 {
+            return CommandResultCode::LoanCollateralNotAllowed;
+        }
+
+        let currency_spec = ssp
+            .get_currency(currency)
+            .expect("collateral_weight_for_base>0 implies the currency spec exists");
+        let free = up.account(currency) - engine.calculate_locked(up, currency, ssp, currency_spec);
+        if free < amount {
+            return CommandResultCode::LoanCollateralInsufficient;
+        }
+
+        up.add_to_cross_loan_collateral(currency, amount);
+        CommandResultCode::Success
+    }
+
+    /// Cross 账户级提取抵押；撤后账户级 LTV ≥ `crossLiquidationLtvBps` 则 revert（subtract-then-
+    /// check 回滚模式）。字段映射：`cmd.symbol` = currency，`cmd.size` = amount。对应 Java
+    /// `handleLoanCrossWithdrawCollateral`（`:558-587`）。
+    ///
+    /// 校验顺序：`amount>0`；`cross_loan_collateral.get(currency) ≥ amount` 否则
+    /// `LoanCollateralExceedsLoan`；`loanService.isNumeraireConfigured()` 否则
+    /// `LoanNumeraireNotConfigured`（先查再扣——numeraire 未配就没法算 LTV，不该先动余额）。
+    /// 通过后**先扣、后重算**加权 LTV（`fail_closed_on_missing_price=true`——缺价拒绝而非放行，
+    /// 防"提空全部抵押"，参考文档 §3.2）；`newLtv ≥ crossLiquidationLtvBps` 则原样加回
+    /// （revert）并返回 `LoanCrossLtvTooHighAfterWithdraw`，否则保留扣减、返回成功。
+    ///
+    /// **事件缺口**：同上。
+    fn handle_loan_cross_withdraw_collateral(
+        engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let up = match Self::preamble(cmd, ups) {
+            Ok(u) => u,
+            Err(rc) => return rc,
+        };
+
+        let currency = cmd.symbol;
+        let amount = cmd.size;
+        if amount <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+        if up.cross_loan_collateral(currency) < amount {
+            return CommandResultCode::LoanCollateralExceedsLoan;
+        }
+        if !engine.loan_service.global_config.is_numeraire_configured() {
+            return CommandResultCode::LoanNumeraireNotConfigured;
+        }
+
+        // subtract-then-check：先扣，重算 LTV 超线再原样加回。
+        up.add_to_cross_loan_collateral(currency, -amount);
+        let new_ltv =
+            engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
+        if new_ltv >= engine.loan_service.global_config.cross_liquidation_ltv_bps as i64 {
+            up.add_to_cross_loan_collateral(currency, amount); // revert
+            return CommandResultCode::LoanCrossLtvTooHighAfterWithdraw;
+        }
+        CommandResultCode::Success
+    }
+
+    /// Cross 借款；借后账户级 LTV > `spec.loanConfig.initialLtvBps` 则 revert（同一 subtract-
+    /// then-check 模式，反向应用于"先落记录再核 LTV"）。字段映射：`cmd.symbol` = 现货
+    /// symbolId，`loanCurrency = spec.quoteCurrency`，`cmd.price` = principal，
+    /// `cmd.reserve_bid_price` = loanId。对应 Java `handleLoanCrossBorrow`（`:589-635`）。
+    ///
+    /// 校验顺序：`loanId` 未被占用（`LoanAlreadyExists`，Cross 命名空间独立于 Isolated）；
+    /// `principal>0`；spec 存在且 `type==CurrencyExchangePair` 且 `loan_config.is_enabled()`
+    /// 否则 `LoanNotEnabled`；`maxAmount!=0 && principal>maxAmount` 否则
+    /// `LoanPrincipalExceedsLimit`；`loanService.isNumeraireConfigured()` 否则
+    /// `LoanNumeraireNotConfigured`；池容量/利用率（[`LoanService::verify_pool_capacity`]）。
+    ///
+    /// 通过后：Cross **恒 FLOATING**（`floating_rate.open_rate_bps`，无 LOCKED 选项——
+    /// `CrossLoanRecord::is_fixed_rate()` 硬编码 `false`），`init_open_snapshot` 锚定计息游标，
+    /// **先把 loan 插入 `cross_loans` 再重算加权 LTV**（`fail_closed_on_missing_price=true`）；
+    /// `newLtv > spec.loanConfig.initialLtvBps` 则**只 `remove` 刚插入的记录**（不涉及池子——
+    /// `disburse_loan` 尚未调用，`verify_pool_capacity` 只读不改状态，此刻池子分文未动，"还池"
+    /// 只是 Java 侧把对象还回 object pool 复用的动作，本移植无对象池、直接 drop，等价于什么都
+    /// 不用做）并返回 `LoanLtvTooHighAfterBorrow`；否则 `disburse_loan`（划账 + 记 borrowed）。
+    ///
+    /// **事件缺口**：同上。
+    fn handle_loan_cross_borrow(
+        engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let up = match Self::preamble(cmd, ups) {
+            Ok(u) => u,
+            Err(rc) => return rc,
+        };
+
+        let loan_id = cmd.reserve_bid_price;
+        if up.cross_loans.contains_key(&loan_id) {
+            return CommandResultCode::LoanAlreadyExists;
+        }
+
+        let symbol_id = cmd.symbol;
+        let principal = cmd.price;
+        if principal <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+
+        let spec = match ssp.get_symbol(symbol_id) {
+            Some(s) if s.symbol_type == SymbolType::CurrencyExchangePair && s.loan_config.is_enabled() => s,
+            _ => return CommandResultCode::LoanNotEnabled,
+        };
+        let loan_currency = spec.quote_currency;
+        if spec.loan_config.max_amount != 0 && principal > spec.loan_config.max_amount {
+            return CommandResultCode::LoanPrincipalExceedsLimit;
+        }
+
+        if !engine.loan_service.global_config.is_numeraire_configured() {
+            return CommandResultCode::LoanNumeraireNotConfigured;
+        }
+        let pool_check = engine.loan_service.verify_pool_capacity(loan_currency, principal);
+        if pool_check != CommandResultCode::Success {
+            return pool_check;
+        }
+
+        // Cross 恒 FLOATING（CrossLoanRecord::is_fixed_rate() 硬编码 false，无 LOCKED 选项）。
+        let open_rate_bps = engine.loan_service.floating_rate.open_rate_bps(loan_currency);
+        let mut loan =
+            CrossLoanRecord::new(cmd.uid, loan_id, spec.symbol_id, loan_currency, open_rate_bps, cmd.timestamp);
+        engine.loan_service.floating_rate.init_open_snapshot(&mut loan, cmd.timestamp);
+        loan.outstanding_principal = principal;
+        up.cross_loans.insert(loan_id, loan);
+
+        let new_ltv =
+            engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
+        if new_ltv > spec.loan_config.initial_ltv_bps as i64 {
+            up.cross_loans.remove(&loan_id); // 池子分文未动，见文档"还池"说明；无对象池可还
+            return CommandResultCode::LoanLtvTooHighAfterBorrow;
+        }
+
+        engine.loan_service.disburse_loan(up, loan_currency, principal);
+        CommandResultCode::Success
+    }
+
+    /// Cross REPAY 共用核心：与 [`Self::settle_repay_isolated`] 逐字同构（校验金额 → accrue →
+    /// 算实抵债额 → 查可用余额 → 抵债），改在 `up.cross_loans` 上操作。对应 Java 共享的私有
+    /// `settleRepay(UserProfile, LoanRecord, OrderCommand)`（`:215-232`）——Java 靠 `LoanRecord`
+    /// 接口多态天然共享同一份代码；Rust 版因为借用检查器（见模块文档"借用设计"一节：`loan`/`up`
+    /// 不能同时活借用）需要按 map 具体类型各写一份"分段重查"的薄包装，Isolated/Cross 各一份，
+    /// 逻辑本身零分叉。**从不释放抵押**——这本就不是 Cross 独有的行为：Isolated `settleRepay`
+    /// 同样从不碰 `collateral_amount`（那是 `LOAN_RELEASE_COLLATERAL` 的职责）；Cross 干脆没有
+    /// per-loan 抵押字段（账户级共享池），"不释放"因而是结构性的，不是本函数需要额外做的事。
+    fn settle_repay_cross(
+        engine: &mut RiskEngine,
+        up: &mut UserProfile,
+        loan_id: i64,
+        cmd: &OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let requested_repay = cmd.price;
+        if requested_repay < 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+
+        let (loan_currency, payoff) = {
+            let loan = up.cross_loans.get_mut(&loan_id).expect("loan existence checked by caller");
+            engine.loan_service.accrue_to(loan, cmd.timestamp);
+            (loan.loan_currency, add_exact(loan.outstanding_principal, loan.accumulated_interest))
+        };
+        let actual_repay =
+            if requested_repay == 0 || requested_repay >= payoff { payoff } else { requested_repay };
+
+        let loan_currency_spec = ssp
+            .get_currency(loan_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
+        let free = up.account(loan_currency) - engine.calculate_locked(up, loan_currency, ssp, loan_currency_spec);
+        if free < actual_repay {
+            return CommandResultCode::LoanAccountInsufficient;
+        }
+
+        let loan = up.cross_loans.get_mut(&loan_id).expect("loan existence checked by caller");
+        engine.loan_service.apply_debt_payment(loan, &mut up.accounts, actual_repay);
+        CommandResultCode::Success
+    }
+
+    /// 偿还 Cross 借贷（本金+利息），永不释放抵押（账户级共享池，见 [`Self::settle_repay_cross`]
+    /// 文档）。字段映射：`cmd.reserve_bid_price` = loanId，`cmd.price` = repayAmount（`0` = 结清
+    /// 全部本息）。对应 Java `handleLoanCrossRepay`（`:637-664`）。
+    ///
+    /// 成功后若 `loan.is_empty()`（`CrossLoanRecord` 没有抵押字段，仅本金/利息全 0 即空）从
+    /// `cross_loans` 移除，让同 `loanId` 可被 `LOAN_CROSS_BORROW` 复用；`cross_loan_collateral`
+    /// 账户级池完全不受影响。
+    ///
+    /// **事件缺口**：同上。
+    fn handle_loan_cross_repay(
+        engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let up = match Self::preamble(cmd, ups) {
+            Ok(u) => u,
+            Err(rc) => return rc,
+        };
+
+        let loan_id = cmd.reserve_bid_price;
+        let loan_uid = match up.cross_loans.get(&loan_id) {
+            Some(l) => l.uid,
+            None => return CommandResultCode::LoanNotFound,
+        };
+        if loan_uid != cmd.uid {
+            return CommandResultCode::LoanUidMismatch;
+        }
+
+        let rc = Self::settle_repay_cross(engine, up, loan_id, cmd, ssp);
+        if rc != CommandResultCode::Success {
+            return rc;
+        }
+
+        let is_empty = up.cross_loans.get(&loan_id).map(|l| l.is_empty()).unwrap_or(true);
+        if is_empty {
+            up.cross_loans.remove(&loan_id);
+        }
+        CommandResultCode::Success
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+    use crate::core::common::loan_record::LoanRecord;
     use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 
     const BASE: i32 = 1;
@@ -1042,17 +1306,393 @@ mod tests {
     }
 
     // ================================================================
+    // LOAN_CROSS_ADD_COLLATERAL / LOAN_CROSS_WITHDRAW_COLLATERAL / LOAN_CROSS_BORROW /
+    // LOAN_CROSS_REPAY — 参考文档 §2.6-2.9
+    // ================================================================
+
+    /// 与 `loan_service.rs` 的分歧测试同一个权重，好让两处数字互相印证。
+    const CROSS_COLLATERAL_WEIGHT_BPS: i32 = 5_000; // 50%
+
+    /// 在 [`setup`] 治具基础上给 BASE 币种挂上非零 `collateral_weight_bps`（否则 CROSS_ADD 恒被
+    /// `LoanCollateralNotAllowed` 拦下），但**不**配置 numeraire——供"numeraire 未配置"系列测试用。
+    fn cross_setup_weight_only() -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
+        let (engine, ups, mut ssp) = setup();
+        ssp.currencies.get_mut(&BASE).unwrap().collateral_weight_bps = CROSS_COLLATERAL_WEIGHT_BPS;
+        (engine, ups, ssp)
+    }
+
+    /// 在 [`cross_setup_weight_only`] 基础上再配置 `numeraire_currency = QUOTE`——QUOTE 同时是
+    /// SYMBOL 的 loanCurrency，让 debt 侧折算恒等（`currency==numeraireCurrency` 直接返回
+    /// amount，免去另建现货对），标准治具供 BORROW/WITHDRAW/REPAY 测试复用。
+    fn cross_setup() -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
+        let (mut engine, ups, ssp) = cross_setup_weight_only();
+        engine.loan_service.global_config.numeraire_currency = QUOTE;
+        (engine, ups, ssp)
+    }
+
+    fn cross_add_cmd(order_id: i64, currency: i32, amount: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::LoanCrossAddCollateral,
+            order_id,
+            uid: UID,
+            symbol: currency,
+            size: amount,
+            timestamp: 1_000,
+            ..Default::default()
+        }
+    }
+
+    fn cross_withdraw_cmd(order_id: i64, currency: i32, amount: i64, ts: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::LoanCrossWithdrawCollateral,
+            order_id,
+            uid: UID,
+            symbol: currency,
+            size: amount,
+            timestamp: ts,
+            ..Default::default()
+        }
+    }
+
+    fn cross_borrow_cmd(order_id: i64, loan_id: i64, symbol_id: i32, principal: i64, ts: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::LoanCrossBorrow,
+            order_id,
+            uid: UID,
+            symbol: symbol_id,
+            price: principal,
+            reserve_bid_price: loan_id,
+            timestamp: ts,
+            ..Default::default()
+        }
+    }
+
+    fn cross_repay_cmd(order_id: i64, loan_id: i64, repay_amount: i64, ts: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::LoanCrossRepay,
+            order_id,
+            uid: UID,
+            reserve_bid_price: loan_id,
+            price: repay_amount,
+            timestamp: ts,
+            ..Default::default()
+        }
+    }
+
+    fn pledge_cross_collateral(
+        engine: &mut RiskEngine,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+        order_id: i64,
+        amount: i64,
+    ) {
+        let mut cmd = cross_add_cmd(order_id, BASE, amount);
+        assert_eq!(LoanCommandDispatcher::dispatch(engine, &mut cmd, ups, ssp), CommandResultCode::Success);
+    }
+
+    /// 开一笔标准 Cross 借贷（SYMBOL, loanCurrency=QUOTE）。`order_id` 复用 `loan_id`。
+    fn open_cross_loan(
+        engine: &mut RiskEngine,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+        loan_id: i64,
+        principal: i64,
+        ts: i64,
+    ) {
+        let mut cmd = cross_borrow_cmd(loan_id, loan_id, SYMBOL, principal, ts);
+        assert_eq!(LoanCommandDispatcher::dispatch(engine, &mut cmd, ups, ssp), CommandResultCode::Success);
+    }
+
+    // ----------------------------------------------------------------
+    // LOAN_CROSS_ADD_COLLATERAL
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn cross_add_collateral_credits_account_level_pool_when_weight_positive() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        let mut cmd = cross_add_cmd(1, BASE, 1_000);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+
+        let up = ups.get(UID).unwrap();
+        assert_eq!(up.cross_loan_collateral(BASE), 1_000);
+        assert_eq!(up.account(BASE), 10_000); // virtual lock: never physically moved out of accounts
+    }
+
+    #[test]
+    fn cross_add_collateral_rejects_currency_with_zero_collateral_weight() {
+        let (mut engine, mut ups, ssp) = cross_setup(); // only BASE has non-zero weight; QUOTE stays 0
+        let mut cmd = cross_add_cmd(1, QUOTE, 100);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanCollateralNotAllowed
+        );
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(QUOTE), 0); // nothing credited
+    }
+
+    #[test]
+    fn cross_add_collateral_rejects_invalid_amount_and_insufficient_balance() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        let mut zero = cross_add_cmd(1, BASE, 0);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut zero, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+
+        let mut too_much = cross_add_cmd(2, BASE, 20_000); // user only has 10_000 BASE
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut too_much, &mut ups, &ssp),
+            CommandResultCode::LoanCollateralInsufficient
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // LOAN_CROSS_BORROW
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn cross_borrow_rejects_numeraire_not_configured() {
+        let (mut engine, mut ups, ssp) = cross_setup_weight_only(); // numeraire left unset
+        let mut cmd = cross_borrow_cmd(1, 42, SYMBOL, 200, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanNumeraireNotConfigured
+        );
+        assert!(ups.get(UID).unwrap().cross_loans.is_empty());
+    }
+
+    #[test]
+    fn cross_borrow_success_is_always_floating_and_disburses() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        engine.loan_service.floating_rate.current_rate_bps.insert(QUOTE, 321);
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000); // weighted collateral = 500
+
+        // debt=200 (loanCurrency==numeraire, no conversion) -> ltv = 200*10000/500 = 4000 <= initialLtv(5000).
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let up = ups.get(UID).unwrap();
+        let loan = up.cross_loans.get(&42).unwrap();
+        assert!(!loan.is_fixed_rate()); // Cross 恒 FLOATING，无 LOCKED 选项
+        assert_eq!(loan.rate_bps, 321); // openRateBps = floating current rate at open, not a fixed-rate spread
+        assert_eq!(loan.outstanding_principal, 200);
+        assert_eq!(loan.loan_currency, QUOTE);
+        assert_eq!(up.account(QUOTE), 200); // disbursed
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 1_000_000 - 200);
+        assert_eq!(engine.loan_service.get_loan_pool_borrowed(QUOTE), 200);
+    }
+
+    #[test]
+    fn cross_borrow_rolls_back_on_ltv_too_high_after_borrow_without_touching_pool() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 100); // weighted collateral = 50
+
+        // debt=200 -> ltv = 200*10000/50 = 40000 >> initialLtv(5000) -> must roll back.
+        let mut cmd = cross_borrow_cmd(2, 42, SYMBOL, 200, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanLtvTooHighAfterBorrow
+        );
+
+        let up = ups.get(UID).unwrap();
+        assert!(up.cross_loans.get(&42).is_none()); // record removed, not left dangling
+        assert_eq!(up.account(QUOTE), 0); // disburse_loan never ran
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 1_000_000); // pool untouched
+        assert_eq!(engine.loan_service.get_loan_pool_borrowed(QUOTE), 0);
+    }
+
+    #[test]
+    fn cross_borrow_rejects_already_exists_not_enabled_and_principal_exceeds_limit() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let mut dup = cross_borrow_cmd(2, 42, SYMBOL, 100, 1_000); // same loan_id
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut dup, &mut ups, &ssp),
+            CommandResultCode::LoanAlreadyExists
+        );
+
+        let mut bad_symbol = cross_borrow_cmd(3, 43, 999, 100, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut bad_symbol, &mut ups, &ssp),
+            CommandResultCode::LoanNotEnabled
+        );
+
+        let mut invalid_principal = cross_borrow_cmd(4, 44, SYMBOL, 0, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut invalid_principal, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+    }
+
+    #[test]
+    fn cross_borrow_rejects_principal_exceeds_limit_and_pool_insufficient() {
+        let (mut engine, mut ups, mut ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        ssp.symbols.get_mut(&SYMBOL).unwrap().loan_config.update(5_000, 8_000, 0, 50, 0); // maxAmount=50
+        let mut too_big = cross_borrow_cmd(2, 42, SYMBOL, 100, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut too_big, &mut ups, &ssp),
+            CommandResultCode::LoanPrincipalExceedsLimit
+        );
+
+        ssp.symbols.get_mut(&SYMBOL).unwrap().loan_config.update(5_000, 8_000, 0, 0, 0); // remove cap
+        engine.loan_service.loan_pool_available.insert(QUOTE, 10); // far less than principal
+        let mut pool_short = cross_borrow_cmd(3, 43, SYMBOL, 100, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut pool_short, &mut ups, &ssp),
+            CommandResultCode::LoanPoolInsufficient
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // LOAN_CROSS_WITHDRAW_COLLATERAL
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn cross_withdraw_collateral_rejects_invalid_amount_and_exceeds_pledged() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        let mut zero = cross_withdraw_cmd(1, BASE, 0, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut zero, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+
+        let mut exceeds = cross_withdraw_cmd(2, BASE, 1, 1_000); // nothing pledged yet
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut exceeds, &mut ups, &ssp),
+            CommandResultCode::LoanCollateralExceedsLoan
+        );
+    }
+
+    #[test]
+    fn cross_withdraw_collateral_rejects_numeraire_not_configured() {
+        let (mut engine, mut ups, ssp) = cross_setup_weight_only(); // numeraire left unset
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        let mut cmd = cross_withdraw_cmd(2, BASE, 100, 1_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanNumeraireNotConfigured
+        );
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(BASE), 1_000); // untouched
+    }
+
+    #[test]
+    fn cross_withdraw_collateral_succeeds_when_new_ltv_stays_below_liquidation_line() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000); // weighted = 500
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000); // debt=200
+
+        // withdraw 100 -> newCollateral=900, weighted=450 -> ltv=200*10000/450=4444 < 8500 (default cross liquidation).
+        let mut cmd = cross_withdraw_cmd(2, BASE, 100, 2_000);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(BASE), 900);
+    }
+
+    #[test]
+    fn cross_withdraw_collateral_reverts_subtraction_when_new_ltv_too_high() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000); // weighted = 500
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000); // debt=200
+
+        // withdraw 600 -> newCollateral=400, weighted=200 -> ltv=200*10000/200=10000 (100%) >= 8500 -> revert.
+        let mut cmd = cross_withdraw_cmd(2, BASE, 600, 2_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanCrossLtvTooHighAfterWithdraw
+        );
+        // subtract-then-check rollback: the tentative subtraction must be fully undone.
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(BASE), 1_000);
+    }
+
+    // ----------------------------------------------------------------
+    // LOAN_CROSS_REPAY
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn cross_repay_full_payoff_removes_loan_but_never_touches_collateral_pool() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000); // disburses 200 QUOTE, no interest ever accrues (cold-start floating)
+
+        let before_collateral = ups.get(UID).unwrap().cross_loan_collateral(BASE);
+        let mut cmd = cross_repay_cmd(2, 42, 0, 2_000); // 0 = full payoff
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+
+        let up = ups.get(UID).unwrap();
+        assert!(up.cross_loans.get(&42).is_none()); // CrossLoanRecord has no collateral field -> is_empty() as soon as debt hits 0
+        assert_eq!(up.cross_loan_collateral(BASE), before_collateral); // account-level pool untouched by REPAY
+        assert_eq!(up.account(QUOTE), 0); // the 200 disbursed was exactly what was owed back
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 1_000_000); // principal fully returned
+    }
+
+    #[test]
+    fn cross_repay_partial_reduces_principal_and_keeps_loan_open() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let mut cmd = cross_repay_cmd(2, 42, 50, 2_000);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+
+        let up = ups.get(UID).unwrap();
+        let loan = up.cross_loans.get(&42).expect("partial repay keeps the loan open");
+        assert_eq!(loan.outstanding_principal, 150);
+        assert_eq!(up.cross_loan_collateral(BASE), 1_000); // untouched
+    }
+
+    #[test]
+    fn cross_repay_rejects_not_found_uid_mismatch_and_invalid_amount() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let mut not_found = cross_repay_cmd(2, 999, 0, 2_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut not_found, &mut ups, &ssp),
+            CommandResultCode::LoanNotFound
+        );
+
+        let mut negative = cross_repay_cmd(3, 42, -1, 2_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut negative, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+
+        // Same reasoning as loan_repay_rejects_uid_mismatch (Isolated): only reachable by directly
+        // grafting a foreign-uid record into the map, mirroring an object-pool reuse bug in Java.
+        let mut foreign = CrossLoanRecord::new(999, 77, SYMBOL, QUOTE, 0, 1_000);
+        foreign.outstanding_principal = 10;
+        ups.get_mut(UID).unwrap().cross_loans.insert(77, foreign);
+        let mut mismatch = cross_repay_cmd(4, 77, 0, 2_000);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut mismatch, &mut ups, &ssp),
+            CommandResultCode::LoanUidMismatch
+        );
+    }
+
+    #[test]
+    fn cross_repay_rejects_account_insufficient() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000); // disburses 200 QUOTE
+        ups.get_mut(UID).unwrap().accounts.insert(QUOTE, 50); // spent the borrowed funds elsewhere
+        let mut cmd = cross_repay_cmd(2, 42, 100, 2_000); // request < payoff, so not auto-capped up
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanAccountInsufficient
+        );
+    }
+
+    // ================================================================
     // dispatch fallthrough for not-yet-implemented is_loan() codes
     // ================================================================
 
     #[test]
     fn dispatch_returns_not_implemented_for_unimplemented_loan_codes() {
         let (mut engine, mut ups, ssp) = setup();
+        // Task 5 落地了 4 个 LOAN_CROSS_* 生命周期命令（ADD/WITHDRAW/BORROW/REPAY），从这份
+        // 清单移除；剩余 6 个（两个 *_FORCE_LIQUIDATE + 4 个 POOL/IF 操作命令）留 Task 6-7。
         for command in [
-            OrderCommandType::LoanCrossAddCollateral,
-            OrderCommandType::LoanCrossWithdrawCollateral,
-            OrderCommandType::LoanCrossBorrow,
-            OrderCommandType::LoanCrossRepay,
             OrderCommandType::LoanCrossForceLiquidate,
             OrderCommandType::LoanForceLiquidate,
             OrderCommandType::PoolDeposit,
