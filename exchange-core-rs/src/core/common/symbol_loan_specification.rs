@@ -1,7 +1,7 @@
 //! 对应 Java: exchange.core2.core.common.SymbolLoanSpecification —— per-symbol 现货借贷配置，
-//! 挂在 `CoreSymbolSpecification::loan_config` 上；全 0 = 该 pair 未启用。仅 `ADD_LOAN`（Task
-//! 2.12，本移植未落地）经 `update` 改写。利率不在此（是 per-loanCurrency 池级概念，归
-//! `LoanService`）。
+//! 挂在 `CoreSymbolSpecification::loan_config` 上；全 0 = 该 pair 未启用。仅 `ADD_LOAN`（参考
+//! §2.12，P5 Task 6 已落地 `RiskEngine::apply_add_loan`）经 `update` 改写。利率不在此（是
+//! per-loanCurrency 池级概念，归 `LoanService`）。
 
 /// 对应 Java `SymbolLoanSpecification`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
