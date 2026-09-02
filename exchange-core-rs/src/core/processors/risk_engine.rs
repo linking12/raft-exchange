@@ -1,6 +1,9 @@
 //! 对应 Java: `exchange.core2.core.processors.RiskEngine`（现货子集：
-//! `placeOrderRiskCheck`/`placeOrder`/`placeExchangeOrder`，行 399–685，现货分支 633–685）。
-//! 权威参考：`docs/superpowers/specs/2026-08-31-p3-spot-risk-reference.md` §2。
+//! `placeOrderRiskCheck`/`placeOrder`/`placeExchangeOrder`，行 399–685，现货分支 633–685；
+//! P4 Task 3 新增期货分支：`placeOrder` 期货路径/`canPlaceMarginOrder`/`closePositionRiskCheck`/
+//! `maxClosableSize`，行 436–503/533–623/823–875）。
+//! 权威参考：`docs/superpowers/specs/2026-08-31-p3-spot-risk-reference.md` §2（现货）、
+//! `docs/superpowers/specs/2026-09-01-p4-futures-risk-reference.md` §3（期货 R1）。
 //!
 //! # Ruling P3-B（borrow 设计）
 //! `RiskEngine` 不持有 `UserProfileService`/`SymbolSpecificationProvider` 的所有权——方法按需
@@ -14,20 +17,41 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::matcher_event_type::MatcherEventType;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order_type::OrderType;
+use crate::core::common::position_direction::PositionDirection;
+use crate::core::common::position_mode::PositionMode;
+use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-/// 对应 Java `RiskEngine`（现货子集）。shard 全局守恒桶（参考文档 §5/§6）：
+/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（`CoreArithmeticUtils` 里的
+/// 同名函数按 Task 1 零依赖 ruling 是私有的），风格对齐 `symbol_position_record.rs` 同款 helper。
+fn mul_exact(a: i64, b: i64) -> i64 {
+    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
+}
+
+/// 对应 Java `Math.subtractExact(long, long)`。
+fn sub_exact(a: i64, b: i64) -> i64 {
+    i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
+}
+
+/// 对应 Java `RiskEngine`（现货子集 + P4 期货 R1 子集）。shard 全局守恒桶（参考文档 §5/§6）：
 /// - `adjustments`：`BALANCE_ADJUSTMENT`（充提）的对冲桶——`accounts[cur] += amountDiff` 的同时
 ///   `adjustments[cur] -= amountDiff`，使 `Σ accounts[cur] + adjustments[cur]` 恒定。
 /// - `fees`：现货成交平台手续费累计桶（Task 6/7 `handle_matcher_events_exchange_sell/buy` 写入）。
+/// - `last_price_cache`：对应 Java `lastPriceCache`（`IntObjectHashMap<LastPriceCacheRecord>`）
+///   ——P4 Task 3 简化子集：只存 `markPrice`（`i64`），完整 `LastPriceCacheRecord`
+///   （含 askPrice/bidPrice）延后到有消费者（清算/ADL，P6）时再补字段。symbol -> markPrice；
+///   缺失或 `0` 都表示"尚无有效标记价"（对应 Java `priceRecord == null || priceRecord.markPrice
+///   == 0` 两种情况，见 [`Self::mark_price`]）。
+/// - `cfg_margin_trading_enabled`：对应 Java `cfgMarginTradingEnabled` 配置开关。
 ///
 /// Java 还有 `suspends`（`BalanceAdjustmentType::Suspend` 型对冲桶）——本任务按 brief 明确延后
 /// （SUSPEND_USER 命令未移植），故不建该字段，避免无命令路径写入的死字段。
@@ -35,11 +59,34 @@ use crate::core::utils::core_arithmetic_utils as arithmetic;
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
+    pub last_price_cache: BTreeMap<i32, i64>,
+    pub cfg_margin_trading_enabled: bool,
 }
 
 impl RiskEngine {
+    /// **Ruling P4-B**：`cfg_margin_trading_enabled` 默认 `true`（P4 期货测试路径默认可用）——
+    /// `#[derive(Default)]` 会给出 `false`，但全仓库唯一的构造入口是 `RiskEngine::new()`
+    /// （无调用点用 `RiskEngine::default()`，见任务报告核对），故这里手写默认值不影响
+    /// derive 出的 `Default` 对既有测试的行为。新增两个字段均以空/零值起步，不改变现货路径
+    /// （`place_exchange_order`）的既有行为——它从不读这两个字段。
     pub fn new() -> Self {
-        RiskEngine { adjustments: BTreeMap::new(), fees: BTreeMap::new() }
+        RiskEngine {
+            adjustments: BTreeMap::new(),
+            fees: BTreeMap::new(),
+            last_price_cache: BTreeMap::new(),
+            cfg_margin_trading_enabled: true,
+        }
+    }
+
+    /// 对应 Java `lastPriceCache.get(symbol)` 之后取 `.markPrice`（简化子集，见结构体字段
+    /// 文档）：`None`（未缓存）与 `Some(0)`（缓存了但标记价为 0）统一折叠成 `None`——对应 Java
+    /// `priceRecord == null || priceRecord.markPrice == 0` 两个 null/零值分支合并成一个"不可用"
+    /// 结果，调用方（`place_order`/`can_place_margin_order`）不用重复判两次。
+    pub fn mark_price(&self, symbol: i32) -> Option<i64> {
+        match self.last_price_cache.get(&symbol) {
+            Some(&p) if p != 0 => Some(p),
+            _ => None,
+        }
     }
 
     /// 对应 Java `RiskEngine.preProcessCommand`（管线结构对齐重构新增）：R1 入口，按
@@ -48,7 +95,10 @@ impl RiskEngine {
     ///   的逻辑搬迁至此）——`AddUser`→[`Self::add_user`]、`BalanceAdjustment`→
     ///   [`Self::balance_adjustment`]，其余（本移植子集里只有 `BinaryDataCommand`）→
     ///   `MatchingUnsupportedCommand`（未移植该命令的处理器，不 panic）。
-    /// - `PlaceOrder`：调用 [`Self::place_order_risk_check`] 做风控冻结（R1 hold）。
+    /// - `PlaceOrder`：调用 [`Self::place_order_risk_check`] 做风控冻结（R1 hold，现货/期货
+    ///   两分支，见该方法文档）。
+    /// - `ClosePosition`（P4 Task 3 新增）：调用 [`Self::close_position_risk_check`]——期货纯
+    ///   减仓命令，无 NSF 检查（不开新敞口）。
     /// - `CancelOrder`/`MoveOrder`/`ReduceOrder`/`OrderBookRequest`（以及本移植子集里的
     ///   `Reset`/`Nop`）：R1 无动作，直落 ME，`cmd.result_code` 留给 ME/R2 决定——对应 Java
     ///   `preProcessCommand` 里这些分支没有风控前置校验。
@@ -73,14 +123,14 @@ impl RiskEngine {
 
         if cmd.command == OrderCommandType::PlaceOrder {
             cmd.result_code = Some(self.place_order_risk_check(cmd, ups, ssp));
+        } else if cmd.command == OrderCommandType::ClosePosition {
+            cmd.result_code = Some(self.close_position_risk_check(cmd, ups, ssp));
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
 
     /// 对应 Java `placeOrderRiskCheck`（399–420）：加载 user profile（缺失 → `AuthInvalidUser`）、
-    /// 加载 symbol spec（缺失 → `InvalidSymbol`），现货分支转 [`Self::place_exchange_order`]。
-    /// 非现货 symbol（期货/期权）本期未移植，`unimplemented!`（对应 Java `placeOrder` 434 行以下
-    /// 的 margin 分支，属 P4 范围）。
+    /// 加载 symbol spec（缺失 → `InvalidSymbol`），转 [`Self::place_order`] 做现货/期货分派。
     ///
     /// 省略 Java 的 `cfgIgnoreRiskProcessing` 开关——P3 未移植该配置项，恒走风控路径。
     pub fn place_order_risk_check(
@@ -97,18 +147,293 @@ impl RiskEngine {
             Some(s) => s,
             None => return CommandResultCode::InvalidSymbol,
         };
-        if spec.symbol_type != SymbolType::CurrencyExchangePair {
-            unimplemented!("P4: futures/margin");
+        self.place_order(cmd, user_profile, spec, ssp)
+    }
+
+    /// 对应 Java `placeOrder`（432–503）：现货 → [`Self::place_exchange_order`]；期货
+    /// （`isFuturesContract`）→ 校验（margin trading 开关/mark price/marginMode+leverage
+    /// 跨腿一致）→ 解析/分配 `SymbolPositionRecord`（NSF 通过前不插入 `positions`）→ ONEWAY
+    /// reduce-only 夹 → `isValidLeverage` → [`Self::can_place_margin_order`] NSF →
+    /// 成功后 `pendingHold[Budget]` + 提交仓入 map。非 perp/非 spot（期权等）`unimplemented!`
+    /// （P5/P6 范围）。参考文档 §3 "placeOrder 期货分支检查序"。
+    ///
+    /// # Rust 对齐 Java 对象池"NSF 前不插入"的做法
+    /// Java 用对象池 new/put 一个可能被丢弃的 `SymbolPositionRecord`；Rust 无对象池，改为：
+    /// 从 `positions` map **clone** 出已有记录（或新建一个本地默认值）到局部变量 `position`，
+    /// 全程只读/只改这份本地副本，NSF 通过后再整体 `insert` 回 map（覆盖旧值或新建条目）——
+    /// 既不会在 NSF 失败时污染 map，也不需要"归还池"这一步。
+    fn place_order(
+        &mut self,
+        cmd: &mut OrderCommand,
+        user_profile: &mut UserProfile,
+        spec: &CoreSymbolSpecification,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        if spec.symbol_type == SymbolType::CurrencyExchangePair {
+            let currency = if matches!(cmd.action, Some(OrderAction::Bid)) {
+                spec.quote_currency
+            } else {
+                spec.base_currency
+            };
+            let currency_spec = ssp
+                .get_currency(currency)
+                .unwrap_or_else(|| panic!("currency spec missing for currency {currency}"));
+            return self.place_exchange_order(cmd, user_profile, spec, currency_spec);
         }
-        let currency = if matches!(cmd.action, Some(OrderAction::Bid)) {
-            spec.quote_currency
-        } else {
-            spec.base_currency
+        if !spec.symbol_type.is_futures_contract() {
+            unimplemented!("P5/P6: option symbol type");
+        }
+        if !self.cfg_margin_trading_enabled {
+            return CommandResultCode::RiskMarginTradingDisabled;
+        }
+        let mark_price = match self.mark_price(cmd.symbol) {
+            Some(p) => p,
+            None => return CommandResultCode::RiskMarkpriceNotAvailable,
         };
+        let action = cmd.action.expect("PLACE_ORDER requires action");
+
+        // 同 symbol 下所有仓位（ONEWAY 至多 1 条，HEDGE 至多 2 条）必须 marginMode + leverage 一致。
+        if user_profile.count_position_record(spec.symbol_id, |pos| pos.margin_mode != cmd.margin_mode) > 0 {
+            return CommandResultCode::RiskMarginModeMismatch;
+        }
+        if user_profile.count_position_record(spec.symbol_id, |pos| !pos.is_same_leverage(cmd.leverage)) > 0 {
+            return CommandResultCode::RiskLeverageMismatch;
+        }
+
+        let position_key = user_profile.create_positions_key(spec.symbol_id, action, cmd.command);
+        let mut position = match user_profile.positions.get(&position_key) {
+            Some(existing) => existing.clone(),
+            None => {
+                let mut p = SymbolPositionRecord::default();
+                p.initialize(user_profile.uid, spec.symbol_id, spec.quote_currency, action, cmd.leverage, cmd.margin_mode);
+                p
+            }
+        };
+
+        // ONEWAY + reduce-only：裁剪 size 到 ≤ 当前反向可平量；同向/无仓直接 SUCCESS no-op
+        // （不开新敞口，也不必"归还"——position 只是本地副本，从未插入 map）。
+        if user_profile.position_mode == PositionMode::OneWay && cmd.is_reduce_only() {
+            cmd.size = Self::max_closable_size(&position, action, cmd.size);
+            if cmd.size <= 0 {
+                return CommandResultCode::Success;
+            }
+        }
+
         let currency_spec = ssp
-            .get_currency(currency)
-            .unwrap_or_else(|| panic!("currency spec missing for currency {currency}"));
-        self.place_exchange_order(cmd, user_profile, spec, currency_spec)
+            .get_currency(position.currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {}", position.currency));
+
+        let notional = position.estimate_notional_for_order(action, cmd.size, mark_price);
+        if !spec.is_valid_leverage(notional, cmd.leverage) {
+            return CommandResultCode::RiskInvalidLeverage;
+        }
+
+        if !self.can_place_margin_order(cmd, user_profile, spec, &position, position_key, currency_spec, ssp) {
+            return CommandResultCode::RiskNsf;
+        }
+
+        // 校验全过：pendingHold 占用（BUDGET 单 cmd.price 是总预算，用 pendingHoldBudget；
+        // 普通限价 cmd.price 是单价，用 pendingHold），再 commit 本地副本回 map。
+        if matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget)) {
+            position.pending_hold_budget(action, cmd.size, cmd.price);
+        } else {
+            position.pending_hold(action, cmd.size, cmd.price);
+        }
+        user_profile.positions.insert(position_key, position);
+
+        CommandResultCode::ValidForMatchingEngine
+    }
+
+    /// 对应 Java `canPlaceMarginOrder`（`:533-623`）：期货下单 NSF 校验——五项加总（scale 到
+    /// currency 后比较）与账户可支配额度比较，`true` 表示可下单。参考文档 §3.3。
+    ///
+    /// `position_key` 替代 Java 的对象引用 `==` 恒等比较（`posRecord == position`）：
+    /// Rust 这里的 `position` 是从 `positions` map clone 出的独立副本而非同一对象，但 NSF 检查
+    /// 发生在把它插回 map 之前——此时 map 里对应 `position_key` 的记录（若存在）与本地副本状态
+    /// 完全一致，故用 key 相等判定"本仓"与 Java 的对象恒等语义等价。
+    #[allow(clippy::too_many_arguments)] // 逐字对齐 Java canPlaceMarginOrder 的参数集，拆分反而失真
+    fn can_place_margin_order(
+        &self,
+        cmd: &OrderCommand,
+        user_profile: &UserProfile,
+        spec: &CoreSymbolSpecification,
+        position: &SymbolPositionRecord,
+        position_key: i32,
+        currency_spec: &CoreCurrencySpecification,
+        ssp: &SymbolSpecificationProvider,
+    ) -> bool {
+        let action = cmd.action.expect("PLACE_ORDER requires action");
+        let is_budget_order = matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
+
+        // ────────────────────────────────────────────────────────────
+        // ① positionMargin：本仓含新挂单后的总保证金。BUDGET 单 cmd.price 已是总预算 notional；
+        //   LIMIT 单需 × size。-1 哨兵（新单不扩最坏敞口）→ 回退到含现有 pending 的
+        //   calculateRequiredMarginForFutures。
+        // ────────────────────────────────────────────────────────────
+        let order_notional = if is_budget_order { cmd.price } else { mul_exact(cmd.size, cmd.price) };
+        let new_order_margin = position.calculate_required_margin_for_order(spec, action, order_notional);
+        let position_margin = if new_order_margin == -1 {
+            position.calculate_required_margin_for_futures(spec)
+        } else {
+            new_order_margin
+        };
+
+        // ────────────────────────────────────────────────────────────
+        // ② crossFreeMargin（currency scale，可负）：遍历账户所有仓位。
+        //   - 本仓（key == position_key）：仅 CROSS 才加自身浮盈（用本单 spec 缩放；margin 已含
+        //     在 positionMargin 里，不重复减）。
+        //   - 其它同 quoteCurrency 仓（含 HEDGE 对侧腿）：CROSS 加其浮盈（用其自身 otherSpec
+        //     缩放），且**无论 marginMode**都减其 calculateRequiredMarginForFutures——任何仓的
+        //     锁定保证金都要从可支配里剥离，只有 CROSS 的浮盈能加回来抵扣。
+        // ────────────────────────────────────────────────────────────
+        let mut cross_free_margin: i64 = 0;
+        for (&key, pos_record) in user_profile.positions.iter() {
+            if key == position_key {
+                if pos_record.margin_mode == MarginMode::Cross {
+                    let mark = self.mark_price(pos_record.symbol).unwrap_or_else(|| {
+                        panic!("mark price missing for open position symbol {}", pos_record.symbol)
+                    });
+                    cross_free_margin += arithmetic::size_price_to_currency_scale(
+                        pos_record.estimate_pnl(mark),
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        currency_spec.currency_scale_k,
+                    );
+                }
+            } else if pos_record.currency == spec.quote_currency {
+                let other_spec = ssp
+                    .get_symbol(pos_record.symbol)
+                    .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", pos_record.symbol));
+                if pos_record.margin_mode == MarginMode::Cross {
+                    let mark = self.mark_price(pos_record.symbol).unwrap_or_else(|| {
+                        panic!("mark price missing for open position symbol {}", pos_record.symbol)
+                    });
+                    cross_free_margin += arithmetic::size_price_to_currency_scale(
+                        pos_record.estimate_pnl(mark),
+                        other_spec.base_scale_k,
+                        other_spec.quote_scale_k,
+                        currency_spec.currency_scale_k,
+                    );
+                }
+                cross_free_margin -= arithmetic::size_price_to_currency_scale(
+                    pos_record.calculate_required_margin_for_futures(other_spec),
+                    other_spec.base_scale_k,
+                    other_spec.quote_scale_k,
+                    currency_spec.currency_scale_k,
+                );
+            }
+        }
+
+        // ────────────────────────────────────────────────────────────
+        // ③ pendingFee：本单成交按 taker rate 预扣估算（NSF 预检用，不实收）。
+        // ────────────────────────────────────────────────────────────
+        let pending_fee = if is_budget_order {
+            position.calculate_pending_fee_for_order_budget(spec, action, cmd.size, cmd.price)
+        } else {
+            position.calculate_pending_fee_for_order(spec, action, cmd.size, cmd.price)
+        };
+
+        // ────────────────────────────────────────────────────────────
+        // ④ openLoss：开仓瞬间浮亏预留（防"开仓即爆仓"）。BUDGET 单跳过（成交价由撮合决定）。
+        //   openingSize：ONEWAY 且反向于现仓时先抵掉 openVolume，剩余部分才是真正新开敞口；
+        //   否则（同向/无仓/HEDGE）openingSize = 全部 cmd.size。
+        // ────────────────────────────────────────────────────────────
+        let mut open_loss: i64 = 0;
+        if !is_budget_order {
+            let opposite_to_pos = user_profile.position_mode == PositionMode::OneWay
+                && position.open_volume > 0
+                && ((action == OrderAction::Bid && position.direction == PositionDirection::Short)
+                    || (action == OrderAction::Ask && position.direction == PositionDirection::Long));
+            let opening_size =
+                if opposite_to_pos { 0i64.max(sub_exact(cmd.size, position.open_volume)) } else { cmd.size };
+            if opening_size > 0 {
+                let mark_price = self
+                    .mark_price(cmd.symbol)
+                    .unwrap_or_else(|| panic!("mark price missing for symbol {} (checked by caller)", cmd.symbol));
+                let order_cost = mul_exact(opening_size, cmd.price);
+                let mark_cost = mul_exact(opening_size, mark_price);
+                open_loss = match action {
+                    OrderAction::Bid => 0i64.max(sub_exact(order_cost, mark_cost)),
+                    OrderAction::Ask => 0i64.max(sub_exact(mark_cost, order_cost)),
+                };
+            }
+        }
+
+        // ────────────────────────────────────────────────────────────
+        // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押（loanCollateralLocked，P5 前恒 0）；
+        //   需求 = scale(positionMargin + pendingFee + openLoss) − crossFreeMargin。
+        // ────────────────────────────────────────────────────────────
+        let currency = position.currency;
+        let spendable = user_profile.account(currency) - user_profile.locked(currency)
+            - self.loan_collateral_locked(user_profile, currency);
+        let required = arithmetic::size_price_to_currency_scale(
+            position_margin + pending_fee + open_loss,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            currency_spec.currency_scale_k,
+        ) - cross_free_margin;
+        required <= spendable
+    }
+
+    /// 对应 Java `loanCollateralLocked`（`:1063-1072`）：借贷抵押锁定额，P5 移植前的 stub——
+    /// 恒返回 `0`（不抵扣任何可支配额度）。占位保留调用点与签名，供 P5 落地时就地替换实现，
+    /// 无需改调用方（`can_place_margin_order`/未来 `withdrawableBalance` 等）。
+    fn loan_collateral_locked(&self, _user_profile: &UserProfile, _currency: i32) -> i64 {
+        0
+    }
+
+    /// 对应 Java `closePositionRiskCheck`（`:823-865`）：`CLOSE_POSITION` R1——纯减仓、无新敞口
+    /// math。同 `place_order` 期货分支的守卫序（symbol/futures type/margin trading 开关），
+    /// 缺仓或 `maxClosableSize<=0` 一律 `SUCCESS` no-op（不下单也不报错）；有效减仓则收敛
+    /// `cmd.size` 到可平量，`cmd.leverage`/`cmd.marginMode` 强制随仓（防止调用方传入与仓位不一致
+    /// 的值污染 ME 事件），`pendingHold` 占用挂单量。
+    pub fn close_position_risk_check(
+        &mut self,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let user_profile = match ups.get_mut(cmd.uid) {
+            Some(u) => u,
+            None => return CommandResultCode::AuthInvalidUser,
+        };
+        let spec = match ssp.get_symbol(cmd.symbol) {
+            Some(s) => s,
+            None => return CommandResultCode::InvalidSymbol,
+        };
+        if !spec.symbol_type.is_futures_contract() {
+            return CommandResultCode::UnsupportedSymbolType;
+        }
+        if !self.cfg_margin_trading_enabled {
+            return CommandResultCode::RiskMarginTradingDisabled;
+        }
+
+        let action = cmd.action.expect("CLOSE_POSITION requires action");
+        let position_key = user_profile.create_positions_key(spec.symbol_id, action, cmd.command);
+        let position = match user_profile.positions.get_mut(&position_key) {
+            Some(p) => p,
+            None => return CommandResultCode::Success,
+        };
+        let close_size = Self::max_closable_size(position, action, cmd.size);
+        if close_size <= 0 {
+            return CommandResultCode::Success;
+        }
+        cmd.size = close_size;
+        cmd.leverage = position.leverage;
+        cmd.margin_mode = position.margin_mode;
+
+        position.pending_hold(action, cmd.size, cmd.price);
+        CommandResultCode::ValidForMatchingEngine
+    }
+
+    /// 对应 Java `maxClosableSize`（`:870-875`）：可平量——只有 `position.direction` 与
+    /// `action` 反向时才有意义（`isOppositeToAction`）；`EMPTY`/同向 直接返回 `0`，让上游
+    /// no-op，防止 reduce-only/CLOSE_POSITION 被误用成开新敞口。
+    fn max_closable_size(pos: &SymbolPositionRecord, action: OrderAction, requested_size: i64) -> i64 {
+        if !pos.direction.is_opposite_to_action(action) {
+            return 0;
+        }
+        requested_size.min(pos.open_volume)
     }
 
     /// 对应 Java `placeExchangeOrder`（633–685）：现货下单冻结。BID 锁 quote，ASK 锁 base；
@@ -2201,5 +2526,418 @@ mod tests {
         let mut engine = RiskEngine::new();
         let cmd = balance_adjustment_cmd(999, QUOTE, 100, 1);
         assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::AuthInvalidUser);
+    }
+
+    // ================================================================================
+    // P4 Task 3：期货 R1 — place_order 期货分支 / can_place_margin_order NSF / CLOSE_POSITION
+    // 参考文档 §3；Java `RiskEngine.java:432-503,533-623,823-875`。
+    //
+    // 搭建：单 symbol（FUT_SYMBOL，base/quote/currency scale 全 1——恒等缩放，NSF 算式手推
+    // 便于核对）+ mark price 缓存 + 一个已建档、按需充值的用户。leverage 默认 1（未配置
+    // init_margin 表 → calculateInitMargin = notional/leverage，即 100% 名义价值）。
+    // ================================================================================
+
+    const FUT_SYMBOL: i32 = 200;
+    const FUT_BASE: i32 = 1;
+    const FUT_QUOTE: i32 = 2;
+
+    fn futures_spec_for(symbol_id: i32, taker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: FUT_BASE,
+            quote_currency: FUT_QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            taker_fee,
+            maker_fee: 0,
+            fee_scale_k,
+            ..Default::default()
+        }
+    }
+
+    fn futures_spec(taker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
+        futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k)
+    }
+
+    fn setup_futures(
+        taker_fee: i64,
+        fee_scale_k: i64,
+        quote_balance: i64,
+        mark_price: i64,
+    ) -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
+        let mut ssp = SymbolSpecificationProvider::new();
+        assert_eq!(ssp.add_symbol(futures_spec(taker_fee, fee_scale_k)), CommandResultCode::Success);
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        ups.get_mut(UID).unwrap().add_to_account(FUT_QUOTE, quote_balance);
+
+        let mut engine = RiskEngine::new();
+        engine.last_price_cache.insert(FUT_SYMBOL, mark_price);
+        (engine, ups, ssp)
+    }
+
+    fn futures_place_cmd(
+        action: OrderAction,
+        size: i64,
+        price: i64,
+        leverage: i32,
+        margin_mode: MarginMode,
+        reduce_only: bool,
+    ) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 1,
+            symbol: FUT_SYMBOL,
+            price,
+            size,
+            action: Some(action),
+            order_type: Some(OrderType::Gtc),
+            uid: UID,
+            leverage,
+            margin_mode,
+            order_flags: if reduce_only {
+                crate::core::common::cmd::order_command::FLAG_REDUCE_ONLY
+            } else {
+                0
+            },
+            ..Default::default()
+        }
+    }
+
+    // --------------------------------------------------------------------------
+    // 成功开仓 + pending 记录 —— 固定费（fee_scale_k=0）+ ISOLATED 一组
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_long_sufficient_margin_fixed_fee_is_valid_and_records_pending() {
+        // taker_fee=2（固定，每手 2）；balance=10_000（充裕）；mark=100。
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
+
+        // 手推：positionMargin=1000（新开 notional 1000/leverage 1）+ pendingFee=20（10*2 固定费）
+        // + openLoss=0（cmd.price==mark）= required 1020 ≤ spendable 10_000。
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        let position =
+            ups.get_mut(UID).unwrap().positions.get(&FUT_SYMBOL).expect("NSF 通过后 position 必须已提交入 map");
+        assert_eq!(position.pending_buy_size, 10);
+        assert_eq!(position.pending_buy_avg_price, 100);
+        assert_eq!(position.open_volume, 0); // R1 只挂单占用，未成交（成交结算在 R2，P4 Task 4+）
+        assert_eq!(position.leverage, 1);
+        assert_eq!(position.margin_mode, MarginMode::Isolated);
+    }
+
+    #[test]
+    fn futures_place_order_insufficient_margin_fixed_fee_is_nsf_and_position_not_created() {
+        // 同上参数，但 balance=1_000 < required 1020 → NSF；且不得污染 positions map。
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 1_000, 100);
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
+
+        assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
+        assert!(
+            !ups.get_mut(UID).unwrap().positions.contains_key(&FUT_SYMBOL),
+            "NSF 失败不得插入 position（NSF 前不插入是 P4 Task 3 的核心约束）"
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // 成功开仓 / NSF 边界 —— 比例费（fee_scale_k>0）+ ISOLATED 一组
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_proportional_fee_sufficient_margin_is_valid() {
+        // taker_fee=100/fee_scale_k=10_000（1% 比例费率）：pendingFee=ceil(10*100*100/10_000)=10。
+        // required=1000(positionMargin)+10(pendingFee)+0(openLoss)=1010 ≤ spendable 2_000。
+        let (mut engine, mut ups, ssp) = setup_futures(100, 10_000, 2_000, 100);
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+    }
+
+    #[test]
+    fn futures_place_order_proportional_fee_insufficient_margin_is_nsf() {
+        // required=1010 > spendable 1_005 → NSF（验证比例费模型下 pendingFee 确实被算入比较）。
+        let (mut engine, mut ups, ssp) = setup_futures(100, 10_000, 1_005, 100);
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
+        assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
+    }
+
+    // --------------------------------------------------------------------------
+    // 杠杆超档 → RiskInvalidLeverage
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_leverage_exceeds_tier_is_invalid_leverage() {
+        // max_leverage 表只配一档 {floor:0 -> 5}：floor_value 对任意 notional 都定位到这唯一档，
+        // 相当于全局杠杆上限 5x（语义见 CoreSymbolSpecification::floor_value 文档）。
+        let mut spec = futures_spec(2, 0);
+        spec.max_leverage.insert(0, 5);
+        let mut ssp = SymbolSpecificationProvider::new();
+        assert_eq!(ssp.add_symbol(spec), CommandResultCode::Success);
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        ups.get_mut(UID).unwrap().add_to_account(FUT_QUOTE, 100_000);
+
+        let mut engine = RiskEngine::new();
+        engine.last_price_cache.insert(FUT_SYMBOL, 100);
+
+        // leverage=10 > 5x 上限，即便资金充裕也应在 isValidLeverage 处直接拒绝（NSF 检查之前）。
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 10, MarginMode::Isolated, false);
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::RiskInvalidLeverage
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // marginMode / leverage 跨腿一致性
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_margin_mode_mismatch_against_existing_position() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+        ups.get_mut(UID)
+            .unwrap()
+            .positions
+            .insert(FUT_SYMBOL, SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 3));
+
+        // 同 leverage(3)，marginMode 与现仓（ISOLATED）冲突（CROSS）→ 在 NSF 检查之前拒绝。
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 3, MarginMode::Cross, false);
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::RiskMarginModeMismatch
+        );
+    }
+
+    #[test]
+    fn futures_place_order_leverage_mismatch_against_existing_position() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+        ups.get_mut(UID)
+            .unwrap()
+            .positions
+            .insert(FUT_SYMBOL, SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 3));
+
+        // 同 marginMode(ISOLATED)，leverage 与现仓（3）冲突（5）。
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 5, MarginMode::Isolated, false);
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::RiskLeverageMismatch
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // ONEWAY + reduce-only 夹（§2 "ONEWAY 只减仓特例"）
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_oneway_reduce_only_clamps_size_to_open_volume_and_succeeds() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+        let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+        pos.direction = PositionDirection::Long;
+        pos.open_volume = 5;
+        pos.open_price_sum = 500; // 均价 100
+        pos.open_init_margin_sum = 500; // 与未配置 init_margin 表下 notional/leverage 一致
+        ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, pos);
+
+        // reduce-only ASK（与现仓 LONG 反向）请求 size=20 > openVolume=5 → 夹到 5。
+        let mut cmd = futures_place_cmd(OrderAction::Ask, 20, 100, 1, MarginMode::Isolated, true);
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        assert_eq!(cmd.size, 5, "reduce-only 请求量必须被夹到可平量 openVolume");
+
+        let updated = ups.get_mut(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(updated.pending_sell_size, 5);
+    }
+
+    #[test]
+    fn futures_place_order_oneway_reduce_only_no_position_clamps_to_zero_is_noop_success() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+
+        // 无仓时 maxClosableSize 恒 0——reduce-only 直接 SUCCESS no-op，绝不开新敞口。
+        let mut cmd = futures_place_cmd(OrderAction::Ask, 5, 100, 1, MarginMode::Isolated, true);
+        assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert!(!ups.get_mut(UID).unwrap().positions.contains_key(&FUT_SYMBOL));
+    }
+
+    // --------------------------------------------------------------------------
+    // crossFreeMargin 循环 —— CROSS 浮盈可抵扣 / ISOLATED 只扣不抵（§3.3 ②，最易出错的部分）
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_cross_position_unrealized_profit_credits_other_symbol_order() {
+        const OTHER_SYMBOL: i32 = 201;
+        let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 600, 100);
+        assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
+        engine.last_price_cache.insert(OTHER_SYMBOL, 200); // OTHER_SYMBOL mark 涨到 200
+
+        // 已有 CROSS 仓（OTHER_SYMBOL，LONG open_volume=10 @ 均价 100）：
+        // estimatePnl = (10*200 - 1000)*+1 = 1000；calculateRequiredMarginForFutures = 500
+        //（openInitMarginSum=500，无 pending，新增敞口 0）。
+        let mut other_pos = SymbolPositionRecord::new(UID, OTHER_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
+        other_pos.direction = PositionDirection::Long;
+        other_pos.open_volume = 10;
+        other_pos.open_price_sum = 1000;
+        other_pos.open_init_margin_sum = 500;
+        ups.get_mut(UID).unwrap().positions.insert(OTHER_SYMBOL, other_pos);
+
+        // 新单（FUT_SYMBOL，全新仓）required(不计cross抵扣)=1020（同 fixed_fee 成功用例）；
+        // crossFreeMargin = scale(1000) - scale(500) = 500 → required 实际 = 1020-500=520。
+        // spendable=600 ≥ 520：若没有 CROSS 抵扣（cross_free_margin 算错成 0），600 < 1020 应报
+        // NSF——本测试断言 ValidForMatchingEngine，专门锁定"CROSS 其它仓浮盈能抵扣"这条通路。
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
+        assert_eq!(
+            engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+    }
+
+    #[test]
+    fn futures_place_order_isolated_other_position_margin_is_deducted_without_pnl_credit() {
+        const OTHER_SYMBOL: i32 = 201;
+        // balance=1_000：若 ISOLATED 其它仓的锁定保证金被错误地"抵扣浮盈但不扣保证金"（对称处理），
+        // 1_000 会 ≥ 1020 通过；正确实现须把该仓 calculateRequiredMarginForFutures(=500) 也从
+        // spendable 里剥离（不加浮盈抵扣，因为 marginMode=ISOLATED），required 实际 = 1020-(0-500)
+        // = 1520 > 1_000 → 必须 NSF。
+        let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 1_000, 100);
+        assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
+        engine.last_price_cache.insert(OTHER_SYMBOL, 200);
+
+        let mut other_pos = SymbolPositionRecord::new(UID, OTHER_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+        other_pos.direction = PositionDirection::Long;
+        other_pos.open_volume = 10;
+        other_pos.open_price_sum = 1000;
+        other_pos.open_init_margin_sum = 500;
+        ups.get_mut(UID).unwrap().positions.insert(OTHER_SYMBOL, other_pos);
+
+        let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
+        assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
+    }
+
+    // --------------------------------------------------------------------------
+    // CLOSE_POSITION（§3 CLOSE_POSITION）
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn close_position_risk_check_no_position_is_noop_success() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::ClosePosition,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Ask),
+            size: 10,
+            price: 100,
+            uid: UID,
+            ..Default::default()
+        };
+        assert_eq!(engine.close_position_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+    }
+
+    #[test]
+    fn close_position_risk_check_existing_position_clamps_size_and_forces_leverage_margin_mode() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+        let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Cross, 7);
+        pos.direction = PositionDirection::Long;
+        pos.open_volume = 5;
+        pos.open_price_sum = 500;
+        ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, pos);
+
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::ClosePosition,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Ask), // 反向平多
+            size: 999,                      // 请求量超过持仓 → 应收敛到 open_volume=5
+            price: 100,
+            uid: UID,
+            leverage: 1,                       // 与仓位 leverage(7) 不同——应被强制覆盖
+            margin_mode: MarginMode::Isolated,  // 与仓位 marginMode(Cross) 不同——应被强制覆盖
+            ..Default::default()
+        };
+
+        assert_eq!(
+            engine.close_position_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        assert_eq!(cmd.size, 5);
+        assert_eq!(cmd.leverage, 7);
+        assert_eq!(cmd.margin_mode, MarginMode::Cross);
+
+        let updated = ups.get_mut(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(updated.pending_sell_size, 5);
+    }
+
+    #[test]
+    fn close_position_risk_check_unsupported_symbol_type_for_spot() {
+        // CLOSE_POSITION 对现货 symbol 应直接拒绝（isFuturesContract 守卫），不查 positions。
+        let mut ssp = SymbolSpecificationProvider::new();
+        assert_eq!(
+            ssp.add_symbol(CoreSymbolSpecification {
+                symbol_id: SYMBOL,
+                symbol_type: SymbolType::CurrencyExchangePair,
+                base_currency: BASE,
+                quote_currency: QUOTE,
+                base_scale_k: 1,
+                quote_scale_k: 1,
+                ..Default::default()
+            }),
+            CommandResultCode::Success
+        );
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        let mut engine = RiskEngine::new();
+
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::ClosePosition,
+            symbol: SYMBOL,
+            action: Some(OrderAction::Ask),
+            size: 10,
+            price: 100,
+            uid: UID,
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.close_position_risk_check(&mut cmd, &mut ups, &ssp),
+            CommandResultCode::UnsupportedSymbolType
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // pre_process_command 路由：CLOSE_POSITION → close_position_risk_check
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn pre_process_command_routes_close_position_to_close_position_risk_check() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
+        let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+        pos.direction = PositionDirection::Long;
+        pos.open_volume = 5;
+        pos.open_price_sum = 500;
+        ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, pos);
+
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::ClosePosition,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Ask),
+            size: 999,
+            price: 100,
+            uid: UID,
+            ..Default::default()
+        };
+        engine.pre_process_command(&mut cmd, &mut ups, &ssp);
+        assert_eq!(cmd.result_code, Some(CommandResultCode::ValidForMatchingEngine));
+        assert_eq!(cmd.size, 5);
     }
 }
