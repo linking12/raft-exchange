@@ -127,3 +127,22 @@
 
 ## 自查（对照参考）
 §1 模型→T1/T2；§2 mode→T1；§3 R1→T3；§4 R2→T4；§5 统一账户→T5；§6 费/funding-hook→T4(费)/P6(funding)；§7 守恒→T4/T8；§8 spec 字段→T1。全覆盖。类型 `SymbolPositionRecord`/枚举跨 T1-8 一致；`calculate_locked` 统一现货(P3)+期货(P4)。
+
+---
+
+## P4 完成状态（2026-09-02）
+**完成。** 8 任务 + 1 终审修复全部评审 clean，`cargo test` **463 绿**（含 256-case 完整期货守恒 proptest）。执行账本：`.superpowers/sdd/2026-09-01-exchange-core-rust-port-p4-futures/progress.md`（工作区随收官删除；账本内容摘录于此）。
+
+**关键结论**
+- 完整期货守恒公式（终审确认、每 currency 零容差）：
+  `Σ_users accounts + adjustments + fees + Σ_positions(estimate_pnl(mark) + extra_margin) == 0`。
+  延迟实现：`position.profit`（未实现盈亏）与 `extra_margin`（待退保证金）是仓内账本字段，平仓 teardown 各恰好结算一次退回 accounts，故守恒中性。（我原 brief 的简写公式 `Σaccounts+adjustments+fees==0` 不完整——实现者复推补全，非弱化。）
+- 全分支终审（opus）确认：**无第三守恒 bug**；两腿同 `mte.price`/`mark_price` 反向注入 `Σ estimate_pnl` 互消，故开/减/平/翻/mark 变动均守恒中性；substrate 确定性干净（全 BTreeMap，无 HashMap/float/unsafe/Rc/RefCell）；self-trade 安全。
+- 终审 Important 已修（**commit 93504de7**，Ruling P4-E）：`markprice_adjustment` 挡 `price<=0`→`RiskInvalidAmount`，堵住 mark=0 折 None 后下游三处 panic 的 Raft 集群级崩溃（Java 无此 guard 但优雅降级；本移植曾严格劣于 Java）。
+
+**Commit 链（P4 range 8a0a3d4b..93504de7）**：Task1 ffe71acd｜T2 322fbf73｜T3 b7019255(含 crash-safety fix b7019255)｜T4 db634416｜T5 b416c31b｜T6 16a1f987｜T7 8b59349f(router CLOSE_POSITION 修复)｜T8 b3cfe72c｜终审 fix 93504de7。
+
+**carry-forward（惰性 stub/不可达，非静默错误，均经终审+任务评审验证）**
+- → **P5**：`loan_collateral_locked` stub 现返回 0，loan 落地时接真实值；`place_exchange_order` 现货 NSF 当前漏减 `loan_collateral_locked`（stub=0 故当前无影响），P5 同步补齐。
+- → **P6**：HEDGE 的 `create_positions_key`/`removePositionRecord` 用 `cmd.command` 占位（ONEWAY 正确，HEDGE 因无 `position_mode` writer 不可达）；`ForceLiquidation` 是 live enum 变体但无 dispatcher——接线时必须加进 router 的 `PlaceOrder|ClosePosition` 分支（否则同 Task7 修掉的 wildcard-吞噬 bug）；`MatcherTradeEvent` 缺 `matched_order_command_type`（HEDGE-CLOSE 的 maker key 需要）；mark-price 命令省略的 `liquidationEngine.checkPositions` 强平/ADL 钩子；ADL leader-local 字段（adlEligibility/pendingADLSize/liquidationFlow）。
+- 通用：orderbook naive 3 个 pre-existing clippy warning（doc_lazy_continuation/too_many_arguments/explicit_counter_loop，非 P4 引入）；`place_order` 对未注册 currency/symbol spec 的 config-invariant panic（与现货 P1-P3 一致；P5/P6 若统一 crash-safety 可转返回码）。
