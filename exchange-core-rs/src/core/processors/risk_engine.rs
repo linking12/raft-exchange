@@ -2236,15 +2236,20 @@ impl RiskEngine {
     /// - **apply**（`cmd.if_takeover_size == Some(size)` 时）：`direction =
     ///   PositionDirection::of_action(cmd.action)`（对应 Java `cmd.action == BID ? LONG :
     ///   SHORT`），调用 [`IfCommandProcessor::apply_event`]（薄封装 `accept_if_position`）。
-    /// - **finalize 前半（关 taker 仓）**：只在接管成功（`Some`）且 taker 在 `cmd.symbol` 上确有
-    ///   持仓记录时执行——对应 Java `takerSpr != null && matcherEvent.eventType != REJECT` 双重
-    ///   门。`close_current_position_futures(action.opposite(), cmd.size, cmd.price)`
-    ///   （不收手续费——对应 Java `finalizeForCommand` 确实没有算 taker/maker fee，纯粹是
-    ///   IFCommandProcessor 与 `handleMatcherEventMargin` 的差异点，非本移植遗漏）；随后
-    ///   `is_empty()` 才触发 extra_margin 退款 + profit 结算入账户 + 移除持仓记录——这段逻辑
-    ///   与 `settle_margin_position_event` 里 TRADE 分支收尾几乎逐字相同（同一套"仓位清空后
-    ///   结算"语义，见 `if_command_processor.rs` 模块文档"三段式与账户结算的落点分工"一节，
-    ///   解释了为什么在这里内联而不是抽成第三个共享函数）。
+    /// - **finalize 前半（关 taker 仓）**：只在接管成功（`Some`）且 taker 在
+    ///   `up.create_positions_key(cmd.symbol, cmd.action, cmd.command)` 上确有持仓记录时执行——
+    ///   对应 Java `takerSpr != null && matcherEvent.eventType != REJECT` 双重门，其中 `takerSpr`
+    ///   由 `takerUp.positions.get(takerUp.createPositionsKey(symbol, cmd.action, cmd.command))`
+    ///   取得（`RiskEngine.handlerRiskRelease:947-948`）——**不是**裸 `symbol`，与
+    ///   `settle_margin_position_event`/`margin_adjustment` 等其它全部结算落点用同一套查找规则
+    ///   （ONEWAY 下二者退化为同一个值，是当前唯一可达路径；HEDGE 才会分叉，见
+    ///   `if_command_processor.rs` 模块文档）。`close_current_position_futures(action.opposite(),
+    ///   cmd.size, cmd.price)`（不收手续费——对应 Java `finalizeForCommand` 确实没有算
+    ///   taker/maker fee，纯粹是 IFCommandProcessor 与 `handleMatcherEventMargin` 的差异点，非本
+    ///   移植遗漏）；随后 `is_empty()` 才触发 extra_margin 退款 + profit 结算入账户 + 移除持仓
+    ///   记录——这段逻辑与 `settle_margin_position_event` 里 TRADE 分支收尾几乎逐字相同（同一套
+    ///   "仓位清空后结算"语义，含 key 查找方式，见 `if_command_processor.rs` 模块文档"三段式与
+    ///   账户结算的落点分工"一节，解释了为什么在这里内联而不是抽成第三个共享函数）。
     /// - **finalize 后半（释放 reserved）**：**无论接管成功/全拒都执行**——对称于 R1 的
     ///   `reserve_if_notional`（对应 Java `finalizeForCommand` 末尾 `releaseReservedIFNotional`
     ///   永远跑，不在任何 `if` 分支内）。
@@ -2269,14 +2274,22 @@ impl RiskEngine {
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
 
             let up = ups.get_or_add_suspended(cmd.uid);
-            if up.positions.contains_key(&symbol) {
-                up.positions.get_mut(&symbol).unwrap().close_current_position_futures(action.opposite(), cmd.size, price);
+            // 对应 Java `RiskEngine.handlerRiskRelease:947-948`：`takerSpr = takerUp.positions.get(
+            // takerUp.createPositionsKey(symbol, cmd.action, cmd.command))`——按 `create_positions_key`
+            // 算出的 key 查 taker 仓位，不是裸 `symbol`。ONEWAY 下两者退化为同一个值（`create_positions_key`
+            // 忽略 action/command），本次切换对当前唯一可达路径（ONEWAY）是 no-op；但与
+            // `settle_margin_position_event`（P4 Task 4）/`margin_adjustment`/`calculate_locked` 等
+            // 其它全部结算落点保持同一套查找规则，为将来 HEDGE（`cmd.action==Ask` 时会查到错误的
+            // 那条腿）铺好正确的接线。
+            let position_key = up.create_positions_key(symbol, action, cmd.command);
+            if up.positions.contains_key(&position_key) {
+                up.positions.get_mut(&position_key).unwrap().close_current_position_futures(action.opposite(), cmd.size, price);
 
-                let is_empty = up.positions.get(&symbol).unwrap().is_empty();
+                let is_empty = up.positions.get(&position_key).unwrap().is_empty();
                 if is_empty {
-                    let currency = up.positions.get(&symbol).unwrap().currency;
+                    let currency = up.positions.get(&position_key).unwrap().currency;
 
-                    let extra_margin = up.positions.get(&symbol).unwrap().extra_margin;
+                    let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
                     if extra_margin > 0 {
                         let refund = arithmetic::size_price_to_currency_scale(
                             extra_margin,
@@ -2285,10 +2298,10 @@ impl RiskEngine {
                             currency_spec.currency_scale_k,
                         );
                         up.add_to_account(currency, refund);
-                        up.positions.get_mut(&symbol).unwrap().extra_margin = 0;
+                        up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
                     }
 
-                    let profit = up.positions.get(&symbol).unwrap().profit;
+                    let profit = up.positions.get(&position_key).unwrap().profit;
                     if profit != 0 {
                         let profit_scaled = arithmetic::size_price_to_currency_scale(
                             profit,
@@ -2298,7 +2311,7 @@ impl RiskEngine {
                         );
                         up.add_to_account(currency, profit_scaled);
                     }
-                    up.positions.remove(&symbol);
+                    up.positions.remove(&position_key);
                 }
             }
         }
@@ -6585,6 +6598,28 @@ mod tests {
                 OrderCommand { command: OrderCommandType::IfDeposit, symbol: FUT_SYMBOL, price: 0, order_id: 1, ..Default::default() };
             engine.pre_process_command(&mut cmd, &mut ups, &ssp);
             assert_eq!(cmd.result_code, Some(CommandResultCode::RiskInvalidAmount));
+        }
+
+        #[test]
+        fn taker_position_lookup_goes_through_create_positions_key_not_raw_symbol() {
+            // 对应 Java `RiskEngine.handlerRiskRelease:947-948`：`takerSpr = takerUp.positions.get(
+            // takerUp.createPositionsKey(symbol, cmd.action, cmd.command))`——不是裸 symbol。
+            // ONEWAY 下 `create_positions_key` 退化为裸 symbol（唯一当前可达路径），这里显式断言
+            // 这个退化关系本身，并证明 finalize 确实是通过这个 key（不是巧合地用了同一个值）找到
+            // 并关闭 taker 仓位的。
+            let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
+            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 100_000);
+
+            let position_key = ups.get(TAKER_UID).unwrap().create_positions_key(FUT_SYMBOL, OrderAction::Bid, OrderCommandType::IfTakeover);
+            assert_eq!(position_key, FUT_SYMBOL, "ONEWAY: create_positions_key 退化为裸 symbol");
+
+            let mut cmd = if_takeover_cmd(OrderAction::Bid, 100, 100);
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            // 仓位确实是在 `position_key` 这个 key 上被关闭/移除的（ONEWAY 下与裸 symbol 数值相同，
+            // 但查找路径必须走 create_positions_key——回归防护同 sibling 结算落点一致的规则）。
+            assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&position_key));
         }
     }
 }

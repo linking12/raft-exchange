@@ -15,7 +15,14 @@
 //! 的 `settle_margin_position_event` 里已有一份几乎逐字相同的实现（TRADE 事件收尾），为避免
 //! 引入第二套微妙不同的"仓位清空后结算"实现，`RiskEngine::if_takeover_apply`
 //! 直接内联同款逻辑（少了 taker/maker 手续费那一段——IF 接管不收成交费，对应 Java
-//! `finalizeForCommand` 确实没有算 fee），而不是把它拆成本文件里的第四个函数。
+//! `finalizeForCommand` 确实没有算 fee），而不是把它拆成本文件里的第四个函数。**"几乎逐字相同"
+//! 明确包含仓位 map 的查找方式**：taker 仓位记录必须经
+//! `up.create_positions_key(symbol, cmd.action, cmd.command)`（对应 Java
+//! `RiskEngine.handlerRiskRelease:947-948` 的 `takerUp.createPositionsKey(symbol, cmd.action,
+//! cmd.command)`）取 key，不能直接用裸 `symbol` 查——`settle_margin_position_event` 的两个调用点
+//! （`:259`/`:638`/`:1553`/`:1575` 等全部结算落点）都遵守这条规则，`if_takeover_apply` 同样如此
+//! （ONEWAY 下 `create_positions_key` 忽略 action/command、退化为裸 symbol，这是唯一当前可达路径，
+//! HEDGE 下才会分叉出不同的 key）。
 //!
 //! # 事件载体的移植偏差（同 P5/P6 既有先例，Ruling P6-A/P6-C）
 //! Java 用 `MatcherEventType::IF_EVENT`（`matchedOrderUid` 承载 shard id）在 R1→ME(merge)→R2
