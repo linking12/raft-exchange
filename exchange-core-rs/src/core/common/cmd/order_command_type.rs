@@ -1,4 +1,6 @@
-/// 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`（现货相关子集）。
+/// 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`（现货子集 + P4 Task 1 期货
+/// `create_positions_key` 所需的 `CLOSE_POSITION`/`FORCE_LIQUIDATION` 两个变体；其余期货/借贷/
+/// 清算变体本移植尚未列入）。
 /// `is_non_trading()` / `is_loan()` 对照 Java 的二级 dispatch 门守分类语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
@@ -6,10 +8,16 @@ pub enum OrderCommandType {
     CancelOrder,
     MoveOrder,
     ReduceOrder,
+    /// 对应 Java `CLOSE_POSITION`（码 5）：纯减仓期货命令，`UserProfile::create_positions_key`
+    /// 会把命中该类型的 key 翻转到对侧仓位（见 `common::user_profile`）。
+    ClosePosition,
     OrderBookRequest,
     AddUser,
     BalanceAdjustment,
     BinaryDataCommand,
+    /// 对应 Java `FORCE_LIQUIDATION`（码 20）：强平期货命令，`create_positions_key` 翻转逻辑
+    /// 与 `ClosePosition` 相同（P6 强平扫描消费；本移植 Task 1 只搬键计算）。
+    ForceLiquidation,
     Reset,
     Nop,
 }
@@ -21,9 +29,11 @@ impl OrderCommandType {
             OrderCommandType::CancelOrder => 2,
             OrderCommandType::MoveOrder => 3,
             OrderCommandType::ReduceOrder => 4,
+            OrderCommandType::ClosePosition => 5,
             OrderCommandType::OrderBookRequest => 6,
             OrderCommandType::AddUser => 10,
             OrderCommandType::BalanceAdjustment => 11,
+            OrderCommandType::ForceLiquidation => 20,
             OrderCommandType::BinaryDataCommand => 91,
             OrderCommandType::Nop => 120,
             OrderCommandType::Reset => 124,
@@ -68,9 +78,11 @@ mod tests {
         assert_eq!(OrderCommandType::CancelOrder.code(), 2);
         assert_eq!(OrderCommandType::MoveOrder.code(), 3);
         assert_eq!(OrderCommandType::ReduceOrder.code(), 4);
+        assert_eq!(OrderCommandType::ClosePosition.code(), 5);
         assert_eq!(OrderCommandType::OrderBookRequest.code(), 6);
         assert_eq!(OrderCommandType::AddUser.code(), 10);
         assert_eq!(OrderCommandType::BalanceAdjustment.code(), 11);
+        assert_eq!(OrderCommandType::ForceLiquidation.code(), 20);
         assert_eq!(OrderCommandType::BinaryDataCommand.code(), 91);
         assert_eq!(OrderCommandType::Nop.code(), 120);
         assert_eq!(OrderCommandType::Reset.code(), 124);
