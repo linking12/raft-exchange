@@ -97,6 +97,7 @@ impl MatchingEngineRouter {
             OrderCommandType::ReduceOrder => book.reduce_order(cmd),
             OrderCommandType::PlaceOrder
             | OrderCommandType::ClosePosition
+            | OrderCommandType::ForceLiquidation
             | OrderCommandType::LoanForceLiquidate
             | OrderCommandType::LoanCrossForceLiquidate => {
                 // 对应 Java `IOrderBook.processCommand`（`:191-199`）：`PLACE_ORDER` 与
@@ -106,6 +107,12 @@ impl MatchingEngineRouter {
                 // （`handler_risk_release` 按 `spec.symbol_type` 分支，不看 `cmd.command`）。
                 // Task 7：两个强平码同理并入——R1（`LoanCommandDispatcher`）已算好
                 // `action=ASK/order_type=IOC`，`new_order` 只管撮合，不关心命令码。
+                // P6 Task 2：`ForceLiquidation`（期货强平，R1 由 P6 后续任务的强平流程算好
+                // `action`/`order_type`/`price`/`size` 再放行）同理并入——此前遗漏在这个 allowlist
+                // 里，落到下面的 `_ => MatchingUnsupportedCommand` 通配分支，覆盖掉 R1 已经写好的
+                // `ValidForMatchingEngine`（与 P4 Task 7 修复过的 `ClosePosition` 同一类 bug，
+                // Java `MatchingEngineRouter.java:206-214` 的 `FORCE_LIQUIDATION` 从来就在这张
+                // allowlist 里，只是 Rust 移植时的直接遗漏，非设计分歧）。
                 if cmd.result_code == Some(CommandResultCode::ValidForMatchingEngine) {
                     // new_order 内部已经写 cmd.result_code（P1 收尾修复），此处直接透传其返回值。
                     book.new_order(cmd)
@@ -322,6 +329,74 @@ mod tests {
         let rc = router.process_order(&mut close);
         assert_eq!(rc, CommandResultCode::UnsupportedSymbolType);
         assert_eq!(close.result_code, Some(CommandResultCode::UnsupportedSymbolType));
+
+        let mut req = OrderCommand {
+            command: OrderCommandType::OrderBookRequest,
+            symbol: 1,
+            size: 10,
+            ..Default::default()
+        };
+        router.process_order(&mut req);
+        let md = req.market_data.expect("应回填 L2 数据");
+        assert!(md.ask_prices.is_empty());
+    }
+
+    // --------------------------------------------------------------------------
+    // P6 Task 2：ForceLiquidation 与 PlaceOrder/ClosePosition 共用 newOrder 分支（对应 Java
+    // `IOrderBook.processCommand:191-199` + `MatchingEngineRouter.java:206-214`）。回归此前遗漏
+    // （`ForceLiquidation` 落在 `_ => MatchingUnsupportedCommand`，会覆盖 R1 已经写好的
+    // `ValidForMatchingEngine`）——同一类 bug、同一种修复手法，已在 P4 Task 7 为 `ClosePosition`
+    // 修过一次。
+    // --------------------------------------------------------------------------
+
+    fn force_liquidation_cmd(order_id: i64, symbol: i32, result_code: CommandResultCode) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            order_id,
+            symbol,
+            price: 100,
+            size: 10,
+            action: Some(OrderAction::Ask),
+            order_type: Some(OrderType::Gtc),
+            uid: order_id,
+            result_code: Some(result_code),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn force_liquidation_valid_for_matching_engine_routes_and_rests_on_book() {
+        let mut router = MatchingEngineRouter::new();
+        router.add_symbol(&spec(1));
+
+        let mut force = force_liquidation_cmd(1, 1, CommandResultCode::ValidForMatchingEngine);
+        let rc = router.process_order(&mut force);
+        assert_eq!(rc, CommandResultCode::Success);
+        assert_eq!(force.result_code, Some(CommandResultCode::Success));
+
+        let mut req = OrderCommand {
+            command: OrderCommandType::OrderBookRequest,
+            symbol: 1,
+            size: 10,
+            ..Default::default()
+        };
+        router.process_order(&mut req);
+        let md = req.market_data.expect("应回填 L2 数据");
+        assert_eq!(md.ask_prices, vec![100]);
+        assert_eq!(md.ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn force_liquidation_not_valid_for_matching_engine_is_not_placed_and_result_code_preserved() {
+        let mut router = MatchingEngineRouter::new();
+        router.add_symbol(&spec(1));
+
+        // R1 拒绝：ME 不应撮合/挂簿，也不应把结果覆盖成 MatchingUnsupportedCommand——修复前的
+        // bug 正是这里：ForceLiquidation 落进通配分支，无论 R1 结果是什么都会被覆盖。
+        let mut force = force_liquidation_cmd(1, 1, CommandResultCode::UnsupportedSymbolType);
+        let rc = router.process_order(&mut force);
+        assert_eq!(rc, CommandResultCode::UnsupportedSymbolType);
+        assert_eq!(force.result_code, Some(CommandResultCode::UnsupportedSymbolType));
 
         let mut req = OrderCommand {
             command: OrderCommandType::OrderBookRequest,

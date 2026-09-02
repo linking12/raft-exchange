@@ -195,6 +195,12 @@ fn matcher_events_diff(
                         x.matched_order_uid, y.matched_order_uid
                     ));
                 }
+                if x.matched_order_command_type != y.matched_order_command_type {
+                    return Some(format!(
+                        "idx {idx}: matched_order_command_type differs: naive={:?} direct={:?}",
+                        x.matched_order_command_type, y.matched_order_command_type
+                    ));
+                }
                 ai = x.next.as_deref();
                 bi = y.next.as_deref();
                 idx += 1;

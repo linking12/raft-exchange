@@ -1,6 +1,7 @@
 //! 整簿撮合实现。对应 Java: exchange.core2.core.orderbook.OrderBookNaiveImpl
 use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::matcher_event_type::MatcherEventType;
@@ -70,6 +71,7 @@ impl OrderBookNaiveImpl {
             action,
             uid: cmd.uid,
             timestamp: cmd.timestamp,
+            command: cmd.command,
         };
 
         self.buckets_by_action_mut(action)
@@ -205,7 +207,7 @@ impl OrderBookNaiveImpl {
             // remaining_in_call 从 size_left 递减；归零即代表 taker 整体成交完毕
             // （size_left 就是 taker 当前总剩余量，与 Java `volumeToCollect == 0` 语义一致）。
             let mut remaining_in_call = size_left;
-            bucket.match_forward(size_left, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price| {
+            bucket.match_forward(size_left, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price, maker_command| {
                 remaining_in_call -= trade;
                 let active_order_completed = remaining_in_call == 0;
                 // bidderHoldPrice = 成交双方中 BID 那一方的 reserve_bid_price（对照 Java
@@ -226,6 +228,9 @@ impl OrderBookNaiveImpl {
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
                     matched_order_uid: maker_uid,
+                    // 对应 Java `OrderBookEventsHelper.java:75`：maker（挂单方）自己的原命令类型，
+                    // 不是本次撮合的 taker 命令（P6-G：Naive/Direct 两簿须逐字节相同地填）。
+                    matched_order_command_type: maker_command,
                     next: None,
                 });
                 if maker_completed {
@@ -289,7 +294,7 @@ impl OrderBookNaiveImpl {
             let bucket = buckets.get_mut(&p).expect("bucket must exist for collected price");
 
             let mut remaining_in_call = size_cap;
-            bucket.match_forward(size_cap, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price| {
+            bucket.match_forward(size_cap, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price, maker_command| {
                 remaining_in_call -= trade;
                 let active_order_completed = remaining_in_call == 0;
                 // 同 match_against 的 bidderHoldPrice 语义（见该处注释）。
@@ -308,6 +313,8 @@ impl OrderBookNaiveImpl {
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
                     matched_order_uid: maker_uid,
+                    // 同 match_against：maker 自己的原命令类型（P6-G）。
+                    matched_order_command_type: maker_command,
                     next: None,
                 });
                 remaining_budget -= trade * p;
@@ -353,6 +360,8 @@ impl OrderBookNaiveImpl {
             bidder_hold_price: cmd.reserve_bid_price,
             // 对应 Java 注释 "matchedOrderUid; // 0 for rejection"：REJECT 无 maker，恒为 0。
             matched_order_uid: 0,
+            // REJECT 无 maker，字段无意义；Java 侧从不写它，取语义中性的默认值（同 matcher_trade_event.rs 文档）。
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: cmd.matcher_event.take(),
         };
         cmd.matcher_event = Some(Box::new(event));
@@ -542,6 +551,8 @@ impl IOrderBook for OrderBookNaiveImpl {
             bidder_hold_price: order.reserve_bid_price,
             // 对应 Java `sendReduceEvent` 未赋值 matchedOrderUid（恒为默认 0）。
             matched_order_uid: 0,
+            // REDUCE 无 maker，同 attach_reject_event 语义。
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: None,
         }));
         cmd.action = Some(order.action);
@@ -606,6 +617,7 @@ impl IOrderBook for OrderBookNaiveImpl {
             // 同 cancel_order：对应 Java `sendReduceEvent` 的 bidderHoldPrice/matchedOrderUid 语义。
             bidder_hold_price: order.reserve_bid_price,
             matched_order_uid: 0,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: None,
         }));
         cmd.action = Some(order.action);
@@ -725,8 +737,10 @@ impl IOrderBook for OrderBookNaiveImpl {
     /// 与 Java 的差异（有意，任务书允许）：
     /// - 不折叠 `symbolSpec.stateHash()`——P1 阶段尚无 `CoreSymbolSpecification`；
     /// - `orderHash` 取我们目前持有的字段（order_id/action/price/size/filled/reserve_bid_price/uid），
-    ///   Java 版还含 orderType/command/filledNotional/userCookie——这些字段本移植阶段
-    ///   要么不存在、要么恒为默认值，纳入不会增加确定性/敏感性，故略去。
+    ///   Java 版还含 orderType/command/filledNotional/userCookie——`command`（P6 Task 2 已给
+    ///   `Order` 补上该字段）与其余几个一样，本移植阶段要么不存在（orderType/filledNotional/
+    ///   userCookie）、要么纳入不会增加确定性/敏感性（command 只用于 P6-G 的
+    ///   `matched_order_command_type` 填充，与状态本身的确定性/敏感性无关），故仍统一略去。
     /// 因此不保证与 Java 侧数值相等，只保证「同操作序列 → 同 hash，不同状态 → 不同 hash」。
     fn state_hash(&self) -> i32 {
         fn order_hash(o: &Order) -> i64 {
@@ -881,6 +895,72 @@ mod ob_tests {
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![4]);
+    }
+
+    // ---- P6 Task 2: MatcherTradeEvent.matched_order_command_type（Ruling P6-G） ----
+    //
+    // 对照 Java `OrderBookEventsHelper.java:75`：`event.matchedOrderCommandType =
+    // matchingOrder.getCommand()`——`matchingOrder` 是 maker（挂单方），与触发本次撮合的 taker
+    // 命令类型无关。
+
+    /// taker=ForceLiquidation 撮 maker=普通 PlaceOrder 挂单：事件的 `matched_order_command_type`
+    /// 必须是 maker 的 `PlaceOrder`，而不是 taker 的 `ForceLiquidation`（Step1(b) 回归场景，
+    /// 对应 P6 Task 2 brief）。
+    #[test]
+    fn trade_event_matched_order_command_type_is_makers_command_not_takers() {
+        let mut book = OrderBookNaiveImpl::new();
+        // maker：普通 PlaceOrder 挂卖单。
+        let mut maker_cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 1, symbol: 1, price: 100, size: 10,
+            action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), uid: 501,
+            ..Default::default()
+        };
+        book.new_order(&mut maker_cmd);
+
+        // taker：ForceLiquidation 买单吃进。
+        let mut taker_cmd = OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            order_id: 2, symbol: 1, price: 100, size: 4,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Ioc), uid: 888,
+            ..Default::default()
+        };
+        book.new_order(&mut taker_cmd);
+
+        let ev = taker_cmd.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(
+            ev.matched_order_command_type,
+            OrderCommandType::PlaceOrder,
+            "matched_order_command_type 必须取 maker 的原命令类型，不是 taker 的 ForceLiquidation"
+        );
+    }
+
+    /// 反向场景：maker 自身的原命令是 ForceLiquidation（挂单后未立即撮合，留在簿上），taker 是
+    /// 普通 PlaceOrder——事件的 matched_order_command_type 应跟随 maker 翻转为 ForceLiquidation，
+    /// 证明字段确实读的是 maker 的 `Order.command` 而非任何固定值/taker 的命令。
+    #[test]
+    fn trade_event_matched_order_command_type_follows_maker_even_when_maker_is_force_liquidation() {
+        let mut book = OrderBookNaiveImpl::new();
+        let mut maker_cmd = OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            order_id: 1, symbol: 1, price: 100, size: 10,
+            action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), uid: 501,
+            ..Default::default()
+        };
+        book.new_order(&mut maker_cmd);
+
+        let mut taker_cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 2, symbol: 1, price: 100, size: 4,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 888,
+            ..Default::default()
+        };
+        book.new_order(&mut taker_cmd);
+
+        let ev = taker_cmd.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(ev.matched_order_command_type, OrderCommandType::ForceLiquidation);
     }
 
     // ---- Task 3: MatcherTradeEvent.bidder_hold_price / matched_order_uid ----
