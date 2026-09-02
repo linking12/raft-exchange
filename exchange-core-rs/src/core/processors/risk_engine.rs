@@ -29,6 +29,8 @@ use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
+use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
 /// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（`CoreArithmeticUtils` 里的
@@ -61,6 +63,11 @@ pub struct RiskEngine {
     pub fees: BTreeMap<i32, i64>,
     pub last_price_cache: BTreeMap<i32, i64>,
     pub cfg_margin_trading_enabled: bool,
+    /// 对应 Java `RiskEngine.loanService`（P5 Task 3 有意未加，本 Task 补上）：per-shard 借贷
+    /// 池状态 + 利率模型，供 `LoanCommandDispatcher`（`is_loan()` 门守命中后）读写 4 个资金桶
+    /// / 两套利率模型。默认构造（全桶空、默认利率曲线）——现货/期货既有路径从不读它，新增
+    /// 字段对它们是纯 no-op。
+    pub loan_service: LoanService,
 }
 
 impl RiskEngine {
@@ -75,6 +82,7 @@ impl RiskEngine {
             fees: BTreeMap::new(),
             last_price_cache: BTreeMap::new(),
             cfg_margin_trading_enabled: true,
+            loan_service: LoanService::new(),
         }
     }
 
@@ -114,6 +122,15 @@ impl RiskEngine {
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) {
+        // 对应 Java `preProcessCommand`（`:260-264`）的第一级门守：`isLoan()` 命中 → 整块委托
+        // `LoanCommandDispatcher.dispatch`，主 switch/`isNonTrading()` 分支永远看不到 loan 命令
+        // （两条门守互斥，参考文档 §0）。P5 Task 4：`LoanCommandDispatcher` 只落 4 个 Isolated
+        // 生命周期命令，其余 10 个 `is_loan()` 码命中 `LoanNotImplemented`（dispatcher 内部处理，
+        // 见其模块文档）。
+        if cmd.command.is_loan() {
+            cmd.result_code = Some(LoanCommandDispatcher::dispatch(self, cmd, ups, ssp));
+            return;
+        }
         if cmd.command.is_non_trading() {
             let rc = match cmd.command {
                 OrderCommandType::AddUser => self.add_user(cmd, ups),

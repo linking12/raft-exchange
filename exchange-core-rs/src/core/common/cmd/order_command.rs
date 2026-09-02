@@ -37,6 +37,12 @@ pub struct OrderCommand {
     /// 对应 Java `OrderCommand.marginMode`（默认 `MarginMode.ISOLATED`，码值 0，与
     /// `MarginMode::default()` 一致，derive 得到的零值恰好是正确默认值）。
     pub margin_mode: MarginMode,
+    /// 对应 Java `OrderCommand.userCookie`（`public int userCookie;`）。P5 Task 4 新增：
+    /// `LOAN_CREATE` 用其低字节承载 `rateMode`（`(byte) cmd.userCookie ==
+    /// IsolatedLoanRecord::RATE_MODE_FLOATING` 则 FLOATING，否则 LOCKED，见
+    /// `loan_command_dispatcher::handle_loan_create`）；其余命令不使用该字段，derive 出的零值
+    /// 与 Java 默认值一致，不影响任何既有构造点。
+    pub user_cookie: i32,
     pub result_code: Option<CommandResultCode>,
     pub matcher_event: Option<Box<MatcherTradeEvent>>,
     pub market_data: Option<L2MarketData>,
