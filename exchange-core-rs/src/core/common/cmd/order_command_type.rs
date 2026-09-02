@@ -1,6 +1,7 @@
 /// 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`（现货子集 + P4 Task 1 期货
-/// `create_positions_key` 所需的 `CLOSE_POSITION`/`FORCE_LIQUIDATION` 两个变体；其余期货/借贷/
-/// 清算变体本移植尚未列入）。
+/// `create_positions_key` 所需的 `CLOSE_POSITION`/`FORCE_LIQUIDATION` 两个变体 + P4 Task 6
+/// 新增 `LEVERAGE_ADJUSTMENT`/`MARGIN_ADJUSTMENT`/`MARKPRICE_ADJUSTMENT` 三个非交易命令；
+/// 其余期货/借贷/清算变体本移植尚未列入）。
 /// `is_non_trading()` / `is_loan()` 对照 Java 的二级 dispatch 门守分类语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
@@ -18,6 +19,16 @@ pub enum OrderCommandType {
     /// 对应 Java `FORCE_LIQUIDATION`（码 20）：强平期货命令，`create_positions_key` 翻转逻辑
     /// 与 `ClosePosition` 相同（P6 强平扫描消费；本移植 Task 1 只搬键计算）。
     ForceLiquidation,
+    /// 对应 Java `LEVERAGE_ADJUSTMENT`（码 21）：显式调整某 symbol 全部仓位的杠杆
+    /// （`RiskEngineCommandDispatcher.adjustLeverage`）。
+    LeverageAdjustment,
+    /// 对应 Java `MARGIN_ADJUSTMENT`（码 23）：追加/CROSS 充值保证金
+    /// （`RiskEngineCommandDispatcher.adjustMargin`）。
+    MarginAdjustment,
+    /// 对应 Java `MARKPRICE_ADJUSTMENT`（码 24）：更新 `lastPriceCache`
+    /// （`RiskEngineCommandDispatcher.adjustMarkPrice`；本移植未含 `liquidationEngine
+    /// .checkPositions` 清算钩子，P6 落地）。
+    MarkpriceAdjustment,
     Reset,
     Nop,
 }
@@ -34,6 +45,9 @@ impl OrderCommandType {
             OrderCommandType::AddUser => 10,
             OrderCommandType::BalanceAdjustment => 11,
             OrderCommandType::ForceLiquidation => 20,
+            OrderCommandType::LeverageAdjustment => 21,
+            OrderCommandType::MarginAdjustment => 23,
+            OrderCommandType::MarkpriceAdjustment => 24,
             OrderCommandType::BinaryDataCommand => 91,
             OrderCommandType::Nop => 120,
             OrderCommandType::Reset => 124,
@@ -42,14 +56,19 @@ impl OrderCommandType {
 
     /// 对应 Java `OrderCommandType.isNonTrading()`：命中即整块委托
     /// `RiskEngineCommandDispatcher.dispatch`，主 switch 只留交易/结算/引擎自身生命周期。
-    /// 现货子集里命中的只有 `ADD_USER` / `BALANCE_ADJUSTMENT` / `BINARY_DATA_COMMAND`
-    /// （Java 全集还含 INTERNAL_TRANSFER/MARGIN_ADJUSTMENT 等期货/借贷专用变体，本移植未列入）。
+    /// 现货子集 + P4 Task 6 期货非交易命令里命中的有 `ADD_USER` / `BALANCE_ADJUSTMENT` /
+    /// `BINARY_DATA_COMMAND` / `LEVERAGE_ADJUSTMENT` / `MARGIN_ADJUSTMENT` /
+    /// `MARKPRICE_ADJUSTMENT`（Java 全集还含 INTERNAL_TRANSFER/POSITION_MODE_ADJUSTMENT 等
+    /// 未移植变体）。
     pub fn is_non_trading(self) -> bool {
         matches!(
             self,
             OrderCommandType::AddUser
                 | OrderCommandType::BalanceAdjustment
                 | OrderCommandType::BinaryDataCommand
+                | OrderCommandType::LeverageAdjustment
+                | OrderCommandType::MarginAdjustment
+                | OrderCommandType::MarkpriceAdjustment
         )
     }
 
@@ -83,6 +102,9 @@ mod tests {
         assert_eq!(OrderCommandType::AddUser.code(), 10);
         assert_eq!(OrderCommandType::BalanceAdjustment.code(), 11);
         assert_eq!(OrderCommandType::ForceLiquidation.code(), 20);
+        assert_eq!(OrderCommandType::LeverageAdjustment.code(), 21);
+        assert_eq!(OrderCommandType::MarginAdjustment.code(), 23);
+        assert_eq!(OrderCommandType::MarkpriceAdjustment.code(), 24);
         assert_eq!(OrderCommandType::BinaryDataCommand.code(), 91);
         assert_eq!(OrderCommandType::Nop.code(), 120);
         assert_eq!(OrderCommandType::Reset.code(), 124);
@@ -90,10 +112,14 @@ mod tests {
 
     #[test]
     fn order_command_type_is_non_trading_classification_matches_java() {
-        // 非交易门守：ADD_USER / BALANCE_ADJUSTMENT / BINARY_DATA_COMMAND 命中。
+        // 非交易门守：ADD_USER / BALANCE_ADJUSTMENT / BINARY_DATA_COMMAND /
+        // LEVERAGE_ADJUSTMENT / MARGIN_ADJUSTMENT / MARKPRICE_ADJUSTMENT 命中。
         assert!(OrderCommandType::AddUser.is_non_trading());
         assert!(OrderCommandType::BalanceAdjustment.is_non_trading());
         assert!(OrderCommandType::BinaryDataCommand.is_non_trading());
+        assert!(OrderCommandType::LeverageAdjustment.is_non_trading());
+        assert!(OrderCommandType::MarginAdjustment.is_non_trading());
+        assert!(OrderCommandType::MarkpriceAdjustment.is_non_trading());
         // 主 switch 交易 / 撮合直落命令：不命中。
         assert!(!OrderCommandType::PlaceOrder.is_non_trading());
         assert!(!OrderCommandType::CancelOrder.is_non_trading());
