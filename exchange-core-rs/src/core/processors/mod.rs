@@ -14,8 +14,10 @@
 //! 任何影响输出的迭代禁用 `HashMap` 迭代序。
 
 pub mod funding_fee_command_processor;
+pub mod if_command_processor;
 pub mod internal_transfer_processor;
 pub mod journaling;
+pub mod liquidation;
 pub mod loan;
 pub mod loan_rate_pricing_processor;
 pub mod matching_engine_router;

@@ -84,6 +84,25 @@ pub struct OrderCommand {
     /// 不产生任何影响。
     #[allow(clippy::type_complexity)]
     pub funding_fee_event: Option<(BTreeMap<i64, i64>, BTreeMap<i64, i64>, i64)>,
+    /// P6 Task 5 新增：`IF_TAKEOVER` R1 专属载体——对应 Java
+    /// `OrderCommand.ifPreviewCoverByShard[shardId]`（按 shard 下标数组）单 shard 塌缩后的标量
+    /// 形态（Ruling P6-C）：`RiskEngine::if_takeover_collect` 调用
+    /// [`crate::core::processors::liquidation::liquidation_service::LiquidationService
+    /// ::reserve_if_notional`] 的返回值原样写入，R2 `RiskEngine::if_takeover_apply` 的 finalize
+    /// 阶段读取它调用 `release_reserved_if_notional`（无论接管成功/全拒都要释放，跟 R1 对称，见
+    /// `if_command_processor.rs` 模块文档）。其余命令类型恒为 `0`（derive 出的零值，`release`
+    /// 释放 0 是 no-op，不产生任何影响）。
+    pub if_preview_cover: i64,
+    /// P6 Task 5 新增：`IF_TAKEOVER` merge 专属载体——对应 Java
+    /// `MatcherEventType::IF_EVENT`/`REJECT`（`matchedOrderUid` 承载 shard id）在 R1→ME(merge)→R2
+    /// 之间传递数据；本移植不扩 `MatcherEventType`（Ruling P6-A），改用这个命令专属字段。
+    /// `Some(size)` = 接管成功（`size` 恒等于 `cmd.size`，单 shard collapse 下 all-or-nothing 退化
+    /// 结果，见 [`crate::core::processors::if_command_processor::IfCommandProcessor
+    /// ::build_matcher_event`] 文档）；`None` = 全拒（对应 Java `REJECT` 事件）。`RiskEngine
+    /// ::if_takeover_collect`（R1+merge 合并）写入，`RiskEngine::if_takeover_apply`（R2）
+    /// 消费——`Some` 时驱动 `accept_if_position` + 关 taker 仓，`None` 时两者都跳过（但下面的
+    /// `if_preview_cover` 释放不受影响，始终执行）。其余命令类型恒为 `None`。
+    pub if_takeover_size: Option<i64>,
 }
 
 impl OrderCommand {

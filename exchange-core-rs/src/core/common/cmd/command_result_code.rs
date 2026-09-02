@@ -15,6 +15,11 @@ pub enum CommandResultCode {
     RiskMarginModeMismatch,     // -2008（P4: 仓位模式不匹配）
     RiskMarginPositionNotExists, // -2009（P4 Task 6: MARGIN_ADJUSTMENT ISOLATED 目标仓位不存在）
     RiskMarkpriceNotAvailable,  // -2011（P4: mark price 缺失/为 0）
+    /// P6 Task 5：期货 `IF_WITHDRAW` 时 `available` 不足以覆盖提取额，逐字对齐 Java
+    /// `CommandResultCode.java:48`（`RISK_IF_INSUFFICIENT(-2012)`）。**与 loan 的
+    /// `LoanIfInsufficient`（-6053）是独立池子的独立错误码**，不可混用（同 `IfDeposit`/
+    /// `LoanIfDeposit` 互异先例，见 `order_command_type.rs`）。
+    RiskIfInsufficient, // -2012（P6: IF_WITHDRAW available 不足）
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
     MatchingInvalidOrderBookId, // -3005（Task 9: MatchingEngineRouter 未知 symbol）
@@ -79,6 +84,7 @@ impl CommandResultCode {
             CommandResultCode::RiskMarginModeMismatch => -2008,
             CommandResultCode::RiskMarginPositionNotExists => -2009,
             CommandResultCode::RiskMarkpriceNotAvailable => -2011,
+            CommandResultCode::RiskIfInsufficient => -2012,
             CommandResultCode::MatchingUnknownOrderId => -3002,
             CommandResultCode::MatchingUnsupportedCommand => -3004,
             CommandResultCode::MatchingInvalidOrderBookId => -3005,
@@ -153,6 +159,14 @@ mod tests {
         assert_eq!(CommandResultCode::RiskMarginModeMismatch.code(), -2008);
         assert_eq!(CommandResultCode::RiskMarginPositionNotExists.code(), -2009);
         assert_eq!(CommandResultCode::RiskMarkpriceNotAvailable.code(), -2011);
+    }
+
+    #[test]
+    fn p6_futures_if_result_code_matches_java_and_differs_from_loan_lif() {
+        // Java `CommandResultCode.java:48`：RISK_IF_INSUFFICIENT(-2012)，与 loan
+        // LoanIfInsufficient(-6053) 是互异的独立池子错误码。
+        assert_eq!(CommandResultCode::RiskIfInsufficient.code(), -2012);
+        assert_ne!(CommandResultCode::RiskIfInsufficient.code(), CommandResultCode::LoanIfInsufficient.code());
     }
 
     #[test]

@@ -31,7 +31,9 @@ use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::processors::funding_fee_command_processor::FundingFeeCommandProcessor;
+use crate::core::processors::if_command_processor::IfCommandProcessor;
 use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
+use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
 use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
@@ -72,6 +74,12 @@ pub struct RiskEngine {
     /// / 两套利率模型。默认构造（全桶空、默认利率曲线）——现货/期货既有路径从不读它，新增
     /// 字段对它们是纯 no-op。
     pub loan_service: LoanService,
+    /// 对应 Java `RiskEngine.liquidationService`（P6 Task 5 新增）：per-shard 期货保险基金（IF）
+    /// 状态——`notionals`/`positions` 两个桶**都进 state_hash/snapshot**（Ruling P6-E，与
+    /// `loan_service` 的 4 个资金桶同级复制语义，但与 loan LIF 是完全独立的池子，见
+    /// `liquidation_service.rs` 模块文档）。默认构造（全空），现货/期货既有路径从不读它，新增
+    /// 字段对它们是纯 no-op。
+    pub liquidation_service: LiquidationService,
 }
 
 impl RiskEngine {
@@ -87,6 +95,7 @@ impl RiskEngine {
             last_price_cache: BTreeMap::new(),
             cfg_margin_trading_enabled: true,
             loan_service: LoanService::new(),
+            liquidation_service: LiquidationService::new(),
         }
     }
 
@@ -144,6 +153,8 @@ impl RiskEngine {
                 OrderCommandType::MarkpriceAdjustment => self.markprice_adjustment(cmd, ssp),
                 OrderCommandType::RepriceLoanRates => self.reprice_loan_rates_collect(cmd),
                 OrderCommandType::InternalTransfer => self.internal_transfer_collect(cmd, ups, ssp),
+                OrderCommandType::IfDeposit => self.if_deposit(cmd, ssp),
+                OrderCommandType::IfWithdraw => self.if_withdraw(cmd, ssp),
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
             cmd.result_code = Some(rc);
@@ -158,6 +169,10 @@ impl RiskEngine {
             // `SETTLE_FUNDINGFEES` 不是 `is_non_trading()`（Task 1 已定），停留在主交易 switch，
             // 见 `Self::settle_funding_fees_collect` 文档。
             cmd.result_code = Some(self.settle_funding_fees_collect(cmd, ups, ssp));
+        } else if cmd.command == OrderCommandType::IfTakeover {
+            // `IF_TAKEOVER` 同样不是 `is_non_trading()`（参考文档 §0 末段已确认），停留在主交易
+            // switch，见 `Self::if_takeover_collect` 文档。
+            cmd.result_code = Some(self.if_takeover_collect(cmd));
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
@@ -798,6 +813,17 @@ impl RiskEngine {
         // 的分支（`:972-976`）。
         if cmd.command == OrderCommandType::SettleFundingfees {
             self.settle_funding_fees_apply(cmd, ups, ssp);
+            return;
+        }
+        // `IF_TAKEOVER` 是本移植第四个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链传数据
+        // 的命令（同上面三条注释一样的理由）——用 `cmd.if_takeover_size`/`cmd.if_preview_cover`
+        // 这两个专属载体而非 `matcher_event`（见 `if_command_processor.rs` 模块文档"事件载体的
+        // 移植偏差"）。对应 Java `RiskEngine.handlerRiskRelease` 处理 `IF_TAKEOVER` 的分支
+        // （`:962-966`/`:987-988`：`ifProcessor.applyEvent` 循环 + `finalizeForCommand`）。
+        // **`liquidationEngine.advanceLiquidation` 钩子未落地**（Java `:997`，Task 7 排期，见
+        // `if_command_processor.rs` 模块文档）。
+        if cmd.command == OrderCommandType::IfTakeover {
+            self.if_takeover_apply(cmd, ups, ssp);
             return;
         }
         if cmd.command.is_non_trading() {
@@ -2170,6 +2196,207 @@ impl RiskEngine {
             &spec,
             &currency_spec,
         );
+    }
+
+    // ====================================================================================
+    // `IF_TAKEOVER`（futures 保险基金接管，P6 Task 5）—— 参考文档 §2.2/§2.3，
+    // Java `IFCommandProcessor.java`（129 行）+ `RiskEngine.java:365-373`（R1）/`:962-988`（R2）。
+    // ====================================================================================
+
+    /// `IF_TAKEOVER` R1+merge：对应 Java `RiskEngine.java` case `IF_TAKEOVER`（`:365-373`）里
+    /// `ifProcessor.collectInput(cmd)` 这一步，叠加 `IFCommandProcessor.buildMatcherEvents`
+    /// （`:39-72`，merge）。单 shard 下（Ruling P6-C）"跨 shard 归并"是恒等操作，同
+    /// `settle_funding_fees_collect`/`internal_transfer_collect` 先例，一次性做完 R1+merge：
+    /// 1. R1 [`IfCommandProcessor::collect_input`]（薄封装
+    ///    [`LiquidationService::reserve_if_notional`]）：`preview = min(available-reserved,
+    ///    size*price)`，写入 `cmd.if_preview_cover`。
+    /// 2. merge [`IfCommandProcessor::build_matcher_event`]：`preview/price`（floor）
+    ///    与 `cmd.size` 比较，覆盖不满 → `None`（全拒，all-or-nothing），否则 `Some(cmd.size)`，
+    ///    写入 `cmd.if_takeover_size`。
+    ///
+    /// 结果码恒 `Success`（对应 Java `TwoStepCommandProcessor.process()`：`buildMatcherEvents`
+    /// 跑完后固定返回 `SUCCESS`，REJECT 是 matcher-event 级别的信号，不是命令级别的失败——调用方
+    /// 靠 `cmd.if_takeover_size == None` 判断"这次没接管成"，同 ADL/FundingFee 先例）。
+    ///
+    /// **未落地 `normalizeCmdPositionSize`**（Java `:369-370`，在 `collectInput` 之后、
+    /// 结果码落定之前按 taker `openVolume` 收敛 `cmd.size`）——`LiquidationEngine` 编排层职责，
+    /// Task 7 排期，见 `if_command_processor.rs` 模块文档"未移植"一节。
+    fn if_takeover_collect(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let preview = IfCommandProcessor::collect_input(&mut self.liquidation_service, cmd.symbol, cmd.size, cmd.price);
+        cmd.if_preview_cover = preview;
+        cmd.if_takeover_size = IfCommandProcessor::build_matcher_event(preview, cmd.size, cmd.price);
+        CommandResultCode::Success
+    }
+
+    /// `IF_TAKEOVER` R2（apply + finalize 合并）：对应 Java `RiskEngine.handlerRiskRelease`
+    /// 处理 `IF_TAKEOVER` 的两段（`:962-966` apply 循环 + `:987-988` finalize）+
+    /// `IFCommandProcessor.applyEvent`（`:75-86`）+ `IFCommandProcessor.finalizeForCommand`
+    /// （`:100-127`）。
+    ///
+    /// - **apply**（`cmd.if_takeover_size == Some(size)` 时）：`direction =
+    ///   PositionDirection::of_action(cmd.action)`（对应 Java `cmd.action == BID ? LONG :
+    ///   SHORT`），调用 [`IfCommandProcessor::apply_event`]（薄封装 `accept_if_position`）。
+    /// - **finalize 前半（关 taker 仓）**：只在接管成功（`Some`）且 taker 在 `cmd.symbol` 上确有
+    ///   持仓记录时执行——对应 Java `takerSpr != null && matcherEvent.eventType != REJECT` 双重
+    ///   门。`close_current_position_futures(action.opposite(), cmd.size, cmd.price)`
+    ///   （不收手续费——对应 Java `finalizeForCommand` 确实没有算 taker/maker fee，纯粹是
+    ///   IFCommandProcessor 与 `handleMatcherEventMargin` 的差异点，非本移植遗漏）；随后
+    ///   `is_empty()` 才触发 extra_margin 退款 + profit 结算入账户 + 移除持仓记录——这段逻辑
+    ///   与 `settle_margin_position_event` 里 TRADE 分支收尾几乎逐字相同（同一套"仓位清空后
+    ///   结算"语义，见 `if_command_processor.rs` 模块文档"三段式与账户结算的落点分工"一节，
+    ///   解释了为什么在这里内联而不是抽成第三个共享函数）。
+    /// - **finalize 后半（释放 reserved）**：**无论接管成功/全拒都执行**——对称于 R1 的
+    ///   `reserve_if_notional`（对应 Java `finalizeForCommand` 末尾 `releaseReservedIFNotional`
+    ///   永远跑，不在任何 `if` 分支内）。
+    ///
+    /// **`liquidationEngine.advanceLiquidation` 钩子未落地**（Java `:996-998`，R2 finalize 之后
+    /// 推进 FORCE→IF→ADL 状态机）——`LiquidationEngine` 属 Task 7 排期，不影响本 Task 负责的
+    /// IF 状态/账户结算正确性（钩子只是"结算后决定下一步降级到 ADL 与否"，不改写结算结果本身）。
+    fn if_takeover_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
+        let symbol = cmd.symbol;
+        let price = cmd.price;
+        let action = cmd.action.expect("IF_TAKEOVER requires action");
+        let accepted_size = cmd.if_takeover_size.take();
+
+        if let Some(size) = accepted_size {
+            let direction = PositionDirection::of_action(action);
+            IfCommandProcessor::apply_event(&mut self.liquidation_service, symbol, direction, size, price);
+
+            let spec = ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
+            let currency_spec = ssp
+                .get_currency(spec.quote_currency)
+                .cloned()
+                .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
+
+            let up = ups.get_or_add_suspended(cmd.uid);
+            if up.positions.contains_key(&symbol) {
+                up.positions.get_mut(&symbol).unwrap().close_current_position_futures(action.opposite(), cmd.size, price);
+
+                let is_empty = up.positions.get(&symbol).unwrap().is_empty();
+                if is_empty {
+                    let currency = up.positions.get(&symbol).unwrap().currency;
+
+                    let extra_margin = up.positions.get(&symbol).unwrap().extra_margin;
+                    if extra_margin > 0 {
+                        let refund = arithmetic::size_price_to_currency_scale(
+                            extra_margin,
+                            spec.base_scale_k,
+                            spec.quote_scale_k,
+                            currency_spec.currency_scale_k,
+                        );
+                        up.add_to_account(currency, refund);
+                        up.positions.get_mut(&symbol).unwrap().extra_margin = 0;
+                    }
+
+                    let profit = up.positions.get(&symbol).unwrap().profit;
+                    if profit != 0 {
+                        let profit_scaled = arithmetic::size_price_to_currency_scale(
+                            profit,
+                            spec.base_scale_k,
+                            spec.quote_scale_k,
+                            currency_spec.currency_scale_k,
+                        );
+                        up.add_to_account(currency, profit_scaled);
+                    }
+                    up.positions.remove(&symbol);
+                }
+            }
+        }
+
+        // finalize 后半：无论接管成功/全拒都释放本命令预冻结的 reserved（跟 R1 对称）。
+        self.liquidation_service.release_reserved_if_notional(symbol, cmd.if_preview_cover);
+    }
+
+    /// 对应 Java `RiskEngineCommandDispatcher.processIFDeposit`（`:465-495`）：futures `IF_DEPOSIT`
+    /// 运营充值——**与 loan `LOAN_IF_DEPOSIT`（`loan_command_dispatcher.rs::handle_loan_if_deposit`）
+    /// 是完全独立的池子**，字段映射也不同：`cmd.symbol` = 期货 symbol（不是币种！`LiquidationService
+    /// .notionals` 是按 symbol 记账），`cmd.price` = currency 记账单位下的充值额（不是
+    /// `cmd.size`——futures IF 与 loan LIF 的字段布局不同，逐字对齐 Java）。
+    ///
+    /// 单 shard 下省略 Java 的定向 shard 路由判断（`(int) cmd.uid == engine.getShardId()`）——同
+    /// `loan_command_dispatcher.rs` 的 `handle_pool_deposit`/`handle_loan_if_deposit` 既有先例，
+    /// 单 shard 该判断恒真，未搬迁；`cmd.uid` 在本移植里对这四类运营命令没有实际语义。
+    ///
+    /// 校验序（逐字对齐 Java）：`symbol` spec 存在 → `currency_amount > 0` → `quote_currency`
+    /// 的 `CoreCurrencySpecification` 存在 → **精度可逆校验**（`currency_to_size_price_scale`
+    /// 换算成 notional 后再 `size_price_to_currency_scale` 换算回来，必须严格等于原值，否则
+    /// `adjustments` 对冲会有截断残量、对账漂移）→ 全部通过才写状态：
+    /// `deposit_to_insurance_fund` + `adjustments[quote_currency] -= currency_amount`（对冲，
+    /// `Σ IFNotional.available（换算成 currency scale）+ adjustments[currency]` 恒定，同
+    /// `balance_adjustment`/loan pool 充提先例）。
+    fn if_deposit(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
+        let spec = match ssp.get_symbol(cmd.symbol) {
+            Some(s) => s,
+            None => return CommandResultCode::InvalidSymbol,
+        };
+        let currency_amount = cmd.price;
+        if currency_amount <= 0 {
+            return CommandResultCode::RiskInvalidAmount;
+        }
+        let currency_spec = match ssp.get_currency(spec.quote_currency) {
+            Some(c) => c,
+            None => return CommandResultCode::InvalidSymbol,
+        };
+        let notional = arithmetic::currency_to_size_price_scale(
+            currency_amount,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            currency_spec.currency_scale_k,
+        );
+        let round_tripped = arithmetic::size_price_to_currency_scale(
+            notional,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            currency_spec.currency_scale_k,
+        );
+        if round_tripped != currency_amount {
+            return CommandResultCode::RiskInvalidAmount;
+        }
+        let quote_currency = spec.quote_currency;
+        self.liquidation_service.deposit_to_insurance_fund(cmd.symbol, notional);
+        *self.adjustments.entry(quote_currency).or_insert(0) -= currency_amount;
+        CommandResultCode::Success
+    }
+
+    /// 对应 Java `RiskEngineCommandDispatcher.processIFWithdraw`（`:502-531`）：语义跟
+    /// [`Self::if_deposit`] 对称，差别只在正负号 + 非负校验——`available` 不足以覆盖时返回
+    /// `RiskIfInsufficient`（**futures 独立错误码，与 loan 的 `LoanIfInsufficient` 互异**，见
+    /// `command_result_code.rs`）。非负校验在 `LiquidationService::withdraw_from_insurance_fund`
+    /// 内部；只扣 `available`，不动 `reserved`（正在保护某笔强平的预冻结部分，运营不能拿走）。
+    fn if_withdraw(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
+        let spec = match ssp.get_symbol(cmd.symbol) {
+            Some(s) => s,
+            None => return CommandResultCode::InvalidSymbol,
+        };
+        let currency_amount = cmd.price;
+        if currency_amount <= 0 {
+            return CommandResultCode::RiskInvalidAmount;
+        }
+        let currency_spec = match ssp.get_currency(spec.quote_currency) {
+            Some(c) => c,
+            None => return CommandResultCode::InvalidSymbol,
+        };
+        let notional = arithmetic::currency_to_size_price_scale(
+            currency_amount,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            currency_spec.currency_scale_k,
+        );
+        let round_tripped = arithmetic::size_price_to_currency_scale(
+            notional,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            currency_spec.currency_scale_k,
+        );
+        if round_tripped != currency_amount {
+            return CommandResultCode::RiskInvalidAmount;
+        }
+        if !self.liquidation_service.withdraw_from_insurance_fund(cmd.symbol, notional) {
+            return CommandResultCode::RiskIfInsufficient;
+        }
+        let quote_currency = spec.quote_currency;
+        *self.adjustments.entry(quote_currency).or_insert(0) += currency_amount;
+        CommandResultCode::Success
     }
 
     /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage`（`ADD_LOAN` 分支，
@@ -6156,6 +6383,208 @@ mod tests {
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
             assert_eq!(ups.get(PAYER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().profit, 0, "no event -> no settlement");
             assert_eq!(total_conserved(&ups), before);
+        }
+    }
+
+    /// P6 Task 5：`IF_TAKEOVER` 全流程（R1+merge+R2 apply+finalize）——参考文档 §2.2。
+    mod if_takeover_tests {
+        use super::*;
+        use crate::core::common::position_direction::PositionDirection;
+        use crate::core::processors::liquidation::liquidation_service::IfNotional;
+
+        const TAKER_UID: i64 = 42;
+
+        fn run_full_pipeline(
+            engine: &mut RiskEngine,
+            cmd: &mut OrderCommand,
+            ups: &mut UserProfileService,
+            ssp: &SymbolSpecificationProvider,
+        ) {
+            engine.pre_process_command(cmd, ups, ssp);
+            engine.handler_risk_release(cmd, ups, ssp);
+        }
+
+        fn if_takeover_cmd(action: OrderAction, size: i64, price: i64) -> OrderCommand {
+            OrderCommand {
+                command: OrderCommandType::IfTakeover,
+                symbol: FUT_SYMBOL,
+                uid: TAKER_UID,
+                action: Some(action),
+                size,
+                price,
+                order_id: 1,
+                ..Default::default()
+            }
+        }
+
+        /// taker（即将被 IF 接管的破产用户）持一笔 LONG 仓位：`open_volume`/`open_price_sum`
+        /// 由调用方指定成本基（用于制造非零 PnL，验证 finalize 的 profit 结算路径）。
+        fn setup_with_taker_long_position(
+            mark_price: i64,
+            open_volume: i64,
+            open_price_sum: i64,
+        ) -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
+            let (engine, mut ups, ssp) = setup_futures(0, 0, 0, mark_price);
+            ups.users.clear();
+            assert_eq!(ups.add_empty_user_profile(TAKER_UID), CommandResultCode::Success);
+            ups.get_mut(TAKER_UID).unwrap().positions.insert(
+                FUT_SYMBOL,
+                SymbolPositionRecord {
+                    direction: PositionDirection::Long,
+                    open_volume,
+                    open_price_sum,
+                    ..SymbolPositionRecord::new(TAKER_UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
+                },
+            );
+            (engine, ups, ssp)
+        }
+
+        #[test]
+        fn full_cover_accepts_position_closes_taker_and_settles_pnl() {
+            // taker LONG 100 @ 成本基 9000（均价 90）；IF 以 price=100 接管全部 100 手。
+            let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
+            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 100_000); // 足额覆盖
+            let taker_account_before = ups.get(TAKER_UID).unwrap().account(FUT_QUOTE);
+
+            // cmd.action == BID：对应 taker 持仓方向 LONG（IF 接管同向仓位，参考文档 §2.2 字段映射）。
+            let mut cmd = if_takeover_cmd(OrderAction::Bid, 100, 100);
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+
+            // IF 侧：接管仓位入账，key = Long.multiplier()(1) * FUT_SYMBOL。
+            let key = FUT_SYMBOL as i64;
+            let if_pos = engine.liquidation_service.positions.get(&key).expect("IF position must be recorded");
+            assert_eq!(if_pos.open_volume, 100);
+            assert_eq!(if_pos.open_price_sum, 100 * 100, "spend = size*price = 10000");
+
+            // IF available 精确扣掉 spend；reserved 经 finalize 释放归零（跟 R1 reserve 对称）。
+            assert_eq!(
+                engine.liquidation_service.notionals[&FUT_SYMBOL],
+                IfNotional { available: 100_000 - 10_000, reserved: 0 },
+                "finalize 必须释放 reserved（即使接管成功也要释放，跟 R1 对称）"
+            );
+
+            // taker 侧：全平仓，PnL = (100*100 - 9000)*1(LONG multiplier) = 1000，结算进账户后仓位被移除。
+            assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL), "全平仓后仓位记录必须被移除");
+            assert_eq!(
+                ups.get(TAKER_UID).unwrap().account(FUT_QUOTE),
+                taker_account_before + 1_000,
+                "已实现 PnL 必须精确结算进账户（currency scale 恒等换算，因 base/quote/currency_scale_k 全为 1）"
+            );
+        }
+
+        #[test]
+        fn undersize_rejects_all_or_nothing_but_still_releases_preview() {
+            // IF 只有 500 可用，接管 100 手 @ price=100 需要 10000 —— 严重覆盖不足，必须全拒。
+            let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
+            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 500);
+
+            let mut cmd = if_takeover_cmd(OrderAction::Bid, 100, 100);
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success), "REJECT 是 matcher-event 级别信号，命令级结果码仍是 Success（同 ADL/FundingFee 先例）");
+
+            // 全拒：IF 没有接管任何仓位。
+            assert!(engine.liquidation_service.positions.is_empty(), "全拒不产生任何 IFPositionRecord");
+
+            // finalize 仍然必须释放 R1 预冻结的 reserved（跟成功路径对称，不留孤儿 reserved）。
+            assert_eq!(
+                engine.liquidation_service.notionals[&FUT_SYMBOL],
+                IfNotional { available: 500, reserved: 0 },
+                "available 分毫未动（从未 accept），reserved 必须归零（finalize 全拒路径仍释放 preview）"
+            );
+
+            // taker 侧：全拒时完全不动 taker 仓位（对应 Java `matcherEvent.eventType != REJECT` 门）。
+            let taker_spr = ups.get(TAKER_UID).unwrap().positions.get(&FUT_SYMBOL).expect("REJECT 不应关闭 taker 仓位");
+            assert_eq!(taker_spr.open_volume, 100);
+            assert_eq!(taker_spr.open_price_sum, 9_000);
+        }
+
+        #[test]
+        fn if_deposit_and_withdraw_hedge_adjustments_and_conserve() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+
+            let mut deposit_cmd = OrderCommand {
+                command: OrderCommandType::IfDeposit,
+                symbol: FUT_SYMBOL,
+                price: 700, // currency_amount
+                order_id: 1,
+                ..Default::default()
+            };
+            engine.pre_process_command(&mut deposit_cmd, &mut ups, &ssp);
+            assert_eq!(deposit_cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(engine.liquidation_service.notionals[&FUT_SYMBOL].available, 700);
+            assert_eq!(*engine.adjustments.get(&FUT_QUOTE).unwrap(), -700, "对冲桶反向记账");
+
+            let mut withdraw_cmd = OrderCommand {
+                command: OrderCommandType::IfWithdraw,
+                symbol: FUT_SYMBOL,
+                price: 300,
+                order_id: 2,
+                ..Default::default()
+            };
+            engine.pre_process_command(&mut withdraw_cmd, &mut ups, &ssp);
+            assert_eq!(withdraw_cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(engine.liquidation_service.notionals[&FUT_SYMBOL].available, 400);
+            assert_eq!(*engine.adjustments.get(&FUT_QUOTE).unwrap(), -400, "withdraw 反向抵消一部分 deposit 的对冲");
+
+            // Σ IFNotional.available + adjustments[currency] 恒定（对冲闭环，同 balance_adjustment/
+            // loan pool 充提先例）。
+            assert_eq!(
+                engine.liquidation_service.notionals[&FUT_SYMBOL].available + engine.adjustments[&FUT_QUOTE],
+                0,
+                "IF 充提必须与 adjustments 桶精确对冲闭环"
+            );
+        }
+
+        #[test]
+        fn if_withdraw_over_available_is_rejected_and_leaves_state_unchanged() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+            let mut deposit_cmd = OrderCommand {
+                command: OrderCommandType::IfDeposit,
+                symbol: FUT_SYMBOL,
+                price: 100,
+                order_id: 1,
+                ..Default::default()
+            };
+            engine.pre_process_command(&mut deposit_cmd, &mut ups, &ssp);
+
+            let mut withdraw_cmd = OrderCommand {
+                command: OrderCommandType::IfWithdraw,
+                symbol: FUT_SYMBOL,
+                price: 101, // 超过 available=100
+                order_id: 2,
+                ..Default::default()
+            };
+            engine.pre_process_command(&mut withdraw_cmd, &mut ups, &ssp);
+
+            assert_eq!(withdraw_cmd.result_code, Some(CommandResultCode::RiskIfInsufficient));
+            assert_eq!(engine.liquidation_service.notionals[&FUT_SYMBOL].available, 100, "拒绝的提取不改状态");
+            assert_eq!(*engine.adjustments.get(&FUT_QUOTE).unwrap(), -100, "拒绝的提取不触碰 adjustments");
+        }
+
+        #[test]
+        fn if_deposit_unknown_symbol_is_invalid_symbol() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+            let mut cmd = OrderCommand {
+                command: OrderCommandType::IfDeposit,
+                symbol: 99_999,
+                price: 100,
+                order_id: 1,
+                ..Default::default()
+            };
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::InvalidSymbol));
+        }
+
+        #[test]
+        fn if_deposit_non_positive_amount_is_invalid_amount() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+            let mut cmd =
+                OrderCommand { command: OrderCommandType::IfDeposit, symbol: FUT_SYMBOL, price: 0, order_id: 1, ..Default::default() };
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskInvalidAmount));
         }
     }
 }
