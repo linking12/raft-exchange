@@ -13,6 +13,7 @@
 //! 确定性铁律（设计文档 §5）：uid→profile、symbol→spec 等映射用有序容器；
 //! 任何影响输出的迭代禁用 `HashMap` 迭代序。
 
+pub mod internal_transfer_processor;
 pub mod journaling;
 pub mod loan;
 pub mod loan_rate_pricing_processor;

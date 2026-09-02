@@ -55,6 +55,16 @@ pub struct OrderCommand {
     /// （详见 `loan_rate_pricing_processor.rs` 模块文档"事件载体的移植偏差"）。其余命令类型
     /// 恒为空 `Vec`，不产生任何影响。
     pub loan_reprice_events: Vec<(i32, i64)>,
+    /// P6 Task 3 新增：`INTERNAL_TRANSFER` 专属的 R1→R2 载体，`(to_uid, currency, amount)`。
+    /// 对应 Java 版本靠 `MatcherEventType::INTERNAL_TRANSFER_EVENT`（撮合引擎共享事件类型，
+    /// `matchedOrderUid`/`price`/`size` 三字段分别承载 `toUid`/`currency`/`amount`）在
+    /// R1→ME(merge)→R2 之间传递数据；本移植不扩 `MatcherEventType`（Ruling P6-A，同 P5
+    /// `loan_reprice_events` 先例：撮合引擎的共享事件类型不塞与撮合无关的变体），改用这个命令
+    /// 专属字段。单 shard 下（Ruling P6-C）R1 collect_input 与 merge build_matcher_events 由
+    /// `RiskEngine::internal_transfer_collect` 一次性完成，结果写进这里；R2 由
+    /// `RiskEngine::handler_risk_release` 专属分支消费（详见 `internal_transfer_processor.rs`
+    /// 模块文档）。其余命令类型恒为 `None`，不产生任何影响。
+    pub internal_transfer_event: Option<(i64, i32, i64)>,
 }
 
 impl OrderCommand {
