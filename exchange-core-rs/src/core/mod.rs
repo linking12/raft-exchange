@@ -27,3 +27,5 @@ pub mod exchange_api;
 
 #[cfg(test)]
 mod e2e_tests;
+#[cfg(test)]
+mod futures_e2e_tests;
