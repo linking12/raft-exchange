@@ -114,7 +114,7 @@ impl RiskEngine {
         if cmd.command.is_non_trading() {
             let rc = match cmd.command {
                 OrderCommandType::AddUser => self.add_user(cmd, ups),
-                OrderCommandType::BalanceAdjustment => self.balance_adjustment(cmd, ups),
+                OrderCommandType::BalanceAdjustment => self.balance_adjustment(cmd, ups, ssp),
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
             cmd.result_code = Some(rc);
@@ -180,7 +180,7 @@ impl RiskEngine {
             let currency_spec = ssp
                 .get_currency(currency)
                 .unwrap_or_else(|| panic!("currency spec missing for currency {currency}"));
-            return self.place_exchange_order(cmd, user_profile, spec, currency_spec);
+            return self.place_exchange_order(cmd, user_profile, spec, currency_spec, ssp);
         }
         if !spec.symbol_type.is_futures_contract() {
             // 对应 Java `placeOrder`（:437-439）：非现货、非期货（当前只有 `Option`）返回
@@ -390,6 +390,166 @@ impl RiskEngine {
         0
     }
 
+    /// 对应 Java `calculateLockedMargin(SymbolPositionRecord, CoreSymbolSpecification,
+    /// CoreCurrencySpecification)`（`:1079-1083`）：单个仓位的期货保证金占用（含 pending +
+    /// 潜在 fee），折算到 currency 记账单位——好让 [`Self::calculate_locked`] 把不同 symbol 的
+    /// 占用累加到同一 currency 上（各 symbol 内部单位 `base_scale_k × quote_scale_k` 不同，不
+    /// 折算无法相加）。
+    fn calculate_locked_margin(
+        &self,
+        position: &SymbolPositionRecord,
+        spec: &CoreSymbolSpecification,
+        currency_spec: &CoreCurrencySpecification,
+    ) -> i64 {
+        let required = position.calculate_required_margin_for_futures(spec);
+        arithmetic::size_price_to_currency_scale(
+            required,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            currency_spec.currency_scale_k,
+        )
+    }
+
+    /// 对应 Java `calculateLocked(UserProfile, int)`（`:1040-1055`）：用户在某 currency 上的
+    /// 全量锁定额（currency scale），不变量 `free = accounts − locked`。三部分累加（loan 移植前
+    /// 借贷抵押恒 0，见 [`Self::loan_collateral_locked`]）：
+    /// ① 所有同 currency 的期货持仓占用保证金（[`Self::calculate_locked_margin`]）；
+    /// ② 现货挂单冻结 `exchangeLocked`；
+    /// ③ 借贷抵押（[`Self::loan_collateral_locked`]，P5 前恒 0）。
+    ///
+    /// 注意（同 Java 文档）：提现 / 加保证金 / 现货下单 / 期货下单四处 NSF **不**直接调本方法
+    /// （它们各自算期货净盈余 [`Self::calculate_free_futures_margin`]），而是单独扣减
+    /// `loan_collateral_locked` 隔离借贷抵押——`calculate_locked` 只用于报表 / 事件下发 / 撮合
+    /// 结算后的余额校验等"纯占用"场景。
+    pub fn calculate_locked(
+        &self,
+        user_profile: &UserProfile,
+        currency: i32,
+        ssp: &SymbolSpecificationProvider,
+        currency_spec: &CoreCurrencySpecification,
+    ) -> i64 {
+        let mut locked: i64 = 0;
+        for position in user_profile.positions.values() {
+            if position.currency == currency {
+                let spec = ssp
+                    .get_symbol(position.symbol)
+                    .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", position.symbol));
+                locked += self.calculate_locked_margin(position, spec, currency_spec);
+            }
+        }
+        locked += user_profile.locked(currency);
+        locked += self.loan_collateral_locked(user_profile, currency);
+        locked
+    }
+
+    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int)`（`:759-761`）：不指定
+    /// `curPosSymbol` 的双参重载，逐仓浮盈一律不计入分摊（更保守）——转发到三参版本、
+    /// `cur_pos_symbol = -1`（永不匹配任何真实 symbol id）。
+    pub fn calculate_free_futures_margin(
+        &self,
+        user_profile: &UserProfile,
+        currency: i32,
+        ssp: &SymbolSpecificationProvider,
+    ) -> i64 {
+        self.calculate_free_futures_margin_for_symbol(user_profile, currency, -1, ssp)
+    }
+
+    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int, int curPosSymbol)`（`:767-805`）：
+    /// 账户级"净期货盈余"（currency scale，可正可负），用作提现 / 现货下单 NSF 的可用额度补充。
+    /// 取两保守估计的 **min**：
+    /// ① 计入未实现盈亏：`realizedPnl + unrealizedPnl − crossInitialMargin − isolatedRequiredMargin`
+    ///   （CROSS 按**初始**保证金扣）；
+    /// ② 不计未实现盈亏：`realizedPnl − crossMaintenanceMargin − isolatedRequiredMargin`
+    ///   （CROSS 按**维持**保证金扣——维持保证金口径 = 把已锁的初始保证金换成维持保证金：
+    ///   `initialMargin − openInitMarginSum + calculateMaintenanceMargin`）。
+    ///
+    /// `cur_pos_symbol` 让该 symbol 上的 ISOLATED 仓浮盈也计入 ①/② 的 `unrealizedPnl`——现货
+    /// 下单场景下，用户在该 symbol 上逐仓仓位的浮盈可为同 symbol 的新现货单提供额度；不匹配的
+    /// ISOLATED 仓浮盈永不计入（PnL 不外借）。CROSS 仓的浮盈不受 `cur_pos_symbol` 限制，恒计入
+    /// （账户级池化）。
+    fn calculate_free_futures_margin_for_symbol(
+        &self,
+        user_profile: &UserProfile,
+        currency: i32,
+        cur_pos_symbol: i32,
+        ssp: &SymbolSpecificationProvider,
+    ) -> i64 {
+        // **Ruling P4-A** 短路：该 currency 上没有任何期货持仓时，下面的五项累加器全恒为 0
+        // （`min(0, 0) = 0`），结果与 currency spec 无关——提前返回，避免为一个纯现货用户（没有
+        // 任何期货仓位）强制要求调用方在 `ssp` 里注册这个 currency 的 spec（`place_exchange_order`
+        // /`balance_adjustment` 两个 spot 调用点在移植 P4 前从不依赖期货 currency spec 注册）。
+        if !user_profile.positions.values().any(|p| p.currency == currency) {
+            return 0;
+        }
+        let currency_spec = ssp
+            .get_currency(currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {currency}"));
+
+        let mut realized_pnl: i64 = 0;
+        let mut unrealized_pnl: i64 = 0;
+        let mut isolated_required_margin: i64 = 0;
+        let mut cross_initial_margin: i64 = 0;
+        let mut cross_maintenance_margin: i64 = 0;
+
+        for position in user_profile.positions.values() {
+            if position.currency != currency {
+                continue;
+            }
+            let spec = ssp
+                .get_symbol(position.symbol)
+                .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", position.symbol));
+            let mark = self
+                .mark_price(position.symbol)
+                .unwrap_or_else(|| panic!("mark price missing for open position symbol {}", position.symbol));
+
+            realized_pnl += arithmetic::size_price_to_currency_scale(
+                position.profit,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                currency_spec.currency_scale_k,
+            );
+
+            if position.margin_mode == MarginMode::Cross {
+                unrealized_pnl += arithmetic::size_price_to_currency_scale(
+                    position.estimate_unrealized_profit(mark),
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    currency_spec.currency_scale_k,
+                );
+                let initial_margin = position.calculate_required_margin_for_futures(spec);
+                cross_initial_margin += arithmetic::size_price_to_currency_scale(
+                    initial_margin,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    currency_spec.currency_scale_k,
+                );
+                // 维持保证金口径：把已锁的初始保证金换成维持保证金。
+                let maintenance_margin = initial_margin - position.open_init_margin_sum
+                    + position.calculate_maintenance_margin(spec, mark);
+                cross_maintenance_margin += arithmetic::size_price_to_currency_scale(
+                    maintenance_margin,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    currency_spec.currency_scale_k,
+                );
+            } else {
+                // 逐仓浮盈只能参与自身 symbol 的分摊。
+                if position.symbol == cur_pos_symbol {
+                    unrealized_pnl += arithmetic::size_price_to_currency_scale(
+                        position.estimate_unrealized_profit(mark),
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        currency_spec.currency_scale_k,
+                    );
+                }
+                isolated_required_margin += self.calculate_locked_margin(position, spec, currency_spec);
+            }
+        }
+
+        (realized_pnl + unrealized_pnl - cross_initial_margin - isolated_required_margin)
+            .min(realized_pnl - cross_maintenance_margin - isolated_required_margin)
+    }
+
     /// 对应 Java `closePositionRiskCheck`（`:823-865`）：`CLOSE_POSITION` R1——纯减仓、无新敞口
     /// math。同 `place_order` 期货分支的守卫序（symbol/futures type/margin trading 开关），
     /// 缺仓或 `maxClosableSize<=0` 一律 `SUCCESS` no-op（不下单也不报错）；有效减仓则收敛
@@ -454,8 +614,11 @@ impl RiskEngine {
     /// - ASK：`is_ask_price_too_low` 守卫（→ `RiskAskPriceLowerThanFee`）→
     ///   `calculate_amount_ask(size) = size` → `symbol_to_currency_scale` 缩放到 base currency scale
     ///   （ASK 侧不预留 fee，从卖出 quote 收益里扣，属 R2）。
-    /// - NSF：`accounts[currency] - exchange_locked[currency] - order_lock_amount < 0` →
-    ///   `RiskNsf`（现货子集：无期货净保证金、无借贷抵押扣减，二者属 P4/Task 8+ 范围）。
+    /// - NSF：`accounts[currency] - exchange_locked[currency] - order_lock_amount +
+    ///   freeFuturesMargin < 0` → `RiskNsf`（P4 Task 5 新增 `freeFuturesMargin` 顶账，对应 Java
+    ///   `:666-669`；`cfg_margin_trading_enabled` 关闭或用户无期货持仓时恒 0——**Ruling P4-A**：
+    ///   对无期货仓的用户，本次改动是纯 no-op，现货 NSF 判定与改动前逐位相同。无借贷抵押扣减，
+    ///   属 Task 8+ 范围）。
     /// - 成功：`user_profile.add_to_locked(currency, +order_lock_amount)`，返回
     ///   `ValidForMatchingEngine`。
     fn place_exchange_order(
@@ -464,6 +627,7 @@ impl RiskEngine {
         user_profile: &mut UserProfile,
         spec: &CoreSymbolSpecification,
         currency_spec: &CoreCurrencySpecification,
+        ssp: &SymbolSpecificationProvider,
     ) -> CommandResultCode {
         let is_bid = matches!(cmd.action, Some(OrderAction::Bid));
         let currency = if is_bid { spec.quote_currency } else { spec.base_currency };
@@ -509,10 +673,14 @@ impl RiskEngine {
 
         let balance = user_profile.account(currency);
         let existing_locked = user_profile.locked(currency);
-        // 现货子集：无 freeFuturesMargin（期货净保证金抵扣）、无 loanLocked（借贷抵押扣减）——
-        // 二者分别属 P4（margin）与 Task 8+（loan）范围，参考文档 §2 已明确"spot: no futures
-        // margin, no loan term"。
-        if balance - existing_locked - order_lock_amount < 0 {
+        // P4 Task 5：期货净盈余顶现货 NSF 额度（对应 Java `:666-669`）。无 loanLocked（借贷抵押
+        // 扣减）——属 Task 8+ 范围，参考文档 §2 已明确"spot: no loan term"。
+        let free_futures_margin = if self.cfg_margin_trading_enabled {
+            self.calculate_free_futures_margin(user_profile, currency, ssp)
+        } else {
+            0
+        };
+        if balance - existing_locked - order_lock_amount + free_futures_margin < 0 {
             return CommandResultCode::RiskNsf;
         }
         user_profile.add_to_locked(currency, order_lock_amount);
@@ -1406,10 +1574,15 @@ impl RiskEngine {
     ///   的 `ADJUSTMENT` 分支）`adjustments[cur] -= amount_diff`——`Σ account[cur] + adjustments[cur]`
     ///   恒定。`BalanceAdjustmentType::Suspend` 对冲桶延后（`RiskEngine` 无 `suspends` 字段，
     ///   见结构体注释），本任务恒按 `Adjustment` 型处理。
+    ///
+    /// P4 Task 5 起，提现分支的 `withdrawable` 额外加 [`Self::calculate_free_futures_margin`]
+    /// （`cfg_margin_trading_enabled` 关闭或用户无期货持仓 → 恒 0，**Ruling P4-A**：无期货仓的用户
+    /// 此改动是纯 no-op，逐位对齐改动前行为）。
     pub fn balance_adjustment(
         &mut self,
         cmd: &OrderCommand,
         ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
     ) -> CommandResultCode {
         let currency = cmd.symbol;
         let amount_diff = cmd.price;
@@ -1421,7 +1594,13 @@ impl RiskEngine {
 
         if amount_diff < 0 {
             let withdrawal_amount = -amount_diff;
-            let withdrawable = user_profile.account(currency) - user_profile.locked(currency);
+            let free_futures_margin = if self.cfg_margin_trading_enabled {
+                self.calculate_free_futures_margin(user_profile, currency, ssp)
+            } else {
+                0
+            };
+            let withdrawable =
+                user_profile.account(currency) - user_profile.locked(currency) + free_futures_margin;
             if withdrawable - withdrawal_amount < 0 {
                 return CommandResultCode::RiskNsf;
             }
@@ -2728,10 +2907,11 @@ mod tests {
     fn balance_adjustment_deposit_increases_account_and_conserves_globally() {
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
         engine.add_user(&add_user_cmd(UID), &mut ups);
 
         let cmd = balance_adjustment_cmd(UID, QUOTE, 1000, 1);
-        assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::Success);
+        assert_eq!(engine.balance_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::Success);
 
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1000);
@@ -2743,8 +2923,9 @@ mod tests {
     fn balance_adjustment_withdrawal_exceeding_withdrawable_is_nsf_and_noop() {
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
         engine.add_user(&add_user_cmd(UID), &mut ups);
-        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups, &ssp);
         // 500 冻结在挂单里，可提余额只剩 500。
         ups.get_mut(UID).unwrap().add_to_locked(QUOTE, 500);
 
@@ -2752,7 +2933,7 @@ mod tests {
         let before_adjustments = *engine.adjustments.get(&QUOTE).unwrap_or(&0);
 
         let withdraw_cmd = balance_adjustment_cmd(UID, QUOTE, -600, 2);
-        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups), CommandResultCode::RiskNsf);
+        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
 
         // NSF：账户与守恒桶都不应变化。
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), before_account);
@@ -2763,11 +2944,12 @@ mod tests {
     fn balance_adjustment_withdrawal_within_withdrawable_succeeds() {
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
         engine.add_user(&add_user_cmd(UID), &mut ups);
-        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups, &ssp);
 
         let withdraw_cmd = balance_adjustment_cmd(UID, QUOTE, -400, 2);
-        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups), CommandResultCode::Success);
+        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 600);
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -600);
     }
@@ -2776,16 +2958,17 @@ mod tests {
     fn balance_adjustment_duplicate_order_id_is_already_applied_same_noop() {
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
         engine.add_user(&add_user_cmd(UID), &mut ups);
 
         let cmd = balance_adjustment_cmd(UID, QUOTE, 1000, 42);
-        assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::Success);
+        assert_eq!(engine.balance_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
 
         // 同 order_id 重复 → AlreadyAppliedSame，账户/adjustments 均不再变化（no-op）。
         let repeat = balance_adjustment_cmd(UID, QUOTE, 1000, 42);
         assert_eq!(
-            engine.balance_adjustment(&repeat, &mut ups),
+            engine.balance_adjustment(&repeat, &mut ups, &ssp),
             CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame
         );
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
@@ -2793,7 +2976,7 @@ mod tests {
 
         // 不同 order_id 正常再次生效。
         let different_id = balance_adjustment_cmd(UID, QUOTE, 500, 43);
-        assert_eq!(engine.balance_adjustment(&different_id, &mut ups), CommandResultCode::Success);
+        assert_eq!(engine.balance_adjustment(&different_id, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1500);
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1500);
     }
@@ -2802,17 +2985,18 @@ mod tests {
     fn balance_adjustment_nsf_does_not_claim_id_so_same_id_retry_after_funding_succeeds() {
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
         engine.add_user(&add_user_cmd(UID), &mut ups);
-        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 500, 1), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 500, 1), &mut ups, &ssp);
 
         // 提现 600 超过可提余额 500 → NSF，order_id=99 未被 claim。
         let nsf_attempt = balance_adjustment_cmd(UID, QUOTE, -600, 99);
-        assert_eq!(engine.balance_adjustment(&nsf_attempt, &mut ups), CommandResultCode::RiskNsf);
+        assert_eq!(engine.balance_adjustment(&nsf_attempt, &mut ups, &ssp), CommandResultCode::RiskNsf);
 
         // 补充资金后用同一 order_id=99 重试，必须放行（NSF 路径未 claim id）。
-        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 2), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 1000, 2), &mut ups, &ssp);
         let retry = balance_adjustment_cmd(UID, QUOTE, -600, 99);
-        assert_eq!(engine.balance_adjustment(&retry, &mut ups), CommandResultCode::Success);
+        assert_eq!(engine.balance_adjustment(&retry, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 900); // 500 + 1000 - 600
     }
 
@@ -2820,8 +3004,9 @@ mod tests {
     fn balance_adjustment_unknown_user_is_auth_invalid_user() {
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
         let cmd = balance_adjustment_cmd(999, QUOTE, 100, 1);
-        assert_eq!(engine.balance_adjustment(&cmd, &mut ups), CommandResultCode::AuthInvalidUser);
+        assert_eq!(engine.balance_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::AuthInvalidUser);
     }
 
     // ================================================================================
@@ -3803,5 +3988,235 @@ mod tests {
 
         let maker_pos = ups.get(FUT2_MAKER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
         assert_eq!(maker_pos.open_volume, 6, "maker 只在 TRADE 事件参与，REDUCE 与其无关");
+    }
+
+    // ================================================================================
+    // P4 Task 5：统一账户 — calculate_locked / calculate_free_futures_margin + 现货 NSF/withdrawable
+    // 顶账接线。参考文档 §4/§5；Java `RiskEngine.java:759-805,1040-1055`。
+    //
+    // 复用 §3 的 setup_futures（FUT_SYMBOL/FUT_BASE/FUT_QUOTE，base/quote/currency scale
+    // 全 1 恒等缩放）。`open_init_margin_sum` 手工摆放（同 user_profile 测试注释）：leverage=1 +
+    // 无 pending 挂单时 `calculate_required_margin_for_futures` 退化为直接返回
+    // `open_init_margin_sum`，测试算术不被 scale/pending 噪声干扰。
+    // ================================================================================
+
+    #[test]
+    fn calculate_locked_zero_when_no_positions_and_no_exchange_locked() {
+        let (engine, ups, ssp) = setup_futures(0, 0, 0, 100);
+        let up = ups.get(UID).unwrap();
+        let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
+        assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 0);
+    }
+
+    #[test]
+    fn calculate_locked_sums_futures_margin_and_exchange_locked() {
+        let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_locked(FUT_QUOTE, 200); // 现货挂单冻结
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.direction = PositionDirection::Long;
+            pos.open_volume = 10;
+            pos.open_price_sum = 1000;
+            pos.open_init_margin_sum = 1000; // 见上：leverage=1 无 pending → required = 本值
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let up = ups.get(UID).unwrap();
+        let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
+        // ① 期货保证金(1000) + ② 现货冻结(200) + ③ 借贷抵押(0, P5 前 stub)。
+        assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
+    }
+
+    #[test]
+    fn calculate_free_futures_margin_zero_for_user_with_no_positions() {
+        // Ruling P4-A 基线：无期货仓的用户，净期货盈余恒 0。
+        let (engine, ups, ssp) = setup_futures(0, 0, 1_000, 100);
+        let up = ups.get(UID).unwrap();
+        assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 0);
+    }
+
+    #[test]
+    fn calculate_free_futures_margin_isolated_position_never_credits_its_own_upnl() {
+        // ISOLATED 仓：required margin 扣，但 2 参重载（curPosSymbol=-1 永不匹配）下浮盈不外借。
+        let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 300);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.direction = PositionDirection::Long;
+            pos.open_volume = 10;
+            pos.open_price_sum = 900;
+            pos.open_init_margin_sum = 200; // required margin = 200（新敞口=0）
+            // mark=300 → 浮盈 = 1*(10*300-900) = 2100，但 ISOLATED + curPosSymbol 不匹配 → 不计。
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let up = ups.get(UID).unwrap();
+        // 两个估计都只剩 "0 - isolatedRequiredMargin(200)"。
+        assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), -200);
+    }
+
+    #[test]
+    fn calculate_free_futures_margin_cross_position_takes_min_of_two_conservative_estimates() {
+        // 维持保证金分档：单档 5%（rate=50/scale_k=1000），覆盖任意 notional——不能复用
+        // setup_futures（它内部用零配置的 futures_spec），改手工搭建。
+        let mut fut_spec = futures_spec(0, 0);
+        fut_spec.maintenance_margin_scale_k = 1000;
+        fut_spec.maintenance_margin.insert(i64::MAX, 50);
+        let mut ssp = SymbolSpecificationProvider::new();
+        assert_eq!(ssp.add_symbol(fut_spec), CommandResultCode::Success);
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        let mut engine = RiskEngine::new();
+        engine.last_price_cache.insert(FUT_SYMBOL, 200);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
+            pos.direction = PositionDirection::Long;
+            pos.open_volume = 10;
+            pos.open_price_sum = 900;
+            pos.open_init_margin_sum = 200; // required(初始) margin = 200（新敞口=0）
+            pos.profit = 500; // 已实现但未派发的"翻仓遗留"利润（见头部注释）
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let up = ups.get(UID).unwrap();
+        // mark=200 → notional=2000，unrealized=1*(2000-900)=1100，maintenanceMargin=2000*0.05=100。
+        // ①（计浮盈，扣初始保证金）= 500 + 1100 - 200 = 1400。
+        // ②（不计浮盈，扣维持保证金，maintenanceMargin 口径 = required-openInitMarginSum+MM = 0+100=100）
+        //   = 500 - 100 = 400。
+        // min(1400, 400) = 400（更保守的估计胜出）。
+        assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 400);
+    }
+
+    #[test]
+    fn calculate_free_futures_margin_flat_cross_position_with_carried_profit() {
+        // open_volume=0（已平仓但 profit 累加器尚未因 isEmpty() 派发——同一 flip 循环内的过渡态，
+        // 见 SymbolPositionRecord 文档 §1"全平/翻仓"）：required margin 恒 0，浮盈也恒 0，
+        // 净期货盈余 = 已实现 profit 全额，两个估计相等。
+        let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
+            pos.profit = 500;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let up = ups.get(UID).unwrap();
+        assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 500);
+    }
+
+    // --------------------------------------------------------------------------
+    // Ruling P4-A 接线验证：无期货仓的用户，现货 NSF/withdrawable 分支是纯 no-op
+    // （改动前后逐位相同）；有期货 CROSS 浮盈的用户，两处 NSF 额度顶账。
+    // --------------------------------------------------------------------------
+
+    const SPOT_SYMBOL: i32 = 300;
+    const SPOT_BASE: i32 = 3;
+
+    fn add_spot_symbol_sharing_fut_quote(ssp: &mut SymbolSpecificationProvider) {
+        let spot_spec = CoreSymbolSpecification {
+            symbol_id: SPOT_SYMBOL,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: SPOT_BASE,
+            quote_currency: FUT_QUOTE, // 与期货 symbol 共用同一 quote currency，才能顶账
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            taker_fee: 0,
+            maker_fee: 0,
+            fee_scale_k: 0,
+            ..Default::default()
+        };
+        assert_eq!(ssp.add_symbol(spot_spec), CommandResultCode::Success);
+        ssp.add_currency(CoreCurrencySpecification { currency: SPOT_BASE, currency_scale_k: 1 });
+    }
+
+    fn spot_bid_cmd(size: i64, price: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 1,
+            symbol: SPOT_SYMBOL,
+            price,
+            size,
+            reserve_bid_price: price,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: UID,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn place_exchange_order_position_less_user_nsf_is_unaffected_by_wiring() {
+        // Ruling P4-A：无期货仓 → calculate_free_futures_margin 恒 0 → 现货 NSF 判定与改动前相同。
+        let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 0, 100);
+        add_spot_symbol_sharing_fut_quote(&mut ssp);
+
+        let mut cmd = spot_bid_cmd(100, 1); // notional=100，quote 余额=0 → 应 NSF
+        let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
+
+        assert_eq!(result, CommandResultCode::RiskNsf);
+        assert_eq!(ups.get(UID).unwrap().locked(FUT_QUOTE), 0);
+    }
+
+    #[test]
+    fn place_exchange_order_spot_nsf_topped_up_by_futures_cross_profit() {
+        // 与上一测试相同的现货余额/订单（本应 NSF），但用户在同 quote currency 上有一条 CROSS
+        // 期货仓，携带已实现浮盈 500（flat carried profit，见上方 free_futures_margin 测试）——
+        // Java `:666-669` 的现货 NSF 顶账：accounts − exchangeLocked − orderLockAmount +
+        // freeFuturesMargin >= 0 才放行。
+        let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 0, 100);
+        add_spot_symbol_sharing_fut_quote(&mut ssp);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
+            pos.profit = 500;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+
+        let mut cmd = spot_bid_cmd(100, 1); // notional=100 > 0 余额，但 < 500 期货净盈余顶账后的额度
+        let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
+
+        assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
+        assert_eq!(ups.get(UID).unwrap().locked(FUT_QUOTE), 100);
+    }
+
+    #[test]
+    fn withdrawable_position_less_user_nsf_is_unaffected_by_wiring() {
+        // Ruling P4-A：无期货仓的提现 NSF 判定与改动前相同。
+        let mut ups = UserProfileService::new();
+        let mut engine = RiskEngine::new();
+        let ssp = SymbolSpecificationProvider::new();
+        engine.add_user(&add_user_cmd(UID), &mut ups);
+        engine.balance_adjustment(&balance_adjustment_cmd(UID, QUOTE, 100, 1), &mut ups, &ssp);
+
+        let withdraw = balance_adjustment_cmd(UID, QUOTE, -400, 2);
+        assert_eq!(engine.balance_adjustment(&withdraw, &mut ups, &ssp), CommandResultCode::RiskNsf);
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 100);
+    }
+
+    #[test]
+    fn withdrawable_topped_up_by_futures_cross_profit() {
+        // account=500、locked=200 → 不顶账时 withdrawable=300；提现 400 会先撞外层现货 NSF，但
+        // 内层 `account + amount_diff >= 0`（500-400=100）不受影响——只有外层需要顶账。
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 500, 100);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_locked(FUT_QUOTE, 200);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
+            pos.profit = 500;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+
+        // 提现 400：不顶账 withdrawable=300 不够，+500 期货净盈余顶账后足够（800 >= 400）。
+        let withdraw_cmd = OrderCommand {
+            command: OrderCommandType::BalanceAdjustment,
+            uid: UID,
+            symbol: FUT_QUOTE,
+            price: -400,
+            order_id: 2,
+            ..Default::default()
+        };
+        assert_eq!(engine.balance_adjustment(&withdraw_cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 500 - 400);
     }
 }

@@ -195,6 +195,21 @@ pub fn size_price_to_currency_scale(
     convert_scale(amount, mul_exact(base_scale_k, quote_scale_k), currency_scale_k)
 }
 
+/// 币种记账单位（`currency_scale_k`）→ 撮合内部乘积单位（`base_scale_k * quote_scale_k`）。
+/// 对应 Java `currencyToSizePriceScale`——[`size_price_to_currency_scale`] 的反向换算，喂
+/// `SymbolPositionRecord::calculate_bankruptcy_price`（P6）的 CROSS `marginBase`（与
+/// `open_init_margin_sum` 同 sizePrice scale）。P4 Task 5:
+/// `UserProfile::cross_margin_base_allocation` 用它把逐仓分摊到的 currency-scale marginBase
+/// 换算回 sizePrice scale。
+pub fn currency_to_size_price_scale(
+    amount: i64,
+    base_scale_k: i64,
+    quote_scale_k: i64,
+    currency_scale_k: i64,
+) -> i64 {
+    convert_scale(amount, currency_scale_k, mul_exact(base_scale_k, quote_scale_k))
+}
+
 /// 币对交易单位（base 或 quote 各自的 `scale_k`，由调用方按 currency id 选定）→ 币种记账
 /// 单位。对应 Java `symbolToCurrencyScale`；Java 版本内部按 `currency.id` 匹配
 /// `spec.baseCurrency`/`quoteCurrency` 选择 `baseScaleK`/`quoteScaleK`——那部分依赖账户/规格
@@ -661,6 +676,29 @@ mod tests {
     #[test]
     fn symbol_to_currency_scale_delegates_to_convert_scale() {
         assert_eq!(symbol_to_currency_scale(150_000_000, 100_000_000, 1_000_000), 1_500_000);
+    }
+
+    #[test]
+    fn currency_to_size_price_scale_matches_convert_scale() {
+        // 与 size_price_to_currency_scale_matches_convert_scale 互为反向换算。
+        assert_eq!(
+            currency_to_size_price_scale(1_500_000, 100_000_000, 1_000_000, 1_000_000),
+            150_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn currency_to_size_price_scale_roundtrips_with_size_price_to_currency_scale() {
+        let base_scale_k = 100_000_000;
+        let quote_scale_k = 1_000_000;
+        let currency_scale_k = 1_000_000;
+        let currency_amount = 42_000_000; // 币种记账单位下的一个金额
+        let size_price_amount =
+            currency_to_size_price_scale(currency_amount, base_scale_k, quote_scale_k, currency_scale_k);
+        assert_eq!(
+            size_price_to_currency_scale(size_price_amount, base_scale_k, quote_scale_k, currency_scale_k),
+            currency_amount
+        );
     }
 
     // ------------------------------------------------------------------
