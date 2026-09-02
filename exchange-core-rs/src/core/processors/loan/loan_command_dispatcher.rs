@@ -2,11 +2,12 @@
 //! 命令 CREATE/REPAY/ADD_COLLATERAL/RELEASE_COLLATERAL + 公共 preamble + dispatch 表
 //! （`OrderCommandType::is_loan()` 门守命中后的入口，参考文档 §0/§2.1-2.4）。
 //!
-//! **Task 4 范围**：`is_loan()` 覆盖 14 个命令码（参考文档 §0），本任务只落 4 个 Isolated
-//! 生命周期命令。其余 10 个（Cross 5 个 `LOAN_CROSS_*`、两个 `*_FORCE_LIQUIDATE`、
-//! `POOL_DEPOSIT`/`POOL_WITHDRAW`/`LOAN_IF_DEPOSIT`/`LOAN_IF_WITHDRAW` 4 个）留 Task 5-7，
-//! 命中 [`LoanCommandDispatcher::dispatch`] 时返回 `CommandResultCode::LoanNotImplemented`——
-//! 本任务测试集从不构造这些命令类型，该分支在当前测试范围内不可达，只是占位而非"假装支持"。
+//! **Task 4 范围**：`is_loan()` 覆盖 14 个命令码（参考文档 §0），Task 4 落了 4 个 Isolated
+//! 生命周期命令，Task 5 补了 4 个 Cross 生命周期命令，Task 6（本任务）补了 4 个 POOL/IF 运营
+//! 命令（`POOL_DEPOSIT`/`POOL_WITHDRAW`/`LOAN_IF_DEPOSIT`/`LOAN_IF_WITHDRAW`，参考文档
+//! §2.11）。剩余 2 个（`LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`）留 Task 7，命中
+//! [`LoanCommandDispatcher::dispatch`] 时返回 `CommandResultCode::LoanNotImplemented`——本任务
+//! 测试集从不构造这两个命令类型，该分支在当前测试范围内不可达，只是占位而非"假装支持"。
 //!
 //! # Rust 对齐 Java `LoanCommandDispatcher(RiskEngine engine)` 构造器持有 engine 的做法
 //! Java 版把 `engine` 存成实例字段，构造一次、复用于每次 `dispatch`。Rust 版不持有任何状态
@@ -86,8 +87,12 @@ impl LoanCommandDispatcher {
             }
             OrderCommandType::LoanCrossBorrow => Self::handle_loan_cross_borrow(engine, cmd, ups, ssp),
             OrderCommandType::LoanCrossRepay => Self::handle_loan_cross_repay(engine, cmd, ups, ssp),
-            // 不可达于本任务测试集：Task 6-7 落地前（Cross/Isolated FORCE_LIQUIDATE、
-            // POOL_DEPOSIT/WITHDRAW、LOAN_IF_DEPOSIT/WITHDRAW），调用方从不构造这些 cmd.command。
+            OrderCommandType::PoolDeposit => Self::handle_pool_deposit(engine, cmd),
+            OrderCommandType::PoolWithdraw => Self::handle_pool_withdraw(engine, cmd),
+            OrderCommandType::LoanIfDeposit => Self::handle_loan_if_deposit(engine, cmd),
+            OrderCommandType::LoanIfWithdraw => Self::handle_loan_if_withdraw(engine, cmd),
+            // 不可达于本任务测试集：Task 7 落地前（Cross/Isolated FORCE_LIQUIDATE），调用方从不
+            // 构造这些 cmd.command。
             _ => CommandResultCode::LoanNotImplemented,
         }
     }
@@ -718,6 +723,68 @@ impl LoanCommandDispatcher {
         if is_empty {
             up.cross_loans.remove(&loan_id);
         }
+        CommandResultCode::Success
+    }
+
+    // ====================================================================================
+    // 运营命令：借贷池 / LIF 充提 — 参考文档 §2.11，Java `handlePoolDeposit`/`handlePoolWithdraw`/
+    // `handleLoanIfDeposit`/`handleLoanIfWithdraw`（`LoanCommandDispatcher.java:940-997`）
+    // ====================================================================================
+    //
+    // 字段映射（4 个命令一致）：`cmd.uid` 携 shardId（不是真实 uid！）、`cmd.symbol`=currency、
+    // `cmd.size`=amount。Java 侧每个 shard 都跑这个 handler，内部按 `(int) cmd.uid ==
+    // engine.getShardId()` 自过滤，非目标 shard 静默 `SUCCESS` 短路——本移植单 shard、该判断
+    // 恒真，未搬迁（同 Task 4/5 既有 ruling：单 shard 下分片过滤是恒真 no-op，`cmd.uid` 这里就是
+    // 单纯忽略，不冒充真实 uid，也不复用 `preamble`——这 4 个命令没有用户身份语义，不查
+    // `UserProfileService`、不做 `try_claim_tx` 幂等）。无幂等去重（loan.md §5.1："运营侧不得
+    // 重放"——重复提交会重复入账，调用方自行保证不重放）。
+
+    /// 对应 Java `handlePoolDeposit`（`:940-951`）：运营方注入池子流动性。
+    fn handle_pool_deposit(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
+        if cmd.size <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+        engine.loan_service.add_to_loan_pool_available(cmd.symbol, cmd.size);
+        *engine.adjustments.entry(cmd.symbol).or_insert(0) -= cmd.size;
+        CommandResultCode::Success
+    }
+
+    /// 对应 Java `handlePoolWithdraw`（`:953-966`）：运营方从池子提取流动性（只能提未借出的
+    /// `loanPoolAvailable` 部分，不足即拒）。
+    fn handle_pool_withdraw(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
+        if cmd.size <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+        if engine.loan_service.get_loan_pool_available(cmd.symbol) < cmd.size {
+            return CommandResultCode::LoanPoolInsufficient;
+        }
+        engine.loan_service.add_to_loan_pool_available(cmd.symbol, -cmd.size);
+        *engine.adjustments.entry(cmd.symbol).or_insert(0) += cmd.size;
+        CommandResultCode::Success
+    }
+
+    /// 对应 Java `handleLoanIfDeposit`（`:968-976`）：运营方给 LIF 注资（启动资金/接管后补仓）。
+    fn handle_loan_if_deposit(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
+        if cmd.size <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+        engine.loan_service.add_to_loan_insurance_fund(cmd.symbol, cmd.size);
+        *engine.adjustments.entry(cmd.symbol).or_insert(0) -= cmd.size;
+        CommandResultCode::Success
+    }
+
+    /// 对应 Java `handleLoanIfWithdraw`（`:978-997`）：运营方从 LIF 提取（处置接管来的抵押库存，
+    /// 场外变现后再 deposit 回来）。余额不足即拒——LIF 允许为负是接管的被动结果（platform 的
+    /// 垫资），不是运营可主动透支的额度，`LOAN_IF_WITHDRAW` 本身绝不能把它推得更负。
+    fn handle_loan_if_withdraw(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
+        if cmd.size <= 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+        if engine.loan_service.get_loan_insurance_fund(cmd.symbol) < cmd.size {
+            return CommandResultCode::LoanIfInsufficient;
+        }
+        engine.loan_service.add_to_loan_insurance_fund(cmd.symbol, -cmd.size);
+        *engine.adjustments.entry(cmd.symbol).or_insert(0) += cmd.size;
         CommandResultCode::Success
     }
 }
@@ -1684,22 +1751,124 @@ mod tests {
     }
 
     // ================================================================
+    // POOL_DEPOSIT / POOL_WITHDRAW / LOAN_IF_DEPOSIT / LOAN_IF_WITHDRAW
+    // ================================================================
+
+    fn pool_cmd(command: OrderCommandType, currency: i32, amount: i64) -> OrderCommand {
+        // uid 在这 4 个命令里携 shardId（非真实 uid），本移植单 shard 未做过滤，任意值皆可。
+        OrderCommand { command, uid: 0, symbol: currency, size: amount, ..Default::default() }
+    }
+
+    #[test]
+    fn pool_deposit_credits_available_and_hedges_adjustments() {
+        let (mut engine, mut ups, ssp) = setup(); // loan_pool_available[QUOTE] starts at 1_000_000
+        let mut cmd = pool_cmd(OrderCommandType::PoolDeposit, QUOTE, 500);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 1_000_500);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -500);
+    }
+
+    #[test]
+    fn pool_deposit_rejects_invalid_amount() {
+        let (mut engine, mut ups, ssp) = setup();
+        let mut zero = pool_cmd(OrderCommandType::PoolDeposit, QUOTE, 0);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut zero, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+        let mut negative = pool_cmd(OrderCommandType::PoolDeposit, QUOTE, -5);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut negative, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+    }
+
+    #[test]
+    fn pool_withdraw_debits_available_and_hedges_adjustments() {
+        let (mut engine, mut ups, ssp) = setup(); // loan_pool_available[QUOTE] = 1_000_000
+        let mut cmd = pool_cmd(OrderCommandType::PoolWithdraw, QUOTE, 300_000);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 700_000);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), 300_000);
+    }
+
+    #[test]
+    fn pool_withdraw_rejects_amount_exceeding_available_and_leaves_bucket_untouched() {
+        let (mut engine, mut ups, ssp) = setup(); // available = 1_000_000
+        let mut cmd = pool_cmd(OrderCommandType::PoolWithdraw, QUOTE, 1_000_001);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanPoolInsufficient
+        );
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 1_000_000);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap_or(&0), 0);
+    }
+
+    #[test]
+    fn pool_deposit_then_withdraw_round_trip_hedges_back_to_zero() {
+        let (mut engine, mut ups, ssp) = setup();
+        let mut dep = pool_cmd(OrderCommandType::PoolDeposit, QUOTE, 1_000);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut dep, &mut ups, &ssp), CommandResultCode::Success);
+        let mut wd = pool_cmd(OrderCommandType::PoolWithdraw, QUOTE, 1_000);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut wd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), 0); // -1000 then +1000
+        assert_eq!(engine.loan_service.get_loan_pool_available(QUOTE), 1_000_000); // net unchanged
+    }
+
+    #[test]
+    fn loan_if_deposit_credits_and_hedges_adjustments() {
+        let (mut engine, mut ups, ssp) = setup();
+        let mut cmd = pool_cmd(OrderCommandType::LoanIfDeposit, QUOTE, 200);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(engine.loan_service.get_loan_insurance_fund(QUOTE), 200);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -200);
+    }
+
+    #[test]
+    fn loan_if_deposit_rejects_invalid_amount() {
+        let (mut engine, mut ups, ssp) = setup();
+        let mut cmd = pool_cmd(OrderCommandType::LoanIfDeposit, QUOTE, 0);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+    }
+
+    #[test]
+    fn loan_if_withdraw_debits_and_hedges_adjustments() {
+        let (mut engine, mut ups, ssp) = setup();
+        engine.loan_service.add_to_loan_insurance_fund(QUOTE, 500);
+        let mut cmd = pool_cmd(OrderCommandType::LoanIfWithdraw, QUOTE, 300);
+        assert_eq!(LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
+        assert_eq!(engine.loan_service.get_loan_insurance_fund(QUOTE), 200);
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), 300);
+    }
+
+    #[test]
+    fn loan_if_withdraw_rejects_when_insufficient_and_never_pushes_more_negative() {
+        let (mut engine, mut ups, ssp) = setup();
+        // LIF 已因某次接管变负（被动结果，不是运营透支额度）——LOAN_IF_WITHDRAW 绝不能把它推得
+        // 更负：guard 用同一个 `<` 比较，负余额对任意正 amount 恒不足，天然满足这条不变式。
+        engine.loan_service.add_to_loan_insurance_fund(QUOTE, -500);
+        let mut cmd = pool_cmd(OrderCommandType::LoanIfWithdraw, QUOTE, 100);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanIfInsufficient
+        );
+        assert_eq!(engine.loan_service.get_loan_insurance_fund(QUOTE), -500); // untouched
+        assert_eq!(*engine.adjustments.get(&QUOTE).unwrap_or(&0), 0);
+    }
+
+    // ================================================================
     // dispatch fallthrough for not-yet-implemented is_loan() codes
     // ================================================================
 
     #[test]
     fn dispatch_returns_not_implemented_for_unimplemented_loan_codes() {
         let (mut engine, mut ups, ssp) = setup();
-        // Task 5 落地了 4 个 LOAN_CROSS_* 生命周期命令（ADD/WITHDRAW/BORROW/REPAY），从这份
-        // 清单移除；剩余 6 个（两个 *_FORCE_LIQUIDATE + 4 个 POOL/IF 操作命令）留 Task 6-7。
-        for command in [
-            OrderCommandType::LoanCrossForceLiquidate,
-            OrderCommandType::LoanForceLiquidate,
-            OrderCommandType::PoolDeposit,
-            OrderCommandType::PoolWithdraw,
-            OrderCommandType::LoanIfDeposit,
-            OrderCommandType::LoanIfWithdraw,
-        ] {
+        // Task 5 落地了 4 个 LOAN_CROSS_* 生命周期命令（ADD/WITHDRAW/BORROW/REPAY），Task 6 落地
+        // 了 4 个 POOL/IF 操作命令，均从这份清单移除；剩余 2 个（两个 *_FORCE_LIQUIDATE）留 Task 7。
+        for command in [OrderCommandType::LoanCrossForceLiquidate, OrderCommandType::LoanForceLiquidate] {
             let mut cmd = OrderCommand { command, uid: UID, ..Default::default() };
             assert_eq!(
                 LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
