@@ -555,6 +555,13 @@ impl RiskEngine {
         if cmd.command.is_non_trading() {
             return;
         }
+        // 期货分支专用（对应 Java `lastPriceCache.get(spec.symbolId)`）：提前算好（在
+        // `fees = &mut self.fees` 分裂借用 `self` 之前），避免下面 `self.mark_price(...)`
+        // （借用 `&self`）与已经存活的 `&mut self.fees` 借用冲突。R1 `place_order` 已强制要求
+        // mark price 存在才能通过风控（`RiskMarkpriceNotAvailable`），故任何能走到 R2 结算的
+        // 期货命令，其 symbol 必已有缓存的 mark price；`unwrap_or(0)` 只是防御性兜底（现货命令
+        // 走到这里时该值也不会被使用），不做 Java 那种"缺失即 NPE"的隐式假设。
+        let mark_price_for_futures = self.mark_price(cmd.symbol).unwrap_or(0);
         let fees = &mut self.fees;
         let mut mte = match cmd.matcher_event.take() {
             Some(m) => m,
@@ -569,7 +576,39 @@ impl RiskEngine {
             .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", cmd.symbol))
             .clone();
         if spec.symbol_type != SymbolType::CurrencyExchangePair {
-            unimplemented!("P4: futures R2");
+            // 期货分支（P4 Task 4）：对应 Java `handlerRiskRelease`（:885-1023）非现货分支的
+            // "else"catch-all（`IF_TAKEOVER`/`AUTO_DELEVERAGING`/`SETTLE_FUNDINGFEES` 各自专属
+            // dispatch 到 P6 处理器，PLACE_ORDER/CLOSE_POSITION/FORCE_LIQUIDATION 等普通成交
+            // 命令统一走 `handleMatcherEventMargin` 循环）。当前 `OrderCommandType` 枚举尚未
+            // 移植 `IF_TAKEOVER`/`AUTO_DELEVERAGING`/`SETTLE_FUNDINGFEES` 三个变体（P6 排期），
+            // 因此没有对应分支可 match——今天能到达这里的期货命令（PLACE_ORDER/CLOSE_POSITION/
+            // ForceLiquidation/CancelOrder/MoveOrder/ReduceOrder）全部走这条统一结算路径，与
+            // Java 现状行为一致；`FORCE_LIQUIDATION` 专属的 `collectLiquidationFee`/
+            // `advanceLiquidation` 后置 hook 是 P6 范围，本任务不落地（不影响本任务的账户结算
+            // 正确性——那两个 hook 只在结算之后追加清算费/推进状态机，不改写本任务负责的
+            // accounts/fees/position 结算结果）。
+            //
+            // 与现货分支不同：现货把链头 REJECT/REDUCE 与后续 TRADE 链分两段处理；期货的
+            // `handle_matcher_event_margin` 对链上每个事件都按 `event_type`（TRADE 走
+            // close-then-open，REJECT/REDUCE 只退 pending）分支，因此不需要在这里预先摘取
+            // 链头，整条链直接交给它统一处理（对齐 Java `do { handleMatcherEventMargin(...); mte
+            // = mte.nextEvent; } while (mte != null);` 外循环）。
+            let taker_action = cmd.action.expect("futures matcher event requires taker action");
+            let quote_currency_spec = ssp
+                .get_currency(spec.quote_currency)
+                .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency))
+                .clone();
+            Self::handle_matcher_event_margin(
+                cmd,
+                mte,
+                &spec,
+                taker_action,
+                ups,
+                fees,
+                &quote_currency_spec,
+                mark_price_for_futures,
+            );
+            return;
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
 
@@ -1088,6 +1127,255 @@ impl RiskEngine {
                 quote_currency_spec.currency_scale_k,
             );
             *fees.entry(quote_currency).or_insert(0) += fee_scaled;
+        }
+    }
+
+    // ====================================================================================
+    // R2 主线：期货 handlers（P4 Task 4）—— 参考文档 §4；Java `RiskEngine.java:1358-1511`
+    // ====================================================================================
+
+    /// 对应 Java `handlerRiskRelease` 里驱动 `handleMatcherEventMargin` 的外层
+    /// `do { ...; mte = mte.nextEvent; } while (mte != null);` 循环：把整条事件链（可能以
+    /// REJECT/REDUCE 起头，后接 0..N 个 TRADE）逐个喂给 [`Self::handle_matcher_event_margin_one`]。
+    /// 与现货 `handle_matcher_events_exchange_sell/buy` 不同——期货不需要在 dispatch 层先把
+    /// 链头 REJECT/REDUCE 摘出来单独处理，因为 `handle_matcher_event_margin_one` 本身按
+    /// `mte.event_type` 分支（TRADE vs REJECT/REDUCE），两种事件都在同一函数里处理。
+    #[allow(clippy::too_many_arguments)]
+    fn handle_matcher_event_margin(
+        cmd: &OrderCommand,
+        first_mte: Box<MatcherTradeEvent>,
+        spec: &CoreSymbolSpecification,
+        taker_action: OrderAction,
+        ups: &mut UserProfileService,
+        fees: &mut BTreeMap<i32, i64>,
+        quote_currency_spec: &CoreCurrencySpecification,
+        mark_price: i64,
+    ) {
+        let mut node = Some(first_mte);
+        while let Some(mut ev) = node {
+            Self::handle_matcher_event_margin_one(
+                cmd,
+                &ev,
+                spec,
+                taker_action,
+                ups,
+                fees,
+                quote_currency_spec,
+                mark_price,
+            );
+            node = ev.next.take();
+        }
+    }
+
+    /// 对应 Java `handleMatcherEventMargin`（`:1358-1511`）处理单个事件：taker 块（恒执行，
+    /// `taker_action` 就是 `cmd.action`）+ maker 块（仅 TRADE 事件，`uidForThisHandler` 单 shard
+    /// 恒真，`makerAction = taker_action.opposite()`）。
+    ///
+    /// # 已知缺口：`matched_order_command_type` 未建模
+    /// Java 用 `mte.matchedOrderCommandType`（maker 挂单自身的命令类型）而非 `cmd.command`（taker
+    /// 命令类型）算 maker 的 `createPositionsKey`——`CLOSE_POSITION`/`FORCE_LIQUIDATION` 会翻转
+    /// HEDGE 模式的键符号。本移植的 [`MatcherTradeEvent`] 尚未携带该字段（撮合引擎/订单簿模型
+    /// 层的缺口，不在本任务范围）。`ONEWAY`（当前唯一有测试覆盖的模式）下
+    /// `create_positions_key` 完全忽略 `command` 参数，故用 `cmd.command` 占位对 ONEWAY 的正确性
+    /// 零影响；`HEDGE` 模式下若 maker 的挂单原本是 `CLOSE_POSITION`/`FORCE_LIQUIDATION`，这里会
+    /// 算错键——留给引入该字段时（P6 前后）一并修正。
+    #[allow(clippy::too_many_arguments)]
+    fn handle_matcher_event_margin_one(
+        cmd: &OrderCommand,
+        mte: &MatcherTradeEvent,
+        spec: &CoreSymbolSpecification,
+        taker_action: OrderAction,
+        ups: &mut UserProfileService,
+        fees: &mut BTreeMap<i32, i64>,
+        quote_currency_spec: &CoreCurrencySpecification,
+        mark_price: i64,
+    ) {
+        // taker 块：单 shard 简化下 taker 恒本地（`uidForThisHandler(cmd.uid)` 恒真）。
+        {
+            let taker_up = ups.get_or_add_suspended(cmd.uid);
+            let position_key = taker_up.create_positions_key(spec.symbol_id, taker_action, cmd.command);
+            // 对应 Java `if (takerUp != null && takerSpr == null) { log.warn(...); }`（防御性跳过，
+            // 非法/竞态下不 panic）：taker 仓位记录理论上必已在 R1 建立，但不强制假设。
+            Self::settle_margin_position_event(
+                taker_up,
+                position_key,
+                /* required = */ false,
+                mte,
+                spec,
+                taker_action,
+                fees,
+                quote_currency_spec,
+                mark_price,
+                /* is_taker = */ true,
+            );
+        }
+
+        // maker 块：仅 TRADE 事件（REJECT/REDUCE 无对手方，`matched_order_uid` 恒 0/无意义）。
+        if mte.event_type == MatcherEventType::Trade {
+            let maker_action = taker_action.opposite();
+            let maker_up = ups.get_or_add_suspended(mte.matched_order_uid);
+            let position_key = maker_up.create_positions_key(spec.symbol_id, maker_action, cmd.command);
+            // 对应 Java `makerUp.getPositionRecordOrThrowEx(...)`：maker 侧仓位记录必须已存在
+            // （TRADE 事件的 `matched_order_uid` 一定对应曾经建过仓/挂单的 uid），缺失即数据损坏，
+            // panic 而非静默吞掉。
+            Self::settle_margin_position_event(
+                maker_up,
+                position_key,
+                /* required = */ true,
+                mte,
+                spec,
+                maker_action,
+                fees,
+                quote_currency_spec,
+                mark_price,
+                /* is_taker = */ false,
+            );
+        }
+    }
+
+    /// 单个用户、单个 position、单个事件的结算核心——taker/maker 共用（差异只在
+    /// `is_taker`：决定 `calculate_taker_fee` 还是 `calculate_maker_fee`）。对应 Java
+    /// `handleMatcherEventMargin` taker 块 `:1369-1443` / maker 块 `:1445-1510` 里去掉纯
+    /// 事件负载（`sendXxxEvent` 的 free/locked 快照——本移植无事件总线，§4 已注明这些字段只喂
+    /// 事件，不参与状态迁移）之后剩下的状态迁移部分：
+    ///
+    /// TRADE：`pendingRelease` 释放本笔挂单 → `closeCurrentPositionFutures` 平反向仓
+    /// （`closedSize`，收 close-fee，PnL 递延进剩余仓成本基或按 direction 全平累进
+    /// `position.profit`——两者都在 primitive 内部完成，这里只管平仓后的 fee）→ 剩余 `sizeToOpen`
+    /// 走 `openPositionMargin` 反手/新开（收 open-fee，`mark_price` 定保证金、`mte.price` 定成本基）。
+    /// REJECT/REDUCE：仅 `pendingRelease`，不动 accounts。
+    /// 两类事件结束后统一检查 `is_empty()`：对应 Java `refundExtraMargin` + `removePositionRecord`
+    /// ——extraMargin 与 profit 分别经 `size_price_to_currency_scale` 一次性打入 accounts，
+    /// position 记录从 `positions` map 移除（Rust 无对象池，直接 `remove`）。
+    ///
+    /// # 借用结构
+    /// 不持有横跨"改仓位"与"改账户/fees"两类操作的单一 `&mut SymbolPositionRecord` 借用——每次
+    /// 只在需要改/读 position 的那一条语句里 `up.positions.get_mut(&position_key)`（NLL 下借用
+    /// 随语句结束即释放），中间穿插的 `up.add_to_account`/`fees` 更新因此不会与仍存活的 position
+    /// 借用冲突。`position_key` 存在性只在函数开头判一次——中途不会有其它代码把它从
+    /// `up.positions` 移除，因此后续 `.unwrap()` 是安全的（对应 Java "非 null 后全程非 null"的
+    /// 隐式契约，这里用一次前置检查 + 注释显式化，而非到处判 `Option`）。
+    #[allow(clippy::too_many_arguments)]
+    fn settle_margin_position_event(
+        up: &mut UserProfile,
+        position_key: i32,
+        required: bool,
+        mte: &MatcherTradeEvent,
+        spec: &CoreSymbolSpecification,
+        action: OrderAction,
+        fees: &mut BTreeMap<i32, i64>,
+        quote_currency_spec: &CoreCurrencySpecification,
+        mark_price: i64,
+        is_taker: bool,
+    ) {
+        if !up.positions.contains_key(&position_key) {
+            if required {
+                panic!(
+                    "handle_matcher_event_margin: maker position record missing for key {position_key} \
+                     (matched_order_uid={})",
+                    up.uid
+                );
+            }
+            return; // 对应 Java taker 侧 takerSpr==null 的防御性 warn+skip。
+        }
+
+        let quote_currency = spec.quote_currency;
+
+        match mte.event_type {
+            MatcherEventType::Trade => {
+                let pre_volume = up.positions.get(&position_key).unwrap().open_volume;
+                up.positions.get_mut(&position_key).unwrap().pending_release(action, mte.size);
+
+                let size_to_open = up
+                    .positions
+                    .get_mut(&position_key)
+                    .unwrap()
+                    .close_current_position_futures(action, mte.size, mte.price);
+                let closed_size = 0i64.max(pre_volume - up.positions.get(&position_key).unwrap().open_volume);
+
+                if closed_size > 0 {
+                    let raw_fee = if is_taker {
+                        arithmetic::calculate_taker_fee(closed_size, mte.price, spec.taker_fee, spec.fee_scale_k)
+                    } else {
+                        arithmetic::calculate_maker_fee(closed_size, mte.price, spec.maker_fee, spec.fee_scale_k)
+                    };
+                    let fee = arithmetic::size_price_to_currency_scale(
+                        raw_fee,
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        quote_currency_spec.currency_scale_k,
+                    );
+                    up.add_to_account(quote_currency, -fee);
+                    *fees.entry(quote_currency).or_insert(0) += fee;
+                }
+
+                if size_to_open > 0 {
+                    // 保证金按 mark_price（保守）、成本基按 mte.price（用于后续平仓算 PnL）。
+                    up.positions.get_mut(&position_key).unwrap().open_position_margin(
+                        action,
+                        size_to_open,
+                        mte.price,
+                        spec,
+                        mark_price,
+                    );
+
+                    let raw_fee = if is_taker {
+                        arithmetic::calculate_taker_fee(size_to_open, mte.price, spec.taker_fee, spec.fee_scale_k)
+                    } else {
+                        arithmetic::calculate_maker_fee(size_to_open, mte.price, spec.maker_fee, spec.fee_scale_k)
+                    };
+                    let fee = arithmetic::size_price_to_currency_scale(
+                        raw_fee,
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        quote_currency_spec.currency_scale_k,
+                    );
+                    up.add_to_account(quote_currency, -fee);
+                    *fees.entry(quote_currency).or_insert(0) += fee;
+                }
+            }
+            MatcherEventType::Reject | MatcherEventType::Reduce => {
+                up.positions.get_mut(&position_key).unwrap().pending_release(action, mte.size);
+            }
+            MatcherEventType::BinaryEvent => {
+                // 不可达：`handler_risk_release` 顶层已对 BINARY_EVENT 短路返回，链上不会再出现。
+            }
+        }
+
+        // 对应 Java `if (takerSpr.isEmpty()) { refundExtraMargin(...); ...; removePositionRecord(...); }`：
+        // 仓位清零（无持仓、无挂单）才触发 extraMargin 退款 + profit 结算 + 拆记录。
+        let is_empty = up.positions.get(&position_key).unwrap().is_empty();
+        if is_empty {
+            let currency = up.positions.get(&position_key).unwrap().currency;
+
+            // `refundExtraMargin`(:1553-1574)：extraMargin 以 sizePriceScale 存储，退款经
+            // `size_price_to_currency_scale`（非 `symbol_to_currency_scale`——输入是
+            // baseScaleK×quoteScaleK 乘积单位）换算回 accounts。
+            let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
+            if extra_margin > 0 {
+                let refund = arithmetic::size_price_to_currency_scale(
+                    extra_margin,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    quote_currency_spec.currency_scale_k,
+                );
+                up.add_to_account(currency, refund);
+                up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
+            }
+
+            // `removePositionRecord`(:1580-1589)：残余已实现盈亏一次性打入 accounts（普通成交里
+            // 已实现 PnL 唯一入账户处），再从 map 摘除（Rust 无对象池，直接 remove）。
+            let profit = up.positions.get(&position_key).unwrap().profit;
+            if profit != 0 {
+                let profit_scaled = arithmetic::size_price_to_currency_scale(
+                    profit,
+                    spec.base_scale_k,
+                    spec.quote_scale_k,
+                    quote_currency_spec.currency_scale_k,
+                );
+                up.add_to_account(currency, profit_scaled);
+            }
+            up.positions.remove(&position_key);
         }
     }
 
@@ -2568,6 +2856,11 @@ mod tests {
         futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k)
     }
 
+    /// 同 [`futures_spec`]，但 `maker_fee` 可配置（Task 4 R2 需要区分 taker/maker 费率的测试用）。
+    fn futures_spec_with_fees(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
+        CoreSymbolSpecification { maker_fee, ..futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k) }
+    }
+
     fn setup_futures(
         taker_fee: i64,
         fee_scale_k: i64,
@@ -3001,5 +3294,514 @@ mod tests {
         engine.pre_process_command(&mut cmd, &mut ups, &ssp);
         assert_eq!(cmd.result_code, Some(CommandResultCode::ValidForMatchingEngine));
         assert_eq!(cmd.size, 5);
+    }
+
+    // ================================================================================
+    // P4 Task 4：期货 R2 — handleMatcherEventMargin（开/平/翻/PnL 结算）
+    // 参考文档 §4/§6/§7；Java `RiskEngine.java:1358-1511` + `refundExtraMargin`(:1553-1574) +
+    // `removePositionRecord`(:1580-1589)。
+    //
+    // 两层测试：
+    // - 低层：直接调用私有 `RiskEngine::settle_margin_position_event`（单用户 + 单 position +
+    //   单事件的结算核心），精确锁定 close-then-open / PnL-only-at-empty / fee 配对语义，
+    //   不需要搭 taker+maker 两侧 + `UserProfileService` 全套。
+    // - 集成层：走真实入口 `handler_risk_release`，验证 taker+maker 双侧联动、链路分派
+    //   （不像现货预先摘取链头 REJECT/REDUCE）、以及跨用户全局守恒。
+    // ================================================================================
+
+    const FUT2_MAKER_UID: i64 = 12;
+
+    fn fut_currency_spec() -> CoreCurrencySpecification {
+        CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 }
+    }
+
+    fn fut_trade_event(size: i64, price: i64, matched_order_uid: i64) -> MatcherTradeEvent {
+        MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price,
+            size,
+            bid_gt_ask: false,
+            bidder_hold_price: 0, // 期货不用 bidderHoldPrice（现货专用字段，参考文档 §4）。
+            matched_order_uid,
+            next: None,
+        }
+    }
+
+    /// R1 `place_order` 恒在 ME 撮合前把 position 记录（连同 pending hold）提交进 map（Task 3
+    /// 已验证的不变式：NSF 通过后才 insert，但一旦通过就必已在 map 里）。集成测试用它模拟
+    /// "R1 已挂单、正等待撮合"的前置状态——`handler_risk_release` 的期货分支不会、也不该凭空
+    /// 生造一条从未在 R1 出现过的 position 记录（taker 缺失时防御性跳过，maker 缺失时 panic，
+    /// 见 [`RiskEngine::settle_margin_position_event`] 文档）。若该 uid/symbol 已有记录（例如
+    /// 平仓测试里在开仓成交之后再挂平仓单），在其基础上叠加 pending，而非覆盖。
+    fn seed_pending_position(ups: &mut UserProfileService, uid: i64, action: OrderAction, size: i64, price: i64) {
+        if ups.get(uid).is_none() {
+            ups.add_empty_user_profile(uid);
+        }
+        let up = ups.get_mut(uid).unwrap();
+        let mut pos = up
+            .positions
+            .get(&FUT_SYMBOL)
+            .cloned()
+            .unwrap_or_else(|| SymbolPositionRecord::new(uid, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1));
+        pos.pending_hold(action, size, price);
+        up.positions.insert(FUT_SYMBOL, pos);
+    }
+
+    fn fut_reject_reduce_event(event_type: MatcherEventType, size: i64) -> MatcherTradeEvent {
+        MatcherTradeEvent {
+            event_type,
+            active_order_completed: false,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            price: 0,
+            size,
+            bid_gt_ask: false,
+            bidder_hold_price: 0,
+            matched_order_uid: 0,
+            next: None,
+        }
+    }
+
+    // --------------------------------------------------------------------------
+    // 低层：settle_margin_position_event —— TRADE 开/平/翻 + REJECT/REDUCE + teardown
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn settle_margin_open_new_position_no_pnl_charges_taker_fee_exact_conservation() {
+        let spec = futures_spec(2, 0); // taker_fee=2（固定，每手 2）
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 10_000);
+            // R1 `place_order` 恒在 ME 撮合前把（哪怕仍是空仓）position 记录连同 pending
+            // hold 一起提交进 map（Task 3 已验证的不变式）——这里用一个刚挂单、尚未成交的
+            // 空仓记录模拟"R1 已建档"，而非假设 R2 能凭空插入一条全新记录。
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.pending_buy_size = 10;
+            pos.pending_buy_avg_price = 100;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_trade_event(10, 100, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        );
+
+        let pos = up.positions.get(&FUT_SYMBOL).expect("open 后仍非空（open_volume>0），不应被拆记录");
+        assert_eq!(pos.direction, PositionDirection::Long);
+        assert_eq!(pos.open_volume, 10);
+        assert_eq!(pos.open_price_sum, 1000); // 成本基按 trade price：10*100
+        assert_eq!(pos.open_init_margin_sum, 1000); // 保证金按 mark：notional(100*10)/leverage(1)
+        assert_eq!(pos.profit, 0, "开仓不产生已实现盈亏");
+
+        // fee = taker_fee(2 固定) * size(10) = 20；无 PnL；仓非空不触发 teardown。
+        assert_eq!(up.account(FUT_QUOTE), 10_000 - 20);
+        assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 20);
+        assert_eq!((up.account(FUT_QUOTE) - 10_000) + *fees.get(&FUT_QUOTE).unwrap(), 0, "唯一移动是费用配对");
+    }
+
+    #[test]
+    fn settle_margin_partial_close_defers_pnl_into_cost_basis_no_realization() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 10_000);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.direction = PositionDirection::Long;
+            pos.open_volume = 20;
+            pos.open_price_sum = 2000; // 均价 100
+            pos.open_init_margin_sum = 2000;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        // ASK 5（< openVolume 20）@110：部分平，价格优于成本但不实现盈亏——盈亏递延进剩余成本基。
+        let mte = fut_trade_event(5, 110, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        );
+
+        let pos = up.positions.get(&FUT_SYMBOL).expect("部分平仍非空，不应拆记录");
+        assert_eq!(pos.open_volume, 15);
+        assert_eq!(pos.open_init_margin_sum, 1500, "trunc(2000*5/20)=500 释放，剩 1500");
+        assert_eq!(pos.open_price_sum, 1450, "2000 - tradeSize(5)*tradePrice(110)=2000-550");
+        assert_eq!(pos.profit, 0, "部分平不实现盈亏");
+
+        // fee = taker_fee(2) * closedSize(5) = 10；仅此账户变动，无 PnL 入账。
+        assert_eq!(up.account(FUT_QUOTE), 10_000 - 10);
+        assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 10);
+    }
+
+    #[test]
+    fn settle_margin_full_close_realizes_pnl_and_removes_position_on_teardown() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 10_000);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.direction = PositionDirection::Long;
+            pos.open_volume = 10;
+            pos.open_price_sum = 1000; // 均价 100
+            pos.open_init_margin_sum = 1000;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        // ASK 10（== openVolume）@120：全平，profit=(1200-1000)*(+1)=200，size_to_open=0（无翻仓）。
+        let mte = fut_trade_event(10, 120, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        );
+
+        assert!(!up.positions.contains_key(&FUT_SYMBOL), "全平且无残余挂单 → isEmpty → 拆记录");
+        // fee = taker_fee(2)*closedSize(10)=20；PnL 结算：+200（isEmpty 唯一入账户处）。
+        assert_eq!(up.account(FUT_QUOTE), 10_000 - 20 + 200);
+        assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 20);
+    }
+
+    #[test]
+    fn settle_margin_flip_closes_full_then_reopens_reverse_direction_defers_profit_payout() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 10_000);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.direction = PositionDirection::Long;
+            pos.open_volume = 10;
+            pos.open_price_sum = 1000; // 均价 100
+            pos.open_init_margin_sum = 1000;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        // ASK 15（> openVolume 10）@120：平掉 10（实现 profit=200）+ 反手开空 5 @120（mark=100）。
+        let mte = fut_trade_event(15, 120, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        );
+
+        let pos = up.positions.get(&FUT_SYMBOL).expect("翻仓后新方向仓位非空，不拆记录");
+        assert_eq!(pos.direction, PositionDirection::Short);
+        assert_eq!(pos.open_volume, 5);
+        assert_eq!(pos.open_price_sum, 600); // 5*120（成本基按 trade price）
+        assert_eq!(pos.open_init_margin_sum, 500); // mark(100)*5/leverage(1)（保证金按 mark price）
+        assert_eq!(pos.profit, 200, "平仓腿已实现盈亏累进 profit，但因新仓非空未结算入账户");
+
+        // fee：close 腿 taker_fee(2)*10=20 + open 腿 taker_fee(2)*5=10，各自独立收取 = 30。
+        // account 只扣 fee（profit 未结算，因 isEmpty()==false）。
+        assert_eq!(up.account(FUT_QUOTE), 10_000 - 30);
+        assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 30);
+    }
+
+    #[test]
+    fn settle_margin_reject_reduce_only_releases_pending_no_account_change() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 5_000);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.pending_buy_size = 10;
+            pos.pending_buy_avg_price = 100;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_reject_reduce_event(MatcherEventType::Reject, 4);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        );
+
+        let pos = up.positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(pos.pending_buy_size, 6);
+        assert_eq!(up.account(FUT_QUOTE), 5_000, "REJECT/REDUCE 只退 pending，不动账户");
+        assert!(fees.is_empty());
+    }
+
+    #[test]
+    fn settle_margin_reduce_full_pending_release_triggers_teardown_refunds_extra_margin_and_leftover_profit() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 1_000);
+            // 合成场景：open_volume=0（已平），但仍有残余 pending 阻止此前 teardown，且带
+            // extraMargin/profit 残留——验证 teardown 一次性把两者都结清。
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.pending_sell_size = 3;
+            pos.profit = 50;
+            pos.extra_margin = 30;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_reject_reduce_event(MatcherEventType::Reduce, 3); // 释放全部剩余 pending → isEmpty
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        );
+
+        assert!(!up.positions.contains_key(&FUT_SYMBOL), "isEmpty 后应拆记录");
+        assert_eq!(up.account(FUT_QUOTE), 1_000 + 30 + 50, "extraMargin(30) + profit(50) 一次性入账");
+        assert!(fees.is_empty(), "本次无成交，无 fee 移动");
+    }
+
+    #[test]
+    fn settle_margin_missing_position_required_false_is_noop() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_trade_event(10, 100, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        );
+
+        assert!(!up.positions.contains_key(&FUT_SYMBOL), "缺失 position 时 required=false 应静默跳过");
+        assert_eq!(up.account(FUT_QUOTE), 0);
+        assert!(fees.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "maker position record missing")]
+    fn settle_margin_missing_position_required_true_panics() {
+        let spec = futures_spec(2, 0);
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_trade_event(10, 100, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, true, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, false,
+        );
+    }
+
+    #[test]
+    fn settle_margin_maker_side_uses_maker_fee_rate_not_taker_rate() {
+        let spec = futures_spec_with_fees(10, 3, 0); // taker=10、maker=3，均固定
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 10_000);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.pending_buy_size = 10;
+            pos.pending_buy_avg_price = 100;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_trade_event(10, 100, 0);
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100,
+            false, // is_taker=false → 必须用 maker_fee(3)，不是 taker_fee(10)
+        );
+
+        assert_eq!(up.account(FUT_QUOTE), 10_000 - 30); // maker_fee(3)*size(10)=30
+        assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 30);
+    }
+
+    #[test]
+    fn settle_margin_proportional_fee_is_exact_no_ceil_drift_taker_and_maker() {
+        // P4-C watch：futures 费用是"同一次计算值同时借记 accounts、贷记 fees"（无现货那种
+        // "逐笔冻结公式 vs 均价重算公式"两套不同公式的落差），故比例费（ceil）在这里天然
+        // 精确配对，不会像现货 P3 缺陷 #2 那样出现 dust——本测试用比例费直接断言 EXACT 守恒
+        // （非近似/容差），验证这个架构性差异。
+        let spec = futures_spec_with_fees(333, 111, 10_000); // taker≈3.33%、maker≈1.11%，故意选不整除的比例
+        let currency_spec = fut_currency_spec();
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_account(FUT_QUOTE, 100_000);
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.pending_buy_size = 7;
+            pos.pending_buy_avg_price = 101;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
+        let mte = fut_trade_event(7, 101, 0); // 刻意用不整除的 size/price 组合放大 ceil 效应
+
+        let up = ups.get_mut(UID).unwrap();
+        RiskEngine::settle_margin_position_event(
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        );
+        let taker_fee = arithmetic::calculate_taker_fee(7, 101, 333, 10_000);
+        assert_ne!(taker_fee, 0);
+        assert_eq!(up.account(FUT_QUOTE), 100_000 - taker_fee, "借记的就是算出来的那一个值，逐位精确");
+        assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), taker_fee, "贷记的也是同一个值，精确配对");
+        assert_eq!((up.account(FUT_QUOTE) - 100_000) + *fees.get(&FUT_QUOTE).unwrap(), 0, "EXACT 守恒，非近似");
+    }
+
+    // --------------------------------------------------------------------------
+    // 集成层：handler_risk_release —— taker+maker 联动 / 链路分派 / 跨用户全局守恒
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn handler_risk_release_futures_trade_opens_both_sides_and_conserves() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100); // taker=2 固定，maker=0
+        assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
+        ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
+        seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
+        seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 10, 100);
+
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Bid),
+            uid: UID,
+            ..Default::default()
+        };
+        cmd.matcher_event = Some(Box::new(fut_trade_event(10, 100, FUT2_MAKER_UID)));
+
+        let taker_before = ups.get(UID).unwrap().account(FUT_QUOTE);
+        let maker_before = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE);
+
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
+
+        assert!(cmd.matcher_event.is_none(), "TRADE 链结算后应清空（对齐现货分支的消费语义）");
+        let taker_pos = ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(taker_pos.direction, PositionDirection::Long);
+        assert_eq!(taker_pos.open_volume, 10);
+        let maker_pos = ups.get(FUT2_MAKER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(maker_pos.direction, PositionDirection::Short);
+        assert_eq!(maker_pos.open_volume, 10);
+
+        let taker_delta = ups.get(UID).unwrap().account(FUT_QUOTE) - taker_before;
+        let maker_delta = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE) - maker_before;
+        let fees_delta = *engine.fees.get(&FUT_QUOTE).unwrap_or(&0);
+        assert_eq!(taker_delta, -20, "taker_fee(2)*size(10)");
+        assert_eq!(maker_delta, 0, "本 fixture maker_fee=0");
+        assert_eq!(taker_delta + maker_delta + fees_delta, 0, "开仓：唯一移动是费用配对");
+    }
+
+    #[test]
+    fn handler_risk_release_futures_full_round_trip_open_then_close_is_zero_sum_between_counterparties() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100); // taker=2 固定，maker=0
+        assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
+        ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
+        seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
+        seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 10, 100);
+
+        // 开仓：UID 多头 10 @100 vs FUT2_MAKER_UID 空头 10 @100。
+        let mut open_cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Bid),
+            uid: UID,
+            ..Default::default()
+        };
+        open_cmd.matcher_event = Some(Box::new(fut_trade_event(10, 100, FUT2_MAKER_UID)));
+        engine.handler_risk_release(&mut open_cmd, &mut ups, &ssp);
+
+        let taker_after_open = ups.get(UID).unwrap().account(FUT_QUOTE);
+        let maker_after_open = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE);
+
+        // 平仓前：双方各自再挂一笔平仓单（R1 已建档，pending 叠加到既有 open_volume 之上）。
+        seed_pending_position(&mut ups, UID, OrderAction::Ask, 10, 120);
+        seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Bid, 10, 120);
+
+        // 平仓：UID 卖出 10 @120 平多，对手 FUT2_MAKER_UID 买回 10 平空——双方都整仓平掉。
+        let mut close_cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Ask),
+            uid: UID,
+            ..Default::default()
+        };
+        close_cmd.matcher_event = Some(Box::new(fut_trade_event(10, 120, FUT2_MAKER_UID)));
+        engine.handler_risk_release(&mut close_cmd, &mut ups, &ssp);
+
+        assert!(!ups.get(UID).unwrap().positions.contains_key(&FUT_SYMBOL), "taker 全平应拆记录");
+        assert!(
+            !ups.get(FUT2_MAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL),
+            "maker 全平应拆记录"
+        );
+
+        let taker_final = ups.get(UID).unwrap().account(FUT_QUOTE);
+        let maker_final = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE);
+
+        // taker(多头) profit=(120-100)*10=200，close_fee=taker_fee(2)*10=20。
+        assert_eq!(taker_final - taker_after_open, 200 - 20);
+        // maker(空头) profit=-(120-100)*10=-200，close_fee=maker_fee(0)*10=0。
+        assert_eq!(maker_final - maker_after_open, -200);
+
+        // 全局守恒：两用户开仓到平仓全程净变动 + fees 净变动 == 0（zero-sum PnL + fee 是唯一真实
+        // 转移，且每次转移都是 accounts↔fees 等额配对）。
+        let total_user_delta = (taker_final - 10_000) + (maker_final - 10_000);
+        let fees_total = *engine.fees.get(&FUT_QUOTE).unwrap();
+        assert_eq!(total_user_delta + fees_total, 0);
+    }
+
+    #[test]
+    fn handler_risk_release_futures_chain_head_reduce_then_trade_applies_both_in_one_call() {
+        // 验证"不像现货预先摘取链头 REJECT/REDUCE"的分派设计：REDUCE(4) 紧跟 TRADE(6) 的同一条
+        // 链，一次 handler_risk_release 调用应把两个事件都结算掉（而非只处理链头就返回）。
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
+        assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
+        ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
+
+        {
+            let up = ups.get_mut(UID).unwrap();
+            let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
+            pos.pending_buy_size = 10; // R1 挂单量（REDUCE(4) 先撤掉一部分，TRADE(6) 成交剩余）
+            pos.pending_buy_avg_price = 100;
+            up.positions.insert(FUT_SYMBOL, pos);
+        }
+        // maker 只参与 TRADE(6) 这一腿（REDUCE 是 taker 自己订单的撤单，与 maker 无关），
+        // 故 maker 的 pending 只需覆盖 TRADE 的 size=6。
+        seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 6, 100);
+
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Bid),
+            uid: UID,
+            ..Default::default()
+        };
+        let trade = fut_trade_event(6, 100, FUT2_MAKER_UID);
+        let mut reduce = fut_reject_reduce_event(MatcherEventType::Reduce, 4);
+        reduce.next = Some(Box::new(trade));
+        cmd.matcher_event = Some(Box::new(reduce));
+
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
+
+        let taker_pos = ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(taker_pos.pending_buy_size, 0, "REDUCE(4) + TRADE(6) 应耗尽全部 10 挂单");
+        assert_eq!(taker_pos.open_volume, 6, "TRADE 事件应正常开仓 6 手，未被链头 REDUCE 影响");
+
+        let maker_pos = ups.get(FUT2_MAKER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(maker_pos.open_volume, 6, "maker 只在 TRADE 事件参与，REDUCE 与其无关");
     }
 }
