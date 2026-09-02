@@ -1,6 +1,8 @@
 //! 定点算术纯函数——现货子集。
 //!
 //! 对应 Java: `exchange.core2.core.utils.CoreArithmeticUtils`
+//! 另含 P6 Task 4 提取的共享原语 [`distribute_remainder_by_one`]（"截断分配 + 1-unit 余数
+//! 分配"，见该函数文档），供 Funding/IF/ADL（P6 Task 4/5/6）复用。
 //! （`exchange-core/src/main/java/exchange/core2/core/utils/CoreArithmeticUtils.java`）。
 //!
 //! # 与 Java 的差异（刻意简化，非语义改变）
@@ -421,6 +423,70 @@ pub fn calculate_deficit_after_liquidate(
     // numerator 可能为负（sign=-1 short），故把 size（恒正）放第一参，numerator 放第二参
     // （ceil_mul_div 支持 b 为负）。
     delta_mm - ceil_mul_div(size, numerator, open_volume)
+}
+
+// ========================================================================
+// P6 Task 4：共享"截断分配 + 1-unit 余数分配"原语 —— 提取自
+// `FundingFeeCommandProcessor.buildMatcherEvents`（:85-104）与
+// `.applyEvent`/`settleFundingFee`（:150-161）两处完全同构的模式，供 IF/ADL（Task 5/6）
+// 复用。参考文档 §4.2/§4.3/§11.2、`.superpowers/sdd/.../task-4-brief.md`"共享原语"一节。
+// ========================================================================
+
+use std::collections::BTreeMap;
+
+/// 把 `total`（非负待分配总量）按 `weights`（key -> 非负权重，`BTreeMap` 保证按 key **升序**
+/// 迭代——determinism 是 load-bearing，参考文档 §11.2 明确警告不能用 hash 容器迭代序）截断
+/// 分配（[`trunc_mul_div`]，向零截断），再把截断产生的余数（`total - Σ 截断额`）按 key
+/// 升序**单趟**逐 1 分配给 `weights` 中出现过的 key（不看该 key 自身权重是否为 0——"出现即
+/// 有资格"，对应 Java 判定条件是 `receiverNotionals`/`payerAmounts` 是否为空，不是权重是否
+/// 为零，两者在本域内恒等价：真实调用点的权重恒 > 0，非空 map 的权重也恒 > 0，此处按
+/// "出现于 map"这个更宽松的条件实现以精确对齐 Java 语义）。
+///
+/// **单趟、不循环回绕**：对应 Java 两处余数分配循环都只跑一趟（`for` 到 `numShards`/
+/// `LongIterator` 到 `keySet` 末尾即止），不会绕回从头再分配一轮。这在数学上总是够用——
+/// N 次截断除法各自的余数 < 除数，累计截断损失严格小于"参与分配的 key 数"（每个截断至多
+/// 损失"不到 1 个单位"的份额，N 个 key 至多损失 N-1 个单位余数），因此 `total >= 0` 时
+/// remainder 恒 `< weights.len()`，单趟必能耗尽；调用方不需要处理"未耗尽"的情况（Java 侧
+/// 对应打印 `log.error` 而非 panic——本移植同样不对这个理论上不可达的分支做特殊处理，如果
+/// 出现将残留在返回的 map 分配额里而不 panic，不破坏 Raft 状态机热路径）。
+///
+/// `total_weight <= 0`（`weights` 为空或所有权重求和为 0）：所有截断额恒为 0，余数即
+/// `total` 本身，直接按 key 升序单趟分配（对应 Java 分母为 0 时不会真的调用 `truncMulDiv`
+/// 的等价效果——调用方在余数分配层面永远不会真的因除零 panic，因为这条路径完全绕开了
+/// [`trunc_mul_div`]）。
+///
+/// 返回：`BTreeMap<K, i64>`，key 集合与 `weights` 完全相同（即使最终分配额为 0 也保留
+/// entry——对应 Java `receiverFees` 对每个 `receiverNotionals` 的 key 都建一个 entry，即便
+/// fee 恰好算出 0；调用方按需再过滤 0 值，不在这里过滤）。
+pub fn distribute_remainder_by_one<K: Ord + Copy>(total: i64, weights: &BTreeMap<K, i64>) -> BTreeMap<K, i64> {
+    let mut result: BTreeMap<K, i64> = BTreeMap::new();
+    if weights.is_empty() {
+        return result;
+    }
+    let total_weight: i64 = weights.values().sum();
+    let mut distributed: i64 = 0;
+    if total_weight != 0 {
+        for (&k, &w) in weights {
+            let amount = trunc_mul_div(total, w, total_weight);
+            distributed += amount;
+            result.insert(k, amount);
+        }
+    } else {
+        for &k in weights.keys() {
+            result.insert(k, 0);
+        }
+    }
+    let mut remainder = total - distributed;
+    if remainder > 0 {
+        for &k in weights.keys() {
+            if remainder <= 0 {
+                break;
+            }
+            *result.get_mut(&k).expect("key inserted above for every weights entry") += 1;
+            remainder -= 1;
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -991,5 +1057,86 @@ mod tests {
     fn calculate_deficit_after_liquidate_zero_size_is_pure_delta_mm() {
         // size=0：ceil_mul_div(0, numerator, Q)=0，结果退化为纯 deltaMM。
         assert_eq!(calculate_deficit_after_liquidate(0, 1, 20, 7, 50, 13, 40, 25), 15);
+    }
+
+    // ------------------------------------------------------------------
+    // distribute_remainder_by_one — P6 Task 4 共享余数分配原语
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn distribute_remainder_by_one_exact_division_no_remainder() {
+        // total=100, weights 1:1 且整除：50/50 各得 50，无截断损失。
+        let weights = BTreeMap::from([(1i64, 50i64), (2i64, 50i64)]);
+        let result = distribute_remainder_by_one(100, &weights);
+        assert_eq!(result, BTreeMap::from([(1, 50), (2, 50)]));
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_truncation_dust_goes_to_lowest_key_first() {
+        // total=10, 三个 key 等权重（各 1）：trunc(10*1/3)=3 每个，截断后 distributed=9，
+        // remainder=1 -> 分给 key 升序第一个（key=1）。
+        let weights = BTreeMap::from([(1i64, 1i64), (2i64, 1i64), (3i64, 1i64)]);
+        let result = distribute_remainder_by_one(10, &weights);
+        assert_eq!(result, BTreeMap::from([(1, 4), (2, 3), (3, 3)]), "余数 1 单位必须分给升序最小的 key=1");
+        assert_eq!(result.values().sum::<i64>(), 10, "分配总额必须等于 total，无 dust 泄漏");
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_remainder_spans_multiple_keys_deterministic_order() {
+        // total=11, 5 个 key 等权重（各 1）：trunc(11/5)=2 每个，distributed=10，remainder=1
+        // -> 只有 key=1 (升序最小) 拿到 +1；这一版再验证 remainder=3 时前 3 个 key 都 +1。
+        let weights = BTreeMap::from([(10i64, 1i64), (20i64, 1i64), (30i64, 1i64), (40i64, 1i64), (50i64, 1i64)]);
+        let result = distribute_remainder_by_one(13, &weights); // trunc(13/5)=2 each, distributed=10, remainder=3
+        assert_eq!(
+            result,
+            BTreeMap::from([(10, 3), (20, 3), (30, 3), (40, 2), (50, 2)]),
+            "余数 3 单位必须按 key 升序分给前 3 个 key（10,20,30），不能绕回或跳过"
+        );
+        assert_eq!(result.values().sum::<i64>(), 13);
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_uneven_weights_pro_rata_plus_deterministic_remainder() {
+        // 构造真实业务形状：total=100, 三个 receiver 按 notional 30/30/40 pro-rata。
+        // trunc(100*30/100)=30, trunc(100*30/100)=30, trunc(100*40/100)=40 -> 恰好整除，无余数。
+        // 换一组制造截断 dust：total=100, weights 33/33/34。
+        let weights = BTreeMap::from([(1i64, 33i64), (2i64, 33i64), (3i64, 34i64)]);
+        // trunc(100*33/100)=33 每个前两个, trunc(100*34/100)=34 -> distributed=100，remainder=0。
+        let result = distribute_remainder_by_one(100, &weights);
+        assert_eq!(result, BTreeMap::from([(1, 33), (2, 33), (3, 34)]));
+
+        // 真正制造 dust：total=10, weights 3/3/4（分母 total_weight=10）。
+        // trunc(10*3/10)=3, trunc(10*3/10)=3, trunc(10*4/10)=4 -> 恰好整除。改用 total_weight=3。
+        let weights2 = BTreeMap::from([(1i64, 1i64), (2i64, 1i64), (3i64, 1i64)]);
+        let result2 = distribute_remainder_by_one(7, &weights2); // trunc(7/3)=2 each, distributed=6, remainder=1
+        assert_eq!(result2, BTreeMap::from([(1, 3), (2, 2), (3, 2)]), "确定性 dust 落到 key=1");
+        assert_eq!(result2.values().sum::<i64>(), 7);
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_zero_total_weight_distributes_purely_by_key_order() {
+        // total_weight==0（所有权重为 0）：截断额恒 0，remainder=total 全部按 key 升序单趟分配。
+        let weights = BTreeMap::from([(1i64, 0i64), (2i64, 0i64), (3i64, 0i64)]);
+        let result = distribute_remainder_by_one(2, &weights);
+        assert_eq!(result, BTreeMap::from([(1, 1), (2, 1), (3, 0)]));
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_empty_weights_yields_empty_result() {
+        let weights: BTreeMap<i64, i64> = BTreeMap::new();
+        assert!(distribute_remainder_by_one(100, &weights).is_empty());
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_zero_total_yields_all_zero_entries() {
+        let weights = BTreeMap::from([(1i64, 10i64), (2i64, 20i64)]);
+        let result = distribute_remainder_by_one(0, &weights);
+        assert_eq!(result, BTreeMap::from([(1, 0), (2, 0)]), "total=0：每个 key 都有 entry，值恒 0");
+    }
+
+    #[test]
+    fn distribute_remainder_by_one_single_key_gets_everything() {
+        let weights = BTreeMap::from([(42i64, 7i64)]);
+        assert_eq!(distribute_remainder_by_one(999, &weights), BTreeMap::from([(42, 999)]));
     }
 }

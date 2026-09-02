@@ -30,6 +30,7 @@ use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::processors::funding_fee_command_processor::FundingFeeCommandProcessor;
 use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
 use crate::core::processors::loan::loan_service::LoanService;
@@ -153,6 +154,10 @@ impl RiskEngine {
             cmd.result_code = Some(self.place_order_risk_check(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::ClosePosition {
             cmd.result_code = Some(self.close_position_risk_check(cmd, ups, ssp));
+        } else if cmd.command == OrderCommandType::SettleFundingfees {
+            // `SETTLE_FUNDINGFEES` 不是 `is_non_trading()`（Task 1 已定），停留在主交易 switch，
+            // 见 `Self::settle_funding_fees_collect` 文档。
+            cmd.result_code = Some(self.settle_funding_fees_collect(cmd, ups, ssp));
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
@@ -781,6 +786,18 @@ impl RiskEngine {
         // 偏差"）。
         if cmd.command == OrderCommandType::InternalTransfer {
             self.internal_transfer_apply(cmd, ups);
+            return;
+        }
+        // `SETTLE_FUNDINGFEES` 是本移植第三个需要真正 R2 处理、但**不是**通过共享
+        // `cmd.matcher_event` 链传数据的命令（同 `REPRICE_LOAN_RATES`/`INTERNAL_TRANSFER`，见
+        // 上面两条注释）——它也不是 `is_non_trading()`（停留在主交易 switch），但同样必须在下面
+        // 通用的 `cmd.matcher_event.take()` 提取**之前**特判：`funding_fee_command_processor.rs`
+        // 用 `cmd.funding_fee_event` 这个专属载体而非 `matcher_event`，若不提前拦截，
+        // `cmd.matcher_event.take()` 会取到 `None`（本命令从未写过它）而直接早退，R2 结算永远
+        // 跑不到。对应 Java `RiskEngine.handlerRiskRelease` 处理 `MatcherEventType.FUNDING_EVENT`
+        // 的分支（`:972-976`）。
+        if cmd.command == OrderCommandType::SettleFundingfees {
+            self.settle_funding_fees_apply(cmd, ups, ssp);
             return;
         }
         if cmd.command.is_non_trading() {
@@ -2064,6 +2081,95 @@ impl RiskEngine {
             return;
         };
         InternalTransferProcessor::apply_event(ups, to_uid, currency, amount);
+    }
+
+    /// `SETTLE_FUNDINGFEES` R1+merge：对应 Java `RiskEngine.preProcessCommand` case
+    /// `SETTLE_FUNDINGFEES`（`:294-309`），叠加 `FundingFeeCommandProcessor.collectInput`
+    /// （`:34-68`）与 `buildMatcherEvents`（`:70-126`，merge）。参考文档 §4.1/§4.2，
+    /// `ExchangeApi.java:1083-1093` 字段映射：`cmd.action` = BID（多付空）/ASK（空付多）、
+    /// `cmd.price = fundingRate`、`cmd.size = rateScaleK`。
+    ///
+    /// # R1 前置门禁顺序（逐字对齐 Java 两层嵌套校验，非本移植随意排序）
+    /// Java 把这一命令的校验拆在两层：外层 `preProcessCommand`（在调用 `collectInput` **之前**）
+    /// 校验 `symbol` spec 存在且类型是 `FUTURES_CONTRACT_PERPETUAL`（否则 `INVALID_SYMBOL`），
+    /// 再校验 `LastPriceCacheRecord` 存在（否则 `RISK_MARKPRICE_NOT_AVAILABLE`）——**这两步都
+    /// 在调用 `collectInput` 之前就会短路返回**，`collectInput` 自身的 `cmd.size<=0` 校验
+    /// （`RISK_INVALID_AMOUNT`）根本没有机会跑到。因此，若 `size<=0` 与 markPrice 缺失同时
+    /// 为真，Java 实际观测到的结果码是 `RISK_MARKPRICE_NOT_AVAILABLE`（markPrice 检查在外层
+    /// 更早），不是 `RISK_INVALID_AMOUNT`——本函数按这个真实嵌套顺序实现：
+    /// `InvalidSymbol` → `RiskMarkpriceNotAvailable` → `RiskInvalidAmount` → 收集。
+    ///
+    /// # 路由偏差（相对 Java，同 `internal_transfer_collect`/`reprice_loan_rates_collect` 先例）
+    /// Java 版本 R1 只做 `collectInput`，随后交给 `MatchingEngineRouter` 的独立
+    /// `FundingFeeCommandProcessor` 实例在 ME 段调用 `buildMatcherEvents`（merge）。单 shard 下
+    /// （Ruling P6-C）"跨 shard 归并"是恒等操作，因此这里把 R1
+    /// [`FundingFeeCommandProcessor::collect_input`] 与 merge
+    /// [`FundingFeeCommandProcessor::build_matcher_events`] 一次性做完，结果写入
+    /// `cmd.funding_fee_event`（`None` 表示 `total_pay==0` 或 `total_recv_notional==0`，
+    /// 对应 Java `cmd.matcherEvent=null`——命令仍是 `Success`，只是没有可结算的事件），供 R2
+    /// （[`Self::settle_funding_fees_apply`]）消费。
+    fn settle_funding_fees_collect(
+        &mut self,
+        cmd: &mut OrderCommand,
+        ups: &UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let spec = match ssp.get_symbol(cmd.symbol) {
+            Some(s) if s.symbol_type == SymbolType::FuturesContractPerpetual => s,
+            _ => return CommandResultCode::InvalidSymbol,
+        };
+        let mark_price = match self.mark_price(cmd.symbol) {
+            Some(p) => p,
+            None => return CommandResultCode::RiskMarkpriceNotAvailable,
+        };
+        if cmd.size <= 0 {
+            return CommandResultCode::RiskInvalidAmount;
+        }
+        let action = cmd.action.expect("SETTLE_FUNDINGFEES requires action");
+        let symbol = spec.symbol_id;
+        let shard = FundingFeeCommandProcessor::collect_input(ups, symbol, mark_price, action, cmd.price, cmd.size);
+        let events = FundingFeeCommandProcessor::build_matcher_events(std::slice::from_ref(&shard));
+        if let Some(&(_shard_id, amount)) = events.first() {
+            cmd.funding_fee_event = Some((shard.payer_amounts, shard.receiver_notionals, amount));
+        }
+        CommandResultCode::Success
+    }
+
+    /// `SETTLE_FUNDINGFEES` R2：对应 Java `RiskEngine.handlerRiskRelease` 处理
+    /// `MatcherEventType.FUNDING_EVENT` 的分支（`:972-976`，`FundingFeeCommandProcessor
+    /// .applyEvent`，`:128-167`）。消费 `cmd.funding_fee_event`（R1 无可结算事件时为 `None`，
+    /// 早退——对应 Java `mte == null` 早退，`SETTLE_FUNDINGFEES` 专属分支根本没机会执行）。
+    ///
+    /// **`liquidationEngine.checkPositions(cmd)` 钩子未落地**（Java `:977`，R2 事件循环结束后
+    /// 追加调用）——`LiquidationEngine` 属 Task 7 排期，见
+    /// `funding_fee_command_processor.rs` 模块文档"checkPositions 钩子"一节，不影响本 Task
+    /// 负责的账户/持仓结算正确性。
+    fn settle_funding_fees_apply(
+        &mut self,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        let Some((payer_amounts, receiver_notionals, shard_recv_amount)) = cmd.funding_fee_event.take() else {
+            return;
+        };
+        let symbol = cmd.symbol;
+        let action = cmd.action.expect("SETTLE_FUNDINGFEES requires action");
+        let spec = ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
+        let currency_spec = ssp
+            .get_currency(spec.quote_currency)
+            .cloned()
+            .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
+        FundingFeeCommandProcessor::apply_event(
+            ups,
+            symbol,
+            action,
+            &payer_amounts,
+            &receiver_notionals,
+            shard_recv_amount,
+            &spec,
+            &currency_spec,
+        );
     }
 
     /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage`（`ADD_LOAN` 分支，
@@ -5899,6 +6005,157 @@ mod tests {
             );
             assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 900, "must not be double-debited");
             assert_eq!(ups.get(TO_UID).unwrap().account(FUT_QUOTE), 100, "must not be double-credited");
+        }
+    }
+
+    // ================================================================================
+    // P6 Task 4: SETTLE_FUNDINGFEES 全管线（R1 pre_process_command → R2
+    // handler_risk_release），对应参考文档 §4 + `FundingFeeCommandProcessor.java`（197 行）。
+    // 处理器函数级测试（collect_input/build_matcher_events/apply_event 直调）见
+    // `funding_fee_command_processor.rs` 自己的 `#[cfg(test)]` 模块；这里只测经
+    // `RiskEngine` 两段管线（R1 门禁 + 完整成功路径 + 守恒）的接线本身。
+    // ================================================================================
+    mod funding_fee_tests {
+        use super::*;
+        use crate::core::common::position_direction::PositionDirection;
+
+        const PAYER_UID: i64 = 1;
+        const RECEIVER_UID: i64 = 2;
+
+        fn funding_cmd(action: OrderAction, rate: i64, rate_scale_k: i64) -> OrderCommand {
+            OrderCommand {
+                command: OrderCommandType::SettleFundingfees,
+                symbol: FUT_SYMBOL,
+                action: Some(action),
+                price: rate,
+                size: rate_scale_k,
+                order_id: 1,
+                ..Default::default()
+            }
+        }
+
+        fn run_full_pipeline(
+            engine: &mut RiskEngine,
+            cmd: &mut OrderCommand,
+            ups: &mut UserProfileService,
+            ssp: &SymbolSpecificationProvider,
+        ) {
+            engine.pre_process_command(cmd, ups, ssp);
+            engine.handler_risk_release(cmd, ups, ssp);
+        }
+
+        /// `setup_futures` 治具全 1 恒等缩放（base_scale_k=quote_scale_k=currency_scale_k=1）：
+        /// notional/fee 手推便于核对。PAYER_UID 开多头（LONG），RECEIVER_UID 开空头（SHORT），
+        /// mark_price 传入 `setup_futures`。
+        fn setup_with_payer_and_receiver(
+            mark_price: i64,
+            payer_volume: i64,
+            receiver_volume: i64,
+        ) -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
+            let (engine, mut ups, ssp) = setup_futures(0, 0, 0, mark_price);
+            // `setup_futures` pre-registers `UID` (const = 7), not our `PAYER_UID`/`RECEIVER_UID`
+            // fixture uids — start from a clean slate and register both explicitly.
+            ups.users.clear();
+            assert_eq!(ups.add_empty_user_profile(PAYER_UID), CommandResultCode::Success);
+            assert_eq!(ups.add_empty_user_profile(RECEIVER_UID), CommandResultCode::Success);
+            ups.get_mut(PAYER_UID).unwrap().positions.insert(
+                FUT_SYMBOL,
+                SymbolPositionRecord {
+                    direction: PositionDirection::Long,
+                    open_volume: payer_volume,
+                    ..SymbolPositionRecord::new(PAYER_UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
+                },
+            );
+            ups.get_mut(RECEIVER_UID).unwrap().positions.insert(
+                FUT_SYMBOL,
+                SymbolPositionRecord {
+                    direction: PositionDirection::Short,
+                    open_volume: receiver_volume,
+                    ..SymbolPositionRecord::new(RECEIVER_UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
+                },
+            );
+            (engine, ups, ssp)
+        }
+
+        fn total_conserved(ups: &UserProfileService) -> i64 {
+            ups.users
+                .values()
+                .map(|u| {
+                    let accounts_sum: i64 = u.accounts.values().sum();
+                    let profit_sum: i64 = u.positions.values().map(|p| p.profit).sum();
+                    accounts_sum + profit_sum
+                })
+                .sum()
+        }
+
+        // ---- R1 gates ----
+
+        #[test]
+        fn invalid_symbol_rejected() {
+            let (mut engine, mut ups, ssp) = setup_with_payer_and_receiver(100, 100, 100);
+            let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
+            cmd.symbol = 99_999; // never registered
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::InvalidSymbol));
+        }
+
+        #[test]
+        fn missing_mark_price_rejected_before_size_gate() {
+            // No mark price cached at all AND size<=0 simultaneously: Java's nested check
+            // order means RISK_MARKPRICE_NOT_AVAILABLE wins (outer gate runs before collectInput's
+            // own size<=0 check ever executes) — see settle_funding_fees_collect doc.
+            let mut ssp = SymbolSpecificationProvider::new();
+            assert_eq!(ssp.add_symbol(futures_spec(0, 0)), CommandResultCode::Success);
+            ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+            ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
+            let mut ups = UserProfileService::new();
+            let mut engine = RiskEngine::new(); // last_price_cache empty
+            let mut cmd = funding_cmd(OrderAction::Bid, 5, 0); // size<=0 too
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskMarkpriceNotAvailable));
+        }
+
+        #[test]
+        fn non_positive_rate_scale_k_rejected_with_invalid_amount() {
+            let (mut engine, mut ups, ssp) = setup_with_payer_and_receiver(100, 100, 100);
+            let mut cmd = funding_cmd(OrderAction::Bid, 5, 0);
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskInvalidAmount));
+        }
+
+        // ---- full pipeline ----
+
+        #[test]
+        fn full_pipeline_settles_zero_sum_and_conserves_total() {
+            // payer LONG 100 @ mark=10 -> notional=1000; rate=5/1000 -> fee=trunc(1000*5/1000)=5.
+            // receiver SHORT 100 -> notional=1000 (sole receiver, gets full 5).
+            let (mut engine, mut ups, ssp) = setup_with_payer_and_receiver(10, 100, 100);
+            let before = total_conserved(&ups);
+            let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(ups.get(PAYER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().profit, -5);
+            assert_eq!(ups.get(RECEIVER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().profit, 5);
+            assert_eq!(total_conserved(&ups), before, "zero-sum: Σaccounts + Σposition.profit unchanged");
+        }
+
+        #[test]
+        fn empty_receiver_pool_produces_no_event_and_no_state_change() {
+            // Only a payer, no receiver -> total_recv_notional==0 -> no event, still Success.
+            let (engine0, mut ups, ssp) = setup_with_payer_and_receiver(10, 100, 100);
+            let mut engine = engine0;
+            // Flatten the receiver's position so it contributes nothing to either pool.
+            ups.get_mut(RECEIVER_UID).unwrap().positions.remove(&FUT_SYMBOL);
+            let before = total_conserved(&ups);
+            let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(ups.get(PAYER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().profit, 0, "no event -> no settlement");
+            assert_eq!(total_conserved(&ups), before);
         }
     }
 }

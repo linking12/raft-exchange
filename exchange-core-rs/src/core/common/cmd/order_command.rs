@@ -1,5 +1,7 @@
 //! 对应 Java: exchange.core2.core.common.cmd.OrderCommand（P1：撮合相关字段 + Task 2：现货路由
 //! 所需字段 + P4 Task 1：期货 `leverage`/`marginMode`/reduce-only 字段扩展）。
+use std::collections::BTreeMap;
+
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -65,6 +67,23 @@ pub struct OrderCommand {
     /// `RiskEngine::handler_risk_release` 专属分支消费（详见 `internal_transfer_processor.rs`
     /// 模块文档）。其余命令类型恒为 `None`，不产生任何影响。
     pub internal_transfer_event: Option<(i64, i32, i64)>,
+    /// P6 Task 4 新增：`SETTLE_FUNDINGFEES` 专属的 R1+merge→R2 载体，
+    /// `(payer_amounts, receiver_notionals, shard_recv_amount)`——`payer_amounts`/
+    /// `receiver_notionals` 是 R1 [`crate::core::processors::funding_fee_command_processor::
+    /// FundingFeeCommandProcessor::collect_input`] 的输出（uid -> fee / uid -> raw notional，
+    /// 对应 Java 每 shard 一份的 `FundingPaymentAndRecvNotional`），`shard_recv_amount` 是 merge
+    /// [`FundingFeeCommandProcessor::build_matcher_events`] 为本 shard 分配到的截断后金额
+    /// （对应 Java `MatcherTradeEvent.price`/`matchedOrderUid` 一对，本移植不扩
+    /// `MatcherEventType`——Ruling P6-A，同 `internal_transfer_event`/`loan_reprice_events`
+    /// 先例）。三元组均为原语类型（`BTreeMap<i64,i64>`/`i64`），不引入 processor 层类型依赖，
+    /// 保持 `common` 层对 `processors` 层零依赖（与 `internal_transfer_event` 用裸元组而非具名
+    /// struct 同一理由）。单 shard 下（Ruling P6-C）`RiskEngine::settle_funding_fees_collect`
+    /// 一次性完成 R1+merge，写入这里；`None` 表示"本命令没有可结算事件"（`total_pay==0` 或
+    /// `total_recv_notional==0`，对应 Java `cmd.matcherEvent=null`）——R2
+    /// [`RiskEngine::settle_funding_fees_apply`] 消费，`None` 时早退，其余命令类型恒为 `None`，
+    /// 不产生任何影响。
+    #[allow(clippy::type_complexity)]
+    pub funding_fee_event: Option<(BTreeMap<i64, i64>, BTreeMap<i64, i64>, i64)>,
 }
 
 impl OrderCommand {
