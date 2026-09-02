@@ -1,5 +1,6 @@
 //! 命令 / 结果 / 报告 DTO。对应 Java `exchange.core2.core.common.**`。
 
+pub mod adl_user_position;
 pub mod balance_adjustment_type;
 pub mod batch_add_loan_command;
 pub mod cmd;
