@@ -271,6 +271,7 @@
 ### P4+ carry-forward（承 P1 未了 + P3 新增）
 - （P1 承接）MatcherTradeEvent 未补的 Java 全字段（futures 用）、IOrderBook 的 getOrderById/validate_internal_state。
 - **⚠ move_order 未验证（P4 必做）**：`ExchangeApi::move_order` 已暴露为公开方法，但 (a) 缺 Java 的 reserve-bid-price 上限守卫（BID 移到 > reserveBidPrice 应返回 `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`，现无条件重撮合 → 可能对未冻结的 quote 结算、欠抵押，真守恒风险）；(b) e2e 场景与 proptest 均**未覆盖** move 路径（GenCmd 无 Move 变体）。**P3 中 move_order 视为未验证、非生产就绪**。P4 补守卫（P3 已有 SymbolType/spec 可做）+ 给 proptest 加 Move 臂。
+  - **更新（2026-09-02，P2 差分对拍反查）**：Rust Naive `move_order` 有一个已确认的资金账 bug——BID 移动即撮合时 TRADE 事件 `bidder_hold_price` 发 0（读了 move 命令未填的 `cmd.reserve_bid_price`），Java 应取 order 自身 reserve。**该 bug 已在 P2 commit `eb987108` 修复**（穿 order 字段，对齐 Java+Direct）。但 **P3 的守恒 proptest 仍缺 Move 变体**——正是它当初没覆盖 move 才让此 bug 潜伏到 P2 才被差分抓到；P4/后续应给 P3 守恒 proptest 补 Move 命令变体，防回归（move-即撮合会经 R2 用 bidder_hold_price 释放 maker 冻结）。
 - （P3 新增）上述两个继承守恒缺陷；processed_tx_ids 无时间窗去重且未入 state_hash（raft/快照需处理）；suspends 桶 + SUSPEND 型 balance-adjust；binary 组帧（当前走直接 API）；snapshot。
 - **性能/并发管线（选型已定）**：Java 的 LMAX Disruptor 五段（Grouping → R1∥Journal → ME → R2，分片）在性能期用 **`disruptor-rs`**（crates.io 的 `disruptor` crate，nicholassm/disruptor-rs）复现——它是 LMAX Disruptor 的 Rust 移植，单生产者 + 依赖定序消费者。**约束：多线程管线必须保持逐位确定性**（分片归属 uid%N/symbol%M + 阶段定序照搬 Java），否则破坏 Raft 状态机前提与 Rust↔Java 差分对拍。
 - 下一阶段可选：P2（OrderBookDirectImpl，链表→slab+索引，另出计划）或直接 P4（期货/统一账户）。
