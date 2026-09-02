@@ -819,6 +819,46 @@ impl RiskEngine {
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
 
+        // Task 7（P5 loan force-liquidate R2 结算钩子）：两个强平命令码需要 TRADE/REJECT 的聚合
+        // 统计（traded_size/traded_notional/rejected_size），但下面的 REJECT/REDUCE 消费
+        // （`mte.next.take()`）与 TRADE 链消费（`handle_matcher_events_exchange_sell/buy`，
+        // Task 6，完全不改）会把整条事件链的所有权转移走、不回填 `cmd.matcher_event`。Java 版
+        // `cmd.matcherEvent` 全程不被置空，`postProcessLoanForceLiquidate`/`_Cross` 可以独立再
+        // 遍历一遍同一条链；本移植改为在这里、消费之前，先非破坏性 peek 一遍（`&mte` 只读遍历），
+        // 把三个聚合量算好存进局部变量，稍后原样传给 post_process 钩子——数值与 Java 重新遍历
+        // 得到的完全一致（同一条链，只是遍历时机提前到消费之前），行为无差异。非强平命令不产生
+        // 额外开销（分支短路，三个量恒 0）。
+        let is_loan_force_liquidate = matches!(
+            cmd.command,
+            OrderCommandType::LoanForceLiquidate | OrderCommandType::LoanCrossForceLiquidate
+        );
+        let (loan_traded_size, loan_traded_notional, loan_rejected_size) = if is_loan_force_liquidate {
+            let mut traded_size: i64 = 0;
+            let mut traded_notional: i128 = 0;
+            let mut rejected_size: i64 = 0;
+            let mut cursor = Some(mte.as_ref());
+            while let Some(ev) = cursor {
+                match ev.event_type {
+                    MatcherEventType::Trade => {
+                        traded_size = traded_size
+                            .checked_add(ev.size)
+                            .unwrap_or_else(|| panic!("overflow: loan force-liquidate traded_size"));
+                        traded_notional += ev.size as i128 * ev.price as i128;
+                    }
+                    MatcherEventType::Reject => {
+                        rejected_size = rejected_size
+                            .checked_add(ev.size)
+                            .unwrap_or_else(|| panic!("overflow: loan force-liquidate rejected_size"));
+                    }
+                    _ => {}
+                }
+                cursor = ev.next.as_deref();
+            }
+            (traded_size, traded_notional, rejected_size)
+        } else {
+            (0i64, 0i128, 0i64)
+        };
+
         // REJECT 总在链头；REDUCE 单独成事件，同样只可能出现在链头。
         let next: Option<Box<MatcherTradeEvent>> =
             if mte.event_type == MatcherEventType::Reduce
@@ -890,6 +930,44 @@ impl RiskEngine {
                     fees,
                 );
                 // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 sell 分支）。
+            }
+        }
+
+        // Loan 强平：spot 标准结算后钩子，把 quote proceeds 路由到 loan/pool/fees/LIF。对应 Java
+        // `handlerRiskRelease`（`:937-945`）——放在 `if (mte != null) {...}` 之后、
+        // `spec.type==CURRENCY_EXCHANGE_PAIR` 分支结束之前，无论上面那块是否跑过（例如整条链只有
+        // 一个 REJECT、没有后续 TRADE 时 `next` 是 `None`，Java 同样不会跳过这个钩子）。
+        // `fees` 最后一次使用在上面的 sell/buy 调用里，此处不再引用它——NLL 下 `self.fees` 的
+        // 字段借用已经结束，可以再借出整个 `&mut self` 传给 post_process（`self` 是
+        // `RiskEngine`，持有 `loan_service` 供接管/结算写桶）。
+        if is_loan_force_liquidate {
+            let taker_up = ups.get_or_add_suspended(cmd.uid);
+            match cmd.command {
+                OrderCommandType::LoanForceLiquidate => {
+                    LoanCommandDispatcher::post_process_loan_force_liquidate(
+                        self,
+                        cmd,
+                        &spec,
+                        taker_up,
+                        ssp,
+                        loan_traded_size,
+                        loan_traded_notional,
+                        loan_rejected_size,
+                    );
+                }
+                OrderCommandType::LoanCrossForceLiquidate => {
+                    LoanCommandDispatcher::post_process_loan_cross_force_liquidate(
+                        self,
+                        cmd,
+                        &spec,
+                        taker_up,
+                        ssp,
+                        loan_traded_size,
+                        loan_traded_notional,
+                        loan_rejected_size,
+                    );
+                }
+                _ => unreachable!("is_loan_force_liquidate implies one of the two force-liquidate codes"),
             }
         }
     }

@@ -59,14 +59,22 @@ impl MatchingEngineRouter {
     /// Java 的 ME 用一张允许表（`MOVE_ORDER`/`CANCEL_ORDER`/`PLACE_ORDER`/`FORCE_LIQUIDATION`/
     /// `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`/`REDUCE_ORDER`/`CLOSE_POSITION`/
     /// `ORDER_BOOK_REQUEST`）决定哪些命令才路由到 `processMatchingCommand`——`is_loan()` 覆盖的
-    /// 14 码里只有两个强平码在表内，其余 12 个（含本 Task 落地的 4 个 Isolated 生命周期命令）
+    /// 14 码里只有两个强平码在表内，其余 12 个（Isolated/Cross 生命周期命令 + POOL/IF 运营命令）
     /// 从不经过 order book。本文件原先只按 `is_non_trading()` 短路（denylist 结构：P1-P4 现货/
     /// 期货子集下"非非交易命令即路由到 book"这条隐含前提一直成立），P5 引入 `is_loan()` 后该
     /// 前提被打破——若不显式短路，`LOAN_CREATE` 等命令的 `cmd.symbol`（现货 symbolId）大概率
     /// 命中一个真实存在的 book，落进下面的 `_ => MatchingUnsupportedCommand` 分支，**覆盖掉 R1
     /// （`LoanCommandDispatcher`）已经写好的正确 `result_code`**。因此追加一条并列短路：
-    /// `is_loan()` 且非两个强平码 → 同样原样保留 R1 结果、不查 book（两个强平码留给 Task 7
-    /// 落地强平时接入真正的 ME 路径；本仓目前没有任何路径会构造出这两个命令，不受影响）。
+    /// `is_loan()` 且非两个强平码 → 同样原样保留 R1 结果、不查 book。
+    ///
+    /// # 两个强平码的真正路由（Task 7 落地）
+    /// `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE` 不在上面的 no-op 短路里——它们的 R1
+    /// （`LoanCommandDispatcher::handle_loan_force_liquidate`/`handle_loan_cross_force_liquidate`）
+    /// 已把 `cmd.action=ASK, cmd.order_type=IOC` 并返回 `ValidForMatchingEngine`，需要真正流进
+    /// order book 撮合，故在下面的 `match cmd.command` 里与 `PlaceOrder | ClosePosition` 共用同一
+    /// 分支（`book.new_order(cmd)`——ME 对撮合无感，只看 `cmd.action`/`cmd.order_type`/`cmd.price`/
+    /// `cmd.size` 这些通用字段，不关心具体是哪个命令码触发的下单，同 `ClosePosition` 复用同一分支
+    /// 的先例）。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         if cmd.command.is_non_trading()
             || (cmd.command.is_loan()
@@ -87,12 +95,17 @@ impl MatchingEngineRouter {
             OrderCommandType::MoveOrder => book.move_order(cmd),
             OrderCommandType::CancelOrder => book.cancel_order(cmd),
             OrderCommandType::ReduceOrder => book.reduce_order(cmd),
-            OrderCommandType::PlaceOrder | OrderCommandType::ClosePosition => {
+            OrderCommandType::PlaceOrder
+            | OrderCommandType::ClosePosition
+            | OrderCommandType::LoanForceLiquidate
+            | OrderCommandType::LoanCrossForceLiquidate => {
                 // 对应 Java `IOrderBook.processCommand`（`:191-199`）：`PLACE_ORDER` 与
                 // `CLOSE_POSITION`（P4 期货纯减仓命令）共用同一分支——`newOrder` 本身不区分二者，
                 // 差异全在 R1（`RiskEngine::place_order`/`close_position_risk_check` 各自算好
                 // `cmd.size`/`action`/`leverage`/`margin_mode` 再放行）与撮合是否触发 R2 期货结算
                 // （`handler_risk_release` 按 `spec.symbol_type` 分支，不看 `cmd.command`）。
+                // Task 7：两个强平码同理并入——R1（`LoanCommandDispatcher`）已算好
+                // `action=ASK/order_type=IOC`，`new_order` 只管撮合，不关心命令码。
                 if cmd.result_code == Some(CommandResultCode::ValidForMatchingEngine) {
                     // new_order 内部已经写 cmd.result_code（P1 收尾修复），此处直接透传其返回值。
                     book.new_order(cmd)

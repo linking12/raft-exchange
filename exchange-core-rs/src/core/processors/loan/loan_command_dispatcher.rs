@@ -38,6 +38,8 @@ use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::cross_loan_record::CrossLoanRecord;
 use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
+use crate::core::common::order_action::OrderAction;
+use crate::core::common::order_type::OrderType;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::common::user_status::UserStatus;
@@ -45,6 +47,7 @@ use crate::core::processors::loan::loan_service::{LoanService, BPS_SCALE};
 use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
+use crate::core::utils::core_arithmetic_utils as arithmetic;
 
 /// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（风格对齐仓内各文件的同名
 /// helper，如 `risk_engine.rs`/`loan_service.rs`）。
@@ -87,13 +90,16 @@ impl LoanCommandDispatcher {
             }
             OrderCommandType::LoanCrossBorrow => Self::handle_loan_cross_borrow(engine, cmd, ups, ssp),
             OrderCommandType::LoanCrossRepay => Self::handle_loan_cross_repay(engine, cmd, ups, ssp),
+            OrderCommandType::LoanForceLiquidate => Self::handle_loan_force_liquidate(engine, cmd, ups, ssp),
+            OrderCommandType::LoanCrossForceLiquidate => {
+                Self::handle_loan_cross_force_liquidate(engine, cmd, ups, ssp)
+            }
             OrderCommandType::PoolDeposit => Self::handle_pool_deposit(engine, cmd),
             OrderCommandType::PoolWithdraw => Self::handle_pool_withdraw(engine, cmd),
             OrderCommandType::LoanIfDeposit => Self::handle_loan_if_deposit(engine, cmd),
             OrderCommandType::LoanIfWithdraw => Self::handle_loan_if_withdraw(engine, cmd),
-            // 不可达于本任务测试集：Task 7 落地前（Cross/Isolated FORCE_LIQUIDATE），调用方从不
-            // 构造这些 cmd.command。
-            _ => CommandResultCode::LoanNotImplemented,
+            // 不可达：is_loan() 门守覆盖的 14 码上面已全部列举。
+            _ => unreachable!("non-loan command dispatched to LoanCommandDispatcher: {:?}", cmd.command),
         }
     }
 
@@ -474,6 +480,204 @@ impl LoanCommandDispatcher {
     }
 
     // ====================================================================================
+    // Isolated 强平：R1 挂 IOC → R2 结算，接不住转 LIF 接管 —— 参考文档 §2.5，Java
+    // `LoanCommandDispatcher.java:388-525,921-933`
+    // ====================================================================================
+
+    /// R1：校验 + pre-move 抵押到 `exchange_locked`，转成 spot ASK IOC 交撮合。对应 Java
+    /// `handleLoanForceLiquidate`（`:388-417`）。字段映射：`cmd.symbol` = 现货 symbolId，
+    /// `cmd.size` = 卖出张数（lot），`cmd.price` = 限价/破产价（调用方给定，本函数不校验其取值
+    /// 合理性——那是 `LoanLiquidationEngine` 定价职责，P6 范围），`cmd.reserve_bid_price` =
+    /// loanId（ASK 命令该字段本就是死值，不与撮合层"BID 保守价"语义冲突，见
+    /// `matcher_trade_event.rs` 模块文档）。
+    ///
+    /// **不走 [`Self::preamble`]**：与其余 Isolated/Cross 用户命令不同，Java `handleLoanForceLiquidate`
+    /// 既不查 `userStatus==SUSPENDED`（强平必须无视冻结状态执行），也不调用
+    /// `processedTransactionIds.tryClaim`（幂等性改由下面的 compare-and-consume 达成，见方法尾部
+    /// 注释）——只检查 `up==null`。
+    ///
+    /// 校验顺序对应 Java：`up==null`→`AuthInvalidUser`；`loanId` 不存在→`LoanNotFound`；
+    /// `loan.uid != cmd.uid`→`LoanUidMismatch`；spec 存在且
+    /// `type==CurrencyExchangePair && base==collateralCurrency && quote==loanCurrency`否则
+    /// `LoanNotEnabled`；`0 < sellAmount ≤ loan.collateralAmount`否则`LoanInvalidAmount`。
+    ///
+    /// **幂等性（compare-and-consume）**：`loan.collateral_amount -= sell_amount` 与
+    /// `up.exchange_locked += sell_amount` 在通过校验后原子发生（单线程，两条语句间无外部可见的
+    /// 中间态）。若同一 loan 被重复提交强平命令（不同 orderId，例如 scanner 每轮各发一条），第二次
+    /// 提交读到的 `loan.collateral_amount` 已是第一次消费后的余量——`sellAmount > collateralAmount`
+    /// 时直接 `LoanInvalidAmount` 拒绝，不会重复扣减，无需额外的去重状态。
+    fn handle_loan_force_liquidate(
+        _engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let up = match ups.get_mut(cmd.uid) {
+            Some(u) => u,
+            None => return CommandResultCode::AuthInvalidUser,
+        };
+
+        let loan_id = cmd.reserve_bid_price;
+        let (loan_uid, collateral_currency, loan_currency, collateral_amount) = match up.isolated_loans.get(&loan_id) {
+            Some(l) => (l.uid, l.collateral_currency, l.loan_currency, l.collateral_amount),
+            None => return CommandResultCode::LoanNotFound,
+        };
+        if loan_uid != cmd.uid {
+            return CommandResultCode::LoanUidMismatch;
+        }
+
+        let spec = match ssp.get_symbol(cmd.symbol) {
+            Some(s)
+                if s.symbol_type == SymbolType::CurrencyExchangePair
+                    && s.base_currency == collateral_currency
+                    && s.quote_currency == loan_currency =>
+            {
+                s
+            }
+            _ => return CommandResultCode::LoanNotEnabled,
+        };
+
+        let collateral_spec = ssp
+            .get_currency(collateral_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {collateral_currency}"));
+        let sell_amount = LoanService::lots_to_collateral_amount(cmd.size, spec, collateral_spec);
+        if sell_amount <= 0 || sell_amount > collateral_amount {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+
+        up.isolated_loans.get_mut(&loan_id).expect("existence checked above").collateral_amount -= sell_amount;
+        up.add_to_locked(collateral_currency, sell_amount);
+
+        cmd.action = Some(OrderAction::Ask);
+        cmd.order_type = Some(OrderType::Ioc);
+        CommandResultCode::ValidForMatchingEngine
+    }
+
+    /// R2：结算完 spot ASK IOC 后调用（owner shard；单 shard 简化，恒真）。对应 Java
+    /// `postProcessLoanForceLiquidate`（`:423-525`）。REJECT 回填 `collateralAmount`；TRADE 所得走
+    /// [`LoanService::settle_liquidation_proceeds`]；市场接不住或抵押只剩尘埃时由 LIF 承接
+    /// （[`Self::take_over_by_insurance_fund`]）。
+    ///
+    /// # Rust 化偏差：三个聚合量由调用方传入，而非重新遍历 `cmd.matcher_event`
+    /// Java 直接遍历 `cmd.matcherEvent`（该字段全程未被置空——`handleMatcherEventsExchangeSell`
+    /// 只读不消费，postProcess 可以独立再走一遍同一条链）。本移植的 R2 结算路径用
+    /// `Option<Box<MatcherTradeEvent>>::take()` 转移所有权，链在 `handle_matcher_events_exchange_sell`
+    /// 消费完后不会复原（该函数完全不改，见 brief/risk_engine 模块文档），因此调用方
+    /// （[`crate::core::processors::risk_engine::RiskEngine::handler_risk_release`]）必须在消费前
+    /// 非破坏性 peek 一遍算出 `traded_size`/`traded_notional`/`rejected_size`，原样传进来——数值
+    /// 与 Java 重新遍历得到的完全一致（同一条链，只是遍历时机提前到消费之前），行为无差异。
+    ///
+    /// # 无事件缺口（同其余 Task 4-6 各 handler）
+    /// Java 在 `tradedSize>0 || takenOver` 时发 `LOAN_LIQUIDATED` 事件；本仓无 FundEvent/EventsHelper
+    /// 风格的事件总线（P1-P6 全程未落地），故不发——账本状态（loan 记录 + 4 个资金桶 + accounts）
+    /// 是权威真相源，守恒由测试直接断言 `accounts`/桶余额，不依赖事件快照。
+    #[allow(clippy::too_many_arguments)]
+    pub fn post_process_loan_force_liquidate(
+        engine: &mut RiskEngine,
+        cmd: &OrderCommand,
+        spec: &CoreSymbolSpecification,
+        taker_up: &mut UserProfile,
+        ssp: &SymbolSpecificationProvider,
+        traded_size: i64,
+        traded_notional: i128,
+        rejected_size: i64,
+    ) {
+        let loan_id = cmd.reserve_bid_price;
+        let (loan_currency, collateral_currency) = match taker_up.isolated_loans.get(&loan_id) {
+            Some(l) => (l.loan_currency, l.collateral_currency),
+            // Java: log.error(...) + return —— loan 在 R2 前已不在（理论不可达，R1 compare-and-
+            // consume 幂等设计下不会发生），无日志基础设施，静默 no-op。
+            None => return,
+        };
+        let loan_currency_spec = ssp
+            .get_currency(loan_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
+        let base_spec = ssp
+            .get_currency(collateral_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {collateral_currency}"));
+
+        // ② REJECT 回填：spot handler 已把 exchangeLocked 释放回用户，抵押须归位保守恒。
+        if rejected_size > 0 {
+            let rejected_in_currency_scale =
+                arithmetic::symbol_to_currency_scale(rejected_size, spec.base_scale_k, base_spec.currency_scale_k);
+            let loan = taker_up.isolated_loans.get_mut(&loan_id).expect("checked above");
+            loan.collateral_amount = add_exact(loan.collateral_amount, rejected_in_currency_scale);
+        }
+
+        // ③ TRADE 结算：所得扣 takerFee 后 → 强平费 → 利息 → 本金，overpay 留用户。
+        if traded_size > 0 {
+            let avg_taker_price = i64::try_from(traded_notional / traded_size as i128)
+                .unwrap_or_else(|_| panic!("overflow narrowing avg_taker_price"));
+            let taker_fee = arithmetic::calculate_taker_fee(traded_size, avg_taker_price, spec.taker_fee, spec.fee_scale_k);
+            let traded_notional_i64 = i64::try_from(traded_notional)
+                .unwrap_or_else(|_| panic!("overflow narrowing traded_notional"));
+            let received_quote = arithmetic::size_price_to_currency_scale(
+                traded_notional_i64 - taker_fee,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                loan_currency_spec.currency_scale_k,
+            );
+            let loan = taker_up.isolated_loans.get_mut(&loan_id).expect("checked above");
+            engine.loan_service.settle_liquidation_proceeds(loan, &mut taker_up.accounts, received_quote, cmd.timestamp);
+        }
+
+        // 全拒路径 settleLiquidationProceeds 未跑过，补计后接管才不漏 pending 利息。
+        let loan = taker_up.isolated_loans.get_mut(&loan_id).expect("checked above");
+        engine.loan_service.accrue_to(loan, cmd.timestamp);
+        let remain_debt = add_exact(loan.outstanding_principal, loan.accumulated_interest);
+        // 用"是否还有可卖整张"而非 collateralAmount==0 判定，否则 sub-lot 尘埃会被当成还有救。
+        let sellable_lots = LoanService::collateral_amount_to_lots(loan.collateral_amount, spec, base_spec);
+        let (principal, interest, collateral) =
+            (loan.outstanding_principal, loan.accumulated_interest, loan.collateral_amount);
+
+        // ④ 终态判定：债清关 loan / 接不住转 LIF / 其余保留等下轮。
+        if remain_debt > 0 && (traded_size == 0 || sellable_lots == 0) {
+            // 全拒或抵押已碎成卖不掉的尘埃而债务仍在 → LIF 承接，避免无限重试。
+            Self::take_over_by_insurance_fund(
+                engine,
+                taker_up,
+                principal,
+                interest,
+                loan_currency,
+                collateral_currency,
+                collateral,
+            );
+            taker_up.isolated_loans.remove(&loan_id);
+        } else if principal == 0 && interest == 0 && collateral == 0 {
+            taker_up.isolated_loans.remove(&loan_id);
+        }
+        // else：部分成交，loan 原样保留（无事件快照，见方法文档"无事件缺口"）。
+    }
+
+    /// LIF 承接不良 Isolated 贷款：按债务全额代偿，取走全部抵押。对应 Java 私有
+    /// `takeOverByInsuranceFund`（`:921-933`）。
+    ///
+    /// 市场按破产价都接不住时的终局——池子立刻回血、债务终结、借款人不再计息，流动性风险转由
+    /// LIF 长期消化。因抵押账面价按破产价恰为债务额，LIF 等于以成本价买下抵押，名义不亏，只承担
+    /// 日后变现的价格风险。LIF **允许为负**：负值即平台已垫资金额，而非损失——损失只在处置抵押
+    /// 库存时实现。抵押原为虚拟锁定，此处从 `accounts` 真实扣走转入 LIF（整个借贷子系统里唯一
+    /// 的物理资金转移，参考文档 §6.3/§3.4）。
+    fn take_over_by_insurance_fund(
+        engine: &mut RiskEngine,
+        up: &mut UserProfile,
+        principal: i64,
+        interest: i64,
+        loan_currency: i32,
+        collateral_currency: i32,
+        collateral: i64,
+    ) {
+        let debt = add_exact(principal, interest);
+        engine.loan_service.add_to_loan_insurance_fund(loan_currency, -debt);
+        engine.loan_service.add_to_loan_pool_available(loan_currency, principal);
+        engine.loan_service.add_to_loan_pool_borrowed(loan_currency, -principal);
+        engine.loan_service.add_to_interest_revenue(loan_currency, interest);
+        if collateral > 0 {
+            up.add_to_account(collateral_currency, -collateral);
+            engine.loan_service.add_to_loan_insurance_fund(collateral_currency, collateral);
+        }
+    }
+
+    // ====================================================================================
     // Cross 用户命令：加减抵押 / 借款 / 还款 —— 参考文档 §2.6-2.9，Java
     // `LoanCommandDispatcher.java:532-705`
     // ====================================================================================
@@ -724,6 +928,217 @@ impl LoanCommandDispatcher {
             up.cross_loans.remove(&loan_id);
         }
         CommandResultCode::Success
+    }
+
+    // ====================================================================================
+    // Cross 强平：R1 挂 IOC → R2 结算，接不住由 LIF 按债务占比接管 —— 参考文档 §2.10，Java
+    // `LoanCommandDispatcher.java:715-902`
+    // ====================================================================================
+
+    /// R1：校验 + pre-move 卖出币抵押到 `exchange_locked`，转成 spot ASK IOC 交撮合。对应 Java
+    /// `handleLoanCrossForceLiquidate`（`:715-747`）。字段映射：`cmd.reserve_bid_price` =
+    /// targetLoanId，`cmd.symbol` = 现货对（base=卖出币，quote=targetLoan.loanCurrency），
+    /// `cmd.size` = 卖出张数（lot）。同 Isolated：不走 [`Self::preamble`]（无 suspended 检查/无
+    /// tryClaim，幂等靠 compare-and-consume，见 [`Self::handle_loan_force_liquidate`] 文档）。
+    ///
+    /// 校验顺序：`up==null`→`AuthInvalidUser`；targetLoanId 不存在→`LoanNotFound`；
+    /// `targetLoan.uid != cmd.uid`→`LoanUidMismatch`；spec 存在且
+    /// `type==CurrencyExchangePair && quote==targetLoan.loanCurrency`否则`LoanNotEnabled`
+    /// （**不**校验 base——Cross 卖出币可以是账户抵押池里的任意合格币种，不像 Isolated 一对一
+    /// 绑定）；`0 < sellAmount ≤ crossLoanCollateral[sellingCurrency]`否则`LoanInvalidAmount`。
+    fn handle_loan_cross_force_liquidate(
+        _engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let up = match ups.get_mut(cmd.uid) {
+            Some(u) => u,
+            None => return CommandResultCode::AuthInvalidUser,
+        };
+
+        let target_loan_id = cmd.reserve_bid_price;
+        let (target_loan_uid, target_loan_currency) = match up.cross_loans.get(&target_loan_id) {
+            Some(l) => (l.uid, l.loan_currency),
+            None => return CommandResultCode::LoanNotFound,
+        };
+        if target_loan_uid != cmd.uid {
+            return CommandResultCode::LoanUidMismatch;
+        }
+
+        let spec = match ssp.get_symbol(cmd.symbol) {
+            Some(s) if s.symbol_type == SymbolType::CurrencyExchangePair && s.quote_currency == target_loan_currency => s,
+            _ => return CommandResultCode::LoanNotEnabled,
+        };
+
+        let selling_currency = spec.base_currency;
+        let available_collateral = up.cross_loan_collateral(selling_currency);
+
+        let selling_currency_spec = ssp
+            .get_currency(selling_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {selling_currency}"));
+        let sell_amount = LoanService::lots_to_collateral_amount(cmd.size, spec, selling_currency_spec);
+        if sell_amount <= 0 || sell_amount > available_collateral {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+
+        up.add_to_cross_loan_collateral(selling_currency, -sell_amount);
+        up.add_to_locked(selling_currency, sell_amount);
+
+        cmd.action = Some(OrderAction::Ask);
+        cmd.order_type = Some(OrderType::Ioc);
+        CommandResultCode::ValidForMatchingEngine
+    }
+
+    /// R2：结算完 spot ASK IOC 后调用。对应 Java `postProcessLoanCrossForceLiquidate`
+    /// （`:753-863`）。REJECT 回填账户级 `cross_loan_collateral`；TRADE 所得走
+    /// [`LoanService::settle_liquidation_proceeds`] 偿 targetLoan；全部抵押结构性耗尽（或全拒）
+    /// 且债务未清则由 LIF 按债务占比承接目标 loan（[`LoanService::take_over_cross_loan`]）；若抵押
+    /// 结构性耗尽，账户其余未偿 Cross 债务一并按 loanId 升序交给 LIF
+    /// （[`Self::take_over_remaining_cross_loans`]）。
+    ///
+    /// 三聚合量（`traded_size`/`traded_notional`/`rejected_size`）与 fail-closed/无事件说明同
+    /// [`Self::post_process_loan_force_liquidate`] 文档。
+    #[allow(clippy::too_many_arguments)]
+    pub fn post_process_loan_cross_force_liquidate(
+        engine: &mut RiskEngine,
+        cmd: &OrderCommand,
+        spec: &CoreSymbolSpecification,
+        taker_up: &mut UserProfile,
+        ssp: &SymbolSpecificationProvider,
+        traded_size: i64,
+        traded_notional: i128,
+        rejected_size: i64,
+    ) {
+        let target_loan_id = cmd.reserve_bid_price;
+        let selling_currency = spec.base_currency;
+        let loan_currency = match taker_up.cross_loans.get(&target_loan_id) {
+            Some(l) => l.loan_currency,
+            // Java: log.warn(...) + return —— target loan 在 R2 前已不在（理论不可达）。
+            None => return,
+        };
+        let loan_currency_spec = ssp
+            .get_currency(loan_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
+        let selling_currency_spec = ssp
+            .get_currency(selling_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {selling_currency}"));
+
+        // ② REJECT 回填：spot handler 已释放 exchangeLocked，抵押归位到账户级抵押池保守恒。
+        if rejected_size > 0 {
+            let rejected_in_currency_scale =
+                arithmetic::symbol_to_currency_scale(rejected_size, spec.base_scale_k, selling_currency_spec.currency_scale_k);
+            taker_up.add_to_cross_loan_collateral(selling_currency, rejected_in_currency_scale);
+        }
+
+        // ③ TRADE 结算：所得扣 takerFee 后 → 强平费 → 利息 → 本金，overpay 留用户。
+        if traded_size > 0 {
+            let avg_taker_price = i64::try_from(traded_notional / traded_size as i128)
+                .unwrap_or_else(|_| panic!("overflow narrowing avg_taker_price"));
+            let taker_fee = arithmetic::calculate_taker_fee(traded_size, avg_taker_price, spec.taker_fee, spec.fee_scale_k);
+            let traded_notional_i64 = i64::try_from(traded_notional)
+                .unwrap_or_else(|_| panic!("overflow narrowing traded_notional"));
+            let received_quote = arithmetic::size_price_to_currency_scale(
+                traded_notional_i64 - taker_fee,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                loan_currency_spec.currency_scale_k,
+            );
+            let loan = taker_up.cross_loans.get_mut(&target_loan_id).expect("checked above");
+            engine.loan_service.settle_liquidation_proceeds(loan, &mut taker_up.accounts, received_quote, cmd.timestamp);
+        }
+
+        // 同 Isolated：全拒路径未结算过，补计后再判债务。
+        let loan = taker_up.cross_loans.get_mut(&target_loan_id).expect("checked above");
+        engine.loan_service.accrue_to(loan, cmd.timestamp);
+        let remain_target_debt = add_exact(loan.outstanding_principal, loan.accumulated_interest);
+
+        // ④ 终态判定：抵押是否结构性耗尽 → 决定 targetLoan 与其余债的去向。只看结构上能否变现
+        // （与选币的永久性条件同源），markPrice 未就绪属临时状态不触发接管。
+        let currencies: Vec<i32> = taker_up.cross_loan_collateral.keys().copied().collect();
+        let mut all_collateral_exhausted = true;
+        for currency in currencies {
+            let amount = taker_up.cross_loan_collateral(currency);
+            if LoanService::is_structurally_sellable(currency, amount, taker_up, ssp) {
+                all_collateral_exhausted = false;
+                break;
+            }
+        }
+
+        // 市场按破产价都接不住（全拒），或抵押结构上已无法变现，而债务仍在 → LIF 按债务占比承接。
+        if remain_target_debt > 0 && (traded_size == 0 || all_collateral_exhausted) {
+            let taken_over =
+                engine.loan_service.take_over_cross_loan(taker_up, target_loan_id, cmd.timestamp, ssp, &engine.last_price_cache);
+            if taken_over {
+                Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
+            }
+            // else：喂价缺失无法估值 → fail-closed，保留 loan 原样等下一轮（Java 打 warn log）。
+        } else {
+            let is_empty = {
+                let l = taker_up.cross_loans.get(&target_loan_id).expect("checked above");
+                l.outstanding_principal == 0 && l.accumulated_interest == 0
+            };
+            if is_empty {
+                taker_up.cross_loans.remove(&target_loan_id);
+            }
+            // else：部分成交，loan 原样保留（无事件快照）。
+        }
+
+        // 抵押结构性耗尽 → 账户其余未偿债务一并由 LIF 承接（按 loanId 升序，见方法文档）。
+        if all_collateral_exhausted {
+            Self::take_over_remaining_cross_loans(engine, taker_up, cmd.timestamp, target_loan_id, ssp);
+        }
+        // Java 在此调用 loanLiquidationEngine.syncCrossExposure(takerUp)（非复制 scanner 索引维护，
+        // P6 范围，本仓未移植 LoanLiquidationEngine，见参考文档 §5.2"flag for implementation
+        // time"）——跳过，不影响本任务负责的账本结算正确性。
+    }
+
+    /// LIF 承接后收尾：债务清零、摘出账户。对应 Java 私有 `closeAndRecycleCrossLoan`
+    /// （`:905-910`）——本移植无对象池，直接 `remove` 即等价于"清零 + 摘出 + 归还对象池"（记录
+    /// 整体被丢弃，字段值不再可观测，无需先逐字段清零）。调用后 `loan_id` 已从 `cross_loans`
+    /// 移除，不可再读。
+    fn close_and_recycle_cross_loan(up: &mut UserProfile, loan_id: i64) {
+        up.cross_loans.remove(&loan_id);
+    }
+
+    /// 抵押结构性耗尽时，把账户其余未偿 Cross 债务一并交给 LIF 承接：账户级抵押是共享的，一笔
+    /// 卖不掉其余同样卖不掉。对应 Java 私有 `takeOverRemainingCrossLoans`（`:873-902`）。
+    ///
+    /// 按 loanId **升序**遍历——每笔分到多少抵押取决于"轮到它时还剩多少债"，顺序即状态，与
+    /// [`LoanService::take_over_cross_loan`] 里抵押币的排序同理，必须确定性（R2 在所有副本执行）。
+    /// `BTreeMap::keys()` 天然升序迭代，无需像 Java 那样显式 `Arrays.sort`。`target_loan_id` 已在
+    /// 调用方尝试过，跳过以免重复处理；喂价缺失 fail-closed 时跳过该笔，继续处理下一笔（不因
+    /// 一笔估值失败而阻塞其余）。
+    ///
+    /// **无事件缺口**：Java 每笔各发一条 `LOAN_LIQUIDATED`（不能合并）；本任务不发事件，同其余
+    /// 各处说明。
+    fn take_over_remaining_cross_loans(
+        engine: &mut RiskEngine,
+        up: &mut UserProfile,
+        now: i64,
+        target_loan_id: i64,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        // 先快照：循环内会 remove。BTreeMap 迭代天然按 loanId 升序，对齐 Java 显式 sort 后的效果。
+        let loan_ids: Vec<i64> = up.cross_loans.keys().copied().collect();
+        for loan_id in loan_ids {
+            if loan_id == target_loan_id {
+                continue;
+            }
+            let should_skip = match up.cross_loans.get(&loan_id) {
+                Some(l) => l.outstanding_principal == 0 && l.accumulated_interest == 0,
+                None => true,
+            };
+            if should_skip {
+                continue;
+            }
+            let taken_over = engine.loan_service.take_over_cross_loan(up, loan_id, now, ssp, &engine.last_price_cache);
+            if !taken_over {
+                // fail-closed：Java 打 warn log，跳过继续下一笔。
+                continue;
+            }
+            Self::close_and_recycle_cross_loan(up, loan_id);
+        }
     }
 
     // ====================================================================================
@@ -1751,6 +2166,261 @@ mod tests {
     }
 
     // ================================================================
+    // Task 7 — LOAN_FORCE_LIQUIDATE R1（pre-move + compare-and-consume）— 参考文档 §2.5
+    // R2/LIF 结算的全流程集成测试（需要真正的 order book 撮合）在 exchange_core.rs
+    // ================================================================
+
+    fn force_liquidate_cmd(order_id: i64, uid: i64, loan_id: i64, lots: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::LoanForceLiquidate,
+            order_id,
+            uid,
+            symbol: SYMBOL,
+            size: lots,
+            price: 1, // 破产/限价，R1 不校验其取值合理性（scanner/调用方职责，见方法文档）
+            reserve_bid_price: loan_id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn force_liquidate_r1_success_premoves_collateral_and_sets_ask_ioc() {
+        let (mut engine, mut ups, ssp) = setup();
+        open_loan(&mut engine, &mut ups, &ssp, 42, 1_000, 400, None);
+
+        let mut cmd = force_liquidate_cmd(1, UID, 42, 600);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        assert_eq!(cmd.action, Some(OrderAction::Ask));
+        assert_eq!(cmd.order_type, Some(OrderType::Ioc));
+        let up = ups.get(UID).unwrap();
+        assert_eq!(up.isolated_loans.get(&42).unwrap().collateral_amount, 400); // 1000-600
+        assert_eq!(up.locked(BASE), 600); // moved into exchange_locked, not accounts
+        assert_eq!(up.account(BASE), 10_000); // accounts itself untouched (virtual lock all along; setup() funds 10_000 BASE)
+    }
+
+    #[test]
+    fn force_liquidate_r1_rejects_not_found() {
+        let (mut engine, mut ups, ssp) = setup();
+        let mut cmd = force_liquidate_cmd(1, UID, 999, 100);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanNotFound
+        );
+    }
+
+    #[test]
+    fn force_liquidate_r1_rejects_uid_mismatch() {
+        // Same construction as `loan_repay_rejects_uid_mismatch`: `up.isolated_loans` is scoped to
+        // `cmd.uid`'s own profile, so `loan.uid != cmd.uid` can only fire when the stored record's
+        // `uid` field itself disagrees with the map it lives in — inject that directly.
+        let (mut engine, mut ups, ssp) = setup();
+        let mut foreign_loan = IsolatedLoanRecord::new(999, 42, SYMBOL, BASE, QUOTE, 0, 1_000);
+        foreign_loan.collateral_amount = 1_000;
+        ups.get_mut(UID).unwrap().isolated_loans.insert(42, foreign_loan);
+
+        let mut cmd = force_liquidate_cmd(1, UID, 42, 100);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanUidMismatch
+        );
+    }
+
+    #[test]
+    fn force_liquidate_r1_rejects_not_enabled_when_symbol_or_currency_mismatch() {
+        let (mut engine, mut ups, ssp) = setup();
+        open_loan(&mut engine, &mut ups, &ssp, 42, 1_000, 400, None);
+
+        let mut missing_symbol = force_liquidate_cmd(1, UID, 42, 100);
+        missing_symbol.symbol = 999; // no such spec
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut missing_symbol, &mut ups, &ssp),
+            CommandResultCode::LoanNotEnabled
+        );
+    }
+
+    #[test]
+    fn force_liquidate_r1_rejects_invalid_amount_zero_or_exceeding_collateral() {
+        let (mut engine, mut ups, ssp) = setup();
+        open_loan(&mut engine, &mut ups, &ssp, 42, 1_000, 400, None);
+
+        let mut zero = force_liquidate_cmd(1, UID, 42, 0);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut zero, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+
+        let mut too_much = force_liquidate_cmd(2, UID, 42, 1_001); // > collateral_amount=1000
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut too_much, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+        // Neither rejected attempt should have mutated state.
+        assert_eq!(ups.get(UID).unwrap().isolated_loans.get(&42).unwrap().collateral_amount, 1_000);
+    }
+
+    /// 幂等核心：compare-and-consume。第一次提交消费 700 抵押（剩 300），第二次仍请求 700
+    /// （> 剩余 300）应被拒绝——无需任何额外去重状态，`loan.collateral_amount` 本身就是幂等游标。
+    #[test]
+    fn force_liquidate_r1_duplicate_submission_is_compare_and_consume_idempotent() {
+        let (mut engine, mut ups, ssp) = setup();
+        open_loan(&mut engine, &mut ups, &ssp, 42, 1_000, 400, None);
+
+        let mut first = force_liquidate_cmd(1, UID, 42, 700);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut first, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        assert_eq!(ups.get(UID).unwrap().isolated_loans.get(&42).unwrap().collateral_amount, 300);
+
+        // Retry (e.g. scanner resubmits with a fresh orderId before R2 of the first has even run):
+        // same loanId, same requested lots — second attempt now exceeds the already-reduced remainder.
+        let mut second = force_liquidate_cmd(2, UID, 42, 700);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut second, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+        assert_eq!(ups.get(UID).unwrap().isolated_loans.get(&42).unwrap().collateral_amount, 300); // unchanged by the rejected retry
+        assert_eq!(ups.get(UID).unwrap().locked(BASE), 700); // only the first attempt's lock stands
+    }
+
+    #[test]
+    fn force_liquidate_r1_ignores_suspended_status_unlike_other_loan_commands() {
+        // Unlike LOAN_CREATE/REPAY/etc., force-liquidate must proceed even against a frozen
+        // account — that's the whole point of a forced liquidation.
+        let (mut engine, mut ups, ssp) = setup();
+        open_loan(&mut engine, &mut ups, &ssp, 42, 1_000, 400, None);
+        ups.get_mut(UID).unwrap().user_status = UserStatus::Suspended;
+
+        let mut cmd = force_liquidate_cmd(1, UID, 42, 500);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+    }
+
+    // ================================================================
+    // Task 7 — LOAN_CROSS_FORCE_LIQUIDATE R1 —— 参考文档 §2.10
+    // ================================================================
+
+    fn cross_force_liquidate_cmd(order_id: i64, uid: i64, target_loan_id: i64, lots: i64) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::LoanCrossForceLiquidate,
+            order_id,
+            uid,
+            symbol: SYMBOL, // base=BASE(selling currency)/quote=QUOTE(targetLoan.loanCurrency)
+            size: lots,
+            price: 1,
+            reserve_bid_price: target_loan_id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cross_force_liquidate_r1_success_premoves_collateral_and_sets_ask_ioc() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000); // weighted collateral = 500
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000); // ltv=4000<=initialLtv(5000)
+
+        let mut cmd = cross_force_liquidate_cmd(2, UID, 42, 600);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+
+        assert_eq!(cmd.action, Some(OrderAction::Ask));
+        assert_eq!(cmd.order_type, Some(OrderType::Ioc));
+        let up = ups.get(UID).unwrap();
+        assert_eq!(up.cross_loan_collateral(BASE), 400); // 1000-600
+        assert_eq!(up.locked(BASE), 600);
+        assert_eq!(up.account(BASE), 10_000); // untouched, still virtually locked (setup() funds 10_000 BASE)
+    }
+
+    #[test]
+    fn cross_force_liquidate_r1_rejects_not_found() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        let mut cmd = cross_force_liquidate_cmd(1, UID, 999, 100);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanNotFound
+        );
+    }
+
+    #[test]
+    fn cross_force_liquidate_r1_rejects_uid_mismatch() {
+        // Same construction as the Isolated equivalent: inject a `CrossLoanRecord` directly into
+        // `UID`'s own `cross_loans` map whose `uid` field disagrees with the map it lives in.
+        let (mut engine, mut ups, ssp) = cross_setup();
+        let mut foreign_loan = CrossLoanRecord::new(999, 42, SYMBOL, QUOTE, 0, 1_000);
+        foreign_loan.outstanding_principal = 200;
+        ups.get_mut(UID).unwrap().cross_loans.insert(42, foreign_loan);
+        ups.get_mut(UID).unwrap().add_to_cross_loan_collateral(BASE, 1_000);
+
+        let mut cmd = cross_force_liquidate_cmd(2, UID, 42, 100);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanUidMismatch
+        );
+    }
+
+    #[test]
+    fn cross_force_liquidate_r1_rejects_not_enabled_when_quote_currency_mismatch() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let mut cmd = cross_force_liquidate_cmd(2, UID, 42, 100);
+        cmd.symbol = 999; // no such spec
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
+            CommandResultCode::LoanNotEnabled
+        );
+    }
+
+    #[test]
+    fn cross_force_liquidate_r1_rejects_invalid_amount_zero_or_exceeding_available() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let mut zero = cross_force_liquidate_cmd(2, UID, 42, 0);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut zero, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+        let mut too_much = cross_force_liquidate_cmd(3, UID, 42, 1_001);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut too_much, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(BASE), 1_000); // untouched
+    }
+
+    #[test]
+    fn cross_force_liquidate_r1_duplicate_submission_is_compare_and_consume_idempotent() {
+        let (mut engine, mut ups, ssp) = cross_setup();
+        pledge_cross_collateral(&mut engine, &mut ups, &ssp, 1, 1_000);
+        open_cross_loan(&mut engine, &mut ups, &ssp, 42, 200, 1_000);
+
+        let mut first = cross_force_liquidate_cmd(2, UID, 42, 700);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut first, &mut ups, &ssp),
+            CommandResultCode::ValidForMatchingEngine
+        );
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(BASE), 300);
+
+        let mut second = cross_force_liquidate_cmd(3, UID, 42, 700);
+        assert_eq!(
+            LoanCommandDispatcher::dispatch(&mut engine, &mut second, &mut ups, &ssp),
+            CommandResultCode::LoanInvalidAmount
+        );
+        assert_eq!(ups.get(UID).unwrap().cross_loan_collateral(BASE), 300); // unchanged by rejected retry
+    }
+
+    // ================================================================
     // POOL_DEPOSIT / POOL_WITHDRAW / LOAN_IF_DEPOSIT / LOAN_IF_WITHDRAW
     // ================================================================
 
@@ -1859,22 +2529,4 @@ mod tests {
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap_or(&0), 0);
     }
 
-    // ================================================================
-    // dispatch fallthrough for not-yet-implemented is_loan() codes
-    // ================================================================
-
-    #[test]
-    fn dispatch_returns_not_implemented_for_unimplemented_loan_codes() {
-        let (mut engine, mut ups, ssp) = setup();
-        // Task 5 落地了 4 个 LOAN_CROSS_* 生命周期命令（ADD/WITHDRAW/BORROW/REPAY），Task 6 落地
-        // 了 4 个 POOL/IF 操作命令，均从这份清单移除；剩余 2 个（两个 *_FORCE_LIQUIDATE）留 Task 7。
-        for command in [OrderCommandType::LoanCrossForceLiquidate, OrderCommandType::LoanForceLiquidate] {
-            let mut cmd = OrderCommand { command, uid: UID, ..Default::default() };
-            assert_eq!(
-                LoanCommandDispatcher::dispatch(&mut engine, &mut cmd, &mut ups, &ssp),
-                CommandResultCode::LoanNotImplemented,
-                "{command:?} should not be implemented yet"
-            );
-        }
-    }
 }
