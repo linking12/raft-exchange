@@ -53,8 +53,26 @@ impl MatchingEngineRouter {
     /// （即使凑巧命中某个 symbol id 相同的 book，也会做一次无意义甚至有害的撮合尝试）。因此在
     /// 最前面显式短路：不查 book、不碰 `cmd.result_code`，原样保留 R1（`preProcessCommand`）写
     /// 下的结果——对应 Java `MatchingEngineRouter` 里非订单类命令根本不会被路由到这里的效果。
+    ///
+    /// # P5 借贷命令 no-op 守卫（Task 4 新增，对照 Java `MatchingEngineRouter`（`:204-212`）的
+    /// **allowlist** 结构）
+    /// Java 的 ME 用一张允许表（`MOVE_ORDER`/`CANCEL_ORDER`/`PLACE_ORDER`/`FORCE_LIQUIDATION`/
+    /// `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`/`REDUCE_ORDER`/`CLOSE_POSITION`/
+    /// `ORDER_BOOK_REQUEST`）决定哪些命令才路由到 `processMatchingCommand`——`is_loan()` 覆盖的
+    /// 14 码里只有两个强平码在表内，其余 12 个（含本 Task 落地的 4 个 Isolated 生命周期命令）
+    /// 从不经过 order book。本文件原先只按 `is_non_trading()` 短路（denylist 结构：P1-P4 现货/
+    /// 期货子集下"非非交易命令即路由到 book"这条隐含前提一直成立），P5 引入 `is_loan()` 后该
+    /// 前提被打破——若不显式短路，`LOAN_CREATE` 等命令的 `cmd.symbol`（现货 symbolId）大概率
+    /// 命中一个真实存在的 book，落进下面的 `_ => MatchingUnsupportedCommand` 分支，**覆盖掉 R1
+    /// （`LoanCommandDispatcher`）已经写好的正确 `result_code`**。因此追加一条并列短路：
+    /// `is_loan()` 且非两个强平码 → 同样原样保留 R1 结果、不查 book（两个强平码留给 Task 7
+    /// 落地强平时接入真正的 ME 路径；本仓目前没有任何路径会构造出这两个命令，不受影响）。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
-        if cmd.command.is_non_trading() {
+        if cmd.command.is_non_trading()
+            || (cmd.command.is_loan()
+                && cmd.command != OrderCommandType::LoanForceLiquidate
+                && cmd.command != OrderCommandType::LoanCrossForceLiquidate)
+        {
             return cmd.result_code.unwrap_or(CommandResultCode::MatchingUnsupportedCommand);
         }
 
