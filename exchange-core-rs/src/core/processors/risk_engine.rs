@@ -1803,9 +1803,22 @@ impl RiskEngine {
     /// 对应 Java `RiskEngineCommandDispatcher.adjustMarkPrice`（`:437-451`）：更新
     /// `lastPriceCache[symbol]`。本移植省略 `liquidationEngine.checkPositions(cmd)`（P6 强平/ADL
     /// 扫描钩子，本任务只搬"设标记价"这一步，不实现清算联动）。symbol 未注册 → `InvalidSymbol`。
+    ///
+    /// **移植加固（相对 Java 有意收窄）**：拒绝 `cmd.price <= 0`（→ `RiskInvalidAmount`）。Java
+    /// `adjustMarkPrice` 无 `price>0` 校验，把 0 存进 `lastPriceCache`，下游 `estimatePnl` 用
+    /// `markPrice==0` 做垃圾算术但**不崩**；本移植的 [`Self::mark_price`] 把 `0→None`，而 `:509`
+    /// (`calculate_free_futures_margin_for_symbol`)、`leverage_adjustment`、`can_place_margin_order`
+    /// 三处对 `None` 直接 `panic!`（用作"有头寸⇒标记价必有效"的不变量断言）。在 Raft 复制的确定性
+    /// 状态机里，已提交命令上的 panic 是集群级 liveness + 重放灾难——严格劣于 Java 的优雅降级。
+    /// 故在 setter 侧拒绝经济上无意义的 `≤0` 标记价，保留那三处 panic 作为真正的不可达不变量守卫。
+    /// 唯一可观测分歧：非法运维命令 `set_mark_price(sym, ≤0)` 的返回码（Java `Success` / 本移植
+    /// `RiskInvalidAmount`）；不影响守恒，两副本一致（确定性保持）。
     pub fn markprice_adjustment(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         if ssp.get_symbol(cmd.symbol).is_none() {
             return CommandResultCode::InvalidSymbol;
+        }
+        if cmd.price <= 0 {
+            return CommandResultCode::RiskInvalidAmount;
         }
         self.set_mark_price(cmd.symbol, cmd.price);
         CommandResultCode::Success
@@ -4637,6 +4650,34 @@ mod tests {
         let mut engine = RiskEngine::new();
         engine.set_mark_price(424_242, 777);
         assert_eq!(engine.mark_price(424_242), Some(777));
+    }
+
+    // P4 终审 crash-safety 加固回归：markprice_adjustment 拒绝 price<=0，保住"有头寸⇒标记价有效"
+    // 不变量，避免下游 free-futures-margin/leverage/can_place_margin_order 三处 mark_price().unwrap()
+    // panic。这正是 256-case proptest 生成器（mark∈[50,200]）结构性覆盖不到的非法输入角。
+    #[test]
+    fn markprice_adjustment_rejects_zero_price_and_prior_mark_survives_without_panic() {
+        // 复刻终审给出的可达崩溃序列：开逐仓仓位(mark=100) → 设 mark=0 → free-futures-margin。
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
+        ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
+
+        // 步骤2：mark=0 被拒（Java 会存 0；本移植收窄为 RiskInvalidAmount），缓存保持上一有效值。
+        let zero = markprice_adjustment_cmd(FUT_SYMBOL, 0);
+        assert_eq!(engine.markprice_adjustment(&zero, &ssp), CommandResultCode::RiskInvalidAmount);
+        assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100), "被拒的 0 标记价不得污染缓存");
+
+        // 步骤3：free-futures-margin 走到 :508 mark_price()——修复前 mark 已变 None 会 panic；
+        // 修复后 mark 仍是 Some(100)，正常返回。此调用不 panic 本身即回归断言。
+        let free = engine.calculate_free_futures_margin(ups.get(UID).unwrap(), FUT_QUOTE, &ssp);
+        assert_eq!(free, 0, "空逐仓仓位(open_volume=0)净期货盈余为 0，且未 panic");
+    }
+
+    #[test]
+    fn markprice_adjustment_rejects_negative_price_and_keeps_cache() {
+        let (mut engine, _ups, ssp) = setup_futures(0, 0, 1_000, 100);
+        let neg = markprice_adjustment_cmd(FUT_SYMBOL, -5);
+        assert_eq!(engine.markprice_adjustment(&neg, &ssp), CommandResultCode::RiskInvalidAmount);
+        assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100));
     }
 
     // --------------------------------------------------------------------------
