@@ -30,6 +30,7 @@ use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
 use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
@@ -141,6 +142,7 @@ impl RiskEngine {
                 OrderCommandType::LeverageAdjustment => self.leverage_adjustment(cmd, ups, ssp),
                 OrderCommandType::MarkpriceAdjustment => self.markprice_adjustment(cmd, ssp),
                 OrderCommandType::RepriceLoanRates => self.reprice_loan_rates_collect(cmd),
+                OrderCommandType::InternalTransfer => self.internal_transfer_collect(cmd, ups, ssp),
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
             cmd.result_code = Some(rc);
@@ -768,6 +770,17 @@ impl RiskEngine {
         // 文档。
         if cmd.command == OrderCommandType::RepriceLoanRates {
             self.reprice_loan_rates_apply(cmd);
+            return;
+        }
+        // `INTERNAL_TRANSFER` 是本移植目前第二个需要真正 R2 处理的非交易命令（同
+        // `REPRICE_LOAN_RATES`，见上面注释）——同理必须在下面的通用 `is_non_trading()` 早退
+        // **之前**特判，否则 to-shard 入账（R2）永远跑不到。对应 Java
+        // `RiskEngine.handlerRiskRelease` 处理 `MatcherEventType.INTERNAL_TRANSFER_EVENT` 的分支
+        // （`InternalTransferProcessor.applyEvent`）；本移植的载体是 `cmd.internal_transfer_event`
+        // 而非 `matcherEvent` 链（见 `internal_transfer_processor.rs` 模块文档"事件载体的移植
+        // 偏差"）。
+        if cmd.command == OrderCommandType::InternalTransfer {
+            self.internal_transfer_apply(cmd, ups);
             return;
         }
         if cmd.command.is_non_trading() {
@@ -1753,7 +1766,12 @@ impl RiskEngine {
     /// margin trading 开启才计）`。现货冻结 / 借贷抵押必扣（都不能提走 / 转走 / 挪作 isolated
     /// margin，否则贷款变裸债），期货净盈余按 [`Self::calculate_free_futures_margin`]（不指定
     /// `curPosSymbol`，逐仓浮盈一律不计入，更保守）。
-    fn withdrawable_balance(
+    ///
+    /// P6 Task 3：可见性放宽到 `pub(crate)`（原为纯私有）——`InternalTransferProcessor::
+    /// collect_input`（`internal_transfer_processor.rs`）需要跨模块复用同一 NSF 口径，同
+    /// `LoanCommandDispatcher` 复用 `calculate_locked`/`mark_price`（均 `pub`）的先例，是同一类
+    /// "跨处理器模块复用 `RiskEngine` 只读方法"偏差，非新设计。
+    pub(crate) fn withdrawable_balance(
         &self,
         user_profile: &UserProfile,
         currency: i32,
@@ -1997,6 +2015,55 @@ impl RiskEngine {
             LoanRatePricingProcessor::apply_event(&mut self.loan_service, currency, util_bps, cmd.timestamp);
         }
         self.loan_service.floating_rate.set_last_reprice_ts(cmd.timestamp);
+    }
+
+    /// `INTERNAL_TRANSFER` R1+merge：对应 Java `RiskEngineCommandDispatcher` 的
+    /// `case INTERNAL_TRANSFER: engine.getInternalTransferProcessor().collectInput(cmd);`
+    /// （参考文档 §5，`ExchangeApi.java:1216-1226` 字段映射）。字段映射：`cmd.uid = from_uid`、
+    /// `cmd.size = to_uid`（**overloaded**——size 承载 uid，非金额）、`cmd.symbol = currency`、
+    /// `cmd.price = amount`、`cmd.order_id = transaction_id`。
+    ///
+    /// # 路由偏差（相对 Java，同 `reprice_loan_rates_collect` 先例，刻意记录）
+    /// Java 版本 R1 只做 `collectInput`，随后交给 `MatchingEngineRouter` 的独立
+    /// `InternalTransferProcessor` 实例在 ME 段调用 `buildMatcherEvents`（merge）。本移植的
+    /// `MatchingEngineRouter` 不持有 `UserProfileService`——没有数据可做归并，且它对所有
+    /// `is_non_trading()` 命令（`INTERNAL_TRANSFER` 在其中）统一 no-op 短路。单 shard 下
+    /// （Ruling P6-C）"跨 shard 归并"本身是恒等操作，因此在这里把 R1
+    /// [`InternalTransferProcessor::collect_input`] 与 merge
+    /// [`InternalTransferProcessor::build_matcher_events`] 一次性做完：R1 失败（self/金额非法/
+    /// 用户缺失/NSF/幂等重复）直接返回对应拒绝码，不写载体；R1 成功则把 `(to_uid, currency,
+    /// amount)` 写入 `cmd.internal_transfer_event`，供 R2（[`Self::handler_risk_release`]）消费。
+    fn internal_transfer_collect(
+        &mut self,
+        cmd: &mut OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let from_uid = cmd.uid;
+        let to_uid = cmd.size;
+        let currency = cmd.symbol;
+        let amount = cmd.price;
+        let order_id = cmd.order_id;
+
+        let rc =
+            InternalTransferProcessor::collect_input(self, ups, ssp, from_uid, to_uid, currency, amount, order_id);
+        if rc == CommandResultCode::Success {
+            cmd.internal_transfer_event =
+                Some(InternalTransferProcessor::build_matcher_events(to_uid, currency, amount));
+        }
+        rc
+    }
+
+    /// `INTERNAL_TRANSFER` R2：对应 Java `RiskEngine.handlerRiskRelease` 处理
+    /// `MatcherEventType.INTERNAL_TRANSFER_EVENT` 的分支（`InternalTransferProcessor.applyEvent`，
+    /// `:84-98`）。消费 `cmd.internal_transfer_event`（R1 失败时为 `None`，早退，to-shard 无事
+    /// 可做——对应 Java `mte == null` 早退），成功时给 to-shard 入账（未知 to 自动建 `SUSPENDED`
+    /// 档）。
+    fn internal_transfer_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService) {
+        let Some((to_uid, currency, amount)) = cmd.internal_transfer_event.take() else {
+            return;
+        };
+        InternalTransferProcessor::apply_event(ups, to_uid, currency, amount);
     }
 
     /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage`（`ADD_LOAN` 分支，
@@ -5676,6 +5743,162 @@ mod tests {
             let expected_rate = engine.loan_service.floating_rate.curve_rate_bps(5_000);
             assert_eq!(engine.loan_service.floating_rate.current_rate_bps_or_base(cur), expected_rate as i32);
             assert_ne!(expected_rate as i32, engine.loan_service.floating_rate.base_bps, "sanity: util=5000 必须偏离 base");
+        }
+    }
+
+    // ================================================================================
+    // P6 Task 3: INTERNAL_TRANSFER 全管线（R1 pre_process_command → R2
+    // handler_risk_release），对应参考文档 §5 + `InternalTransferProcessor.java`（106 行）。
+    // ================================================================================
+    mod internal_transfer_tests {
+        use super::*;
+
+        const TO_UID: i64 = 99;
+
+        fn transfer_cmd(from_uid: i64, to_uid: i64, currency: i32, amount: i64, order_id: i64) -> OrderCommand {
+            OrderCommand {
+                command: OrderCommandType::InternalTransfer,
+                uid: from_uid,
+                size: to_uid, // overloaded: carries a uid, not an amount
+                symbol: currency,
+                price: amount,
+                order_id,
+                ..Default::default()
+            }
+        }
+
+        fn run_full_pipeline(
+            engine: &mut RiskEngine,
+            cmd: &mut OrderCommand,
+            ups: &mut UserProfileService,
+            ssp: &SymbolSpecificationProvider,
+        ) {
+            engine.pre_process_command(cmd, ups, ssp);
+            engine.handler_risk_release(cmd, ups, ssp);
+        }
+
+        #[test]
+        fn successful_transfer_debits_from_credits_to_and_conserves_total() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100); // UID balance 1000 FUT_QUOTE
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 700);
+            assert_eq!(ups.get(TO_UID).unwrap().account(FUT_QUOTE), 300);
+            assert_eq!(
+                ups.get(UID).unwrap().account(FUT_QUOTE) + ups.get(TO_UID).unwrap().account(FUT_QUOTE),
+                1_000,
+                "conservation: from -= amount, to += amount"
+            );
+        }
+
+        #[test]
+        fn transfer_to_never_seen_uid_auto_creates_suspended_profile() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
+            assert!(ups.get(TO_UID).is_none(), "sanity: to_uid must not pre-exist");
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            let to = ups.get(TO_UID).expect("R2 must auto-create the target profile");
+            assert_eq!(to.user_status, crate::core::common::user_status::UserStatus::Suspended);
+            assert_eq!(to.account(FUT_QUOTE), 300);
+        }
+
+        #[test]
+        fn self_transfer_rejected_before_any_balance_change() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
+            let mut cmd = transfer_cmd(UID, UID, FUT_QUOTE, 300, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::InternalTransferInvalidSelf));
+            assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 1_000, "self-transfer must not touch the balance");
+        }
+
+        #[test]
+        fn non_positive_amount_rejected() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 0, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskInvalidAmount));
+            assert!(ups.get(TO_UID).is_none(), "rejected transfer must not auto-create the target");
+        }
+
+        #[test]
+        fn negative_amount_rejected() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, -5, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskInvalidAmount));
+        }
+
+        #[test]
+        fn missing_from_profile_rejected_with_auth_invalid_user() {
+            let mut ssp = SymbolSpecificationProvider::new();
+            ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+            let mut ups = UserProfileService::new(); // UID never registered
+            let mut engine = RiskEngine::new();
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::AuthInvalidUser));
+            assert!(ups.get(TO_UID).is_none());
+        }
+
+        #[test]
+        fn plain_insufficient_balance_rejected_with_nsf() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 100, 100); // only 100 available
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskNsf));
+            assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 100, "NSF must not debit");
+            assert!(ups.get(TO_UID).is_none());
+        }
+
+        #[test]
+        fn loan_collateral_lock_makes_an_otherwise_sufficient_balance_nsf() {
+            // accounts=300 nominally covers a 300 transfer, but 300 of it is locked as isolated
+            // loan collateral (same currency) -> withdrawable_balance = 300 - 0 - 300 + 0 = 0 < 300.
+            // Proves NSF respects the same lock as a withdrawal (via withdrawable_balance reuse).
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 300, 100);
+            ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
+            let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::RiskNsf));
+            assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 300, "NSF must not debit");
+        }
+
+        #[test]
+        fn same_order_id_twice_is_claim_and_keep_not_double_debited() {
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
+            let mut cmd1 = transfer_cmd(UID, TO_UID, FUT_QUOTE, 100, 42);
+            run_full_pipeline(&mut engine, &mut cmd1, &mut ups, &ssp);
+            assert_eq!(cmd1.result_code, Some(CommandResultCode::Success));
+            assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 900);
+
+            // Same order_id again; balance (900) is still nominally sufficient for another 100,
+            // isolating the claim check (not a fresh NSF failure) as the actual blocker.
+            let mut cmd2 = transfer_cmd(UID, TO_UID, FUT_QUOTE, 100, 42);
+            run_full_pipeline(&mut engine, &mut cmd2, &mut ups, &ssp);
+
+            assert_eq!(
+                cmd2.result_code,
+                Some(CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame)
+            );
+            assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 900, "must not be double-debited");
+            assert_eq!(ups.get(TO_UID).unwrap().account(FUT_QUOTE), 100, "must not be double-credited");
         }
     }
 }
