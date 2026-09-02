@@ -6,9 +6,15 @@
 //! `docs/superpowers/specs/2026-09-02-p5-loan-reference.md` §1.6/§3/§4/§6。
 use std::collections::BTreeMap;
 
+use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_global_config::LoanGlobalConfig;
 use crate::core::processors::loan::rate::fixed_rate_model::FixedRateModel;
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
+
+/// 对应 Java `LoanService.YEAR_MS`（`:41`）：1 年（ms），跨节点唯一确定性形式，不依赖日历/闰年。
+pub const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
+/// 对应 Java `LoanService.BPS_SCALE`（`:42`）：bps 精度基准（10000 = 100%）。
+pub const BPS_SCALE: i64 = 10_000;
 
 /// 对应 Java `LoanService`（字段子集，`:51-59`）。
 ///
@@ -78,6 +84,32 @@ impl LoanService {
 
     pub fn add_to_loan_insurance_fund(&mut self, currency: i32, delta: i64) {
         *self.loan_insurance_fund.entry(currency).or_insert(0) += delta;
+    }
+
+    // ================================================================
+    // 利率模型二分派 —— 对应 Java `LoanService.accrueTo`/`calculateDisplayInterest`
+    // （`:123-131`）：按 `loan.isFixedRate()` 分派到 `fixed_rate`/`floating_rate`，
+    // 2 处调用点，if/else 即可，不需要多态。
+    // ================================================================
+
+    /// 写路径：把截至 `now` 的利息补计进 `loan.accumulated_interest` 并推进游标
+    /// （`acc_snapshot` 或 `last_accrue_ts`，按利率模型而定）；返回本次新增利息（≥ 0）。
+    pub fn accrue_to<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
+        if loan.is_fixed_rate() {
+            self.fixed_rate.accrue(loan, now)
+        } else {
+            self.floating_rate.accrue(loan, now)
+        }
+    }
+
+    /// 读路径：返回 `accumulated_interest` 加上截至 `now` 的 pending 利息，不推进游标、
+    /// 不改 loan（展示、强平判定等只读场景用）。
+    pub fn calculate_display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
+        if loan.is_fixed_rate() {
+            self.fixed_rate.display_interest(loan, now)
+        } else {
+            self.floating_rate.display_interest(loan, now)
+        }
     }
 
     /// 确定性状态 hash：折叠排序后的 4 个资金桶 + `global_config`/`floating_rate`/`fixed_rate`
@@ -209,5 +241,57 @@ mod tests {
         let mut diff_fixed = LoanService::new();
         diff_fixed.fixed_rate.locked_rate_adjust_bps = 5;
         assert_ne!(h0, diff_fixed.state_hash());
+    }
+
+    use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
+
+    #[test]
+    fn accrue_to_dispatches_fixed_loans_to_fixed_rate_model() {
+        let s = LoanService::new();
+        let mut fixed_loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 5_000 /* 50% */, 0);
+        fixed_loan.set_outstanding_principal(1_000_000);
+        assert!(fixed_loan.is_fixed_rate()); // default rate_mode = Locked
+
+        let delta = s.accrue_to(&mut fixed_loan, YEAR_MS);
+
+        assert_eq!(delta, 500_000); // simple interest, matches FixedRateModel::accrue directly
+        assert_eq!(fixed_loan.accumulated_interest(), 500_000);
+    }
+
+    #[test]
+    fn accrue_to_dispatches_floating_loans_to_floating_rate_model() {
+        let mut s = LoanService::new();
+        s.floating_rate.last_reprice_ts = 1_000;
+        s.floating_rate.current_rate_bps.insert(20, 500); // 5%
+
+        let mut floating_loan = IsolatedLoanRecord::new(2, 2, 100, 10, 20, 0, 1_000);
+        floating_loan.rate_mode = LoanRateMode::Floating;
+        floating_loan.set_outstanding_principal(315_360_000_000);
+        assert!(!floating_loan.is_fixed_rate());
+
+        let delta = s.accrue_to(&mut floating_loan, 3_000); // 2000ms since last_reprice_ts at 5%
+
+        assert_eq!(delta, 1_000);
+        assert_eq!(floating_loan.accumulated_interest(), 1_000);
+        assert_eq!(floating_loan.acc_snapshot(), 1_000_000); // cursor advanced to live acc
+    }
+
+    #[test]
+    fn calculate_display_interest_dispatches_by_is_fixed_rate_and_does_not_mutate() {
+        let s = LoanService::new();
+
+        let mut fixed_loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 5_000, 0);
+        fixed_loan.set_outstanding_principal(1_000_000);
+        assert_eq!(s.calculate_display_interest(&fixed_loan, YEAR_MS), 500_000);
+        assert_eq!(fixed_loan.accumulated_interest(), 0); // unchanged: read path
+
+        let mut floating_loan = IsolatedLoanRecord::new(2, 2, 100, 10, 20, 0, 1_000);
+        floating_loan.rate_mode = LoanRateMode::Floating;
+        floating_loan.set_outstanding_principal(315_360_000_000);
+        let mut s2 = LoanService::new();
+        s2.floating_rate.last_reprice_ts = 1_000;
+        s2.floating_rate.current_rate_bps.insert(20, 500);
+        assert_eq!(s2.calculate_display_interest(&floating_loan, 3_000), 1_000);
+        assert_eq!(floating_loan.accumulated_interest(), 0); // unchanged: read path
     }
 }
