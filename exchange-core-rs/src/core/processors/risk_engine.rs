@@ -1467,14 +1467,19 @@ impl RiskEngine {
     /// `taker_action` 就是 `cmd.action`）+ maker 块（仅 TRADE 事件，`uidForThisHandler` 单 shard
     /// 恒真，`makerAction = taker_action.opposite()`）。
     ///
-    /// # 已知缺口：`matched_order_command_type` 未建模
+    /// # `matched_order_command_type`（P6 Task 2 接线）
     /// Java 用 `mte.matchedOrderCommandType`（maker 挂单自身的命令类型）而非 `cmd.command`（taker
     /// 命令类型）算 maker 的 `createPositionsKey`——`CLOSE_POSITION`/`FORCE_LIQUIDATION` 会翻转
-    /// HEDGE 模式的键符号。本移植的 [`MatcherTradeEvent`] 尚未携带该字段（撮合引擎/订单簿模型
-    /// 层的缺口，不在本任务范围）。`ONEWAY`（当前唯一有测试覆盖的模式）下
-    /// `create_positions_key` 完全忽略 `command` 参数，故用 `cmd.command` 占位对 ONEWAY 的正确性
-    /// 零影响；`HEDGE` 模式下若 maker 的挂单原本是 `CLOSE_POSITION`/`FORCE_LIQUIDATION`，这里会
-    /// 算错键——留给引入该字段时（P6 前后）一并修正。
+    /// HEDGE 模式的键符号，取决于 **maker** 自己的命令类型，可能与触发本次撮合的 taker 命令不同
+    /// （对应 Java `RiskEngine.java:1450`）。taker 块用 `cmd.command`（taker 自己的命令，天然正确，
+    /// Java 同样是 `cmd.command`——`RiskEngine.java` taker 侧 `createPositionsKey` 就是用触发本次
+    /// 事件的命令本身）；maker 块改用 `mte.matched_order_command_type`（Task 1 加字段、本任务在两
+    /// order book 撮合时按 maker 挂单的 `Order.command`/`DirectOrder.command` 逐字节相同地填充，
+    /// 见 `order_book_naive_impl.rs`/`order_book_direct_impl.rs`）。`ONEWAY`（当前唯一可达模式，
+    /// 无 `position_mode` writer）下 `create_positions_key` 完全忽略 `command` 参数，故此次切换
+    /// 对 ONEWAY 的正确性零影响（P4 期货测试不回归，见
+    /// `handler_risk_release_futures_trade_opens_both_sides_and_conserves` 等既有测试原样通过）；
+    /// `HEDGE` 模式下（目前不可达）现在会用 maker 真正的原始命令类型，接线正确。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin_one(
         cmd: &OrderCommand,
@@ -1510,7 +1515,8 @@ impl RiskEngine {
         if mte.event_type == MatcherEventType::Trade {
             let maker_action = taker_action.opposite();
             let maker_up = ups.get_or_add_suspended(mte.matched_order_uid);
-            let position_key = maker_up.create_positions_key(spec.symbol_id, maker_action, cmd.command);
+            let position_key =
+                maker_up.create_positions_key(spec.symbol_id, maker_action, mte.matched_order_command_type);
             // 对应 Java `makerUp.getPositionRecordOrThrowEx(...)`：maker 侧仓位记录必须已存在
             // （TRADE 事件的 `matched_order_uid` 一定对应曾经建过仓/挂单的 uid），缺失即数据损坏，
             // panic 而非静默吞掉。
@@ -2415,6 +2421,7 @@ mod tests {
             bid_gt_ask: false,
             bidder_hold_price,
             matched_order_uid: 0,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next,
         })
     }
@@ -2596,6 +2603,7 @@ mod tests {
             bid_gt_ask: false,
             bidder_hold_price,
             matched_order_uid,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next,
         })
     }
@@ -3992,6 +4000,18 @@ mod tests {
     }
 
     fn fut_trade_event(size: i64, price: i64, matched_order_uid: i64) -> MatcherTradeEvent {
+        fut_trade_event_with_command(size, price, matched_order_uid, OrderCommandType::PlaceOrder)
+    }
+
+    /// 同 `fut_trade_event`，但允许显式指定 `matched_order_command_type`（P6 Task 2 新增，
+    /// 供 `handle_matcher_event_margin_one` maker 块 ONEWAY 不回归测试使用：即便它与
+    /// `cmd.command` 不同，ONEWAY 下 `create_positions_key` 也应忽略该差异，见该函数文档）。
+    fn fut_trade_event_with_command(
+        size: i64,
+        price: i64,
+        matched_order_uid: i64,
+        matched_order_command_type: OrderCommandType,
+    ) -> MatcherTradeEvent {
         MatcherTradeEvent {
             event_type: MatcherEventType::Trade,
             active_order_completed: false,
@@ -4002,6 +4022,7 @@ mod tests {
             bid_gt_ask: false,
             bidder_hold_price: 0, // 期货不用 bidderHoldPrice（现货专用字段，参考文档 §4）。
             matched_order_uid,
+            matched_order_command_type,
             next: None,
         }
     }
@@ -4037,6 +4058,7 @@ mod tests {
             bid_gt_ask: false,
             bidder_hold_price: 0,
             matched_order_uid: 0,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: None,
         }
     }
@@ -4380,6 +4402,58 @@ mod tests {
         assert_eq!(taker_delta, -20, "taker_fee(2)*size(10)");
         assert_eq!(maker_delta, 0, "本 fixture maker_fee=0");
         assert_eq!(taker_delta + maker_delta + fees_delta, 0, "开仓：唯一移动是费用配对");
+    }
+
+    /// P6 Task 2 Step1(c)：`create_positions_key` maker 侧改用 `mte.matched_order_command_type`
+    /// 而非 `cmd.command` 后，ONEWAY 下行为不变——即便两者**故意不同**（taker=ForceLiquidation，
+    /// maker=PlaceOrder，对应真实的 FORCE_LIQUIDATION 撮合普通挂单场景）。断言与上面
+    /// `handler_risk_release_futures_trade_opens_both_sides_and_conserves`（taker=PlaceOrder，
+    /// `matched_order_command_type` 默认同为 PlaceOrder）逐项相同：ONEWAY 下
+    /// `create_positions_key` 完全忽略 `command` 参数，故这两种命令组合的最终仓位/账户/费用结果
+    /// 必须完全一致——若切换引入了回归，这里会先于任何 P4 期货测试察觉。
+    #[test]
+    fn handler_risk_release_futures_trade_oneway_unaffected_by_matched_order_command_type_switch() {
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
+        assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
+        ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
+        seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
+        seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 10, 100);
+
+        // taker 命令是 ForceLiquidation；maker 的 matched_order_command_type 是 PlaceOrder——
+        // 两者故意不同，模拟 taker=ForceLiquidation 撮 maker=普通挂单的真实场景。
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            symbol: FUT_SYMBOL,
+            action: Some(OrderAction::Bid),
+            uid: UID,
+            ..Default::default()
+        };
+        cmd.matcher_event = Some(Box::new(fut_trade_event_with_command(
+            10,
+            100,
+            FUT2_MAKER_UID,
+            OrderCommandType::PlaceOrder,
+        )));
+
+        let taker_before = ups.get(UID).unwrap().account(FUT_QUOTE);
+        let maker_before = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE);
+
+        engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
+
+        assert!(cmd.matcher_event.is_none());
+        let taker_pos = ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(taker_pos.direction, PositionDirection::Long);
+        assert_eq!(taker_pos.open_volume, 10);
+        let maker_pos = ups.get(FUT2_MAKER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
+        assert_eq!(maker_pos.direction, PositionDirection::Short);
+        assert_eq!(maker_pos.open_volume, 10);
+
+        let taker_delta = ups.get(UID).unwrap().account(FUT_QUOTE) - taker_before;
+        let maker_delta = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE) - maker_before;
+        let fees_delta = *engine.fees.get(&FUT_QUOTE).unwrap_or(&0);
+        assert_eq!(taker_delta, -20, "与 taker=PlaceOrder 基线完全一致（ONEWAY 忽略 command）");
+        assert_eq!(maker_delta, 0);
+        assert_eq!(taker_delta + maker_delta + fees_delta, 0);
     }
 
     #[test]

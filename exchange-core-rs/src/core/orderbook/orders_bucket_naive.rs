@@ -1,5 +1,6 @@
 //! 单价位 FIFO 桶。对应 Java: exchange.core2.core.orderbook.OrdersBucketNaive
 use std::collections::BTreeMap;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order::Order;
 
 pub struct OrdersBucketNaive {
@@ -78,24 +79,27 @@ impl OrdersBucketNaive {
 
     /// 从桶头 FIFO 撮合 `to_collect`，返回剩余未撮合量。
     /// 回调额外携带 maker 的 `uid`/`reserve_bid_price`（Task 3 新增，供调用方按 Java
-    /// `OrdersBucketNaive.match` 的语义算出 `MatcherTradeEvent.matchedOrderUid`/`bidderHoldPrice`）。
+    /// `OrdersBucketNaive.match` 的语义算出 `MatcherTradeEvent.matchedOrderUid`/`bidderHoldPrice`）
+    /// 与 `command`（Task 2 新增，maker 挂单的原命令类型，供调用方填
+    /// `MatcherTradeEvent.matched_order_command_type`——对应 Java
+    /// `OrderBookEventsHelper.java:75`：`event.matchedOrderCommandType = matchingOrder.getCommand()`）。
     pub fn match_forward(&mut self, mut to_collect: i64,
-                         on_trade: &mut impl FnMut(i64, i64, bool, i64, i64)) -> i64 {
+                         on_trade: &mut impl FnMut(i64, i64, bool, i64, i64, OrderCommandType)) -> i64 {
         let seqs: Vec<i64> = self.entries.keys().copied().collect();
         for seq in seqs {
             if to_collect == 0 {
                 break;
             }
-            let (maker_id, trade, completed, maker_uid, maker_reserve_bid_price) = {
+            let (maker_id, trade, completed, maker_uid, maker_reserve_bid_price, maker_command) = {
                 let o = self.entries.get_mut(&seq).unwrap();
                 let avail = o.remaining();
                 let trade = to_collect.min(avail);
                 o.filled += trade;
-                (o.order_id, trade, o.remaining() == 0, o.uid, o.reserve_bid_price)
+                (o.order_id, trade, o.remaining() == 0, o.uid, o.reserve_bid_price, o.command)
             };
             to_collect -= trade;
             self.total_volume -= trade;
-            on_trade(maker_id, trade, completed, maker_uid, maker_reserve_bid_price);
+            on_trade(maker_id, trade, completed, maker_uid, maker_reserve_bid_price, maker_command);
             if completed {
                 self.entries.remove(&seq);
                 self.id_to_seq.remove(&maker_id);
@@ -119,7 +123,8 @@ mod tests {
             reserve_bid_price: 0,
             action: OrderAction::Ask,
             uid: id,
-            timestamp: id
+            timestamp: id,
+            command: OrderCommandType::PlaceOrder,
         }
     }
 
@@ -131,7 +136,7 @@ mod tests {
         assert_eq!(b.total_volume(), 15);
         // 先进先出：撮合 12 → 全吃 order1(10) + order2 部分(2)
         let mut collected: Vec<(i64, i64)> = vec![]; // (maker_id, trade_size)
-        let remaining = b.match_forward(12, &mut |maker_id, sz, _completed, _maker_uid, _maker_reserve_bid_price| {
+        let remaining = b.match_forward(12, &mut |maker_id, sz, _completed, _maker_uid, _maker_reserve_bid_price, _maker_command| {
             collected.push((maker_id, sz));
         });
         assert_eq!(remaining, 0); // 请求量全部撮合
@@ -160,6 +165,7 @@ mod tests {
             action: OrderAction::Ask,
             uid,
             timestamp: 0,
+            command: OrderCommandType::PlaceOrder,
         }
     }
 
@@ -297,7 +303,7 @@ mod tests {
         }
 
         let mut events_count = 0usize;
-        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed, _maker_uid, _maker_reserve_bid_price| {
+        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed, _maker_uid, _maker_reserve_bid_price, _maker_command| {
             events_count += 1;
         });
         assert_eq!(events_count, expected_num_orders);
@@ -339,7 +345,7 @@ mod tests {
 
             let to_match = expected_volume / 2;
             let mut collected_volume: i64 = 0;
-            let remaining = bucket.match_forward(to_match, &mut |_maker_id, trade, _completed, _maker_uid, _maker_reserve_bid_price| {
+            let remaining = bucket.match_forward(to_match, &mut |_maker_id, trade, _completed, _maker_uid, _maker_reserve_bid_price, _maker_command| {
                 collected_volume += trade;
             });
             assert_eq!(collected_volume, to_match);
@@ -350,7 +356,7 @@ mod tests {
         }
 
         let mut events_count = 0usize;
-        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed, _maker_uid, _maker_reserve_bid_price| {
+        let remaining = bucket.match_forward(expected_volume, &mut |_maker_id, _trade, _completed, _maker_uid, _maker_reserve_bid_price, _maker_command| {
             events_count += 1;
         });
         assert_eq!(events_count, expected_num_orders);

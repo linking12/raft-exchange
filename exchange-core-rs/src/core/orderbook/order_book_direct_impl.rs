@@ -516,7 +516,7 @@ impl OrderBookDirectImpl {
         loop {
             let midx = maker.expect("loop body only runs while maker is Some");
 
-            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_reserve_bid_price) = {
+            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_reserve_bid_price, m_command) = {
                 let o = self.order(midx);
                 (
                     o.size,
@@ -527,6 +527,7 @@ impl OrderBookDirectImpl {
                     o.uid,
                     o.order_id,
                     o.reserve_bid_price,
+                    o.command,
                 )
             };
 
@@ -565,6 +566,9 @@ impl OrderBookDirectImpl {
                 bid_gt_ask: is_bid,
                 bidder_hold_price,
                 matched_order_uid: m_uid,
+                // maker 自己的原命令类型（对应 Java `OrderBookEventsHelper.java:75`，P6-G：须与
+                // Naive `match_against` 逐字节相同地填）。
+                matched_order_command_type: m_command,
                 next: None,
             });
 
@@ -828,9 +832,9 @@ impl OrderBookDirectImpl {
                 price_bucket_tail = self.bucket(parent).tail;
             }
 
-            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id) = {
+            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_command) = {
                 let o = self.order(midx);
-                (o.size, o.filled, o.price, o.parent.expect("maker must have parent bucket"), o.prev, o.uid, o.order_id)
+                (o.size, o.filled, o.price, o.parent.expect("maker must have parent bucket"), o.prev, o.uid, o.order_id, o.command)
             };
 
             let trade_price = m_price;
@@ -867,6 +871,8 @@ impl OrderBookDirectImpl {
                 bid_gt_ask: true,
                 bidder_hold_price: taker_reserve_bid_price,
                 matched_order_uid: m_uid,
+                // 同 try_match_instantly：maker 自己的原命令类型（P6-G）。
+                matched_order_command_type: m_command,
                 next: None,
             });
 
@@ -929,6 +935,8 @@ impl OrderBookDirectImpl {
             bid_gt_ask: false,
             bidder_hold_price: cmd.reserve_bid_price,
             matched_order_uid: 0,
+            // REJECT 无 maker，字段无意义，取默认值（同 Naive 的 attach_reject_event）。
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: cmd.matcher_event.take(),
         };
         cmd.matcher_event = Some(Box::new(event));
@@ -1189,6 +1197,8 @@ impl IOrderBook for OrderBookDirectImpl {
             bid_gt_ask: false,
             bidder_hold_price: reserve_bid_price,
             matched_order_uid: 0,
+            // REDUCE 无 maker，同 attach_reject_event 语义。
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: None,
         }));
 
@@ -1257,6 +1267,7 @@ impl IOrderBook for OrderBookDirectImpl {
             bid_gt_ask: false,
             bidder_hold_price: reserve_bid_price,
             matched_order_uid: 0,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: None,
         }));
         cmd.action = Some(action);
@@ -1922,6 +1933,104 @@ mod tests {
         assert!(l2.ask_prices.is_empty());
         assert!(l2.bid_prices.is_empty());
         direct.validate_internal_state();
+    }
+
+    // ---- P6 Task 2: MatcherTradeEvent.matched_order_command_type（Ruling P6-G） ----
+    //
+    // 对照 Java `OrderBookEventsHelper.java:75`：字段取 maker（挂单方）自己的原命令类型，与触发
+    // 本次撮合的 taker 命令无关。**逐字节对拍 Naive**（不只是断言值，直接比对两簿产出的完整
+    // `MatcherTradeEvent` 链），这正是 P6-G 要求的"两 book 必须逐字节相同地填"的直接证据。
+
+    /// taker=ForceLiquidation 撮 maker=普通 PlaceOrder 挂单：事件的 matched_order_command_type
+    /// 必须是 maker 的 PlaceOrder，不是 taker 的 ForceLiquidation——且 Direct 与 Naive 逐位一致。
+    #[test]
+    fn trade_event_matched_order_command_type_is_makers_command_not_takers_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        let maker = |order_id: i64| OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id,
+            symbol: 1,
+            price: 100,
+            size: 10,
+            action: Some(OrderAction::Ask),
+            order_type: Some(OrderType::Gtc),
+            uid: 501,
+            ..Default::default()
+        };
+        direct.new_order(&mut maker(1));
+        naive.new_order(&mut maker(1));
+
+        let taker = |order_id: i64| OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            order_id,
+            symbol: 1,
+            price: 100,
+            size: 4,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Ioc),
+            uid: 888,
+            ..Default::default()
+        };
+        let mut d_taker = taker(2);
+        direct.new_order(&mut d_taker);
+        let mut n_taker = taker(2);
+        naive.new_order(&mut n_taker);
+
+        assert_eq!(
+            d_taker.matcher_event, n_taker.matcher_event,
+            "matched_order_command_type（及全部其它字段）须 Direct/Naive 逐位一致（P6-G）"
+        );
+        let ev = d_taker.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.event_type, MatcherEventType::Trade);
+        assert_eq!(
+            ev.matched_order_command_type,
+            OrderCommandType::PlaceOrder,
+            "matched_order_command_type 必须取 maker 的原命令类型，不是 taker 的 ForceLiquidation"
+        );
+    }
+
+    /// 反向场景：maker 自身的原命令是 ForceLiquidation，taker 是普通 PlaceOrder——字段应跟随
+    /// maker 翻转，证明确实读的是 maker 的 `DirectOrder.command`，且与 Naive 逐位一致。
+    #[test]
+    fn trade_event_matched_order_command_type_follows_maker_when_maker_is_force_liquidation_matching_naive() {
+        let mut direct = OrderBookDirectImpl::new();
+        let mut naive = OrderBookNaiveImpl::new();
+
+        let maker = |order_id: i64| OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            order_id,
+            symbol: 1,
+            price: 100,
+            size: 10,
+            action: Some(OrderAction::Ask),
+            order_type: Some(OrderType::Gtc),
+            uid: 501,
+            ..Default::default()
+        };
+        direct.new_order(&mut maker(1));
+        naive.new_order(&mut maker(1));
+
+        let taker = |order_id: i64| OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id,
+            symbol: 1,
+            price: 100,
+            size: 4,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: 888,
+            ..Default::default()
+        };
+        let mut d_taker = taker(2);
+        direct.new_order(&mut d_taker);
+        let mut n_taker = taker(2);
+        naive.new_order(&mut n_taker);
+
+        assert_eq!(d_taker.matcher_event, n_taker.matcher_event);
+        let ev = d_taker.matcher_event.as_ref().expect("应有成交事件");
+        assert_eq!(ev.matched_order_command_type, OrderCommandType::ForceLiquidation);
     }
 
     #[test]
