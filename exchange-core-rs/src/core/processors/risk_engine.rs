@@ -154,8 +154,10 @@ impl RiskEngine {
     /// （`isFuturesContract`）→ 校验（margin trading 开关/mark price/marginMode+leverage
     /// 跨腿一致）→ 解析/分配 `SymbolPositionRecord`（NSF 通过前不插入 `positions`）→ ONEWAY
     /// reduce-only 夹 → `isValidLeverage` → [`Self::can_place_margin_order`] NSF →
-    /// 成功后 `pendingHold[Budget]` + 提交仓入 map。非 perp/非 spot（期权等）`unimplemented!`
-    /// （P5/P6 范围）。参考文档 §3 "placeOrder 期货分支检查序"。
+    /// 成功后 `pendingHold[Budget]` + 提交仓入 map。非现货、非期货（当前只有 `Option`）→
+    /// `UnsupportedSymbolType`（对应 Java `:437-439`；这是 Raft 复制状态机的 R1 热路径，绝不
+    /// panic——`Option` 型 symbol 今天就能通过 `add_symbol` 注册，交易支持留给 P5/P6，但"不
+    /// panic"现在就要做到）。参考文档 §3 "placeOrder 期货分支检查序"。
     ///
     /// # Rust 对齐 Java 对象池"NSF 前不插入"的做法
     /// Java 用对象池 new/put 一个可能被丢弃的 `SymbolPositionRecord`；Rust 无对象池，改为：
@@ -181,7 +183,13 @@ impl RiskEngine {
             return self.place_exchange_order(cmd, user_profile, spec, currency_spec);
         }
         if !spec.symbol_type.is_futures_contract() {
-            unimplemented!("P5/P6: option symbol type");
+            // 对应 Java `placeOrder`（:437-439）：非现货、非期货（当前只有 `Option`）返回
+            // `UnsupportedSymbolType`——绝不 panic。R1 是 Raft 复制状态机的热路径，`unimplemented!`
+            // 会让一条已合法落盘的命令直接 crash 整个确定性状态机；`add_symbol` 目前不校验
+            // `symbol_type`，`Option` 型 symbol 可以被注册，因此这条分支今天就可达，必须走正常
+            // 返回值而非占位 panic（P5/P6 排期的是"支持 Option 交易"，不是"不 panic"——不 panic
+            // 现在就要做到）。
+            return CommandResultCode::UnsupportedSymbolType;
         }
         if !self.cfg_margin_trading_enabled {
             return CommandResultCode::RiskMarginTradingDisabled;
@@ -2698,6 +2706,60 @@ mod tests {
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
             CommandResultCode::RiskInvalidLeverage
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // 崩溃安全性回归：非现货、非期货 symbol（当前只有 Option）绝不 panic（对应 Java
+    // `placeOrder`:437-439 的 UnsupportedSymbolType，而非 unimplemented!）——`add_symbol` 不校验
+    // symbol_type，Option 型 symbol 今天就能注册，R1 是 Raft 复制状态机热路径，panic 会直接
+    // crash 整个确定性状态机。
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn futures_place_order_option_symbol_type_returns_unsupported_not_panic() {
+        const OPTION_SYMBOL: i32 = 202;
+        let mut ssp = SymbolSpecificationProvider::new();
+        assert_eq!(
+            ssp.add_symbol(CoreSymbolSpecification {
+                symbol_id: OPTION_SYMBOL,
+                symbol_type: SymbolType::Option,
+                base_currency: FUT_BASE,
+                quote_currency: FUT_QUOTE,
+                base_scale_k: 1,
+                quote_scale_k: 1,
+                ..Default::default()
+            }),
+            CommandResultCode::Success
+        );
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+
+        let mut ups = UserProfileService::new();
+        assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
+        ups.get_mut(UID).unwrap().add_to_account(FUT_QUOTE, 100_000);
+
+        let mut engine = RiskEngine::new();
+
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 1,
+            symbol: OPTION_SYMBOL,
+            price: 100,
+            size: 10,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: UID,
+            ..Default::default()
+        };
+
+        // 走 pre_process_command（真实 R1 入口），断言 cmd.result_code——若实现仍是
+        // unimplemented!/panic!，本测试进程会直接 abort，而不是走到下面的 assert_eq 失败。
+        engine.pre_process_command(&mut cmd, &mut ups, &ssp);
+        assert_eq!(cmd.result_code, Some(CommandResultCode::UnsupportedSymbolType));
+        assert!(
+            !ups.get_mut(UID).unwrap().positions.contains_key(&OPTION_SYMBOL),
+            "不支持的 symbol 类型不得创建 position"
         );
     }
 
