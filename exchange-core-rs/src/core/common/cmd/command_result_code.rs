@@ -26,6 +26,12 @@ pub enum CommandResultCode {
     SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
 
     // ================================================================
+    // P6 Task 1：内部转账，逐字对应 Java `CommandResultCode.java:74`（handler 留后续 Task，
+    // 见参考文档 §5.1；这里只落码值，供 InternalTransferProcessor.collectInput 的 R1 校验用）。
+    // ================================================================
+    InternalTransferInvalidSelf, // -4301，from == to 自转
+
+    // ================================================================
     // P5 Task 1：现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`
     // （handler 本身留 Task 2+，这里先落码值，供后续 Task 直接引用）。
     // ================================================================
@@ -82,6 +88,7 @@ impl CommandResultCode {
             CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame => -4101,
             CommandResultCode::UserMgmtAccountBalanceAdjustmentNsf => -4103,
             CommandResultCode::SymbolMgmtSymbolAlreadyExists => -5001,
+            CommandResultCode::InternalTransferInvalidSelf => -4301,
             CommandResultCode::LoanNotEnabled => -6001,
             CommandResultCode::LoanAlreadyExists => -6002,
             CommandResultCode::LoanNotFound => -6003,
@@ -128,6 +135,12 @@ mod tests {
         assert_eq!(CommandResultCode::MatchingInvalidOrderBookId.code(), -3005);
         assert_eq!(CommandResultCode::MatchingMoveFailedPriceOverRiskLimit.code(), -3041);
         assert_eq!(CommandResultCode::MatchingReduceFailedWrongSize.code(), -3051);
+    }
+
+    #[test]
+    fn p6_internal_transfer_invalid_self_matches_java() {
+        // Java `CommandResultCode.java:74`：INTERNAL_TRANSFER_INVALID_SELF(-4301)。
+        assert_eq!(CommandResultCode::InternalTransferInvalidSelf.code(), -4301);
     }
 
     #[test]
