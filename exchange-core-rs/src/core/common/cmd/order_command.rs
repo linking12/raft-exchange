@@ -2,6 +2,7 @@
 //! 所需字段 + P4 Task 1：期货 `leverage`/`marginMode`/reduce-only 字段扩展）。
 use std::collections::BTreeMap;
 
+use crate::core::common::adl_user_position::AdlUserPosition;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -103,6 +104,31 @@ pub struct OrderCommand {
     /// 消费——`Some` 时驱动 `accept_if_position` + 关 taker 仓，`None` 时两者都跳过（但下面的
     /// `if_preview_cover` 释放不受影响，始终执行）。其余命令类型恒为 `None`。
     pub if_takeover_size: Option<i64>,
+    /// P6 Task 6 新增：`AUTO_DELEVERAGING` R1 专属载体——对应 Java
+    /// `OrderCommand.adlUserPositionsByShard[shardId]`（按 shard 下标数组、每项是单链表头指针）
+    /// 单 shard 塌缩后的形态（Ruling P6-C）：`Vec<AdlUserPosition>` 取代链表（无对象池，见
+    /// `adl_user_position.rs` 模块文档），元素顺序 = R1 选中顺序（按 `risk_score` DESC 排序后
+    /// 贪心选取，已经是 merge 阶段需要的全局最优序——单 shard 下"跨 shard best-of-N"退化为对这一
+    /// 个列表的顺序消费，见 `adl_command_processor.rs` 模块文档）。
+    ///
+    /// **这是 R2 finalize 释放 `pending_adl_size` 时必须读取的"原始 R1 表"**——`RiskEngine::adl_apply`
+    /// 的 finalize 阶段用 `std::mem::take` 取走它整体消费一次（每个候选都对称释放，不管
+    /// [`Self::adl_events`] 里实际消费了多少），不会被 merge 阶段污染（merge 只读它、产出一份
+    /// 独立的 `adl_events`，不修改这个字段本身——对应 Java 注释"cursors 必须 clone，不能直接复用
+    /// cmd.adlUserPositionsByShard"，本移植用只读迭代 + 独立输出取代克隆，效果等价，见
+    /// `adl_command_processor.rs` 模块文档"merge 的克隆-vs-原表"一节）。其余命令类型恒为空
+    /// `Vec`，不产生任何影响。
+    pub adl_user_positions: Vec<AdlUserPosition>,
+    /// P6 Task 6 新增：`AUTO_DELEVERAGING` merge 专属载体，`(uid, exec_volume)`——对应 Java
+    /// `MatcherEventType::ADL_EVENT` 单链表（`matchedOrderUid`/`size` 各自承载 uid / 实际消费量）
+    /// 在 merge→R2 之间传递数据；本移植不扩 `MatcherEventType`（Ruling P6-A，同
+    /// `if_takeover_size`/`internal_transfer_event` 先例），改用这个命令专属字段。空 `Vec` = 全拒
+    /// （对应 Java `cmd.matcherEvent.eventType == REJECT`，即"没有候选可减仓"）——R2
+    /// `RiskEngine::adl_apply` 用 `is_empty()` 判定是否跳过 taker 自身平仓（对应 Java
+    /// `matcherEvent.eventType != REJECT` 门）。`RiskEngine::adl_collect`（R1+merge 合并，单 shard
+    /// 下"跨 shard 归并"是恒等操作，同 `if_takeover_collect` 先例）写入，同时把 `cmd.size` 改写为
+    /// 实际消费总量（对应 Java `cmd.size -= remaining`）。其余命令类型恒为空 `Vec`。
+    pub adl_events: Vec<(i64, i64)>,
 }
 
 impl OrderCommand {

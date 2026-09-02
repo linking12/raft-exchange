@@ -30,6 +30,8 @@ use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::adl_user_position::AdlUserPosition;
+use crate::core::processors::adl_command_processor::AdlCommandProcessor;
 use crate::core::processors::funding_fee_command_processor::FundingFeeCommandProcessor;
 use crate::core::processors::if_command_processor::IfCommandProcessor;
 use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
@@ -173,6 +175,10 @@ impl RiskEngine {
             // `IF_TAKEOVER` 同样不是 `is_non_trading()`（参考文档 §0 末段已确认），停留在主交易
             // switch，见 `Self::if_takeover_collect` 文档。
             cmd.result_code = Some(self.if_takeover_collect(cmd));
+        } else if cmd.command == OrderCommandType::AutoDeleveraging {
+            // `AUTO_DELEVERAGING` 同样不是 `is_non_trading()`，停留在主交易 switch，见
+            // `Self::adl_collect` 文档。
+            cmd.result_code = Some(self.adl_collect(cmd, ups, ssp));
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
@@ -824,6 +830,17 @@ impl RiskEngine {
         // `if_command_processor.rs` 模块文档）。
         if cmd.command == OrderCommandType::IfTakeover {
             self.if_takeover_apply(cmd, ups, ssp);
+            return;
+        }
+        // `AUTO_DELEVERAGING` 是本移植第五个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链
+        // 传数据的命令（同上面四条注释一样的理由）——用 `cmd.adl_events`/`cmd.adl_user_positions`
+        // 这两个专属载体而非 `matcher_event`（见 `adl_command_processor.rs` 模块文档"事件载体的
+        // 移植偏差"）。对应 Java `RiskEngine.handlerRiskRelease` 处理 `AUTO_DELEVERAGING` 的分支
+        // （`:967-970` apply 循环 + `:989-990` finalize：`ADLCommandProcessor.applyEvent` 循环 +
+        // `finalizeForCommand`）。**`liquidationEngine.advanceLiquidation` 钩子未落地**（Java
+        // `:997`，Task 7 排期，同 `if_takeover_apply` 文档）。
+        if cmd.command == OrderCommandType::AutoDeleveraging {
+            self.adl_apply(cmd, ups, ssp);
             return;
         }
         if cmd.command.is_non_trading() {
@@ -2318,6 +2335,204 @@ impl RiskEngine {
 
         // finalize 后半：无论接管成功/全拒都释放本命令预冻结的 reserved（跟 R1 对称）。
         self.liquidation_service.release_reserved_if_notional(symbol, cmd.if_preview_cover);
+    }
+
+    // ====================================================================================
+    // `AUTO_DELEVERAGING`（自动减仓 ADL，P6 Task 6）—— 参考文档 §3、§11.1，
+    // Java `ADLCommandProcessor.java`（257 行）+ `LiquidationService.java:191-321`（排序键 + 候选
+    // 构造）+ `RiskEngine.java:374-380`（R1）/`:962-990`（R2）。
+    // ====================================================================================
+
+    /// `AUTO_DELEVERAGING` R1+merge：对应 Java `RiskEngine.java` case `AUTO_DELEVERAGING`
+    /// （`:374-380`）里 `adlProcessor.collectInput(cmd)` 这一步，叠加
+    /// `ADLCommandProcessor.buildMatcherEvents`（`:102-165`，merge）。单 shard 下（Ruling P6-C）
+    /// "跨 shard 归并"是恒等操作，同 `if_takeover_collect` 先例，一次性做完 R1+merge：
+    ///
+    /// 1. [`LiquidationService::compute_profitable_positions_by_symbol`] 现算全体 ADL 候选（按需
+    ///    重算，不缓存，见其文档），取出 `cmd.symbol` 这一档。
+    /// 2. [`AdlCommandProcessor::collect_input`]（纯选择算法）：筛选 + 按 `risk_score` DESC 排序 +
+    ///    贪心分配，产出候选列表——**这就是 R1 的最终预占量**，写入 `cmd.adl_user_positions`
+    ///    （R2 finalize 释放时读的"原始表"，见 `adl_command_processor.rs` 模块文档）。
+    /// 3. **写回 `pending_adl_size`**（Java 版本这一步是 R1 `collectInput` 里对活引用直接
+    ///    `pos.pendingADLSize += canTake`；本移植因为候选是克隆快照，必须显式按
+    ///    `up.create_positions_key(symbol, action.opposite(), AutoDeleveraging)` 重新查活记录再
+    ///    写，见 `compute_profitable_positions_by_symbol` 文档"Rust 所有权改造"一节）——
+    ///    **在 merge 之前完成**，对应 Java R1 阶段就已经预占（跟 merge 阶段是否真消费无关，
+    ///    merge 只决定"这次命令实际用掉多少"，不影响"预占了多少"这个事实）。
+    /// 4. [`AdlCommandProcessor::build_matcher_events`]（merge）：产出 `cmd.adl_events`（消费
+    ///    序列）并把 `cmd.size` 改写为实际消费总量（对应 Java `cmd.size -= remaining`，R2 finalize
+    ///    平 taker 自己的仓要用这个真实数）。
+    ///
+    /// 结果码恒 `Success`（同 `if_takeover_collect`：`buildMatcherEvents` 跑完固定 `SUCCESS`，
+    /// 空 `adl_events` 是"这次没减成"的信号，不是命令失败）。
+    ///
+    /// **未落地 `normalizeCmdPositionSize`**（同 `if_takeover_collect` 文档，Task 7 排期）。
+    fn adl_collect(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
+        cmd.adl_user_positions.clear();
+        cmd.adl_events.clear();
+
+        let symbol = cmd.symbol;
+        let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
+        let bankruptcy_price = cmd.price;
+        let remaining_size = cmd.size;
+        if remaining_size <= 0 {
+            return CommandResultCode::Success;
+        }
+
+        let mut candidates_map = LiquidationService::compute_profitable_positions_by_symbol(ups, ssp, &self.last_price_cache);
+        let candidates = candidates_map.remove(&symbol).unwrap_or_default();
+
+        let picks = AdlCommandProcessor::collect_input(candidates, symbol, action, bankruptcy_price, remaining_size);
+
+        // R1 写回：预占 pending_adl_size（与 finalize 对称释放，见 `adl_apply` 文档）。
+        for pick in &picks {
+            if let Some(profile) = ups.users.get_mut(&pick.uid) {
+                let position_key = profile.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
+                if let Some(pos) = profile.positions.get_mut(&position_key) {
+                    pos.pending_adl_size += pick.volume;
+                }
+            }
+        }
+
+        let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, remaining_size);
+        cmd.adl_user_positions = picks;
+        cmd.adl_events = events;
+        cmd.size = consumed; // 真实平仓数量，R2 finalize 用它关 taker 自己的仓
+
+        CommandResultCode::Success
+    }
+
+    /// ADL 专属的关仓 + 清算 helper——`adl_apply` 的 R2 apply（关 counterparty 仓）与 finalize
+    /// （关 taker 自己的仓）共用同一套逻辑（对应 Java `ADLCommandProcessor.applyEvent:196-212` 与
+    /// `finalizeForCommand:220-235` 里几乎逐字重复的 close-and-cleanup 三段：
+    /// `closeCurrentPositionFutures` → `isEmpty()` 判定 → 退 `extraMargin` + 结算 `profit` + 移除
+    /// 持仓记录）——ADL 不收手续费（同 IF_TAKEOVER，对应 Java 两处都没有算 taker/maker fee 那段），
+    /// 因此可以安全共享，不像 `if_command_processor.rs` 模块文档解释的
+    /// "为什么不与 `settle_margin_position_event` 共享"那样有 fee 差异顾虑——这里在 ADL 自己的两个
+    /// 调用点之间是真正等价的重复逻辑（参考文档 §3.3 "worth factoring into one shared helper"）。
+    fn adl_close_and_settle(
+        up: &mut UserProfile,
+        position_key: i32,
+        close_action: OrderAction,
+        size: i64,
+        price: i64,
+        spec: &CoreSymbolSpecification,
+        currency_spec: &CoreCurrencySpecification,
+    ) {
+        let Some(pos) = up.positions.get_mut(&position_key) else {
+            return;
+        };
+        pos.close_current_position_futures(close_action, size, price);
+
+        let is_empty = up.positions.get(&position_key).map(|p| p.is_empty()).unwrap_or(false);
+        if !is_empty {
+            return;
+        }
+        let currency = up.positions.get(&position_key).unwrap().currency;
+
+        let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
+        if extra_margin > 0 {
+            let refund = arithmetic::size_price_to_currency_scale(
+                extra_margin,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                currency_spec.currency_scale_k,
+            );
+            up.add_to_account(currency, refund);
+            up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
+        }
+
+        let profit = up.positions.get(&position_key).unwrap().profit;
+        if profit != 0 {
+            let profit_scaled = arithmetic::size_price_to_currency_scale(
+                profit,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                currency_spec.currency_scale_k,
+            );
+            up.add_to_account(currency, profit_scaled);
+        }
+        up.positions.remove(&position_key);
+    }
+
+    /// `AUTO_DELEVERAGING` R2（apply + finalize 合并）：对应 Java `RiskEngine.handlerRiskRelease`
+    /// 处理 `AUTO_DELEVERAGING` 的两段（`:967-970` apply 循环 + `:989-990` finalize）+
+    /// `ADLCommandProcessor.applyEvent`（`:167-213`）+ `ADLCommandProcessor.finalizeForCommand`
+    /// （`:215-255`）。
+    ///
+    /// - **apply**（`cmd.adl_events` 逐条）：counterparty `UserProfile`/仓位记录都可能在 R1 选中
+    ///   与 R2 应用之间消失（对应 Java `[CASCADE-DEBUG]` 日志两处）——**best-effort skip，不是
+    ///   error**：`pending_adl_size` 的修正统一在 finalize 阶段做，不依赖 apply 是否成功
+    ///   （参考文档 §3.3）。用 `up.create_positions_key(symbol, action.opposite(),
+    ///   AutoDeleveraging)`（不是裸 `symbol`，同 `if_takeover_apply` 先例）查 counterparty 仓位，
+    ///   `close_current_position_futures(action, exec_size, price)`（`adlPosSide.opposite() ==
+    ///   cmd.action`，见 Java `:196` 与本函数文档推导）。
+    /// - **finalize 前半（关 taker 仓）**：只在 `cmd.adl_events` 非空时执行（对应 Java
+    ///   `matcherEvent.eventType != REJECT`——空事件列表就是"这次没减成"，没有仓位可关）。taker
+    ///   用 `ups.get_or_add_suspended` 取（同 `if_takeover_apply`：Java `handlerRiskRelease` 顶层
+    ///   对 taker 统一 `getUserProfileOrAddSuspended`，不像 counterparty 那样允许整个 profile
+    ///   缺失），仓位用 `up.create_positions_key(symbol, action, AutoDeleveraging)` 查（对应 Java
+    ///   `RiskEngine.handlerRiskRelease:947-948` 同款 key 规则），`close_current_position_futures
+    ///   (action.opposite(), cmd.size, price)`（`cmd.size` 此时已被 `adl_collect` 改写为真实消费
+    ///   量）。
+    /// - **finalize 后半（释放 pending_adl_size）**：走 **`cmd.adl_user_positions`**（R1 原始表，
+    ///   `mem::take` 取走整体消费一次），对每个候选 `pos.pending_adl_size -= pick.volume`——
+    ///   **不管 apply 阶段实际消费了多少**，对称于 `adl_collect` 的 `+=`（参考文档 §3.4：
+    ///   "proposed-but-not-picked 的候选也要释放"）。`pending_adl_size > 0` 才减（对应 Java
+    ///   `pos.pendingADLSize > 0` 防御性门，避免在极端时序下减成负数）。
+    ///
+    /// **`liquidationEngine.advanceLiquidation` 钩子未落地**（同 `if_takeover_apply` 文档，Task 7
+    /// 排期，不影响本 Task 负责的账户结算正确性）。
+    fn adl_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
+        let symbol = cmd.symbol;
+        let price = cmd.price;
+        let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
+
+        let spec = ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
+        let currency_spec = ssp
+            .get_currency(spec.quote_currency)
+            .cloned()
+            .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
+
+        let events = std::mem::take(&mut cmd.adl_events);
+
+        // R2 apply：per-event 关 counterparty 仓（best-effort skip，见文档）。
+        for &(uid, exec_size) in &events {
+            let Some(up) = ups.users.get_mut(&uid) else {
+                // counterparty UserProfile 在 R1/R2 之间已消失 -> skip，不是 error。
+                continue;
+            };
+            let position_key = up.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
+            if !up.positions.contains_key(&position_key) {
+                // counterparty 仓位在 R1/R2 之间已被关掉 -> skip，不是 error。
+                continue;
+            }
+            Self::adl_close_and_settle(up, position_key, action, exec_size, price, &spec, &currency_spec);
+        }
+
+        // finalize 前半：关 taker 自己的仓（只在有实际成交时，对应 Java != REJECT）。
+        if !events.is_empty() {
+            let taker_uid = cmd.uid;
+            let taker_size = cmd.size;
+            let up = ups.get_or_add_suspended(taker_uid);
+            let taker_key = up.create_positions_key(symbol, action, OrderCommandType::AutoDeleveraging);
+            if up.positions.contains_key(&taker_key) {
+                Self::adl_close_and_settle(up, taker_key, action.opposite(), taker_size, price, &spec, &currency_spec);
+            }
+        }
+
+        // finalize 后半：释放本命令全部候选（R1 原始表）的 pending_adl_size，跟 R1 `+=` 对称。
+        let adl_positions: Vec<AdlUserPosition> = std::mem::take(&mut cmd.adl_user_positions);
+        for pick in &adl_positions {
+            if let Some(up) = ups.users.get_mut(&pick.uid) {
+                let position_key = up.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
+                if let Some(pos) = up.positions.get_mut(&position_key) {
+                    if pos.pending_adl_size > 0 {
+                        pos.pending_adl_size -= pick.volume;
+                    }
+                }
+            }
+        }
     }
 
     /// 对应 Java `RiskEngineCommandDispatcher.processIFDeposit`（`:465-495`）：futures `IF_DEPOSIT`
@@ -6620,6 +6835,278 @@ mod tests {
             // 仓位确实是在 `position_key` 这个 key 上被关闭/移除的（ONEWAY 下与裸 symbol 数值相同，
             // 但查找路径必须走 create_positions_key——回归防护同 sibling 结算落点一致的规则）。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&position_key));
+        }
+    }
+
+    /// P6 Task 6：`AUTO_DELEVERAGING` 全流程（R1 选候选+预占 → merge best-of-N → R2 apply+finalize
+    /// 对称释放）——参考文档 §3、§11.1。纯算法级测试（`collect_input`/`build_matcher_events` 的
+    /// 筛选/排序/贪心分配）见 `adl_command_processor.rs` 自己的 `#[cfg(test)]` 模块；
+    /// `risk_score`/`unrealized_pnl`/`compute_profitable_positions_by_symbol` 的饱和乘法与
+    /// ISOLATED/CROSS 资格构造见 `liquidation_service.rs` 自己的 `#[cfg(test)]` 模块。这里只测经
+    /// `RiskEngine` 两段管线接线本身：taker 视角、pending_adl_size 预占/释放对称、counterparty
+    /// 消失 skip、cmd.size 改写、HEDGE key 查找、守恒。
+    mod adl_tests {
+        use super::*;
+        use crate::core::common::position_direction::PositionDirection;
+
+        const TAKER_UID: i64 = 42;
+        const CP_A: i64 = 100; // 高分候选（高杠杆/高浮盈）
+        const CP_B: i64 = 101; // 低分候选
+        const CP_C: i64 = 102; // 预算耗尽后完全够不到的候选
+
+        fn run_full_pipeline(
+            engine: &mut RiskEngine,
+            cmd: &mut OrderCommand,
+            ups: &mut UserProfileService,
+            ssp: &SymbolSpecificationProvider,
+        ) {
+            engine.pre_process_command(cmd, ups, ssp);
+            engine.handler_risk_release(cmd, ups, ssp);
+        }
+
+        fn adl_cmd(action: OrderAction, size: i64, bankruptcy_price: i64) -> OrderCommand {
+            OrderCommand {
+                command: OrderCommandType::AutoDeleveraging,
+                symbol: FUT_SYMBOL,
+                uid: TAKER_UID,
+                action: Some(action),
+                size,
+                price: bankruptcy_price,
+                order_id: 1,
+                ..Default::default()
+            }
+        }
+
+        fn short_position(uid: i64, open_volume: i64, open_price_sum: i64, open_init_margin_sum: i64) -> SymbolPositionRecord {
+            SymbolPositionRecord {
+                direction: PositionDirection::Short,
+                open_volume,
+                open_price_sum,
+                open_init_margin_sum,
+                ..SymbolPositionRecord::new(uid, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
+            }
+        }
+
+        /// taker LONG 100（成本基 9000，均价 90），三个 ISOLATED SHORT 候选：
+        /// CP_A（60 手、score 最高）> CP_B（80 手、score 次高）> CP_C（50 手、score 最低，预算耗尽后
+        /// 摸不到）。bankruptcy_price = 100：三者按破产价都仍有浮盈（open_price_sum 各自均价 >
+        /// 100*volume 的 short 侧盈利条件）。
+        fn setup_taker_and_three_candidates() -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
+            let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+            ups.users.clear();
+            for uid in [TAKER_UID, CP_A, CP_B, CP_C] {
+                assert_eq!(ups.add_empty_user_profile(uid), CommandResultCode::Success);
+            }
+            ups.get_mut(TAKER_UID).unwrap().positions.insert(
+                FUT_SYMBOL,
+                SymbolPositionRecord {
+                    direction: PositionDirection::Long,
+                    open_volume: 100,
+                    open_price_sum: 9_000,
+                    ..SymbolPositionRecord::new(TAKER_UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
+                },
+            );
+            // A: volume=60, avg=133.33(8000/60), margin=800 -> leverage=10, uPnl=(8000-6000)=2000, score=10*2000*100=2,000,000
+            ups.get_mut(CP_A).unwrap().positions.insert(FUT_SYMBOL, short_position(CP_A, 60, 8_000, 800));
+            // B: volume=80, avg=130(10400/80), margin=2000 -> leverage=5, uPnl=(10400-8000)=2400, score=5*2400*100=1,200,000
+            ups.get_mut(CP_B).unwrap().positions.insert(FUT_SYMBOL, short_position(CP_B, 80, 10_400, 2_000));
+            // C: volume=50, avg=120(6000/50), margin=6000 -> leverage=1, uPnl=(6000-5000)=1000, score=1*1000*100=100,000（垫底）
+            ups.get_mut(CP_C).unwrap().positions.insert(FUT_SYMBOL, short_position(CP_C, 50, 6_000, 6_000));
+            (engine, ups, ssp)
+        }
+
+        // ---- risk_score 排序驱动的选取顺序 + 预算耗尽边界 ----
+
+        #[test]
+        fn r1_selects_by_risk_score_desc_and_stops_once_size_exhausted() {
+            // remaining=100：A(60,得分最高)先取满60，剩40 -> B 只部分取 40（剩80里的一部分），C 完全摸不到。
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
+
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(cmd.adl_user_positions.len(), 2, "只有 A、B 被选中，C 预算耗尽前摸不到");
+            assert_eq!(cmd.adl_user_positions[0].uid, CP_A, "得分最高的候选必须排第一个被选中");
+            assert_eq!(cmd.adl_user_positions[0].volume, 60);
+            assert_eq!(cmd.adl_user_positions[1].uid, CP_B);
+            assert_eq!(cmd.adl_user_positions[1].volume, 40, "B 只能部分取：min(available=80, remaining=40)=40");
+
+            // R1 写回：A/B 的 pending_adl_size 立即体现预占；C 完全未被触碰。
+            assert_eq!(ups.get(CP_A).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 60);
+            assert_eq!(ups.get(CP_B).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 40);
+            assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 0, "预算耗尽前摸不到的候选，pending_adl_size 必须保持 0");
+        }
+
+        #[test]
+        fn merge_rewrites_cmd_size_to_actual_consumed_when_candidates_fall_short() {
+            // remaining=200 请求，但 A+B+C 总可用只有 60+80+50=190 -> 实际消费=190，cmd.size 必须改写。
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 200, 100);
+
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(cmd.size, 190, "merge 必须把 cmd.size 改写为实际消费总量，不是原始请求量");
+            assert_eq!(cmd.adl_user_positions.len(), 3, "预算够大，A/B/C 全部入选");
+            let total_events: i64 = cmd.adl_events.iter().map(|(_, v)| v).sum();
+            assert_eq!(total_events, 190, "events 里每条 exec_volume 之和必须等于改写后的 cmd.size");
+        }
+
+        // ---- R1 预占 / finalize 对称释放（含守恒）----
+
+        #[test]
+        fn finalize_releases_pending_adl_size_symmetrically_for_every_selected_candidate() {
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            // A 全平仓 -> 仓位记录被移除（is_empty），无从查 pending_adl_size 残留（本就该是 0，
+            // 位置已经不存在了，等价于确认没有孤儿预占）。
+            assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL), "A 60 手全部被吃，仓位清空后移除");
+            // B 只被吃掉 40（部分平仓），剩余 40 手仓位还在，pending_adl_size 必须归 0（对称释放，
+            // 不管 apply 实际消费了多少——这里巧合是"消费了多少就释放多少"，因为单 shard 下
+            // R1/merge 用同一个 remaining 计数器，见 adl_command_processor.rs 模块文档）。
+            let b_pos = &ups.get(CP_B).unwrap().positions[&FUT_SYMBOL];
+            assert_eq!(b_pos.pending_adl_size, 0, "finalize 必须把 B 的 pending_adl_size 释放回 0");
+            assert_eq!(b_pos.open_volume, 40, "B 原 80 手，被吃 40，剩 40");
+            // C 完全没被选中，本就没有预占过，finalize 走它是 no-op。
+            assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 0);
+            assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].open_volume, 50, "C 完全未受影响");
+        }
+
+        #[test]
+        fn full_pipeline_closes_taker_and_settles_realized_pnl_exactly() {
+            // 注意：不同于 funding fee（真正的零和 peer transfer）或 IF_TAKEOVER（连同 IF 池子
+            // bucket 一起看才守恒），ADL 的 taker 与 counterparty 并不是彼此的原始成交对手——
+            // 二者各自的持仓成本基来自各自独立的历史成交（对手在这个测试夹具之外，不在
+            // `ups` 里），所以 Σaccounts+Σposition.profit 在"仅 taker+counterparty 这几个用户"的
+            // 局部视角下**不必然守恒**（真正的全局零和只在"整个交易所全部持仓"这个更大范围成立，
+            // 超出本处理器级测试的夹具规模，参考文档 §10 对 IF 扩展守恒恒等式的类似讨论）。
+            // 这里改为断言每个账户的**精确期望值**，验证 close-and-cleanup helper 本身没有算错
+            // /算漏/算重，而不是断言一个在这个夹具规模下本就不成立的全局不变量。
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
+
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            // taker LONG 100 手全部被 ADL 平掉 -> 仓位清空移除，PnL = (100*100-9000)*1 = 1000 结算入账户。
+            assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL));
+            assert_eq!(ups.get(TAKER_UID).unwrap().account(FUT_QUOTE), 1_000);
+            // CP_A 60 手全部被吃（全平）-> PnL = (8000 - 60*100)*-1(Short) = 2000，结算入账户，仓位移除。
+            assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL));
+            assert_eq!(ups.get(CP_A).unwrap().account(FUT_QUOTE), 2_000);
+            // CP_B 只被吃 40（部分平仓）-> PnL 递延进成本基，不结算，账户不动，仓位记录还在。
+            assert_eq!(ups.get(CP_B).unwrap().account(FUT_QUOTE), 0);
+            assert_eq!(ups.get(CP_B).unwrap().positions[&FUT_SYMBOL].profit, 0, "部分平仓不实现盈亏");
+            // CP_C 完全未被触碰。
+            assert_eq!(ups.get(CP_C).unwrap().account(FUT_QUOTE), 0);
+            assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].open_volume, 50);
+        }
+
+        // ---- counterparty 在 R1/R2 之间消失：best-effort skip，不是 error ----
+
+        #[test]
+        fn counterparty_profile_vanished_between_r1_and_r2_is_skipped_not_error() {
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
+
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp); // R1：A、B 被选中并预占
+
+            // 模拟 R1/R2 之间 B 的 UserProfile 整个消失（用户被清号等极端时序）。
+            ups.users.remove(&CP_B);
+
+            engine.handler_risk_release(&mut cmd, &mut ups, &ssp); // R2：不能 panic
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success), "counterparty 消失不影响命令级结果码");
+            // A（仍存在）正常被平仓结算。
+            assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL));
+            // taker 仍然按 cmd.size（改写后的真实消费量 100）被全部平仓——不受 B 消失影响
+            // （pendingADLSize 修正是 finalize 阶段统一做的，不依赖 apply 是否成功，参考文档 §3.3）。
+            assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL));
+        }
+
+        #[test]
+        fn counterparty_position_vanished_between_r1_and_r2_is_skipped_not_error() {
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
+
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp); // R1：A、B 被选中并预占
+
+            // 模拟 R1/R2 之间 B 的仓位记录被其他路径关掉（profile 还在，仓位没了）。
+            ups.get_mut(CP_B).unwrap().positions.remove(&FUT_SYMBOL);
+            let b_account_before = ups.get(CP_B).unwrap().account(FUT_QUOTE);
+
+            engine.handler_risk_release(&mut cmd, &mut ups, &ssp); // R2：不能 panic
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert_eq!(ups.get(CP_B).unwrap().account(FUT_QUOTE), b_account_before, "仓位已消失，apply 与 finalize 释放都必须 no-op，不能凭空造账");
+            assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL), "A 不受 B 消失影响，正常结算");
+        }
+
+        // ---- HEDGE 模式：create_positions_key（不是裸 symbol）----
+
+        #[test]
+        fn hedge_mode_uses_create_positions_key_not_raw_symbol() {
+            // 对应 Java `up.createPositionsKey(cmd.symbol, adlPosSide, cmd.command)`
+            // （`ADLCommandProcessor.applyEvent`/`finalizeForCommand` 与
+            // `RiskEngine.handlerRiskRelease:947-948`）——HEDGE 下 key = ±symbol，不是裸 symbol。
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            ups.get_mut(TAKER_UID).unwrap().position_mode = PositionMode::Hedge;
+            ups.get_mut(CP_A).unwrap().position_mode = PositionMode::Hedge;
+            // taker 的 open_volume 从 100 收窄到 60，恰好与本测试请求的 ADL size 相等——否则 60 <
+            // 100 只会触发部分平仓（仓位记录还在），断言"仓位记录被移除"就测不出 key 是否用对。
+            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_volume = 60;
+            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 5_400; // 60*90
+            // taker LONG -> HEDGE key = +FUT_SYMBOL；重新按 HEDGE 规则插入（键必须与 direction 一致）。
+            let taker_pos = ups.get_mut(TAKER_UID).unwrap().positions.remove(&FUT_SYMBOL).unwrap();
+            ups.get_mut(TAKER_UID).unwrap().positions.insert(FUT_SYMBOL, taker_pos);
+            // CP_A SHORT -> HEDGE key = -FUT_SYMBOL。
+            let cp_a_pos = ups.get_mut(CP_A).unwrap().positions.remove(&FUT_SYMBOL).unwrap();
+            ups.get_mut(CP_A).unwrap().positions.insert(-FUT_SYMBOL, cp_a_pos);
+
+            let taker_key = ups.get(TAKER_UID).unwrap().create_positions_key(FUT_SYMBOL, OrderAction::Bid, OrderCommandType::AutoDeleveraging);
+            let cp_a_key = ups.get(CP_A).unwrap().create_positions_key(FUT_SYMBOL, OrderAction::Ask, OrderCommandType::AutoDeleveraging);
+            assert_eq!(taker_key, FUT_SYMBOL);
+            assert_eq!(cp_a_key, -FUT_SYMBOL, "HEDGE 下 counterparty(SHORT) 的 key 必须是 -symbol");
+
+            let mut cmd = adl_cmd(OrderAction::Bid, 60, 100); // 只请求 60，恰好吃满 A 也恰好平掉 taker 全部仓位
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&taker_key), "taker 必须按 create_positions_key 算出的 key 被关闭，不是巧合命中裸 symbol");
+            assert!(!ups.get(CP_A).unwrap().positions.contains_key(&cp_a_key), "counterparty 必须按 -symbol 这个 key 被关闭，证明查找路径确实走了 create_positions_key 而非裸 symbol");
+        }
+
+        // ---- 请求量非正 / 无候选：全拒但不 panic ----
+
+        #[test]
+        fn non_positive_size_is_noop_success() {
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            let mut cmd = adl_cmd(OrderAction::Bid, 0, 100);
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
+            assert!(cmd.adl_user_positions.is_empty());
+            assert!(cmd.adl_events.is_empty());
+            assert!(ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL), "size<=0 不应关掉 taker 的仓");
+        }
+
+        #[test]
+        fn no_eligible_candidates_rejects_without_touching_taker_position() {
+            let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            // 把三个候选全部翻成同向（LONG），过滤条件 `!is_same_as_action` 会把它们全部排除。
+            for uid in [CP_A, CP_B, CP_C] {
+                ups.get_mut(uid).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().direction = PositionDirection::Long;
+            }
+            let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
+            run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
+
+            assert_eq!(cmd.result_code, Some(CommandResultCode::Success), "空候选是 matcher-event 级别的全拒，不是命令失败（同 IF_TAKEOVER 先例）");
+            assert!(cmd.adl_events.is_empty());
+            assert!(ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL), "全拒（events 为空）时 finalize 不应关闭 taker 自己的仓");
         }
     }
 }

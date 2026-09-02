@@ -80,10 +80,17 @@ pub struct SymbolPositionRecord {
 impl SymbolPositionRecord {
     /// 对应 Java 池化复用前的手工构造场景：直接给定 `(uid, symbol, currency, margin_mode,
     /// leverage)`，其余字段取结构体默认零值（`direction=Empty`）。`leverage` 经
-    /// [`Self::update_leverage`] 归一（`0` -> `1`）。
+    /// [`Self::update_leverage`] 归一（`0` -> `1`）。**P6 Task 6 补齐**：`adl_eligibility` 按
+    /// `margin_mode` 归一（`Isolated -> 100`，`Cross -> 0`），对应 Java `SymbolPositionRecord`
+    /// 字段原始初始值 `adlEligibility = 100`（`Default` derive 给出的是 `0`，与 Java raw 字段
+    /// 初始值不同，同 `leverage` 的 Ruling P4-B 一个道理——这个便捷构造函数是本移植新增的，不是
+    /// Java 逐字对应的构造器，必须显式补上这条默认值规则，否则新建的 ISOLATED 仓位
+    /// `adl_eligibility` 会停留在 Rust 零值 `0`，导致 `risk_score` 恒为 0、ADL 永远选不中它）。
     pub fn new(uid: i64, symbol: i32, currency: i32, margin_mode: MarginMode, leverage: i32) -> Self {
         let mut r = SymbolPositionRecord { uid, symbol, currency, margin_mode, ..Default::default() };
         r.update_leverage(leverage);
+        r.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
+        r.pending_adl_size = 0;
         r
     }
 
@@ -115,6 +122,10 @@ impl SymbolPositionRecord {
         self.update_leverage(leverage);
         self.margin_mode = margin_mode;
         self.extra_margin = 0;
+        // 对应 Java `initialize` (`:110-111`)：ADL 资格因子按 margin_mode 归一，pendingADLSize
+        // 清零——池化复用入口，池复用前的旧值必须清干净（P6 Task 6 补齐，见 `Self::new` 文档）。
+        self.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
+        self.pending_adl_size = 0;
     }
 
     /// 对应 Java `updateLeverage(int leverage)`：`0` 归一为 `1`（用户未选 = 默认 1 倍）。
@@ -149,6 +160,11 @@ impl SymbolPositionRecord {
         self.update_leverage(0);
         self.margin_mode = MarginMode::Isolated;
         self.extra_margin = 0;
+        // 对应 Java `reset()` (`:706-709`)：无条件回落到 ISOLATED 默认值——`reset()` 之后紧跟
+        // `initialize()` 才会按真实 margin_mode 重设，二者组合与 Java 池化复用序列一致
+        // （P6 Task 6 补齐，见 `Self::new` 文档）。
+        self.adl_eligibility = 100;
+        self.pending_adl_size = 0;
     }
 
     /// 对应 Java `stateHash()`：`Objects.hash(symbol, currency, direction.getMultiplier(),
