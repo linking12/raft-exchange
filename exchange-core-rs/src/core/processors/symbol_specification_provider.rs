@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn add_currency_and_get_currency_roundtrip() {
         let mut provider = SymbolSpecificationProvider::new();
-        provider.add_currency(CoreCurrencySpecification { currency: 1, currency_scale_k: 100 });
+        provider.add_currency(CoreCurrencySpecification { currency: 1, currency_scale_k: 100, ..Default::default() });
         assert_eq!(provider.get_currency(1).unwrap().currency_scale_k, 100);
         assert!(provider.get_currency(2).is_none());
     }

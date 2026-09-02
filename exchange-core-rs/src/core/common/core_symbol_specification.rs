@@ -4,6 +4,7 @@
 //! loan 相关字段本期不移植）。
 use std::collections::BTreeMap;
 
+use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{ceil_mul_div, trunc_mul_div};
 
@@ -35,6 +36,15 @@ pub struct CoreSymbolSpecification {
     pub maintenance_margin_scale_k: i64,
     /// <notional, maxLeverage>，按 notional floor 分档。
     pub max_leverage: BTreeMap<i64, i64>,
+
+    // ================================================================
+    // 现货借贷（P5）：type=CURRENCY_EXCHANGE_PAIR only；非现货 symbol 全 0/禁用
+    // ================================================================
+    /// 对应 Java `CoreSymbolSpecification.loanConfig`：非空、默认全 0（禁用）。
+    /// 唯一 mutation point 是 `ADD_LOAN`（本移植 Task 2.12，未落地）经
+    /// `update_loan_config`（Java `:240-244`，本 Task 未移植该薄包装，直接改
+    /// `loan_config.update(...)`）。
+    pub loan_config: SymbolLoanSpecification,
 }
 
 impl CoreSymbolSpecification {

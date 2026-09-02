@@ -1873,10 +1873,10 @@ mod tests {
             ssp.add_symbol(spec_with_fee(taker_fee, fee_scale_k)),
             CommandResultCode::Success
         );
-        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100 });
+        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100, ..Default::default() });
         ssp.add_currency(CoreCurrencySpecification {
             currency: QUOTE,
-            currency_scale_k: 1_000_000,
+            currency_scale_k: 1_000_000, ..Default::default()
         });
 
         let mut ups = UserProfileService::new();
@@ -2281,10 +2281,10 @@ mod tests {
             ssp.add_symbol(spec_with_fees(taker_fee, maker_fee, fee_scale_k)),
             CommandResultCode::Success
         );
-        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100 });
+        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100, ..Default::default() });
         ssp.add_currency(CoreCurrencySpecification {
             currency: QUOTE,
-            currency_scale_k: 100 * 1_000_000,
+            currency_scale_k: 100 * 1_000_000, ..Default::default()
         });
 
         let mut ups = UserProfileService::new();
@@ -2613,10 +2613,10 @@ mod tests {
             ssp.add_symbol(spec_with_fees(taker_fee, maker_fee, fee_scale_k)),
             CommandResultCode::Success
         );
-        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100 });
+        ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 100, ..Default::default() });
         ssp.add_currency(CoreCurrencySpecification {
             currency: QUOTE,
-            currency_scale_k: 100 * 1_000_000,
+            currency_scale_k: 100 * 1_000_000, ..Default::default()
         });
 
         let mut ups = UserProfileService::new();
@@ -3263,8 +3263,8 @@ mod tests {
     ) -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(futures_spec(taker_fee, fee_scale_k)), CommandResultCode::Success);
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
 
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
@@ -3378,8 +3378,8 @@ mod tests {
         spec.max_leverage.insert(0, 5);
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(spec), CommandResultCode::Success);
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
 
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
@@ -3419,8 +3419,8 @@ mod tests {
             }),
             CommandResultCode::Success
         );
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
 
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
@@ -3706,7 +3706,7 @@ mod tests {
     const FUT2_MAKER_UID: i64 = 12;
 
     fn fut_currency_spec() -> CoreCurrencySpecification {
-        CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 }
+        CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() }
     }
 
     fn fut_trade_event(size: i64, price: i64, matched_order_uid: i64) -> MatcherTradeEvent {
@@ -4272,8 +4272,8 @@ mod tests {
         fut_spec.maintenance_margin.insert(i64::MAX, 50);
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(fut_spec), CommandResultCode::Success);
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
 
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
@@ -4336,7 +4336,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ssp.add_symbol(spot_spec), CommandResultCode::Success);
-        ssp.add_currency(CoreCurrencySpecification { currency: SPOT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: SPOT_BASE, currency_scale_k: 1, ..Default::default() });
     }
 
     fn spot_bid_cmd(size: i64, price: i64) -> OrderCommand {
@@ -4617,8 +4617,8 @@ mod tests {
         // 设价后同一 symbol 的 place_order 才能看到它并算出正确保证金。
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(futures_spec(0, 0)), CommandResultCode::Success);
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
         ups.get_mut(UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
@@ -4745,8 +4745,8 @@ mod tests {
         spec.max_leverage.insert(0, 1);
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(spec), CommandResultCode::Success);
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1 });
-        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1 });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
 
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);

@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::cross_loan_record::CrossLoanRecord;
+use crate::core::common::isolated_loan_record::IsolatedLoanRecord;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::position_mode::PositionMode;
@@ -33,6 +35,18 @@ pub struct UserProfile {
     /// symbol -> 持仓记录；`HEDGE` 模式下正 symbol 为多头、负 symbol 为空头，键由
     /// [`Self::create_positions_key`] 统一计算。
     pub positions: BTreeMap<i32, SymbolPositionRecord>,
+
+    // ================================================================
+    // 现货借贷（P5）：默认空，Task 2+ 消费；对应 Java `UserProfile.java:97,102,105`
+    // ================================================================
+    /// loanId -> record（对应 Java `LongObjectHashMap<IsolatedLoanRecord> isolatedLoans`）。
+    pub isolated_loans: BTreeMap<i64, IsolatedLoanRecord>,
+    /// currency -> amount（对应 Java `IntLongHashMap crossLoanCollateral`）：账户级 Cross 抵押池，
+    /// 多笔 Cross debt 共享。
+    pub cross_loan_collateral: BTreeMap<i32, i64>,
+    /// loanId -> record（对应 Java `LongObjectHashMap<CrossLoanRecord> crossLoans`）；与
+    /// `isolated_loans` 是独立的 loanId 命名空间。
+    pub cross_loans: BTreeMap<i64, CrossLoanRecord>,
 }
 
 impl UserProfile {
@@ -45,6 +59,9 @@ impl UserProfile {
             processed_tx_ids: BTreeSet::new(),
             position_mode: PositionMode::default(),
             positions: BTreeMap::new(),
+            isolated_loans: BTreeMap::new(),
+            cross_loan_collateral: BTreeMap::new(),
+            cross_loans: BTreeMap::new(),
         }
     }
 
@@ -324,6 +341,20 @@ impl UserProfile {
             h = h.wrapping_mul(31).wrapping_add(key as i64);
             h = h.wrapping_mul(31).wrapping_add(record.state_hash() as i64);
         }
+        // P5：三个借贷字段折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:353-355`）
+        // 覆盖 isolatedLoans/crossLoanCollateral/crossLoans；BTreeMap 天然有序满足确定性要求。
+        for (&loan_id, loan) in &self.isolated_loans {
+            h = h.wrapping_mul(31).wrapping_add(loan_id);
+            h = h.wrapping_mul(31).wrapping_add(loan.state_hash() as i64);
+        }
+        for (&cur, &amt) in &self.cross_loan_collateral {
+            h = h.wrapping_mul(31).wrapping_add(cur as i64);
+            h = h.wrapping_mul(31).wrapping_add(amt);
+        }
+        for (&loan_id, loan) in &self.cross_loans {
+            h = h.wrapping_mul(31).wrapping_add(loan_id);
+            h = h.wrapping_mul(31).wrapping_add(loan.state_hash() as i64);
+        }
         ((h >> 32) as i32) ^ (h as i32)
     }
 }
@@ -527,7 +558,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn currency_spec_scale1(currency: i32) -> CoreCurrencySpecification {
-        CoreCurrencySpecification { currency, currency_scale_k: 1 }
+        CoreCurrencySpecification { currency, currency_scale_k: 1, ..Default::default() }
     }
 
     /// `base_scale_k=quote_scale_k=currency_scale_k=1`：`size_price_to_currency_scale`/
