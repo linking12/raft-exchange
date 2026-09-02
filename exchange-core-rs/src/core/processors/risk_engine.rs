@@ -27,6 +27,7 @@ use crate::core::common::position_mode::PositionMode;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
+use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
@@ -1860,6 +1861,125 @@ impl RiskEngine {
     /// 直接写 `last_price_cache`。命令路径请走 [`Self::markprice_adjustment`]。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
         self.last_price_cache.insert(symbol, price);
+    }
+
+    /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage`（`ADD_LOAN` 分支，
+    /// `:563-646`）：批量运行时配置命令，三段（`global`/`symbol`/`rate_curve`）独立可选、独立
+    /// 校验——一段非法只跳过，不影响另外两段（参考文档 §2.12）。
+    ///
+    /// # 路由偏差（相对 Java，刻意记录，非"偷懒少做"）
+    /// Java 侧 `ADD_LOAN` 是 `BinaryDataCommand`（`BinaryCommandType.ADD_LOAN`），经
+    /// `OrderCommand.command == BINARY_DATA_COMMAND` 的组帧回调
+    /// `RiskEngineCommandDispatcher.handleBinaryMessage`——**不**经 `isLoan()`/
+    /// `LoanCommandDispatcher`。本仓库当前完全没有 binary-command 组帧基建：`OrderCommand`
+    /// 结构体没有携带任意二进制负载的字段，`handleBinaryMessage` 另外三个姊妹分支
+    /// （`BatchAddCurrenciesCommand`/`BatchAddSymbolsCommand`/`BatchAddAccountsCommand`）在本
+    /// 仓库同样不存在——现有的 `SymbolSpecificationProvider::add_symbol`/`add_currency` 都是直调
+    /// 的普通方法，从未经过任何 `OrderCommand`/`BINARY_DATA_COMMAND` 管线。故本任务遵循 Java 的
+    /// **落点**（挂在 `RiskEngine` 上，对应 `RiskEngineCommandDispatcher`，不是
+    /// `LoanCommandDispatcher`）但不假装有一条不存在的 binary-frame 管线：直接开放
+    /// `apply_add_loan(&BatchAddLoanCommand, &mut SymbolSpecificationProvider)` 作为配置入口，
+    /// 与 `add_symbol`/`add_currency` 同等地位——调用方（管理端 / 未来的 `BINARY_DATA_COMMAND`
+    /// 组帧层）拿到解码后的 `BatchAddLoanCommand` 值后直接调用即可。不经 `preamble`/幂等/结果码
+    /// （Java 版 `handleBinaryMessage` 本身也是 `void`，不返回每条子命令的结果码，只有
+    /// `log.info`/`log.warn`；本移植无日志基建，三段各自静默跳过非法输入，调用方若要观测哪段
+    /// 被拒，需自行在调用前后比对状态）。
+    ///
+    /// 三段语义（逐字对应 Java）：
+    /// - **global**：`thresholds_valid_given_current` 通过，且（`numeraire_currency>0` 时）
+    ///   目标币种的 `CoreCurrencySpecification` 必须存在，才 apply-all-or-nothing 写回 7 个
+    ///   partial-update 字段（`<=0` = 不改）。
+    /// - **symbol**：`spec` 存在且 `symbol_type==CurrencyExchangePair`，`resolve(...)` 派生后的
+    ///   `Resolved::valid()` 通过才 apply——**这一步就是 Task 5 遗留前置义务的收口**：
+    ///   `Resolved::valid()` 强制 `collateral_weight_bps ∈ [0,10000]`，是当前唯一能写这个字段
+    ///   的命令，写坏了就会让 `LoanService::cross_ltv_bps` 里"权重不可能越界所以
+    ///   `trunc_mul_div` panic 不可达"的论断失效。`initial==0`（kill-switch）只清
+    ///   `initial_ltv_bps`，保留 `liquidation`/`margin_call`/`max_amount`/`max_term_days`
+    ///   原值（存量贷款不因关闭新借款而被连带强平）；否则五字段整体写回
+    ///   `SymbolLoanSpecification::update`，并把 `collateral_weight_bps` **额外**写到 base
+    ///   currency 的 `CoreCurrencySpecification`（per-currency，非 per-symbol，同 base 的多个
+    ///   pair 后写覆盖前写）。
+    /// - **rate_curve**：`valid()` 通过才整体替换 `FloatingRateModel` 的 4 个曲线参数 +
+    ///   `FixedRateModel::locked_rate_adjust_bps`（存在即全量替换，无 partial-update——`0` 是
+    ///   合法曲线值）。
+    pub fn apply_add_loan(&mut self, cmd: &BatchAddLoanCommand, ssp: &mut SymbolSpecificationProvider) {
+        if let Some(g) = &cmd.global {
+            let current_liq = self.loan_service.global_config.cross_liquidation_ltv_bps;
+            let current_mc = self.loan_service.global_config.cross_margin_call_ltv_bps;
+            let numeraire_ok = g.numeraire_currency <= 0 || ssp.get_currency(g.numeraire_currency).is_some();
+            if numeraire_ok && g.thresholds_valid_given_current(current_liq, current_mc) {
+                let config = &mut self.loan_service.global_config;
+                if g.numeraire_currency > 0 {
+                    config.numeraire_currency = g.numeraire_currency;
+                }
+                if g.cross_liquidation_ltv_bps > 0 {
+                    config.cross_liquidation_ltv_bps = g.cross_liquidation_ltv_bps;
+                }
+                if g.cross_margin_call_ltv_bps > 0 {
+                    config.cross_margin_call_ltv_bps = g.cross_margin_call_ltv_bps;
+                }
+                if g.loan_pool_utilization_cap_bps > 0 {
+                    config.loan_pool_utilization_cap_bps = g.loan_pool_utilization_cap_bps;
+                }
+                if g.loan_liquidation_fee_bps > 0 {
+                    config.loan_liquidation_fee_bps = g.loan_liquidation_fee_bps;
+                }
+                if g.ltv_liquidation_buffer_bps > 0 {
+                    config.ltv_liquidation_buffer_bps = g.ltv_liquidation_buffer_bps;
+                }
+                if g.ltv_margin_call_buffer_bps > 0 {
+                    config.ltv_margin_call_buffer_bps = g.ltv_margin_call_buffer_bps;
+                }
+            }
+        }
+
+        if let Some(s) = &cmd.symbol {
+            let gc = self.loan_service.global_config;
+            let resolved = s.resolve(gc.ltv_liquidation_buffer_bps, gc.ltv_margin_call_buffer_bps);
+            let spec_ok = match ssp.symbols.get(&s.symbol_id) {
+                Some(spec) => spec.symbol_type == SymbolType::CurrencyExchangePair,
+                None => false,
+            };
+            if spec_ok && resolved.valid() {
+                let base_currency = ssp.symbols.get(&s.symbol_id).unwrap().base_currency;
+                let spec = ssp.symbols.get_mut(&s.symbol_id).unwrap();
+                if resolved.initial_ltv_bps == 0 {
+                    // 停借只关开关：liquidation/marginCall/maxAmount/maxTermDays 由原值保留，
+                    // 跟着归零会把存量贷款连带强平，故不动它们（也不派生 collateralWeightBps）。
+                    let cur = spec.loan_config;
+                    spec.loan_config.update(
+                        0,
+                        cur.liquidation_ltv_bps,
+                        cur.margin_call_ltv_bps,
+                        cur.max_amount,
+                        cur.max_term_days,
+                    );
+                } else {
+                    spec.loan_config.update(
+                        resolved.initial_ltv_bps,
+                        resolved.liquidation_ltv_bps,
+                        resolved.margin_call_ltv_bps,
+                        resolved.max_amount,
+                        resolved.max_term_days,
+                    );
+                    // collateralWeightBps 是 base 币的账户级折价率，同 base 的多个 pair 共享，
+                    // 后写覆盖前写（Java 注释原文同此）。
+                    if let Some(base_spec) = ssp.currencies.get_mut(&base_currency) {
+                        base_spec.collateral_weight_bps = resolved.collateral_weight_bps;
+                    }
+                }
+            }
+        }
+
+        if let Some(rc) = &cmd.rate_curve {
+            if rc.valid() {
+                self.loan_service.floating_rate.base_bps = rc.base_bps;
+                self.loan_service.floating_rate.kink_util_bps = rc.kink_util_bps;
+                self.loan_service.floating_rate.slope1_bps = rc.slope1_bps;
+                self.loan_service.floating_rate.slope2_bps = rc.slope2_bps;
+                self.loan_service.fixed_rate.locked_rate_adjust_bps = rc.locked_rate_adjust_bps;
+            }
+        }
     }
 }
 
@@ -4931,5 +5051,290 @@ mod tests {
 
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         assert_eq!(ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().leverage, 2);
+    }
+
+    // ================================================================
+    // Task 6 — apply_add_loan (ADD_LOAN 三段运行时配置)
+    // ================================================================
+    mod add_loan_tests {
+        use super::*;
+        use crate::core::common::batch_add_loan_command::{
+            BatchAddLoanCommand, GlobalLoanConfig, RateCurveConfig, SymbolLoanConfig, UNSET, UNSET_AMOUNT,
+        };
+        use crate::core::processors::loan::loan_global_config::LoanGlobalConfig;
+
+        fn add_loan_symbol_spec() -> CoreSymbolSpecification {
+            CoreSymbolSpecification {
+                symbol_id: SYMBOL,
+                symbol_type: SymbolType::CurrencyExchangePair,
+                base_currency: BASE,
+                quote_currency: QUOTE,
+                base_scale_k: 1,
+                quote_scale_k: 1,
+                ..Default::default()
+            }
+        }
+
+        fn add_loan_setup() -> (RiskEngine, SymbolSpecificationProvider) {
+            let engine = RiskEngine::new();
+            let mut ssp = SymbolSpecificationProvider::new();
+            ssp.add_symbol(add_loan_symbol_spec());
+            ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
+            ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
+            (engine, ssp)
+        }
+
+        fn no_change_global() -> GlobalLoanConfig {
+            GlobalLoanConfig {
+                numeraire_currency: 0,
+                cross_liquidation_ltv_bps: 0,
+                cross_margin_call_ltv_bps: 0,
+                loan_pool_utilization_cap_bps: 0,
+                loan_liquidation_fee_bps: 0,
+                ltv_liquidation_buffer_bps: 0,
+                ltv_margin_call_buffer_bps: 0,
+            }
+        }
+
+        fn unset_symbol_config(symbol_id: i32, initial: i32, weight: i32) -> SymbolLoanConfig {
+            SymbolLoanConfig {
+                symbol_id,
+                loan_initial_ltv_bps: initial,
+                loan_liquidation_ltv_bps: UNSET,
+                loan_margin_call_ltv_bps: UNSET,
+                loan_max_amount: UNSET_AMOUNT,
+                loan_max_term_days: UNSET,
+                collateral_weight_bps: weight,
+            }
+        }
+
+        // ------------------------------------------------------------
+        // global 段
+        // ------------------------------------------------------------
+
+        #[test]
+        fn global_section_applies_partial_update_fields_and_skips_non_positive_ones() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let g = GlobalLoanConfig {
+                numeraire_currency: QUOTE,
+                cross_liquidation_ltv_bps: 9000,
+                cross_margin_call_ltv_bps: 8500,
+                loan_pool_utilization_cap_bps: 0,  // no-change
+                loan_liquidation_fee_bps: 300,
+                ltv_liquidation_buffer_bps: 0, // no-change
+                ltv_margin_call_buffer_bps: 1500,
+            };
+            let cmd = BatchAddLoanCommand { global: Some(g), symbol: None, rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            let cfg = engine.loan_service.global_config;
+            assert_eq!(cfg.numeraire_currency, QUOTE);
+            assert_eq!(cfg.cross_liquidation_ltv_bps, 9000);
+            assert_eq!(cfg.cross_margin_call_ltv_bps, 8500);
+            assert_eq!(cfg.loan_pool_utilization_cap_bps, LoanGlobalConfig::default().loan_pool_utilization_cap_bps);
+            assert_eq!(cfg.loan_liquidation_fee_bps, 300);
+            assert_eq!(cfg.ltv_liquidation_buffer_bps, LoanGlobalConfig::default().ltv_liquidation_buffer_bps);
+            assert_eq!(cfg.ltv_margin_call_buffer_bps, 1500);
+        }
+
+        #[test]
+        fn global_section_rejects_invalid_thresholds_and_leaves_config_untouched() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let g = GlobalLoanConfig {
+                cross_liquidation_ltv_bps: 8000,
+                cross_margin_call_ltv_bps: 8000, // eff_margin_call == eff_liquidation -> invalid
+                ..no_change_global()
+            };
+            let cmd = BatchAddLoanCommand { global: Some(g), symbol: None, rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+            assert_eq!(engine.loan_service.global_config, LoanGlobalConfig::default());
+        }
+
+        #[test]
+        fn global_section_rejects_when_numeraire_currency_spec_missing() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let g = GlobalLoanConfig { numeraire_currency: 999, ..no_change_global() };
+            let cmd = BatchAddLoanCommand { global: Some(g), symbol: None, rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+            assert_eq!(engine.loan_service.global_config, LoanGlobalConfig::default());
+        }
+
+        // ------------------------------------------------------------
+        // symbol 段
+        // ------------------------------------------------------------
+
+        #[test]
+        fn symbol_section_resolves_unset_fields_and_writes_collateral_weight_to_base_currency() {
+            let (mut engine, mut ssp) = add_loan_setup(); // global buffers at default (2000/1000)
+            let s = unset_symbol_config(SYMBOL, 6_000, 7_000);
+            let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            let spec = ssp.symbols.get(&SYMBOL).unwrap();
+            assert_eq!(spec.loan_config.initial_ltv_bps, 6_000);
+            assert_eq!(spec.loan_config.liquidation_ltv_bps, 8_000); // 6000 + 2000 buffer
+            assert_eq!(spec.loan_config.margin_call_ltv_bps, 7_000); // 8000 - 1000 buffer
+            assert_eq!(spec.loan_config.max_amount, 0);
+            assert_eq!(spec.loan_config.max_term_days, 0);
+            // collateralWeightBps lands on the BASE currency, not the symbol/quote.
+            assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 7_000);
+            assert_eq!(ssp.currencies.get(&QUOTE).unwrap().collateral_weight_bps, 0);
+        }
+
+        #[test]
+        fn symbol_section_kill_switch_zeroes_only_initial_and_preserves_the_rest() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            // Pre-existing config, as if a prior ADD_LOAN had opened the market.
+            ssp.symbols.get_mut(&SYMBOL).unwrap().loan_config.update(6_000, 8_000, 7_000, 500_000, 30);
+
+            let s = unset_symbol_config(SYMBOL, 0, UNSET); // initial==0 kill-switch
+            let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            let spec = ssp.symbols.get(&SYMBOL).unwrap();
+            assert_eq!(spec.loan_config.initial_ltv_bps, 0); // only this flips
+            assert_eq!(spec.loan_config.liquidation_ltv_bps, 8_000); // preserved
+            assert_eq!(spec.loan_config.margin_call_ltv_bps, 7_000); // preserved
+            assert_eq!(spec.loan_config.max_amount, 500_000); // preserved
+            assert_eq!(spec.loan_config.max_term_days, 30); // preserved
+            // Kill-switch branch never touches collateralWeightBps.
+            assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 0);
+        }
+
+        #[test]
+        fn symbol_section_rejects_collateral_weight_above_10000_and_applies_nothing() {
+            // Forward-obligation test: this is the guard that keeps Task 5's cross-LTV
+            // trunc_mul_div panic unreachable — collateral_weight_bps must never leave [0,10000].
+            let (mut engine, mut ssp) = add_loan_setup();
+            let s = SymbolLoanConfig {
+                symbol_id: SYMBOL,
+                loan_initial_ltv_bps: 6_000,
+                loan_liquidation_ltv_bps: 8_000,
+                loan_margin_call_ltv_bps: 7_000,
+                loan_max_amount: 0,
+                loan_max_term_days: 0,
+                collateral_weight_bps: 10_001, // out of [0,10000]
+            };
+            let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            let spec = ssp.symbols.get(&SYMBOL).unwrap();
+            assert_eq!(spec.loan_config, Default::default()); // untouched
+            assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 0); // untouched
+        }
+
+        #[test]
+        fn symbol_section_rejects_negative_collateral_weight_and_applies_nothing() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let s = SymbolLoanConfig {
+                symbol_id: SYMBOL,
+                loan_initial_ltv_bps: 6_000,
+                loan_liquidation_ltv_bps: 8_000,
+                loan_margin_call_ltv_bps: 7_000,
+                loan_max_amount: 0,
+                loan_max_term_days: 0,
+                collateral_weight_bps: -2, // out of [0,10000] (not the UNSET==-1 sentinel)
+            };
+            let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            let spec = ssp.symbols.get(&SYMBOL).unwrap();
+            assert_eq!(spec.loan_config, Default::default());
+        }
+
+        #[test]
+        fn symbol_section_rejects_unregistered_or_non_spot_symbol() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let missing = unset_symbol_config(999_999, 6_000, 5_000);
+            let cmd = BatchAddLoanCommand { global: None, symbol: Some(missing), rate_curve: None };
+            engine.apply_add_loan(&cmd, &mut ssp);
+            assert_eq!(ssp.symbols.get(&999_999), None); // no spec created
+        }
+
+        // ------------------------------------------------------------
+        // rate_curve 段
+        // ------------------------------------------------------------
+
+        #[test]
+        fn rate_curve_section_replaces_floating_curve_and_fixed_spread() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let rc = RateCurveConfig {
+                base_bps: 300,
+                kink_util_bps: 7_500,
+                slope1_bps: 500,
+                slope2_bps: 7_000,
+                locked_rate_adjust_bps: -100,
+            };
+            let cmd = BatchAddLoanCommand { global: None, symbol: None, rate_curve: Some(rc) };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            assert_eq!(engine.loan_service.floating_rate.base_bps, 300);
+            assert_eq!(engine.loan_service.floating_rate.kink_util_bps, 7_500);
+            assert_eq!(engine.loan_service.floating_rate.slope1_bps, 500);
+            assert_eq!(engine.loan_service.floating_rate.slope2_bps, 7_000);
+            assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, -100);
+        }
+
+        #[test]
+        fn rate_curve_section_rejects_invalid_kink_and_leaves_curve_untouched() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let default_floating = engine.loan_service.floating_rate.clone();
+            let rc = RateCurveConfig {
+                base_bps: 300,
+                kink_util_bps: 0, // must be strictly > 0
+                slope1_bps: 500,
+                slope2_bps: 7_000,
+                locked_rate_adjust_bps: -100,
+            };
+            let cmd = BatchAddLoanCommand { global: None, symbol: None, rate_curve: Some(rc) };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            assert_eq!(engine.loan_service.floating_rate, default_floating);
+            assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, 0);
+        }
+
+        // ------------------------------------------------------------
+        // 三段独立性：一段非法只 warn-skip，不影响另外两段
+        // ------------------------------------------------------------
+
+        #[test]
+        fn one_invalid_section_does_not_prevent_the_other_two_from_applying() {
+            let (mut engine, mut ssp) = add_loan_setup();
+            let valid_global = GlobalLoanConfig {
+                numeraire_currency: QUOTE,
+                cross_liquidation_ltv_bps: 9_000,
+                cross_margin_call_ltv_bps: 8_500,
+                ..no_change_global()
+            };
+            let invalid_symbol = SymbolLoanConfig {
+                symbol_id: SYMBOL,
+                loan_initial_ltv_bps: 6_000,
+                loan_liquidation_ltv_bps: 8_000,
+                loan_margin_call_ltv_bps: 7_000,
+                loan_max_amount: 0,
+                loan_max_term_days: 0,
+                collateral_weight_bps: 50_000, // invalid, must not poison the other two sections
+            };
+            let valid_rate_curve = RateCurveConfig {
+                base_bps: 300,
+                kink_util_bps: 7_500,
+                slope1_bps: 500,
+                slope2_bps: 7_000,
+                locked_rate_adjust_bps: 25,
+            };
+            let cmd = BatchAddLoanCommand {
+                global: Some(valid_global),
+                symbol: Some(invalid_symbol),
+                rate_curve: Some(valid_rate_curve),
+            };
+            engine.apply_add_loan(&cmd, &mut ssp);
+
+            assert_eq!(engine.loan_service.global_config.numeraire_currency, QUOTE);
+            assert_eq!(engine.loan_service.global_config.cross_liquidation_ltv_bps, 9_000);
+            assert_eq!(engine.loan_service.floating_rate.base_bps, 300);
+            assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, 25);
+            // The invalid symbol section left the spec untouched.
+            assert_eq!(ssp.symbols.get(&SYMBOL).unwrap().loan_config, Default::default());
+        }
     }
 }
