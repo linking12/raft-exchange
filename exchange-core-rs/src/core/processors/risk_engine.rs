@@ -374,7 +374,7 @@ impl RiskEngine {
         }
 
         // ────────────────────────────────────────────────────────────
-        // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押（loanCollateralLocked，P5 前恒 0）；
+        // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押（loanCollateralLocked）；
         //   需求 = scale(positionMargin + pendingFee + openLoss) − crossFreeMargin。
         // ────────────────────────────────────────────────────────────
         let currency = position.currency;
@@ -389,11 +389,21 @@ impl RiskEngine {
         required <= spendable
     }
 
-    /// 对应 Java `loanCollateralLocked`（`:1063-1072`）：借贷抵押锁定额，P5 移植前的 stub——
-    /// 恒返回 `0`（不抵扣任何可支配额度）。占位保留调用点与签名，供 P5 落地时就地替换实现，
-    /// 无需改调用方（`can_place_margin_order`/未来 `withdrawableBalance` 等）。
-    fn loan_collateral_locked(&self, _user_profile: &UserProfile, _currency: i32) -> i64 {
-        0
+    /// 对应 Java `loanCollateralLocked`（`:1063-1072`）：借贷抵押虚拟锁定额（currency scale）——
+    /// ③ Isolated：`isolated_loans` 中 `collateral_currency == currency` 的各条 `collateral_amount`
+    /// 求和；④ Cross：账户级 `cross_loan_collateral` 池按 currency 直取（缺省 0，同 Java
+    /// `LongIntHashMap.get` 语义）。抵押物仍躺在 `accounts` 里从未被物理转移——本方法只是让
+    /// 借贷抵押不能被现货挂单 / 期货保证金 / 提现顶用，否则贷款变裸债，损失由借贷池承担
+    /// （P5-B：无任何 loan 的用户两个 map 皆空，两项累加恒 0，与 P4 stub 行为逐位相同）。
+    fn loan_collateral_locked(&self, user_profile: &UserProfile, currency: i32) -> i64 {
+        let mut locked: i64 = 0;
+        for loan in user_profile.isolated_loans.values() {
+            if loan.collateral_currency == currency {
+                locked += loan.collateral_amount;
+            }
+        }
+        locked += user_profile.cross_loan_collateral.get(&currency).copied().unwrap_or(0);
+        locked
     }
 
     /// 对应 Java `calculateLockedMargin(SymbolPositionRecord, CoreSymbolSpecification,
@@ -417,11 +427,11 @@ impl RiskEngine {
     }
 
     /// 对应 Java `calculateLocked(UserProfile, int)`（`:1040-1055`）：用户在某 currency 上的
-    /// 全量锁定额（currency scale），不变量 `free = accounts − locked`。三部分累加（loan 移植前
-    /// 借贷抵押恒 0，见 [`Self::loan_collateral_locked`]）：
+    /// 全量锁定额（currency scale），不变量 `free = accounts − locked`。三部分累加：
     /// ① 所有同 currency 的期货持仓占用保证金（[`Self::calculate_locked_margin`]）；
     /// ② 现货挂单冻结 `exchangeLocked`；
-    /// ③ 借贷抵押（[`Self::loan_collateral_locked`]，P5 前恒 0）。
+    /// ③④ 借贷抵押（[`Self::loan_collateral_locked`]：Isolated collateralCurrency 匹配的各 loan +
+    /// Cross 账户级抵押池）。
     ///
     /// 注意（同 Java 文档）：提现 / 加保证金 / 现货下单 / 期货下单四处 NSF **不**直接调本方法
     /// （它们各自算期货净盈余 [`Self::calculate_free_futures_margin`]），而是单独扣减
@@ -620,11 +630,13 @@ impl RiskEngine {
     /// - ASK：`is_ask_price_too_low` 守卫（→ `RiskAskPriceLowerThanFee`）→
     ///   `calculate_amount_ask(size) = size` → `symbol_to_currency_scale` 缩放到 base currency scale
     ///   （ASK 侧不预留 fee，从卖出 quote 收益里扣，属 R2）。
-    /// - NSF：`accounts[currency] - exchange_locked[currency] - order_lock_amount +
+    /// - NSF：`accounts[currency] - exchange_locked[currency] - loan_locked - order_lock_amount +
     ///   freeFuturesMargin < 0` → `RiskNsf`（P4 Task 5 新增 `freeFuturesMargin` 顶账，对应 Java
     ///   `:666-669`；`cfg_margin_trading_enabled` 关闭或用户无期货持仓时恒 0——**Ruling P4-A**：
-    ///   对无期货仓的用户，本次改动是纯 no-op，现货 NSF 判定与改动前逐位相同。无借贷抵押扣减，
-    ///   属 Task 8+ 范围）。
+    ///   对无期货仓的用户，`freeFuturesMargin` 项是纯 no-op。`loan_locked`
+    ///   = [`Self::loan_collateral_locked`]，对应 Java `:673`——**P5 Task 3**：补 P4 Task 5 遗留的
+    ///   carry（stub 恒 0 时是 no-op，接入真实实现后现货挂单不能再顶用借贷抵押）；无 loan 用户
+    ///   `loan_locked` 恒 0，NSF 判定与改动前逐位相同）。
     /// - 成功：`user_profile.add_to_locked(currency, +order_lock_amount)`，返回
     ///   `ValidForMatchingEngine`。
     fn place_exchange_order(
@@ -679,14 +691,17 @@ impl RiskEngine {
 
         let balance = user_profile.account(currency);
         let existing_locked = user_profile.locked(currency);
-        // P4 Task 5：期货净盈余顶现货 NSF 额度（对应 Java `:666-669`）。无 loanLocked（借贷抵押
-        // 扣减）——属 Task 8+ 范围，参考文档 §2 已明确"spot: no loan term"。
+        // P4 Task 5：期货净盈余顶现货 NSF 额度（对应 Java `:666-669`）。
         let free_futures_margin = if self.cfg_margin_trading_enabled {
             self.calculate_free_futures_margin(user_profile, currency, ssp)
         } else {
             0
         };
-        if balance - existing_locked - order_lock_amount + free_futures_margin < 0 {
+        // P5 Task 3（补 P4 Task 5 carry）：借贷抵押必扣，不能被现货挂单锁走，否则贷款变裸债
+        // （对应 Java `:673`，`placeExchangeOrder` 单独减 `loanCollateralLocked`，不调 umbrella
+        // `calculateLocked`）。无 loan 用户 `loan_collateral_locked` 恒 0，判定与改动前逐位相同。
+        let loan_locked = self.loan_collateral_locked(user_profile, currency);
+        if balance - existing_locked - loan_locked - order_lock_amount + free_futures_margin < 0 {
             return CommandResultCode::RiskNsf;
         }
         user_profile.add_to_locked(currency, order_lock_amount);
@@ -1621,7 +1636,7 @@ impl RiskEngine {
     }
 
     /// 对应 Java `RiskEngine.withdrawableBalance`（`:747-753`）：提现 / 转账 / 加保证金（ISOLATED）
-    /// 共用的 NSF 口径——`accounts − 现货冻结 − 借贷抵押（P5 前恒 0）+ 期货净盈余（仅
+    /// 共用的 NSF 口径——`accounts − 现货冻结 − 借贷抵押 + 期货净盈余（仅
     /// margin trading 开启才计）`。现货冻结 / 借贷抵押必扣（都不能提走 / 转走 / 挪作 isolated
     /// margin，否则贷款变裸债），期货净盈余按 [`Self::calculate_free_futures_margin`]（不指定
     /// `curPosSymbol`，逐仓浮盈一律不计入，更保守）。
@@ -4232,8 +4247,99 @@ mod tests {
         }
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
-        // ① 期货保证金(1000) + ② 现货冻结(200) + ③ 借贷抵押(0, P5 前 stub)。
+        // ① 期货保证金(1000) + ② 现货冻结(200) + ③④ 借贷抵押(0, 本用户无 loan)。
         assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
+    }
+
+    // --------------------------------------------------------------------------
+    // P5 Task 3：loanCollateralLocked 虚拟锁——借贷抵押物留在 accounts，但不能被现货挂单 /
+    // 期货保证金 / 提现顶用（对应 Java RiskEngine.loanCollateralLocked :1063-1072 + 四站点
+    // 单独扣减 :673/withdrawableBalance/spendable + calculate_locked ③④）。
+    // --------------------------------------------------------------------------
+
+    fn isolated_loan_with_collateral(loan_id: i64, collateral_currency: i32, collateral_amount: i64)
+        -> crate::core::common::isolated_loan_record::IsolatedLoanRecord {
+        crate::core::common::isolated_loan_record::IsolatedLoanRecord {
+            loan_id,
+            collateral_currency,
+            collateral_amount,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn loan_collateral_locked_sums_isolated_and_cross_by_currency() {
+        let (engine, mut ups, _ssp) = setup_futures(0, 0, 0, 100);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
+            up.isolated_loans.insert(2, isolated_loan_with_collateral(2, FUT_QUOTE, 50));
+            up.isolated_loans.insert(3, isolated_loan_with_collateral(3, FUT_BASE, 999)); // 他币不计入 FUT_QUOTE
+            up.cross_loan_collateral.insert(FUT_QUOTE, 100);
+        }
+        let up = ups.get(UID).unwrap();
+        // ③ Isolated(300+50，FUT_BASE 的 999 不算) + ④ Cross(100) = 450。
+        assert_eq!(engine.loan_collateral_locked(up, FUT_QUOTE), 450);
+        assert_eq!(engine.loan_collateral_locked(up, FUT_BASE), 999);
+        // 无任何抵押的币种恒 0。
+        assert_eq!(engine.loan_collateral_locked(up, 12345), 0);
+    }
+
+    #[test]
+    fn loan_collateral_locked_zero_for_user_without_loans() {
+        // Ruling P5-B：无 loan 用户两个 map 皆空，虚拟锁恒 0，与 P4 stub 逐位相同。
+        let (engine, ups, _ssp) = setup_futures(0, 0, 1_000, 100);
+        assert_eq!(engine.loan_collateral_locked(ups.get(UID).unwrap(), FUT_QUOTE), 0);
+    }
+
+    #[test]
+    fn calculate_locked_includes_loan_collateral() {
+        let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+        {
+            let up = ups.get_mut(UID).unwrap();
+            up.add_to_locked(FUT_QUOTE, 200); // ② 现货冻结
+            up.isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300)); // ③ 借贷抵押
+        }
+        let up = ups.get(UID).unwrap();
+        let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
+        // ① 期货(0) + ② 现货冻结(200) + ③④ 借贷抵押(300) = 500。
+        assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 500);
+    }
+
+    #[test]
+    fn place_exchange_order_nsf_when_loan_collateral_locks_the_balance() {
+        // accounts=100（其中 100 是某 isolated loan 的抵押物，物理仍在 accounts）。无 loan 时
+        // notional=50 的现货 bid 本可放行（100 ≥ 50）；但借贷抵押虚拟锁走 100 → free=0 → NSF。
+        let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 100, 100);
+        add_spot_symbol_sharing_fut_quote(&mut ssp);
+        ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 100));
+
+        let mut cmd = spot_bid_cmd(50, 1); // notional=50
+        let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
+        assert_eq!(result, CommandResultCode::RiskNsf, "借贷抵押锁走余额后现货挂单应 NSF");
+        assert_eq!(ups.get(UID).unwrap().locked(FUT_QUOTE), 0, "NSF 不得锁定任何额度");
+    }
+
+    #[test]
+    fn place_exchange_order_succeeds_when_free_balance_covers_order_despite_loan() {
+        // 对照：同样 100 抵押，但 accounts=200 → free=200-100=100 ≥ notional 50 → 放行。
+        let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 200, 100);
+        add_spot_symbol_sharing_fut_quote(&mut ssp);
+        ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 100));
+
+        let mut cmd = spot_bid_cmd(50, 1);
+        let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
+        assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
+        assert_eq!(ups.get(UID).unwrap().locked(FUT_QUOTE), 50);
+    }
+
+    #[test]
+    fn withdrawable_balance_deducts_loan_collateral() {
+        // accounts=500，isolated loan 抵押 300（同币）→ 可提 = 500 − 0 冻结 − 300 抵押 + 0 期货 = 200。
+        let (engine, mut ups, ssp) = setup_futures(0, 0, 500, 100);
+        ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
+        let up = ups.get(UID).unwrap();
+        assert_eq!(engine.withdrawable_balance(up, FUT_QUOTE, &ssp), 200);
     }
 
     #[test]
