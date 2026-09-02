@@ -169,3 +169,25 @@
 
 ## 自查（对照参考 + 计划一致性）
 §1 模型→T1；§4 利率→T2；§3.4 虚拟锁→T3；§2.1-2.4 Isolated→T4；§2.6-2.9+§3.2 Cross→T5；§2.11-2.12 运维/配置→T6；§2.5+§2.10+§5.2+§6.3 force-liquidate+LIF→T7；§4.2 reprice→T8；§6 守恒→T9。全覆盖。类型 `LoanService`/`LoanRecord`/`FloatingRateModel` 跨任务签名一致（Task1 定义、Task2/4/5/7 消费）。`loan_collateral_locked` 在 T3 一次填真，T4+ 复用。范围界定：扫描器→P6 已在两处标注。
+
+---
+
+## P5 完成状态（2026-09-02）
+**完成。** 9 任务全部评审 clean + 全分支终审 **Ready to merge: YES**。`cargo test` **677 绿**（+214 loan 测试，含 loan 守恒 proptest）。执行账本：`.superpowers/sdd/2026-09-02-exchange-core-rust-port-p5-loan/progress.md`（工作区随收官删除；摘录于此）。
+
+**全分支终审（opus）两大签核（显式）**
+- **无潜在守恒 bug**：逐路径核对所有动钱操作皆为「配对守恒」——disburse/apply_debt_payment/settle_liquidation_proceeds/LIF 接管(Isolated+Cross，每次抵押扣押恒为 `crossLoanCollateral−=/accounts−=/LIF+=` 三行匹配三元组，估值 bookkeeping 无论如何截断都不破守恒)/cross-borrow rollback(disburse 前 remove 无动钱)/pool·LIF 运维(桶↔adjustments 对冲)。§6.2 恒等式 telescope 后是对独立 mutate 状态的可证伪约束（非 ΣX−ΣX）；loanPoolBorrowed==Σoutstanding tracker 独立校验；accumulated_interest/outstanding_principal 正确不进任何桶（是 claim，付款时才实现）。
+- **无可达 Rust-only panic**：每个 `*_exact`/panic 站点都映射到 Java 同样 throw 的 `Math.*Exact`；唯一 Java 有意 catch→哨兵的 crossLtvBps，Rust 忠实用 checked→i64::MAX/unevaluable 不 panic；无可达除零（bankruptcy-price 除法在未移植的 scanner 里，P5 handler 收 cmd.price 限价）；Task5 Cross-LTV 溢出经 Task6 ADD_LOAN `[0,10000]` 门守端到端闭合。
+- 跨任务一致性/确定性（weight DESC·currency ASC·loanId ASC·reprice currency ASC）/crash-safety 全 clean。
+
+**完整守恒恒等式（每 currency，零容差）**：
+`Σ_user(accounts − exchangeLocked − loanCollateral) + extraMargin + exchangeLocked + loanCollateral + (loanPoolAvailable + interestRevenue + loanInsuranceFund) + fees + adjustments == 0`（loanPoolBorrowed 排除=tracker）。
+
+**Commit 链（P5 range 3762c73e..bf7f6fb1，12 commits）**：plan 3762c73e｜T1 3cd5d602+fix 3a68ae2a｜T2 fa2be541｜T3 4af2a426｜T4 a79bff66｜T5 fbc34ed1｜T6 26062a26+doc 2332b1ed｜T7 83513171｜T8 fd7119b2｜T9 9382602c+follow-up bf7f6fb1。
+
+**carry-forward → P6（终审确认，均惰性/接受范围）**
+- 自动清算 SCANNER：`LoanLiquidationEngine`（checkLoans/checkIsolated/checkCross/pick 函数/is_structurally_sellable）+ 非复制索引（isolatedLoanSymbolToUsers/crossLoanCurrencyToUsers）+ sync 钩子（onIsolatedLoanOpened/Closed/syncCrossExposure）。**P6 须补** `post_process_loan_cross_force_liquidate` 里 Java 调 `syncCrossExposure(takerUp)` 的调用点（Rust 已留注释 :1091）。
+- **bankruptcy-price 计算**（`ceilMulDiv(mark, realDebt, collateralValue)` + `collateralValue<=0` skip 的除零守卫）只在未移植 scanner 里——P6 移植时须带上该守卫。
+- 事件发射（LOAN_LIQUIDATED/LOAN_BORROW/margin-call）：全 port 无事件总线，账本为准；`cum_interest_paid` 已维护但仅事件消费。
+- LIQUIDATION_SCAN 与 LOAN_IF_DEPOSIT 共享字节码 64（Task1 记，LIQUIDATION_SCAN 未移植，P6 移植时注意）。
+- minor（非阻断，Java-faithful）：postProcess 从 avg_taker_price 重算 taker fee 可能与现货逐笔 fee 舍入不同——只移动 user-overpay↔LIF/pool 的分配，不破守恒。
