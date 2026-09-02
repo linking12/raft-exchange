@@ -135,3 +135,22 @@
 
 ## 自查（对照参考）
 §1 结构→T1；§2.3 insert/§5 L2→T2；§2.1 撮合→T3；§3 IOC/FOK/预算→T4；§4 cancel/reduce/move→T5；§7 不变式→T6；§8 差分+Ruling P2-1→T4/T7。全覆盖。类型 `OrderIdx/BucketIdx` 跨 T1-7 一致；事件字段规则复用 §6 = 现有 MatcherTradeEvent。
+
+---
+
+## P2 完成状态（2026-09-02）
+
+7/7 任务完成，逐任务评审 + 全分支终审全 clean。`cargo test --lib` **290 绿**（含 256-case Naive↔Direct 差分 proptest + 7 定向场景 + 6 validate 负向），`-D warnings` 干净。`OrderBookDirectImpl`（slab+索引）是 `IOrderBook` 的 drop-in，与 `OrderBookNaiveImpl` **逐位一致**（差分对拍证明）。
+
+### 本分支发现并修复的 2 个真 bug
+1. **IOC_BUDGET 跨桶预算泄漏（Direct，`ab752661`）**：便宜桶被流动性耗尽跨到更差价时 batch_remaining 未重置→超预算成交。修=跨桶时 batch_remaining=0 强制按新价重算。
+2. **Naive move `bidder_hold_price`（P1 bug，`eb987108`）**：BID 移动即撮合时读了 `cmd.reserve_bid_price`(=0) 而非 order 自身 reserve_bid_price → 事件发 0。取证确认 Java(Naive+Direct)均取 taker 自身 reserve；修 Rust Naive 穿 order 字段。**有资金账后果**（RiskEngine R2 用 bidder_hold_price 释放 maker quote 冻结）——差分对拍反查出的更早期 bug。
+
+### 裁定（Rulings）
+- **P2-1** FOK_BUDGET 镜像 Naive 无价上限；**P2-2** Direct.state_hash==Naive.state_hash；**P2-3** move reserve 守卫仅 Direct、差分测试用 inert spec 中和。
+- IOC_BUDGET 按 Naive 实际算法（非 Java §3 结构）——Naive 是移植真源。
+
+### carry-forward
+- **⚠ P3 conservation proptest 缺 Move 变体**（正是它没抓到上面 #2 的 move bidder_hold_price bug）——已在本次修好 Naive，但 P3 proptest 应补 Move 命令变体防回归。**已加入 P3 计划 carry-forward。**
+- 小项（非阻塞）：4 个 `skeleton_*` 测试名陈旧（内容仍有效）；`DirectOrder.user_cookie` 死字段（OrderCommand 无 cookie 数据，恒 0）。
+- Direct 尚未接入 engine/工厂（P3 引擎当前用 Naive）；如需切换或让引擎可选 Direct，后续接线（非本期）。
