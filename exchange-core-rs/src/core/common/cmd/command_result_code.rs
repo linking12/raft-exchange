@@ -4,9 +4,15 @@ pub enum CommandResultCode {
     Success,                // 100
     AuthInvalidUser,        // -1001
     InvalidSymbol,          // -1201
+    UnsupportedSymbolType,  // -1203（P4 Task 1: 非期货 symbol 走期货下单路径）
     RiskNsf,                // -2001
     RiskInvalidReserveBidPrice, // -2002
     RiskAskPriceLowerThanFee,   // -2003
+    RiskMarginTradingDisabled,  // -2004（P4: cfgMarginTradingEnabled==false）
+    RiskInvalidLeverage,        // -2006（P4: 杠杆倍率不在 symbol 支持范围内）
+    RiskLeverageMismatch,       // -2007（P4: 新杠杆与当前仓位杠杆不匹配）
+    RiskMarginModeMismatch,     // -2008（P4: 仓位模式不匹配）
+    RiskMarkpriceNotAvailable,  // -2011（P4: mark price 缺失/为 0）
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
     MatchingInvalidOrderBookId, // -3005（Task 9: MatchingEngineRouter 未知 symbol）
@@ -25,9 +31,15 @@ impl CommandResultCode {
             CommandResultCode::Success => 100,
             CommandResultCode::AuthInvalidUser => -1001,
             CommandResultCode::InvalidSymbol => -1201,
+            CommandResultCode::UnsupportedSymbolType => -1203,
             CommandResultCode::RiskNsf => -2001,
             CommandResultCode::RiskInvalidReserveBidPrice => -2002,
             CommandResultCode::RiskAskPriceLowerThanFee => -2003,
+            CommandResultCode::RiskMarginTradingDisabled => -2004,
+            CommandResultCode::RiskInvalidLeverage => -2006,
+            CommandResultCode::RiskLeverageMismatch => -2007,
+            CommandResultCode::RiskMarginModeMismatch => -2008,
+            CommandResultCode::RiskMarkpriceNotAvailable => -2011,
             CommandResultCode::MatchingUnknownOrderId => -3002,
             CommandResultCode::MatchingUnsupportedCommand => -3004,
             CommandResultCode::MatchingInvalidOrderBookId => -3005,
@@ -59,5 +71,15 @@ mod tests {
         assert_eq!(CommandResultCode::MatchingInvalidOrderBookId.code(), -3005);
         assert_eq!(CommandResultCode::MatchingMoveFailedPriceOverRiskLimit.code(), -3041);
         assert_eq!(CommandResultCode::MatchingReduceFailedWrongSize.code(), -3051);
+    }
+
+    #[test]
+    fn futures_command_result_codes_match_java() {
+        assert_eq!(CommandResultCode::UnsupportedSymbolType.code(), -1203);
+        assert_eq!(CommandResultCode::RiskMarginTradingDisabled.code(), -2004);
+        assert_eq!(CommandResultCode::RiskInvalidLeverage.code(), -2006);
+        assert_eq!(CommandResultCode::RiskLeverageMismatch.code(), -2007);
+        assert_eq!(CommandResultCode::RiskMarginModeMismatch.code(), -2008);
+        assert_eq!(CommandResultCode::RiskMarkpriceNotAvailable.code(), -2011);
     }
 }

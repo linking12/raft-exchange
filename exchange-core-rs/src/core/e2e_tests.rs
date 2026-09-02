@@ -108,6 +108,7 @@ fn fixed_fee_spec(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecification {
         taker_fee,
         maker_fee,
         fee_scale_k: 0,
+        ..Default::default()
     }
 }
 
@@ -122,6 +123,7 @@ fn proportional_fee_spec(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> Co
         taker_fee,
         maker_fee,
         fee_scale_k,
+        ..Default::default()
     }
 }
 

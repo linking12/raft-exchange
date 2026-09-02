@@ -2766,6 +2766,7 @@ mod tests {
             taker_fee: 0,
             maker_fee: 0,
             fee_scale_k: 0,
+            ..Default::default()
         }
     }
 

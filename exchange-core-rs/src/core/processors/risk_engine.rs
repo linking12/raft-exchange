@@ -845,6 +845,7 @@ mod tests {
             taker_fee,
             maker_fee: 0,
             fee_scale_k,
+            ..Default::default()
         }
     }
 
@@ -1254,6 +1255,7 @@ mod tests {
             taker_fee,
             maker_fee,
             fee_scale_k,
+            ..Default::default()
         }
     }
 
