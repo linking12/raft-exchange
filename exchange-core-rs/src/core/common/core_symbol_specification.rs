@@ -25,6 +25,12 @@ pub struct CoreSymbolSpecification {
     pub taker_fee: i64,
     pub maker_fee: i64,
     pub fee_scale_k: i64,
+    /// 对应 Java `CoreSymbolSpecification.liquidationFee`：强平费率（fee_scale_k==0 时为固定
+    /// 费 size×liquidation_fee，否则按比例，语义/scale 与 taker_fee/maker_fee 一致）。P6 Task 1
+    /// 新增——`SymbolPositionRecord::calculate_bankruptcy_price` 与
+    /// `core_arithmetic_utils::calculate_liquidation_fee` 消费；P1-P5 既有构造点全部走
+    /// `..Default::default()`，零值即"未配置强平费"，不影响既有行为。
+    pub liquidation_fee: i64,
 
     // ================================================================
     // 期货：保证金（type=FUTURES_CONTRACT_* only；spot symbol 全 0/空）

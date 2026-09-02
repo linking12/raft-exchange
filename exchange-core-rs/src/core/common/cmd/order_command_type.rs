@@ -1,8 +1,16 @@
 /// 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`（现货子集 + P4 Task 1 期货
 /// `create_positions_key` 所需的 `CLOSE_POSITION`/`FORCE_LIQUIDATION` 两个变体 + P4 Task 6
 /// 新增 `LEVERAGE_ADJUSTMENT`/`MARGIN_ADJUSTMENT`/`MARKPRICE_ADJUSTMENT` 三个非交易命令 + P5
-/// Task 1 新增 14 个 loan/pool 变体 + `RepriceLoanRates`；其余期货/清算变体本移植尚未列入）。
+/// Task 1 新增 14 个 loan/pool 变体 + `RepriceLoanRates` + P6 Task 1 新增 `InternalTransfer`/
+/// `IfTakeover`/`AutoDeleveraging`/期货 `IfDeposit`/`IfWithdraw`/`SettleFundingfees`/
+/// `LiquidationScan`/`SystemLiquidationNotify`；其余期货/清算变体本移植尚未列入）。
 /// `is_non_trading()` / `is_loan()` 对照 Java 的二级 dispatch 门守分类语义。
+///
+/// **Ruling P6-D**：本移植是独立 crate，无 wire-protocol 兼容需求，新增码只需在本枚举内部互异，
+/// 不必与 Java 字节码值逐位对齐。参考文档 §12.4 额外指出 Java 源码 `LIQUIDATION_SCAN`（码 64）
+/// 与 `LOAN_IF_DEPOSIT`（码 64）本身就重复——本移植 `LiquidationScan` 故意不选 64（已被
+/// `LoanIfDeposit` 占用），选 44，规避这个 Java 既有的重复码，不是"修正" Java，只是本枚举内部
+/// 互异约束下的必然选择。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
     PlaceOrder,
@@ -68,6 +76,41 @@ pub enum OrderCommandType {
     /// （TwoStep reprice 管线，参考文档 §4.2；本 Task 只落分类，管线本体留 Task 3+）。
     RepriceLoanRates,
 
+    // ================================================================
+    // P6 Task 1：期货强平/ADL/资金费/内部转账命令码（参考文档 §0/§9/§12.4）。
+    // handler 本体（LiquidationEngine/IFCommandProcessor/ADLCommandProcessor/
+    // FundingFeeCommandProcessor/InternalTransferProcessor 等）留后续 Task，这里先落变体 +
+    // is_non_trading 分类。
+    // ================================================================
+    /// 对应 Java `INTERNAL_TRANSFER`（码 14）：账户间内部转账，`isNonTrading()` 命中，走
+    /// `RiskEngineCommandDispatcher` → `InternalTransferProcessor`（TwoStep，参考文档 §5）。
+    InternalTransfer,
+    /// 对应 Java `SETTLE_FUNDINGFEES`（码 25）：资金费结算，外部（operator/oracle）驱动，
+    /// **不属于** `isNonTrading()`——留在主 switch（参考文档 §4）。
+    SettleFundingfees,
+    /// 对应 Java `SYSTEM_LIQUIDATION_NOTIFY`（码 31）：`startLiquidationFlow` 附带发出的
+    /// best-effort 强平告警通知，走 raft 但不 mutate 任何状态；**不属于** `isNonTrading()`
+    /// （参考文档 §1.4）。
+    SystemLiquidationNotify,
+    /// 对应 Java `IF_TAKEOVER`（码 40）：保险基金接管破产仓位（FORCE 被拒后的下一级），
+    /// TwoStep（参考文档 §1.5/§2.2）；**不属于** `isNonTrading()`——留在主 switch。
+    IfTakeover,
+    /// 对应 Java `AUTO_DELEVERAGING`（码 41）：ADL 摊派（IF 接管仍不足后的最终级），TwoStep
+    /// （参考文档 §1.5/§3）；**不属于** `isNonTrading()`——留在主 switch。
+    AutoDeleveraging,
+    /// 对应 Java 期货 `IF_DEPOSIT`（码 42）：保险基金运营充值。**与 `LoanIfDeposit`
+    /// （码 64，现货借贷 LIF 池）是两个完全独立的池子**（参考文档 §10"Loan LIF interaction
+    /// with futures IF: None"），不可混淆；`isNonTrading()` 命中，同 `LoanIfDeposit` 走
+    /// `RiskEngineCommandDispatcher`（参考文档 §2.1）。
+    IfDeposit,
+    /// 对应 Java 期货 `IF_WITHDRAW`（码 43）：保险基金运营提取。同 [`Self::IfDeposit`]，
+    /// 与 `LoanIfWithdraw` 是独立池子；`isNonTrading()` 命中。
+    IfWithdraw,
+    /// 对应 Java `LIQUIDATION_SCAN`（Java 码 64，与 `LOAN_IF_DEPOSIT` 撞码——本移植选 44
+    /// 规避，见类文档 Ruling P6-D）：全量强平扫描 backstop（`cmd.symbol < 0` 触发，参考文档
+    /// §1.1/§7）；**不属于** `isNonTrading()`——留在主 switch。
+    LiquidationScan,
+
     Reset,
     Nop,
 }
@@ -108,6 +151,18 @@ impl OrderCommandType {
             OrderCommandType::BinaryDataCommand => 91,
             OrderCommandType::Nop => 120,
             OrderCommandType::Reset => 124,
+            // P6 Task 1：见类文档 Ruling P6-D——本移植零依赖 wire-protocol 字节对齐，新码只需
+            // 互异；InternalTransfer/SettleFundingfees/SystemLiquidationNotify/IfTakeover/
+            // AutoDeleveraging/IfDeposit/IfWithdraw 数值对齐 Java（参考文档 §12.4），
+            // LiquidationScan 故意不取 Java 的 64（已被 LoanIfDeposit 占用），改用 44。
+            OrderCommandType::InternalTransfer => 14,
+            OrderCommandType::SettleFundingfees => 25,
+            OrderCommandType::SystemLiquidationNotify => 31,
+            OrderCommandType::IfTakeover => 40,
+            OrderCommandType::AutoDeleveraging => 41,
+            OrderCommandType::IfDeposit => 42,
+            OrderCommandType::IfWithdraw => 43,
+            OrderCommandType::LiquidationScan => 44,
         }
     }
 
@@ -115,10 +170,16 @@ impl OrderCommandType {
     /// `RiskEngineCommandDispatcher.dispatch`，主 switch 只留交易/结算/引擎自身生命周期。
     /// 现货子集 + P4 Task 6 期货非交易命令里命中的有 `ADD_USER` / `BALANCE_ADJUSTMENT` /
     /// `BINARY_DATA_COMMAND` / `LEVERAGE_ADJUSTMENT` / `MARGIN_ADJUSTMENT` /
-    /// `MARKPRICE_ADJUSTMENT`（Java 全集还含 INTERNAL_TRANSFER/POSITION_MODE_ADJUSTMENT 等
-    /// 未移植变体）+ P5 Task 1 新增 `RepriceLoanRates`（**不含** 14 个 `is_loan()` 码——
-    /// reprice 走 `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`，loan 命令走独立
-    /// `LoanCommandDispatcher`，两条门守互斥，见参考文档 §0）。
+    /// `MARKPRICE_ADJUSTMENT` + P5 Task 1 新增 `RepriceLoanRates`（**不含** 14 个
+    /// `is_loan()` 码——reprice 走 `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`，
+    /// loan 命令走独立 `LoanCommandDispatcher`，两条门守互斥，见参考文档 §0）+ P6 Task 1
+    /// 新增 `InternalTransfer` / 期货 `IfDeposit` / `IfWithdraw`（参考文档 §0 末段："`isNonTrading()`
+    /// now includes `INTERNAL_TRANSFER` and `MARKPRICE_ADJUSTMENT`"）。
+    ///
+    /// **不命中**（参考文档 §0 末段逐字确认）：`IfTakeover` / `AutoDeleveraging` /
+    /// `SettleFundingfees` / `ForceLiquidation` / `LiquidationScan` /
+    /// `SystemLiquidationNotify`——这些留在 `RiskEngine.preProcessCommand` 主 switch 与
+    /// `MatchingEngineRouter.processOrder` 的显式分支里，不走 `isNonTrading()` dispatcher。
     pub fn is_non_trading(self) -> bool {
         matches!(
             self,
@@ -129,6 +190,9 @@ impl OrderCommandType {
                 | OrderCommandType::MarginAdjustment
                 | OrderCommandType::MarkpriceAdjustment
                 | OrderCommandType::RepriceLoanRates
+                | OrderCommandType::InternalTransfer
+                | OrderCommandType::IfDeposit
+                | OrderCommandType::IfWithdraw
         )
     }
 
@@ -263,5 +327,102 @@ mod tests {
     #[test]
     fn order_command_type_default_is_nop() {
         assert_eq!(OrderCommandType::default(), OrderCommandType::Nop);
+    }
+
+    // ================================================================
+    // P6 Task 1：新命令码 + is_non_trading 分类（参考文档 §0/§12.4）
+    // ================================================================
+
+    #[test]
+    fn p6_new_codes_are_internally_distinct_and_match_java_where_unconflicted() {
+        // Ruling P6-D：只需互异，Java 数值不是硬约束；但对无冲突的码保留 Java 数值方便对照。
+        assert_eq!(OrderCommandType::InternalTransfer.code(), 14);
+        assert_eq!(OrderCommandType::SettleFundingfees.code(), 25);
+        assert_eq!(OrderCommandType::SystemLiquidationNotify.code(), 31);
+        assert_eq!(OrderCommandType::IfTakeover.code(), 40);
+        assert_eq!(OrderCommandType::AutoDeleveraging.code(), 41);
+        assert_eq!(OrderCommandType::IfDeposit.code(), 42);
+        assert_eq!(OrderCommandType::IfWithdraw.code(), 43);
+        // Java 的 64 与 LOAN_IF_DEPOSIT 撞码——本移植故意不取 64，见类文档 Ruling P6-D。
+        assert_eq!(OrderCommandType::LiquidationScan.code(), 44);
+        assert_ne!(OrderCommandType::LiquidationScan.code(), OrderCommandType::LoanIfDeposit.code());
+
+        // 互异性：把所有变体的 code() 丢进一个 Vec，去重后长度不变。
+        let all = [
+            OrderCommandType::PlaceOrder,
+            OrderCommandType::CancelOrder,
+            OrderCommandType::MoveOrder,
+            OrderCommandType::ReduceOrder,
+            OrderCommandType::ClosePosition,
+            OrderCommandType::OrderBookRequest,
+            OrderCommandType::AddUser,
+            OrderCommandType::BalanceAdjustment,
+            OrderCommandType::BinaryDataCommand,
+            OrderCommandType::ForceLiquidation,
+            OrderCommandType::LeverageAdjustment,
+            OrderCommandType::MarginAdjustment,
+            OrderCommandType::MarkpriceAdjustment,
+            OrderCommandType::LoanCreate,
+            OrderCommandType::LoanRepay,
+            OrderCommandType::LoanAddCollateral,
+            OrderCommandType::LoanReleaseCollateral,
+            OrderCommandType::LoanForceLiquidate,
+            OrderCommandType::LoanCrossAddCollateral,
+            OrderCommandType::LoanCrossWithdrawCollateral,
+            OrderCommandType::LoanCrossBorrow,
+            OrderCommandType::LoanCrossRepay,
+            OrderCommandType::LoanCrossForceLiquidate,
+            OrderCommandType::PoolDeposit,
+            OrderCommandType::PoolWithdraw,
+            OrderCommandType::RepriceLoanRates,
+            OrderCommandType::LoanIfDeposit,
+            OrderCommandType::LoanIfWithdraw,
+            OrderCommandType::InternalTransfer,
+            OrderCommandType::SettleFundingfees,
+            OrderCommandType::SystemLiquidationNotify,
+            OrderCommandType::IfTakeover,
+            OrderCommandType::AutoDeleveraging,
+            OrderCommandType::IfDeposit,
+            OrderCommandType::IfWithdraw,
+            OrderCommandType::LiquidationScan,
+            OrderCommandType::Reset,
+            OrderCommandType::Nop,
+        ];
+        let mut codes: Vec<i8> = all.iter().map(|t| t.code()).collect();
+        let n = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), n, "OrderCommandType codes must be pairwise distinct (Ruling P6-D)");
+    }
+
+    #[test]
+    fn p6_internal_transfer_and_futures_if_deposit_withdraw_are_non_trading() {
+        assert!(OrderCommandType::InternalTransfer.is_non_trading());
+        assert!(OrderCommandType::IfDeposit.is_non_trading());
+        assert!(OrderCommandType::IfWithdraw.is_non_trading());
+    }
+
+    #[test]
+    fn p6_liquidation_state_machine_and_scan_codes_stay_in_main_switch() {
+        // 参考文档 §0 末段逐字列出的"不属于 isNonTrading"清单。
+        assert!(!OrderCommandType::IfTakeover.is_non_trading());
+        assert!(!OrderCommandType::AutoDeleveraging.is_non_trading());
+        assert!(!OrderCommandType::SettleFundingfees.is_non_trading());
+        assert!(!OrderCommandType::ForceLiquidation.is_non_trading());
+        assert!(!OrderCommandType::LiquidationScan.is_non_trading());
+        assert!(!OrderCommandType::SystemLiquidationNotify.is_non_trading());
+    }
+
+    #[test]
+    fn p6_new_codes_are_not_loan_codes() {
+        // 期货 IF 池与 loan LIF 池是两个独立 bucket（参考文档 §10），互不属于对方的分类门守。
+        assert!(!OrderCommandType::IfDeposit.is_loan());
+        assert!(!OrderCommandType::IfWithdraw.is_loan());
+        assert!(!OrderCommandType::InternalTransfer.is_loan());
+        assert!(!OrderCommandType::IfTakeover.is_loan());
+        assert!(!OrderCommandType::AutoDeleveraging.is_loan());
+        assert!(!OrderCommandType::SettleFundingfees.is_loan());
+        assert!(!OrderCommandType::LiquidationScan.is_loan());
+        assert!(!OrderCommandType::SystemLiquidationNotify.is_loan());
     }
 }

@@ -2,16 +2,19 @@
 //! + `is_empty`/`reset`/`state_hash`；保证金/PnL/开平原语见 §1 `:494-669`，本移植落 Task 2）。
 //!
 //! Java 字段里 `adlEligibility`/`pendingADLSize`/`liquidationFlow` 是 **leader-local**、纯内存、
-//! 不持久化、不进 `stateHash` 的字段（强平扫描专用状态，P6 才会用到）。本移植 Task 1 按参考文档
-//! §1 的说明整体不落这三个字段——它们不参与任何 Task 1-4 的业务语义，等 P6 落地强平/ADL 时再按
-//! 需引入，避免过早搬入无消费者的状态。
+//! 不持久化、不进 `stateHash` 的字段（强平扫描专用状态）。P4 移植时整体不落这三个字段（无消费者）。
+//! **P6 Task 1**：引入 `pending_adl_size`/`adl_eligibility`（ADL Task 6 消费的纯标量非复制计数），
+//! 二者**排除出 `state_hash`**（Ruling P6-E：非复制 scratch 状态，由 R1/R2 确定性重放维持一致，
+//! 不参与 raft 状态校验）。`liquidation_flow` 是状态机对象（`Option<LiquidationFlow>`），随
+//! FORCE→IF→ADL 状态机一起在 P6 Task 7 引入（其类型与状态机同处定义，避免过早搬入空壳）——同样
+//! 非复制、不进 `state_hash`。
 use std::collections::BTreeMap;
 
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::position_direction::PositionDirection;
-use crate::core::utils::core_arithmetic_utils::{calculate_taker_fee, ceil_divide, trunc_mul_div};
+use crate::core::utils::core_arithmetic_utils::{calculate_taker_fee, ceil_divide, ceil_mul_div, trunc_mul_div};
 
 /// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。
 /// `CoreArithmeticUtils` 里的等价函数是私有的（Task 1 的零依赖 ruling），这里本地重复一份
@@ -61,6 +64,17 @@ pub struct SymbolPositionRecord {
     pub margin_mode: MarginMode,
     /// 补充保证金（sizePriceScale），`MARGIN_ADJUSTMENT` 手动加，清空仓位时整额退。
     pub extra_margin: i64,
+
+    // ================================================================
+    // 非复制 leader-local scratch（Ruling P6-E）：不进 `state_hash`、不序列化。
+    // ADL 一条命令内 R1 预留 / R2-finalize 对称释放的纯标量计数（参考 §3）。
+    // ================================================================
+    /// 对应 Java `SymbolPositionRecord.pendingADLSize`：ADL R1 `collect_input` 里对本仓预留的
+    /// 待减仓量，`finalize_for_command` 对称释放。防同一命令的多 shard 候选选择重复减同一手量。
+    pub pending_adl_size: i64,
+    /// 对应 Java `SymbolPositionRecord.adlEligibility`：ADL 资格因子（ISOLATED 默认 100，CROSS
+    /// 默认 0、过账户级安全门后写 clamp 因子）。`riskScore` 的乘子之一。
+    pub adl_eligibility: i64,
 }
 
 impl SymbolPositionRecord {
@@ -160,6 +174,35 @@ impl SymbolPositionRecord {
         h = h.wrapping_mul(31).wrapping_add(self.margin_mode.code() as i64);
         h = h.wrapping_mul(31).wrapping_add(self.extra_margin);
         ((h >> 32) as i32) ^ (h as i32)
+    }
+
+    /// 对应 Java `calculateBankruptcyPrice(CoreSymbolSpecification, ToLongFunction)`
+    /// （`SymbolPositionRecord.java:295-312`）：破产价（= 权益恰好归零的清算限价）。
+    /// `margin_base_fn` 对应 Java 的 `crossMarginBaseFn`——ISOLATED 分支不调它（直接
+    /// `open_init_margin_sum + extra_margin`），CROSS 分支用它取账户级 marginBase（P4 已移植的
+    /// `cross_margin_base_allocation` 之类，由清算引擎在 P6 Task 7 传入；单仓/测试可传 `|_| 0`）。
+    /// 单位：三者(marginBase/openPriceSum/结果)同 sizePriceScale/quoteScaleK 对齐，见 Java 注释。
+    /// 逐字对齐 Java：运算顺序、`*_exact`/`ceil_*` 取舍照抄，不重推。
+    pub fn calculate_bankruptcy_price(
+        &self,
+        spec: &CoreSymbolSpecification,
+        margin_base_fn: impl Fn(&SymbolPositionRecord) -> i64,
+    ) -> i64 {
+        let margin_base = match self.margin_mode {
+            MarginMode::Isolated => add_exact(self.open_init_margin_sum, self.extra_margin),
+            MarginMode::Cross => margin_base_fn(self),
+        };
+        let sign = self.direction.multiplier() as i64;
+        let total_fee = add_exact(spec.taker_fee, spec.liquidation_fee);
+        if spec.is_fixed_fee() {
+            let max_loss = sub_exact(margin_base, mul_exact(total_fee, self.open_volume));
+            let numer = sub_exact(self.open_price_sum, mul_exact(sign, max_loss));
+            ceil_divide(numer, self.open_volume)
+        } else {
+            let numer = sub_exact(self.open_price_sum, mul_exact(sign, margin_base));
+            let denom = mul_exact(self.open_volume, sub_exact(spec.fee_scale_k, mul_exact(sign, total_fee)));
+            ceil_mul_div(numer, spec.fee_scale_k, denom)
+        }
     }
 
     // ================================================================
@@ -657,6 +700,53 @@ mod tests {
         let mut diff_extra_margin = base.clone();
         diff_extra_margin.extra_margin = 1;
         assert_ne!(h0, diff_extra_margin.state_hash());
+    }
+
+    // ------------------------------------------------------------------
+    // P6 Task 1：非复制字段排除 state_hash（Ruling P6-E）+ calculate_bankruptcy_price。
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn state_hash_excludes_non_replicated_adl_fields() {
+        let base = SymbolPositionRecord::new(1, 100, 2, MarginMode::Isolated, 5);
+        let h0 = base.state_hash();
+
+        let mut diff_pending_adl = base.clone();
+        diff_pending_adl.pending_adl_size = 999;
+        assert_eq!(h0, diff_pending_adl.state_hash(), "pending_adl_size 非复制，不进 state_hash");
+
+        let mut diff_adl_elig = base.clone();
+        diff_adl_elig.adl_eligibility = 100;
+        assert_eq!(h0, diff_adl_elig.state_hash(), "adl_eligibility 非复制，不进 state_hash");
+    }
+
+    fn long_position(open_volume: i64, open_init_margin_sum: i64, open_price_sum: i64, extra_margin: i64) -> SymbolPositionRecord {
+        let mut p = SymbolPositionRecord::new(1, 100, 2, MarginMode::Isolated, 1);
+        p.direction = PositionDirection::Long; // sign = +1
+        p.open_volume = open_volume;
+        p.open_init_margin_sum = open_init_margin_sum;
+        p.open_price_sum = open_price_sum;
+        p.extra_margin = extra_margin;
+        p
+    }
+
+    #[test]
+    fn calculate_bankruptcy_price_isolated_fixed_fee() {
+        // ISOLATED Long：margin_base = 100+20 = 120；total_fee = taker(2)+liq(3) = 5；fixed(fee_scale_k=0)。
+        // max_loss = 120 - 5*10 = 70；numer = 1000 - 1*70 = 930；ceil_divide(930,10) = 93。
+        let pos = long_position(10, 100, 1000, 20);
+        let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 3, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 93);
+    }
+
+    #[test]
+    fn calculate_bankruptcy_price_isolated_proportional_fee() {
+        // ISOLATED Long：margin_base = 100+0 = 100；total_fee = 100+100 = 200；fee_scale_k = 1_000_000。
+        // numer = 1000 - 1*100 = 900；denom = 10*(1_000_000 - 1*200) = 9_998_000；
+        // ceil_mul_div(900, 1_000_000, 9_998_000) = ceil(900_000_000/9_998_000) = ceil(90.018) = 91。
+        let pos = long_position(10, 100, 1000, 0);
+        let spec = CoreSymbolSpecification { taker_fee: 100, liquidation_fee: 100, fee_scale_k: 1_000_000, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 91);
     }
 
     #[test]

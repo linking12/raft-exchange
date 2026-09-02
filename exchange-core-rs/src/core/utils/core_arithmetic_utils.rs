@@ -319,6 +319,110 @@ pub fn is_ask_price_too_low(price: i64, taker_fee: i64, fee_scale_k: i64) -> boo
     price < ceil_divide(fee_scale_k, taker_fee)
 }
 
+// ========================================================================
+// P6 Task 1：强平数学原语 —— 对应 Java `CoreArithmeticUtils.java:180-240`
+// ========================================================================
+//
+// Java 这三个函数直接接受 `SymbolPositionRecord`/`CoreSymbolSpecification`/
+// `LastPriceCacheRecord` 三个模型类型；本模块延续既有 Ruling（P3 Task 1，见文件头）——
+// 零依赖模型层，`calculate_taker_fee`/`calculate_maker_fee` 已经是这个先例（接受裸标量费率，
+// 不接受 spec）。因此下面三个函数把 Java 版本里"先从 position/spec 读一把标量再算"的那些局部
+// 变量（`E`/`MM`/`Q`/`Pm`/`sign` 等）直接做成入参，调用方（`SymbolPositionRecord` 自身方法或
+// 未来的清算引擎）负责用已有的 `estimate_unrealized_profit`/`calculate_maintenance_margin`
+// 算好这些标量再传进来。这是**参数传递方式**上的刻意偏差（保持架构边界不变），不是算法偏差——
+// 公式的运算顺序、哪些子表达式过 `*_exact`/`ceil_mul_div`、哪些保留 Java 原始的裸 `+`/`-`，
+// 逐字对齐 Java 源码（Java 源文件本身的注释已经精确标注了这些取舍，照抄不重推）。
+
+/// 对应 Java `calculateLiquidationFee(long size, long price, CoreSymbolSpecification spec)`：
+/// `fee_scale_k == 0`（固定费）→ `size * liquidation_fee`；否则按比例
+/// `ceil(size * price * liquidation_fee / fee_scale_k)`。结构与 `calculate_taker_fee`/
+/// `calculate_maker_fee` 完全一致，费率换成 `liquidation_fee`。
+pub fn calculate_liquidation_fee(size: i64, price: i64, liquidation_fee: i64, fee_scale_k: i64) -> i64 {
+    if fee_scale_k == 0 {
+        mul_exact(size, liquidation_fee)
+    } else {
+        ceil_mul_mul_div(size, price, liquidation_fee, fee_scale_k)
+    }
+}
+
+/// 计算强平数量 x。对应 Java `calculateSizeToLiquidate(SymbolPositionRecord position,
+/// CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:201-214`）。
+///
+/// <pre>
+/// 原权益：     E = openInitMarginSum + unrealizedPnl
+/// 减保证金：   ΔIM = openInitMarginSum * x / Q
+/// 减未实现P&L：ΔPnl = sign * (Pm - Pe) * x
+/// 新权益：     E' = E - ΔIM - ΔPnl
+/// 新权益须 ≥ 维持保证金：E' ≥ Pm * (Q - x) * Rmm
+///   ⇒  E - IMS * x / Q - sign * (Pm - Pe) * x ≥ Pm * (Q - x) * Rmm
+///   ⇒  x ≥ (E - Pm * Q * Rmm) / (IMS / Q + Pm * (sign * 1 - Rmm) - sign * Pe)
+///         其中 Rmm = MM / (Pm * Q),  Pe = openPriceSum / Q
+///   ⇒  x ≥ (E - MM) / (IMS / Q + sign * Pm - MM / Q - sign * openPriceSum / Q)
+///   ⇒  x ≥ (E - MM) * Q / (IMS + sign * Pm * Q - MM - sign * openPriceSum)
+/// </pre>
+///
+/// 入参对应 Java 局部变量（调用方先算好再传入，见本节前言）：`equity` = E =
+/// `openInitMarginSum + position.estimateUnrealizedProfit(priceRecord)`；
+/// `maintenance_margin` = MM = `position.calculateMaintenanceMargin(spec, priceRecord)`；
+/// `open_init_margin_sum`/`open_volume`/`open_price_sum`/`mark_price`/`sign` 直接对应
+/// `position.openInitMarginSum`/`openVolume`/`openPriceSum`/`priceRecord.markPrice`/
+/// `direction.getMultiplier()`。
+pub fn calculate_size_to_liquidate(
+    equity: i64,
+    maintenance_margin: i64,
+    open_init_margin_sum: i64,
+    open_volume: i64,
+    open_price_sum: i64,
+    mark_price: i64,
+    sign: i64,
+) -> i64 {
+    // 分子 (E-MM)*Q：大持仓 + 巨大 PnL 场景下溢出，用 multiplyExact 早抛。
+    let numerator = mul_exact(equity - maintenance_margin, open_volume);
+    // 分母 Pm*Q：notional 大单同样可能溢出——Java 只对这一处乘法用 multiplyExact，其余
+    // 加减保留裸运算，逐字对齐（Java 源码注释同样只标注了这一处溢出风险）。
+    let denominator =
+        open_init_margin_sum + sign * mul_exact(mark_price, open_volume) - maintenance_margin - sign * open_price_sum;
+    ceil_divide(numerator, denominator)
+}
+
+/// 估算强平 x 手后，对缺口的改善。对应 Java `calculateDeficitAfterLiquidate(long size,
+/// SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord
+/// priceRecord)`（`:228-240`）。
+///
+/// <pre>
+/// deficit  = totalMM - totalEquity
+/// Δdeficit = ΔMM - ΔE,  其中 ΔE = ΔIM + ΔPnl
+/// ΔD = ΔMM - ΔIM - ΔPnl
+///    = ΔMM - openInitMarginSum * x / Q - sign * (Pm - Pe) * x,   Pe = openPriceSum / Q
+///    = ΔMM - openInitMarginSum * x / Q - sign * (Pm - openPriceSum / Q) * x
+///    = ΔMM - (openInitMarginSum + sign * (Pm * Q - openPriceSum) * x) / Q
+/// </pre>
+///
+/// 入参对应 Java 局部变量：`sign` = `position.direction.getMultiplier()`；
+/// `open_init_margin_sum`/`open_volume`/`open_price_sum`/`mark_price` 直接对应 position/
+/// priceRecord 字段；`maintenance_margin_now`/`maintenance_margin_after` 对应 Java
+/// `spec.calculateMaintenanceMargin(notionalNow)`/`spec.calculateMaintenanceMargin(notionalAfter)`
+/// 的调用结果（`notionalNow = openVolume * markPrice`、`notionalAfter = (openVolume - size) *
+/// markPrice`——分档 MM 表查询依赖 `CoreSymbolSpecification`，本模块零依赖模型层，故由调用方
+/// 先算好两个 notional 对应的 MM 再传入，见本节前言）。
+pub fn calculate_deficit_after_liquidate(
+    size: i64,
+    sign: i64,
+    open_init_margin_sum: i64,
+    open_volume: i64,
+    open_price_sum: i64,
+    mark_price: i64,
+    maintenance_margin_now: i64,
+    maintenance_margin_after: i64,
+) -> i64 {
+    let delta_mm = maintenance_margin_now - maintenance_margin_after;
+    let numerator = open_init_margin_sum + sign * (mul_exact(mark_price, open_volume) - open_price_sum);
+    // numerator * size 在大仓位场景溢出（同 fee 路径 bug 同款 pattern），ceilMulDiv 自带 hybrid 兜底。
+    // numerator 可能为负（sign=-1 short），故把 size（恒正）放第一参，numerator 放第二参
+    // （ceil_mul_div 支持 b 为负）。
+    delta_mm - ceil_mul_div(size, numerator, open_volume)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,5 +922,74 @@ mod tests {
             calculate_amount_bid_release_corr_maker(100, 5, 4, 100_000, 10_000, 1_000_000),
             146
         );
+    }
+
+    // ------------------------------------------------------------------
+    // P6 Task 1：强平数学原语 —— CoreArithmeticUtils.java:180-240
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn calculate_liquidation_fee_fixed_vs_proportional() {
+        // 固定费：结构同 calculate_taker_fee。
+        assert_eq!(calculate_liquidation_fee(100, 3_000_000_000, 2, 0), 200);
+        // 比例费：与 calculate_taker_fee_fixed_vs_proportional 用同一组数字核对。
+        assert_eq!(
+            calculate_liquidation_fee(100_000_000, 3_000_000_000, 500, 1_000_000),
+            150_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn calculate_size_to_liquidate_long_exact_division() {
+        // LONG（sign=+1）：E=-50, MM=40, Q=10, Pm=90, openInitMarginSum=50, openPriceSum=1000。
+        // numerator=(E-MM)*Q=(-50-40)*10=-900
+        // denominator=50+1*90*10-40-1*1000=50+900-40-1000=-90
+        // ceil_divide(-900,-90)=10（整除，无需进位）
+        assert_eq!(calculate_size_to_liquidate(-50, 40, 50, 10, 1000, 90, 1), 10);
+    }
+
+    #[test]
+    fn calculate_size_to_liquidate_positive_sign_ceils_up_on_remainder() {
+        // 任意标量组合验证 ceil 分支：sign=1, Q=7, Pm=13, openInitMarginSum=20, openPriceSum=50,
+        // E=100, MM=30。
+        // numerator=(100-30)*7=490
+        // denominator=20+1*13*7-30-1*50=20+91-30-50=31
+        // ceil_divide(490,31): 490/31=15 余25(31*15=465)≠0 -> 16
+        assert_eq!(calculate_size_to_liquidate(100, 30, 20, 7, 50, 13, 1), 16);
+    }
+
+    #[test]
+    fn calculate_size_to_liquidate_short_sign_flips_denominator_terms() {
+        // 同上但 sign=-1（SHORT）：numerator 不受 sign 影响，仅 denominator 变。
+        // denominator=20+(-1)*13*7-30-(-1)*50=20-91-30+50=-51
+        // ceil_divide(490,-51): 490/-51 向零截断=-9（51*9=459<490<510=51*10），余数
+        // 490-(-51*-9)=490-459=31≠0 -> -9+1=-8（本函数逐字对齐 ceil_divide 的既有实现，
+        // 不重新论证其数学 ceiling 语义，见该函数文档）。
+        assert_eq!(calculate_size_to_liquidate(100, 30, 20, 7, 50, 13, -1), -8);
+    }
+
+    #[test]
+    fn calculate_deficit_after_liquidate_positive_sign() {
+        // size=3, sign=1, openInitMarginSum=20, openVolume=7, openPriceSum=50, markPrice=13,
+        // MM_now=40, MM_after=25。
+        // deltaMM=40-25=15
+        // numerator=20+1*(13*7-50)=20+41=61
+        // ceil_mul_div(3,61,7)=ceil(183/7)=ceil(26.14..)=27
+        // result=15-27=-12
+        assert_eq!(calculate_deficit_after_liquidate(3, 1, 20, 7, 50, 13, 40, 25), -12);
+    }
+
+    #[test]
+    fn calculate_deficit_after_liquidate_negative_sign() {
+        // 同上但 sign=-1：numerator=20+(-1)*(91-50)=20-41=-21
+        // ceil_mul_div(3,-21,7)=ceil(-63/7)=ceil(-9)=-9（整除，无需进位）
+        // result=15-(-9)=24
+        assert_eq!(calculate_deficit_after_liquidate(3, -1, 20, 7, 50, 13, 40, 25), 24);
+    }
+
+    #[test]
+    fn calculate_deficit_after_liquidate_zero_size_is_pure_delta_mm() {
+        // size=0：ceil_mul_div(0, numerator, Q)=0，结果退化为纯 deltaMM。
+        assert_eq!(calculate_deficit_after_liquidate(0, 1, 20, 7, 50, 13, 40, 25), 15);
     }
 }
