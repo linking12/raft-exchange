@@ -15,7 +15,7 @@ pub struct CoreCurrencySpecification {
     /// （`LoanService::collateral_weight_for_base` 门守 `LOAN_COLLATERAL_NOT_ALLOWED`）；
     /// 对应 Java `CoreCurrencySpecification.collateralWeightBps`。只此一处 mutation point：
     /// `ADD_LOAN` 的 `SymbolLoanConfig` apply 路径（本 Task 未落地，仅字段本身）。
-    pub collateral_weight_bps: i64,
+    pub collateral_weight_bps: i32,
 }
 
 #[cfg(test)]
