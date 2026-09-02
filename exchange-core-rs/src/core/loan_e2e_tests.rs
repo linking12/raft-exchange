@@ -42,6 +42,7 @@ use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::exchange_core::ExchangeCore;
+use crate::core::processors::loan::loan_service::LoanService;
 
 // ================================================================================================
 // 守恒 / 不变式 helper（Step 1）
@@ -922,7 +923,19 @@ enum GenLoanCmd {
     PoolWithdraw { currency_idx: usize, amount: i64 },
     IfDeposit { currency_idx: usize, amount: i64 },
     IfWithdraw { currency_idx: usize, amount: i64 },
-    ForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64 },
+    /// `full_drain`: coverage fix for a blind spot found in Task 9 review — with `lots` alone
+    /// drawn independently of the target loan's actual `collateral_amount`, a single command can
+    /// essentially never request *exactly* the remaining collateral (any overshoot is rejected
+    /// outright by `handle_loan_force_liquidate`'s `sellAmount > collateralAmount` check, it is
+    /// never clamped), so `collateral_amount` can (almost) never be driven to exactly 0 and the
+    /// terminal `sellable_lots == 0` / `traded_size == 0` LIF-takeover branch in
+    /// `post_process_loan_force_liquidate` was never reached by the fuzzer (0 hits across ~442
+    /// isolated force-liquidate attempts in two 3000-case runs). When `true`, the executor (which
+    /// has runtime access to the target loan's live state, unlike this generator) overrides `lots`
+    /// with the loan's *actual* remaining collateral converted to lots before submitting —
+    /// `lots` here still gets generated and is used verbatim whenever `full_drain` is `false` or
+    /// the target loan doesn't exist, preserving the original partial-fill/rejection coverage.
+    ForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64, full_drain: bool },
     CrossForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64 },
     Reprice,
     SetMarkPrice { on_cross_symbol: bool, price: i64 },
@@ -962,8 +975,11 @@ fn gen_loan_cmd(n_users: usize) -> impl Strategy<Value = GenLoanCmd> {
         (0usize..3, 1i64..=5_000).prop_map(|(currency_idx, amount)| GenLoanCmd::IfDeposit { currency_idx, amount });
     let if_withdraw =
         (0usize..3, 1i64..=5_000).prop_map(|(currency_idx, amount)| GenLoanCmd::IfWithdraw { currency_idx, amount });
-    let force_liquidate = (0..n_users, loan_id_space.clone(), 1i64..=2_000)
-        .prop_map(|(uid_idx, loan_id, lots)| GenLoanCmd::ForceLiquidate { uid_idx, loan_id, lots });
+    // 40% full_drain: strengthens coverage toward the isolated LIF-takeover terminal branch (see
+    // `GenLoanCmd::ForceLiquidate` doc) while keeping the majority partial/random-overshoot, as
+    // before, for rejection-path and partial-fill coverage.
+    let force_liquidate = (0..n_users, loan_id_space.clone(), 1i64..=2_000, prop::bool::weighted(0.4))
+        .prop_map(|(uid_idx, loan_id, lots, full_drain)| GenLoanCmd::ForceLiquidate { uid_idx, loan_id, lots, full_drain });
     let cross_force_liquidate = (0..n_users, loan_id_space, 1i64..=2_000)
         .prop_map(|(uid_idx, loan_id, lots)| GenLoanCmd::CrossForceLiquidate { uid_idx, loan_id, lots });
     let reprice = Just(GenLoanCmd::Reprice);
@@ -1125,9 +1141,29 @@ proptest! {
                     let cur = PT_CURRENCIES[*currency_idx];
                     let _ = submit(&mut core, cmd_loan_if_withdraw(order_id, cur, *amount));
                 }
-                GenLoanCmd::ForceLiquidate { uid_idx, loan_id, lots } => {
+                GenLoanCmd::ForceLiquidate { uid_idx, loan_id, lots, full_drain } => {
                     let uid = uids[*uid_idx];
-                    let _ = submit(&mut core, cmd_loan_force_liquidate(order_id, uid, PT_SYMBOL, *loan_id, 1, *lots, now));
+                    // full_drain: read the target loan's *actual live* collateral_amount and
+                    // request exactly that many lots (converted via the same scale conversion
+                    // `handle_loan_force_liquidate` itself uses) so the generator can reach the
+                    // `collateral_amount -> 0` state that triggers the terminal LIF-takeover
+                    // branch — a request that can never be produced by drawing `lots` in isolation
+                    // from the loan's runtime state, since any overshoot beyond the actual
+                    // remaining collateral is rejected outright (not clamped). Falls back to the
+                    // originally-generated `lots` whenever the loan doesn't exist or full_drain
+                    // wasn't rolled, preserving partial-fill/rejection coverage.
+                    let effective_lots = if *full_drain {
+                        core.ups.get(uid).and_then(|up| up.isolated_loans.get(loan_id)).and_then(|loan| {
+                            let spec = core.ssp.get_symbol(PT_SYMBOL)?;
+                            let base_spec = core.ssp.get_currency(PT_BASE)?;
+                            let full = LoanService::collateral_amount_to_lots(loan.collateral_amount, spec, base_spec);
+                            (full > 0).then_some(full)
+                        })
+                    } else {
+                        None
+                    }
+                    .unwrap_or(*lots);
+                    let _ = submit(&mut core, cmd_loan_force_liquidate(order_id, uid, PT_SYMBOL, *loan_id, 1, effective_lots, now));
                 }
                 GenLoanCmd::CrossForceLiquidate { uid_idx, loan_id, lots } => {
                     let uid = uids[*uid_idx];
