@@ -69,7 +69,12 @@ impl MatchingEngineRouter {
             OrderCommandType::MoveOrder => book.move_order(cmd),
             OrderCommandType::CancelOrder => book.cancel_order(cmd),
             OrderCommandType::ReduceOrder => book.reduce_order(cmd),
-            OrderCommandType::PlaceOrder => {
+            OrderCommandType::PlaceOrder | OrderCommandType::ClosePosition => {
+                // 对应 Java `IOrderBook.processCommand`（`:191-199`）：`PLACE_ORDER` 与
+                // `CLOSE_POSITION`（P4 期货纯减仓命令）共用同一分支——`newOrder` 本身不区分二者，
+                // 差异全在 R1（`RiskEngine::place_order`/`close_position_risk_check` 各自算好
+                // `cmd.size`/`action`/`leverage`/`margin_mode` 再放行）与撮合是否触发 R2 期货结算
+                // （`handler_risk_release` 按 `spec.symbol_type` 分支，不看 `cmd.command`）。
                 if cmd.result_code == Some(CommandResultCode::ValidForMatchingEngine) {
                     // new_order 内部已经写 cmd.result_code（P1 收尾修复），此处直接透传其返回值。
                     book.new_order(cmd)
@@ -229,5 +234,72 @@ mod tests {
         router.process_order(&mut req);
         let md = req.market_data.expect("应回填 L2 数据");
         assert_eq!(md.bid_volumes, vec![10]);
+    }
+
+    // --------------------------------------------------------------------------
+    // P4 Task 7：ClosePosition 与 PlaceOrder 共用 newOrder 分支（对应 Java
+    // `IOrderBook.processCommand:191-199`）——ME 对撮合无感，只看 `cmd.result_code` 是否已被
+    // R1 放行。回归此前遗漏（`ClosePosition` 落在 `_ => MatchingUnsupportedCommand`，会覆盖 R1
+    // 已经写好的 `ValidForMatchingEngine`/`Success` 之外的结果）。
+    // --------------------------------------------------------------------------
+
+    fn close_position_cmd(order_id: i64, symbol: i32, result_code: CommandResultCode) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::ClosePosition,
+            order_id,
+            symbol,
+            price: 100,
+            size: 10,
+            action: Some(OrderAction::Ask),
+            order_type: Some(OrderType::Gtc),
+            uid: order_id,
+            result_code: Some(result_code),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn close_position_valid_for_matching_engine_routes_and_rests_on_book() {
+        let mut router = MatchingEngineRouter::new();
+        router.add_symbol(&spec(1));
+
+        let mut close = close_position_cmd(1, 1, CommandResultCode::ValidForMatchingEngine);
+        let rc = router.process_order(&mut close);
+        assert_eq!(rc, CommandResultCode::Success);
+        assert_eq!(close.result_code, Some(CommandResultCode::Success));
+
+        let mut req = OrderCommand {
+            command: OrderCommandType::OrderBookRequest,
+            symbol: 1,
+            size: 10,
+            ..Default::default()
+        };
+        router.process_order(&mut req);
+        let md = req.market_data.expect("应回填 L2 数据");
+        assert_eq!(md.ask_prices, vec![100]);
+        assert_eq!(md.ask_volumes, vec![10]);
+    }
+
+    #[test]
+    fn close_position_not_valid_for_matching_engine_is_not_placed_and_result_code_preserved() {
+        let mut router = MatchingEngineRouter::new();
+        router.add_symbol(&spec(1));
+
+        // R1 拒绝（如 UnsupportedSymbolType）：ME 不应撮合/挂簿，也不应覆盖成
+        // MatchingUnsupportedCommand。
+        let mut close = close_position_cmd(1, 1, CommandResultCode::UnsupportedSymbolType);
+        let rc = router.process_order(&mut close);
+        assert_eq!(rc, CommandResultCode::UnsupportedSymbolType);
+        assert_eq!(close.result_code, Some(CommandResultCode::UnsupportedSymbolType));
+
+        let mut req = OrderCommand {
+            command: OrderCommandType::OrderBookRequest,
+            symbol: 1,
+            size: 10,
+            ..Default::default()
+        };
+        router.process_order(&mut req);
+        let md = req.market_data.expect("应回填 L2 数据");
+        assert!(md.ask_prices.is_empty());
     }
 }
