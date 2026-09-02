@@ -51,6 +51,20 @@ impl SymbolSpecificationProvider {
     pub fn get_currency(&self, currency: i32) -> Option<&CoreCurrencySpecification> {
         self.currencies.get(&currency)
     }
+
+    /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`（`:77-81`）：反查
+    /// base/quote 现货对 spec；命中多个取 symbolId 最小者，无则 `None`。`add_symbol` 已对现货
+    /// `(base,quote)` 强制唯一（见其文档），所以至多一个匹配——这里直接线性扫
+    /// `symbols`（`BTreeMap` 天然按 `symbol_id` 升序，天然满足"取最小者"语义），不必像 Java
+    /// 那样另建 O(1) 反查索引。Cross LTV/`valueInNumeraire`（Task 5+）用此反查 currency→numeraire
+    /// 的估值路径。
+    pub fn find_spot_symbol(&self, base_currency: i32, quote_currency: i32) -> Option<&CoreSymbolSpecification> {
+        self.symbols.values().find(|s| {
+            s.symbol_type == SymbolType::CurrencyExchangePair
+                && s.base_currency == base_currency
+                && s.quote_currency == quote_currency
+        })
+    }
 }
 
 #[cfg(test)]
