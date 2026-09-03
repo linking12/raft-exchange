@@ -63,6 +63,25 @@ impl ExchangeCore {
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
         self.matching.process_order(cmd); // ME
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
+        self.drain_liquidation_commands();
+    }
+
+    /// P6 Task 7b：排空强平引擎的提交队列（`LiquidationEngine::pending_commands`），把检测/状态机
+    /// 推进产出的 `FORCE_LIQUIDATION`/`IF_TAKEOVER`/`AUTO_DELEVERAGING` 命令依次喂回完整管线
+    /// （R1→ME→R2）——替代 Java disruptor `submit` 的 ring 重入（本移植单管线无总线，见
+    /// `liquidation_engine.rs` 模块文档"submit → 队列"）。
+    ///
+    /// **FIFO + 逐条弹出**：处理一条生成命令时可能再入队后继命令（FORCE REJECT→IF、IF REJECT→ADL），
+    /// 故每轮重新检查队首而非一次性快照——保持提交顺序。**有界终止**：每条 FORCE/IF/ADL 的 R2
+    /// `advance_liquidation` 至多再产出一条下一级命令（FORCE→IF→ADL→终态，ADL 恒终态），生成命令的
+    /// R1 不触发 `check_positions`（只有 markprice/scan/funding 触发），故链深≤3/仓位，必然收敛。
+    fn drain_liquidation_commands(&mut self) {
+        while !self.risk.liquidation_engine.pending_commands.is_empty() {
+            let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
+            self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
+            self.matching.process_order(&mut generated);
+            self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
+        }
     }
 }
 
@@ -652,5 +671,223 @@ mod loan_force_liquidate_tests {
         assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 0);
 
         assert_eq!(conserved_total(&core, QUOTE), before_quote);
+    }
+}
+
+// ============================================================================
+// P6 Task 7b：期货强平全链路 e2e（markprice 触发检测 → FORCE→IF→ADL 状态机 → 队列排空重喂 →
+// collect_liquidation_fee + advance_liquidation + normalize + 索引维护）。参考文档 §1。
+//
+// 直接对 `ExchangeCore` 写（而非 `ExchangeApi`）：需要 `core.risk.liquidation_engine.is_running`
+// 的 leader 门开关与 `liquidation_service`（IFNotional）的可变/只读访问，`ExchangeApi` 未暴露。
+// ============================================================================
+#[cfg(test)]
+mod liquidation_engine_e2e_tests {
+    use super::*;
+    use crate::core::common::cmd::command_result_code::CommandResultCode;
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+    use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use crate::core::common::margin_mode::MarginMode;
+    use crate::core::common::order_action::OrderAction;
+    use crate::core::common::order_type::OrderType;
+    use crate::core::common::position_direction::PositionDirection;
+    use crate::core::common::symbol_type::SymbolType;
+    use std::collections::BTreeMap;
+
+    const BASE: i32 = 1;
+    const QUOTE: i32 = 2;
+    const FUT: i32 = 400;
+    const BORROWER: i64 = 10; // 被强平者
+    const M1: i64 = 20; // 开仓对手（借款人开 LONG 时的 maker SHORT）
+    const M2: i64 = 30; // 强平吸单方（FORCE ASK 的 BID 对手）
+
+    /// 期货 spec：MM 单档 5%（rate=500, scale=10000）；base/quote scale=1（恒等缩放，守恒可直接
+    /// 加 IFNotional.available）。
+    fn fut_spec() -> CoreSymbolSpecification {
+        let mut mm = BTreeMap::new();
+        mm.insert(i64::MAX, 500);
+        CoreSymbolSpecification {
+            symbol_id: FUT,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: BASE,
+            quote_currency: QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            taker_fee: 0,
+            maker_fee: 0,
+            fee_scale_k: 0,
+            maintenance_margin: mm,
+            maintenance_margin_scale_k: 10_000,
+            liquidation_fee: 200, // 2%（proportional，fee_scale_k=10000）
+            ..Default::default()
+        }
+    }
+
+    fn seeded() -> ExchangeCore {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
+        let spec = CoreSymbolSpecification { fee_scale_k: 10_000, ..fut_spec() };
+        assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
+        core.matching.add_symbol(&spec);
+        for uid in [BORROWER, M1, M2] {
+            core.ups.add_empty_user_profile(uid);
+            core.ups.get_mut(uid).unwrap().add_to_account(QUOTE, 10_000_000);
+        }
+        core.risk.liquidation_engine.is_running = true; // leader
+        core
+    }
+
+    fn fut_order(order_id: i64, uid: i64, price: i64, size: i64, action: OrderAction, order_type: OrderType, leverage: i32) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id,
+            uid,
+            symbol: FUT,
+            price,
+            size,
+            reserve_bid_price: price,
+            action: Some(action),
+            order_type: Some(order_type),
+            leverage,
+            margin_mode: MarginMode::Isolated,
+            timestamp: 1_000,
+            ..Default::default()
+        }
+    }
+
+    fn markprice(price: i64, ts: i64) -> OrderCommand {
+        OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price, timestamp: ts, ..Default::default() }
+    }
+
+    /// 守恒（含 IF，Ruling P6-I）：Σaccounts + fees + adjustments + Σ(仓位 estimate_pnl(mark)+
+    /// extra_margin) + Σ IFNotional.available + Σ IF 接管仓 estimate_pnl(mark)。scale 全 1 故 IF
+    /// 项（notional 单位）可直接相加。
+    fn conserved(core: &ExchangeCore) -> i64 {
+        let cur = QUOTE;
+        let mark = *core.risk.last_price_cache.get(&FUT).unwrap_or(&0);
+        let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
+        total += *core.risk.fees.get(&cur).unwrap_or(&0);
+        total += *core.risk.adjustments.get(&cur).unwrap_or(&0);
+        for u in core.ups.users.values() {
+            for p in u.positions.values() {
+                if p.currency == cur {
+                    total += p.estimate_pnl(mark) + p.extra_margin;
+                }
+            }
+        }
+        for n in core.risk.liquidation_service.notionals.values() {
+            total += n.available;
+        }
+        for ifp in core.risk.liquidation_service.positions.values() {
+            let sign = ifp.direction.multiplier() as i64;
+            total += sign * (mark * ifp.open_volume - ifp.open_price_sum);
+        }
+        total
+    }
+
+    /// 开借款人 LONG 10@100、leverage 10（margin=100）：M1 挂 ASK@100（开 SHORT），借款人 BID@100 吃单。
+    fn open_borrower_long(core: &mut ExchangeCore) {
+        let mut m1 = fut_order(1, M1, 100, 10, OrderAction::Ask, OrderType::Gtc, 10);
+        core.process_command(&mut m1);
+        assert_eq!(m1.result_code, Some(CommandResultCode::Success));
+        let mut b = fut_order(2, BORROWER, 100, 10, OrderAction::Bid, OrderType::Gtc, 10);
+        core.process_command(&mut b);
+        assert_eq!(b.result_code, Some(CommandResultCode::Success));
+        assert_eq!(core.ups.get(BORROWER).unwrap().positions[&FUT].direction, PositionDirection::Long);
+        assert_eq!(core.ups.get(BORROWER).unwrap().positions[&FUT].open_volume, 10);
+    }
+
+    #[test]
+    fn on_position_opened_indexes_borrower_and_makers() {
+        let mut core = seeded();
+        core.process_command(&mut markprice(100, 1_000)); // 健康，无触发
+        open_borrower_long(&mut core);
+        // 借款人 LONG + M1 SHORT 都应进 symbol_to_users 索引（新仓 commit 时登记）。
+        let holders = core.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("索引应有该 symbol");
+        assert!(holders.contains(&BORROWER));
+        assert!(holders.contains(&M1));
+    }
+
+    #[test]
+    fn markprice_drop_triggers_full_liquidation_collects_fee_to_if_and_conserves() {
+        let mut core = seeded();
+        core.process_command(&mut markprice(100, 1_000));
+        open_borrower_long(&mut core);
+        // 破产价 = ceil_mul_div(open_price_sum - margin_base, fee_scale_k, open_volume*(fee_scale_k -
+        // total_fee)) = ceil_mul_div(1000-100, 10000, 10*(10000-200)) = ceil(9000000/98000) = 92。
+        // M2 挂 BID@92 size10（resting），恰好吸收 FORCE ASK@92。
+        let mut m2 = fut_order(3, M2, 92, 10, OrderAction::Bid, OrderType::Gtc, 10);
+        core.process_command(&mut m2);
+        assert_eq!(m2.result_code, Some(CommandResultCode::Success));
+
+        // mark 跌到 94：借款人 LONG（avg100/lev10/margin100）equity=100-60=40 < MM=47 -> 触发强平。
+        let before = conserved(&core);
+        core.process_command(&mut markprice(94, 2_000));
+
+        // FORCE 已由 markprice 钩子生成并被 drain_liquidation_commands 排空重喂、成交平仓。
+        assert!(
+            core.risk.liquidation_engine.pending_commands.is_empty(),
+            "队列必须被排空（生成的 FORCE 已处理）"
+        );
+        assert!(
+            !core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT),
+            "借款人 LONG 被 FORCE 全平，仓位移除"
+        );
+        // 清算费进 IFNotional.available（成交 10@92 -> notional 920 -> fee=ceil(920*200/10000)=19）。
+        // 精确 fee 公式由 Task 1 `calculate_liquidation_fee` 测试覆盖，这里只验证"费用确实计入 IF"。
+        let if_available: i64 = core.risk.liquidation_service.notionals.values().map(|n| n.available).sum();
+        assert!(if_available > 0, "清算费必须计入 IFNotional.available");
+        // 全局守恒（含 IF 项）在强平前后不变。
+        assert_eq!(conserved(&core), before, "强平（含清算费转入 IF）全局守恒");
+    }
+
+    #[test]
+    fn direct_force_size_clamped_by_normalize() {
+        // 直接投递一条 size 远超 open_volume 的 FORCE（模拟陈旧/换届命令）——normalize 必须夹到
+        // open_volume，绝不超平。走 advance_liquidation 的 flow=None + FORCE recovery 路径。
+        let mut core = seeded();
+        core.process_command(&mut markprice(100, 1_000));
+        open_borrower_long(&mut core); // 借款人 LONG 10
+        let mut m2 = fut_order(3, M2, 90, 100, OrderAction::Bid, OrderType::Gtc, 10); // 充足 BID 流动性
+        core.process_command(&mut m2);
+
+        let before = conserved(&core);
+        // FORCE ASK size=999（>> 10），限价 90。normalize 夹到 10。
+        let mut force = OrderCommand {
+            command: OrderCommandType::ForceLiquidation,
+            order_id: 42,
+            uid: BORROWER,
+            symbol: FUT,
+            price: 90,
+            size: 999,
+            action: Some(OrderAction::Ask),
+            order_type: Some(OrderType::Ioc),
+            timestamp: 3_000,
+            ..Default::default()
+        };
+        core.process_command(&mut force);
+        assert_eq!(force.size, 10, "normalize 必须把 cmd.size 夹到 open_volume=10，不得超平");
+        assert!(!core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT), "10 手全平后仓位移除");
+        assert_eq!(conserved(&core), before, "夹取后正常成交，守恒");
+    }
+
+    #[test]
+    fn force_with_no_liquidity_cascades_force_if_adl_without_panic_and_conserves() {
+        // 无吸单流动性：FORCE 全 REJECT → 状态机转 WAIT_IF 并入队 IF → IF 池空 REJECT → 转 WAIT_ADL
+        // 入队 ADL → 无 ADL 候选 → 终态。整条级联经队列排空自动跑完，不 panic，守恒。
+        let mut core = seeded();
+        core.process_command(&mut markprice(100, 1_000));
+        open_borrower_long(&mut core); // 借款人 LONG 10；M1 SHORT 10（唯一对手，不挂 BID）
+
+        let before = conserved(&core);
+        core.process_command(&mut markprice(94, 2_000)); // 触发，但无 BID 吸单
+
+        // 级联跑完、队列排空、不 panic。
+        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "FORCE→IF→ADL 级联后队列排空");
+        // 无任何流动性/IF 池/ADL 候选 -> 借款人仓位仍在（没被平掉），但流程已推进到终态或等待。
+        // 关键断言：整个过程不 panic 且守恒（无凭空造钱）。
+        assert_eq!(conserved(&core), before, "无成交的级联不改变任何余额，守恒");
     }
 }

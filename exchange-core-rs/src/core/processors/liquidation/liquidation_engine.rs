@@ -128,7 +128,8 @@ impl LiquidationEngine {
         if !self.is_running {
             return;
         }
-        let uids: Vec<i64> = if cmd.symbol >= 0 {
+        let targeted = cmd.symbol >= 0;
+        let uids: Vec<i64> = if targeted {
             match self.symbol_to_users.get(&cmd.symbol) {
                 Some(holders) => holders.iter().copied().collect(),
                 None => Vec::new(),
@@ -136,8 +137,27 @@ impl LiquidationEngine {
         } else {
             ups.users.keys().copied().filter(|&uid| Self::covered_by_scan_slice(cmd, uid)).collect()
         };
-        for uid in uids {
-            self.check_user(uid, cmd.timestamp, ups, ssp, last_price_cache);
+        for uid in &uids {
+            self.check_user(*uid, cmd.timestamp, ups, ssp, last_price_cache);
+        }
+
+        // lazy-prune（本移植对 Java `onPositionClosed` 的替代，见模块文档"移植偏差"）：Java 在
+        // `removePositionRecord` 里 eager 摘除索引；本移植不把 `liquidation_engine` 侵入式穿进散落
+        // 各处的静态结算函数（`handle_matcher_event_margin`/`adl_close_and_settle` 等），改为在
+        // targeted 检测时顺带清理——凡本 symbol 的持有者已无该 symbol 任何仓位记录（已被平仓移除）
+        // 则从索引摘除。等效于 Java 的 eager 移除（最终态一致，索引有界不泄漏），且天然 HEDGE 安全
+        // （按"是否还有该 symbol 的任何仓位记录"判定，与 Java `onPositionClosed` 的 `p.symbol==symbol`
+        // 语义一致）。correctness 不依赖索引精度：scan-slice 兜底全量整扫 + `check_user` 每次读活
+        // 仓位状态，stale/缺失条目至多影响 targeted 效率，不影响强平正确性。
+        if targeted {
+            if let Some(holders) = self.symbol_to_users.get_mut(&cmd.symbol) {
+                holders.retain(|uid| {
+                    ups.get(*uid).is_some_and(|u| u.positions.values().any(|p| p.symbol == cmd.symbol))
+                });
+                if holders.is_empty() {
+                    self.symbol_to_users.remove(&cmd.symbol);
+                }
+            }
         }
         // Task 8: self.loan_liquidation_engine.check_loans(cmd, ...) —— 借贷侧强平检测。
     }
@@ -306,7 +326,7 @@ impl LiquidationEngine {
                 continue; // MM <= equity < 1.2×MM：仅预警（P6-B no-op）
             }
             // 风险度升序：最危险优先。稳定排序保同分相对序（对齐 Java Comparator + FastList 稳定）。
-            risk_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            risk_pairs.sort_by_key(|p| p.0);
             Self::force_cross_decisions(
                 profile,
                 &risk_pairs,
