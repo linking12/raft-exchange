@@ -32,3 +32,7 @@ RAFT-EXCHANGE-DATA/
 
 # AI session tooling
 .claude/
+
+# SDD/规划文档 + proptest 回归种子——不纳入版本控制
+/docs/
+proptest-regressions/
