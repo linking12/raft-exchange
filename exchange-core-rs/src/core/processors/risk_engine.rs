@@ -35,6 +35,7 @@ use crate::core::processors::adl_command_processor::AdlCommandProcessor;
 use crate::core::processors::funding_fee_command_processor::FundingFeeCommandProcessor;
 use crate::core::processors::if_command_processor::IfCommandProcessor;
 use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
+use crate::core::processors::liquidation::liquidation_engine::LiquidationEngine;
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
 use crate::core::processors::loan::loan_service::LoanService;
@@ -82,6 +83,13 @@ pub struct RiskEngine {
     /// `liquidation_service.rs` 模块文档）。默认构造（全空），现货/期货既有路径从不读它，新增
     /// 字段对它们是纯 no-op。
     pub liquidation_service: LiquidationService,
+    /// 对应 Java `RiskEngine.liquidationEngine`（P6 Task 7 新增）：per-shard 期货强平引擎——
+    /// 检测（`check_positions`）+ FORCE→IF→ADL 状态机（`advance_liquidation`）+ symbol→持有者
+    /// 索引 + 提交队列（`pending_commands`，由 `ExchangeCore` 排空重喂）。**只持非复制 leader-local
+    /// 状态**（索引/leader 门/队列），不进 state_hash/snapshot（Ruling P6-E），见
+    /// `liquidation_engine.rs` 模块文档。默认构造（`is_running=false`——follower 起步，server 侧
+    /// raft leadership 切换时 toggle）。既有现货/期货非强平路径从不读它，纯新增。
+    pub liquidation_engine: LiquidationEngine,
 }
 
 impl RiskEngine {
@@ -98,6 +106,7 @@ impl RiskEngine {
             cfg_margin_trading_enabled: true,
             loan_service: LoanService::new(),
             liquidation_service: LiquidationService::new(),
+            liquidation_engine: LiquidationEngine::new(),
         }
     }
 
@@ -152,7 +161,7 @@ impl RiskEngine {
                 OrderCommandType::BalanceAdjustment => self.balance_adjustment(cmd, ups, ssp),
                 OrderCommandType::MarginAdjustment => self.margin_adjustment(cmd, ups, ssp),
                 OrderCommandType::LeverageAdjustment => self.leverage_adjustment(cmd, ups, ssp),
-                OrderCommandType::MarkpriceAdjustment => self.markprice_adjustment(cmd, ssp),
+                OrderCommandType::MarkpriceAdjustment => self.markprice_adjustment(cmd, ups, ssp),
                 OrderCommandType::RepriceLoanRates => self.reprice_loan_rates_collect(cmd),
                 OrderCommandType::InternalTransfer => self.internal_transfer_collect(cmd, ups, ssp),
                 OrderCommandType::IfDeposit => self.if_deposit(cmd, ssp),
@@ -171,14 +180,30 @@ impl RiskEngine {
             // `SETTLE_FUNDINGFEES` 不是 `is_non_trading()`（Task 1 已定），停留在主交易 switch，
             // 见 `Self::settle_funding_fees_collect` 文档。
             cmd.result_code = Some(self.settle_funding_fees_collect(cmd, ups, ssp));
+        } else if cmd.command == OrderCommandType::ForceLiquidation {
+            // `FORCE_LIQUIDATION` R1（P6 Task 7b）：对应 Java `preProcessCommand:291`——只做
+            // `normalize_cmd_position_size`（按当前 openVolume 夹取 cmd.size），随后作为 IOC 平仓单
+            // 走 ME 撮合（R2 走通用期货保证金结算 + `collect_liquidation_fee`/`advance_liquidation`
+            // 后置钩子）。size 夹取是换届/陈旧命令安全的核心（参考文档 §1.5）。
+            cmd.result_code = Some(Self::normalize_cmd_position_size(cmd, ups));
         } else if cmd.command == OrderCommandType::IfTakeover {
             // `IF_TAKEOVER` 同样不是 `is_non_trading()`（参考文档 §0 末段已确认），停留在主交易
-            // switch，见 `Self::if_takeover_collect` 文档。
+            // switch，见 `Self::if_takeover_collect` 文档。P6 Task 7b：先 `normalize_cmd_position_size`
+            // 夹取 cmd.size（对应 Java `:370`）再 collect（collect 的结果码覆盖 normalize 的）。
+            Self::normalize_cmd_position_size(cmd, ups);
             cmd.result_code = Some(self.if_takeover_collect(cmd));
         } else if cmd.command == OrderCommandType::AutoDeleveraging {
             // `AUTO_DELEVERAGING` 同样不是 `is_non_trading()`，停留在主交易 switch，见
-            // `Self::adl_collect` 文档。
+            // `Self::adl_collect` 文档。P6 Task 7b：先 `normalize_cmd_position_size` 夹取 cmd.size
+            // （对应 Java `:378`）再 collect。
+            Self::normalize_cmd_position_size(cmd, ups);
             cmd.result_code = Some(self.adl_collect(cmd, ups, ssp));
+        } else if cmd.command == OrderCommandType::LiquidationScan {
+            // `LIQUIDATION_SCAN` R1（P6 Task 7b）：对应 Java `preProcessCommand:324`——纯扫描触发，
+            // 不撮合。委托 `check_positions`（全量整扫、按切片过滤，内部 `is_running` leader 门）。
+            // 单 shard = shard 0，结果码恒 `Success`（对应 Java `:325-327` shard-0-only SUCCESS）。
+            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache);
+            cmd.result_code = Some(CommandResultCode::Success);
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
@@ -263,6 +288,9 @@ impl RiskEngine {
         }
 
         let position_key = user_profile.create_positions_key(spec.symbol_id, action, cmd.command);
+        // P6 Task 7b：新建仓位需登记进 `symbol_to_users` 索引（对应 Java `onPositionOpened`，
+        // `RiskEngine.java:490-491`——仅新仓，且在校验全过 commit 之后触发，见下方 insert 处）。
+        let is_new_position = !user_profile.positions.contains_key(&position_key);
         let mut position = match user_profile.positions.get(&position_key) {
             Some(existing) => existing.clone(),
             None => {
@@ -302,6 +330,11 @@ impl RiskEngine {
             position.pending_hold(action, cmd.size, cmd.price);
         }
         user_profile.positions.insert(position_key, position);
+        // P6 Task 7b：新仓 commit 后登记进强平索引（对应 Java `onPositionOpened`，仅新仓）。
+        // `user_profile` 借用在上一句 insert 后释放，可安全访问平级字段 `liquidation_engine`。
+        if is_new_position {
+            self.liquidation_engine.on_position_opened(user_profile.uid, spec.symbol_id);
+        }
 
         CommandResultCode::ValidForMatchingEngine
     }
@@ -819,6 +852,9 @@ impl RiskEngine {
         // 的分支（`:972-976`）。
         if cmd.command == OrderCommandType::SettleFundingfees {
             self.settle_funding_fees_apply(cmd, ups, ssp);
+            // P6 Task 7b：对应 Java `handlerRiskRelease:977`——资金费 R2 结算后触发同 symbol 的强平
+            // 检测（资金费结算本身可能把某仓推破产）。这是 Task 4 记的 checkPositions 钩子 retrofit。
+            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache);
             return;
         }
         // `IF_TAKEOVER` 是本移植第四个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链传数据
@@ -830,6 +866,8 @@ impl RiskEngine {
         // `if_command_processor.rs` 模块文档）。
         if cmd.command == OrderCommandType::IfTakeover {
             self.if_takeover_apply(cmd, ups, ssp);
+            // P6 Task 7b：对应 Java `handlerRiskRelease:997`——IF R2 结算后推进状态机（REJECT→ADL）。
+            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
         // `AUTO_DELEVERAGING` 是本移植第五个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链
@@ -841,6 +879,8 @@ impl RiskEngine {
         // `:997`，Task 7 排期，同 `if_takeover_apply` 文档）。
         if cmd.command == OrderCommandType::AutoDeleveraging {
             self.adl_apply(cmd, ups, ssp);
+            // P6 Task 7b：对应 Java `handlerRiskRelease:997`——ADL R2 结算后推进状态机（恒终态）。
+            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
         if cmd.command.is_non_trading() {
@@ -889,6 +929,28 @@ impl RiskEngine {
                 .get_currency(spec.quote_currency)
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency))
                 .clone();
+
+            // P6 Task 7b：`FORCE_LIQUIDATION` 的 `collect_liquidation_fee` 需要 TRADE 事件的
+            // Σsize / Σ(size×price)——但 `handle_matcher_event_margin` 会消费整条链、不回填
+            // `cmd.matcher_event`（同 loan force-liquidate 的 peek 先例，见上方现货分支注释）。故在
+            // 消费之前非破坏性 peek 一遍算好聚合量。非 FORCE 命令不产生额外开销（分支短路，恒 0）。
+            let is_force = cmd.command == OrderCommandType::ForceLiquidation;
+            let (force_taker_size, force_taker_size_price) = if is_force {
+                let mut taker_size: i64 = 0;
+                let mut taker_size_price: i128 = 0;
+                let mut cursor = Some(mte.as_ref());
+                while let Some(ev) = cursor {
+                    if ev.event_type == MatcherEventType::Trade {
+                        taker_size += ev.size;
+                        taker_size_price += ev.size as i128 * ev.price as i128;
+                    }
+                    cursor = ev.next.as_deref();
+                }
+                (taker_size, taker_size_price)
+            } else {
+                (0i64, 0i128)
+            };
+
             Self::handle_matcher_event_margin(
                 cmd,
                 mte,
@@ -899,6 +961,38 @@ impl RiskEngine {
                 &quote_currency_spec,
                 mark_price_for_futures,
             );
+
+            // P6 Task 7b：`FORCE_LIQUIDATION` R2-finalize 后置钩子（对应 Java `handlerRiskRelease
+            // :992` collectLiquidationFee + `:997` advanceLiquidation）。`fees` 借用到此已不再使用
+            // （NLL 释放），可安全访问 `liquidation_service`/`liquidation_engine` 两个平级字段。
+            if is_force {
+                // collect_liquidation_fee（Java `:1522-1550`）：Σtrade 手续费从 taker 账户扣、计入
+                // IFNotional.available。taker_size==0（全 REJECT，无成交）→ no-op。`taker_spr.currency`
+                // /`.symbol` 用 `spec.quote_currency`/`cmd.symbol` 等价替代（full-fill 移仓后记录已不在，
+                // 但这两个量与仓位无关，见 Java 字段来源）。
+                if force_taker_size > 0 {
+                    let avg_price = (force_taker_size_price / force_taker_size as i128) as i64;
+                    let notional_fee = arithmetic::calculate_liquidation_fee(
+                        force_taker_size,
+                        avg_price,
+                        spec.liquidation_fee,
+                        spec.fee_scale_k,
+                    );
+                    let quote_fee = arithmetic::size_price_to_currency_scale(
+                        notional_fee,
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        quote_currency_spec.currency_scale_k,
+                    );
+                    if let Some(taker) = ups.get_mut(cmd.uid) {
+                        taker.add_to_account(spec.quote_currency, -quote_fee);
+                    }
+                    self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
+                }
+                // advance_liquidation（Java `:997`）：FORCE apply 后推进状态机（全成交闭环 /
+                // REJECT→WAIT_IF 并入队 IF）。
+                Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
+            }
             return;
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
@@ -2019,7 +2113,60 @@ impl RiskEngine {
     /// 故在 setter 侧拒绝经济上无意义的 `≤0` 标记价，保留那三处 panic 作为真正的不可达不变量守卫。
     /// 唯一可观测分歧：非法运维命令 `set_mark_price(sym, ≤0)` 的返回码（Java `Success` / 本移植
     /// `RiskInvalidAmount`）；不影响守恒，两副本一致（确定性保持）。
-    pub fn markprice_adjustment(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
+    /// 对应 Java `normalizeCmdPositionSize`（`RiskEngine.java:724-740`）：`FORCE_LIQUIDATION`/
+    /// `IF_TAKEOVER`/`AUTO_DELEVERAGING` 的 R1 size 归一——按 `create_positions_key(symbol, action,
+    /// command)` 定位仓位，`cmd.size = min(cmd.size, open_volume)`。
+    ///
+    /// **视角**：FORCE 用被强平者平仓视角（action 与 position direction 反向）；IF/ADL 用
+    /// counterparty 接管视角（action 与 direction 同向）——同一 `create_positions_key` 因 `command`
+    /// 不同而在 HEDGE 下解析到不同仓位（见 `build_force/if/adl_cmd`）。这是换届/陈旧命令安全的
+    /// 核心：即便 scanner 决策与 R1 apply 之间仓位缩小，size 也永不超平当前 `open_volume`
+    /// （参考文档 §1.5/§1.6）。仓位不存在 → `Success`（no-op）；用户不存在 → `AuthInvalidUser`。
+    fn normalize_cmd_position_size(cmd: &mut OrderCommand, ups: &UserProfileService) -> CommandResultCode {
+        let action = match cmd.action {
+            Some(a) => a,
+            None => return CommandResultCode::Success,
+        };
+        let profile = match ups.get(cmd.uid) {
+            Some(p) => p,
+            None => return CommandResultCode::AuthInvalidUser,
+        };
+        let key = profile.create_positions_key(cmd.symbol, action, cmd.command);
+        let Some(position) = profile.positions.get(&key) else {
+            return CommandResultCode::Success;
+        };
+        cmd.size = cmd.size.min(position.open_volume);
+        CommandResultCode::ValidForMatchingEngine
+    }
+
+    /// 对应 Java `handlerRiskRelease:996-999`：强平类命令（FORCE/IF/ADL）R2 结算后推进
+    /// FORCE→IF→ADL 状态机。按 `create_positions_key(symbol, cmd.action, cmd.command)` 定位 taker
+    /// 仓位（= 携带 `liquidation_flow` 的那条），存在则调 `advance_liquidation`。仓位已被本命令
+    /// 完全平掉移除（full fill）→ 无仓可推进、flow 随记录一并消失，skip（对齐 Java：full-fill 下
+    /// advance 对 detached record 置 flow=None 也是 moot；REJECT/部分成交则仓位仍在、advance 推进
+    /// 到下一级并入队后继命令）。借用：`liquidation_engine` 显式传引用，避免 `&mut self` 重借。
+    fn advance_liquidation_for(engine: &mut LiquidationEngine, cmd: &OrderCommand, ups: &mut UserProfileService) {
+        let action = match cmd.action {
+            Some(a) => a,
+            None => return,
+        };
+        let key = match ups.get(cmd.uid) {
+            Some(u) => u.create_positions_key(cmd.symbol, action, cmd.command),
+            None => return,
+        };
+        if let Some(u) = ups.get_mut(cmd.uid) {
+            if let Some(pos) = u.positions.get_mut(&key) {
+                engine.advance_liquidation(cmd, pos);
+            }
+        }
+    }
+
+    pub fn markprice_adjustment(
+        &mut self,
+        cmd: &OrderCommand,
+        ups: &mut UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
         if ssp.get_symbol(cmd.symbol).is_none() {
             return CommandResultCode::InvalidSymbol;
         }
@@ -2027,6 +2174,10 @@ impl RiskEngine {
             return CommandResultCode::RiskInvalidAmount;
         }
         self.set_mark_price(cmd.symbol, cmd.price);
+        // P6 Task 7b：对应 Java `RiskEngineCommandDispatcher.adjustMarkPrice:447`——价格更新后触发
+        // targeted 强平检测（`cmd.symbol >= 0` 只查该 symbol 的持有者）。内部 `is_running` leader
+        // 门；产出的 FORCE 命令入 `liquidation_engine.pending_commands`，由 `ExchangeCore` 排空重喂。
+        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache);
         CommandResultCode::Success
     }
 
@@ -5672,17 +5823,17 @@ mod tests {
 
     #[test]
     fn markprice_adjustment_sets_last_price_cache() {
-        let (mut engine, _ups, ssp) = setup_futures(0, 0, 0, 100); // 治具已设 mark=100
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100); // 治具已设 mark=100
         let cmd = markprice_adjustment_cmd(FUT_SYMBOL, 250);
-        assert_eq!(engine.markprice_adjustment(&cmd, &ssp), CommandResultCode::Success);
+        assert_eq!(engine.markprice_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(250));
     }
 
     #[test]
     fn markprice_adjustment_unknown_symbol_is_invalid_symbol_and_does_not_write_cache() {
-        let (mut engine, _ups, ssp) = setup_futures(0, 0, 0, 100);
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         let cmd = markprice_adjustment_cmd(9999, 250);
-        assert_eq!(engine.markprice_adjustment(&cmd, &ssp), CommandResultCode::InvalidSymbol);
+        assert_eq!(engine.markprice_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::InvalidSymbol);
         assert_eq!(engine.mark_price(9999), None);
     }
 
@@ -5738,7 +5889,7 @@ mod tests {
 
         // 步骤2：mark=0 被拒（Java 会存 0；本移植收窄为 RiskInvalidAmount），缓存保持上一有效值。
         let zero = markprice_adjustment_cmd(FUT_SYMBOL, 0);
-        assert_eq!(engine.markprice_adjustment(&zero, &ssp), CommandResultCode::RiskInvalidAmount);
+        assert_eq!(engine.markprice_adjustment(&zero, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100), "被拒的 0 标记价不得污染缓存");
 
         // 步骤3：free-futures-margin 走到 :508 mark_price()——修复前 mark 已变 None 会 panic；
@@ -5749,9 +5900,9 @@ mod tests {
 
     #[test]
     fn markprice_adjustment_rejects_negative_price_and_keeps_cache() {
-        let (mut engine, _ups, ssp) = setup_futures(0, 0, 1_000, 100);
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
         let neg = markprice_adjustment_cmd(FUT_SYMBOL, -5);
-        assert_eq!(engine.markprice_adjustment(&neg, &ssp), CommandResultCode::RiskInvalidAmount);
+        assert_eq!(engine.markprice_adjustment(&neg, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100));
     }
 
@@ -6942,6 +7093,11 @@ mod tests {
         fn merge_rewrites_cmd_size_to_actual_consumed_when_candidates_fall_short() {
             // remaining=200 请求，但 A+B+C 总可用只有 60+80+50=190 -> 实际消费=190，cmd.size 必须改写。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
+            // P6 Task 7b：R1 现在先经 normalize_cmd_position_size 把 cmd.size 夹到 taker 自己的
+            // open_volume（默认 100）。本用例要验证的是"候选不足→按实际消费改写"，与 taker 自身仓量
+            // 无关，故把 taker 仓放大到 300（>200 请求），让 normalize 不夹取，隔离出候选不足这条路径。
+            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_volume = 300;
+            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 27_000; // 300*90
             let mut cmd = adl_cmd(OrderAction::Bid, 200, 100);
 
             engine.pre_process_command(&mut cmd, &mut ups, &ssp);
