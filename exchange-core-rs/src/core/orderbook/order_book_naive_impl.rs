@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::matcher_event_type::MatcherEventType;
@@ -9,6 +10,7 @@ use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::order::Order;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
+use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::orders_bucket_naive::OrdersBucketNaive;
 
@@ -23,6 +25,11 @@ pub struct OrderBookNaiveImpl {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,
     id_index: BTreeMap<i64, (OrderAction, i64, i64)>,
+    /// 对应 Java `OrderBookNaiveImpl.symbolSpec`：`move_order` 的现货 BID 风控（`:495-497`）读取
+    /// `symbol_type`。`None` = 不做该风控（与 `OrderBookDirectImpl` 的 `symbol_spec=None` 对齐，
+    /// 用于差分对拍两簿同构；生产经 `MatchingEngineRouter::add_symbol` 用 `with_symbol_spec` 注入
+    /// 真实 spec，令 guard 生效）。
+    symbol_spec: Option<CoreSymbolSpecification>,
 }
 
 impl OrderBookNaiveImpl {
@@ -31,13 +38,27 @@ impl OrderBookNaiveImpl {
             ask_buckets: BTreeMap::new(),
             bid_buckets: BTreeMap::new(),
             id_index: BTreeMap::new(),
+            symbol_spec: None,
         }
+    }
+
+    /// 带 symbol spec 构造（对应 Java `OrderBookNaiveImpl(CoreSymbolSpecification)`）：令
+    /// `move_order` 的现货 BID 风控生效。生产由 `MatchingEngineRouter::add_symbol` 调用。
+    pub fn with_symbol_spec(symbol_spec: CoreSymbolSpecification) -> Self {
+        Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
 
     fn buckets_by_action_mut(&mut self, action: OrderAction) -> &mut BTreeMap<i64, OrdersBucketNaive> {
         match action {
             OrderAction::Ask => &mut self.ask_buckets,
             OrderAction::Bid => &mut self.bid_buckets,
+        }
+    }
+
+    fn buckets_by_action(&self, action: OrderAction) -> &BTreeMap<i64, OrdersBucketNaive> {
+        match action {
+            OrderAction::Ask => &self.ask_buckets,
+            OrderAction::Bid => &self.bid_buckets,
         }
     }
 
@@ -661,6 +682,31 @@ impl IOrderBook for OrderBookNaiveImpl {
             return CommandResultCode::MatchingUnknownOrderId;
         }
 
+        // 对齐 Java `OrderBookNaiveImpl.java:492`：`cmd.action` 在风控守卫**之前**回填（故守卫失败
+        // 时 cmd.action 仍已被设为挂单方向——这是 Java Naive 与 Direct 的既有差异：Direct 在守卫后
+        // 才设 action）。`action` 取自 `id_index`，恒等于挂单自身的 `order.action`。
+        cmd.action = Some(action);
+
+        // 现货 BID 风控守卫（对应 Java `OrderBookNaiveImpl.java:495-497`）：现货对（CURRENCY_
+        // EXCHANGE_PAIR）的 BID 挂单，move 目标价不得超过该挂单自身的 `reserve_bid_price`（下单时
+        // 冻结的保留价，超过就需要未冻结的额外资金）——超出则 `MatchingMoveFailedPriceOverRiskLimit`
+        // 且**不改簿状态**。在移出桶之前 peek（`OrdersBucketNaive::get` 只读），失败即原样返回、
+        // 不破坏 FIFO。`symbol_spec=None`（差分对拍/未注入 spec）时天然跳过（与 Direct impl 一致）。
+        if let Some(spec) = &self.symbol_spec {
+            if spec.symbol_type == SymbolType::CurrencyExchangePair && action == OrderAction::Bid {
+                let reserve = self
+                    .buckets_by_action(action)
+                    .get(&old_price)
+                    .and_then(|b| b.get(order_id))
+                    .map(|o| o.reserve_bid_price);
+                if let Some(reserve_bid_price) = reserve {
+                    if new_price > reserve_bid_price {
+                        return CommandResultCode::MatchingMoveFailedPriceOverRiskLimit;
+                    }
+                }
+            }
+        }
+
         let buckets = self.buckets_by_action_mut(action);
         let mut order = buckets
             .get_mut(&old_price)
@@ -1230,6 +1276,59 @@ mod ob_tests {
         // 卖单 5 全部成交，不再挂簿；买单剩 5
         assert!(book.fill_l2(10).ask_prices.is_empty());
         assert_eq!(book.fill_l2(10).bid_volumes, vec![5]);
+    }
+
+    fn exchange_pair_spec() -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id: 1,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: 1,
+            quote_currency: 2,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn move_bid_over_reserve_price_rejected_on_exchange_pair_spec() {
+        // 对应 Java `OrderBookNaiveImpl.java:495-497`（Ruling P2-3，与 Direct impl 同款）：现货 BID
+        // move 目标价不得超过挂单自身 reserve_bid_price。用 with_symbol_spec 注入现货 spec 令 guard 生效。
+        let mut book = OrderBookNaiveImpl::with_symbol_spec(exchange_pair_spec());
+        // GTC BID @90，reserve_bid_price=95（挂单时冻结价）。
+        let mut place = OrderCommand {
+            order_id: 1, symbol: 1, price: 90, size: 5, reserve_bid_price: 95,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 1, ..Default::default()
+        };
+        book.new_order(&mut place);
+
+        // move 到 96 > reserve 95 -> 越限拒绝，簿状态完全不变。
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 96, uid: 1, ..Default::default() };
+        let rc = book.move_order(&mut cmd);
+        assert_eq!(rc, CommandResultCode::MatchingMoveFailedPriceOverRiskLimit);
+        assert_eq!(cmd.action, Some(OrderAction::Bid), "Java Naive 在 guard 前已回填 cmd.action（与 Direct 不同）");
+        assert!(cmd.matcher_event.is_none(), "失败分支不产生事件");
+        let l2 = book.fill_l2(10);
+        assert_eq!(l2.bid_prices, vec![90], "拒绝后订单仍在原价 90，FIFO/状态不变");
+        assert_eq!(l2.bid_volumes, vec![5]);
+
+        // move 到 95（== reserve）允许；到 94（< reserve）也允许。
+        let mut ok = OrderCommand { order_id: 1, symbol: 1, price: 95, uid: 1, ..Default::default() };
+        assert_eq!(book.move_order(&mut ok), CommandResultCode::Success, "== reserve 边界允许");
+        assert_eq!(book.fill_l2(10).bid_prices, vec![95]);
+    }
+
+    #[test]
+    fn move_bid_guard_skipped_when_symbol_spec_absent() {
+        // new()（symbol_spec=None，差分对拍口径）时 guard 不生效——move BID 到任意高价都放行。
+        let mut book = OrderBookNaiveImpl::new();
+        let mut place = OrderCommand {
+            order_id: 1, symbol: 1, price: 90, size: 5, reserve_bid_price: 95,
+            action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 1, ..Default::default()
+        };
+        book.new_order(&mut place);
+        let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 200, uid: 1, ..Default::default() };
+        assert_eq!(book.move_order(&mut cmd), CommandResultCode::Success, "无 spec 时不做 BID 风控");
     }
 
     #[test]

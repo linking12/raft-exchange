@@ -110,6 +110,11 @@ pub enum OrderCommandType {
     /// 规避，见类文档 Ruling P6-D）：全量强平扫描 backstop（`cmd.symbol < 0` 触发，参考文档
     /// §1.1/§7）；**不属于** `isNonTrading()`——留在主 switch。
     LiquidationScan,
+    /// 对应 Java `SETTLE_PNL`（码 26）：交割合约（`FUTURES_CONTRACT_DELIVERY`）到期结算——按交割价
+    /// 整仓平掉该 symbol 上所有用户的持仓、退还 extra_margin、结算已实现盈亏、移除仓位记录
+    /// （`RiskEngine.settlePnl`，参考 RiskEngine.java:695）。全部效果在 R1 完成、不进撮合，故归入
+    /// `is_non_trading()`（ME/R2 no-op），与 Java `case SETTLE_PNL` 返回 `false`（不下 ME）等价。
+    SettlePnl,
 
     Reset,
     Nop,
@@ -163,6 +168,7 @@ impl OrderCommandType {
             OrderCommandType::IfDeposit => 42,
             OrderCommandType::IfWithdraw => 43,
             OrderCommandType::LiquidationScan => 44,
+            OrderCommandType::SettlePnl => 26, // 对齐 Java SETTLE_PNL((byte)26)
         }
     }
 
@@ -193,6 +199,7 @@ impl OrderCommandType {
                 | OrderCommandType::InternalTransfer
                 | OrderCommandType::IfDeposit
                 | OrderCommandType::IfWithdraw
+                | OrderCommandType::SettlePnl
         )
     }
 

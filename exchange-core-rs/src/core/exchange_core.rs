@@ -1274,3 +1274,131 @@ mod snapshot_tests {
         );
     }
 }
+
+// ============================================================================
+// SETTLE_PNL（交割合约到期结算）e2e——对应 Java RiskEngine.settlePnl（:695）。
+// ============================================================================
+#[cfg(test)]
+mod settle_pnl_tests {
+    use super::*;
+    use crate::core::common::cmd::command_result_code::CommandResultCode;
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+    use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use crate::core::common::margin_mode::MarginMode;
+    use crate::core::common::order_action::OrderAction;
+    use crate::core::common::order_type::OrderType;
+    use crate::core::common::symbol_type::SymbolType;
+
+    const BASE: i32 = 1;
+    const QUOTE: i32 = 2;
+    const DELIV: i32 = 800; // 交割合约
+    const PERP: i32 = 801; // 永续（用于"非交割 -> InvalidSymbol"负例）
+    const U_LONG: i64 = 10;
+    const U_SHORT: i64 = 11;
+
+    fn deliv_spec() -> CoreSymbolSpecification {
+        let mut mm = std::collections::BTreeMap::new();
+        mm.insert(i64::MAX, 500);
+        CoreSymbolSpecification {
+            symbol_id: DELIV,
+            symbol_type: SymbolType::FuturesContractDelivery,
+            base_currency: BASE,
+            quote_currency: QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            maintenance_margin: mm,
+            maintenance_margin_scale_k: 10_000,
+            ..Default::default()
+        }
+    }
+
+    fn conserved(core: &ExchangeCore) -> i64 {
+        let cur = QUOTE;
+        let mark = *core.risk.last_price_cache.get(&DELIV).unwrap_or(&0);
+        let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
+        total += *core.risk.fees.get(&cur).unwrap_or(&0);
+        total += *core.risk.adjustments.get(&cur).unwrap_or(&0);
+        for u in core.ups.users.values() {
+            for p in u.positions.values() {
+                if p.currency == cur {
+                    total += p.estimate_pnl(mark) + p.extra_margin;
+                }
+            }
+        }
+        total
+    }
+
+    fn order(oid: i64, uid: i64, symbol: i32, price: i64, size: i64, bid: bool) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: oid,
+            uid,
+            symbol,
+            price,
+            size,
+            reserve_bid_price: price,
+            action: Some(if bid { OrderAction::Bid } else { OrderAction::Ask }),
+            order_type: Some(OrderType::Gtc),
+            leverage: 10,
+            margin_mode: MarginMode::Isolated,
+            timestamp: 1_000,
+            ..Default::default()
+        }
+    }
+
+    fn seeded() -> ExchangeCore {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
+        assert_eq!(core.ssp.add_symbol(deliv_spec()), CommandResultCode::Success);
+        core.matching.add_symbol(&deliv_spec());
+        for uid in [U_LONG, U_SHORT] {
+            core.ups.add_empty_user_profile(uid);
+            core.ups.get_mut(uid).unwrap().add_to_account(QUOTE, 1_000_000);
+        }
+        core
+    }
+
+    #[test]
+    fn settle_pnl_closes_all_positions_at_delivery_price_and_conserves() {
+        let mut core = seeded();
+        // mark=100，U_SHORT ASK@100 开空，U_LONG BID@100 吃单开多。
+        core.process_command(&mut OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: DELIV, price: 100, timestamp: 1_000, ..Default::default() });
+        core.process_command(&mut order(1, U_SHORT, DELIV, 100, 10, false));
+        core.process_command(&mut order(2, U_LONG, DELIV, 100, 10, true));
+        assert_eq!(core.ups.get(U_LONG).unwrap().positions[&DELIV].open_volume, 10);
+        assert_eq!(core.ups.get(U_SHORT).unwrap().positions[&DELIV].open_volume, 10);
+
+        let long_acct0 = core.ups.get(U_LONG).unwrap().account(QUOTE);
+        let short_acct0 = core.ups.get(U_SHORT).unwrap().account(QUOTE);
+        let before = conserved(&core);
+
+        // 到期按交割价 105 结算：LONG 实现 +50、SHORT 实现 -50。
+        let mut settle = OrderCommand { command: OrderCommandType::SettlePnl, symbol: DELIV, price: 105, timestamp: 2_000, ..Default::default() };
+        core.process_command(&mut settle);
+        assert_eq!(settle.result_code, Some(CommandResultCode::Success));
+
+        // 两个持仓都被整仓平掉、记录移除。
+        assert!(!core.ups.get(U_LONG).unwrap().positions.contains_key(&DELIV), "LONG 交割平仓移除");
+        assert!(!core.ups.get(U_SHORT).unwrap().positions.contains_key(&DELIV), "SHORT 交割平仓移除");
+        // PnL 实现入账户：LONG +50、SHORT -50（相对开仓后余额）。
+        assert_eq!(core.ups.get(U_LONG).unwrap().account(QUOTE) - long_acct0, 50, "LONG 交割盈利 (105-100)*10=+50");
+        assert_eq!(core.ups.get(U_SHORT).unwrap().account(QUOTE) - short_acct0, -50, "SHORT 交割亏损 (100-105)*10=-50");
+        // 全局守恒（持仓清空后 estimate_pnl 归 0，PnL 已入账户，零和）。
+        assert_eq!(conserved(&core), before, "交割结算全局守恒");
+    }
+
+    #[test]
+    fn settle_pnl_on_non_delivery_symbol_is_invalid() {
+        let mut core = seeded();
+        // 注册一个永续合约（非交割）。
+        let perp = CoreSymbolSpecification { symbol_id: PERP, symbol_type: SymbolType::FuturesContractPerpetual, ..deliv_spec() };
+        assert_eq!(core.ssp.add_symbol(perp.clone()), CommandResultCode::Success);
+        core.matching.add_symbol(&perp);
+
+        let mut settle = OrderCommand { command: OrderCommandType::SettlePnl, symbol: PERP, price: 105, timestamp: 2_000, ..Default::default() };
+        core.process_command(&mut settle);
+        assert_eq!(settle.result_code, Some(CommandResultCode::InvalidSymbol), "SETTLE_PNL 只对交割合约有效");
+    }
+}

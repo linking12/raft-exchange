@@ -170,6 +170,7 @@ impl RiskEngine {
                 OrderCommandType::InternalTransfer => self.internal_transfer_collect(cmd, ups, ssp),
                 OrderCommandType::IfDeposit => self.if_deposit(cmd, ssp),
                 OrderCommandType::IfWithdraw => self.if_withdraw(cmd, ssp),
+                OrderCommandType::SettlePnl => self.settle_pnl(cmd, ups, ssp),
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
             cmd.result_code = Some(rc);
@@ -2194,6 +2195,48 @@ impl RiskEngine {
         // targeted 强平检测（`cmd.symbol >= 0` 只查该 symbol 的持有者）。内部 `is_running` leader
         // 门；产出的 FORCE 命令入 `liquidation_engine.pending_commands`，由 `ExchangeCore` 排空重喂。
         self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
+        CommandResultCode::Success
+    }
+
+    /// 对应 Java `RiskEngine.settlePnl`（`:695-717`）+ R1 dispatch `case SETTLE_PNL`（`:311-321`）：
+    /// **交割合约到期结算**。校验 spec 存在且 `type == FUTURES_CONTRACT_DELIVERY`（否则 `InvalidSymbol`）；
+    /// 遍历所有用户在该 symbol 上的每条持仓（ONEWAY 1 条 / HEDGE `±symbol` 2 条），`open_volume>0`
+    /// 者按交割价 `cmd.price` **整仓平仓**（close_action = LONG?ASK:BID）、退还 `extra_margin`、
+    /// 结算已实现盈亏入账户、移除仓位记录——复用 [`Self::adl_close_and_settle`] 的
+    /// close→refund→settle→remove（ADL/IF/settle_pnl 三处共用，均不收手续费）。
+    ///
+    /// 全部效果在 R1 完成，ME/R2 no-op（`is_non_trading()`），对齐 Java `case SETTLE_PNL` 返回
+    /// `false`（不下撮合）。单 shard = shard 0，结果码 `Success`（对齐 Java `shardId==0` SUCCESS）。
+    /// 无事件总线故不发 `sendPnlSettlementEvent`（Ruling P6-B）。
+    fn settle_pnl(&mut self, cmd: &OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
+        let symbol = cmd.symbol;
+        let spec = match ssp.get_symbol(symbol) {
+            Some(s) if s.symbol_type == SymbolType::FuturesContractDelivery => s.clone(),
+            _ => return CommandResultCode::InvalidSymbol,
+        };
+        let currency_spec = match ssp.get_currency(spec.quote_currency) {
+            Some(c) => c.clone(),
+            None => return CommandResultCode::InvalidSymbol, // spec 存在则 currency 应存在，防御性
+        };
+        let price = cmd.price;
+        for up in ups.users.values_mut() {
+            // 该 symbol 上所有非空持仓的 key（ONEWAY: symbol；HEDGE: ±symbol）。先收集再改，
+            // 避免迭代中改容器（adl_close_and_settle 会 remove 仓位记录）。
+            let keys: Vec<i32> = up
+                .positions
+                .iter()
+                .filter(|(_, p)| p.symbol == symbol && p.open_volume != 0)
+                .map(|(&k, _)| k)
+                .collect();
+            for key in keys {
+                let (close_action, size) = {
+                    let pos = &up.positions[&key];
+                    let action = if pos.direction == PositionDirection::Long { OrderAction::Ask } else { OrderAction::Bid };
+                    (action, pos.open_volume)
+                };
+                Self::adl_close_and_settle(up, key, close_action, size, price, &spec, &currency_spec);
+            }
+        }
         CommandResultCode::Success
     }
 

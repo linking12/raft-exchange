@@ -38,7 +38,10 @@ impl MatchingEngineRouter {
     /// 对应 Java `MatchingEngineRouter.addSymbol`（276–289 行，现货子集：略去
     /// `cfgMarginTradingEnabled` 校验与重复添加告警——重复 add 直接忽略，保持幂等）。
     pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
-        self.books.entry(spec.symbol_id).or_default();
+        // 用 `with_symbol_spec` 注入真实 spec，令 `move_order` 的现货 BID 风控（`OrderBookNaiveImpl
+        // .java:495-497`）在生产路径生效（`new()`/`Default` 的 `symbol_spec=None` 只用于差分对拍）。
+        // 幂等：已存在则保留原簿（对齐 Java `addSymbol` 忽略重复添加）。
+        self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookNaiveImpl::with_symbol_spec(spec.clone()));
     }
 
     /// 对应 Java `MatchingEngineRouter.processMatchingCommand`（291–312 行）
