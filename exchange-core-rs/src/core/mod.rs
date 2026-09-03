@@ -31,3 +31,5 @@ mod e2e_tests;
 mod futures_e2e_tests;
 #[cfg(test)]
 mod loan_e2e_tests;
+#[cfg(test)]
+mod liquidation_e2e_tests;
