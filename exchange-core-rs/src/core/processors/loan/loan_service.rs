@@ -23,6 +23,15 @@ pub const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
 /// 对应 Java `LoanService.BPS_SCALE`（`:42`）：bps 精度基准（10000 = 100%）。
 pub const BPS_SCALE: i64 = 10_000;
 
+/// force-sell orderId 命名空间/子类型/位掩码（对应 Java `LoanService.java:44-49`）——force-sell
+/// orderId 顶字节 `'L'`（0x4C），独占命名空间，避开期货 `'I'`/ADL `'A'`（P6 Task 8 scanner 消费）。
+pub const ORDERID_NAMESPACE_TAG: i64 = 0x4C; // 'L'
+pub const ORDERID_SUBTYPE_ISOLATED: i64 = 0x53; // 'S'
+pub const ORDERID_SUBTYPE_CROSS: i64 = 0x43; // 'C'
+const ORDERID_UID_MASK: i64 = 0xF_FFFF; // 20 bit uid hash
+const ORDERID_LOANID_MASK: i64 = 0xFFFF; // 16 bit loanId hash
+const ORDERID_TS_MASK: i64 = 0xFFF; // 12 bit 秒
+
 /// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（arithmetic 层零依赖 ruling，
 /// 风格对齐 `rate::fixed_rate_model`/`rate::floating_rate_model`/`risk_engine.rs` 各自的同名 helper）。
 fn mul_exact(a: i64, b: i64) -> i64 {
@@ -433,6 +442,35 @@ impl LoanService {
         base_spec: &CoreCurrencySpecification,
     ) -> i64 {
         arithmetic::convert_scale(amount, base_spec.currency_scale_k, spec.base_scale_k)
+    }
+
+    /// 对应 Java 静态 `quoteAmountToLots`（`:435-438`）：借款币金额（quote currencyScale）→ 按
+    /// `mark_price`（此处传破产价 limit）折算的下单张数（lot，ceil 向上取整不少卖）。Task 8 Cross
+    /// scanner `calculate_cross_sell_size` 消费。
+    pub fn quote_amount_to_lots(
+        quote_amount: i64,
+        mark_price: i64,
+        spec: &CoreSymbolSpecification,
+        quote_spec: &CoreCurrencySpecification,
+    ) -> i64 {
+        let notional = arithmetic::currency_to_size_price_scale(
+            quote_amount,
+            spec.base_scale_k,
+            spec.quote_scale_k,
+            quote_spec.currency_scale_k,
+        );
+        arithmetic::ceil_divide(notional, mark_price)
+    }
+
+    /// 对应 Java 静态 `forceSellOrderId`（`:481-486`）：force-sell orderId 位编码——
+    /// `tag<<56 | subtype<<48 | uidHash<<28 | loanIdHash<<12 | tsSec`。`subtype` 取
+    /// [`ORDERID_SUBTYPE_ISOLATED`]/[`ORDERID_SUBTYPE_CROSS`]。`tickTimeMs` 用触发命令 timestamp
+    /// （确定性，同 futures `generate_liquidation_order_id` 的偏差，leader-only 生成经 raft 复制）。
+    pub fn force_sell_order_id(subtype: i64, uid: i64, loan_id: i64, tick_time_ms: i64) -> i64 {
+        let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & ORDERID_UID_MASK;
+        let loan_id_hash = (loan_id.wrapping_mul(31).wrapping_add(17)) & ORDERID_LOANID_MASK;
+        let ts_sec = (tick_time_ms / 1000) & ORDERID_TS_MASK;
+        (ORDERID_NAMESPACE_TAG << 56) | (subtype << 48) | (uid_hash << 28) | (loan_id_hash << 12) | ts_sec
     }
 
     /// 对应 Java `settleLiquidationProceeds`（`:159-166`）：强平所得 `received_quote`（已扣撮合

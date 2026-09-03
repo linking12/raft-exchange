@@ -202,7 +202,7 @@ impl RiskEngine {
             // `LIQUIDATION_SCAN` R1（P6 Task 7b）：对应 Java `preProcessCommand:324`——纯扫描触发，
             // 不撮合。委托 `check_positions`（全量整扫、按切片过滤，内部 `is_running` leader 门）。
             // 单 shard = shard 0，结果码恒 `Success`（对应 Java `:325-327` shard-0-only SUCCESS）。
-            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache);
+            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
             cmd.result_code = Some(CommandResultCode::Success);
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
@@ -854,7 +854,7 @@ impl RiskEngine {
             self.settle_funding_fees_apply(cmd, ups, ssp);
             // P6 Task 7b：对应 Java `handlerRiskRelease:977`——资金费 R2 结算后触发同 symbol 的强平
             // 检测（资金费结算本身可能把某仓推破产）。这是 Task 4 记的 checkPositions 钩子 retrofit。
-            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache);
+            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
             return;
         }
         // `IF_TAKEOVER` 是本移植第四个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链传数据
@@ -2177,7 +2177,7 @@ impl RiskEngine {
         // P6 Task 7b：对应 Java `RiskEngineCommandDispatcher.adjustMarkPrice:447`——价格更新后触发
         // targeted 强平检测（`cmd.symbol >= 0` 只查该 symbol 的持有者）。内部 `is_running` leader
         // 门；产出的 FORCE 命令入 `liquidation_engine.pending_commands`，由 `ExchangeCore` 排空重喂。
-        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache);
+        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
         CommandResultCode::Success
     }
 
