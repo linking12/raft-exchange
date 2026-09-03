@@ -75,7 +75,7 @@ impl LoanCommandDispatcher {
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) -> CommandResultCode {
-        match cmd.command {
+        let rc = match cmd.command {
             OrderCommandType::LoanCreate => Self::handle_loan_create(engine, cmd, ups, ssp),
             OrderCommandType::LoanRepay => Self::handle_loan_repay(engine, cmd, ups, ssp),
             OrderCommandType::LoanAddCollateral => Self::handle_loan_add_collateral(engine, cmd, ups, ssp),
@@ -100,7 +100,58 @@ impl LoanCommandDispatcher {
             OrderCommandType::LoanIfWithdraw => Self::handle_loan_if_withdraw(engine, cmd),
             // 不可达：is_loan() 门守覆盖的 14 码上面已全部列举。
             _ => unreachable!("non-loan command dispatched to LoanCommandDispatcher: {:?}", cmd.command),
+        };
+        // P6 Task 8：loan 变更后 reconcile 该用户的强平扫描器 targeted 索引（对应 Java 各 handler
+        // 内联调用 `onIsolatedLoanOpened`/`onIsolatedLoanClosed`/`syncCrossExposure` + 参考文档 §6.7
+        // 的 P5 seam：`post_process_loan_cross_force_liquidate` 处 `syncCrossExposure(takerUp)`）。本移植
+        // 集中在 dispatch 出口按 `cmd.uid` 做一次幂等 reconcile——end-state 与 Java 逐点增量维护一致
+        // （见 `loan_liquidation_engine.rs` 模块文档）。仅对涉及用户 loan/collateral 的命令触发；
+        // pool/IF 运营命令不碰用户借贷敞口，跳过。
+        if matches!(
+            cmd.command,
+            OrderCommandType::LoanCreate
+                | OrderCommandType::LoanRepay
+                | OrderCommandType::LoanAddCollateral
+                | OrderCommandType::LoanReleaseCollateral
+                | OrderCommandType::LoanCrossAddCollateral
+                | OrderCommandType::LoanCrossWithdrawCollateral
+                | OrderCommandType::LoanCrossBorrow
+                | OrderCommandType::LoanCrossRepay
+                | OrderCommandType::LoanForceLiquidate
+                | OrderCommandType::LoanCrossForceLiquidate
+        ) {
+            Self::reconcile_loan_indices(engine, ups, cmd.uid);
         }
+        rc
+    }
+
+    /// P6 Task 8：按 `uid` reconcile 借贷强平扫描器的两个 targeted 索引到该用户当前敞口的精确态。
+    /// isolated：登记全部非空 loan 的 symbol（`on_isolated_loan_opened`），并对该 uid 当前被索引、
+    /// 却已无活 loan 的 symbol 摘除（`on_isolated_loan_closed` 本身 multi-loan 安全）。cross：走
+    /// `sync_cross_exposure`（登记敞口币种 + 账户全退出精确扫除，非对称容忍 §6.7）。借用：
+    /// `engine.liquidation_engine.loan_liquidation_engine` 是嵌套平级字段，与 `ups` 参数不重叠。
+    fn reconcile_loan_indices(engine: &mut RiskEngine, ups: &UserProfileService, uid: i64) {
+        let up = match ups.get(uid) {
+            Some(u) => u,
+            None => return,
+        };
+        let lle = &mut engine.liquidation_engine.loan_liquidation_engine;
+        for loan in up.isolated_loans.values() {
+            if !loan.is_empty() {
+                lle.on_isolated_loan_opened(uid, loan.symbol_id);
+            }
+        }
+        // 摘除该 uid 已无活 loan 的 isolated symbol（先收集再改，避免迭代中改容器）。
+        let indexed: Vec<i32> = lle
+            .isolated_loan_symbol_to_users
+            .iter()
+            .filter(|(_, users)| users.contains(&uid))
+            .map(|(&s, _)| s)
+            .collect();
+        for sym in indexed {
+            lle.on_isolated_loan_closed(up, sym);
+        }
+        lle.sync_cross_exposure(up);
     }
 
     /// 公共 preamble（参考文档 §2 顶部）：缺户 → `AuthInvalidUser`；冻结户 →

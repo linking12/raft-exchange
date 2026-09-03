@@ -891,3 +891,125 @@ mod liquidation_engine_e2e_tests {
         assert_eq!(conserved(&core), before, "无成交的级联不改变任何余额，守恒");
     }
 }
+
+// ============================================================================
+// P6 Task 8：loan 清算扫描器全链路 e2e——LIQUIDATION_SCAN → check_positions 尾部委托 checkLoans →
+// 检出越线 isolated loan → 提交 LOAN_FORCE_LIQUIDATE → 队列排空 → P5 handler 结算 → 守恒。
+// ============================================================================
+#[cfg(test)]
+mod loan_scanner_e2e_tests {
+    use super::*;
+    use crate::core::common::cmd::command_result_code::CommandResultCode;
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+    use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use crate::core::common::isolated_loan_record::IsolatedLoanRecord;
+    use crate::core::common::order_action::OrderAction;
+    use crate::core::common::order_type::OrderType;
+    use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
+    use crate::core::common::symbol_type::SymbolType;
+
+    const COLL: i32 = 1; // 抵押币 = spot base
+    const LOANC: i32 = 2; // 借款币 = spot quote
+    const SYMBOL: i32 = 100;
+    const BORROWER: i64 = 10;
+    const MAKER: i64 = 20;
+    const LOAN_ID: i64 = 42;
+
+    fn loan_spot_spec() -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id: SYMBOL,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: COLL,
+            quote_currency: LOANC,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            loan_config: SymbolLoanSpecification {
+                initial_ltv_bps: 5000,
+                liquidation_ltv_bps: 8000, // 80%
+                margin_call_ltv_bps: 7000,
+                max_amount: 0,
+                max_term_days: 0,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
+        let accounts: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
+        accounts
+            + core.risk.loan_service.get_loan_pool_available(cur)
+            + core.risk.loan_service.get_interest_revenue(cur)
+            + core.risk.loan_service.get_loan_insurance_fund(cur)
+            + *core.risk.fees.get(&cur).unwrap_or(&0)
+            + *core.risk.adjustments.get(&cur).unwrap_or(&0)
+    }
+
+    #[test]
+    fn liquidation_scan_triggers_isolated_loan_force_liquidate_and_conserves() {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: COLL, currency_scale_k: 1, collateral_weight_bps: 8000, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: LOANC, currency_scale_k: 1, ..Default::default() });
+        assert_eq!(core.ssp.add_symbol(loan_spot_spec()), CommandResultCode::Success);
+        core.matching.add_symbol(&loan_spot_spec());
+        core.ups.add_empty_user_profile(BORROWER);
+        core.ups.add_empty_user_profile(MAKER);
+        core.risk.last_price_cache.insert(SYMBOL, 1); // markPrice 1
+        core.risk.liquidation_engine.is_running = true; // leader
+
+        // 直接建一笔越线 isolated loan：抵押 1000 COLL、本金 900 LOANC（LTV 90% >= 80%）。
+        core.risk.loan_service.add_to_loan_pool_available(LOANC, 1_000_000);
+        {
+            let b = core.ups.get_mut(BORROWER).unwrap();
+            b.add_to_account(COLL, 1_000);
+            let mut loan = IsolatedLoanRecord::new(BORROWER, LOAN_ID, SYMBOL, COLL, LOANC, 0, 0);
+            loan.outstanding_principal = 900;
+            loan.collateral_amount = 1_000;
+            b.isolated_loans.insert(LOAN_ID, loan);
+        }
+        let b = core.ups.get_mut(BORROWER).unwrap();
+        core.risk.loan_service.disburse_loan(b, LOANC, 900);
+
+        // maker 挂 BID@1 size2000（吸收 force-sell ASK@破产价1）。
+        core.ups.get_mut(MAKER).unwrap().add_to_account(LOANC, 1_000_000_000);
+        let mut mk = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 1,
+            uid: MAKER,
+            symbol: SYMBOL,
+            price: 1,
+            size: 2_000,
+            reserve_bid_price: 1,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc),
+            timestamp: 1_000,
+            ..Default::default()
+        };
+        core.process_command(&mut mk);
+        assert_eq!(mk.result_code, Some(CommandResultCode::Success));
+
+        let before_coll = conserved(&core, COLL);
+        let before_loanc = conserved(&core, LOANC);
+
+        // LIQUIDATION_SCAN（symbol=-1、全扫）→ check_positions 尾部委托 checkLoans → 检出越线 loan →
+        // 提交 LOAN_FORCE_LIQUIDATE → drain 排空重喂 → P5 handler 结算。
+        let mut scan = OrderCommand {
+            command: OrderCommandType::LiquidationScan,
+            symbol: -1,
+            uid: 0,
+            size: 0, // sliceCount<=0 = 全扫
+            timestamp: 2_000,
+            ..Default::default()
+        };
+        core.process_command(&mut scan);
+
+        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "扫描生成的 force-liquidate 已排空处理");
+        assert!(
+            !core.ups.get(BORROWER).unwrap().isolated_loans.contains_key(&LOAN_ID),
+            "越线 loan 被强平（1000 抵押全卖、900 本金还清、loan 移除）"
+        );
+        // 守恒（借贷全局恒等式，含 pool/interest/LIF/fee/adjustment）。
+        assert_eq!(conserved(&core, COLL), before_coll, "COLL 守恒");
+        assert_eq!(conserved(&core, LOANC), before_loanc, "LOANC 守恒");
+    }
+}

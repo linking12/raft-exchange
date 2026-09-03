@@ -40,6 +40,8 @@ use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::processors::liquidation::liquidation_flow::{LiquidationFlow, LiquidationState};
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
+use crate::core::processors::loan::loan_liquidation_engine::LoanLiquidationEngine;
+use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::{
@@ -70,6 +72,11 @@ pub struct LiquidationEngine {
     /// 提交队列（替代 Java disruptor ring 的 `submit`，见模块文档）：检测/状态机推进产出的
     /// `FORCE_LIQUIDATION`/`IF_TAKEOVER`/`AUTO_DELEVERAGING` 命令，由 driver 排空重喂管线。
     pub pending_commands: Vec<OrderCommand>,
+    /// 对应 Java `LiquidationEngine.loanLiquidationEngine`（构造时创建的稳定单例）：现货借贷强平
+    /// 扫描器子域委托对象。`check_positions` 尾部委托其 `check_loans`（同一条 `LIQUIDATION_SCAN`/
+    /// 价格事件同时驱动期货 + 借贷检测，§1.1/§7.3）；其产出的 force-liquidate 命令在 `check_positions`
+    /// 末尾收拢进 [`Self::pending_commands`] 统一由 driver 排空。
+    pub loan_liquidation_engine: LoanLiquidationEngine,
 }
 
 impl LiquidationEngine {
@@ -118,6 +125,7 @@ impl LiquidationEngine {
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
+        loan_service: &LoanService,
     ) {
         if !self.is_running {
             return;
@@ -153,7 +161,11 @@ impl LiquidationEngine {
                 }
             }
         }
-        // Task 8: self.loan_liquidation_engine.check_loans(cmd, ...) —— 借贷侧强平检测。
+        // 尾部委托借贷扫描器（对应 Java `checkPositions:147` `loanLiquidationEngine.checkLoans(cmd)`，
+        // §1.1/§7.3：同一价格/scan 事件同时驱动期货 + 借贷检测）。其产出的 force-liquidate 命令收拢进
+        // 本引擎队列，由 driver 统一排空。
+        self.loan_liquidation_engine.check_loans(cmd, ups, ssp, last_price_cache, loan_service);
+        self.pending_commands.append(&mut self.loan_liquidation_engine.pending_commands);
     }
 
     /// 对应 Java `checkUser`（`:171-197`）：逐仓分类——ISOLATED 立即判定；CROSS 按 quote 币种分组
@@ -717,7 +729,7 @@ mod tests {
         insert_long(&mut ups, UID);
         lpc.insert(FUT_SYMBOL, 50); // 深度水下
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc);
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
         assert!(engine.pending_commands.is_empty(), "follower 不检测、不提交");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
     }
@@ -732,7 +744,7 @@ mod tests {
         lpc.insert(FUT_SYMBOL, 50); // mark=50：profit=-500，equity=-400 < MM=25 -> 触发
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc);
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
 
         assert_eq!(engine.pending_commands.len(), 1, "触发一条 FORCE");
         let force = &engine.pending_commands[0];
@@ -758,7 +770,7 @@ mod tests {
         lpc.insert(FUT_SYMBOL, 100); // mark=100：profit=0，equity=100 >= MM=50 -> 健康
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
 
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc);
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
 
         assert!(engine.pending_commands.is_empty(), "健康仓不触发");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
@@ -772,8 +784,8 @@ mod tests {
         lpc.insert(FUT_SYMBOL, 50);
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc);
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc); // 第二次：flow 已存在 -> 幂等跳过
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new()); // 第二次：flow 已存在 -> 幂等跳过
 
         assert_eq!(engine.pending_commands.len(), 1, "flow 已在 -> 第二次不重复提交（幂等门）");
     }
@@ -789,7 +801,7 @@ mod tests {
         // scan slice：sliceCount=2、scanSlice=1 -> 只查 uid mod 2 == 1（uid=1），跳过 uid=2。
         let scan = OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid: 1, size: 2, timestamp: 5_000, ..Default::default() };
 
-        engine.check_positions(&scan, &mut ups, &ssp, &lpc);
+        engine.check_positions(&scan, &mut ups, &ssp, &lpc, &LoanService::new());
 
         assert_eq!(engine.pending_commands.len(), 1, "只 uid=1 在切片内");
         assert_eq!(engine.pending_commands[0].uid, 1);
