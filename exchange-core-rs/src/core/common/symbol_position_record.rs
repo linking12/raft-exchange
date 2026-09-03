@@ -14,6 +14,7 @@ use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::position_direction::PositionDirection;
+use crate::core::processors::liquidation::liquidation_flow::LiquidationFlow;
 use crate::core::utils::core_arithmetic_utils::{calculate_taker_fee, ceil_divide, ceil_mul_div, trunc_mul_div};
 
 /// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。
@@ -75,6 +76,11 @@ pub struct SymbolPositionRecord {
     /// 对应 Java `SymbolPositionRecord.adlEligibility`：ADL 资格因子（ISOLATED 默认 100，CROSS
     /// 默认 0、过账户级安全门后写 clamp 因子）。`riskScore` 的乘子之一。
     pub adl_eligibility: i64,
+    /// 对应 Java `SymbolPositionRecord.liquidationFlow`（P6 Task 7 引入）：进行中的 FORCE→IF→ADL
+    /// 强平状态机对象，`None` = 无进行中流程。**leader-local、不序列化、不进 `state_hash`**
+    /// （Ruling P6-E，见 `liquidation_flow.rs` 模块文档 + 本模块头注）。流程闭环时置回 `None`；
+    /// 换届后新 leader 侧全为 `None`，残余破产仓重走 FORCE 恢复。
+    pub liquidation_flow: Option<LiquidationFlow>,
 }
 
 impl SymbolPositionRecord {
@@ -126,6 +132,8 @@ impl SymbolPositionRecord {
         // 清零——池化复用入口，池复用前的旧值必须清干净（P6 Task 6 补齐，见 `Self::new` 文档）。
         self.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
         self.pending_adl_size = 0;
+        // 对应 Java `initialize` (`:112`)：池化复用清理纯内存强平流程状态（P6 Task 7）。
+        self.liquidation_flow = None;
     }
 
     /// 对应 Java `updateLeverage(int leverage)`：`0` 归一为 `1`（用户未选 = 默认 1 倍）。
@@ -165,6 +173,8 @@ impl SymbolPositionRecord {
         // （P6 Task 6 补齐，见 `Self::new` 文档）。
         self.adl_eligibility = 100;
         self.pending_adl_size = 0;
+        // 对应 Java `reset` (`:710`)：池化复用清理纯内存强平流程状态（P6 Task 7）。
+        self.liquidation_flow = None;
     }
 
     /// 对应 Java `stateHash()`：`Objects.hash(symbol, currency, direction.getMultiplier(),
@@ -734,6 +744,11 @@ mod tests {
         let mut diff_adl_elig = base.clone();
         diff_adl_elig.adl_eligibility = 100;
         assert_eq!(h0, diff_adl_elig.state_hash(), "adl_eligibility 非复制，不进 state_hash");
+
+        let mut diff_flow = base.clone();
+        diff_flow.liquidation_flow =
+            Some(crate::core::processors::liquidation::liquidation_flow::LiquidationFlow::new(123, 45, 6));
+        assert_eq!(h0, diff_flow.state_hash(), "liquidation_flow 非复制、纯内存，不进 state_hash（Ruling P6-E）");
     }
 
     fn long_position(open_volume: i64, open_init_margin_sum: i64, open_price_sum: i64, extra_margin: i64) -> SymbolPositionRecord {
