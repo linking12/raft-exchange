@@ -18,6 +18,7 @@ use crate::core::orderbook::orders_bucket_naive::OrdersBucketNaive;
 /// - `bid_buckets`：存储用升序 key，但按买方最优价（最高价）遍历时用 `.iter().rev()` / `.range(..).rev()`。
 /// - `id_index`：order_id -> (side, price, uid)，用于 O(log n) 定位挂单所在的桶（cancel/reduce/move），
 ///   `uid` 用于复刻 Java `idMap.get(orderId).uid != cmd.uid` 的所有权校验（Task 7 补全，此前 Task 6 遗留）。
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct OrderBookNaiveImpl {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,

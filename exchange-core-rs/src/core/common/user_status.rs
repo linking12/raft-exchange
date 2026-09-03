@@ -1,5 +1,5 @@
 /// 对应 Java `exchange.core2.core.common.UserStatus`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum UserStatus {
     Active,
     Suspended,

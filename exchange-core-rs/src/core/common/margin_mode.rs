@@ -1,7 +1,7 @@
 //! 对应 Java: exchange.core2.core.common.MarginMode。
 //! `ISOLATED(0)` 默认（逐仓，自筹保证金，PnL 不外借）；`CROSS(1)`（全仓，按币种进账户级池）。
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MarginMode {
     Isolated,
     Cross,

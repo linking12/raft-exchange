@@ -14,7 +14,7 @@ use crate::core::utils::core_arithmetic_utils::{ceil_mul_div, trunc_mul_div};
 /// 构造点上零值兜底——spot symbol 不填这些字段即代表"未配置期货保证金"（`calculate_init_margin`
 /// /`calculate_maintenance_margin`/`is_valid_leverage` 在字段为 0/空表时的行为分别是：
 /// 100% 初始保证金率、100% 维持保证金率、不限杠杆上限）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoreSymbolSpecification {
     pub symbol_id: i32,
     pub symbol_type: SymbolType,

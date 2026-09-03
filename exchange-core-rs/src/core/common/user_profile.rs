@@ -18,7 +18,7 @@ use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_status::UserStatus;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UserProfile {
     pub uid: i64,
     pub user_status: UserStatus,

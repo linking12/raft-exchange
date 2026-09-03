@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order::Order;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct OrdersBucketNaive {
     price: i64,
     total_volume: i64,

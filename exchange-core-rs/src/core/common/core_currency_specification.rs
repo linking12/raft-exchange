@@ -7,7 +7,7 @@
 /// Ruling P5-A：`#[derive(Default)]` 让新增的 `collateral_weight_bps` 在所有既有 P1-P4
 /// 构造点上零值兜底（`0` = 该币种不可作为 Cross 抵押，`LOAN_COLLATERAL_NOT_ALLOWED`，
 /// 即"未配置借贷"时的安全默认）——所有既有构造点已改用 `..Default::default()` 展开语法。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoreCurrencySpecification {
     pub currency: i32,
     pub currency_scale_k: i64,

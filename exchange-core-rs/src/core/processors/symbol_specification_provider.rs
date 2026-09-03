@@ -9,7 +9,7 @@ use crate::core::common::symbol_type::SymbolType;
 
 /// 对应 Java `SymbolSpecificationProvider`。`spot_pair_index` 对应其派生索引 `spotPairIndex`
 /// （Java 里不进 stateHash/序列化、纯派生态；这里同理留作运行期唯一性索引）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SymbolSpecificationProvider {
     pub symbols: BTreeMap<i32, CoreSymbolSpecification>,
     pub currencies: BTreeMap<i32, CoreCurrencySpecification>,

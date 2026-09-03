@@ -20,7 +20,7 @@ fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FixedRateModel {
     /// 相对 floating 曲线的加/减价（bps），默认 `0` = 与 floating 同价。
     pub locked_rate_adjust_bps: i32,

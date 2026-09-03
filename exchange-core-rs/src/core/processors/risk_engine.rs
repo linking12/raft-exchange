@@ -66,7 +66,7 @@ fn sub_exact(a: i64, b: i64) -> i64 {
 ///
 /// Java 还有 `suspends`（`BalanceAdjustmentType::Suspend` 型对冲桶）——本任务按 brief 明确延后
 /// （SUSPEND_USER 命令未移植），故不建该字段，避免无命令路径写入的死字段。
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
@@ -89,6 +89,10 @@ pub struct RiskEngine {
     /// 状态**（索引/leader 门/队列），不进 state_hash/snapshot（Ruling P6-E），见
     /// `liquidation_engine.rs` 模块文档。默认构造（`is_running=false`——follower 起步，server 侧
     /// raft leadership 切换时 toggle）。既有现货/期货非强平路径从不读它，纯新增。
+    ///
+    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：换届恢复后由
+    /// `ExchangeCore::from_snapshot_bytes` 从复原的 `ups` 重建索引（等价 Java `updateProvider`）。
+    #[serde(skip)]
     pub liquidation_engine: LiquidationEngine,
 }
 

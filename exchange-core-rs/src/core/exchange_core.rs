@@ -17,11 +17,12 @@
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::margin_mode::MarginMode;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
 
 /// 对应 Java `ExchangeCore`（现货子集，单 shard）。
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ExchangeCore {
     pub risk: RiskEngine,
     pub matching: MatchingEngineRouter,
@@ -82,6 +83,70 @@ impl ExchangeCore {
             self.matching.process_order(&mut generated);
             self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
         }
+    }
+
+    // ========================================================================
+    // Snapshot 序列化（对应 Java 各处理器的 `writeMarshallable`/`BytesIn` + `updateProvider`
+    // 重建）。本移植用 serde derive + bincode 一次性序列化整个 `ExchangeCore` 复制态；跨节点一致性
+    // 由 `state_hash` 保证，快照只需 **round-trip 保真**（序列化→反序列化→状态等价），不要求与 Java
+    // 字节格式互通（本移植是独立实现）。
+    //
+    // # 非复制状态的处理（Ruling P6-E）
+    // `RiskEngine.liquidation_engine`（含 loan 扫描器）整体 `#[serde(skip)]`；`SymbolPositionRecord`
+    // 的 `liquidation_flow`/`adl_eligibility`/`pending_adl_size` 三个 scratch 字段 `#[serde(skip)]`。
+    // 反序列化后经 [`Self::restore_non_replicated_state`] 复原到"换届后新 leader"语义（等价 Java
+    // `updateProvider`）：非复制字段重置/按 margin_mode 归一，索引从复原的 `ups` 重建。
+    // ========================================================================
+
+    /// 把整个复制态序列化成快照字节（bincode）。非复制 leader-local 状态经 `#[serde(skip)]` 自动
+    /// 排除（`liquidation_engine` + 三个 SPR scratch 字段）。
+    pub fn to_snapshot_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("snapshot serialize must not fail on in-memory state")
+    }
+
+    /// 从快照字节恢复 `ExchangeCore`。反序列化后调用 [`Self::restore_non_replicated_state`] 复原
+    /// 非复制状态（等价 Java 快照恢复经 `updateProvider` 重建 scanner 索引 + 非复制字段）。
+    pub fn from_snapshot_bytes(bytes: &[u8]) -> Self {
+        let mut core: ExchangeCore =
+            bincode::deserialize(bytes).expect("snapshot deserialize must not fail on trusted snapshot");
+        core.restore_non_replicated_state();
+        core
+    }
+
+    /// 复原非复制 leader-local 状态到"换届后新 leader"语义（对应 Java `updateProvider` 在快照恢复
+    /// 时做的事）：
+    /// 1. 每个仓位的 `adl_eligibility` 按 `margin_mode` 归一（ISOLATED=100 / CROSS=0，同 `new`/
+    ///    `initialize`）——`#[serde(skip)]` 反序列化后为 `0`，ISOLATED 必须补回 `100` 否则
+    ///    `risk_score` 恒 0、ADL 永远选不中它。`pending_adl_size`/`liquidation_flow` 已是 Default
+    ///    （`0`/`None`），即"无预留、无进行中流程"的 fresh-leader 态。
+    /// 2. 重建 `liquidation_engine` 的两类 targeted 索引（`symbol_to_users` + loan 扫描器双索引）
+    ///    ——`liquidation_engine` 整体是 `Default`（`is_running=false` follower 起步），索引从复原的
+    ///    `ups` 扫出（futures 持仓 → `on_position_opened`；loan → `rebuild_indices`）。
+    fn restore_non_replicated_state(&mut self) {
+        // 1. 仓位非复制 scratch 字段归一。
+        for up in self.ups.users.values_mut() {
+            for pos in up.positions.values_mut() {
+                pos.adl_eligibility = if pos.margin_mode == MarginMode::Isolated { 100 } else { 0 };
+                pos.pending_adl_size = 0;
+                pos.liquidation_flow = None;
+            }
+        }
+        // 2. 重建 liquidation_engine 索引（futures symbol_to_users）。
+        let le = &mut self.risk.liquidation_engine;
+        for up in self.ups.users.values() {
+            for pos in up.positions.values() {
+                if pos.open_volume == 0 {
+                    continue;
+                }
+                if let Some(spec) = self.ssp.get_symbol(pos.symbol) {
+                    if spec.symbol_type.is_futures_contract() {
+                        le.on_position_opened(up.uid, pos.symbol);
+                    }
+                }
+            }
+        }
+        // loan 扫描器双索引重建。
+        le.loan_liquidation_engine.rebuild_indices(&self.ups);
     }
 }
 
@@ -1011,5 +1076,201 @@ mod loan_scanner_e2e_tests {
         // 守恒（借贷全局恒等式，含 pool/interest/LIF/fee/adjustment）。
         assert_eq!(conserved(&core, COLL), before_coll, "COLL 守恒");
         assert_eq!(conserved(&core, LOANC), before_loanc, "LOANC 守恒");
+    }
+}
+
+// ============================================================================
+// Snapshot 序列化 round-trip 测试（对应 Java writeMarshallable/BytesIn + updateProvider 重建）。
+// 构建富复制态（期货持仓 + 挂单簿 + isolated loan + 池子 + fees/adjustments），快照→恢复，
+// 验证：①复制态 round-trip 字节等价 ②非复制态复原（adl_eligibility 归一 + 索引重建）
+// ③恢复后功能正常（markprice 触发强平走 targeted 索引）。
+// ============================================================================
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::core::common::cmd::command_result_code::CommandResultCode;
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+    use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use crate::core::common::isolated_loan_record::IsolatedLoanRecord;
+    use crate::core::common::order_action::OrderAction;
+    use crate::core::common::order_type::OrderType;
+    use crate::core::common::position_direction::PositionDirection;
+    use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
+    use crate::core::common::symbol_type::SymbolType;
+
+    const BASE: i32 = 1;
+    const QUOTE: i32 = 2;
+    const FUT: i32 = 700;
+    const SPOT: i32 = 100; // BASE/QUOTE 现货（供 isolated loan）
+    const U_LONG: i64 = 10;
+    const U_SHORT: i64 = 11;
+    const U_MAKER: i64 = 12;
+    const BORROWER: i64 = 13;
+
+    fn fut_spec() -> CoreSymbolSpecification {
+        let mut mm = std::collections::BTreeMap::new();
+        mm.insert(i64::MAX, 500);
+        CoreSymbolSpecification {
+            symbol_id: FUT,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: BASE,
+            quote_currency: QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            fee_scale_k: 10_000,
+            liquidation_fee: 200,
+            maintenance_margin: mm,
+            maintenance_margin_scale_k: 10_000,
+            ..Default::default()
+        }
+    }
+
+    fn spot_spec() -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id: SPOT,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: BASE,
+            quote_currency: QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            loan_config: SymbolLoanSpecification {
+                initial_ltv_bps: 5000,
+                liquidation_ltv_bps: 8000,
+                margin_call_ltv_bps: 7000,
+                max_amount: 0,
+                max_term_days: 0,
+            },
+            ..Default::default()
+        }
+    }
+
+    /// 构建一个覆盖所有序列化组件的富复制态。
+    fn build_rich_core() -> ExchangeCore {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, collateral_weight_bps: 8000, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
+        assert_eq!(core.ssp.add_symbol(fut_spec()), CommandResultCode::Success);
+        assert_eq!(core.ssp.add_symbol(spot_spec()), CommandResultCode::Success);
+        core.matching.add_symbol(&fut_spec());
+        core.matching.add_symbol(&spot_spec());
+        for uid in [U_LONG, U_SHORT, U_MAKER, BORROWER] {
+            core.ups.add_empty_user_profile(uid);
+            core.ups.get_mut(uid).unwrap().add_to_account(QUOTE, 10_000_000);
+        }
+        core.risk.liquidation_engine.is_running = true;
+
+        // markprice + 期货持仓（U_SHORT ASK@100 开空，U_LONG BID@100 吃单开多）。
+        let mut mp = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price: 100, timestamp: 1_000, ..Default::default() };
+        core.process_command(&mut mp);
+        let mut a = fut_order(1, U_SHORT, 100, 10, false, 10);
+        core.process_command(&mut a);
+        let mut b = fut_order(2, U_LONG, 100, 10, true, 10);
+        core.process_command(&mut b);
+        // 一张 resting 期货挂单（未成交，制造 order book state）。
+        let mut resting = fut_order(3, U_MAKER, 80, 5, true, 10);
+        core.process_command(&mut resting);
+
+        // isolated loan（现货，制造 loan + 池子 state + loan 索引）。
+        core.risk.loan_service.add_to_loan_pool_available(QUOTE, 1_000_000);
+        {
+            let bp = core.ups.get_mut(BORROWER).unwrap();
+            bp.add_to_account(BASE, 1_000);
+            let mut loan = IsolatedLoanRecord::new(BORROWER, 99, SPOT, BASE, QUOTE, 0, 0);
+            loan.outstanding_principal = 300;
+            loan.collateral_amount = 1_000;
+            bp.isolated_loans.insert(99, loan);
+        }
+        let bp = core.ups.get_mut(BORROWER).unwrap();
+        core.risk.loan_service.disburse_loan(bp, QUOTE, 300);
+        // 索引维护（模拟 dispatcher 的 reconcile）。
+        core.risk.liquidation_engine.loan_liquidation_engine.on_isolated_loan_opened(BORROWER, SPOT);
+
+        // IF 池子 state。
+        core.risk.liquidation_service.credit_liquidation_fee(FUT, 500);
+        core
+    }
+
+    fn fut_order(order_id: i64, uid: i64, price: i64, size: i64, bid: bool, leverage: i32) -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id,
+            uid,
+            symbol: FUT,
+            price,
+            size,
+            reserve_bid_price: price,
+            action: Some(if bid { OrderAction::Bid } else { OrderAction::Ask }),
+            order_type: Some(OrderType::Gtc),
+            leverage,
+            margin_mode: crate::core::common::margin_mode::MarginMode::Isolated,
+            timestamp: 1_000,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_replicated_state_and_rebuilds_non_replicated() {
+        let core = build_rich_core();
+        let bytes = core.to_snapshot_bytes();
+        let restored = ExchangeCore::from_snapshot_bytes(&bytes);
+
+        // ① 复制态 round-trip 字节等价（serialize(deserialize(x)) == serialize(x)）。
+        assert_eq!(restored.to_snapshot_bytes(), bytes, "复制态快照 round-trip 必须字节等价");
+
+        // 抽查关键复制态被复原。
+        assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].open_volume, 10);
+        assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].direction, PositionDirection::Long);
+        assert_eq!(restored.ups.get(BORROWER).unwrap().isolated_loans[&99].outstanding_principal, 300);
+        assert_eq!(restored.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000 - 300);
+        assert_eq!(restored.risk.liquidation_service.notionals[&FUT].available, 500);
+        // order book：U_MAKER 的 resting BID@80 仍在。
+        let mut ob = OrderCommand { command: OrderCommandType::OrderBookRequest, symbol: FUT, size: 10, ..Default::default() };
+        let mut restored2 = ExchangeCore::from_snapshot_bytes(&bytes);
+        restored2.process_command(&mut ob);
+        let md = ob.market_data.unwrap();
+        assert!(md.bid_prices.contains(&80), "resting 挂单簿状态必须随快照复原");
+
+        // ② 非复制态复原：adl_eligibility 按 margin_mode 归一（ISOLATED 期货仓 = 100）。
+        assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].adl_eligibility, 100, "ISOLATED 仓 adl_eligibility 复原为 100");
+        assert!(restored.ups.get(U_LONG).unwrap().positions[&FUT].liquidation_flow.is_none());
+        assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].pending_adl_size, 0);
+
+        // ② 索引重建：futures symbol_to_users 含有开仓的 U_LONG/U_SHORT。U_MAKER 只挂单未开仓
+        // （open_volume==0），rebuild 按 open_volume>0 过滤跳过它——**与 Java updateProvider 的
+        // `openVolume==0 return` 过滤一致**（在线维护 on_position_opened 在下单时就登记是 superset，
+        // rebuild 是 open-position-only 子集；resting-only 用户无仓可强平，scan-slice 兜底）。
+        let holders = restored.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("futures 索引重建");
+        assert!(holders.contains(&U_LONG) && holders.contains(&U_SHORT));
+        assert!(!holders.contains(&U_MAKER), "只挂单未开仓的用户按 open_volume>0 过滤，不入重建索引（对齐 Java）");
+        assert!(
+            restored.risk.liquidation_engine.loan_liquidation_engine.isolated_loan_symbol_to_users.get(&SPOT).unwrap().contains(&BORROWER),
+            "loan 索引重建"
+        );
+        // is_running 复原为 follower（false）——leader 门由 server 侧 raft 重新置位。
+        assert!(!restored.risk.liquidation_engine.is_running);
+    }
+
+    #[test]
+    fn restored_core_liquidation_works_via_rebuilt_index() {
+        // 恢复后功能验证：markprice 暴跌触发 U_LONG（ISOLATED 期货多头）强平——依赖重建的
+        // symbol_to_users targeted 索引 + 归一的 adl_eligibility。
+        let core = build_rich_core();
+        let bytes = core.to_snapshot_bytes();
+        let mut restored = ExchangeCore::from_snapshot_bytes(&bytes);
+        restored.risk.liquidation_engine.is_running = true; // server 侧重新成为 leader
+
+        // 给强平 FORCE ASK 备好吸单 BID（U_MAKER 已有 BID@80，破产价≈92>80 不够，另挂 BID@92）。
+        let mut mk = fut_order(50, U_MAKER, 92, 10, true, 10);
+        restored.process_command(&mut mk);
+
+        let mut mp = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price: 94, timestamp: 5_000, ..Default::default() };
+        restored.process_command(&mut mp);
+
+        assert!(restored.risk.liquidation_engine.pending_commands.is_empty(), "恢复后强平级联正常排空");
+        assert!(
+            !restored.ups.get(U_LONG).unwrap().positions.contains_key(&FUT),
+            "恢复后 targeted 索引生效，U_LONG 被强平平仓"
+        );
     }
 }
