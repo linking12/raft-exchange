@@ -79,12 +79,15 @@ impl AdlCommandProcessor {
             })
             .collect();
 
-        // 预先算好每个候选的分值再排序（等价于 Java `sortThisByLong(riskScore).reverseThis()`，
-        // 但只算一次分值，不在比较器里重复调用）——`sort_by` 是稳定排序（Rust 标准库文档承诺），
-        // 同分候选保持过滤后的原相对序，对应 Java 稳定排序（参考文档 §11.1）。
+        // 逐字复刻 Java `sortThisByLong(riskScore).reverseThis()`（`ADLCommandProcessor.java:70`）：
+        // **升序稳定排序，再整体 reverse**。注意这**不等价于**直接降序稳定排序——`reverseThis()` 会
+        // 把同分（tied）元素的相对序也一并反转（升序稳定后同分保持原序 [A,B]，reverse 后变 [B,A]），
+        // 而直接降序稳定排序会保留 [A,B]。同分时二者选中的对手方不同，故必须照抄 Java 的两步式以
+        // 保证跨实现 tie-break 一致（参考文档 §11.1）。只算一次分值，不在比较器里重复调用。
         let mut scored: Vec<(i64, SymbolPositionRecord)> =
             filtered.into_iter().map(|pos| (LiquidationService::risk_score(&pos, bankruptcy_price), pos)).collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by(|a, b| a.0.cmp(&b.0)); // 升序稳定（对应 sortThisByLong）
+        scored.reverse(); // 整体反转（对应 reverseThis，同分序也反转）
 
         let mut remaining = remaining_size;
         let mut out = Vec::new();
@@ -185,14 +188,16 @@ mod tests {
     }
 
     #[test]
-    fn collect_input_stable_sort_preserves_relative_order_on_tie() {
-        // 分值相同（uid=1 与 uid=2 完全同构）时，稳定排序保持输入相对序（参考文档 §11.1）
+    fn collect_input_tie_break_reverses_input_order_like_java_reverse_this() {
+        // 分值相同（uid=1 与 uid=2 完全同构）时，Java `sortThisByLong().reverseThis()` 会**反转**
+        // 同分元素的相对序：升序稳定后为 [uid1, uid2]，reverseThis 后为 [uid2, uid1]。故先扫到的
+        // uid1 反而排在后面。这是逐字对齐 Java tie-break（不是直接降序稳定排序的"保留原序"）。
         let a = candidate(1, PositionDirection::Short, 5, 750, 100, 50, 0);
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 50, 0);
         let picks = AdlCommandProcessor::collect_input(vec![a, b], 100, OrderAction::Bid, 100, 10);
         assert_eq!(picks.len(), 2);
-        assert_eq!(picks[0].uid, 1);
-        assert_eq!(picks[1].uid, 2);
+        assert_eq!(picks[0].uid, 2, "reverseThis 把同分序反转：后扫到的 uid2 排第一");
+        assert_eq!(picks[1].uid, 1);
     }
 
     #[test]

@@ -855,10 +855,18 @@ impl RiskEngine {
         // 跑不到。对应 Java `RiskEngine.handlerRiskRelease` 处理 `MatcherEventType.FUNDING_EVENT`
         // 的分支（`:972-976`）。
         if cmd.command == OrderCommandType::SettleFundingfees {
+            // Java 在 `handlerRiskRelease` 顶层用 `cmd.matcherEvent != null` 门控整个函数
+            // （`:888-890`），funding 无事件（`total_pay==0 || total_recv==0` → matcherEvent=null）时
+            // 根本进不到 `:977` 的 checkPositions。本移植的 funding 事件载体是 `cmd.funding_fee_event`
+            // （`None` = 无事件），故在结算消费它之前先捕获是否有事件，据此门控 check_positions，
+            // 与 Java 一致——无 funding 结算就不触发强平扫描。
+            let had_funding_event = cmd.funding_fee_event.is_some();
             self.settle_funding_fees_apply(cmd, ups, ssp);
-            // P6 Task 7b：对应 Java `handlerRiskRelease:977`——资金费 R2 结算后触发同 symbol 的强平
-            // 检测（资金费结算本身可能把某仓推破产）。这是 Task 4 记的 checkPositions 钩子 retrofit。
-            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
+            // 对应 Java `handlerRiskRelease:977`——资金费 R2 结算后触发同 symbol 的强平检测
+            // （资金费结算本身可能把某仓推破产）。这是 Task 4 记的 checkPositions 钩子 retrofit。
+            if had_funding_event {
+                self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
+            }
             return;
         }
         // `IF_TAKEOVER` 是本移植第四个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链传数据
@@ -988,10 +996,14 @@ impl RiskEngine {
                         spec.quote_scale_k,
                         quote_currency_spec.currency_scale_k,
                     );
+                    // debit 与 credit 必须对称/全有全无（对应 Java `collectLiquidationFee` 顶层
+                    // `if (takerSpr == null) return;` 守护）——taker profile 缺失时两者都不做，
+                    // 否则会凭空 credit IF、破坏守恒。当前不可达（FORCE target 的 profile 必已存在），
+                    // 但显式对齐 Java 的对称性，杜绝潜在守恒漏洞。
                     if let Some(taker) = ups.get_mut(cmd.uid) {
                         taker.add_to_account(spec.quote_currency, -quote_fee);
+                        self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
                     }
-                    self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
                 }
                 // advance_liquidation（Java `:997`）：FORCE apply 后推进状态机（全成交闭环 /
                 // REJECT→WAIT_IF 并入队 IF）。
