@@ -7,4 +7,6 @@
 //! （`LiquidationEngine`——FORCE→IF→ADL 状态机的编排层，是这些函数唯一的调用方，参考文档 §1/§3），
 //! 见 `liquidation_service.rs` 模块文档"未移植：orderId 编码 / ADL 候选构造"一节。
 
+pub mod liquidation_engine;
+pub mod liquidation_flow;
 pub mod liquidation_service;

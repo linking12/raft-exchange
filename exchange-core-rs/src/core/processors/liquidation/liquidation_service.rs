@@ -101,6 +101,38 @@ impl LiquidationService {
         LiquidationService::default()
     }
 
+    /// 对应 Java `generateLiquidationOrderId(SymbolPositionRecord)`（`LiquidationService.java:182-188`）：
+    /// 为一笔强平流程生成根 orderId——位布局 `symbol<<32 | uidHash<<12 | sideBit<<11 | tsPart`
+    /// （`uidHash = (uid*31+17)&0xFFFFF` 20 bit；`sideBit = SHORT?1:0`；`tsPart` 11 bit）。
+    ///
+    /// **确定性偏差（刻意）**：Java 用 `System.currentTimeMillis()/1000` 取 `tsPart`——本移植改用
+    /// **触发命令的 `timestamp`**（`ts/1000 & 0x7FF`）。理由：`check_positions` 是 leader-only
+    /// （`is_running` 门），Java 里 leader 生成后经 raft 复制给 follower 重放同一条命令，wall-clock
+    /// 只在 leader 生成时读一次故可接受；但纯库 + 确定性测试要求可复现，`cmd.timestamp` 本身是
+    /// 复制态字段（每条命令入队时定档），用它既保 leader/follower 一致又保测试可复现，与本移植
+    /// 通篇"用 `cmd.timestamp` 而非 wall-clock"的确定性纪律一致。同一 scan 内同 `symbol+uid+side`
+    /// 即同一仓位（不可能有两个），跨 uid 的 `uidHash` 互异，故不会碰撞（与 Java 同）。
+    pub fn generate_liquidation_order_id(uid: i64, symbol: i32, direction: PositionDirection, timestamp: i64) -> i64 {
+        let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & 0xFFFFF; // 20 bit
+        let side_bit: i64 = if direction == PositionDirection::Short { 1 } else { 0 };
+        let ts_part = (timestamp / 1000) & 0x7FF; // 11 bit
+        ((symbol as i64) << 32) | (uid_hash << 12) | (side_bit << 11) | ts_part
+    }
+
+    /// 对应 Java `generateIFOrderId(long)`（`:190-193`）：IF 命令的 orderId 由根强平 orderId 派生，
+    /// 高位打 `'I'`（`0x49`）标签。
+    pub fn generate_if_order_id(liquidation_order_id: i64) -> i64 {
+        let if_order_tag: i64 = 0x49; // 'I'
+        (if_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
+    }
+
+    /// 对应 Java `generateADLOrderId(long)`（`:195-198`）：ADL 命令的 orderId 由根强平 orderId 派生，
+    /// 高位打 `'A'`（`0x41`）标签。
+    pub fn generate_adl_order_id(liquidation_order_id: i64) -> i64 {
+        let adl_order_tag: i64 = 0x41; // 'A'
+        (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
+    }
+
     /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池（Task 7
     /// `collectLiquidationFee` 消费；本 Task 只落地这个记账原语本身）。
     pub fn credit_liquidation_fee(&mut self, symbol: i32, notional_fee: i64) {
@@ -397,6 +429,44 @@ fn saturating_multiply(a: i64, b: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- orderId 编码（generate_liquidation/if/adl_order_id）----
+
+    #[test]
+    fn generate_liquidation_order_id_encodes_symbol_uid_side_ts() {
+        let long_id = LiquidationService::generate_liquidation_order_id(1, 200, PositionDirection::Long, 5_000);
+        let short_id = LiquidationService::generate_liquidation_order_id(1, 200, PositionDirection::Short, 5_000);
+        // 高 32 位 = symbol。
+        assert_eq!((long_id >> 32) as i32, 200);
+        // sideBit（bit 11）：LONG=0 / SHORT=1。
+        assert_eq!((long_id >> 11) & 1, 0);
+        assert_eq!((short_id >> 11) & 1, 1);
+        // tsPart = (ts/1000)&0x7FF = 5。
+        assert_eq!(long_id & 0x7FF, 5);
+        // uidHash（bit 12-31）= (uid*31+17)&0xFFFFF。
+        assert_eq!((long_id >> 12) & 0xFFFFF, (1i64 * 31 + 17) & 0xFFFFF);
+    }
+
+    #[test]
+    fn generate_liquidation_order_id_distinct_uids_no_collision_same_scan() {
+        // 同 symbol/side/ts、不同 uid -> uidHash 不同 -> orderId 不同（不碰撞）。
+        let a = LiquidationService::generate_liquidation_order_id(1, 200, PositionDirection::Long, 5_000);
+        let b = LiquidationService::generate_liquidation_order_id(2, 200, PositionDirection::Long, 5_000);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn generate_if_and_adl_order_id_tag_high_byte_and_preserve_low_bits() {
+        let root = LiquidationService::generate_liquidation_order_id(1, 200, PositionDirection::Long, 5_000);
+        let if_id = LiquidationService::generate_if_order_id(root);
+        let adl_id = LiquidationService::generate_adl_order_id(root);
+        assert_eq!((if_id >> 56) & 0xFF, 0x49, "'I' 标签");
+        assert_eq!((adl_id >> 56) & 0xFF, 0x41, "'A' 标签");
+        // 低 56 位保留根 orderId（root 本身 < 2^56，故完整保留）。
+        assert_eq!(if_id & 0x00FF_FFFF_FFFF_FFFF, root & 0x00FF_FFFF_FFFF_FFFF);
+        assert_eq!(adl_id & 0x00FF_FFFF_FFFF_FFFF, root & 0x00FF_FFFF_FFFF_FFFF);
+        assert_ne!(if_id, adl_id, "IF/ADL 标签不同 -> orderId 不同");
+    }
 
     // ---- credit_liquidation_fee / deposit / withdraw ----
 
