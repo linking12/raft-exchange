@@ -50,8 +50,11 @@ impl LiquidationScheduler {
     pub fn new(scan_slice_count: i64, reprice_every_n_ticks: i64, shard_id: i32) -> Self {
         LiquidationScheduler {
             scan_tick: 0,
+            // 对应 Java 构造器 `LiquidationScheduledService.java:54` 的 `Math.max(1, ...)`：非正配置
+            // 归一为 1（= 每 tick reprice），而非"从不 reprice"。`scan_slice_count` 同理由
+            // `run_one_iteration` 里 `.max(1)` 兜底。
             scan_slice_count,
-            reprice_every_n_ticks,
+            reprice_every_n_ticks: reprice_every_n_ticks.max(1),
             shard_id,
             is_running: false,
             pending_commands: Vec::new(),
