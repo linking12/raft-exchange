@@ -77,16 +77,10 @@ impl LiquidationEngine {
         LiquidationEngine::default()
     }
 
-    /// 对应 Java `LiquidationScheduledService.coveredByScanSlice(cmd, uid)`（`:129-134`）：静态、
-    /// 期货 + 借贷扫描器共用（§7.3）。非 `LIQUIDATION_SCAN` 或 `size<=0`（切片数无效 = 全扫，
-    /// legacy/replay）恒 `true`；否则 `floorMod(uid, sliceCount) == scanSlice`（`cmd.size` =
-    /// sliceCount，`cmd.uid` = scanSlice，见 §7.4 `ApiLiquidationScan` 映射）。`floorMod` 用
-    /// `rem_euclid`（Rust 的欧几里得取模 = Java `Math.floorMod`，对负 uid 也返非负余数）。
+    /// 期货 + 借贷扫描器共用的切片过滤——委托 [`scheduler::covered_by_scan_slice`]（Task 9 提取为
+    /// 自由函数，§7.3 "one shared slicing decision"）。保留此关联函数入口不改既有调用点。
     pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
-        if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
-            return true;
-        }
-        uid.rem_euclid(cmd.size) == cmd.uid
+        crate::core::processors::liquidation::scheduler::covered_by_scan_slice(cmd, uid)
     }
 
     /// 对应 Java `onPositionOpened`（`:151-153`）：开仓 apply 把 uid 登记进 symbol→持有者索引
