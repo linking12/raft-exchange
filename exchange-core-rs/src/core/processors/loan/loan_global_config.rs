@@ -13,7 +13,7 @@ pub const DEFAULT_LTV_MARGIN_CALL_BUFFER_BPS: i32 = 1000; // 10%，liquidation�
 pub const NUMERAIRE_UNSET: i32 = 0;
 
 /// 对应 Java `LoanGlobalConfig`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LoanGlobalConfig {
     /// Cross 估值基准币；未配（`NUMERAIRE_UNSET`）时 Cross BORROW/WITHDRAW fail-close、scanner 跳过。
     pub numeraire_currency: i32,

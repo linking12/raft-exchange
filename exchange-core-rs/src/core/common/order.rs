@@ -2,7 +2,7 @@
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order_action::OrderAction;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Order {
     pub order_id: i64,
     pub price: i64,

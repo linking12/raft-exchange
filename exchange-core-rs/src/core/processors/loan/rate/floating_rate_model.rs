@@ -41,7 +41,7 @@ pub const DEFAULT_SLOPE2_BPS: i32 = 6000; // kink→100% 陡增幅
 ///
 /// Java 侧 `currentRateBps`/`accRateBpsMs` 是 `IntLongHashMap`（currency -> value）；本移植
 /// 用 `BTreeMap<i32,i64>` 保持确定性迭代序（仓库铁律：禁 HashMap）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FloatingRateModel {
     /// 零利用率基础利率。
     pub base_bps: i32,

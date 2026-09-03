@@ -35,7 +35,7 @@ fn mul_exact(a: i64, b: i64) -> i64 {
 }
 
 /// 对应 Java `SymbolPositionRecord`：期货 / 保证金交易的单 symbol、单方向持仓记录。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct SymbolPositionRecord {
     pub uid: i64,
     pub symbol: i32,
@@ -72,14 +72,27 @@ pub struct SymbolPositionRecord {
     // ================================================================
     /// 对应 Java `SymbolPositionRecord.pendingADLSize`：ADL R1 `collect_input` 里对本仓预留的
     /// 待减仓量，`finalize_for_command` 对称释放。防同一命令的多 shard 候选选择重复减同一手量。
+    ///
+    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：leader-local 预留计数，换届恢复即重置
+    /// 为 0（Java writeMarshallable 同样不写它），下一轮 ADL scan 重新预留。
+    #[serde(skip)]
     pub pending_adl_size: i64,
     /// 对应 Java `SymbolPositionRecord.adlEligibility`：ADL 资格因子（ISOLATED 默认 100，CROSS
     /// 默认 0、过账户级安全门后写 clamp 因子）。`riskScore` 的乘子之一。
+    ///
+    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：leader-local；换届恢复后由
+    /// `ExchangeCore::from_snapshot_bytes` 的 fixup 按 `margin_mode` 归一（ISOLATED=100 / CROSS=0，
+    /// 同 `new`/`initialize`），CROSS 值下一轮 ADL scan 重算。Java writeMarshallable 同样不写它。
+    #[serde(skip)]
     pub adl_eligibility: i64,
     /// 对应 Java `SymbolPositionRecord.liquidationFlow`（P6 Task 7 引入）：进行中的 FORCE→IF→ADL
     /// 强平状态机对象，`None` = 无进行中流程。**leader-local、不序列化、不进 `state_hash`**
     /// （Ruling P6-E，见 `liquidation_flow.rs` 模块文档 + 本模块头注）。流程闭环时置回 `None`；
     /// 换届后新 leader 侧全为 `None`，残余破产仓重走 FORCE 恢复。
+    ///
+    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：纯内存状态机，换届恢复即 `None`
+    /// （Java 明确不序列化 `liquidationFlow`），残余破产仓被重新检测重启 FORCE→IF→ADL 周期。
+    #[serde(skip)]
     pub liquidation_flow: Option<LiquidationFlow>,
 }
 

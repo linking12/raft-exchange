@@ -4,7 +4,7 @@
 use crate::core::common::loan_record::LoanRecord;
 
 /// 对应 Java `CrossLoanRecord`。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CrossLoanRecord {
     // ── 身份
     /// 所属用户（上下文注入，不参与序列化，只进 state_hash）。

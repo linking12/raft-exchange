@@ -1,6 +1,6 @@
 /// 对应 Java `exchange.core2.core.common.SymbolType`。现货移植只用 `CurrencyExchangePair`；
 /// 其余变体（期货/期权）仅保留码值以便未来分支/序列化对齐，本期无业务逻辑。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolType {
     CurrencyExchangePair,
     FuturesContractPerpetual,

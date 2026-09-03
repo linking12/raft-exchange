@@ -9,7 +9,7 @@ use crate::core::common::user_status::UserStatus;
 
 /// 对应 Java `UserProfileService`（现货子集：注册表 + `addEmptyUserProfile`/`getUserProfile`/
 /// `getUserProfileOrAddSuspended`；`balanceAdjustment` 等业务逻辑属 Task 8）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct UserProfileService {
     pub users: BTreeMap<i64, UserProfile>,
 }

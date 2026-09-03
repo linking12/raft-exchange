@@ -6,7 +6,7 @@
 //! 避免出现两套不一致的映射表。
 use crate::core::common::order_action::OrderAction;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PositionDirection {
     Long,
     Short,

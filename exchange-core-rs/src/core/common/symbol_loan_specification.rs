@@ -4,7 +4,7 @@
 //! per-loanCurrency 池级概念，归 `LoanService`）。
 
 /// 对应 Java `SymbolLoanSpecification`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct SymbolLoanSpecification {
     /// 开仓 LTV 上限；`0` = 借贷未启用。
     pub initial_ltv_bps: i32,

@@ -44,7 +44,7 @@ fn mul_exact(a: i64, b: i64) -> i64 {
 /// `reserved` 是强平流程中的预冻结部分（R1 `reserve_if_notional` 写入，R2 finalize
 /// `release_reserved_if_notional` 释放，与真实扣款 `accept_if_position` 是两条独立记账线，见
 /// [`LiquidationService`] 模块文档）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IfNotional {
     pub available: i64,
     pub reserved: i64,
@@ -62,7 +62,7 @@ impl IfNotional {
 
 /// 对应 Java `LiquidationService.IFPositionRecord`：IF 自身接管仓位——某 symbol+方向 累计接管的
 /// 持仓量与开仓成本（反向出清估值用，Task 7 ADL/清算编排消费）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IfPositionRecord {
     pub symbol: i32,
     pub direction: PositionDirection,
@@ -90,7 +90,7 @@ impl IfPositionRecord {
 ///   同 symbol 的多/空两条独立持仓记录（brief 明确 key 类型 `i64`，虽然 Java 原版
 ///   `IntObjectHashMap` 是 `int` key；`i64` 宽域不改变语义，`direction.multiplier() ∈ {-1,0,1}`
 ///   与 `symbol: i32` 相乘在两种宽度下数值恒等）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LiquidationService {
     pub notionals: BTreeMap<i32, IfNotional>,
     pub positions: BTreeMap<i64, IfPositionRecord>,

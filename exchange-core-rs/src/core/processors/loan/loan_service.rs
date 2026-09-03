@@ -62,7 +62,7 @@ fn checked_add_i64(a: i64, b: i64) -> Option<i64> {
 ///
 /// Java 侧对应类型是 `IntLongHashMap`；本移植用 `BTreeMap<i32,i64>` 保持确定性迭代序
 /// （仓库铁律：状态/输出禁 HashMap）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct LoanService {
     pub loan_pool_available: BTreeMap<i32, i64>,
     pub loan_pool_borrowed: BTreeMap<i32, i64>,

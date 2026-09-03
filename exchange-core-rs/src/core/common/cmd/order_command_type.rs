@@ -11,7 +11,7 @@
 /// 与 `LOAN_IF_DEPOSIT`（码 64）本身就重复——本移植 `LiquidationScan` 故意不选 64（已被
 /// `LoanIfDeposit` 占用），选 44，规避这个 Java 既有的重复码，不是"修正" Java，只是本枚举内部
 /// 互异约束下的必然选择。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderCommandType {
     PlaceOrder,
     CancelOrder,

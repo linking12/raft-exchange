@@ -25,7 +25,7 @@ use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
 /// 对应 Java `MatchingEngineRouter`（现货子集：只保留 symbol→book 路由 + 撮合分派，
 /// 序列化/对象池/分片/二进制命令等本期不移植）。
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct MatchingEngineRouter {
     books: BTreeMap<i32, OrderBookNaiveImpl>,
 }

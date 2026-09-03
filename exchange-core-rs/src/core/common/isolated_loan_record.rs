@@ -5,7 +5,7 @@ use crate::core::common::loan_record::LoanRecord;
 
 /// 对应 Java `IsolatedLoanRecord.RATE_MODE_LOCKED`/`RATE_MODE_FLOATING`：
 /// LOCKED=定息，开仓锁 `rate_bps` 线性计息；FLOATING=活期，走 `acc_snapshot` 累加器。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LoanRateMode {
     Locked,
     Floating,
@@ -37,7 +37,7 @@ impl Default for LoanRateMode {
 }
 
 /// 对应 Java `IsolatedLoanRecord`。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct IsolatedLoanRecord {
     // ── 身份
     /// 所属用户（上下文注入，不参与序列化，只进 state_hash）。

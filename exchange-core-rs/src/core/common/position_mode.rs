@@ -2,7 +2,7 @@
 //! `ONEWAY(0)` 默认（每 symbol 一条持仓记录，键=raw symbol）；
 //! `HEDGE(1)`（每 symbol 两条持仓记录，键=+symbol 多头/-symbol 空头）。
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PositionMode {
     OneWay,
     Hedge,
