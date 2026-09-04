@@ -55,45 +55,21 @@ pub struct SymbolPositionRecord {
     /// 补充保证金（sizePriceScale），`MARGIN_ADJUSTMENT` 手动加，清空仓位时整额退。
     pub extra_margin: i64,
 
-    // ================================================================
-    // 非复制 leader-local scratch（Ruling P6-E）：不进 `state_hash`、不序列化。
-    // ADL 一条命令内 R1 预留 / R2-finalize 对称释放的纯标量计数（参考 §3）。
-    // ================================================================
-    /// 对应 Java `SymbolPositionRecord.pendingADLSize`：ADL R1 `collect_input` 里对本仓预留的
-    /// 待减仓量，`finalize_for_command` 对称释放。防同一命令的多 shard 候选选择重复减同一手量。
-    ///
-    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：leader-local 预留计数，换届恢复即重置
-    /// 为 0（Java writeMarshallable 同样不写它），下一轮 ADL scan 重新预留。
+    // 非复制 leader-local scratch（Ruling P6-E）：不进 state_hash、不序列化。
+    /// 对应 Java `pendingADLSize`：ADL R1 预留待减仓量，R2-finalize 对称释放；`#[serde(skip)]`，Ruling P6-E。
     #[serde(skip)]
     pub pending_adl_size: i64,
-    /// 对应 Java `SymbolPositionRecord.adlEligibility`：ADL 资格因子（ISOLATED 默认 100，CROSS
-    /// 默认 0、过账户级安全门后写 clamp 因子）。`riskScore` 的乘子之一。
-    ///
-    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：leader-local；换届恢复后由
-    /// `ExchangeCore::from_snapshot_bytes` 的 fixup 按 `margin_mode` 归一（ISOLATED=100 / CROSS=0，
-    /// 同 `new`/`initialize`），CROSS 值下一轮 ADL scan 重算。Java writeMarshallable 同样不写它。
+    /// 对应 Java `adlEligibility`：ADL 资格因子（ISOLATED=100/CROSS=0，安全门后 clamp）；`#[serde(skip)]`，Ruling P6-E。
     #[serde(skip)]
     pub adl_eligibility: i64,
-    /// 对应 Java `SymbolPositionRecord.liquidationFlow`（P6 Task 7 引入）：进行中的 FORCE→IF→ADL
-    /// 强平状态机对象，`None` = 无进行中流程。**leader-local、不序列化、不进 `state_hash`**
-    /// （Ruling P6-E，见 `liquidation_flow.rs` 模块文档 + 本模块头注）。流程闭环时置回 `None`；
-    /// 换届后新 leader 侧全为 `None`，残余破产仓重走 FORCE 恢复。
-    ///
-    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：纯内存状态机，换届恢复即 `None`
-    /// （Java 明确不序列化 `liquidationFlow`），残余破产仓被重新检测重启 FORCE→IF→ADL 周期。
+    /// 对应 Java `liquidationFlow`（P6 Task 7）：进行中的 FORCE→IF→ADL 状态机，`None`=无流程；`#[serde(skip)]`，Ruling P6-E。
     #[serde(skip)]
     pub liquidation_flow: Option<LiquidationFlow>,
 }
 
 impl SymbolPositionRecord {
-    /// 对应 Java 池化复用前的手工构造场景：直接给定 `(uid, symbol, currency, margin_mode,
-    /// leverage)`，其余字段取结构体默认零值（`direction=Empty`）。`leverage` 经
-    /// [`Self::update_leverage`] 归一（`0` -> `1`）。**P6 Task 6 补齐**：`adl_eligibility` 按
-    /// `margin_mode` 归一（`Isolated -> 100`，`Cross -> 0`），对应 Java `SymbolPositionRecord`
-    /// 字段原始初始值 `adlEligibility = 100`（`Default` derive 给出的是 `0`，与 Java raw 字段
-    /// 初始值不同，同 `leverage` 的 Ruling P4-B 一个道理——这个便捷构造函数是本移植新增的，不是
-    /// Java 逐字对应的构造器，必须显式补上这条默认值规则，否则新建的 ISOLATED 仓位
-    /// `adl_eligibility` 会停留在 Rust 零值 `0`，导致 `risk_score` 恒为 0、ADL 永远选不中它）。
+    /// 本移植新增的便捷构造器（非 Java 逐字对应）：给定 identity 字段，其余取默认零值；`leverage` 经
+    /// [`Self::update_leverage`] 归一，`adl_eligibility` 按 `margin_mode` 归一（P6 Task 6）。
     pub fn new(uid: i64, symbol: i32, currency: i32, margin_mode: MarginMode, leverage: i32) -> Self {
         let mut r = SymbolPositionRecord { uid, symbol, currency, margin_mode, ..Default::default() };
         r.update_leverage(leverage);
@@ -102,9 +78,7 @@ impl SymbolPositionRecord {
         r
     }
 
-    /// 对应 Java `initialize(long uid, int symbol, int currency, OrderAction orderAction,
-    /// int leverage, MarginMode marginMode)`：池化复用入口，按开仓方向建立新记录（`direction`
-    /// 由 `orderAction` 推导：`BID -> LONG`，否则 `SHORT`），持仓/成本/盈亏清零。
+    /// 对应 Java `initialize(...)`：池化复用入口，按 `orderAction` 推导 `direction`，持仓/成本/盈亏清零。
     pub fn initialize(
         &mut self,
         uid: i64,
@@ -130,8 +104,7 @@ impl SymbolPositionRecord {
         self.update_leverage(leverage);
         self.margin_mode = margin_mode;
         self.extra_margin = 0;
-        // 对应 Java `initialize` (`:110-111`)：ADL 资格因子按 margin_mode 归一，pendingADLSize
-        // 清零——池化复用入口，池复用前的旧值必须清干净（P6 Task 6 补齐，见 `Self::new` 文档）。
+        // 对应 Java `initialize` (`:110-111`)：ADL 资格因子按 margin_mode 归一，池复用清干净旧值。
         self.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
         self.pending_adl_size = 0;
         // 对应 Java `initialize` (`:112`)：池化复用清理纯内存强平流程状态（P6 Task 7）。
@@ -153,9 +126,7 @@ impl SymbolPositionRecord {
         self.open_volume == 0 && self.pending_sell_size == 0 && self.pending_buy_size == 0
     }
 
-    /// 对应 Java `reset()`：池复用清零（Rust 无对象池，保留方法以便调用方显式清空复用一条记录）。
-    /// 与 `Default::default()` 的区别：`Default` 会把 `uid`/`symbol`/`currency` 也清零，
-    /// 而 `reset()` 与 Java 一致——保留 identity 字段不动，只清业务状态。
+    /// 对应 Java `reset()`：池复用清零，保留 identity 字段（uid/symbol/currency）不动，只清业务状态。
     pub fn reset(&mut self) {
         self.pending_buy_size = 0;
         self.pending_sell_size = 0;
@@ -170,21 +141,14 @@ impl SymbolPositionRecord {
         self.update_leverage(0);
         self.margin_mode = MarginMode::Isolated;
         self.extra_margin = 0;
-        // 对应 Java `reset()` (`:706-709`)：无条件回落到 ISOLATED 默认值——`reset()` 之后紧跟
-        // `initialize()` 才会按真实 margin_mode 重设，二者组合与 Java 池化复用序列一致
-        // （P6 Task 6 补齐，见 `Self::new` 文档）。
+        // 对应 Java `reset()` (`:706-709`)：无条件回落 ISOLATED 默认值，后续 `initialize()` 按真实 margin_mode 重设。
         self.adl_eligibility = 100;
         self.pending_adl_size = 0;
         // 对应 Java `reset` (`:710`)：池化复用清理纯内存强平流程状态（P6 Task 7）。
         self.liquidation_flow = None;
     }
 
-    /// 对应 Java `stateHash()`：`Objects.hash(symbol, currency, direction.getMultiplier(),
-    /// openVolume, openInitMarginSum, openPriceSum, profit, pendingSellSize, pendingBuySize,
-    /// pendingSellAvgPrice, pendingBuyAvgPrice, leverage, enumStateHash(marginMode),
-    /// extraMargin)`——**不含 `uid`**（逐字对齐 Java，非遗漏）。风格对齐
-    /// `UserProfile::state_hash`（`h=h*31+field` 滚动折叠）；不保证与 Java 数值相等，只保证
-    /// 「同状态 -> 同 hash，不同状态 -> 不同 hash」。
+    /// 对应 Java `stateHash()`：字段滚动折叠 hash，**不含 `uid`**（逐字对齐，非遗漏）；不保证数值与 Java 相等，只保证状态可辨。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);
@@ -204,13 +168,8 @@ impl SymbolPositionRecord {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 对应 Java `calculateBankruptcyPrice(CoreSymbolSpecification, ToLongFunction)`
-    /// （`SymbolPositionRecord.java:295-312`）：破产价（= 权益恰好归零的清算限价）。
-    /// `margin_base_fn` 对应 Java 的 `crossMarginBaseFn`——ISOLATED 分支不调它（直接
-    /// `open_init_margin_sum + extra_margin`），CROSS 分支用它取账户级 marginBase（P4 已移植的
-    /// `cross_margin_base_allocation` 之类，由清算引擎在 P6 Task 7 传入；单仓/测试可传 `|_| 0`）。
-    /// 单位：三者(marginBase/openPriceSum/结果)同 sizePriceScale/quoteScaleK 对齐，见 Java 注释。
-    /// 逐字对齐 Java：运算顺序、`*_exact`/`ceil_*` 取舍照抄，不重推。
+    /// 对应 Java `calculateBankruptcyPrice(CoreSymbolSpecification, ToLongFunction)`（`SymbolPositionRecord.java:295-312`）：
+    /// 破产价（权益归零的清算限价）；`margin_base_fn` 对应 `crossMarginBaseFn`，逐字对齐 Java 运算顺序与取舍。
     pub fn calculate_bankruptcy_price(
         &self,
         spec: &CoreSymbolSpecification,
@@ -233,12 +192,9 @@ impl SymbolPositionRecord {
         }
     }
 
-    // ================================================================
     // pending 挂单占用 / 释放 —— 对应 Java `:160-226`
-    // ================================================================
 
-    /// 对应 Java `pendingHold(OrderAction, long size, long price)`（`:160-168`）：R1 发单前调，
-    /// 累加挂单量并把该侧的挂单加权均价重算（ceil，保守估计）。
+    /// 对应 Java `pendingHold`（`:160-168`）：R1 发单前调，累加挂单量并重算该侧加权均价（ceil，保守估计）。
     pub fn pending_hold(&mut self, order_action: OrderAction, size: i64, price: i64) {
         match order_action {
             OrderAction::Ask => {
@@ -254,9 +210,7 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `pendingHoldBudget(OrderAction, long size, long budgetNotional)`（`:179-199`）：
-    /// BUDGET 单专用——`cmd.price` 本身就是总预算 notional，无需再乘 size；直接把 budget 累进
-    /// 该侧 pending notional 再 ceil 除回新 size 得新 avg（下游 `size × avg ≈ notional` 契约）。
+    /// 对应 Java `pendingHoldBudget`（`:179-199`）：BUDGET 单专用，`price` 即总预算 notional，累进后 ceil 除回新 avg。
     pub fn pending_hold_budget(&mut self, order_action: OrderAction, size: i64, budget_notional: i64) {
         match order_action {
             OrderAction::Ask => {
@@ -286,8 +240,7 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `calculateAvgPrice`（private helper，`:201-208`）：`currentSize` 与
-    /// `newSize` 合计的加权均价，ceil 取整（保守）。合计量 ≤0 时返回 0（对应侧已清空）。
+    /// 对应 Java `calculateAvgPrice`（private helper，`:201-208`）：合计加权均价，ceil 取整；合计量 ≤0 返回 0。
     fn calculate_avg_price(current_avg: i64, current_size: i64, new_price: i64, new_size: i64) -> i64 {
         let total_size = add_exact(current_size, new_size);
         if total_size <= 0 {
@@ -297,8 +250,7 @@ impl SymbolPositionRecord {
         ceil_divide(total_notional, total_size)
     }
 
-    /// 对应 Java `pendingRelease(OrderAction, long size)`（`:210-226`）：R2 成交/拒/减确认时调，
-    /// 减该侧挂单量，返回实际释放量（`min(pending, size)`）；侧归零时重置该侧 avg 价。
+    /// 对应 Java `pendingRelease`（`:210-226`）：R2 成交/拒/减确认时调，返回实际释放量 `min(pending, size)`；侧归零时重置 avg。
     pub fn pending_release(&mut self, order_action: OrderAction, size: i64) -> i64 {
         match order_action {
             OrderAction::Ask => {
@@ -320,28 +272,21 @@ impl SymbolPositionRecord {
         }
     }
 
-    // ================================================================
     // 盈亏 / 保证金 —— 对应 Java `:233-245`, `:478-615`
-    // ================================================================
 
-    /// 对应 Java `estimatePnl(LastPriceCacheRecord)`（`:233-235`）：`profit`（已实现）+
-    /// 未实现盈亏（以 `mark_price` 估价）。
+    /// 对应 Java `estimatePnl`（`:233-235`）：`profit`（已实现）+ 未实现盈亏（`mark_price` 估价）。
     pub fn estimate_pnl(&self, mark_price: i64) -> i64 {
         add_exact(self.profit, self.estimate_unrealized_profit(mark_price))
     }
 
-    /// 对应 Java `estimateUnrealizedProfit(LastPriceCacheRecord)`（`:240-245`）：
-    /// `sign × (openVolume × mark − openPriceSum)`。LONG 取正号、SHORT 取反号、EMPTY 恒 0
-    /// （`openVolume==0` 时 `direction` 必为 `Empty`，乘数 0 天然兜底）。
+    /// 对应 Java `estimateUnrealizedProfit`（`:240-245`）：`sign × (openVolume × mark − openPriceSum)`；EMPTY 时乘数 0 天然兜底。
     pub fn estimate_unrealized_profit(&self, mark_price: i64) -> i64 {
         let notional = mul_exact(self.open_volume, mark_price);
         let delta = sub_exact(notional, self.open_price_sum);
         mul_exact(self.direction.multiplier() as i64, delta)
     }
 
-    /// 对应 Java `calculateMaintenanceMargin(CoreSymbolSpecification, LastPriceCacheRecord)`
-    /// （`:478-484`）：【强平风险评估用】只看 `openVolume × mark`，不看 pending 挂单。空仓
-    /// 返回 0（避免 `spec.calculateMaintenanceMargin(0)` 在未配置分档表时按 100% 兜底成非零）。
+    /// 对应 Java `calculateMaintenanceMargin`（`:478-484`）：强平风险评估用，只看 `openVolume × mark`，忽略 pending；空仓返回 0。
     pub fn calculate_maintenance_margin(&self, spec: &CoreSymbolSpecification, mark_price: i64) -> i64 {
         if self.open_volume == 0 {
             return 0;
