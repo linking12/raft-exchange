@@ -1,48 +1,16 @@
-//! 对应 Java: `exchange.core2.core.processors.LoanRatePricingProcessor`（`TwoStepCommandProcessor`
-//! 的一个薄实例，全文移植）。`REPRICE_LOAN_RATES` 两步处理器：按全局利用率重定价浮动利率。
-//!
-//! 参考文档 §4.2："Reprice pipeline — TwoStepCommandProcessor pattern"。三段式：
-//! - **R1** [`Self::collect_input`]：每 shard 把本地 `loanPoolBorrowed`/`loanPoolAvailable`
-//!   写进同一张 map，靠 key 符号区分——borrowed 存 `key = currency`（≥0）、available 存
-//!   `key = !currency`（按位取反，非负 currency id 取反恒为负数，故不会与 borrowed 的 key 冲突）。
-//! - **merge** [`Self::build_matcher_events`]：跨 shard 求和后，按币种算 `util =
-//!   FloatingRateModel::utilization_bps(totalBorrowed, totalAvailable)`，currency **升序**产出
-//!   `(currency, util_bps)` 事件（跨节点确定性，对应 Java `currencies.toSortedArray()`）。
-//! - **R2** [`Self::apply_event`]：每个事件先 `advance_accumulator`（用旧生效利率结清
-//!   `[last_reprice_ts, tick_ts)` 这段旧区间）再 `reprice_currency`（把 util 过曲线写新生效利率）
-//!   ——顺序不可颠倒，否则旧区间会被错误地按新利率结算（`FloatingRateModel::advance_accumulator`
-//!   文档同一处强调）。`set_last_reprice_ts` **不**在这里调用——Java 版本是在
-//!   `RiskEngine.handlerRiskRelease`（R2 编排层，`:906-913`）事件循环**之后、只调一次**，本移植
-//!   镜像该结构，由 `RiskEngine::handler_risk_release` 负责（参考文档 §4.2 最后一段）。
-//!
-//! # 事件载体的移植偏差（Task 8 brief 明确允许的选择之一，需记录）
-//! Java 版本靠 `OrderCommand.commonByShard[..].amounts`（R1 写）+ `OrderCommand.matcherEvent`
-//! 单链表（merge 写、R2 消费，事件类型 `MatcherEventType.LOAN_REPRICE_EVENT`）在 R1→ME(merge)→R2
-//! 三段之间传递数据。本移植的 `MatcherEventType`/`MatcherTradeEvent` 是撮合引擎的共享类型
-//! （`risk_engine.rs::handle_matcher_event_margin` 等多处对其做穷尽 `match`），且
-//! `MatchingEngineRouter`（ME 层）当前设计上不持有 `LoanService`——都不适合塞一个和撮合无关的
-//! "reprice 事件"变体进去（会波及期货结算的穷尽匹配、且 ME 层拿不到 loan 池数据）。因此改用
-//! `OrderCommand.loan_reprice_events: Vec<(i32, i64)>`（`(currency, util_bps)`）作为本命令类型
-//! 专属的 R1→R2 载体：`RiskEngine::pre_process_command` 的 `is_non_trading()` 分支里
-//! **一次性**完成 R1 collect_input + merge build_matcher_events（单 shard 下"跨 shard 求和"是恒等
-//! 操作，但下面两个函数仍按"多 shard 输入"的形状实现，保留结构，供将来多 shard 时对齐 Java 的
-//! 真实归并语义），结果写进 `cmd.loan_reprice_events`；`RiskEngine::handler_risk_release` 读取并
-//! 消费它，驱动 R2。数值/顺序/语义与 Java 完全一致，只是数据搬运的物理载体不同。
+//! 对应 Java `LoanRatePricingProcessor`（`TwoStepCommandProcessor` 薄实例）。`REPRICE_LOAN_RATES` 两步处理器：
+//! R1 collect_input 收借贷池、merge build_matcher_events 按利用率算利率事件（currency 升序）、R2 apply_event
+//! 先 advance_accumulator 再 reprice_currency。事件载体用 `OrderCommand.loan_reprice_events`，参考文档 §4.2。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 
-/// 无状态处理器——所有方法都是关联函数，不持有任何字段（Java 版本持有 `riskEngine`/
-/// `eventsHelper` 两个可选引用只是为了在 R1/R2 实例与 merge 实例之间做运行时门禁校验，本移植
-/// 单线程同步调用模型不需要这层门禁，调用方按阶段直接调用对应方法即可）。
+/// 无状态处理器——所有方法都是关联函数，不持有字段（Java 版本的 riskEngine/eventsHelper 只是运行时门禁，本移植不需要）。
 pub struct LoanRatePricingProcessor;
 
 impl LoanRatePricingProcessor {
-    /// R1：对应 Java `collectInput`（`LoanRatePricingProcessor.java:35-53`）。读
-    /// `loan_service` 的两个池子桶，编码进一张 `BTreeMap<i32,i64>`——`borrowed` 存在
-    /// `key = currency`，`available` 存在 `key = !currency`。跳过值为 0 的条目（对应 Java `if (v
-    /// != 0)` 守卫，纯粹是稀疏化，不影响正确性——merge 阶段缺失键按 0 处理）。
+    /// R1：对应 Java `collectInput`（`:35-53`）。编码进 `BTreeMap<i32,i64>`：borrowed@key=currency，available@key=!currency，跳过 0 值。
     pub fn collect_input(loan_service: &LoanService) -> BTreeMap<i32, i64> {
         let mut shard_data = BTreeMap::new();
         for (&currency, &v) in &loan_service.loan_pool_borrowed {
@@ -58,14 +26,7 @@ impl LoanRatePricingProcessor {
         shard_data
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:56-91`）。`shard_data` 是每个 shard 各自的
-    /// [`Self::collect_input`] 输出（本移植单 shard 场景下调用方传长度为 1 的切片）；按 key 符号
-    /// 拆回 borrowed/available 并跨 shard 累加，再按币种算利用率，currency **升序**
-    /// （`BTreeSet` 天然有序迭代）输出 `(currency, util_bps)`。空池（没有任何 currency）返回空
-    /// `Vec`——对应 Java `currencies.isEmpty()` 时 `cmd.matcherEvent = null` 的效果：调用方
-    /// （`RiskEngine::handler_risk_release`）据此判断"本次 reprice 无事可做"，连
-    /// `set_last_reprice_ts` 都不推进（详见该函数文档，镜像 Java `handlerRiskRelease` 顶层
-    /// `mte == null` 早退）。
+    /// merge：对应 Java `buildMatcherEvents`（`:56-91`）。跨 shard 累加后按币种算利用率，currency 升序输出；空池返回空 Vec（对应 `mte == null` 早退）。
     pub fn build_matcher_events(shard_data: &[BTreeMap<i32, i64>]) -> Vec<(i32, i64)> {
         let mut total_borrowed: BTreeMap<i32, i64> = BTreeMap::new();
         let mut total_available: BTreeMap<i32, i64> = BTreeMap::new();
@@ -92,10 +53,7 @@ impl LoanRatePricingProcessor {
             .collect()
     }
 
-    /// R2 per-event：对应 Java `applyEvent`（`:93-104`）。**顺序不可颠倒**：先
-    /// `advance_accumulator`（用推进前的旧生效利率结清旧区间）再 `reprice_currency`（写新生效
-    /// 利率）。`set_last_reprice_ts` 不在这里调用——由调用方在所有事件处理完后统一调用一次
-    /// （对应 Java `RiskEngine.handlerRiskRelease` 事件循环外的 `setLastRepriceTs`，`:906-913`）。
+    /// R2 per-event：对应 Java `applyEvent`（`:93-104`）。顺序不可颠倒：先 advance_accumulator 再 reprice_currency；set_last_reprice_ts 由调用方统一调用一次。
     pub fn apply_event(loan_service: &mut LoanService, currency: i32, util_bps: i64, tick_ts: i64) {
         loan_service.floating_rate.advance_accumulator(currency, tick_ts);
         loan_service.floating_rate.reprice_currency(currency, util_bps);

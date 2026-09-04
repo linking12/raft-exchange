@@ -1,88 +1,26 @@
-//! 对应 Java: `exchange.core2.core.processors.IFCommandProcessor`（129 行，`TwoStepCommandProcessor`
-//! 的一个薄实例）。`IF_TAKEOVER` 两步处理器：R1 各 shard 在 IF balance 上 reserve notional；
-//! merge 按 `floor(reserved / price)` 算能承接多少（**全拒非部分拒**——见
-//! [`IfCommandProcessor::build_matcher_event`]）；R2 落账 counterparty 仓位 + 关 taker +
-//! 释放 reserved 余量（跟 R1 对称）。参考文档 §2.2。
-//!
-//! # 三段式与账户结算的落点分工（同 P6 既有先例）
-//! 本文件只落地 R1/merge/R2-apply 三个**不触碰用户账户**的纯记账原语（全部委托
-//! [`LiquidationService`] 的方法或纯函数）——R2 finalize（关 taker 仓 + refund extra margin +
-//! 结算 profit + release reserved）需要同时借用 `UserProfileService`/
-//! `SymbolSpecificationProvider`，跟 `FundingFeeCommandProcessor::settle_funding_fee`/
-//! `InternalTransferProcessor::apply_event` 走的是同一条路线不同：那两个函数都在各自文件里就地
-//! 完成账户落账，但 IF finalize 还需要判定 `taker_spr.is_empty()` 后触发的一整套仓位清理
-//! （`refund_extra_margin`/`remove_position_record` 内联逻辑）——这套逻辑在 `risk_engine.rs`
-//! 的 `settle_margin_position_event` 里已有一份几乎逐字相同的实现（TRADE 事件收尾），为避免
-//! 引入第二套微妙不同的"仓位清空后结算"实现，`RiskEngine::if_takeover_apply`
-//! 直接内联同款逻辑（少了 taker/maker 手续费那一段——IF 接管不收成交费，对应 Java
-//! `finalizeForCommand` 确实没有算 fee），而不是把它拆成本文件里的第四个函数。**"几乎逐字相同"
-//! 明确包含仓位 map 的查找方式**：taker 仓位记录必须经
-//! `up.create_positions_key(symbol, cmd.action, cmd.command)`（对应 Java
-//! `RiskEngine.handlerRiskRelease:947-948` 的 `takerUp.createPositionsKey(symbol, cmd.action,
-//! cmd.command)`）取 key，不能直接用裸 `symbol` 查——`settle_margin_position_event` 的两个调用点
-//! （`:259`/`:638`/`:1553`/`:1575` 等全部结算落点）都遵守这条规则，`if_takeover_apply` 同样如此
-//! （ONEWAY 下 `create_positions_key` 忽略 action/command、退化为裸 symbol，这是唯一当前可达路径，
-//! HEDGE 下才会分叉出不同的 key）。
-//!
-//! # 事件载体的移植偏差（同 P5/P6 既有先例，Ruling P6-A/P6-C）
-//! Java 用 `MatcherEventType::IF_EVENT`（`matchedOrderUid` 承载 shard id）在 R1→ME(merge)→R2
-//! 之间传递数据，`OrderCommand.ifPreviewCoverByShard[]`（按 shard 下标数组）承载 R1 输出。本移植
-//! 不扩 `MatcherEventType`（撮合引擎共享类型，Ruling P6-A），改用
-//! `OrderCommand.if_preview_cover: i64`（R1 输出，单 shard 塌缩后退化为标量，不再是数组）+
-//! `OrderCommand.if_takeover_size: Option<i64>`（merge 输出：`Some(size)` = 接管成功，`size`
-//! 恒等于 `cmd.size`——单 shard 下"总覆盖量 ≥ 剩余量"这一前提一旦成立，
-//! `min(maxSizeByNotional, remainingSize)` 就退化为 `remainingSize` 本身；`None` = 全拒，对应
-//! Java `cmd.matcherEvent.eventType == REJECT`）。由 `RiskEngine::if_takeover_collect`
-//! （R1+merge 合并，单 shard 下"跨 shard 归并"是恒等操作，同
-//! `settle_funding_fees_collect`/`internal_transfer_collect` 先例）一次性完成，写入这两个字段；
-//! `RiskEngine::if_takeover_apply` 消费。
-//!
-//! # 未移植：`normalizeCmdPositionSize`（Task 7 排期）
-//! Java `RiskEngine.java:365-373`（`case IF_TAKEOVER`）在调用 `ifProcessor.collectInput(cmd)`
-//! **之后**、R1 结果码落定**之前**，额外调用 `normalizeCmdPositionSize(cmd)`
-//! （`RiskEngine.java:724-740`）——按 taker 当前 `openVolume` 收敛 `cmd.size`（不能接管超过
-//! 实际持仓量），且"无仓位则直接 `SUCCESS` 短路，不进 matching engine"。参考文档把这个函数放在
-//! §1.6（`LiquidationEngine` 一节），不在 §2（本 Task 范围的 `IFCommandProcessor`/
-//! `LiquidationService`）——`normalizeCmdPositionSize` 与 `checkPositions`/`advanceLiquidation`
-//! 同属 Task 7 的 `LiquidationEngine` 编排层职责（决定"什么时候构造/如何收敛一条 IF_TAKEOVER
-//! 命令"），不是 `IFCommandProcessor` 自身的 R1/merge/R2 语义。本 Task 的
-//! `RiskEngine::if_takeover_collect` 因此按调用方已给定的 `cmd.size` 直接 reserve，不做收敛——
-//! Task 7 接入 `LiquidationEngine` 时需要在构造 `IF_TAKEOVER` 命令前先做这一步归一化（本 Task 的
-//! `reserve_if_notional`/`build_matcher_event` 不关心 size 从哪来，收窄 size 只会让覆盖率更容易
-//! 达标，不影响本 Task 已验证的 all-or-nothing/conservation 语义）。
+//! 对应 Java `IFCommandProcessor`（`TwoStepCommandProcessor` 薄实例）。`IF_TAKEOVER` 两步处理器：
+//! R1 各 shard 在 IF balance 上 reserve notional，merge 按 floor(reserved/price) 算能承接多少
+//! （全拒非部分拒），R2 落账 counterparty 仓位+关 taker+释放 reserved（参考文档 §2.2）。
+//! R2 finalize 内联复用 `risk_engine.rs::settle_margin_position_event` 同款仓位清理逻辑（不收手续费），
+//! 须经 `create_positions_key` 取 key。事件载体用 `if_preview_cover`/`if_takeover_size` 而非 Java
+//! `MatcherEventType::IF_EVENT`（Ruling P6-A/P6-C）。`normalizeCmdPositionSize` 未移植，属 Task 7
+//! `LiquidationEngine` 编排层职责，不影响本文件 all-or-nothing/conservation 语义。
 
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 
-/// 无状态处理器——同 `FundingFeeCommandProcessor`/`InternalTransferProcessor` 先例，所有方法都是
-/// 关联函数，不持有任何字段（Java 版本持有 `riskEngine`/`eventsHelper` 只是运行时门禁，单线程
-/// 同步调用模型不需要）。
+/// 无状态处理器——同 `FundingFeeCommandProcessor`/`InternalTransferProcessor` 先例，不持有字段。
 pub struct IfCommandProcessor;
 
 impl IfCommandProcessor {
-    /// R1：对应 Java `collectInput`（`:31-36`）——薄封装 [`LiquidationService::reserve_if_notional`]
-    /// （`min(available-reserved, size*price)`，**caps to coverable，never over-promises**）。
+    /// R1：对应 Java `collectInput`（`:31-36`）——薄封装 [`LiquidationService::reserve_if_notional`]（caps to coverable，never over-promises）。
     pub fn collect_input(liquidation: &mut LiquidationService, symbol: i32, size: i64, price: i64) -> i64 {
         liquidation.reserve_if_notional(symbol, size, price)
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:39-72`）——单 shard 塌缩版（Ruling P6-C）。
-    ///
-    /// Java 用 `remainingSize <= 0 || price <= 0 -> REJECT` 前置门（`:41-44`），随后
-    /// `totalCoverSize = Σ (reservedByShard[i] / price)`（**floor division 逐 shard 算完再求和**
-    /// ——碎片化的名义价值不能跨 shard 池化，Java 注释原文：不能用 notional 总和判够）。单 shard
-    /// 下这个求和退化为对唯一一个 shard 的 `preview_cover / price` 取值，无求和可言，但语义
-    /// 完全等价（多 shard 场景下的"逐 shard floor 再求和"与"单 shard floor"在 shard 数=1 时是
-    /// 同一个表达式）。
-    ///
-    /// `total_cover_size < remaining_size` → 全拒（`None`，对应 Java `buildRejectEvent()`）——
-    /// **all-or-nothing，不是部分接管**：哪怕能覆盖 99%，覆盖不满就整单拒绝，这是 IF undersize
-    /// 场景降级到 ADL 的触发条件（Task 7 `advanceLiquidation` 消费，参考文档 §1.5）。
-    ///
-    /// 否则 `Some(take_size)`，`take_size = min(max_size_by_notional, remaining_size)`——单 shard
-    /// 下 `max_size_by_notional = total_cover_size >= remaining_size`（刚通过上面的门），故
-    /// `take_size` 恒等于 `remaining_size`（`cmd.size`）：单 shard collapse 下"接管"要么全额、
-    /// 要么全拒，没有中间态，这正是多 shard 版本"per-shard 部分承接、累加凑够 remaining"这个循环
-    /// 在 shard 数=1 时的退化结果，不是本移植额外简化的行为。
+    /// merge：对应 Java `buildMatcherEvents`（`:39-72`）——单 shard 塌缩版（Ruling P6-C）。前置门
+    /// `remaining_size<=0 || price<=0` → 全拒；`floor(preview_cover/price) < remaining_size` → 全拒
+    /// （all-or-nothing，覆盖不满即整单拒绝，是 IF undersize 降级到 ADL 的触发条件，参考文档 §1.5）；
+    /// 否则 `Some(take_size)` 恒等于 remaining_size（单 shard 下无中间态）。
     pub fn build_matcher_event(preview_cover: i64, remaining_size: i64, price: i64) -> Option<i64> {
         if remaining_size <= 0 || price <= 0 {
             return None;
@@ -94,8 +32,7 @@ impl IfCommandProcessor {
         Some(max_size_by_notional.min(remaining_size))
     }
 
-    /// R2 per-event：对应 Java `applyEvent`（`:75-86`，已过滤 `ev.matchedOrderUid == shardId` 的
-    /// 单 shard 恒真情形）——薄封装 [`LiquidationService::accept_if_position`]。
+    /// R2 per-event：对应 Java `applyEvent`（`:75-86`）——薄封装 [`LiquidationService::accept_if_position`]。
     pub fn apply_event(
         liquidation: &mut LiquidationService,
         symbol: i32,

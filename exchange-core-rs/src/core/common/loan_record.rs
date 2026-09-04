@@ -1,6 +1,4 @@
-//! 对应 Java: exchange.core2.core.common.LoanRecord —— Isolated / Cross 贷款凭证共享的债务视图，
-//! 让 accrue / repay / 强平结算逻辑只写一份（Task 2+ 消费；本 Task 只落接口）。金额均为
-//! `loanCurrency` 的 currencyScale。
+//! 对应 Java `LoanRecord`：Isolated/Cross 贷款凭证共享的债务视图，金额均为 `loanCurrency` 的 currencyScale。
 
 /// 对应 Java `LoanRecord` 接口。`IsolatedLoanRecord`/`CrossLoanRecord` 均实现之；
 /// `LoanService`/`FloatingRateModel`/`FixedRateModel`（Task 2+）都只通过该接口操作 loan。

@@ -1,6 +1,4 @@
-//! 对应 Java: exchange.core2.core.common.CrossLoanRecord —— Cross 单笔债务凭证，挂在
-//! `UserProfile::cross_loans`。无抵押字段——Cross 抵押是账户级的，多笔 debt 共享
-//! `UserProfile::cross_loan_collateral` 池。
+//! 对应 Java `CrossLoanRecord`：Cross 单笔债务凭证，挂 `UserProfile::cross_loans`；无抵押字段（抵押是账户级共享池）。
 use crate::core::common::loan_record::LoanRecord;
 
 /// 对应 Java `CrossLoanRecord`。
@@ -38,8 +36,7 @@ pub struct CrossLoanRecord {
 }
 
 impl CrossLoanRecord {
-    /// 对应 Java `CrossLoanRecord(uid, loanId, symbolId, loanCurrency, rateBps, openedAtTs)`
-    /// 构造器：直接调用 `initialize`。
+    /// 对应 Java `CrossLoanRecord(...)` 构造器：直接调用 `initialize`。
     pub fn new(uid: i64, loan_id: i64, symbol_id: i32, loan_currency: i32, rate_bps: i32, opened_at_ts: i64) -> Self {
         let mut r = CrossLoanRecord::default();
         r.initialize(uid, loan_id, symbol_id, loan_currency, rate_bps, opened_at_ts);
@@ -66,8 +63,7 @@ impl CrossLoanRecord {
         self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `stateHash()`（`:174-178`）：`Objects.hash` 覆盖的 10 个字段，风格对齐
-    /// `IsolatedLoanRecord::state_hash`（`h=h*31+field` 滚动折叠）。
+    /// 对应 Java `stateHash()`（`:174-178`），风格对齐 `IsolatedLoanRecord::state_hash`。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);

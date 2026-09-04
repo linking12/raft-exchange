@@ -1,15 +1,5 @@
-//! 对应 Java: exchange.core2.core.processors.loan.rate.FixedRateModel。
-//!
-//! 定期利率模型（Fixed/Lock），仅用于 Isolated LOCKED：开仓时锁定 `FloatingRateModel` 当前利率 +
-//! 点差，此后利率不再变化，按固定利率线性计息。
-//!
-//! **移植偏差（有意，Task 1 已定）**：Java 版持有 `final FloatingRateModel floating` 字段（同一
-//! `LoanService` 实例内的共享引用）。Rust 侧 `LoanService` 同时拥有 `floating_rate`/`fixed_rate`
-//! 两个字段，若在 `FixedRateModel` 内再放一份 `floating` 引用会形成同结构体内的自引用，需要
-//! `Rc`/生命周期才能表达——与仓库"禁 Rc/RefCell"铁律冲突。因此本移植不搬这个引用字段，
-//! `open_rate_bps` 改为显式接收 `&FloatingRateModel` 参数（`LoanService` 调用时传
-//! `&self.floating_rate`），语义等价，只是把"隐式持有"换成"显式传参"。`accrue`/`display_interest`
-//! 不需要 floating（只读 loan 自身锁定的 `rate_bps`），故不带该参数。
+//! 对应 Java `FixedRateModel`：定期利率模型（Fixed/Lock），仅用于 Isolated LOCKED，开仓锁定 floating 当前利率+点差，此后固定线性计息。
+//! 移植偏差：不持有 `floating` 引用字段（禁 Rc/RefCell 铁律），`open_rate_bps` 改为显式接收 `&FloatingRateModel` 参数。
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
@@ -39,21 +29,14 @@ impl FixedRateModel {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 开仓利率 = floating 当前利率（未 reprice 过则回退 base）+ `locked_rate_adjust_bps`，
-    /// 下限 0；结果固化进 `loan.rate_bps`，此后不再随 floating 变化。对应 Java `openRateBps`
-    /// （`:50-53`）。
+    /// 对应 Java `openRateBps`（`:50-53`）：floating 当前利率 + spread，下限 0，固化进 `loan.rate_bps`。
     pub fn open_rate_bps(&self, floating: &FloatingRateModel, loan_currency: i32) -> i32 {
         let adjusted =
             floating.current_rate_bps_or_base(loan_currency) as i64 + self.locked_rate_adjust_bps as i64;
         adjusted.max(0) as i32
     }
 
-    /// 写路径：按 `loan.rate_bps` 补计利息到 `now`，推进 `last_accrue_ts`；返回本次新增利息
-    /// （≥ 0）。对应 Java `accrue`（`:56-68`）。
-    ///
-    /// **truncated-but-chargeable（F1）**：只在"已计息（`delta>0`）"或"本就不可能计息（无本金/
-    /// 免息）"时推进游标；有本金有利率却因截断得 0 时保留游标，让被截断的 `elapsed` 继续累积到
-    /// 跨过精度阈值再计——否则高频 accrue（如反复 REPAY）会把每段亚阈值利息永久吞掉。
+    /// 对应 Java `accrue`（`:56-68`）：按 `rate_bps` 补计利息到 `now`，推进游标；truncated-but-chargeable（F1）截断得 0 时保留游标避免吞息。
     pub fn accrue<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         let delta =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
@@ -68,17 +51,14 @@ impl FixedRateModel {
         delta
     }
 
-    /// 读路径：`accumulated_interest` + 到 `now` 的 pending 利息，不改 loan。对应 Java
-    /// `displayInterest`（`:71-74`）。
+    /// 对应 Java `displayInterest`（`:71-74`）：`accumulated_interest` + pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let pending =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
         add_exact(loan.accumulated_interest(), pending)
     }
 
-    /// 对应 Java 私有静态 `accrueDelta`（`:76-87`）：**分两步 `truncMulDiv`**——先
-    /// `elapsed×principal/YEAR_MS` 再 `×rateBps/BPS_SCALE`，避免中间值溢出。两次调用的截断点
-    /// 与合并成一次 `i128` 连乘再除的结果不同，必须严格按 Java 的两步顺序调用，不可合并。
+    /// 对应 Java `accrueDelta`（`:76-87`）：分两步 `trunc_mul_div`（先/YEAR_MS 再/BPS_SCALE），不可合并为一次连乘。
     fn accrue_delta(outstanding_principal: i64, rate_bps: i32, last_accrue_ts: i64, now: i64) -> i64 {
         if outstanding_principal <= 0 || rate_bps <= 0 {
             return 0;
@@ -189,9 +169,7 @@ mod tests {
 
     #[test]
     fn accrue_truncated_but_chargeable_freezes_cursor_until_threshold_crossed() {
-        // principal == YEAR_MS makes interest_base == elapsed exactly (no first-step truncation),
-        // so only the second truncMulDiv step (× rate_bps / BPS_SCALE) truncates — isolates F1
-        // to exactly the case the brief describes.
+        // principal == YEAR_MS isolates truncation to the second trunc_mul_div step (F1 case).
         let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 5_000 /* 50% */, 0);
         loan.set_outstanding_principal(YEAR_MS);
         let model = FixedRateModel::default();
@@ -211,8 +189,7 @@ mod tests {
 
     #[test]
     fn accrue_advances_cursor_even_at_zero_delta_when_principal_or_rate_is_nonpositive() {
-        // No principal: delta is intrinsically always 0, so the cursor must still advance
-        // (this is NOT the F1 case — F1 only freezes when principal>0 AND rate>0).
+        // No principal: not the F1 case (F1 only freezes when principal>0 AND rate>0).
         let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 500, 0);
         loan.set_outstanding_principal(0);
         let model = FixedRateModel::default();

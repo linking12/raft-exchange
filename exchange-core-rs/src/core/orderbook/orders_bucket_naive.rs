@@ -61,9 +61,7 @@ impl OrdersBucketNaive {
         self.entries.get(&seq)
     }
 
-    /// 原地减少某挂单的 size（不移除），同步扣减桶的 total_volume。
-    /// 对应 Java `order.size -= reduceBy; ordersBucket.reduceSize(reduceBy);`。
-    /// 返回减量后的订单快照（用于构造 REDUCE 事件）；未找到返回 `None`。
+    /// 原地减少挂单 size 并扣减 total_volume，返回减量后快照，未找到返回 None。对应 Java `order.size -= reduceBy; ordersBucket.reduceSize(reduceBy)`。
     pub fn reduce(&mut self, order_id: i64, reduce_by: i64) -> Option<Order> {
         let seq = *self.id_to_seq.get(&order_id)?;
         let o = self.entries.get_mut(&seq)?;
@@ -72,18 +70,12 @@ impl OrdersBucketNaive {
         Some(o.clone())
     }
 
-    /// 按 FIFO（挂单顺序）只读遍历桶内订单。对应 Java `OrdersBucketNaive.forEachOrder` /
-    /// `getAllOrders`（用于 `state_hash` 的确定性折叠，只读、不改变桶状态）。
+    /// 按 FIFO 只读遍历桶内订单（供 state_hash 确定性折叠用）。对应 Java `OrdersBucketNaive.forEachOrder`/`getAllOrders`。
     pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
         self.entries.values()
     }
 
-    /// 从桶头 FIFO 撮合 `to_collect`，返回剩余未撮合量。
-    /// 回调额外携带 maker 的 `uid`/`reserve_bid_price`（Task 3 新增，供调用方按 Java
-    /// `OrdersBucketNaive.match` 的语义算出 `MatcherTradeEvent.matchedOrderUid`/`bidderHoldPrice`）
-    /// 与 `command`（Task 2 新增，maker 挂单的原命令类型，供调用方填
-    /// `MatcherTradeEvent.matched_order_command_type`——对应 Java
-    /// `OrderBookEventsHelper.java:75`：`event.matchedOrderCommandType = matchingOrder.getCommand()`）。
+    /// 从桶头 FIFO 撮合 to_collect，返回剩余未撮合量；回调携带 maker 的 uid/reserve_bid_price/command 供填 MatcherTradeEvent 字段。对应 Java `OrdersBucketNaive.match` / `OrderBookEventsHelper.java:75`。
     pub fn match_forward(&mut self, mut to_collect: i64,
                          on_trade: &mut impl FnMut(i64, i64, bool, i64, i64, OrderCommandType)) -> i64 {
         let seqs: Vec<i64> = self.entries.keys().copied().collect();
@@ -145,13 +137,7 @@ mod tests {
         assert_eq!(b.total_volume(), 3);
     }
 
-    // ===================================================================
-    // 翻译自 Java OrdersBucketNaiveTest（exchange-core/src/test/java/.../orderbook/OrdersBucketNaiveTest.java）
-    // 适配：Java `remove(orderId, uid)` -> 我们的 `remove(order_id)`（uid 归属校验在 OrderBookNaiveImpl::id_index
-    // 层做，桶层本身不持有 uid 校验职责，见 Task 6/7）；Java `Collections.shuffle(..., new Random(1))` 打乱移除
-    // 顺序 -> 这里简化为固定顺序（顺序不影响这些测试断言的计数/总量结果，因为都是按 id 精确移除+动态重算期望值，
-    // 不依赖具体哪个 id 被移除），不额外引入 RNG 依赖。
-    // ===================================================================
+    // 翻译自 Java OrdersBucketNaiveTest；remove(orderId, uid) 简化为 remove(order_id)，shuffle 移除顺序简化为固定顺序（不影响断言）。
 
     const JAVA_UID_1: i64 = 412;
     const JAVA_UID_2: i64 = 413;

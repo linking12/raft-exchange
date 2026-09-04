@@ -1,28 +1,5 @@
-//! 对应 Java: `exchange.core2.core.processors.liquidation.LiquidationService`（376 行）。
-//! 参考文档 §2.1/§2.3。
-//!
-//! 保险基金（IF）复制状态：per-shard 单例，`RiskEngine` 持有（`RiskEngine.loan_service` 同级
-//! 字段）。**`notionals`/`positions` 进 state_hash/snapshot**——与 Java 版本
-//! `symbolToUsers`（非复制索引，本移植 Task 7 排期）/ `LiquidationFlow`（同上）不同，这两个桶是
-//! IF 的真实资金池状态，必须跨节点强一致（Ruling P6-E）。
-//!
-//! # P6 Task 6 补齐：ADL 候选构造 + 排序键
-//! `unrealized_pnl`/`risk_score`（`saturating_multiply` 支撑，ADL 排序键，逐字对齐 Java
-//! `LiquidationService.java:191-213`）与 `compute_profitable_positions_by_symbol`/
-//! `add_cross_positions_if_user_safe`（ADL 候选扫描，`:225-321`）已落地——
-//! `RiskEngine::adl_collect`（`AUTO_DELEVERAGING` R1）消费，见 `adl_command_processor.rs`
-//! 模块文档。Java 版本这些函数依赖 `updateProvider` 注入的
-//! `UserProfileService`/`SymbolSpecificationProvider`/`lastPriceCache` 三个 provider（实例字段）；
-//! 本移植把它们改成显式函数参数（`compute_profitable_positions_by_symbol` 不再是
-//! `&self`/`&mut self` 方法，是纯粹按参数运算的关联函数——`LiquidationService` 自身的状态
-//! `notionals`/`positions` 与 ADL 候选构造无关，不需要借用 `self`），避免在 `LiquidationService`
-//! 里引入一份"provider 注入"生命周期管理机制。
-//!
-//! # 未移植：orderId 编码（Task 7 排期）
-//! Java 版本另有 `generateLiquidationOrderId`/`generateIFOrderId`/`generateADLOrderId`/
-//! `isLiquidationOrderId`（静态 orderId 位编码工具）——唯一调用方是 `LiquidationEngine`
-//! （`buildForceCmd`/`buildIFCmd`/`buildADLCmd`/`advanceLiquidation`——参考文档 §1，Task 7 排期），
-//! 本 Task 的 `ADLCommandProcessor`/`RiskEngine::adl_collect` 不消费它们，本文件仍不落地。
+//! 对应 Java `LiquidationService`，参考文档 §2.1/§2.3。保险基金（IF）复制状态：per-shard 单例，`RiskEngine` 持有；`notionals`/`positions` 进 state_hash/snapshot（Ruling P6-E）。
+//! ADL 候选构造 + 排序键（`unrealized_pnl`/`risk_score`/`compute_profitable_positions_by_symbol`/`add_cross_positions_if_user_safe`，逐字对齐 Java `:191-321`）已落地，provider 传参不持有（同 P3-B），`RiskEngine::adl_collect` 消费。
 
 use std::collections::BTreeMap;
 
@@ -34,8 +11,7 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::size_price_to_currency_scale;
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份，同仓库既有 helper 风格
-/// （`funding_fee_command_processor.rs`/`risk_engine.rs` 同名 helper）。
+/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（同仓库既有 helper 风格）。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }

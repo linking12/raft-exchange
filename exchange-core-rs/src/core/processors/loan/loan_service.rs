@@ -1,9 +1,4 @@
-//! 对应 Java: exchange.core2.core.processors.loan.LoanService —— per-shard 单例，
-//! 纯状态 + 纯函数工具类，不持有 `RiskEngine` 引用（`loan.md` line 105）。
-//!
-//! **Task 1 范围**：仅字段 + 构造 + `state_hash` + 桶存取。accrue/debt-payment/LTV/
-//! LIF-takeover/scale 换算/orderId 编码等纯函数（Java `:60-497`）留 Task 2/4，参考文档
-//! `docs/superpowers/specs/2026-09-02-p5-loan-reference.md` §1.6/§3/§4/§6。
+//! 对应 Java `LoanService`：per-shard 单例，纯状态 + 纯函数工具类，不持有 `RiskEngine` 引用（`loan.md` line 105），参考文档 §1.6/§3/§4/§6。
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -23,8 +18,7 @@ pub const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
 /// 对应 Java `LoanService.BPS_SCALE`（`:42`）：bps 精度基准（10000 = 100%）。
 pub const BPS_SCALE: i64 = 10_000;
 
-/// force-sell orderId 命名空间/子类型/位掩码（对应 Java `LoanService.java:44-49`）——force-sell
-/// orderId 顶字节 `'L'`（0x4C），独占命名空间，避开期货 `'I'`/ADL `'A'`（P6 Task 8 scanner 消费）。
+/// force-sell orderId 命名空间/子类型/位掩码（对应 Java `LoanService.java:44-49`），顶字节 `'L'` 独占命名空间，避开期货 `'I'`/ADL `'A'`。
 pub const ORDERID_NAMESPACE_TAG: i64 = 0x4C; // 'L'
 pub const ORDERID_SUBTYPE_ISOLATED: i64 = 0x53; // 'S'
 pub const ORDERID_SUBTYPE_CROSS: i64 = 0x43; // 'C'
@@ -32,8 +26,7 @@ const ORDERID_UID_MASK: i64 = 0xF_FFFF; // 20 bit uid hash
 const ORDERID_LOANID_MASK: i64 = 0xFFFF; // 16 bit loanId hash
 const ORDERID_TS_MASK: i64 = 0xFFF; // 12 bit 秒
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（arithmetic 层零依赖 ruling，
-/// 风格对齐 `rate::fixed_rate_model`/`rate::floating_rate_model`/`risk_engine.rs` 各自的同名 helper）。
+/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（arithmetic 层零依赖 ruling）。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
@@ -43,51 +36,34 @@ fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 对应 Java `Math.addExact(long, long)` 的 try/catch 用法（`crossLtvBps`，`:220-263`）：Java 侧
-/// 在 Cross LTV 累加路径里显式 `catch (ArithmeticException e)` 把溢出折成一个哨兵值而非崩溃
-/// （见 `cross_ltv_bps` 三处调用点），与仓内其余 `add_exact`（panic-on-overflow）语义不同，故
-/// 单独起名，不复用上面的 `add_exact`。
+/// 对应 Java `crossLtvBps`（`:220-263`）里 try/catch 溢出折哨兵值的 `Math.addExact` 用法，与其余 panic-on-overflow 的 `add_exact` 语义不同故单独起名。
 fn checked_add_i64(a: i64, b: i64) -> Option<i64> {
     i64::try_from(a as i128 + b as i128).ok()
 }
 
-/// 对应 Java `LoanService`（字段子集，`:51-59`）。
-///
-/// 4 个资金桶（进 raft snapshot，参与全局守恒对账，参考文档 §6）：
-/// - `loan_pool_available`：各币种可借余额（currency scale）。
-/// - `loan_pool_borrowed`：各币种已借出本金（currency scale）——**tracker，不参与守恒**（其
-///   对应资金已在借款人 `accounts` 里，见参考文档 §6.2 "excludes loanPoolBorrowed"）。
-/// - `interest_revenue`：利息收入（currency scale）。
-/// - `loan_insurance_fund`：LIF 保险基金，允许为负（LIF 接管坏账的被动结果，非运营透支）。
-///
-/// Java 侧对应类型是 `IntLongHashMap`；本移植用 `BTreeMap<i32,i64>` 保持确定性迭代序
-/// （仓库铁律：状态/输出禁 HashMap）。
+/// 对应 Java `LoanService`（字段子集，`:51-59`）：4 个资金桶进 raft snapshot 参与全局守恒对账（§6），`loan_pool_borrowed` 是 tracker 不参与守恒（§6.2），`BTreeMap` 保确定序（禁 HashMap）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct LoanService {
     pub loan_pool_available: BTreeMap<i32, i64>,
     pub loan_pool_borrowed: BTreeMap<i32, i64>,
     pub interest_revenue: BTreeMap<i32, i64>,
+    /// LIF 保险基金，允许为负（接管坏账的被动结果，非运营透支）。
     pub loan_insurance_fund: BTreeMap<i32, i64>,
     /// 全局运行时配置（Cross 阈值 / pool 利用率上限 / numeraire）。
     pub global_config: LoanGlobalConfig,
     /// 活期利率：Isolated FLOATING + 全部 Cross。
     pub floating_rate: FloatingRateModel,
-    /// 定期利率：Isolated LOCKED，开仓时锚定 `floating_rate` 当前利率
-    /// （移植偏差见 `rate::fixed_rate_model` 模块文档：不持有 `floating_rate` 的引用字段）。
+    /// 定期利率：Isolated LOCKED，开仓时锚定 `floating_rate` 当前利率（不持有其引用字段，见 `rate::fixed_rate_model` 模块文档）。
     pub fixed_rate: FixedRateModel,
 }
 
 impl LoanService {
-    /// 对应 Java `LoanService()` 构造器（`:61-69`）：全部桶空、`globalConfig`/两个利率模型各自
-    /// 默认值。
+    /// 对应 Java `LoanService()` 构造器（`:61-69`）：全部桶空、各字段默认值。
     pub fn new() -> Self {
         LoanService::default()
     }
 
-    // ================================================================
-    // 桶存取 —— 对应 Java `IntLongHashMap.get(currency)` / `.addToValue(currency, delta)`
-    // 缺省语义（缺省 0，`delta` 可为负）
-    // ================================================================
+    // 桶存取：对应 Java `IntLongHashMap.get`/`.addToValue`（缺省 0，delta 可为负）。
 
     pub fn get_loan_pool_available(&self, currency: i32) -> i64 {
         *self.loan_pool_available.get(&currency).unwrap_or(&0)
@@ -121,14 +97,9 @@ impl LoanService {
         *self.loan_insurance_fund.entry(currency).or_insert(0) += delta;
     }
 
-    // ================================================================
-    // 利率模型二分派 —— 对应 Java `LoanService.accrueTo`/`calculateDisplayInterest`
-    // （`:123-131`）：按 `loan.isFixedRate()` 分派到 `fixed_rate`/`floating_rate`，
-    // 2 处调用点，if/else 即可，不需要多态。
-    // ================================================================
+    // 利率模型二分派：对应 Java `accrueTo`/`calculateDisplayInterest`（`:123-131`），按 `loan.isFixedRate()` 分派。
 
-    /// 写路径：把截至 `now` 的利息补计进 `loan.accumulated_interest` 并推进游标
-    /// （`acc_snapshot` 或 `last_accrue_ts`，按利率模型而定）；返回本次新增利息（≥ 0）。
+    /// 写路径：补计截至 `now` 的利息进 `loan.accumulated_interest` 并推进游标，返回本次新增利息（≥ 0）。
     pub fn accrue_to<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         if loan.is_fixed_rate() {
             self.fixed_rate.accrue(loan, now)
@@ -137,8 +108,7 @@ impl LoanService {
         }
     }
 
-    /// 读路径：返回 `accumulated_interest` 加上截至 `now` 的 pending 利息，不推进游标、
-    /// 不改 loan（展示、强平判定等只读场景用）。
+    /// 读路径：`accumulated_interest` + 截至 `now` 的 pending 利息，不改 loan（展示/强平判定用）。
     pub fn calculate_display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         if loan.is_fixed_rate() {
             self.fixed_rate.display_interest(loan, now)

@@ -1,10 +1,7 @@
-//! 对应 Java: exchange.core2.core.common.IsolatedLoanRecord —— Isolated 单笔贷款凭证，挂在
-//! `UserProfile::isolated_loans`；抵押与本笔 loan 一对一绑定。Java 侧对象池复用、identity 非
-//! final；Rust 无对象池，`initialize` 仍保留以镜像 Java 契约（复用一条记录时显式重置）。
+//! 对应 Java `IsolatedLoanRecord`：Isolated 单笔贷款凭证，挂 `UserProfile::isolated_loans`；抵押与本笔 loan 一对一绑定。
 use crate::core::common::loan_record::LoanRecord;
 
-/// 对应 Java `IsolatedLoanRecord.RATE_MODE_LOCKED`/`RATE_MODE_FLOATING`：
-/// LOCKED=定息，开仓锁 `rate_bps` 线性计息；FLOATING=活期，走 `acc_snapshot` 累加器。
+/// 对应 Java `RATE_MODE_LOCKED`/`RATE_MODE_FLOATING`：LOCKED=定息线性计息；FLOATING=活期累加器计息。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LoanRateMode {
     Locked,
@@ -29,8 +26,7 @@ impl LoanRateMode {
 }
 
 impl Default for LoanRateMode {
-    /// 对应 Java `IsolatedLoanRecord.initialize(...)`：默认 LOCKED，由 `handleLoanCreate`
-    /// （Task 2+）在 initialize 后按 `cmd` 改写。
+    /// 对应 Java `initialize(...)`：默认 LOCKED，由 `handleLoanCreate` 后续按 `cmd` 改写。
     fn default() -> Self {
         LoanRateMode::Locked
     }
@@ -77,8 +73,7 @@ pub struct IsolatedLoanRecord {
 }
 
 impl IsolatedLoanRecord {
-    /// 对应 Java `IsolatedLoanRecord(uid, loanId, symbolId, collateralCurrency, loanCurrency,
-    /// rateBps, openedAtTs)` 构造器：直接调用 `initialize`。
+    /// 对应 Java `IsolatedLoanRecord(...)` 构造器：直接调用 `initialize`。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         uid: i64,
@@ -127,9 +122,7 @@ impl IsolatedLoanRecord {
         self.collateral_amount == 0 && self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `stateHash()`（`:192-197`）：`Objects.hash` 覆盖的 14 个字段，风格对齐
-    /// `UserProfile::state_hash`（`h=h*31+field` 滚动折叠）；不保证与 Java 数值相等，只保证
-    /// 「同状态 -> 同 hash，不同状态 -> 不同 hash」。
+    /// 对应 Java `stateHash()`（`:192-197`），风格对齐 `UserProfile::state_hash`；不保证与 Java 数值相等，仅保证同态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);

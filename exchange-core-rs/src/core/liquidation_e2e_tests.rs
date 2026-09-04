@@ -1,12 +1,4 @@
-//! P6 Task 10（收官）：期货清算 / ADL / IF 的**全局守恒扩展** + e2e 场景 + 守恒 proptest。
-//! 参考文档 §10、§11。
-//!
-//! # 守恒恒等式（含 IF 项，Ruling P6-I）
-//! P4/P5 的完整式（`Σaccounts + adjustments + fees + Σ仓位(estimate_pnl(mark)+extra_margin)`）
-//! **再加** `+ Σ IFNotional.available + Σ IFPositionRecord.estimate_pnl(mark)`——否则每笔带清算费的
-//! FORCE 会把费用从 taker accounts 移进 `IFNotional.available`（P4/P5 窄式外、P6 扩展式内守恒），
-//! IF takeover 把破产仓移进 `IFPositionRecord`，naive 式会假报漂移。本文件所有 spec 用
-//! `base_scale=quote_scale=currency_scale=1`（恒等缩放），故 IF 项（notional 单位）可直接相加。
+//! P6 Task 10（收官）：期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（Ruling P6-I，本文件 scale 全 1 恒等缩放）。
 use proptest::prelude::*;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -180,16 +172,7 @@ enum GenCmd {
     Mark { price: i64 },
 }
 
-/// 生成器**按 uid 奇偶固定下单方向**（偶=BID/做多，奇=ASK/做空），刻意排除**自成交**
-/// （同一用户在两侧同时挂单、自身 BID 与自身 ASK 互相撮合）。
-///
-/// 排除理由（记录 hazard，非隐藏 bug）：自成交 + 强平级联会走到 P4 期货结算的
-/// `handle_matcher_event_margin` maker 块 `required=true` 不变式——当一条成交事件的 maker
-/// （`matched_order_uid`）在自成交/级联交错下其仓位记录状态异常时 panic。该不变式属 P4 既有
-/// settlement 代码（非 Task 7/8 强平接线引入）；自成交是否应被核心撮合支持是独立的 Java-parity
-/// 问题，超出本任务（清算 e2e/守恒）范围。固定单侧 = 无自撮合，每个持有挂单的用户其仓位记录
-/// 恒非空（`pending>0 -> !is_empty -> 不被强平移除`），maker 恒有记录，proptest 因而在**现实的
-/// 多用户对手撮合 + 强平**场景下健全验证含 IF 的全局守恒。
+/// 生成器按 uid 奇偶固定方向（偶=BID/奇=ASK），刻意排除自成交——避免触发 P4 结算 maker `required=true` 不变式 panic（已知 hazard，非本任务范围，非隐藏 bug）。
 fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
     prop_oneof![
         (0usize..4, 80i64..120, 1i64..20).prop_map(|(uid_idx, price, size)| GenCmd::Place { uid_idx, price, size }),
@@ -200,9 +183,7 @@ fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 120, ..ProptestConfig::default() })]
 
-    /// 4 用户、单期货 symbol、杠杆 10、强平引擎开启。随机下单 + markprice 波动会自然触发
-    /// FORCE→IF→ADL 级联。断言：每步后含 IF 的全局守恒（QUOTE+BASE）恒 == 起始值、IFNotional
-    /// 永不为负、全程不 panic。
+    /// 4 用户单期货、杠杆 10、强平引擎开启，随机下单+markprice 触发 FORCE→IF→ADL 级联；断言含 IF 的全局守恒（QUOTE+BASE）恒定、IFNotional 非负、不 panic。
     #[test]
     fn conservation_holds_under_random_stream_with_liquidation(cmds in prop::collection::vec(cmd_strategy(), 1..40)) {
         let (mut core, uids) = seeded(4);

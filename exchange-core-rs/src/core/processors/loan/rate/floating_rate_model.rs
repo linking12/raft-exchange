@@ -1,14 +1,6 @@
-//! 对应 Java: exchange.core2.core.processors.loan.rate.FloatingRateModel。
-//!
-//! 浮动利率引擎（Flexible/活期）：kinked 曲线 + reprice 生效利率 + 累加器计息，适用于 Isolated
-//! FLOATING 及全部 Cross 借贷，也是 `FixedRateModel` 开仓锁率的来源。per-shard 复制状态。
-//!
-//! 计息用"累加器差值法"：`acc_rate_bps_ms` 按币种累积"利率 × 时间"，只在 reprice 时用旧生效
-//! 利率结算 `[last_reprice_ts, tick_ts)` 这段区间（`advance_accumulator`）；两次 reprice 之间的
-//! 即时值由 `live_acc_rate_bps_ms` 用当前生效利率外推得到。每笔 loan 记一个 `acc_snapshot`
-//! （开仓或上次结息时的累加器读数），欠息 = `(liveAcc − accSnapshot)` 换算成本金对应的利息——
-//! 这样计息与 loan 笔数无关，一次 reprice 即对所有持仓同时生效。**加法，非乘法/复利**——
-//! 刻意选择以保证 64-bit 溢出安全，且"利息只作用于本金"（loan.md §13.5 rationale）。
+//! 对应 Java `FloatingRateModel`：浮动利率引擎（kinked 曲线 + reprice 生效利率 + 累加器计息），
+//! 用于 Isolated FLOATING + 全部 Cross 借贷，per-shard 复制状态。计息用累加器差值法（`acc_rate_bps_ms`
+//! + 每笔 loan 的 `acc_snapshot`），加法非复利，保 64-bit 溢出安全（loan.md §13.5）。
 use std::collections::BTreeMap;
 
 use crate::core::common::loan_record::LoanRecord;

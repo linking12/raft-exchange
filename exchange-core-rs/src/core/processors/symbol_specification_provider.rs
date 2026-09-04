@@ -1,5 +1,4 @@
-//! 对应 Java: exchange.core2.core.processors.SymbolSpecificationProvider
-//! （现货子集：add_symbol 的重复 symbolId/(base,quote) 拒绝）。
+//! 对应 Java `SymbolSpecificationProvider`（现货子集：add_symbol 的重复 symbolId/(base,quote) 拒绝）。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -7,8 +6,7 @@ use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::symbol_type::SymbolType;
 
-/// 对应 Java `SymbolSpecificationProvider`。`spot_pair_index` 对应其派生索引 `spotPairIndex`
-/// （Java 里不进 stateHash/序列化、纯派生态；这里同理留作运行期唯一性索引）。
+/// 对应 Java `SymbolSpecificationProvider`；`spot_pair_index` 对应派生索引 `spotPairIndex`（不进 stateHash/序列化）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SymbolSpecificationProvider {
     pub symbols: BTreeMap<i32, CoreSymbolSpecification>,
@@ -21,9 +19,7 @@ impl SymbolSpecificationProvider {
         Self::default()
     }
 
-    /// 对应 Java `SymbolSpecificationProvider.addSymbol`：拒重复 `symbol_id`；
-    /// 现货（`CurrencyExchangePair`）额外拒重复 `(base_currency, quote_currency)` 对
-    /// （期货/期权豁免——交割合约按交割日合法共享 base/quote，见 spot-pair-uniqueness-invariant）。
+    /// 对应 Java `SymbolSpecificationProvider.addSymbol`：拒重复 symbol_id；现货额外拒重复 (base,quote)，期货/期权豁免。
     pub fn add_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if self.symbols.contains_key(&spec.symbol_id) {
             return CommandResultCode::SymbolMgmtSymbolAlreadyExists;
@@ -52,12 +48,7 @@ impl SymbolSpecificationProvider {
         self.currencies.get(&currency)
     }
 
-    /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`（`:77-81`）：反查
-    /// base/quote 现货对 spec；命中多个取 symbolId 最小者，无则 `None`。`add_symbol` 已对现货
-    /// `(base,quote)` 强制唯一（见其文档），所以至多一个匹配——这里直接线性扫
-    /// `symbols`（`BTreeMap` 天然按 `symbol_id` 升序，天然满足"取最小者"语义），不必像 Java
-    /// 那样另建 O(1) 反查索引。Cross LTV/`valueInNumeraire`（Task 5+）用此反查 currency→numeraire
-    /// 的估值路径。
+    /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`（`:77-81`）：反查 base/quote 现货对 spec，线性扫 BTreeMap。
     pub fn find_spot_symbol(&self, base_currency: i32, quote_currency: i32) -> Option<&CoreSymbolSpecification> {
         self.symbols.values().find(|s| {
             s.symbol_type == SymbolType::CurrencyExchangePair

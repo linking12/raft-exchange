@@ -1,14 +1,11 @@
-//! 对应 Java: exchange.core2.core.processors.UserProfileService
-//! （现货子集：注册表 + `addEmptyUserProfile`/`getUserProfile`/`getUserProfileOrAddSuspended`；
-//! `balanceAdjustment` 等业务逻辑属 Task 8，本任务只搭注册表 + 新增）。
+//! 对应 Java `UserProfileService`（现货子集：注册表 + addEmptyUserProfile/getUserProfile/getUserProfileOrAddSuspended）。
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::common::user_status::UserStatus;
 
-/// 对应 Java `UserProfileService`（现货子集：注册表 + `addEmptyUserProfile`/`getUserProfile`/
-/// `getUserProfileOrAddSuspended`；`balanceAdjustment` 等业务逻辑属 Task 8）。
+/// 对应 Java `UserProfileService`（现货子集：注册表 + addEmptyUserProfile/getUserProfile/getUserProfileOrAddSuspended）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct UserProfileService {
     pub users: BTreeMap<i64, UserProfile>,
@@ -19,9 +16,7 @@ impl UserProfileService {
         Self::default()
     }
 
-    /// 对应 Java `UserProfileService.addEmptyUserProfile`：新建 `UserProfile(uid, ACTIVE)`；
-    /// 重复 uid → `USER_MGMT_USER_ALREADY_EXISTS`（Java 原返回 `boolean`，这里按任务书要求改为
-    /// `CommandResultCode` 以便调用方直接回填 `cmd.result_code`）。
+    /// 对应 Java `UserProfileService.addEmptyUserProfile`：新建 ACTIVE profile，重复 uid → UserMgmtUserAlreadyExists。
     pub fn add_empty_user_profile(&mut self, uid: i64) -> CommandResultCode {
         if self.users.contains_key(&uid) {
             return CommandResultCode::UserMgmtUserAlreadyExists;
@@ -38,8 +33,7 @@ impl UserProfileService {
         self.users.get_mut(&uid)
     }
 
-    /// 对应 Java `getUserProfileOrAddSuspended`：不存在则以 `SUSPENDED` 状态创建（他 shard 用户
-    /// 在本 shard 首次被引用时的兜底路径，语义详见 P3 风控参考 §3）。
+    /// 对应 Java `getUserProfileOrAddSuspended`：不存在则以 SUSPENDED 状态创建（他 shard 用户首次引用时的兜底路径）。
     pub fn get_or_add_suspended(&mut self, uid: i64) -> &mut UserProfile {
         self.users
             .entry(uid)

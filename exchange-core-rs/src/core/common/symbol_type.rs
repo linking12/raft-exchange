@@ -1,5 +1,4 @@
-/// 对应 Java `exchange.core2.core.common.SymbolType`。现货移植只用 `CurrencyExchangePair`；
-/// 其余变体（期货/期权）仅保留码值以便未来分支/序列化对齐，本期无业务逻辑。
+/// 对应 Java `SymbolType`。现货移植只用 `CurrencyExchangePair`，其余变体仅保留码值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolType {
     CurrencyExchangePair,
@@ -25,10 +24,7 @@ impl SymbolType {
 }
 
 impl Default for SymbolType {
-    /// 现货移植的隐含默认值：`CoreSymbolSpecification` 的期货字段全 0/空即代表"非期货"，
-    /// 与之配套，`symbol_type` 派生 `Default` 时取 `CurrencyExchangePair`（对应 Java 无显式
-    /// 默认值，此处为 Rust `#[derive(Default)]` 契约新增，未改变任何显式构造路径的行为——
-    /// 所有既有 spot 构造点都显式指定 `symbol_type`）。
+    /// 隐含默认值：Rust `Default` 契约新增，Java 无显式默认值；既有构造点均显式指定 `symbol_type`。
     fn default() -> Self {
         SymbolType::CurrencyExchangePair
     }

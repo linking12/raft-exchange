@@ -1,9 +1,4 @@
-//! 对应 Java: exchange.core2.core.common.PositionDirection。
-//!
-//! Java 用同一个整数值同时承担 enum 常量的构造参数（`multiplier`）与 `of(byte code)`
-//! 的反解码码值：`LONG(1)`/`SHORT(-1)`/`EMPTY(0)`。Rust 侧对应做法：`multiplier()`
-//! 与 `code()` 返回同一枚举到同一整数的映射（`code()` 只是 `multiplier()` 收窄成 `i8`），
-//! 避免出现两套不一致的映射表。
+//! 对应 Java `PositionDirection`：`LONG(1)`/`SHORT(-1)`/`EMPTY(0)`，`code()`/`multiplier()` 共用同一映射避免不一致。
 use crate::core::common::order_action::OrderAction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -28,8 +23,7 @@ impl PositionDirection {
         self.multiplier() as i8
     }
 
-    /// 对应 Java `PositionDirection.of(byte code)`。未知码值 panic（对应 Java
-    /// `IllegalArgumentException`）。
+    /// 对应 Java `PositionDirection.of(byte code)`：未知码值 panic（对应 Java `IllegalArgumentException`）。
     pub fn of_code(code: i8) -> Self {
         match code {
             1 => PositionDirection::Long,

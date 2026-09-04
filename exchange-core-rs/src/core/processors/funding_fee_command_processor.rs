@@ -1,67 +1,13 @@
-//! 对应 Java: `exchange.core2.core.processors.FundingFeeCommandProcessor`（`TwoStepCommandProcessor`
-//! 的一个薄实例，全文移植，197 行）。`SETTLE_FUNDINGFEES` 两步处理器：资金费零和结算——
-//! payer 池（多付空 / 空付多，由 `cmd.action` 决定）按各自持仓 notional 精确算出应付费，
-//! receiver 池按各自持仓 notional pro-rata 分摊应收费，两者恒等（零和，无桶）。
-//!
-//! 参考文档 §4。字段映射（`ExchangeApi.java:1083-1093`）：`cmd.action` = BID（多付空）/ASK
-//! （空付多）、`cmd.price = fundingRate`、`cmd.size = rateScaleK`（定点费率的 scale，
-//! `trunc_mul_div` 除以它）。`cmd.symbol` = 期货 symbol。**`SETTLE_FUNDINGFEES` 不是
-//! `is_non_trading()`**（Task 1 已定，见 `order_command_type.rs`）——停留在主交易 switch，
-//! 与 `PLACE_ORDER`/`CLOSE_POSITION` 同级。
-//!
-//! 三段式（同 `InternalTransferProcessor`/`LoanRatePricingProcessor` 骨架，Ruling P6-A/P6-C）：
-//! - **R1** [`Self::collect_input`]：走全部 `ACTIVE` 用户在 `symbol` 上的持仓，
-//!   `notional = open_volume * mark_price`；持仓方向与 `cmd.action` 相同 → payer 侧，精确算出
-//!   `fee = trunc_mul_div(notional, cmd.price, cmd.size)`（`fee>0` 才记）；方向相反 → receiver
-//!   侧，记**原始 notional**（不在 R1 就算出 fee——按比例分摊要等 merge 阶段知道
-//!   `total_pay`/`total_recv_notional` 才能算，见 merge 文档）。
-//! - **merge** [`Self::build_matcher_events`]：**两级 pro-rata 的第一级**——`total_pay`
-//!   （跨 shard payer 费用求和）按各 shard 的 receiver notional 占比截断分配，用 `trunc_mul_div`
-//!   叠加 [`distribute_remainder_by_one`] 做 1-unit 余数分配（shard-id 升序确定性），产出每个
-//!   shard 应收到的 `shard_recv_amount`。`total_pay==0 || total_recv_notional==0` → 无事件
-//!   （没有可结算的东西）。
-//! - **R2** [`Self::apply_event`]：**两级 pro-rata 的第二级**——先无条件精确扣 `payer_amounts`
-//!   （R1 已算好精确值，无需再截断），再把 merge 分给本 shard 的 `shard_recv_amount` 按
-//!   `receiver_notionals` 占比重新截断分配给具体用户（同一个 [`distribute_remainder_by_one`]
-//!   原语，第二次调用，weights 换成 uid -> notional）。两笔都走
-//!   [`Self::settle_funding_fee`]：按 `symbol`/`-symbol`（HEDGE 双向持仓）找匹配方向的活仓，
-//!   有则直接加进 `position.profit`（无需 scale——position.profit 与 fee 同 sizePrice
-//!   scale）；仓已在 R1/R2 之间平掉（ghost）则改用 `size_price_to_currency_scale` 缩放进
-//!   `accounts[quote_currency]`——费跟着钱走，不跟着已经不存在的仓走。
-//!
-//! # 事件载体的移植偏差（同 P5/P6 既有先例，Ruling P6-A/P6-C，需记录）
-//! Java 用 `MatcherEventType::FUNDING_EVENT`（撮合引擎共享事件类型，`matchedOrderUid`/`price`
-//! 分别承载 shard id / shard 分配额）在 R1→ME(merge)→R2 之间传递数据，`OrderCommand
-//! .fundingPaymentAndRecvNotionalByShard[]`（按 shard 下标的数组）承载 R1 输出。本移植不扩
-//! `MatcherEventType`（撮合引擎共享类型，多处对其做穷尽 `match`，塞一个和撮合无关的"资金费
-//! 事件"变体波及面大），改用 `OrderCommand.funding_fee_event: Option<(BTreeMap<i64,i64>,
-//! BTreeMap<i64,i64>, i64)>`（`(payer_amounts, receiver_notionals, shard_recv_amount)`）承载
-//! R1+merge 的合并结果。单 shard 下（Ruling P6-C）"跨 shard 归并"是恒等操作（`build_matcher_
-//! events` 收到长度为 1 的切片，`shard_recv_amount` 退化为恰好 `total_pay`，第一级的余数分配
-//! 理论上恒为 0——但函数本身仍按"多 shard 输入"的形状实现，供未来多 shard 时对齐 Java 真实
-//! 归并语义），由 `RiskEngine::settle_funding_fees_collect` 一次性完成 R1
-//! [`Self::collect_input`] + merge [`Self::build_matcher_events`]，结果写入
-//! `cmd.funding_fee_event`；`RiskEngine::settle_funding_fees_apply` 消费，驱动 R2
-//! [`Self::apply_event`]。数值/顺序/语义与 Java 完全一致，只是数据搬运的物理载体不同。
-//!
-//! # 共享原语：`distribute_remainder_by_one`
-//! 本文件是"截断分配 + 1-unit 余数分配"模式的**发源地**（Java 两处几乎逐字相同的循环，见
-//! `FundingFeeCommandProcessor.java:85-104`/`:150-161`）——已提取到
-//! [`crate::core::utils::core_arithmetic_utils::distribute_remainder_by_one`]（零依赖模型层，
-//! 泛型 over `K: Ord + Copy`），Task 5（IF）/Task 6（ADL）复用同一个函数，不再各自重复实现。
-//!
-//! # checkPositions 钩子（有意未落地，记录偏差）
-//! Java `RiskEngine.handlerRiskRelease`（`:977`）在 R2 事件循环结束后追加调用
-//! `liquidationEngine.checkPositions(cmd)`——funding 结算完，若有仓因此掉进强平/ADL
-//! 资格区间，立刻触发检测。本移植的 `LiquidationEngine`/`checkPositions` 属 Task 7 排期（P6-K
-//! 已把 `liquidation_flow` 挪到 Task 7），本 Task 不落地这个钩子——不影响本 Task 负责的账户/
-//! 持仓结算正确性（钩子只是"结算后顺带检查"，不改写结算结果本身），Task 7 完成时需回来给
-//! `RiskEngine::settle_funding_fees_apply` 补上同一钩子调用（参考文档 §1.1 line 977，进度
-//! ledger 已记录这条依赖）。
-//!
-//! # 未移植：事件总线
-//! `sendFundingFeeEvent`/`sendFundingFeeEventForClosedPosition`（`:187`/`:192-193`）未移植——
-//! 全 port 无事件总线（Ruling P6-B，同 P1-P5 既定），不影响账户结算正确性。
+//! 对应 Java `FundingFeeCommandProcessor`（`TwoStepCommandProcessor` 薄实例，全文移植）。`SETTLE_FUNDINGFEES`
+//! 两步处理器：资金费零和结算，payer 池精确算费、receiver 池 pro-rata 分摊，两者恒等（参考文档 §4）。
+//! `SETTLE_FUNDINGFEES` 不是 `is_non_trading()`，与 PLACE_ORDER 同级主交易 switch。R1 collect_input 扫
+//! ACTIVE 用户产出 payer_amounts/receiver_notionals；merge build_matcher_events 做两级 pro-rata 第一级
+//! （跨 shard 截断分配 + distribute_remainder_by_one 余数分配，shard-id 升序确定性）；R2 apply_event 做
+//! 第二级（精确扣 payer，receiver 按 notional 占比二次截断分配），经 settle_funding_fee 落账（活仓记
+//! profit，ghost 仓缩放进 accounts[quote_currency]）。事件载体用 `OrderCommand.funding_fee_event` 而非
+//! Java `MatcherEventType::FUNDING_EVENT`（Ruling P6-A/P6-C）。`distribute_remainder_by_one` 由本文件
+//! 提取为共享原语，IF/ADL 复用。`checkPositions` 钩子（Java `:977`）未落地，属 Task 7 排期。事件总线
+//! （`sendFundingFeeEvent` 等）未移植（Ruling P6-B）。
 
 use std::collections::BTreeMap;
 
