@@ -1,7 +1,4 @@
-//! 对应 Java `LoanCommandDispatcher`：借贷命令 dispatch 表 + 公共 preamble（`is_loan()` 门守命中后的入口，参考文档 §0/§2.1-2.4）。
-//! `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE` 留 Task 7，现返回 `LoanNotImplemented` 占位。
-//! Rust 偏差：不持有 `engine`（零大小类型），每次调用显式传 `&mut RiskEngine`。
-//! REPAY 按 `loan_id` 重查两次 map 而非传 `&mut LoanRecord`：避免 `up` 整体借用与 `loan` 字段借用重叠（NLL 分段借用）。
+//! 对应 Java `LoanCommandDispatcher`：借贷命令 dispatch 表 + 公共 preamble（参考文档 §0/§2.1-2.4）；零大小类型，无 `engine` 字段，逐次显式传参。
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -242,12 +239,7 @@ impl LoanCommandDispatcher {
     // LOAN_REPAY — 参考文档 §2.2，Java `handleLoanRepay`（`:234-271`）+ `settleRepay`（`:215-232`）
     // ====================================================================================
 
-    /// Isolated REPAY 共用核心：校验金额 → accrue → 算实抵债额（0 或 ≥payoff 则视为全额）→ 查
-    /// 可用余额 → 抵债（利息优先，[`LoanService::apply_debt_payment`]）。对应 Java 私有
-    /// `settleRepay`（`:215-232`）。**不释放抵押**（部分还款也不动 `collateralAmount`）。
-    ///
-    /// 接收 `loan_id` 而非 `&mut LoanRecord`——见模块文档"借用设计"一节。调用方须已确认
-    /// `loan_id` 存在于 `up.isolated_loans` 且归属 `cmd.uid`。
+    /// Isolated REPAY 共用核心：accrue→算实抵债额→查余额→抵债（利息优先），对应 Java 私有 `settleRepay`（`:215-232`），不释放抵押。
     fn settle_repay_isolated(
         engine: &mut RiskEngine,
         up: &mut UserProfile,
@@ -286,12 +278,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 偿还 Isolated 借贷（本金+利息）。字段映射：`cmd.reserve_bid_price` = loanId，
-    /// `cmd.price` = repayAmount（`0` = 结清全部本息）。成功后若 `loan.is_empty()`（本金/利息/
-    /// 抵押全 0），从 map 移除（对应 Java 归还对象池——本移植无对象池，直接 drop）。
-    ///
-    /// **事件缺口**：同 [`Self::handle_loan_create`] 文档，Java 侧的 `LOAN_REPAY` 事件本任务
-    /// 不发送。
+    /// 偿还 Isolated 借贷（本金+利息）；成功后若 `loan.is_empty()` 从 map 移除；事件缺口同 [`Self::handle_loan_create`]。
     fn handle_loan_repay(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,

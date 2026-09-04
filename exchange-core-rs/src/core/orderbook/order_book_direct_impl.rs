@@ -163,8 +163,7 @@ impl OrderBookDirectImpl {
 
     // ---- 挂单入链/入桶 ----
 
-    /// 挂单入链+入桶。对应 Java `insertOrder(order, freeBucket)`(`:638-715`)：价位已有桶则挂为新 tail，
-    /// 否则新建桶并插入最近更优邻桶前或成为新 best；`free_bucket` 仅 moveOrder 传入复用。
+    /// 挂单入链+入桶，对应 Java `insertOrder(order, freeBucket)`(`:638-715`)；`free_bucket` 仅 moveOrder 传入复用。
     pub fn insert_order(&mut self, order_idx: usize, free_bucket: Option<usize>) {
         let (is_ask, price, remaining) = {
             let o = self.order(order_idx);
@@ -259,8 +258,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 摘链摘桶：cancel/reduce(全删)/move 共用的核心手术。对应 Java `removeOrder`(`:599-635`)：扣桶量、
-    /// 若是 tail 则摘价位或前移 tail、双向链摘除、修复 best；不释放 order 自身槽位（交调用方处理）。
+    /// 摘链摘桶，cancel/reduce(全删)/move 共用，对应 Java `removeOrder`(`:599-635`)；不释放 order 自身槽位（交调用方处理）。
     fn remove_order(&mut self, order_idx: usize) -> Option<usize> {
         let (size, filled, action, price, next, prev, parent) = {
             let o = self.order(order_idx);
@@ -310,8 +308,7 @@ impl OrderBookDirectImpl {
         bucket_removed
     }
 
-    /// GTC 下单：先 `try_match_instantly`，全成则不挂、重复 order_id 则拒绝剩余、否则挂簿。
-    /// 对应 Java `newOrderPlaceGtc`(`:148-189`)。
+    /// GTC 下单，对应 Java `newOrderPlaceGtc`(`:148-189`)：先撮合，全成则不挂、重复 order_id 拒绝剩余、否则挂簿。
     fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
         let size = cmd.size;
         let action = cmd.action.expect("GTC order requires action");
@@ -355,9 +352,7 @@ impl OrderBookDirectImpl {
         self.insert_order(idx, None);
     }
 
-    /// 撮合核心。对应 Java `tryMatchInstantly`(`:253-372`)，GTC/IOC/FOK_BUDGET/move 共用；`limit_price=None`
-    /// 仅 FOK_BUDGET 用（Ruling P2-1：BID/ASK 均不设价格上限，不复刻 Java 的价格上限巧合）。maker 沿
-    /// best.prev 走摘除完成单，槽位回收推迟到循环结束+best 修复之后（防止本次调用内复用刚释放的槽）。
+    /// 撮合核心，对应 Java `tryMatchInstantly`(`:253-372`)，GTC/IOC/FOK_BUDGET/move 共用；`limit_price=None` 仅 FOK_BUDGET 用（Ruling P2-1：不设价格上限）。
     pub fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
@@ -524,8 +519,7 @@ impl OrderBookDirectImpl {
         (taker_filled, taker_filled_notional)
     }
 
-    /// IOC：即时撮合（价格受限），未成交剩余（`size - filled`）直接 REJECT，从不挂簿。
-    /// 对应 Java `newOrderMatchIoc`(`:191-202`)。
+    /// IOC：即时撮合（价格受限），未成交剩余直接 REJECT、从不挂簿，对应 Java `newOrderMatchIoc`(`:191-202`)。
     fn new_order_match_ioc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC order requires action");
         let price = cmd.price;
@@ -539,8 +533,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 无价格限制地探测撮合满 `size` 所需的总预算。对应 Java `checkBudgetToFill`(`:222-250`)：按桶
-    /// 粒度走（不逐 order），凑不够返回 `i64::MAX` 哨兵；累加用 `i128` 防止溢出 `i64`。
+    /// 无价格限制探测撮合满 `size` 所需总预算，对应 Java `checkBudgetToFill`(`:222-250`)；按桶粒度走，凑不够返回 `i64::MAX` 哨兵，累加用 `i128` 防溢出。
     fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
         let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
         let mut budget: i128 = 0;
@@ -567,16 +560,13 @@ impl OrderBookDirectImpl {
         i64::MAX // 流动性不足以吃满 size（对应 Java `Long.MAX_VALUE` 哨兵）
     }
 
-    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本<=limit、ASK 要求收入>=limit；
-    /// `calculated==i64::MAX`（流动性不足哨兵）恒不满足。
+    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本<=limit、ASK 要求收入>=limit；`i64::MAX` 哨兵恒不满足。
     fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
         calculated != i64::MAX
             && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
     }
 
-    /// FOK_BUDGET：`check_budget_to_fill` 探测吃满 `size` 所需总预算，`is_budget_limit_satisfied`
-    /// 判定满足则整单撮合（`limit_price=None`，见 Ruling P2-1：镜像 Naive、不设每单价上限），
-    /// 不满足则整单 REJECT（不改簿）。对应 Java `newOrderMatchFokBudget`(`:204-215`)。
+    /// FOK_BUDGET：预算满足（Ruling P2-1：不设每单价上限）则整单撮合，否则整单 REJECT 不改簿，对应 Java `newOrderMatchFokBudget`(`:204-215`)。
     fn new_order_match_fok_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("FOK_BUDGET order requires action");
         let size = cmd.size;
@@ -593,8 +583,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// IOC_BUDGET：仅支持 BID（用预算上限买）；ASK 语义模糊，整单 REJECT（同 Naive）。
-    /// 对应 Java `newOrderMatchIocBudget`(`:133-145`)。
+    /// IOC_BUDGET：仅支持 BID（用预算上限买），ASK 语义模糊整单 REJECT（同 Naive），对应 Java `newOrderMatchIocBudget`(`:133-145`)。
     fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC_BUDGET order requires action");
         if action != OrderAction::Bid {
@@ -613,10 +602,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// IOC_BUDGET 专用撮合，不对应 Java `tryMatchInstantlyWithBudget`(`:381-488`)——镜像 Naive
-    /// `match_against_budget`：无价格上限，预算按价位独立分批不跨价位延续（桶被吃穿跨价位时须显式
-    /// 清零 `batch_remaining`，曾漏掉致真实 bug，见 `ioc_budget_partial_fill_capped_by_budget_matches_naive`）；
-    /// `active_order_completed`=当前批次耗尽而非 taker 整体完成；仅 BID 调用，硬编码吃 ask 侧。
+    /// IOC_BUDGET 专用撮合，镜像 Naive `match_against_budget`：预算按价位独立分批不跨价位延续（曾漏清零致真实 bug，见 `ioc_budget_partial_fill_capped_by_budget_matches_naive`）；仅 BID 调用，硬编码吃 ask 侧。
     fn match_against_budget_ioc(
         &mut self,
         taker_size: i64,

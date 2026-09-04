@@ -16,10 +16,7 @@ fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
 
-/// 对应 Java `LiquidationService.IFNotional`：IF 单 symbol 名义资金。`available` 可动用，
-/// `reserved` 是强平流程中的预冻结部分（R1 `reserve_if_notional` 写入，R2 finalize
-/// `release_reserved_if_notional` 释放，与真实扣款 `accept_if_position` 是两条独立记账线，见
-/// [`LiquidationService`] 模块文档）。
+/// 对应 Java `LiquidationService.IFNotional`：IF 单 symbol 名义资金——`available` 可动用，`reserved` 为强平预冻结（R1/R2 独立记账线）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IfNotional {
     pub available: i64,
@@ -27,17 +24,14 @@ pub struct IfNotional {
 }
 
 impl IfNotional {
-    /// 折叠进父结构 `LiquidationService::state_hash` 的 rolling hash（风格对齐
-    /// `UserProfile::state_hash`/`LoanService::state_hash`：`h=h*31+field`，不保证与 Java
-    /// `Objects.hash` 数值相等，只保证「同状态 -> 同 hash，不同状态 -> 不同 hash」）。
+    /// 折叠进 `state_hash` 的 rolling hash（`h=h*31+field`，风格对齐 `UserProfile`/`LoanService`，不要求与 Java `Objects.hash` 数值相等）。
     fn fold_hash(&self, h: i64) -> i64 {
         let h = h.wrapping_mul(31).wrapping_add(self.available);
         h.wrapping_mul(31).wrapping_add(self.reserved)
     }
 }
 
-/// 对应 Java `LiquidationService.IFPositionRecord`：IF 自身接管仓位——某 symbol+方向 累计接管的
-/// 持仓量与开仓成本（反向出清估值用，Task 7 ADL/清算编排消费）。
+/// 对应 Java `LiquidationService.IFPositionRecord`：IF 自身接管仓位——某 symbol+方向累计持仓量与开仓成本（反向出清估值用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IfPositionRecord {
     pub symbol: i32,
@@ -48,8 +42,7 @@ pub struct IfPositionRecord {
 
 impl IfPositionRecord {
     fn fold_hash(&self, h: i64) -> i64 {
-        // direction 用 multiplier()（已是 i32）保持跨节点/跨版本稳定，同 Java 注释
-        // "direction 是 enum：用 multiplier 保持跨 JVM 稳定"。
+        // direction 用 multiplier() 保持跨节点/版本稳定（同 Java 注释）。
         let h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);
         let h = h.wrapping_mul(31).wrapping_add(self.direction.multiplier() as i64);
         let h = h.wrapping_mul(31).wrapping_add(self.open_volume);
@@ -57,15 +50,7 @@ impl IfPositionRecord {
     }
 }
 
-/// 对应 Java `LiquidationService`（IF 状态职责子集——orderId 编码 / ADL 候选构造见模块文档
-/// "未移植"一节）。
-///
-/// - `notionals`：`symbol -> IFNotional{available, reserved}`——`available` 是撮合内部乘积单位
-///   （`size*price`，即 sizePrice scale，非币种记账单位）下的可动用 IF 余额。
-/// - `positions`：`(direction.multiplier() * symbol) -> IFPositionRecord`——key 用符号编码区分
-///   同 symbol 的多/空两条独立持仓记录（brief 明确 key 类型 `i64`，虽然 Java 原版
-///   `IntObjectHashMap` 是 `int` key；`i64` 宽域不改变语义，`direction.multiplier() ∈ {-1,0,1}`
-///   与 `symbol: i32` 相乘在两种宽度下数值恒等）。
+/// 对应 Java `LiquidationService`（IF 状态子集）：`notionals: symbol -> IFNotional`（sizePrice scale 可动用余额），`positions: (direction.multiplier()*symbol) -> IFPositionRecord`（符号编码 key 区分多空）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LiquidationService {
     pub notionals: BTreeMap<i32, IfNotional>,
@@ -77,17 +62,7 @@ impl LiquidationService {
         LiquidationService::default()
     }
 
-    /// 对应 Java `generateLiquidationOrderId(SymbolPositionRecord)`（`LiquidationService.java:182-188`）：
-    /// 为一笔强平流程生成根 orderId——位布局 `symbol<<32 | uidHash<<12 | sideBit<<11 | tsPart`
-    /// （`uidHash = (uid*31+17)&0xFFFFF` 20 bit；`sideBit = SHORT?1:0`；`tsPart` 11 bit）。
-    ///
-    /// **确定性偏差（刻意）**：Java 用 `System.currentTimeMillis()/1000` 取 `tsPart`——本移植改用
-    /// **触发命令的 `timestamp`**（`ts/1000 & 0x7FF`）。理由：`check_positions` 是 leader-only
-    /// （`is_running` 门），Java 里 leader 生成后经 raft 复制给 follower 重放同一条命令，wall-clock
-    /// 只在 leader 生成时读一次故可接受；但纯库 + 确定性测试要求可复现，`cmd.timestamp` 本身是
-    /// 复制态字段（每条命令入队时定档），用它既保 leader/follower 一致又保测试可复现，与本移植
-    /// 通篇"用 `cmd.timestamp` 而非 wall-clock"的确定性纪律一致。同一 scan 内同 `symbol+uid+side`
-    /// 即同一仓位（不可能有两个），跨 uid 的 `uidHash` 互异，故不会碰撞（与 Java 同）。
+    /// 对应 Java `generateLiquidationOrderId`（`LiquidationService.java:182-188`）：生成根 orderId，位布局 `symbol<<32|uidHash<<12|sideBit<<11|tsPart`；tsPart 刻意改用 `cmd.timestamp` 而非 wall-clock 以保确定性。
     pub fn generate_liquidation_order_id(uid: i64, symbol: i32, direction: PositionDirection, timestamp: i64) -> i64 {
         let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & 0xFFFFF; // 20 bit
         let side_bit: i64 = if direction == PositionDirection::Short { 1 } else { 0 };

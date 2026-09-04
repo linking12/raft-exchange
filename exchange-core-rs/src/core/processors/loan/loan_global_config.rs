@@ -1,7 +1,4 @@
-//! 对应 Java: exchange.core2.core.processors.loan.LoanGlobalConfig —— 现货借贷全局
-//! （per-shard 单例）运行时配置：Cross 强平线/预警线、借贷池利用率上限、强平费率、numeraire
-//! 基准币。进 raft snapshot，各 shard 独立维护一份；仅 `ADD_LOAN` 命令（参考 §2.12，P5 Task 6
-//! 已落地 `RiskEngine::apply_add_loan`）按字段逐个 partial-update 改写。
+//! 对应 Java `LoanGlobalConfig`：现货借贷全局运行时配置（per-shard 单例），仅 `ADD_LOAN` 命令 partial-update 改写。
 
 pub const DEFAULT_CROSS_LIQUIDATION_LTV_BPS: i32 = 8500; // 85%
 pub const DEFAULT_CROSS_MARGIN_CALL_LTV_BPS: i32 = 8000; // 80%
@@ -57,8 +54,7 @@ impl LoanGlobalConfig {
 }
 
 impl Default for LoanGlobalConfig {
-    /// 对应 Java `LoanGlobalConfig()` 构造器（内部调用 `reset()`）：7 个默认值逐字对应
-    /// `LoanGlobalConfig.java:28-33`。
+    /// 对应 Java `LoanGlobalConfig()` 构造器：7 个默认值逐字对应 `LoanGlobalConfig.java:28-33`。
     fn default() -> Self {
         LoanGlobalConfig {
             numeraire_currency: NUMERAIRE_UNSET,

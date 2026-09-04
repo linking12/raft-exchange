@@ -1,17 +1,6 @@
 //! 对应 Java: `exchange.core2.core.ExchangeApi`（现货子集门面）。设计文档 §4。
-//!
-//! `ExchangeApi` 包一层 [`ExchangeCore`]：symbol/currency 注册走**直接 API**（不构造
-//! `OrderCommand`，本移植未含 `ADD_SYMBOL`/`ADD_CURRENCY` 这类命令变体——Java 里 symbol/currency
-//! 注册本就是 `ExchangeApi` 直调 `SymbolSpecificationProvider`/`MatchingEngineRouter`，不经
-//! Disruptor 环）；下单/撤单/查询等交易操作则构造 `OrderCommand` 并走
-//! [`ExchangeCore::process_command`] 确定性管线。
-//!
-//! # 排序要求：currency 必须先于引用它的 symbol 注册
-//! [`ExchangeApi::add_symbol`] 会校验 `spec.base_currency`/`spec.quote_currency` 是否已经
-//! 通过 [`ExchangeApi::add_currency`] 注册；未注册则拒绝（`InvalidSymbol`），不会把该 symbol
-//! 写入注册表，也不会在 matching router 里建 order book——避免出现"symbol 存在但引用的
-//! currency spec 缺失"这种下单时才会 panic 的悬空状态（R1 `place_order_risk_check` 用
-//! `ssp.get_currency(..).unwrap_or_else(|| panic!(..))` 假定 currency 必存在）。
+//! symbol/currency 注册走直接 API（不经 Disruptor/OrderCommand）；下单等交易操作构造
+//! `OrderCommand` 走 [`ExchangeCore::process_command`]。currency 必须先于引用它的 symbol 注册，否则 `add_symbol` 拒绝（`InvalidSymbol`），避免悬空引用导致下单时 panic。
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::{OrderCommand, FLAG_REDUCE_ONLY};
@@ -68,11 +57,7 @@ pub struct ReduceOrderRequest {
     pub reduce_size: i64,
 }
 
-/// [`ExchangeApi::place_futures_order`] 的入参（对应 Java `ExchangeApi` 手工拼 `PLACE_ORDER`
-/// 建造器 + P4 期货扩展字段 `leverage`/`marginMode`/`FLAG_REDUCE_ONLY`）。无 `reserve_bid_price`
-/// 字段——期货 `place_order` 分支（`RiskEngine::place_order`）不读该字段（现货专属：BID 保守价
-/// 校验），传 `PlaceOrderRequest` 的等价字段会被期货风控静默忽略，故这里干脆不建模，避免误导
-/// 调用方以为它对期货下单有意义。
+/// [`ExchangeApi::place_futures_order`] 的入参：`PLACE_ORDER` + P4 期货扩展字段；无 `reserve_bid_price`（现货专属字段，期货风控不读，故不建模）。
 #[derive(Debug, Clone, Copy)]
 pub struct PlaceFuturesOrderRequest {
     pub order_id: i64,
@@ -87,12 +72,7 @@ pub struct PlaceFuturesOrderRequest {
     pub reduce_only: bool,
 }
 
-/// [`ExchangeApi::close_position`] 的入参（对应 Java `CLOSE_POSITION` 命令字段）。`action` 是
-/// **平仓方向**（与被平仓位方向相反：平多传 `Ask`，平空传 `Bid`）——[`RiskEngine::close_position_risk_check`]
-/// 用它定位 `positions` map 里对应的仓位记录、并校验反向。`size`/`price` 是平仓单的委托量/价，
-/// 实际成交量会被风控收敛到 `min(size, position.open_volume)`；`leverage`/`margin_mode` 会被风控
-/// 强制覆盖为仓位自身的值（调用方传什么都不影响结果，见该方法文档），此处仍要求传入只是为了
-/// 复用同一个 `OrderCommand` 构造路径，字段留空也不影响正确性。
+/// [`ExchangeApi::close_position`] 的入参（`CLOSE_POSITION` 命令字段）。`action` 是平仓方向（与仓位方向相反）；`size`/`price` 会被风控收敛/覆盖，`leverage`/`margin_mode` 无关紧要，仅为复用 `OrderCommand` 构造路径而保留。
 #[derive(Debug, Clone, Copy)]
 pub struct ClosePositionRequest {
     pub order_id: i64,
@@ -104,10 +84,7 @@ pub struct ClosePositionRequest {
     pub order_type: OrderType,
 }
 
-/// [`ExchangeApi::margin_adjustment`] 的入参（对应 Java `MARGIN_ADJUSTMENT` 命令字段复用）。
-/// `symbol` 语义按 `margin_mode` 二义：`Isolated` 时是真实 symbol id（定位某仓追加保证金）；
-/// `Cross` 时是 currency id（等价于对该币种做一笔 `BALANCE_ADJUSTMENT`，见
-/// [`RiskEngine::margin_adjustment`] 文档）。`amount` 走 `cmd.price`，恒为正（追加）。
+/// [`ExchangeApi::margin_adjustment`] 的入参（`MARGIN_ADJUSTMENT`）。`symbol` 按 `margin_mode` 二义：`Isolated` 是 symbol id，`Cross` 是 currency id；`amount` 走 `cmd.price`，恒为正。
 #[derive(Debug, Clone, Copy)]
 pub struct MarginAdjustmentRequest {
     pub uid: i64,
@@ -118,9 +95,7 @@ pub struct MarginAdjustmentRequest {
     pub order_id: i64,
 }
 
-/// 对应 Java `ExchangeApi`（现货子集门面）：构造命令、提交 [`ExchangeCore::process_command`]、
-/// 取回结果，供测试/未来消费方使用。本期单线程直调（Java 版本经 Disruptor `RingBuffer` 异步
-/// 提交 + `Future`/`CompletableFuture` 取结果——单线程确定性管线下二者退化为同步直调）。
+/// 对应 Java `ExchangeApi`：构造命令、提交 [`ExchangeCore::process_command`]、取回结果；本期单线程直调（Java 版经 Disruptor 异步提交+Future，此处退化为同步直调）。
 #[derive(Default)]
 pub struct ExchangeApi {
     core: ExchangeCore,
@@ -137,9 +112,7 @@ impl ExchangeApi {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
     }
 
-    /// 直接注册 symbol spec：写 [`SymbolSpecificationProvider`] 并在
-    /// [`MatchingEngineRouter`] 里建对应 order book。要求 `spec` 引用的 base/quote currency
-    /// 已经 [`Self::add_currency`] 过，否则返回 `InvalidSymbol` 且两处都不写入。
+    /// 直接注册 symbol spec 并建 order book；要求 base/quote currency 已注册，否则返回 `InvalidSymbol` 且两处都不写入。
     pub fn add_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if self.core.ssp.get_currency(spec.base_currency).is_none()
             || self.core.ssp.get_currency(spec.quote_currency).is_none()
@@ -247,15 +220,10 @@ impl ExchangeApi {
     }
 
     // ------------------------------------------------------------------
-    // 期货门面（P4 Task 7）：symbol 注册走与 [`Self::add_symbol`] 相同的直接 API（非命令）；
-    // mark price / 下单 / 平仓 / 保证金 / 杠杆调整走各自的 `OrderCommand` 变体 +
-    // [`ExchangeCore::process_command`]。
+    // 期货门面（P4 Task 7）：symbol 注册同 add_symbol 直接 API；mark price/下单/平仓/保证金/杠杆走 OrderCommand。
     // ------------------------------------------------------------------
 
-    /// 直接注册期货 symbol spec（同 [`Self::add_symbol`] 的排序要求：currency 必须先注册）。
-    /// 唯一区别：显式校验 `spec.symbol_type.is_futures_contract()`，非期货类型直接拒绝——
-    /// 防止调用方拿现货 spec 误调这个方法（该校验是本方法独有的输入契约，[`Self::add_symbol`]
-    /// 本身对 symbol_type 不作任何限制，两个方法背后是同一条注册路径）。
+    /// 同 [`Self::add_symbol`]，多校验 `spec.symbol_type.is_futures_contract()`，非期货类型拒绝。
     pub fn add_futures_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if !spec.symbol_type.is_futures_contract() {
             return CommandResultCode::UnsupportedSymbolType;
@@ -349,8 +317,7 @@ impl ExchangeApi {
     // 只读内省（供测试/上层校验守恒态用，非 Java ExchangeApi 原有方法）。
     // ------------------------------------------------------------------
 
-    /// 某用户在某 symbol 上的仓位记录（`ONEWAY` 下 key 恒为 `symbol`；本移植未提供切换
-    /// `position_mode` 的门面方法，故不处理 `HEDGE` 双腿键的场景）。
+    /// 某用户在某 symbol 上的仓位记录（`ONEWAY` 下 key 恒为 `symbol`，不处理 `HEDGE` 双腿键）。
     pub fn user_position(&self, uid: i64, symbol: i32) -> Option<&SymbolPositionRecord> {
         self.core.ups.get(uid).and_then(|p| p.positions.get(&symbol))
     }
@@ -414,31 +381,24 @@ mod tests {
     #[test]
     fn add_symbol_before_currency_is_rejected_and_does_not_register() {
         let mut api = ExchangeApi::new();
-        // 未 add_currency：symbol 引用的两种 currency 都不存在。
+        // 未 add_currency：两种 currency 都不存在。
         let rc = api.add_symbol(spot_spec_fixed_fee(0, 0));
         assert_eq!(rc, CommandResultCode::InvalidSymbol);
         assert!(api.ssp().get_symbol(SYMBOL).is_none());
 
-        // 之后即便补上 currency，也不会因为之前那次失败调用而已经存在——可以正常重试成功。
+        // 补上 currency 后可正常重试成功。
         api.add_currency(BASE, 1);
         api.add_currency(QUOTE, 1);
         assert_eq!(api.add_symbol(spot_spec_fixed_fee(0, 0)), CommandResultCode::Success);
     }
 
-    /// Step 1（RED→GREEN）：一笔现货 taker/maker 成交端到端——经 ExchangeApi 播种
-    /// currency/symbol/user/balance，卖方挂 ASK，买方吃单 BID 完全成交，断言：
-    /// - 双方最终 base/quote 余额（卖方失 base 得 quote−maker 费；买方失 quote(含 taker 费)
-    ///   得 base）；
-    /// - fees 桶收到 taker+maker 手续费；
-    /// - 全局守恒：`Σ users.accounts[cur] + adjustments[cur] + fees[cur] == 0`
-    ///   （两种货币分别验证）；
-    /// - `request_l2` 反映撮合后盘口已清空（完全成交，无残量）。
+    /// 现货 taker/maker 成交端到端：断言双方余额结算、fees 收取、全局守恒、盘口清空。
     #[test]
     fn spot_ask_bid_full_match_settles_balances_and_conserves_globally() {
         let mut api = ExchangeApi::new();
         api.add_currency(BASE, 1);
         api.add_currency(QUOTE, 1);
-        // 固定费：taker_fee=10（size*10）、maker_fee=5（size*5），fee_scale_k=0。
+        // 固定费：taker_fee=10、maker_fee=5，fee_scale_k=0。
         assert_eq!(api.add_symbol(spot_spec_fixed_fee(10, 5)), CommandResultCode::Success);
 
         assert_eq!(api.add_user(SELLER), CommandResultCode::Success);
@@ -467,8 +427,7 @@ mod tests {
         });
         assert_eq!(ask_rc, CommandResultCode::Success);
 
-        // 买方吃单：BID @ 50，reserve_bid_price=50（非 budget，reserve==price），size 1000，
-        // 与卖方 ASK 完全撮合。
+        // 买方吃单：BID @ 50，reserve_bid_price=50（非 budget），与卖方 ASK 完全撮合。
         let bid_rc = api.place_order(PlaceOrderRequest {
             order_id: 2,
             uid: BUYER,
@@ -482,14 +441,12 @@ mod tests {
         assert_eq!(bid_rc, CommandResultCode::Success);
 
         // ---- 逐用户余额断言（手算见 task-10 报告，taker_fee=10/maker_fee=5 固定费）----
-        // 卖方（maker/ASK）：base 全部卖出（1000→0，locked 同步清零）；
-        // quote 收到 size*price − maker_fee = 50_000 − 5_000 = 45_000。
+        // 卖方（maker/ASK）：quote 收到 size*price − maker_fee = 45_000。
         assert_eq!(api.user_account(SELLER, BASE), 0);
         assert_eq!(api.user_locked(SELLER, BASE), 0);
         assert_eq!(api.user_account(SELLER, QUOTE), 45_000);
 
-        // 买方（taker/BID）：base 收到成交量 1000；quote 花费 size*price + taker_fee
-        // = 50_000 + 10_000 = 60_000（100_000 − 60_000 = 40_000），locked 清零。
+        // 买方（taker/BID）：quote 花费 size*price + taker_fee = 60_000，剩 40_000。
         assert_eq!(api.user_account(BUYER, BASE), 1_000);
         assert_eq!(api.user_account(BUYER, QUOTE), 40_000);
         assert_eq!(api.user_locked(BUYER, QUOTE), 0);

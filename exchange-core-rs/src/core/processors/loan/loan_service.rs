@@ -118,17 +118,10 @@ impl LoanService {
     }
 
     // ================================================================
-    // Task 4：Isolated 生命周期命令的公共金钱原语 —— 对应 Java `LoanCommandDispatcher.java`
-    // 私有静态 `verifyPoolCapacity`（`:1045-1062`）/`disburseLoan`（`:1065-1069`）+
-    // `LoanService.java` `applyDebtPayment`（`:138-152`）/`collateralValueInQuoteCurrency`
-    // （`:412-420`）。放在 `LoanService` 而非 dispatcher：这四个都是纯粹的"钱怎么走"逻辑，
-    // 不涉及 loan 存在性/所有权/LTV 门禁等命令级校验（那些留在
-    // `loan_command_dispatcher::LoanCommandDispatcher` 里）。
+    // Task 4：金钱原语，对应 Java LoanCommandDispatcher.java:1045-1069 + LoanService.java:138-152,412-420
     // ================================================================
 
-    /// 对应 handleLoanCreate 处 `openRateBps` 的二选一分派（`:186-188`）：按 `rate_mode` 选
-    /// floating 当前利率 / fixed 派生利率（fixed 需要显式传 `&self.floating_rate`，见
-    /// `rate::fixed_rate_model` 模块文档的移植偏差说明）。
+    /// 对应 handleLoanCreate 处 `openRateBps` 二选一分派（`:186-188`）：按 rate_mode 选 floating 当前利率 / fixed 派生利率。
     pub fn open_rate_bps(&self, rate_mode: LoanRateMode, loan_currency: i32) -> i32 {
         match rate_mode {
             LoanRateMode::Floating => self.floating_rate.open_rate_bps(loan_currency),
@@ -136,12 +129,7 @@ impl LoanService {
         }
     }
 
-    /// 对应 Java 私有静态 `verifyPoolCapacity`（`:1045-1062`）：池容量 + 利用率校验，
-    /// `LOAN_CREATE`（本 Task）与 `LOAN_CROSS_BORROW`（Task 5）共用。`available < principal` →
-    /// `LoanPoolInsufficient`；否则若 `totalPool>0` 且新利用率（`newBorrowed/totalPool`，两边
-    /// 同放大 `BPS_SCALE` 比较避免除法精度损失）超过 `loanPoolUtilizationCapBps` →
-    /// `LoanPoolUtilizationExceeded`。`totalPool<=0`（池子从未注资）时跳过利用率检查——与
-    /// Java `if (totalPool > 0)` 分支逐字一致。
+    /// 对应 Java 私有静态 `verifyPoolCapacity`（`:1045-1062`）：池容量+利用率校验，LOAN_CREATE 与 LOAN_CROSS_BORROW 共用，逐字对齐 Java。
     pub fn verify_pool_capacity(&self, loan_currency: i32, principal: i64) -> CommandResultCode {
         let available = self.get_loan_pool_available(loan_currency);
         let borrowed = self.get_loan_pool_borrowed(loan_currency);
@@ -169,13 +157,7 @@ impl LoanService {
         self.add_to_loan_pool_borrowed(loan_currency, principal);
     }
 
-    /// 对应 Java `applyDebtPayment`（`:138-152`）：用 `fund` 按利息优先、本金其次抵债，封顶为
-    /// 当前未偿本息之和；本金部分回补 `loanPoolAvailable` / 冲减 `loanPoolBorrowed`，利息部分
-    /// 计入 `interestRevenue`。返回本次抵扣的利息部分（≥ 0，供调用方发 `LOAN_REPAY`/
-    /// `LOAN_LIQUIDATED` 事件——本 Task 未落地事件发送，见 `loan_command_dispatcher` 模块文档
-    /// 的事件缺口说明）。`account` 是调用方传入的 `UserProfile::accounts`（对应 Java
-    /// `IntLongHashMap account` 参数，非整个 `UserProfile`）——REPAY 与强平结算共用此一处金钱
-    /// 逻辑，Cross（Task 5+）复用同一实现。
+    /// 对应 Java `applyDebtPayment`（`:138-152`）：fund 按利息优先、本金其次抵债，封顶未偿本息之和，返回本次抵扣的利息部分；REPAY/强平/Cross 共用。
     pub fn apply_debt_payment<L: LoanRecord>(
         &mut self,
         loan: &mut L,
