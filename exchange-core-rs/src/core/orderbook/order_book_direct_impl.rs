@@ -1,26 +1,6 @@
-//! 高性能订单簿（slab/arena 实现）。对应 Java: exchange.core2.core.orderbook.OrderBookDirectImpl
-//! （字段：`:44-103` 构造/字段，`:960-1100` DirectOrder/Bucket 节点）。
-//!
-//! Java 用侵入式双向链表（`DirectOrder.next/prev` 直接持对象引用）+ ART
-//! （`LongAdaptiveRadixTreeMap`）价位索引。Rust 版用 slab（`Vec<Option<T>> + free-list`）+
-//! `BTreeMap` 落地同一结构：
-//! - `orders`/`buckets`：slab，`next/prev/parent/tail` 全部退化为 slab 索引（`usize`）而非引用；
-//!   `order_free`/`bucket_free` 是 LIFO 空闲槽栈，回收后优先复用（确定性：先释放的先被复用）。
-//! - `ask_price_buckets`/`bid_price_buckets`：`BTreeMap<i64, BucketIdx>` 对应 Java 的 ART，按价格
-//!   有序（ask 升序=最优价最小 key，bid 用降序遍历=最优价最大 key），`range`/`.rev()`
-//!   对应 Java `getLowerValue`/`getHigherValue`/`forEach`/`forEachDesc`。
-//! - `order_id_index`：`BTreeMap<i64, OrderIdx>`（点查为主，用 BTreeMap 维持"禁 HashMap"不变式，
-//!   迭代序不影响任何输出）。
-//! - `symbol_spec`：仅 `moveOrder` 的 `CURRENCY_EXCHANGE_PAIR` 现货风控读取（`:565`）+ 访问器；
-//!   `objectsPool`/`eventsHelper`/`loggingCfg`（纯 Java 对象池/日志）本移植不落地。
-//!
-//! P2 Task 1 落地了数据结构 + slab 原语 + 可编译的 `IOrderBook` 骨架（撮合/cancel/reduce/move/
-//! hash 仍占位）。**P2 Task 2** 在此基础上补齐：`insert_order`（对应 Java `insertOrder`
-//! `:638-715`，挂单入链+入桶的核心指针手术）、`new_order` 的 GTC **无撮合**挂单路径（对应
-//! Java `newOrderPlaceGtc:148-189`，撮合与 dup-id 拒绝留 Task 3）、`fill_l2`（对应 Java
-//! `fillAsks/fillBids:916-935`，纯桶图迭代不走链，与 `OrderBookNaiveImpl::fill_l2` 逐位一致）、
-//! `validate_internal_state`（对应 Java `validateInternalState:738-849` 的核心子集，供测试/
-//! 后续任务当对拍 oracle 用）。cancel/reduce/move/IOC/FOK*/state_hash 仍占位，留 Task 3-6。
+//! 高性能订单簿（slab/arena 实现）。对应 Java `OrderBookDirectImpl`（`:44-103` 构造/字段，`:960-1100`
+//! DirectOrder/Bucket）；Rust 用 slab（`Vec<Option<T>>`+free-list）+ `BTreeMap` 落地 Java 的侵入式
+//! 双向链表 + ART 价位索引（`order_id_index` 用 BTreeMap 维持"禁 HashMap"不变式）。
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -37,13 +17,7 @@ use crate::core::common::order_type::OrderType;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 
-/// 挂单节点（slab 元素）。对应 Java `OrderBookDirectImpl.DirectOrder`(`:960-1093`)。
-///
-/// `parent`/`next`/`prev` 在 Java 是对象引用，这里退化为 slab 索引：
-/// - `parent`：挂单所在 `Bucket` 的索引（对应 Java `Bucket parent`）。
-/// - `next`：链上更靠近撮合前端（best）方向的下一个 order（对应 Java 注释
-///   "next order (towards the matching direction, price grows for asks)"）。
-/// - `prev`：链上更靠近队尾（更差价/同价更晚 FIFO）方向的下一个 order。
+/// 挂单节点（slab 元素）。对应 Java `DirectOrder`(`:960-1093`)；parent/next/prev 退化为 slab 索引。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectOrder {
     pub order_id: i64,
@@ -51,8 +25,7 @@ pub struct DirectOrder {
     pub size: i64,
     pub filled: i64,
     pub filled_notional: i64,
-    /// 现货 BID 挂单的风控预留价（对应 Java 注释
-    /// "reserved price for fast moves of GTC bid orders in exchange mode"）。
+    /// 现货 BID 挂单的风控预留价（Java: "reserved price for fast moves of GTC bid orders in exchange mode"）。
     pub reserve_bid_price: i64,
     pub action: OrderAction,
     pub order_type: OrderType,
@@ -68,11 +41,7 @@ pub struct DirectOrder {
     pub prev: Option<usize>,
 }
 
-/// 价位桶：同价位挂单的聚合视图。对应 Java `OrderBookDirectImpl.Bucket`(`:1096-1100`)。
-///
-/// 价格本身不存在 `Bucket` 里（隐含 = `tail` 那个 order 的 `price`，也是 ART key）；
-/// 桶之间没有自己的 next/prev 指针——桶间衔接全靠全局单链的
-/// `tail.prev`/`(桶内最老 order).next` 完成（见模块头注释）。
+/// 价位桶：同价位挂单的聚合视图。对应 Java `Bucket`(`:1096-1100`)；价格隐含=tail.price，桶间衔接靠全局单链。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bucket {
     /// 桶内所有挂单剩余量（`size - filled`）之和。
@@ -82,15 +51,7 @@ pub struct Bucket {
     pub tail: usize,
 }
 
-/// 高性能订单簿。对应 Java `OrderBookDirectImpl`。
-///
-/// slab/arena 布局：`orders`/`buckets` 是带 free-list 的 `Vec<Option<T>>`，回收槽位 LIFO 复用
-/// （见 `alloc_order`/`free_order`/`alloc_bucket`/`free_bucket`）。
-///
-/// `#[allow(dead_code)]`：`ask_price_buckets`/`bid_price_buckets`/`order_id_index`/`best_ask`/
-/// `best_bid` 本任务（Task 1）只建结构、不接线——`insertOrder`/`removeOrder`/撮合逻辑落在
-/// Task 2-6，此前这些字段除了在 `new()` 里初始化外无生产代码读写（测试里通过 `#[cfg(test)]`
-/// 内部访问会读到，但非测试构建下会触发 `dead_code`）。
+/// 高性能订单簿。对应 Java `OrderBookDirectImpl`；slab/arena 布局，回收槽位 LIFO 复用。
 #[allow(dead_code)]
 pub struct OrderBookDirectImpl {
     /// 订单 slab；`None` 表示该槽已释放待复用。
@@ -101,29 +62,22 @@ pub struct OrderBookDirectImpl {
     buckets: Vec<Option<Bucket>>,
     /// `buckets` 的空闲槽 LIFO 栈。
     bucket_free: Vec<usize>,
-    /// ask 侧价位索引：价格 -> Bucket slab 索引，升序（对应 Java ART `askPriceBuckets`，
-    /// ask "更优" = 更低价）。
+    /// ask 侧价位索引：价格 -> Bucket slab 索引，升序（对应 Java ART `askPriceBuckets`，更优=更低价）。
     ask_price_buckets: BTreeMap<i64, usize>,
-    /// bid 侧价位索引：价格 -> Bucket slab 索引，存储用升序 key，按买方最优价（最高价）
-    /// 遍历用 `.rev()`（对应 Java ART `bidPriceBuckets`，bid "更优" = 更高价）。
+    /// bid 侧价位索引：升序 key 存储，遍历用 `.rev()` 取最优（最高价）（对应 Java ART `bidPriceBuckets`）。
     bid_price_buckets: BTreeMap<i64, usize>,
-    /// orderId -> Order slab 索引（对应 Java ART `orderIdIndex`；用 BTreeMap 维持
-    /// "禁 HashMap" 不变式，点查为主，迭代序不影响任何输出）。
+    /// orderId -> Order slab 索引（对应 Java ART `orderIdIndex`；用 BTreeMap 维持"禁 HashMap"不变式）。
     order_id_index: BTreeMap<i64, usize>,
     /// ask 侧链头 = 全局最优 ask（可空）。对应 Java `bestAskOrder`。
     best_ask: Option<usize>,
     /// bid 侧链头 = 全局最优 bid（可空）。对应 Java `bestBidOrder`。
     best_bid: Option<usize>,
-    /// 仅 `moveOrder` 的 `CURRENCY_EXCHANGE_PAIR` 现货风控 + 访问器读取
-    /// （对应 Java 构造入参 `symbolSpec`；`ObjectsPool`/`OrderBookEventsHelper`/
-    /// `LoggingConfiguration` 纯 Java 对象池/日志，本移植不落地）。
+    /// 仅 `moveOrder` 现货风控+访问器读取（对应 Java 构造入参 `symbolSpec`；对象池/日志不落地）。
     symbol_spec: Option<CoreSymbolSpecification>,
 }
 
 impl OrderBookDirectImpl {
-    /// 建空簿。对应 Java 构造函数 `OrderBookDirectImpl(CoreSymbolSpecification, ObjectsPool,
-    /// OrderBookEventsHelper, LoggingConfiguration)`（`:60-73`）——本移植只保留有功能依赖的
-    /// `symbolSpec`，此处先留空（Task 2+ 由调用方注入）。
+    /// 建空簿。对应 Java 构造函数 `OrderBookDirectImpl(...)`（`:60-73`），仅保留 `symbolSpec`。
     pub fn new() -> Self {
         Self {
             orders: Vec::new(),
@@ -139,9 +93,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 建空簿并注入 `symbolSpec`（P2 Task 5：`moveOrder` 的现货 BID 风控守卫需要它，见
-    /// `move_order`）。对应 Java 构造函数的 `symbolSpec` 入参；`ObjectsPool`/`OrderBookEventsHelper`/
-    /// `LoggingConfiguration` 仍不落地。
+    /// 建空簿并注入 `symbolSpec`（`move_order` 现货 BID 风控守卫需要它）。对应 Java 构造函数的 symbolSpec 入参。
     pub fn with_symbol_spec(symbol_spec: CoreSymbolSpecification) -> Self {
         Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
@@ -211,25 +163,8 @@ impl OrderBookDirectImpl {
 
     // ---- 挂单入链/入桶 ----
 
-    /// 挂单入链+入桶。对应 Java `insertOrder(order, freeBucket)`(`:638-715`)。
-    ///
-    /// `free_bucket`：仅 moveOrder（Task 4）会传入——`removeOrder` 摘链时若整桶被清空，会把该
-    /// Bucket 槽位"摘出 BTreeMap 但不释放"传回来复用；本任务的 GTC 挂单路径恒传 `None`。
-    ///
-    /// - **情形 A（价位已有桶）**（`:646-669`）：新 order 成为桶的新 `tail`（FIFO 最新）：
-    ///   `old_tail.prev` 指向新 order、`prev_order.next`（若存在）指向新 order、新 order 自己的
-    ///   `next=old_tail, prev=prev_order, parent=bucket`；`bucket.volume += remaining`、
-    ///   `num_orders += 1`。若调用方传了 `free_bucket`（本情形用不上），直接释放回 slab
-    ///   （对应 Java `objectsPool.put`）。
-    /// - **情形 B（价位无桶）**（`:670-714`）：新建/复用一个 Bucket（`tail/volume/num_orders`
-    ///   全部对应新 order），登记进 `ask_price_buckets`/`bid_price_buckets`。然后查"最近的更优价
-    ///   邻桶"：ask 更优=更低价→`range(..price).next_back()`（Java `getLowerValue`）；
-    ///   bid 更优=更高价→`range(price+1..).next()`（Java `getHigherValue`）。
-    ///   - 找到邻桶：插在该邻桶 `tail` 的边界前（`:683-694`），global best 不动。
-    ///   - 没找到：新 order 成为该侧新的 global best（`:696-713`）。
-    ///
-    /// **borrow 处理**：先把需要的标量（`is_ask/price/remaining/old_tail/prev_order` 等）读出到
-    /// 局部变量，再逐个 `order_mut`/`bucket_mut` 写回——不同时持有两个 slab 元素的 `&mut`。
+    /// 挂单入链+入桶。对应 Java `insertOrder(order, freeBucket)`(`:638-715`)：价位已有桶则挂为新 tail，
+    /// 否则新建桶并插入最近更优邻桶前或成为新 best；`free_bucket` 仅 moveOrder 传入复用。
     pub fn insert_order(&mut self, order_idx: usize, free_bucket: Option<usize>) {
         let (is_ask, price, remaining) = {
             let o = self.order(order_idx);
@@ -284,8 +219,7 @@ impl OrderBookDirectImpl {
                 self.bid_price_buckets.insert(price, bucket_idx);
             }
 
-            // `price.checked_add(1)`：`price==i64::MAX` 时没有更高价可能存在，`range` 应视为
-            // 空区间而非 panic/环绕（P2 Task 2 审阅遗留的 i64::MAX 溢出隐患，Task 6 补上）。
+            // `checked_add(1)` 防 price==i64::MAX 时 range 溢出/环绕。
             let neighbor_bucket = if is_ask {
                 self.ask_price_buckets.range(..price).next_back().map(|(_, &b)| b)
             } else {
@@ -325,25 +259,8 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 摘链摘桶：cancel/reduce(全删)/move 共用的核心手术。对应 Java `removeOrder`(`:599-635`)。
-    ///
-    /// 1. `bucket.volume -= (size-filled)`、`bucket.num_orders -= 1`（在读 `bucket.tail`/桶内
-    ///    其它字段前——Java 同样先扣量再判断 tail）。
-    /// 2. 若 `order` 正是它所在桶的 `tail`：
-    ///    - 若 `order.next` 为空 **或** `order.next` 属于别的桶（本桶只剩这一个 order）→
-    ///      从价位索引（按 `order.action` 选 ask/bid 侧）摘除该价位、**返回该 Bucket 的 slab
-    ///      索引交给调用方处理**（cancel/reduce 直接 `free_bucket`；move 传给
-    ///      `insert_order` 复用或按情况释放，见 `move_order`）——本函数自己不释放。
-    ///    - 否则（桶内还有别的 order）：`bucket.tail = order.next`（`next` 必非空，上面已
-    ///      判过）。
-    /// 3. 通用双向链摘除：`order.next` 存在则其 `.prev` 接到 `order.prev`；`order.prev` 存在
-    ///    则其 `.next` 接到 `order.next`（两者互不依赖，Java 也是分别独立判断）。
-    /// 4. best 修复：`order_idx==best_ask` → `best_ask=order.prev`；否则
-    ///    `order_idx==best_bid` → `best_bid=order.prev`（`else if`——两个 best 不可能同时
-    ///    指向同一个 order，因为 ask/bid 是两条独立的链）。
-    ///
-    /// 不释放 `order` 自身的 slab 槽——调用方在读完仍需要的字段后再 `free_order`
-    /// （cancel/reduce(全删) 立即释放；move 视是否需要重挂决定）。
+    /// 摘链摘桶：cancel/reduce(全删)/move 共用的核心手术。对应 Java `removeOrder`(`:599-635`)：扣桶量、
+    /// 若是 tail 则摘价位或前移 tail、双向链摘除、修复 best；不释放 order 自身槽位（交调用方处理）。
     fn remove_order(&mut self, order_idx: usize) -> Option<usize> {
         let (size, filled, action, price, next, prev, parent) = {
             let o = self.order(order_idx);
@@ -394,13 +311,7 @@ impl OrderBookDirectImpl {
     }
 
     /// GTC 下单：先 `try_match_instantly`，全成则不挂、重复 order_id 则拒绝剩余、否则挂簿。
-    /// 对应 Java `newOrderPlaceGtc`(`:148-189`)（P2 Task 3）。
-    ///
-    /// - `filled_size == size`：完全成交，不挂单，直接返回（已发的 TRADE 事件链留在 `cmd.matcher_event`）。
-    /// - `order_id_index` 已存在该 `order_id`（重复下单）：能撮合但不能挂，对未成交剩余量
-    ///   `size - filled_size` 发 REJECT 事件（前插到已有的 TRADE 事件链前，见 `attach_reject_event`）。
-    /// - 否则：建 `DirectOrder`（`filled`/`filled_notional` = 撮合产生的累计值）、登记
-    ///   `order_id_index`、`insert_order` 挂簿。
+    /// 对应 Java `newOrderPlaceGtc`(`:148-189`)。
     fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
         let size = cmd.size;
         let action = cmd.action.expect("GTC order requires action");
@@ -444,34 +355,9 @@ impl OrderBookDirectImpl {
         self.insert_order(idx, None);
     }
 
-    /// 撮合核心。对应 Java `tryMatchInstantly(:253-372)`（GTC/IOC/FOK_BUDGET/move 共用；GTC/IOC
-    /// 调用它时 taker 起始 `filled`/`filled_notional` 恒为 0）。
-    ///
-    /// `limit_price`：`Some(p)` 按价格过滤对手侧（GTC/IOC 主路径，BID 要求 `maker.price<=p`、
-    /// ASK 要求 `maker.price>=p`）；`None` 表示不限价——**仅 FOK_BUDGET 使用**。按 Ruling P2-1，
-    /// Rust 侧 BID/ASK FOK_BUDGET 一律不设价格上限，镜像 Naive 的 `try_match_full`，不复刻
-    /// Java Direct "BID FOK_BUDGET 复用 cmd.price 当每单价上限"的巧合（见 §8/模块头 Ruling 说明）。
-    ///
-    /// 无撮合（对手侧无挂单 / 价格越限 / `taker_size==0`）→ 不发事件、不改任何状态，返回
-    /// `(0, 0)`（对应 Java `EMPTY_LONGS`；GTC/IOC 起始 filled 恒 0，故与"返回 taker 起始值"退化为同一形式）。
-    ///
-    /// 循环（§2.1(a)-(j)）：`maker` 从 `best_ask`(BID taker)/`best_bid`(ASK taker) 起沿 `.prev` 走
-    /// （桶内老到新、跨桶更优到更差）。每轮一个 maker：
-    /// - `trade_size=min(remaining, maker.size-maker.filled)`，成交价=maker.price；
-    /// - 更新 taker 累计 + maker.filled/filled_notional + `maker.parent.volume -= trade_size`；
-    /// - `maker_completed = maker.filled==maker.size`：完成则 `parent.num_orders -= 1`（发事件前）；
-    /// - `remaining -= trade_size`（发事件前，使 `active_order_completed` 反映扣减后的状态）；
-    /// - 发 TRADE 事件、追加到本次调用的事件链；
-    /// - 若 maker 未完成 → break（它留簿，taker 已耗尽）；
-    /// - 若完成：从 `order_id_index` 摘除，**推迟 slab 槽的实际回收到循环结束+best 修复之后**
-    ///   （`freed_orders`，对应 §2.1(h) 的"防止同一次撮合调用内新分配复用刚释放的槽"约束——
-    ///   本函数内不会新分配 order，纯防御性保留该顺序以匹配 Java 的对象池释放时机）；
-    ///   若 maker 是其桶的 `tail` → 从价位索引摘桶+释放 Bucket，`price_bucket_tail` 推进到
-    ///   `maker.prev` 所在桶的 tail（若存在）；
-    /// - 前进 `maker = maker.prev`，价格/剩余量条件不满足则退出循环。
-    ///
-    /// 循环后：`maker` 非空则 `maker.next = None`（它成为新链头）；`best_ask`/`best_bid = maker`
-    /// （可能为 `None`）。返回 `(taker_filled, taker_filled_notional)`。
+    /// 撮合核心。对应 Java `tryMatchInstantly`(`:253-372`)，GTC/IOC/FOK_BUDGET/move 共用；`limit_price=None`
+    /// 仅 FOK_BUDGET 用（Ruling P2-1：BID/ASK 均不设价格上限，不复刻 Java 的价格上限巧合）。maker 沿
+    /// best.prev 走摘除完成单，槽位回收推迟到循环结束+best 修复之后（防止本次调用内复用刚释放的槽）。
     pub fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
@@ -509,8 +395,7 @@ impl OrderBookDirectImpl {
         let mut taker_filled: i64 = 0;
         let mut taker_filled_notional: i64 = 0;
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
-        // 完成的 maker 槽位：先摘 order_id_index，槽本身推迟到循环结束+best 修复之后才真正 free
-        // （§2.1(h)：本函数内不重新分配 order，纯粹保持与 Java 对象池释放时机一致的顺序）。
+        // 完成的 maker 槽位：先摘 order_id_index，槽本身推迟到循环结束+best 修复之后才真正 free。
         let mut freed_orders: Vec<usize> = Vec::new();
 
         loop {
@@ -552,8 +437,7 @@ impl OrderBookDirectImpl {
             remaining -= trade_size;
             let active_order_completed = remaining == 0;
 
-            // bidderHoldPrice：BID 那一方的 reserve_bid_price（taker 是 BID 用 taker 自己的，
-            // 否则 maker 是 BID、用 maker 的）——同 Naive §6。
+            // bidderHoldPrice 选择规则：BID 那一方的 reserve_bid_price（同 Naive）。
             let bidder_hold_price = if is_bid { taker_reserve_bid_price } else { m_reserve_bid_price };
 
             events.push(MatcherTradeEvent {
@@ -566,8 +450,7 @@ impl OrderBookDirectImpl {
                 bid_gt_ask: is_bid,
                 bidder_hold_price,
                 matched_order_uid: m_uid,
-                // maker 自己的原命令类型（对应 Java `OrderBookEventsHelper.java:75`，P6-G：须与
-                // Naive `match_against` 逐字节相同地填）。
+                // maker 自己的原命令类型（Java `OrderBookEventsHelper.java:75`，P6-G：须与 Naive 逐字节一致）。
                 matched_order_command_type: m_command,
                 next: None,
             });
@@ -630,8 +513,7 @@ impl OrderBookDirectImpl {
             self.free_order(idx);
         }
 
-        // 按撮合发生顺序拼成单链表，整体覆盖 cmd.matcher_event（对应 Java 首事件直接赋值
-        // triggerCmd.matcherEvent，不与调用前已有的链拼接——与 Naive 的 match_against 一致）。
+        // 按撮合发生顺序拼成单链表，整体覆盖 cmd.matcher_event（不与调用前已有的链拼接，同 Naive）。
         let mut chain: Option<Box<MatcherTradeEvent>> = None;
         for mut ev in events.into_iter().rev() {
             ev.next = chain.take();
@@ -657,16 +539,8 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 无价格限制地探测撮合满 `size` 所需的总预算。对应 Java `checkBudgetToFill`(`:222-250`)。
-    ///
-    /// 从对侧链头起**按桶粒度**走（不逐 order）：`available = bucket.volume`（该桶剩余总量），
-    /// `size<=available` 时直接返回 `budget + size*price`；否则 `budget += available*price`、
-    /// `size -= available`，用 `bucket.tail.prev` 跳到下一个（更差价）桶继续。链走尽仍未凑够
-    /// `size` → 流动性不足，返回 `i64::MAX` 哨兵（对应 Java `Long.MAX_VALUE`）。
-    ///
-    /// 累加用 `i128` 防止 `available*price`/`budget` 溢出 `i64`（对应 Java `Math.multiplyExact`
-    /// 在溢出时抛异常；这里选择饱和到 `i64::MAX`——效果上等价于"预算不可能满足"，与
-    /// `is_budget_limit_satisfied` 对哨兵值的显式排除语义一致，见下）。
+    /// 无价格限制地探测撮合满 `size` 所需的总预算。对应 Java `checkBudgetToFill`(`:222-250`)：按桶
+    /// 粒度走（不逐 order），凑不够返回 `i64::MAX` 哨兵；累加用 `i128` 防止溢出 `i64`。
     fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
         let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
         let mut budget: i128 = 0;
@@ -686,17 +560,15 @@ impl OrderBookDirectImpl {
                 return if total > i64::MAX as i128 { i64::MAX } else { total as i64 };
             }
 
-            // 跳到下一个（更差价）桶：桶内其余 order 已被 `bucket.volume` 一次性计入，
-            // 无需逐 order 遍历（对应 Java `makerOrder = bucket.tail.prev`）。
+            // 跳到下一个（更差价）桶，桶内其余 order 已被 `bucket.volume` 一次性计入（对应 Java `bucket.tail.prev`）。
             maker = self.order(bucket.tail).prev;
         }
 
         i64::MAX // 流动性不足以吃满 size（对应 Java `Long.MAX_VALUE` 哨兵）
     }
 
-    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本 `calculated<=limit`，
-    /// ASK 要求收入 `calculated>=limit`；`calculated==i64::MAX`（`check_budget_to_fill` 的
-    /// "流动性不足"哨兵）恒不满足——即使 ASK 分支的 `calculated>=limit` 数值上会成立。
+    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本<=limit、ASK 要求收入>=limit；
+    /// `calculated==i64::MAX`（流动性不足哨兵）恒不满足。
     fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
         calculated != i64::MAX
             && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
@@ -714,8 +586,7 @@ impl OrderBookDirectImpl {
         let budget = self.check_budget_to_fill(action, size);
 
         if Self::is_budget_limit_satisfied(action, budget, limit) {
-            // 预算已证足够吃满 size：调用不限价的 try_match_instantly（"满足即全成"不变式），
-            // 之后不再 reject。
+            // 预算已证足够吃满 size：调用不限价的 try_match_instantly，之后不再 reject。
             self.try_match_instantly(action, size, reserve_bid_price, None, cmd);
         } else {
             Self::attach_reject_event(cmd, size);
@@ -742,48 +613,10 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// IOC_BUDGET 专用撮合。**不对应 Java `tryMatchInstantlyWithBudget`(`:381-488`) 的结构**——
-    /// 那个 Java 版本用"每单价<=limitPrice(=cmd.price 复用) + 预算连续递减"的单一 do-while，
-    /// 但已定案、不可回退的 Naive Rust 移植（`OrderBookNaiveImpl::match_against_budget` 配合
-    /// `OrdersBucketNaive::match_forward`）用了完全不同的算法：**无价格上限，且预算上限按
-    /// "每个价位一个独立批次"分配、批次之间不延续、也不重试**。既然规格明确"Direct 必须与
-    /// Naive 外部结果逐位一致"，本函数镜像 Naive 的算法而非 Java 的（在实现过程中通过对拍
-    /// 测试发现两者在"预算批次是否跨桶延续"上存在真实分歧，而非仅是 Ruling P2-1 提到的
-    /// FOK_BUDGET 那种"巧合但等价"——这里不镜像 Naive 会导致真实的成交量/事件分歧，已用
-    /// `ioc_budget_partial_fill_capped_by_budget_matches_naive` 覆盖）：
-    /// - **无价格上限**（对应 Naive `match_against_budget` 没有 `taker_price_limit` 参数）。
-    /// - `batch_remaining==0`（尚未开始，或上一批已耗尽）时，才用"当前 maker 的价 + 当前剩余
-    ///   预算/剩余量"重新计算 `size_cap = remaining.min(affordable)`；`size_cap<=0` → 整体停止
-    ///   撮合（对应 Naive `if size_cap<=0 {break}` 跳出整个外层循环）。
-    /// - 批次内（同价位，可能跨多个 FIFO 挂单）逐单成交，直到批次上限耗尽或该价位挂单耗尽。
-    ///
-    /// **`batch_remaining` 归零的三种方式，必须逐一都能触发"下一价位重新计算"**（这是曾经的
-    /// 一个真实 bug 的教训——第 3 种最初被漏掉，见下）：
-    /// 1. **预算耗尽**：`size_cap` 由 `affordable` 决定，trade 后 `remaining_budget_new =
-    ///    remaining_budget - size_cap*price < price`（地板除余数恒小于除数）。ask 价格链严格
-    ///    递增、`remaining_budget` 只减不增，故无论下一个 maker 价格相同还是更差(更高)，都有
-    ///    `remaining_budget_new < 该价`，`affordable=0`，重新计算必然立即 `size_cap<=0` 而
-    ///    整体停止——与 Naive"该价位批次已用完、永不重试"的效果逐位等价。这种情形 trade 数学
-    ///    本身就会让 `batch_remaining` 精确归零，无需额外干预。
-    /// 2. **taker 整体剩余耗尽**：`size_cap` 由 `remaining` 决定，trade 后 `remaining==0`，
-    ///    本轮循环顶部的 `if remaining==0 {break}` 已在下一次迭代前拦下，不会走到重新计算。
-    /// 3. **本价位流动性耗尽（桶内货比批次上限少）**：`size_cap` 由 `affordable`/`remaining`
-    ///    的 min 决定，但**该价位桶的总量比 size_cap 还小**——吃穿整个桶（`midx ==
-    ///    price_bucket_tail`）跨到下一个（更差）价位时，`batch_remaining` 可能仍 **>0**（预算
-    ///    或量都还没花完，只是这一档没货了）！trade 数学不会自动把它归零，必须在桶被吃穿、
-    ///    `maker` 跨桶时**显式**把 `batch_remaining` 置 0，强迫下一轮用新价位重新算一次
-    ///    `size_cap`（否则会把按旧价位算出的 leftover 原封不动地套到更差价位上继续吃、跳过了
-    ///    对新价位的 affordability 检查——这正是 Naive 严禁的"预算批次跨桶延续"，对应 Naive
-    ///    `for p in prices` 对每个价位独立调用 `size_cap = size_left.min(affordable)`，从不
-    ///    带着上一价位的余量进入下一价位）。见下方 `if midx == price_bucket_tail` 分支。
-    ///
-    /// 因此 `active_order_completed` 语义是"**当前批次**是否耗尽"而非"taker 整体是否成交完"——
-    /// 批次上限 < taker 整体剩余量时两者不同，这是本函数与 `try_match_instantly` 的关键差异。
-    ///
-    /// 仅 BID 会调用本函数（IOC_BUDGET 对 ASK 已在调用方 `new_order_match_ioc_budget` 整单
-    /// reject），故硬编码吃 `ask_price_buckets`/`best_ask`、`bid_gt_ask=true`、
-    /// `bidder_hold_price=taker_reserve_bid_price`（同 Naive 对 taker=BID 的字段选择）。
-    /// 允许部分成交、从不挂单；未成交剩余由调用方走 REJECT。
+    /// IOC_BUDGET 专用撮合，不对应 Java `tryMatchInstantlyWithBudget`(`:381-488`)——镜像 Naive
+    /// `match_against_budget`：无价格上限，预算按价位独立分批不跨价位延续（桶被吃穿跨价位时须显式
+    /// 清零 `batch_remaining`，曾漏掉致真实 bug，见 `ioc_budget_partial_fill_capped_by_budget_matches_naive`）；
+    /// `active_order_completed`=当前批次耗尽而非 taker 整体完成；仅 BID 调用，硬编码吃 ask 侧。
     fn match_against_budget_ioc(
         &mut self,
         taker_size: i64,
@@ -805,9 +638,7 @@ impl OrderBookDirectImpl {
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut freed_orders: Vec<usize> = Vec::new();
 
-        // 批次状态：`batch_remaining`=当前批次还能买多少（0 表示尚未开始或上一批已耗尽，
-        // 下一轮循环顶部要用"当前 maker"重新计算）；`price_bucket_tail`=当前批次所在桶的
-        // tail（判断"是否吃穿整个桶"用，每次重新计算批次时刷新）。
+        // `batch_remaining`=当前批次还能买多少（0 则下轮重新计算）；`price_bucket_tail`=当前批次所在桶的 tail。
         let mut batch_remaining: i64 = 0;
         let mut price_bucket_tail: usize = 0;
 
@@ -881,25 +712,14 @@ impl OrderBookDirectImpl {
                 freed_orders.push(midx);
 
                 if midx == price_bucket_tail {
-                    // 吃穿了整个桶（本桶流动性 < 批次上限）——跨到下一个（更差）价位。
-                    // `batch_remaining` 可能仍 >0（本批次的钱/量并未真正花完，只是这一价位没
-                    // 货了），必须强制清零，强迫下一轮循环顶部重新为"新价位"计算一次全新的
-                    // `size_cap`（否则会把这笔按旧价位算出的 leftover 预算原封不动地套到更差
-                    // 价位上继续吃，等于没有对新价位做 affordability 检查——这正是 Naive 严禁
-                    // 的"预算批次跨桶延续"）。对应 Naive `for p in prices` 对每个价位都独立
-                    // 调用 `size_cap = size_left.min(affordable)`，从不把上一个价位的余量带
-                    // 到下一个价位。
+                    // 吃穿整个桶，跨到下一价位：强制清零 batch_remaining，禁止预算批次跨桶延续（同 Naive）。
                     self.ask_price_buckets.remove(&m_price);
                     self.free_bucket(m_parent);
                     batch_remaining = 0;
                 }
                 maker = m_prev;
             }
-            // !maker_completed：maker 原地不动（留簿、部分成交）；此时 batch_remaining 必为 0
-            // （trade_size=batch_remaining.min(avail)，avail>batch_remaining 时 trade_size=
-            // batch_remaining，减完后归零）；`maker` 保留在这个仍合法、未被摘除的挂单上，
-            // 循环顶部的 `remaining==0` 检查/下一轮的"批次耗尽重算"会按上面的论证正确处理
-            // （重算必然 size_cap<=0 而 break，`maker` 原样成为新 best，绝不会被误"跳过"丢失）。
+            // !maker_completed：maker 原地不动（留簿、部分成交），此时 batch_remaining 必归零。
         }
 
         if let Some(midx) = maker {
@@ -922,8 +742,7 @@ impl OrderBookDirectImpl {
     }
 
     /// 不挂单、不改簿的 REJECT 事件，前插到 `cmd.matcher_event` 链头。对应 Java
-    /// `OrderBookEventsHelper.attachRejectEvent`（同 Naive 的 `attach_reject_event`：已有的成交
-    /// 事件链——如部分撮合后 dup-id 拒绝剩余——被接到 REJECT 之后）。
+    /// `OrderBookEventsHelper.attachRejectEvent`（同 Naive 的 `attach_reject_event`）。
     fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
         let event = MatcherTradeEvent {
             event_type: MatcherEventType::Reject,
@@ -942,25 +761,9 @@ impl OrderBookDirectImpl {
         cmd.matcher_event = Some(Box::new(event));
     }
 
-    /// 内部状态校验（测试/对拍用）。对应 Java `validateInternalState`(`:738-849`)，落地 §7
-    /// 全部 10 条不变式（P2 Task 2 只做了子集——3 只查了 tail、4/6/10 缺失——本任务补全）：
-    /// 1. 每侧 `best.next == None`（若 best 存在）；
-    /// 2. 从 best 沿 `.prev` 走访问该侧每个 order 恰一次（无环），且相邻两者
-    ///    `X.prev==Y ⟺ Y.next==X`（价、时严格序由 4/6/10 结构性保证：桶间价格单调 + 桶内
-    ///    FIFO 位置即插入序，见下）；
-    /// 3. **每个** order（不只是 tail）都满足 `order.parent.tail.price == order.price`；
-    /// 4. 跨桶边界价格严格单调（ask 沿 `.prev` 升、bid 沿 `.prev` 降），不允许同价相邻两个
-    ///    order 分属不同桶；
-    /// 5. 每个桶：`bucket.volume == Σ(size-filled)`、`num_orders == count`（聚合整条链后比对，
-    ///    等价于"在 tail 处核对"）；
-    /// 6. 桶边界处 `.prev` 指向的价格与当前桶不同（4 的边界情形，一并验证）；
-    /// 7. 每价 ↔ 恰一个 Bucket——ART 价位图（`ask/bid_price_buckets`）与链可达桶集合**逐个**
-    ///    相同（不仅长度相等，用集合比对防"数量凑巧相等但内容不同"的漏判）；
-    /// 8. `order_id_index` 的 key 集合 == 两条链上 order_id 的并集（无孤儿，双向）；
-    /// 9. 链上每个 order 的 `action` 与所属侧一致；
-    /// 10. 每条链上"即将跨出某个桶"的那个 order（含链尾最后一个）确实是该桶的 `tail`。
-    ///
-    /// 违反任一条直接 panic（清晰消息），供测试当断言用，不在生产路径调用。
+    /// 内部状态校验（测试/对拍用）。对应 Java `validateInternalState`(`:738-849`)，落地 §7 全部 10 条
+    /// 不变式（best.next 为空/链无环且双向一致/tail 价格一致/跨桶价格单调/桶聚合值/ART 图与链一致/
+    /// order_id_index 无孤儿/action 一致/桶边界 tail），违反任一条直接 panic，不在生产路径调用。
     pub fn validate_internal_state(&self) {
         self.validate_side(true);
         self.validate_side(false);
@@ -981,9 +784,7 @@ impl OrderBookDirectImpl {
         );
     }
 
-    /// 单侧（ask 或 bid）不变式 1/2/3/4/5/6/7/9/10 的校验（8 是跨侧的，在
-    /// `validate_internal_state` 里做）。单趟遍历该侧的链，边走边聚合/边比对相邻关系，
-    /// 走完后再核对每个价位桶的聚合值与 ART 图。
+    /// 单侧（ask/bid）不变式 1/2/3/4/5/6/7/9/10 校验（8 跨侧，在 `validate_internal_state` 里做）。
     fn validate_side(&self, is_ask: bool) {
         let side_name = if is_ask { "ask" } else { "bid" };
         let best = if is_ask { self.best_ask } else { self.best_bid };
@@ -1011,8 +812,7 @@ impl OrderBookDirectImpl {
             assert!(visited.insert(idx), "{side_name} chain revisits slab idx {idx} (cycle?)");
             let o = self.order(idx);
 
-            // 不变式 2（后半）：X.prev==Y ⟺ Y.next==X。遍历本身用 `X.prev` 找到 `Y=idx`，
-            // 这里核对反向指针 `Y.next` 确实指回 `X`。
+            // 不变式 2（后半）：X.prev==Y ⟺ Y.next==X。
             if let Some((c_idx, _, _)) = closer {
                 assert_eq!(
                     o.next,
@@ -1046,8 +846,7 @@ impl OrderBookDirectImpl {
 
             if let Some((c_idx, c_parent, c_price)) = closer {
                 if c_parent != parent {
-                    // 跨桶边界：4（价格严格单调 + 不允许同价异桶相邻）+ 6（边界处价格必不同）
-                    // + 10（刚离开的 order 必须正是它所在桶的 tail）。
+                    // 跨桶边界：不变式 4（价格严格单调+不同价异桶）+6（边界价格必不同）+10（离开的 order 须是桶 tail）。
                     assert_ne!(
                         c_price,
                         o.price,
@@ -1085,8 +884,7 @@ impl OrderBookDirectImpl {
             cur = o.prev;
         }
 
-        // 不变式 10（链尾）：走到链尽头，最后一个 order 也必须是它所在桶的 tail
-        // （对应链上最远离 best 的那个桶的边界，循环体内的"跨桶边界"分支覆盖不到链尾这一次）。
+        // 不变式 10（链尾）：链上最后一个 order 也必须是它所在桶的 tail（循环体内分支覆盖不到链尾这一次）。
         if let Some((last_idx, last_parent, _)) = closer {
             assert_eq!(
                 self.bucket(last_parent).tail,
@@ -1095,8 +893,7 @@ impl OrderBookDirectImpl {
             );
         }
 
-        // 不变式 5：每个价位桶的聚合 volume/num_orders 与整条链上归属该桶的 order 汇总一致；
-        // 同时核对 `bucket.tail.price` 与 ART 价位图的 key 自洽。
+        // 不变式 5：桶聚合 volume/num_orders 与链上归属 order 汇总一致；核对 tail.price 与 ART key 自洽。
         for (&price, &bucket_idx) in buckets_map.iter() {
             let b = self.bucket(bucket_idx);
             assert_eq!(

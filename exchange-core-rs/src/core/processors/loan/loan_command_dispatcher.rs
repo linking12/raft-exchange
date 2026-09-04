@@ -1,37 +1,7 @@
-//! 对应 Java: exchange.core2.core.processors.loan.LoanCommandDispatcher —— Isolated 生命周期
-//! 命令 CREATE/REPAY/ADD_COLLATERAL/RELEASE_COLLATERAL + 公共 preamble + dispatch 表
-//! （`OrderCommandType::is_loan()` 门守命中后的入口，参考文档 §0/§2.1-2.4）。
-//!
-//! **Task 4 范围**：`is_loan()` 覆盖 14 个命令码（参考文档 §0），Task 4 落了 4 个 Isolated
-//! 生命周期命令，Task 5 补了 4 个 Cross 生命周期命令，Task 6（本任务）补了 4 个 POOL/IF 运营
-//! 命令（`POOL_DEPOSIT`/`POOL_WITHDRAW`/`LOAN_IF_DEPOSIT`/`LOAN_IF_WITHDRAW`，参考文档
-//! §2.11）。剩余 2 个（`LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`）留 Task 7，命中
-//! [`LoanCommandDispatcher::dispatch`] 时返回 `CommandResultCode::LoanNotImplemented`——本任务
-//! 测试集从不构造这两个命令类型，该分支在当前测试范围内不可达，只是占位而非"假装支持"。
-//!
-//! # Rust 对齐 Java `LoanCommandDispatcher(RiskEngine engine)` 构造器持有 engine 的做法
-//! Java 版把 `engine` 存成实例字段，构造一次、复用于每次 `dispatch`。Rust 版不持有任何状态
-//! （`LoanCommandDispatcher` 是零大小类型，方法全是关联函数），改为每次调用显式传入
-//! `engine: &mut RiskEngine`——既避免了 `RiskEngine`/`LoanCommandDispatcher` 相互持有导致的
-//! 生命周期/所有权问题，又能复用 `RiskEngine::mark_price`/`calculate_locked`（均为 `&self`
-//! 方法）：NLL 下这些只读调用与随后对 `engine.loan_service`（`RiskEngine` 的字段）的可变访问
-//! 从不同时存活，不产生借用冲突。这与 brief 建议的 `dispatch(cmd, up_service, ssp,
-//! loan_service)` 四参签名有出入——`calculateLocked`/`markPrice` 是 `RiskEngine` 的方法而非
-//! `LoanService` 的，若不传整个 `engine` 就得把这两个方法复制一份到 dispatcher 里，属于更差的
-//! 重复；显式传 `&mut RiskEngine` 是更小的偏差。
-//!
-//! # 借用设计：REPAY 为何按 `loan_id` 重查两次 map，而不是直接传 `&mut LoanRecord`
-//! Java 的 `settleRepay(UserProfile up, LoanRecord loan, OrderCommand cmd)` 同时持有 `up` 和从
-//! `up.isolatedLoans` 取出的 `loan` 引用（GC 语言里这只是两个别名，完全合法）。Rust 不允许：
-//! 若 `loan: &mut IsolatedLoanRecord` 是从 `up.isolated_loans.get_mut(loan_id)` 借出的，就不能
-//! 同时把 `up`（整个结构体）传给 `engine.calculate_locked(up, ..)`（需要 `&UserProfile`，对
-//! 借用检查器不透明，视作借用 `up` 全部字段，与 `loan` 借用的 `isolated_loans` 字段重叠）。
-//! 因此 [`Self::settle_repay_isolated`] 改为接收 `loan_id`，在需要访问 `loan` 与需要访问
-//! `up`（整体）之间**顺序**、**分段**地各自重新 `get`/`get_mut` 一次——同一时刻只活一种借用，
-//! NLL 允许其非重叠地相继发生。代价是同一 loan 多查了几次 `BTreeMap`（O(log n)，可忽略）；
-//! 好处是不需要 `unsafe`/`RefCell` 就能逐字复刻 Java 的校验顺序与金钱流向。
-//! Cross（Task 5）REPAY 复用相同的整体结构，但要在 `cross_loans` 上重复一份（Java 侧
-//! `settleRepay` 通过 `LoanRecord` 接口天然共享；Rust 版每种 map 各自一份薄包装）。
+//! 对应 Java `LoanCommandDispatcher`：借贷命令 dispatch 表 + 公共 preamble（`is_loan()` 门守命中后的入口，参考文档 §0/§2.1-2.4）。
+//! `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE` 留 Task 7，现返回 `LoanNotImplemented` 占位。
+//! Rust 偏差：不持有 `engine`（零大小类型），每次调用显式传 `&mut RiskEngine`。
+//! REPAY 按 `loan_id` 重查两次 map 而非传 `&mut LoanRecord`：避免 `up` 整体借用与 `loan` 字段借用重叠（NLL 分段借用）。
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -49,8 +19,7 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（风格对齐仓内各文件的同名
-/// helper，如 `risk_engine.rs`/`loan_service.rs`）。
+/// 对应 Java `Math.multiplyExact`：局部私有重复一份（风格对齐仓内同名 helper）。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
@@ -64,11 +33,7 @@ fn add_exact(a: i64, b: i64) -> i64 {
 pub struct LoanCommandDispatcher;
 
 impl LoanCommandDispatcher {
-    /// 对应 Java `dispatch(OrderCommand cmd)`（`:51-121`）：按 `cmd.command` 路由。Task 4 只落
-    /// 4 个 Isolated 生命周期命令；其余 10 个 `is_loan()` 码见模块文档。
-    ///
-    /// Java 原版按 `uidForThisHandler(cmd.uid)`/`(int) cmd.uid == shardId` 做分片自过滤——本移植
-    /// 单 shard、恒真，未搬迁该判断（同 P3/P4 既有 ruling：单 shard 下分片过滤是恒真 no-op）。
+    /// 对应 Java `dispatch(OrderCommand cmd)`（`:51-121`）：按 `cmd.command` 路由；分片自过滤单 shard 下恒真，未搬迁（同 P3/P4 ruling）。
     pub fn dispatch(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -101,12 +66,7 @@ impl LoanCommandDispatcher {
             // 不可达：is_loan() 门守覆盖的 14 码上面已全部列举。
             _ => unreachable!("non-loan command dispatched to LoanCommandDispatcher: {:?}", cmd.command),
         };
-        // P6 Task 8：loan 变更后 reconcile 该用户的强平扫描器 targeted 索引（对应 Java 各 handler
-        // 内联调用 `onIsolatedLoanOpened`/`onIsolatedLoanClosed`/`syncCrossExposure` + 参考文档 §6.7
-        // 的 P5 seam：`post_process_loan_cross_force_liquidate` 处 `syncCrossExposure(takerUp)`）。本移植
-        // 集中在 dispatch 出口按 `cmd.uid` 做一次幂等 reconcile——end-state 与 Java 逐点增量维护一致
-        // （见 `loan_liquidation_engine.rs` 模块文档）。仅对涉及用户 loan/collateral 的命令触发；
-        // pool/IF 运营命令不碰用户借贷敞口，跳过。
+        // P6 Task 8：loan 变更后在 dispatch 出口按 uid 幂等 reconcile 强平扫描器索引（end-state 等价 Java 逐点增量维护，见 loan_liquidation_engine.rs）；pool/IF 运营命令跳过。
         if matches!(
             cmd.command,
             OrderCommandType::LoanCreate
@@ -125,11 +85,7 @@ impl LoanCommandDispatcher {
         rc
     }
 
-    /// P6 Task 8：按 `uid` reconcile 借贷强平扫描器的两个 targeted 索引到该用户当前敞口的精确态。
-    /// isolated：登记全部非空 loan 的 symbol（`on_isolated_loan_opened`），并对该 uid 当前被索引、
-    /// 却已无活 loan 的 symbol 摘除（`on_isolated_loan_closed` 本身 multi-loan 安全）。cross：走
-    /// `sync_cross_exposure`（登记敞口币种 + 账户全退出精确扫除，非对称容忍 §6.7）。借用：
-    /// `engine.liquidation_engine.loan_liquidation_engine` 是嵌套平级字段，与 `ups` 参数不重叠。
+    /// P6 Task 8：按 uid reconcile 借贷强平扫描器的 isolated/cross 两个 targeted 索引到当前敞口精确态（§6.7）。
     fn reconcile_loan_indices(engine: &mut RiskEngine, ups: &UserProfileService, uid: i64) {
         let up = match ups.get(uid) {
             Some(u) => u,
@@ -141,7 +97,7 @@ impl LoanCommandDispatcher {
                 lle.on_isolated_loan_opened(uid, loan.symbol_id);
             }
         }
-        // 摘除该 uid 已无活 loan 的 isolated symbol（先收集再改，避免迭代中改容器）。
+        // 摘除已无活 loan 的 isolated symbol（先收集再改，避免迭代中改容器）。
         let indexed: Vec<i32> = lle
             .isolated_loan_symbol_to_users
             .iter()
@@ -154,10 +110,7 @@ impl LoanCommandDispatcher {
         lle.sync_cross_exposure(up);
     }
 
-    /// 公共 preamble（参考文档 §2 顶部）：缺户 → `AuthInvalidUser`；冻结户 →
-    /// `LoanUserSuspended`；`tryClaim` 幂等（claim-and-keep：claim 后即使后续校验失败也不释放，
-    /// 重试须换新 `orderId`，对齐 `BALANCE_ADJUSTMENT`）。成功直接返回 `&mut UserProfile`，
-    /// 避免调用方重复按 uid 查表。`loanId` 是纯业务键，不参与幂等（不在这里判重）。
+    /// 公共 preamble（参考文档 §2 顶部）：缺户 → `AuthInvalidUser`；冻结户 → `LoanUserSuspended`；`tryClaim` 幂等（claim-and-keep，对齐 `BALANCE_ADJUSTMENT`）。
     fn preamble<'a>(
         cmd: &OrderCommand,
         ups: &'a mut UserProfileService,
@@ -172,9 +125,7 @@ impl LoanCommandDispatcher {
         Ok(up)
     }
 
-    /// 对应 Java 私有 `evalCollateralInLoanCurrency`（`:1009-1015`）：从 `ssp` 取
-    /// `spec.base_currency`/`quote_currency` 各自的 `CoreCurrencySpecification`，转调
-    /// [`LoanService::collateral_value_in_quote_currency`]。
+    /// 对应 Java `evalCollateralInLoanCurrency`（`:1009-1015`）：转调 [`LoanService::collateral_value_in_quote_currency`]。
     fn eval_collateral_in_loan_currency(
         ssp: &SymbolSpecificationProvider,
         amount: i64,
@@ -190,28 +141,7 @@ impl LoanCommandDispatcher {
     // LOAN_CREATE — 参考文档 §2.1，Java `handleLoanCreate`（`:130-209`）
     // ====================================================================================
 
-    /// 开仓 Isolated 借贷。字段映射（参考文档 §2.1，逐字对齐 Java）：`cmd.symbol` = 现货
-    /// symbolId，`cmd.size` = collateralAmount（base scale），`cmd.price` = principal（quote
-    /// scale），`cmd.reserve_bid_price` = loanId，`cmd.user_cookie` 低字节 = rateMode
-    /// （`== RATE_MODE_FLOATING` sentinel 则 FLOATING，否则 LOCKED）。
-    ///
-    /// 校验顺序 cheap→expensive（逐条对应 Java `:141-176`）：spec 存在且
-    /// `type==CURRENCY_EXCHANGE_PAIR` → `LoanNotEnabled`；`loan_config.is_enabled()` →
-    /// `LoanNotEnabled`；`loanId` 未被占用 → `LoanAlreadyExists`；`principal>0 &&
-    /// collateralAmount>0` → `LoanInvalidAmount`；`maxAmount!=0 && principal>maxAmount` →
-    /// `LoanPrincipalExceedsLimit`；`markPrice>0` → `LoanMarkpriceNotReady`；LTV
-    /// `principal×10000 ≤ collateralValue×initialLtvBps` → `LoanLtvTooHigh`；自由抵押余额
-    /// `accounts−calculateLocked ≥ collateralAmount` → `LoanCollateralInsufficient`；池容量/
-    /// 利用率 → `LoanPoolInsufficient`/`LoanPoolUtilizationExceeded`。
-    ///
-    /// 成功后 disburse：`accounts[loanCurrency] += principal`；`loanPoolAvailable -=
-    /// principal`；`loanPoolBorrowed += principal`（[`LoanService::disburse_loan`]）。
-    ///
-    /// **事件缺口**：Java 版在此发 `LOAN_BORROW` 事件（`EventsHelper.sendLoanBorrowEvent`）。
-    /// 本仓库尚无 FundEvent/EventsHelper 风格的事件总线（现货/期货既有的 P1-P4 命令路径也从
-    /// 未发送任何此类事件，只做记账副作用），故本任务同样不发——账本状态（loan 记录 + 4 个
-    /// 资金桶 + accounts）已经是权威、可测试的真相源；下游若要接事件总线是后续任务的范围，
-    /// 这里不假装已经支持。
+    /// 开仓 Isolated 借贷（参考文档 §2.1，逐字对齐 Java `:141-176`）：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。`LOAN_BORROW` 事件不移植（无事件总线，同 P1-P4）。
     fn handle_loan_create(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,

@@ -1,19 +1,9 @@
-//! 对应 Java: exchange.core2.core.common.api.binary.BatchAddLoanCommand —— `ADD_LOAN` 运行时
-//! 配置命令的 DTO + 全部校验器（参考文档 §2.12）。三段（`global`/`symbol`/`rate_curve`）各自
-//! 独立可选、独立校验：一段非法只 `log.warn`（本移植无日志基建，调用方按返回值/文档约定自行
-//! 感知，见 `RiskEngine::apply_add_loan` 文档）并跳过，不影响另外两段。
-//!
-//! Java 原版还携带 Chronicle `BytesIn`/`BytesOut` 序列化（跨节点 binary command 帧）——本仓库
-//! 无该序列化基建（`grep BytesIn/BytesOut` 全仓库唯一命中在 journaling 模块，与本 DTO 无关），
-//! 故本移植只保留纯数据 + 纯校验，不做 marshalling；`RiskEngine::apply_add_loan` 直接接收
-//! `&BatchAddLoanCommand` 值本身（见该方法文档，routing 偏差的完整说明）。
+//! 对应 Java `BatchAddLoanCommand`（`ADD_LOAN` 配置命令 DTO+校验，参考文档 §2.12）：三段独立可选独立校验，一段非法跳过不影响另外两段；不移植 Chronicle 序列化。
 
 /// bps 满量程（100%）。对应 Java `BatchAddLoanCommand.BPS_FULL`。
 pub const BPS_FULL: i32 = 10_000;
 
-/// 对应 Java `BatchAddLoanCommand`：三段独立可选。至少一段非 `None`（Java 构造器校验此项；
-/// 本移植把该约束留给调用方——纯数据类型没有"非法状态不可构造"的构造器可拒绝，三段全
-/// `None` 时 `RiskEngine::apply_add_loan` 是纯 no-op，无害）。
+/// 对应 Java `BatchAddLoanCommand`：三段独立可选；三段全 `None` 时下游是纯 no-op。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BatchAddLoanCommand {
     pub global: Option<GlobalLoanConfig>,
@@ -25,9 +15,7 @@ pub struct BatchAddLoanCommand {
 // GlobalLoanConfig —— 参考文档 §2.12 第一段
 // ========================================================================
 
-/// 对应 Java `BatchAddLoanCommand.GlobalLoanConfig`：5 个 partial-update 字段（`<=0` = 不改，
-/// 两个字段是绝对赋值——`numeraireCurrency`/`crossLiquidationLtvBps`/`crossMarginCallLtvBps`
-/// 同样遵循 `<=0` 不改约定，见 Java `numeraireCurrency <= 0` 分支）。
+/// 对应 Java `BatchAddLoanCommand.GlobalLoanConfig`：partial-update 字段，`<=0` = 不改。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlobalLoanConfig {
     /// Cross 估值基准币；`<=0` = 不改。
@@ -47,11 +35,7 @@ pub struct GlobalLoanConfig {
 }
 
 impl GlobalLoanConfig {
-    /// 对应 Java `thresholdsValidGivenCurrent(int, int)`（`:199-209`）：apply-all-or-nothing
-    /// 校验——针对"应用本次更新之后"会生效的有效值（未提供的沿用调用方传入的当前值），而非
-    /// 本次更新携带的原始字段值本身。`loanPoolUtilizationCapBps`/`loanLiquidationFeeBps`/两个
-    /// 缓冲字段这 4 项则直接校验原始字段（它们没有"当前值"参数可比对——调用方若不改就传
-    /// `<=0`，此时该子式恒真，不卡校验）。
+    /// 对应 Java `thresholdsValidGivenCurrent(int, int)`（`:199-209`）：校验应用更新后生效的有效值（未提供的沿用当前值）。
     pub fn thresholds_valid_given_current(
         &self,
         current_cross_liquidation_ltv_bps: i32,
@@ -84,13 +68,10 @@ impl GlobalLoanConfig {
 /// `UNSET` 哨兵值：override 字段未指定，按 `resolve` 从全局缓冲派生/默认。对应 Java
 /// `SymbolLoanConfig.UNSET`。
 pub const UNSET: i32 = -1;
-/// `loan_max_amount`（`i64`）的 `UNSET` 哨兵值——Java 字段是 `long`，`UNSET` 字面量 `-1` 隐式转
-/// 宽；本移植字段类型不同，需要各自一份同值常量。
+/// `loan_max_amount`（`i64`）专用的 `UNSET` 哨兵值（类型不同于 `UNSET`）。
 pub const UNSET_AMOUNT: i64 = -1;
 
-/// 对应 Java `BatchAddLoanCommand.SymbolLoanConfig`：6 个 per-symbol override 字段（外加
-/// `collateral_weight_bps`，虽然落地时写到 base currency，而不是 symbol）。`UNSET`
-/// （`-1`/`UNSET_AMOUNT`）= 未指定该项，`resolve` 时从 `loanInitialLtvBps`/全局缓冲派生。
+/// 对应 Java `BatchAddLoanCommand.SymbolLoanConfig`：per-symbol override 字段；`UNSET` = 未指定，`resolve` 时派生。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SymbolLoanConfig {
     pub symbol_id: i32,
@@ -110,11 +91,7 @@ pub struct SymbolLoanConfig {
 }
 
 impl SymbolLoanConfig {
-    /// 对应 Java `resolve(int liqBufferBps, int mcBufferBps)`（`:283-290`）：把三个可能是
-    /// `UNSET` 的字段（`liquidation`/`marginCall`/`collateralWeight`）连同两个金额/期限字段
-    /// 一起填实成 [`Resolved`]。**注意派生顺序**：`marginCall` 的默认值依赖 `liq`（已派生后的
-    /// 值），不是 `loan_liquidation_ltv_bps` 的原始字段值——即便原始 `liquidation` 字段本身是
-    /// 显式指定的，`marginCall` 未指定时依然从"最终生效的 liquidation"倒推。
+    /// 对应 Java `resolve(int liqBufferBps, int mcBufferBps)`（`:283-290`）：把 `UNSET` 字段填实成 [`Resolved`]；`marginCall` 默认值依赖已派生的 `liq`，不是原始字段。
     pub fn resolve(&self, liq_buffer_bps: i32, mc_buffer_bps: i32) -> Resolved {
         let liq = if self.loan_liquidation_ltv_bps == UNSET {
             self.loan_initial_ltv_bps + liq_buffer_bps
@@ -152,13 +129,7 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    /// 对应 Java `Resolved.valid()`（`:269-274`）：`0 <= initial < 10000`；`initial>0` 时还要
-    /// `thresholds_valid`；`maxAmount`/`maxTermDays` 非负；**`collateralWeightBps ∈ [0,10000]`
-    /// ——这一条是 Task 5 遗留的前置义务的收口点**：`LoanService::cross_ltv_bps` 里对
-    /// `collateral_weight_bps` 做 `trunc_mul_div(valueInNum, weight, BPS_SCALE)` 且不做
-    /// overflow-checked（Task 5 报告记录：weight ∈ [0,10000] 时数学上不可达 panic，前提是
-    /// "当前没有任何命令能把它设到该区间外"）——`ADD_LOAN` 正是那个命令，所以这里必须严格挡住
-    /// 越界值，否则会让 Task 5 标记为"当前不可达"的 panic 变得可达。
+    /// 对应 Java `Resolved.valid()`（`:269-274`）：LTV/金额/期限范围校验；`collateralWeightBps ∈ [0,10000]` 是 `LoanService::cross_ltv_bps` 免 overflow-panic 的前置义务收口点。
     pub fn valid(&self) -> bool {
         self.initial_ltv_bps >= 0
             && self.initial_ltv_bps < BPS_FULL
@@ -183,8 +154,7 @@ fn thresholds_valid(initial: i32, margin_call: i32, liquidation: i32) -> bool {
 // RateCurveConfig —— 参考文档 §2.12 第三段
 // ========================================================================
 
-/// 对应 Java `BatchAddLoanCommand.RateCurveConfig`：5 个字段，存在即整体替换（无 partial-update
-/// ——`0` 是合法曲线值，不能借用 `<=0` 当"不改"哨兵）。
+/// 对应 Java `BatchAddLoanCommand.RateCurveConfig`：存在即整体替换（无 partial-update，`0` 是合法曲线值）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateCurveConfig {
     /// 零利用率基础利率。
@@ -200,8 +170,7 @@ pub struct RateCurveConfig {
 }
 
 impl RateCurveConfig {
-    /// 对应 Java `RateCurveConfig.valid()`（`:323-326`）：`base ∈ [0,10000)`、
-    /// `0 < kink < 10000`、`slope1/slope2 >= 0`；`locked_rate_adjust_bps` 无约束（可负）。
+    /// 对应 Java `RateCurveConfig.valid()`（`:323-326`）：`base ∈ [0,10000)`、`0 < kink < 10000`、`slope1/slope2 >= 0`。
     pub fn valid(&self) -> bool {
         self.base_bps >= 0
             && self.base_bps < BPS_FULL
@@ -366,9 +335,7 @@ mod tests {
         assert!(!symbol(1, 5_000, 8_000, 0, 0, -2, 5_000).resolve(0, 0).valid());
     }
 
-    /// **前置义务收口测试**：collateralWeightBps 越界（>10000 或 <0）必须被拒——这是 Task 5
-    /// `trunc_mul_div` overflow-panic "当前不可达" 论断成立的唯一前提，`ADD_LOAN` 是唯一能写这
-    /// 个字段的命令，必须在这里守住。
+    /// 前置义务收口测试：collateralWeightBps 越界（>10000 或 <0）必须被拒。
     #[test]
     fn resolved_valid_rejects_collateral_weight_out_of_bps_range() {
         assert!(!symbol(1, 5_000, 8_000, 0, 0, 0, BPS_FULL + 1).resolve(0, 0).valid());

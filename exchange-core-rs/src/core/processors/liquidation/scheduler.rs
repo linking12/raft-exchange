@@ -1,20 +1,9 @@
-//! 对应 Java: `exchange.core2.core.processors.liquidation.LiquidationScheduledService`（`LiquidationEngine`
-//! 的抽象父类里的定时器 harness 部分）+ `coveredByScanSlice` 静态切片函数。参考文档 §7、§11.4。
-//!
-//! # 移植偏差（Ruling P6-F）
-//! Java 用 `ScheduledExecutorService.scheduleWithFixedDelay` 起后台线程周期 tick；本移植（纯库、
-//! 无 server raft 集成）简化为**可手动 tick 的 harness**——[`LiquidationScheduler::run_one_iteration`]
-//! 由外部（server 侧定时器 / 测试）驱动，产出的命令进 [`LiquidationScheduler::pending_commands`]
-//! 队列（同 `liquidation_engine.rs` 的 submit→队列偏差），由 driver 排空喂回管线。`is_running`
-//! （leader 门）+ shard-0 门与 Java 契约一致；start/stop 的 raft leadership 接线在 exchange-core 外。
+//! 对应 Java `LiquidationScheduledService`（定时器 harness 部分）+ `coveredByScanSlice`，参考文档 §7、§11.4。
+//! 移植偏差（Ruling P6-F）：ScheduledExecutorService 简化为可手动 tick 的 harness，产出命令入 pending_commands 队列（同 submit→队列偏差），is_running/shard-0 门与 Java 契约一致。
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 
-/// 对应 Java `LiquidationScheduledService.coveredByScanSlice(cmd, uid)`（`:129-134`）：**静态、
-/// 期货 + 借贷扫描器共用**（§7.3）。非 `LIQUIDATION_SCAN` 或 `size<=0`（切片数无效 = 全扫，
-/// legacy/replay）恒 `true`；否则 `floorMod(uid, sliceCount) == scanSlice`（`cmd.size` = sliceCount，
-/// `cmd.uid` = scanSlice，见 §7.4 `ApiLiquidationScan` 映射）。`floorMod` 用 `rem_euclid`
-/// （= Java `Math.floorMod`，对负 uid 也返非负余数）。
+/// 对应 Java `LiquidationScheduledService.coveredByScanSlice(cmd, uid)`（`:129-134`）：非 SCAN 或 size<=0 恒 true，否则 `floorMod(uid, sliceCount)==scanSlice`（`rem_euclid` 对齐 Java `Math.floorMod`）。
 pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
         return true;
@@ -22,37 +11,29 @@ pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     uid.rem_euclid(cmd.size) == cmd.uid
 }
 
-/// 对应 Java `LiquidationScheduledService`（定时器 harness 部分）：shard-0-only 的强平扫描 tick。
-/// 只持有 leader-local 调度状态（`scan_tick`/切片数/reprice 周期/leader 门 + 提交队列），非复制
-/// ——切片选择虽由非确定的 tick 时钟产出，但**落进 `LIQUIDATION_SCAN.scan_slice` 命令字段经 raft
-/// 复制**，故所有副本看到同一切片（§7.2/§11.4）。
+/// 对应 Java `LiquidationScheduledService`（定时器 harness 部分）：shard-0-only 强平扫描 tick，非复制，切片经 `LIQUIDATION_SCAN` 命令字段 raft 复制（§7.2/§11.4）。
 #[derive(Debug)]
 pub struct LiquidationScheduler {
-    /// 本地递增 tick 计数（非复制）。切片号 = `scan_tick mod scan_slice_count`。
+    /// 本地递增 tick 计数（非复制）；切片号 = `scan_tick mod scan_slice_count`。
     pub scan_tick: i64,
-    /// 扫描切片总数（round-robin 把全体用户分成这么多片，每 tick 扫一片）。
+    /// 扫描切片总数（round-robin，每 tick 扫一片）。
     pub scan_slice_count: i64,
-    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`（loan 利率重定价，P5 §4.2）。
+    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`（P5 §4.2）。
     pub reprice_every_n_ticks: i64,
-    /// shard id：只有 shard 0 跑调度器（其提交的命令经 raft 到达所有 shard，§7.2）。
+    /// shard id：只有 shard 0 跑调度器（§7.2）。
     pub shard_id: i32,
-    /// leader 门（同 `LiquidationEngine::is_running`）：`false` 时 `run_one_iteration` no-op。
+    /// leader 门：`false` 时 `run_one_iteration` no-op。
     pub is_running: bool,
-    /// 提交队列（替代 Java disruptor `submit`）：`run_one_iteration` 产出的 `LIQUIDATION_SCAN`/
-    /// `REPRICE_LOAN_RATES` 命令，由 driver 排空喂回管线。
+    /// 提交队列（替代 Java disruptor `submit`）。
     pub pending_commands: Vec<OrderCommand>,
 }
 
 impl LiquidationScheduler {
-    /// `scan_slice_count`/`reprice_every_n_ticks` 对应 Java 系统属性默认（`raftexchange.liquidation
-    /// .scanSlices=10`、`raftexchange.loanReprice.everyNTicks=30`）；`shard_id`/`is_running` 由
-    /// server 侧按 raft leadership 设置（默认 shard 0、follower 起步）。
+    /// `scan_slice_count`/`reprice_every_n_ticks` 对应 Java 系统属性默认；`shard_id`/`is_running` 由 server 按 raft leadership 设置。
     pub fn new(scan_slice_count: i64, reprice_every_n_ticks: i64, shard_id: i32) -> Self {
         LiquidationScheduler {
             scan_tick: 0,
-            // 对应 Java 构造器 `LiquidationScheduledService.java:54` 的 `Math.max(1, ...)`：非正配置
-            // 归一为 1（= 每 tick reprice），而非"从不 reprice"。`scan_slice_count` 同理由
-            // `run_one_iteration` 里 `.max(1)` 兜底。
+            // 非正配置归一为 1（对齐 Java `Math.max(1,...)`），而非"从不 reprice"。
             scan_slice_count,
             reprice_every_n_ticks: reprice_every_n_ticks.max(1),
             shard_id,
@@ -61,13 +42,7 @@ impl LiquidationScheduler {
         }
     }
 
-    /// 对应 Java `runOneIteration`（`:57-67`）：**shard-0-only** 一次 tick——提交本片
-    /// `LIQUIDATION_SCAN`（`symbol=-1`、`uid=slice`、`size=sliceCount`，§7.4）；每
-    /// `reprice_every_n_ticks` 个 tick 额外提交一次 `REPRICE_LOAN_RATES`；`scan_tick++`。
-    /// `is_running=false`（follower）或非 shard 0 → no-op（不 tick、不提交）。
-    ///
-    /// `timestamp` 由调用方传入（server 侧定时器的复制时钟 / 测试固定值）——命令入队后经管线时
-    /// 用它做确定性的时间相关计算（同其它命令）。
+    /// 对应 Java `runOneIteration`（`:57-67`）：shard-0-only 一次 tick——提交本片 `LIQUIDATION_SCAN`，每 N tick 额外提交 `REPRICE_LOAN_RATES`，`scan_tick++`；follower 或非 shard 0 no-op。
     pub fn run_one_iteration(&mut self, timestamp: i64) {
         if !self.is_running || self.shard_id != 0 {
             return;

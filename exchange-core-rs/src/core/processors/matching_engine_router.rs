@@ -1,19 +1,5 @@
-//! ME（Matching Engine）路由：按 symbol 把命令分派到对应的 `OrderBookNaiveImpl`。
-//! 对应 Java: `exchange.core2.core.processors.MatchingEngineRouter`（329 行，`processOrder`/`processMatchingCommand`）
-//! + `orderbook/IOrderBook.processCommand`（静态分派，182–227 行）。
-//!
-//! # 范围裁剪（本移植阶段）
-//! Java `processOrder` 还处理 `IF_TAKEOVER`/`AUTO_DELEVERAGING`/`SETTLE_FUNDINGFEES`/
-//! `RESET_FEE`/`INTERNAL_TRANSFER`/`REPRICE_LOAN_RATES`/`BINARY_DATA_*`/`RESET`/`NOP`/
-//! `PERSIST_STATE_MATCHING`/`RECOVER_STATE_MATCHING` 等非撮合命令，以及跨分片
-//! `symbolForThisHandler` 分片过滤——本期单 shard、现货子集，这些命令未移植（`OrderCommandType`
-//! 枚举里也没有对应变体），故 `process_order` 只承担 Java `processMatchingCommand` +
-//! `IOrderBook.processCommand` 这一段：查 symbol→book、按 `cmd.command` 分派、写 `cmd.result_code`。
-//!
-//! # R1 门（对照 Java `IOrderBook.processCommand` 192–199 行）
-//! `PlaceOrder` 只有在 `cmd.result_code == Some(ValidForMatchingEngine)`（R1 放行）时才真正
-//! 调 `book.new_order`；否则原样保留 R1 写下的 `result_code`（Java: `return cmd.resultCode; // no change`），
-//! ME 绝不覆盖 R1 的拒绝结果。
+//! ME（Matching Engine）路由：按 symbol 分派到 `OrderBookNaiveImpl`，对应 Java `MatchingEngineRouter` +
+//! `IOrderBook.processCommand`（`:182-227`）；R1 门：只有 `ValidForMatchingEngine` 才真正撮合，否则保留 R1 结果不覆盖。
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -23,8 +9,7 @@ use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
-/// 对应 Java `MatchingEngineRouter`（现货子集：只保留 symbol→book 路由 + 撮合分派，
-/// 序列化/对象池/分片/二进制命令等本期不移植）。
+/// 对应 Java `MatchingEngineRouter`（现货子集，只保留 symbol→book 路由 + 撮合分派）。
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct MatchingEngineRouter {
     books: BTreeMap<i32, OrderBookNaiveImpl>,
@@ -35,49 +20,14 @@ impl MatchingEngineRouter {
         MatchingEngineRouter { books: BTreeMap::new() }
     }
 
-    /// 对应 Java `MatchingEngineRouter.addSymbol`（276–289 行，现货子集：略去
-    /// `cfgMarginTradingEnabled` 校验与重复添加告警——重复 add 直接忽略，保持幂等）。
+    /// 对应 Java `MatchingEngineRouter.addSymbol`（`:276-289`，现货子集，重复 add 幂等忽略）。
     pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
-        // 用 `with_symbol_spec` 注入真实 spec，令 `move_order` 的现货 BID 风控（`OrderBookNaiveImpl
-        // .java:495-497`）在生产路径生效（`new()`/`Default` 的 `symbol_spec=None` 只用于差分对拍）。
-        // 幂等：已存在则保留原簿（对齐 Java `addSymbol` 忽略重复添加）。
+        // 幂等：已存在则保留原簿；用 with_symbol_spec 注入真实 spec 供 move_order 现货 BID 风控用。
         self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookNaiveImpl::with_symbol_spec(spec.clone()));
     }
 
-    /// 对应 Java `MatchingEngineRouter.processMatchingCommand`（291–312 行）
-    /// + `IOrderBook.processCommand`（176–227 行）。写 `cmd.result_code` 并返回同一个值。
-    ///
-    /// # 非交易命令 no-op 守卫（管线结构对齐 Java 之后新增）
-    /// `ExchangeCore::process_command` 重构后，所有命令都依次流过 R1→ME→R2（对齐 Java 全命令
-    /// 过 disruptor 三阶段的结构），非交易命令（`AddUser`/`BalanceAdjustment` 等）也会流经这里。
-    /// 非交易命令的 `cmd.symbol` 语义不是 symbol id（例如 `BalanceAdjustment` 是币种 id），若不
-    /// 提前拦截，下面 `self.books.get_mut(&cmd.symbol)` 会用错误的键去查 book——大概率查不到，
-    /// 命中 `MATCHING_INVALID_ORDER_BOOK_ID` 分支，**覆盖掉 R1 已经写好的正确 `result_code`**
-    /// （即使凑巧命中某个 symbol id 相同的 book，也会做一次无意义甚至有害的撮合尝试）。因此在
-    /// 最前面显式短路：不查 book、不碰 `cmd.result_code`，原样保留 R1（`preProcessCommand`）写
-    /// 下的结果——对应 Java `MatchingEngineRouter` 里非订单类命令根本不会被路由到这里的效果。
-    ///
-    /// # P5 借贷命令 no-op 守卫（Task 4 新增，对照 Java `MatchingEngineRouter`（`:204-212`）的
-    /// **allowlist** 结构）
-    /// Java 的 ME 用一张允许表（`MOVE_ORDER`/`CANCEL_ORDER`/`PLACE_ORDER`/`FORCE_LIQUIDATION`/
-    /// `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`/`REDUCE_ORDER`/`CLOSE_POSITION`/
-    /// `ORDER_BOOK_REQUEST`）决定哪些命令才路由到 `processMatchingCommand`——`is_loan()` 覆盖的
-    /// 14 码里只有两个强平码在表内，其余 12 个（Isolated/Cross 生命周期命令 + POOL/IF 运营命令）
-    /// 从不经过 order book。本文件原先只按 `is_non_trading()` 短路（denylist 结构：P1-P4 现货/
-    /// 期货子集下"非非交易命令即路由到 book"这条隐含前提一直成立），P5 引入 `is_loan()` 后该
-    /// 前提被打破——若不显式短路，`LOAN_CREATE` 等命令的 `cmd.symbol`（现货 symbolId）大概率
-    /// 命中一个真实存在的 book，落进下面的 `_ => MatchingUnsupportedCommand` 分支，**覆盖掉 R1
-    /// （`LoanCommandDispatcher`）已经写好的正确 `result_code`**。因此追加一条并列短路：
-    /// `is_loan()` 且非两个强平码 → 同样原样保留 R1 结果、不查 book。
-    ///
-    /// # 两个强平码的真正路由（Task 7 落地）
-    /// `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE` 不在上面的 no-op 短路里——它们的 R1
-    /// （`LoanCommandDispatcher::handle_loan_force_liquidate`/`handle_loan_cross_force_liquidate`）
-    /// 已把 `cmd.action=ASK, cmd.order_type=IOC` 并返回 `ValidForMatchingEngine`，需要真正流进
-    /// order book 撮合，故在下面的 `match cmd.command` 里与 `PlaceOrder | ClosePosition` 共用同一
-    /// 分支（`book.new_order(cmd)`——ME 对撮合无感，只看 `cmd.action`/`cmd.order_type`/`cmd.price`/
-    /// `cmd.size` 这些通用字段，不关心具体是哪个命令码触发的下单，同 `ClosePosition` 复用同一分支
-    /// 的先例）。
+    /// 对应 Java `MatchingEngineRouter.processMatchingCommand`（`:291-312`）+ `IOrderBook.processCommand`
+    /// （`:176-227`）；非交易命令与借贷生命周期命令（两强平码除外）原样短路保留 R1 结果（Java allowlist `:204-212`）。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         if cmd.command.is_non_trading()
             || (cmd.command.is_loan()
@@ -88,7 +38,7 @@ impl MatchingEngineRouter {
         }
 
         let Some(book) = self.books.get_mut(&cmd.symbol) else {
-            // 对应 Java: `orderBook == null` → `MATCHING_INVALID_ORDER_BOOK_ID`（-3005）。
+            // 对应 Java `orderBook == null` → MATCHING_INVALID_ORDER_BOOK_ID（-3005）。
             let rc = CommandResultCode::MatchingInvalidOrderBookId;
             cmd.result_code = Some(rc);
             return rc;
@@ -103,31 +53,17 @@ impl MatchingEngineRouter {
             | OrderCommandType::ForceLiquidation
             | OrderCommandType::LoanForceLiquidate
             | OrderCommandType::LoanCrossForceLiquidate => {
-                // 对应 Java `IOrderBook.processCommand`（`:191-199`）：`PLACE_ORDER` 与
-                // `CLOSE_POSITION`（P4 期货纯减仓命令）共用同一分支——`newOrder` 本身不区分二者，
-                // 差异全在 R1（`RiskEngine::place_order`/`close_position_risk_check` 各自算好
-                // `cmd.size`/`action`/`leverage`/`margin_mode` 再放行）与撮合是否触发 R2 期货结算
-                // （`handler_risk_release` 按 `spec.symbol_type` 分支，不看 `cmd.command`）。
-                // Task 7：两个强平码同理并入——R1（`LoanCommandDispatcher`）已算好
-                // `action=ASK/order_type=IOC`，`new_order` 只管撮合，不关心命令码。
-                // P6 Task 2：`ForceLiquidation`（期货强平，R1 由 P6 后续任务的强平流程算好
-                // `action`/`order_type`/`price`/`size` 再放行）同理并入——此前遗漏在这个 allowlist
-                // 里，落到下面的 `_ => MatchingUnsupportedCommand` 通配分支，覆盖掉 R1 已经写好的
-                // `ValidForMatchingEngine`（与 P4 Task 7 修复过的 `ClosePosition` 同一类 bug，
-                // Java `MatchingEngineRouter.java:206-214` 的 `FORCE_LIQUIDATION` 从来就在这张
-                // allowlist 里，只是 Rust 移植时的直接遗漏，非设计分歧）。
+                // PlaceOrder/ClosePosition/两强平码/ForceLiquidation 共用 new_order 分支（Java allowlist `:206-214`）。
                 if cmd.result_code == Some(CommandResultCode::ValidForMatchingEngine) {
-                    // new_order 内部已经写 cmd.result_code（P1 收尾修复），此处直接透传其返回值。
+                    // new_order 内部已写 cmd.result_code，此处透传其返回值。
                     book.new_order(cmd)
                 } else {
-                    // 对应 Java: `return cmd.resultCode; // no change` —— R1 拒绝的命令，ME 不撮合、
-                    // 不覆盖 result_code。
+                    // 对应 Java `return cmd.resultCode; // no change`：R1 拒绝的命令不撮合、不覆盖。
                     return cmd.result_code.unwrap_or(CommandResultCode::MatchingUnsupportedCommand);
                 }
             }
             OrderCommandType::OrderBookRequest => {
-                // 对应 Java: `int size = (int) cmd.size; ... size >= 0 ? size : Integer.MAX_VALUE`
-                // （`(int) cmd.size` 是窄化截断，`as i32` 语义一致）。
+                // 对应 Java `(int) cmd.size` 窄化截断，`size >= 0 ? size : Integer.MAX_VALUE`。
                 let size = cmd.size as i32;
                 let size = if size >= 0 { size } else { i32::MAX };
                 cmd.market_data = Some(book.fill_l2(size));
@@ -277,12 +213,7 @@ mod tests {
         assert_eq!(md.bid_volumes, vec![10]);
     }
 
-    // --------------------------------------------------------------------------
-    // P4 Task 7：ClosePosition 与 PlaceOrder 共用 newOrder 分支（对应 Java
-    // `IOrderBook.processCommand:191-199`）——ME 对撮合无感，只看 `cmd.result_code` 是否已被
-    // R1 放行。回归此前遗漏（`ClosePosition` 落在 `_ => MatchingUnsupportedCommand`，会覆盖 R1
-    // 已经写好的 `ValidForMatchingEngine`/`Success` 之外的结果）。
-    // --------------------------------------------------------------------------
+    // ClosePosition 与 PlaceOrder 共用 newOrder 分支的回归测试（对应 Java `IOrderBook.processCommand:191-199`）。
 
     fn close_position_cmd(order_id: i64, symbol: i32, result_code: CommandResultCode) -> OrderCommand {
         OrderCommand {
@@ -326,8 +257,7 @@ mod tests {
         let mut router = MatchingEngineRouter::new();
         router.add_symbol(&spec(1));
 
-        // R1 拒绝（如 UnsupportedSymbolType）：ME 不应撮合/挂簿，也不应覆盖成
-        // MatchingUnsupportedCommand。
+        // R1 拒绝（如 UnsupportedSymbolType）：ME 不应撮合/挂簿，也不应覆盖成 MatchingUnsupportedCommand。
         let mut close = close_position_cmd(1, 1, CommandResultCode::UnsupportedSymbolType);
         let rc = router.process_order(&mut close);
         assert_eq!(rc, CommandResultCode::UnsupportedSymbolType);
@@ -344,13 +274,7 @@ mod tests {
         assert!(md.ask_prices.is_empty());
     }
 
-    // --------------------------------------------------------------------------
-    // P6 Task 2：ForceLiquidation 与 PlaceOrder/ClosePosition 共用 newOrder 分支（对应 Java
-    // `IOrderBook.processCommand:191-199` + `MatchingEngineRouter.java:206-214`）。回归此前遗漏
-    // （`ForceLiquidation` 落在 `_ => MatchingUnsupportedCommand`，会覆盖 R1 已经写好的
-    // `ValidForMatchingEngine`）——同一类 bug、同一种修复手法，已在 P4 Task 7 为 `ClosePosition`
-    // 修过一次。
-    // --------------------------------------------------------------------------
+    // ForceLiquidation 与 PlaceOrder/ClosePosition 共用 newOrder 分支的回归测试（Java `MatchingEngineRouter.java:206-214`）。
 
     fn force_liquidation_cmd(order_id: i64, symbol: i32, result_code: CommandResultCode) -> OrderCommand {
         OrderCommand {
@@ -394,8 +318,7 @@ mod tests {
         let mut router = MatchingEngineRouter::new();
         router.add_symbol(&spec(1));
 
-        // R1 拒绝：ME 不应撮合/挂簿，也不应把结果覆盖成 MatchingUnsupportedCommand——修复前的
-        // bug 正是这里：ForceLiquidation 落进通配分支，无论 R1 结果是什么都会被覆盖。
+        // R1 拒绝：ME 不应撮合/挂簿，也不应把结果覆盖成 MatchingUnsupportedCommand。
         let mut force = force_liquidation_cmd(1, 1, CommandResultCode::UnsupportedSymbolType);
         let rc = router.process_order(&mut force);
         assert_eq!(rc, CommandResultCode::UnsupportedSymbolType);

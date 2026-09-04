@@ -1,19 +1,11 @@
-//! 对应 Java: exchange.core2.core.common.CoreSymbolSpecification
-//! （现货子集 + P4 Task 1 期货保证金字段扩展：symbolId/type/base+quote currency/
-//! base+quoteScaleK/taker+makerFee/feeScaleK + initMargin/maintenanceMargin/maxLeverage；
-//! loan 相关字段本期不移植）。
+//! 对应 Java `CoreSymbolSpecification`（现货子集 + P4 期货保证金字段扩展）。
 use std::collections::BTreeMap;
 
 use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{ceil_mul_div, trunc_mul_div};
 
-/// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。
-///
-/// Ruling P4-B：`#[derive(Default)]` 让新增的期货字段（`init_margin` 等）在所有既有 P1-P3
-/// 构造点上零值兜底——spot symbol 不填这些字段即代表"未配置期货保证金"（`calculate_init_margin`
-/// /`calculate_maintenance_margin`/`is_valid_leverage` 在字段为 0/空表时的行为分别是：
-/// 100% 初始保证金率、100% 维持保证金率、不限杠杆上限）。
+/// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。Ruling P4-B：`#[derive(Default)]` 零值兜底 = 未配置期货保证金（100%初始/维持保证金率、不限杠杆）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoreSymbolSpecification {
     pub symbol_id: i32,
@@ -25,11 +17,7 @@ pub struct CoreSymbolSpecification {
     pub taker_fee: i64,
     pub maker_fee: i64,
     pub fee_scale_k: i64,
-    /// 对应 Java `CoreSymbolSpecification.liquidationFee`：强平费率（fee_scale_k==0 时为固定
-    /// 费 size×liquidation_fee，否则按比例，语义/scale 与 taker_fee/maker_fee 一致）。P6 Task 1
-    /// 新增——`SymbolPositionRecord::calculate_bankruptcy_price` 与
-    /// `core_arithmetic_utils::calculate_liquidation_fee` 消费；P1-P5 既有构造点全部走
-    /// `..Default::default()`，零值即"未配置强平费"，不影响既有行为。
+    /// 对应 Java `liquidationFee`：强平费率（fee_scale_k==0 为固定费）。P6 新增，零值=未配置。
     pub liquidation_fee: i64,
 
     // ================================================================
@@ -46,10 +34,7 @@ pub struct CoreSymbolSpecification {
     // ================================================================
     // 现货借贷（P5）：type=CURRENCY_EXCHANGE_PAIR only；非现货 symbol 全 0/禁用
     // ================================================================
-    /// 对应 Java `CoreSymbolSpecification.loanConfig`：非空、默认全 0（禁用）。
-    /// 唯一 mutation point 是 `ADD_LOAN`（本移植 Task 2.12，未落地）经
-    /// `update_loan_config`（Java `:240-244`，本 Task 未移植该薄包装，直接改
-    /// `loan_config.update(...)`）。
+    /// 对应 Java `loanConfig`：默认全 0（禁用）；唯一 mutation point 是 `ADD_LOAN`。
     pub loan_config: SymbolLoanSpecification,
 }
 
@@ -59,10 +44,7 @@ impl CoreSymbolSpecification {
         self.fee_scale_k == 0
     }
 
-    /// 对应 Java `calculateInitMargin(long notional, long leverage)`（`:135-141`）：
-    /// 初始保证金 = 名义价值 × 初始保证金率 / 杠杆。
-    /// `init_margin_scale_k == 0 || init_margin == 0`（未配置）时按 100% 初始保证金率处理，
-    /// 即 `notional / leverage`；否则 `ceil(notional × init_margin / (init_margin_scale_k × leverage))`。
+    /// 对应 Java `calculateInitMargin(long, long)`（`:135-141`）：未配置时 `notional/leverage`，否则 `ceil(notional×init_margin/(scaleK×leverage))`。
     pub fn calculate_init_margin(&self, notional: i64, leverage: i64) -> i64 {
         if self.init_margin_scale_k == 0 || self.init_margin == 0 {
             return notional / leverage;
@@ -74,10 +56,7 @@ impl CoreSymbolSpecification {
         ceil_mul_div(notional, self.init_margin, denom)
     }
 
-    /// 对应 Java `calculateMaintenanceMargin(long notional)`（`:150-174`）：维持保证金 =
-    /// 各分档段 seg × MMR_seg / scaleK 之和。`maintenance_margin` 以 (floor, MMR) 分档存表，
-    /// 仓位跨档时逐段累加；notional 小于最小 floor 时用最小档 rate 整段兜底；表空或
-    /// `scaleK == 0` 时按 100% 返回 notional。
+    /// 对应 Java `calculateMaintenanceMargin(long)`（`:150-174`）：按 (floor, MMR) 分档逐段累加；表空/scaleK==0 时返回 notional。
     pub fn calculate_maintenance_margin(&self, notional: i64) -> i64 {
         if self.maintenance_margin_scale_k == 0 || self.maintenance_margin.is_empty() {
             return notional;
@@ -102,9 +81,7 @@ impl CoreSymbolSpecification {
         mm + trunc_mul_div(notional - prev_floor, prev_rate, self.maintenance_margin_scale_k)
     }
 
-    /// 对应 Java `isValidLeverage(long notional, int leverage)`（`:118-130`）：
-    /// 负杠杆一律非法；`max_leverage` 未配档（空表）时不限上限；否则按 notional 做 floor 分档
-    /// 查表，`leverage <= max_leverage_value` 才合法。
+    /// 对应 Java `isValidLeverage(long, int)`（`:118-130`）：负杠杆非法；空表不限上限；否则按 floor 分档查表。
     pub fn is_valid_leverage(&self, notional: i64, leverage: i32) -> bool {
         if leverage < 0 {
             return false;
@@ -118,10 +95,7 @@ impl CoreSymbolSpecification {
         }
     }
 
-    /// 对应 Java `getFloorValueInSortedMap`：`headMap(key)`（**严格小于** `key`，不含 `key`
-    /// 本身）非空时取其最大 key 对应的值；为空（`key` 小于等于表中最小 floor）时退化取表中
-    /// 最小 floor 的值。注意 `key` 恰好等于某个 floor 时也走"严格小于"分支——逐字对齐 Java
-    /// 原始实现（非"标准 `<=` floor 查找"，是 Java 既有行为，不做"修正"）。
+    /// 对应 Java `getFloorValueInSortedMap`：`headMap(key)`（严格小于 key）非空取最大 key 的值，为空则退化取最小 floor 的值（逐字对齐 Java 非直觉边界行为）。
     fn floor_value(map: &BTreeMap<i64, i64>, key: i64) -> Option<i64> {
         match map.range(..key).next_back() {
             Some((_, &v)) => Some(v),
@@ -234,18 +208,7 @@ mod tests {
         spec.maintenance_margin_scale_k = 10_000;
         spec.maintenance_margin.insert(50_000, 50); // tier1 rate 0.5%
         spec.maintenance_margin.insert(200_000, 100); // tier2 rate 1%
-        // Java 循环体在算完某个 floor 对应的 segment 之后，才把 `prevRate` 更新成该 floor 自己
-        // 的 rate（供下一轮使用）——即每一档的 rate 实际生效区间是 `[本档 floor, 下一档 floor]`，
-        // 比配置表面上看起来的"到本档 floor 为止"晚一档兑现（首段 `[0, firstFloor]` 例外，直接
-        // 用 `firstRate` 兜底，故首段与第二段恰好用了同一个 rate）。逐字对齐 Java `:150-174`
-        // 循环体，不是"修正"过的直觉分档语义。
-        //
-        // notional=100_000 逐步推演：
-        //   entry(50_000,50): seg=min(100_000,50_000)-0=50_000, mm+=trunc(50_000*50/10_000)=250;
-        //                      100_000>50_000 继续；prevFloor=50_000, prevRate=50（本档 rate）
-        //   entry(200_000,100): seg=min(100_000,200_000)-50_000=50_000,
-        //                      mm+=trunc(50_000*prevRate(50，非 100)/10_000)=250 -> mm=500；
-        //                      100_000<=200_000 -> return 500
+        // 每档 rate 生效区间比配置表面晚一档兑现（逐字对齐 Java `:150-174` 循环体）。
         assert_eq!(spec.calculate_maintenance_margin(100_000), 500);
     }
 
@@ -255,14 +218,7 @@ mod tests {
         spec.maintenance_margin_scale_k = 10_000;
         spec.maintenance_margin.insert(50_000, 50);
         spec.maintenance_margin.insert(200_000, 100);
-        // notional=300_000 逐步推演（同上"rate 晚一档兑现"规则）：
-        //   entry(50_000,50): seg=50_000-0=50_000, mm+=trunc(50_000*50/10_000)=250;
-        //                      prevFloor=50_000, prevRate=50
-        //   entry(200_000,100): seg=min(300_000,200_000)-50_000=150_000,
-        //                      mm+=trunc(150_000*50/10_000)=750 -> mm=1000（仍用上一档 rate=50）；
-        //                      300_000>200_000 继续；prevFloor=200_000, prevRate=100（本档 rate，
-        //                      循环无更多 entry，留给收尾段用）
-        //   收尾：mm + trunc(300_000-200_000, 100, 10_000) = 1000 + 1000 = 2000
+        // 超出最后一档，收尾段用最后一档 rate（同上"晚一档兑现"规则）。
         assert_eq!(spec.calculate_maintenance_margin(300_000), 2000);
     }
 
@@ -293,8 +249,7 @@ mod tests {
         assert!(spec.is_valid_leverage(10_000, 125));
         assert!(!spec.is_valid_leverage(10_000, 126));
 
-        // notional==50_000 恰好等于某 floor：走"严格小于" -> headMap(50_000)={0} -> 125（非
-        // 50_000 档的 50，逐字对齐 Java 非直觉的边界行为）
+        // notional==floor 恰好等于某档：走"严格小于"，逐字对齐 Java 非直觉边界行为。
         assert!(spec.is_valid_leverage(50_000, 125));
 
         // notional=50_001: headMap={0,50_000} -> lastKey=50_000 -> maxLeverage=50

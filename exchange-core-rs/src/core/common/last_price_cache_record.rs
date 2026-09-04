@@ -1,12 +1,4 @@
-//! 对应 Java: exchange.core2.core.processors.LastPriceCacheRecord。
-//!
-//! 每 symbol 的最新价快照，进 raft snapshot、参与 state hash。markPrice 按 symbol 类型分两个
-//! 来源：**期货**由 `MARKPRICE_ADJUSTMENT` 外部喂入（指数价）；**现货**价格本就是本所撮合出来
-//! 的，没有外部喂价方，故由 [`apply_trade_price`] 用成交价维护。
-//!
-//! Java 字段名 `markPrice`/`markPriceTs`；本移植按 Task 1 brief 措辞改名为 `last_price`/
-//! `last_price_ts`，语义与取值逐字对齐 Java（未改变字段数量：`markPriceTs` 是
-//! `apply_trade_price` 15s 窗口混合公式的必要状态，Java 原文件同样持有它）。
+//! 对应 Java `LastPriceCacheRecord`：每 symbol 最新价快照，进 raft snapshot、参与 state hash；期货由外部喂价，现货由 [`apply_trade_price`] 维护。Java `markPrice`/`markPriceTs` 本移植改名 `last_price`/`last_price_ts`。
 
 /// 对应 Java `LastPriceCacheRecord.WINDOW_MS`：15 秒滑动混合窗口。
 pub const WINDOW_MS: i64 = 15_000;
@@ -15,33 +7,24 @@ pub const WINDOW_MS: i64 = 15_000;
 pub struct LastPriceCacheRecord {
     pub ask_price: i64,
     pub bid_price: i64,
-    /// 对应 Java `markPrice`：期货由外部喂价（`MARKPRICE_ADJUSTMENT`），现货由
-    /// [`apply_trade_price`] 用成交价滑动混合维护。
+    /// 对应 Java `markPrice`：期货由外部喂价，现货由 [`apply_trade_price`] 滑动混合维护。
     pub last_price: i64,
-    /// 对应 Java `markPriceTs`：`last_price` 最近一次更新的时间戳，[`apply_trade_price`]
-    /// 混合公式据此计算窗口内的时间占比。
+    /// 对应 Java `markPriceTs`：`last_price` 最近一次更新的时间戳。
     pub last_price_ts: i64,
 }
 
 impl LastPriceCacheRecord {
-    /// 对应 Java `LastPriceCacheRecord()` 无参构造：`askPrice=Long.MAX_VALUE, bidPrice=0,
-    /// markPrice=0, markPriceTs=0`。
+    /// 对应 Java 无参构造：`askPrice=MAX_VALUE, bidPrice=0, markPrice=0, markPriceTs=0`。
     pub fn new() -> Self {
         LastPriceCacheRecord { ask_price: i64::MAX, bid_price: 0, last_price: 0, last_price_ts: 0 }
     }
 
-    /// 对应 Java `LastPriceCacheRecord(long askPrice, long bidPrice, long markPrice)`：
-    /// `markPriceTs` 缺省 0。
+    /// 对应 Java `LastPriceCacheRecord(long, long, long)`：`markPriceTs` 缺省 0。
     pub fn with_prices(ask_price: i64, bid_price: i64, last_price: i64) -> Self {
         LastPriceCacheRecord { ask_price, bid_price, last_price, last_price_ts: 0 }
     }
 
-    /// 对应 Java `applyTradePrice(long ts, long price)`：用成交价滑动混合维护
-    /// `markPrice`（现货专用；期货走外部 `MARKPRICE_ADJUSTMENT`，不调用本方法）。
-    ///
-    /// - `price <= 0` 或 `ts <= last_price_ts`（过期/非法输入）：no-op。
-    /// - 首次生效（`last_price <= 0`）或时间跨度 `dt >= WINDOW_MS`：直接采纳新成交价。
-    /// - 否则按窗口内时间占比线性混合：`(last_price*(WINDOW_MS-dt) + price*dt) / WINDOW_MS`。
+    /// 对应 Java `applyTradePrice(long, long)`：现货专用，成交价滑动混合维护 `markPrice`；过期/非法输入 no-op，首次或超窗口直接采纳，否则按时间占比线性混合。
     pub fn apply_trade_price(&mut self, ts: i64, price: i64) {
         if price <= 0 || ts <= self.last_price_ts {
             return;
@@ -55,9 +38,7 @@ impl LastPriceCacheRecord {
         self.last_price_ts = ts;
     }
 
-    /// 确定性状态 hash，风格对齐 `UserProfile::state_hash`（`h=h*31+field` 滚动折叠）。
-    /// 对应 Java `stateHash()`（`Objects.hash(askPrice, bidPrice, markPrice, markPriceTs)`）；
-    /// 不保证与 Java 数值相等，只保证「同状态 -> 同 hash，不同状态 -> 不同 hash」。
+    /// 对应 Java `stateHash()`，风格对齐 `UserProfile::state_hash`；不保证与 Java 数值相等，仅保证同态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.ask_price);
@@ -120,8 +101,7 @@ mod tests {
     #[test]
     fn apply_trade_price_blends_within_window() {
         let mut r = LastPriceCacheRecord::new();
-        // ts=0 恰好等于默认 last_price_ts=0，命中 `ts<=last_price_ts` 直接 no-op（Java 原始
-        // 行为：首次生效必须用 ts>0），故起始 tick 用 ts=1。
+        // ts=0 会命中默认 last_price_ts=0 的 no-op 分支，故起始 tick 用 ts=1。
         r.apply_trade_price(1, 100);
         // dt=5000 < WINDOW_MS=15000: (100*(15000-5000) + 200*5000) / 15000 = (1_000_000+1_000_000)/15000=133
         r.apply_trade_price(5_001, 200);

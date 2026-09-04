@@ -1,18 +1,4 @@
-//! P3 Task 11：端到端现货场景 + 守恒 proptest。
-//!
-//! 对应设计文档 §7（"不变量……另用 proptest 随机命令流兜底"）与参考文档 §6（现货守恒不变式）。
-//! 核心断言（参考文档 §6 第 2 条，`fees`/`adjustments` 均计入）：
-//!
-//! ```text
-//! ∀ currency: Σ_users accounts[cur] + adjustments[cur] + fees[cur] == 0
-//! ```
-//!
-//! 播种阶段用 `balance_adjustment` 充值——每笔充值都会把等额反向记入 `adjustments`
-//! （`accounts[cur] += amount; adjustments[cur] -= amount`），所以上式在播种后立即成立，
-//! 之后任何交易命令（下单/撮合/撤单/减量）都只在 `accounts`/`exchange_locked`/`fees` 之间
-//! 转移价值，不创造/销毁总量，故该式应对**每一步**都恒成立。
-//!
-//! 本文件只做只读断言 + 通过 `ExchangeApi` 驱动命令，不新增任何生产接口。
+//! P3 Task 11：端到端现货场景 + 守恒 proptest（设计文档 §7 / 参考文档 §6 守恒不变式：Σ_users accounts+adjustments+fees == 0，每步恒成立）。
 
 use proptest::prelude::*;
 
@@ -28,11 +14,7 @@ const BASE: i32 = 1;
 const QUOTE: i32 = 2;
 const SYMBOL: i32 = 100;
 
-/// 全局守恒断言（参考文档 §6）：对 `ssp` 里注册过的**每个 currency**，
-/// `Σ_users accounts[cur] + adjustments[cur] + fees[cur] == 0`。
-///
-/// 用 `api.ssp().currencies.keys()` 拿到 currency 全集（而非硬编码 BASE/QUOTE），这样
-/// proptest 场景即便将来扩展多币种也不需要改这个 helper。
+/// 全局守恒断言（参考文档 §6）：对每个已注册 currency 校验 Σ_users accounts+adjustments+fees == 0。
 fn assert_global_conservation(api: &ExchangeApi) {
     for &cur in api.ssp().currencies.keys() {
         let user_sum: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -46,8 +28,7 @@ fn assert_global_conservation(api: &ExchangeApi) {
     }
 }
 
-/// `accounts` 恒非负（参考文档 §6 第 1 条的必要条件之一）：结算永远不会把用户的真实余额
-/// 打成负数——这条对固定费/比例费symbol都严格成立，跟下面 `exchange_locked` 的情况不同。
+/// `accounts` 恒非负（参考文档 §6 第 1 条）：固定费/比例费 symbol 均严格成立。
 fn assert_accounts_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &bal) in &p.accounts {
@@ -56,13 +37,7 @@ fn assert_accounts_non_negative(api: &ExchangeApi) {
     }
 }
 
-/// `exchange_locked` 恒非负。**注意**：这条对固定费 symbol 严格成立（费用精确无 ceiling），
-/// 但对比例费 symbol 不是 Java 参考实现真正保证的不变式——一笔比例费 BID 挂单如果跨 ≥2 次
-/// 独立事件释放冻结，ceiling 的超可加性会让释放总额超过冻结额，把 `exchange_locked` 打成
-/// 负数（Java `RiskEngine.handleMatcherEventsExchangeSell` ~1154-1163 /
-/// `handleMatcherRejectReduceEventExchange` ~1094-1120，`CoreArithmeticUtils.calculateAmountBidTakerFee`
-/// 96-101 行同源同构）。详见文件末尾 `characterization_proportional_fee_bid_multi_release_matches_java_negative_lock`。
-/// 因此调用方（尤其是 proptest）必须只在 `fixed_fee` 分支下调用这条检查。
+/// `exchange_locked` 恒非负：固定费严格成立，比例费下因 ceiling 超可加性会合式变负（Java `RiskEngine.handleMatcherEventsExchangeSell` ~1154-1163 / `handleMatcherRejectReduceEventExchange` ~1094-1120，`CoreArithmeticUtils.calculateAmountBidTakerFee` 96-101 行同构缺陷，详见文件末尾 characterization 测试），调用方须只在 `fixed_fee` 分支调用本检查。
 fn assert_locked_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &locked) in &p.exchange_locked {
@@ -71,24 +46,19 @@ fn assert_locked_non_negative(api: &ExchangeApi) {
     }
 }
 
-/// 每用户每币不变式：`accounts` 恒非负（严格）+ `exchange_locked` 恒非负（仅在调用方确定
-/// 不会触发上面提到的比例费超可加性缺陷时才应该调用，例如下面 5 个场景测试——它们要么用固定费，
-/// 要么比例费场景刻意只走单次释放路径）。
+/// 每用户每币不变式：accounts 非负 + exchange_locked 非负（仅调用方确定不会触发比例费超可加性缺陷时用，如下面 5 个场景测试）。
 fn assert_no_negative_balances(api: &ExchangeApi) {
     assert_accounts_non_negative(api);
     assert_locked_non_negative(api);
 }
 
-/// 每步断言的复合 helper：守恒 + 非负，5 个场景测试里每条命令后都调用一次。
-/// **不用于 proptest**——proptest 的比例费分支可能合式地触发 `exchange_locked` 变负
-/// （见 `assert_locked_non_negative` 的文档），proptest 改用下面的 `assert_invariants_gated`。
+/// 每步断言的复合 helper：守恒 + 非负，5 个场景测试每条命令后调用；不用于 proptest（改用下面 `assert_invariants_gated`）。
 fn assert_invariants(api: &ExchangeApi) {
     assert_global_conservation(api);
     assert_no_negative_balances(api);
 }
 
-/// proptest 专用的不变式 helper：真实守恒 + accounts 非负恒定检查；`exchange_locked` 非负
-/// 仅在 `fixed_fee=true` 时检查（比例费分支下这条不是 Java 保证的不变式，见上方文档）。
+/// proptest 专用不变式 helper：守恒 + accounts 非负恒查；exchange_locked 非负仅在 fixed_fee=true 时查。
 fn assert_invariants_gated(api: &ExchangeApi, fixed_fee: bool) {
     assert_global_conservation(api);
     assert_accounts_non_negative(api);
@@ -508,8 +478,7 @@ fn scenario_self_trade_conserves_globally() {
     );
     assert_invariants(&api);
 
-    // 同一 uid 用 BID 吃自己的 ASK：base 净不变（卖出 200 又买回 200），
-    // quote 净支出 = taker_fee + maker_fee（两边费用都从自己身上扣），fees 桶同步增加。
+    // 自成交 hazard：同一 uid 用 BID 吃自己的 ASK，base 净不变，quote 净支出等于自己承担的 taker+maker 费。
     let fees_before = api.fees(QUOTE);
     let quote_before = api.user_account(USER, QUOTE);
 
@@ -542,25 +511,7 @@ fn scenario_self_trade_conserves_globally() {
 // Step 2/3：随机命令流守恒 proptest（设计文档 §7 / 参考文档 §6）。
 // ============================================================================================
 
-/// 生成阶段的合式约束（写在这里而非代码里散落，便于审阅）：
-/// - `price ∈ [1, 200_000]`、`size ∈ [1, 1_000]`：notional 上限 2×10^8，远低于 i64 溢出边界，
-///   叠加比例费（fee_scale_k=1_000_000, taker/maker_fee ≤ 20）也不会溢出。
-/// - BID 侧非 BUDGET 订单要求 `reserve_bid_price >= price`（参考文档 §2）——这里恒取
-///   `reserve_bid_price == price`，简单满足下界，同时避免涉及 BUDGET 语义（`cmd.price` 在
-///   BUDGET 单里表示预算总额而非单价，语义不同，未纳入本生成器，budget 变体已由 Task 6/7/9
-///   的定向单测覆盖）。
-/// - ASK 侧比例费有 `price >= ceil(fee_scale_k / taker_fee)` 的下限校验（`RiskAskPriceLowerThanFee`），
-///   本生成器固定 `taker_fee=20, fee_scale_k=1_000_000` 时门槛为 50_000——低于该价的 ASK
-///   会被 R1 拒绝（合式但预期部分失败，属正常覆盖，不代表生成器有误）。
-/// - CANCEL/REDUCE 只对"此前由本次流程签发过的 GTC 订单"生效（从 `issued` 列表按下标取模选取）；
-///   命中已被撤销/吃满的旧 id 时走 `MatchingUnknownOrderId` 无副作用路径，同样合式。
-///
-/// 断言策略（P3-C 裁决，见 `assert_invariants_gated` 文档）：真实守恒
-/// （`assert_global_conservation`）与 `accounts` 非负在 `fixed_fee` 两个分支下都严格断言；
-/// `exchange_locked` 非负**只在 `fixed_fee=true` 时**断言——比例费分支下一笔 BID 挂单跨
-/// ≥2 次独立释放会因 ceiling 超可加性合式地把 `exchange_locked` 打成负数（Java 参考实现
-/// 既有缺陷，见文件末尾 characterization 测试），这不是本生成器的产物缺陷，故不在比例费
-/// 分支断言它。
+/// 随机命令生成器：price/size 范围避免溢出，BID 恒取 reserve_bid_price==price（不覆盖 BUDGET 语义），CANCEL/REDUCE 从 `issued` 里取目标；断言策略见 `assert_invariants_gated`（P3-C 裁决：exchange_locked 非负仅 fixed_fee 分支断言）。
 #[derive(Debug, Clone)]
 enum GenCmd {
     Place { uid_idx: usize, is_bid: bool, order_type_idx: u8, price: i64, size: i64 },
@@ -595,8 +546,7 @@ fn gen_cmd(n_users: usize) -> impl Strategy<Value = GenCmd> {
     prop_oneof![6 => place, 2 => cancel, 2 => reduce]
 }
 
-/// 顶层策略：`fixed_fee` 二选一（固定费 vs 比例费）、`n_users ∈ [2,5]`、每用户初始 base/quote
-/// 充值 `∈ [1_000, 1_000_000_000]`、命令流长度 `∈ [10, 60)`。
+/// 顶层策略：fixed_fee 二选一、n_users∈[2,5]、每用户初始 base/quote 充值∈[1e3,1e9]、命令流长度∈[10,60)。
 fn scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<(i64, i64)>, Vec<GenCmd>)> {
     (any::<bool>(), 2usize..=5).prop_flat_map(|(fixed_fee, n_users)| {
         let balances =
@@ -609,21 +559,7 @@ fn scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<(i64, i64)>, V
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Step 2/3：任意合式命令流跑完（且逐步）都不 panic，真实守恒式恒成立、`accounts` 恒非负；
-    /// `exchange_locked` 非负仅在 `fixed_fee=true` 分支断言（见 `assert_invariants_gated`）。
-    ///
-    /// **比例费分支 `maker_fee` 刻意固定为 0**（而非之前草稿里的非零值）：调试本任务时发现，
-    /// SELL 方向（taker=ASK 吃 maker 的 resting BID）结算里，`calculate_amount_bid_release_corr_maker`
-    /// 把 `taker_fee` 与 `maker_fee` 合并进同一个 `ceil` 计算 maker 的实际净扣款，而 fees 池
-    /// 里的 `maker_fee` 是用 `avg_maker_price` 独立单独 `ceil` 出来的——这两个 `ceil` 不满足
-    /// `ceil(a-b) == ceil(a)-ceil(b)`，`maker_fee != 0` 时哪怕只有一次 TRADE 事件（无价格改善、
-    /// 无多笔聚合）也可能让 `Σ accounts+adjustments+fees` 出现 ±1 的真实偏差——这是一个跟本文件
-    /// 末尾 characterization test（`exchange_locked` 超可加性变负）**不同根因**的第二个 Java
-    /// 继承缺陷（同源于 `RiskEngine.handleMatcherEventsExchangeSell`，但是另一处 `ceil` 不可加，
-    /// 而不是跨事件的重复 `ceil`）。P3-C 裁决只覆盖了第一个缺陷，第二个未经调查/未经裁决，
-    /// 不在本任务范围内继续深挖或修复；本生成器固定 `maker_fee=0` 规避触发它（`maker_fee=0`
-    /// 时该 `ceil` 退化成与 `hold_fee` 完全相同的表达式，恒等，不会出现偏差），只保留已裁决的
-    /// 第一个缺陷（`exchange_locked` 超可加性）在覆盖范围内。建议后续单独立项调查这第二个缺陷。
+    /// Step 2/3：任意合式命令流逐步跑完不 panic，守恒式恒成立、accounts 恒非负，exchange_locked 非负仅 fixed_fee=true 分支断言。比例费分支 maker_fee 刻意固定为 0，规避 `RiskEngine.handleMatcherEventsExchangeSell` 里 `calculate_amount_bid_release_corr_maker` 与 fees 池独立 ceil 不满足 `ceil(a-b)==ceil(a)-ceil(b)` 导致的第二个未裁决 Java 继承缺陷（与文件末尾 characterization 的 exchange_locked 超可加性缺陷不同根因，未修复、待单独立项）。
     #[test]
     fn conservation_holds_for_random_command_stream(
         (fixed_fee, n_users, balances, cmds) in scenario_strategy()
@@ -708,50 +644,13 @@ proptest! {
 }
 
 // ============================================================================================
-// Characterization test：Java 参考实现的既有缺陷（非本任务引入）——按 P3-C 裁决保留 Java parity，
-// 不修生产代码；断言"缺陷确实按 Java 的方式发生"，而不是断言它不发生。
+// Characterization test：Java 参考实现既有缺陷，P3-C 裁决保留 parity 不修生产代码——断言缺陷确实按 Java 方式发生。
 // ============================================================================================
 //
-// proptest（Step 2/3）默认 256 cases 曾在 `fixed_fee=false` 分支命中此现象（复现种子存于
-// `proptest-regressions/engine/e2e_tests.txt`）。下面是手工提炼出的**最小、无 REDUCE/CANCEL
-// 参与的纯撮合复现**：一笔比例费 BID 挂单被两笔独立的 ASK 分两次吃完，第二次结算后
-// `exchange_locked[QUOTE]` 变为 -1。
-//
-// 根因（逐行核对 Java `RiskEngine.handleMatcherEventsExchangeSell` ~1154-1163 与
-// `handleMatcherRejectReduceEventExchange` ~1094-1120，均通过 `CoreArithmeticUtils
-// .calculateAmountBidTakerFee`〔~96-101 行〕，Rust 译文见本 crate
-// `processors::risk::RiskEngine::handle_matcher_events_exchange_sell` 及
-// `handle_matcher_reject_reduce_event_exchange`）：
-// - 比例费 BID 单下单时冻结 `notional + ceil(size*price*takerFee/feeScaleK)`（含手续费上限的
-//   ceiling 一次性算好）。
-// - 但**释放**（无论是被 REDUCE/CANCEL 剩量释放，还是被 maker 身份在某笔 TRADE 里部分成交释放）
-//   永远是对"这一次释放的 chunk"独立重新算一次 `ceil(chunk_size*price*takerFee/feeScaleK)`，
-//   而不是从原始冻结额里按比例扣减、也不追踪"剩余应保留手续费"。
-// - Ceiling 具有超可加性：`ceil(a) + ceil(b) >= ceil(a+b)`，等号只在恰好整除时成立。只要一笔
-//   比例费 BID 挂单的生命周期内被拆成 **2 次或以上**独立释放（reduce 多次、reduce+cancel、
-//   或被两笔不同的 taker 分别部分吃掉——完全不需要 REDUCE/CANCEL），释放总额几乎必然**超过**
-//   原始冻结额，把 `exchange_locked` 打成负数。
-// - Java 原始实现与 Rust 译文的公式逐字一致（见上方引用），故这不是移植引入的翻译偏差，而是
-//   参考实现本身在"比例费 BID 单跨多次释放"场景下的既有缺陷。
-//
-// 受影响路径：`RiskEngine::handle_matcher_reject_reduce_event_exchange`（Task 5，REDUCE/CANCEL
-// 释放 BID 挂单剩量）+ `RiskEngine::handle_matcher_events_exchange_sell` 里对 maker（BID）的
-// per-trade-event `hold_quote` 释放（Task 6）。ASK 侧释放（`calculate_amount_ask` 恒等于
-// `size`，无 ceiling）不受影响；`handle_matcher_events_exchange_buy`（Task 7）里 taker 自身的
-// 释放用 avg-price 单次结算，同样不受影响——只有 **resting BID 挂单的 quote 锁**、且
-// **跨 ≥2 次独立释放事件**时才会触发。
-//
-// **P3-C 裁决（保留 Java parity）**：Task 11 brief 明示"无新生产接口"，且修复涉及 Task 5/6
-// 的核心结算公式，需单独立项。经控制者裁定：这只破坏 `exchange_locked >= 0`——一条 Java 自己
-// 也从未真正保证过的子不变式（`exchange_locked` 只是"应锁多少"的记账标记）；真正的资金守恒
-// `Σ_users accounts + adjustments + fees == 0` 完全不受影响，因为 `exchange_locked` 根本不
-// 参与该等式左侧的求和——`accounts` 结算本身分毫不差。故不在 Task 11 范围内改生产代码，而是把
-// 本测试从"预期失败的 bug 报告"转成"预期通过的 characterization"：显式断言 `exchange_locked`
-// 确实变成 Java 会产生的那个负值，同时断言真实守恒依然成立（证明没有资金真的凭空消失，只是
-// 锁定标记算错了）。
+// 最小复现：比例费 BID 挂单被两笔独立 ASK 分两次吃完，第二次结算后 exchange_locked[QUOTE] 变为 -1。根因：Java `RiskEngine.handleMatcherEventsExchangeSell` ~1154-1163 / `handleMatcherRejectReduceEventExchange` ~1094-1120（经 `CoreArithmeticUtils.calculateAmountBidTakerFee` ~96-101 行）每次释放独立重新 ceil，ceiling 超可加性导致跨 ≥2 次释放时总释放额超过原始冻结额；只影响 `exchange_locked` 记账标记，不参与真实守恒等式求和，故 P3-C 裁决不修，仅断言 parity。
 #[test]
 fn characterization_proportional_fee_bid_multi_release_matches_java_negative_lock() {
-    const MAKER: i64 = 1; // 挂 BID，将被两笔独立 ASK 分两次吃完（无 REDUCE/CANCEL 参与）。
+    const MAKER: i64 = 1; // 挂 BID，被两笔独立 ASK 分两次吃完。
     const TAKER1: i64 = 2;
     const TAKER2: i64 = 3;
 
@@ -765,9 +664,7 @@ fn characterization_proportional_fee_bid_multi_release_matches_java_negative_loc
     assert_eq!(api.balance_adjustment(TAKER1, BASE, 1_000, 2), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(TAKER2, BASE, 1_000, 3), CommandResultCode::Success);
 
-    // MAKER 挂 BID @758_000 size=67（reserve==price）：
-    // notional=67*758_000=50_786_000；fee=ceil(50_786_000*20/1_000_000)=ceil(1015.72)=1016；
-    // lock_full = 50_787_016。
+    // MAKER 挂 BID @758_000 size=67，lock_full=50_787_016（notional+ceil手续费）。
     assert_eq!(
         api.place_order(PlaceOrderRequest {
             order_id: 1,
@@ -783,9 +680,7 @@ fn characterization_proportional_fee_bid_multi_release_matches_java_negative_loc
     );
     assert_eq!(api.user_locked(MAKER, QUOTE), 50_787_016);
 
-    // TAKER1 卖出 66（吃掉 MAKER 挂单的前 66 个单位，独立一次 TRADE 结算释放）：
-    // release1 = 66*758_000 + ceil(66*758_000*20/1_000_000) = 50_028_000 + ceil(1000.56)=1001
-    //          = 50_029_001；剩余锁 = 50_787_016 - 50_029_001 = 758_015。
+    // TAKER1 卖出 66（第一次独立释放），剩余锁 758_015。
     assert_eq!(
         api.place_order(PlaceOrderRequest {
             order_id: 2,
@@ -801,9 +696,7 @@ fn characterization_proportional_fee_bid_multi_release_matches_java_negative_loc
     );
     assert_eq!(api.user_locked(MAKER, QUOTE), 758_015);
 
-    // TAKER2 卖出剩下的 1（第二次、独立的 TRADE 结算释放）：
-    // release2 = 1*758_000 + ceil(1*758_000*20/1_000_000) = 758_000 + ceil(15.16)=16 = 758_016，
-    // **超过**上一步剩余的 758_015 —— exchange_locked 被打成 -1。
+    // TAKER2 卖出剩下的 1（第二次独立释放），release2=758_016 超过剩余锁 758_015，exchange_locked 被打成 -1。
     assert_eq!(
         api.place_order(PlaceOrderRequest {
             order_id: 3,
@@ -818,17 +711,15 @@ fn characterization_proportional_fee_bid_multi_release_matches_java_negative_loc
         CommandResultCode::Success
     );
 
-    // Characterization：exchange_locked 确实变成 Java 会产生的那个负值（-1），而不是释放到 0。
-    // 这是对 Java 既有缺陷的忠实复现（P3-C 裁决：保留 parity，不修生产代码）——断言"缺陷发生了"。
+    // Characterization：exchange_locked 确实变成 Java 会产生的负值 -1（P3-C 裁决：保留 parity，断言缺陷发生了）。
     assert_eq!(
         api.user_locked(MAKER, QUOTE),
         -1,
         "Java parity：ceiling 超可加性应让 exchange_locked 变成 -1，而不是释放到 0"
     );
 
-    // 但真实资金守恒完全不受影响：exchange_locked 只是记账标记，不参与这个等式的求和，
-    // 所以哪怕它算错了，也没有任何资金真的凭空消失或多出来。
+    // 但真实资金守恒不受影响：exchange_locked 只是记账标记，不参与该等式求和。
     assert_global_conservation(&api);
-    // accounts 本身也分毫不差——只有 exchange_locked 这个标记算错了。
+    // accounts 本身分毫不差，只有 exchange_locked 算错了。
     assert_accounts_non_negative(&api);
 }

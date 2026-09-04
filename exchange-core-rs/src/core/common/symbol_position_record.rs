@@ -1,13 +1,4 @@
-//! 对应 Java: exchange.core2.core.common.SymbolPositionRecord（Task 1 子集：字段 + 构造/初始化
-//! + `is_empty`/`reset`/`state_hash`；保证金/PnL/开平原语见 §1 `:494-669`，本移植落 Task 2）。
-//!
-//! Java 字段里 `adlEligibility`/`pendingADLSize`/`liquidationFlow` 是 **leader-local**、纯内存、
-//! 不持久化、不进 `stateHash` 的字段（强平扫描专用状态）。P4 移植时整体不落这三个字段（无消费者）。
-//! **P6 Task 1**：引入 `pending_adl_size`/`adl_eligibility`（ADL Task 6 消费的纯标量非复制计数），
-//! 二者**排除出 `state_hash`**（Ruling P6-E：非复制 scratch 状态，由 R1/R2 确定性重放维持一致，
-//! 不参与 raft 状态校验）。`liquidation_flow` 是状态机对象（`Option<LiquidationFlow>`），随
-//! FORCE→IF→ADL 状态机一起在 P6 Task 7 引入（其类型与状态机同处定义，避免过早搬入空壳）——同样
-//! 非复制、不进 `state_hash`。
+//! 对应 Java `SymbolPositionRecord`：期货保证金持仓记录。`adl_eligibility`/`pending_adl_size`/`liquidation_flow` 是 leader-local 非复制 scratch 状态，不进 `state_hash`（Ruling P6-E）。
 use std::collections::BTreeMap;
 
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -17,9 +8,7 @@ use crate::core::common::position_direction::PositionDirection;
 use crate::core::processors::liquidation::liquidation_flow::LiquidationFlow;
 use crate::core::utils::core_arithmetic_utils::{calculate_taker_fee, ceil_divide, ceil_mul_div, trunc_mul_div};
 
-/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。
-/// `CoreArithmeticUtils` 里的等价函数是私有的（Task 1 的零依赖 ruling），这里本地重复一份
-/// 而非放开可见性——保持 arithmetic 层与 model 层的依赖边界不动。
+/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。本地重复一份以保持依赖边界。
 fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }

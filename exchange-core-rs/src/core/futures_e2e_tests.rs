@@ -1,42 +1,4 @@
-//! P4 Task 8：期货 e2e 场景 + 守恒 proptest。
-//!
-//! 对应任务简报 §"What to produce" 与参考文档 §7（守恒不变式）。核心断言（[`assert_futures_conservation`]）：
-//!
-//! ```text
-//! ∀ currency: Σ_users accounts[cur] + adjustments[cur] + fees[cur]
-//!           + Σ_open_positions[currency==cur] (estimate_pnl(mark) + extra_margin) == 0
-//! ```
-//!
-//! # 为什么比任务简报英文括注给出的公式（仅 `accounts+adjustments+fees`）多两项
-//!
-//! 简报原话："Margin/PnL are position-internal virtual and never leave accounts except as
-//! realized-PnL-at-close and fees, so the accounts+adjustments+fees sum stays 0." 这是对参考文档
-//! §7 的过度简化——参考文档 §7 原文明确把 `position.extraMargin`/`position.profit` 也列入必须
-//! 两两配平的状态集合（"`{accounts, RiskEngine.fees, 清算费池, position.openInitMarginSum,
-//! position.extraMargin, position.profit}` 里任一减必配等额一增"），而不是只有 accounts+fees。
-//!
-//! 本任务开发过程中用一个最小复现（见 [`characterization_naive_formula_misses_deferred_value`]）
-//! 实证验证了：仅 `accounts+adjustments+fees` 在**两种场景**下会出现非零偏差——都不是生产代码
-//! 的 bug，而是"真实资金已经离开 accounts，但尚未回到 accounts"这一时间差的必然结果：
-//!
-//! 1. **MARGIN_ADJUSTMENT（isolated）**：`accounts -= amount` 是真实扣款，但对应的 `+amount`
-//!    只进了 `position.extra_margin`（仓内虚拟字段），要等这条仓位清空时才会一次性退回
-//!    `accounts`。调用 `margin_adjustment` 到该仓位清空之间的任何时刻，`accounts+adjustments+fees`
-//!    天然缺这一块，直到退款配平。
-//! 2. **平仓对手方与开仓对手方不是同一个人（或未在同一价位对敲）**：某用户全平仓位、实现的
-//!    PnL 会立刻整笔付进它自己的 `accounts`（`removePositionRecord` 一次性入账），但这笔盈利
-//!    在数学上是从**当前仍持有对侧敞口、尚未平仓**的另一个用户的**未实现**浮亏里"预支"出来的
-//!    ——那笔浮亏只存在于对方仓位的 `open_volume`/`open_price_sum`（经 `estimate_pnl(mark)`
-//!    才能算出来），完全不在 `accounts+adjustments+fees` 的求和范围内，直到对方也平仓才补上。
-//!    （若某次平仓恰好是同一对原始对手方、以相同的价格轨迹对敲，两边会在同一笔成交里同时清空/
-//!    同时不清空，naive 公式在**那种特殊构造**下确实精确成立——本文件下面的场景 A/B/C/E/F 就是
-//!    刻意按这个约束构造的，因此它们的每一步也**额外**满足 naive 公式，见各场景注释；但通用的
-//!    多用户随机撮合（本文件的 proptest）无法保证这个约束，必须用完整公式。）
-//!
-//! 二者的共同本质：`estimate_pnl(mark)`（未实现 + 未支付的已实现盈亏）与 `extra_margin` 都是
-//! "已经从 accounts 转移出去、尚未转回来"的**真实**价值（不同于 `open_init_margin_sum`——那个是
-//! 纯虚拟的 NSF 记账标记，从未真的从 accounts 扣过，因此不需要计入本守恒式）。把这两项加回去，
-//! 守恒式在任意命令、任意时刻都精确成立（已用 proptest 256 组随机命令流验证）。
+//! P4 Task 8：期货 e2e 场景 + 守恒 proptest（任务简报 §"What to produce" / 参考文档 §7）。核心断言（[`assert_futures_conservation`]）：Σ_users accounts+adjustments+fees + Σ_open_positions(estimate_pnl(mark)+extra_margin) == 0——比简报的 naive 公式多出的两项（estimate_pnl/extra_margin）对应两类"资金已离开 accounts、尚未转回"的时间差场景（isolated MARGIN_ADJUSTMENT 递延退款、平仓对手方与开仓对手方不同导致的未实现浮亏递延），均非生产代码 bug，详见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`] 与场景 D。
 use proptest::prelude::*;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -59,13 +21,7 @@ const FUT_SYMBOL: i32 = 300;
 // 守恒 / 非负断言 helper
 // ================================================================================================
 
-/// 全局守恒断言，见文件头文档——本文件（场景 + proptest）**唯一**使用的守恒 helper。
-///
-/// 用 `base_scale_k == quote_scale_k == currency_scale_k == 1`（本文件所有 spec 都这样构造）
-/// 使 `size_price_scale` 与 `currency_scale` 恒等，因此 `estimate_pnl`/`extra_margin` 可以直接
-/// 加进 currency 的求和而不必经 `size_price_to_currency_scale` 换算——这是本文件的简化前提，
-/// 不是生产代码的行为（生产代码在非 1 缩放下必须换算，见 `RiskEngine::settle_margin_position_event`/
-/// `margin_adjustment`）。
+/// 全局守恒断言，见文件头文档——本文件唯一使用的守恒 helper；本文件 scale_k 恒为 1，故 estimate_pnl/extra_margin 可直接求和，无需 `size_price_to_currency_scale` 换算（生产代码非 1 缩放下需换算）。
 fn assert_futures_conservation(api: &ExchangeApi) {
     for &cur in api.ssp().currencies.keys() {
         let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -88,8 +44,7 @@ fn assert_futures_conservation(api: &ExchangeApi) {
     }
 }
 
-/// `accounts` 恒非负——期货 NSF 校验（`can_place_margin_order`/`margin_adjustment` 的
-/// `withdrawable_balance` 检查）应该保证这一点，任何时刻都不该被打破。
+/// `accounts` 恒非负——期货 NSF 校验（`can_place_margin_order`/`margin_adjustment`）应保证此点。
 fn assert_accounts_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &bal) in &p.accounts {
@@ -98,8 +53,7 @@ fn assert_accounts_non_negative(api: &ExchangeApi) {
     }
 }
 
-/// 仓位记录内部不变式：`open_volume`/`open_init_margin_sum` 恒非负（生产代码从未产生负值的
-/// 路径，这里断言是双保险，一旦触发即代表 Task 1-7 的仓位原语有真实 bug）。
+/// 仓位记录内部不变式：`open_volume`/`open_init_margin_sum` 恒非负（双保险，触发即代表 Task 1-7 仓位原语有真实 bug）。
 fn assert_positions_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for pos in p.positions.values() {
@@ -132,10 +86,7 @@ fn assert_futures_invariants(api: &ExchangeApi) {
 // spec / api 构造 helper
 // ================================================================================================
 
-/// 固定费期货 spec：`base_scale_k=quote_scale_k=1`；`init_margin`/`maintenance_margin`/
-/// `max_leverage` 全部留空（未配置）——`calculate_init_margin` 退化为 `notional/leverage`，
-/// `is_valid_leverage` 对任意非负杠杆放行（简化场景/proptest 的杠杆合式性，见任务简报"Before you
-/// begin"）。
+/// 固定费期货 spec：scale_k=1，init/maintenance_margin/max_leverage 留空，任意非负杠杆放行（简化场景/proptest 合式性）。
 fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -151,9 +102,7 @@ fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecifica
     }
 }
 
-/// 比例费期货 spec（同上，`fee_scale_k` 非零）。任务简报强调期货比例费按 Task 4 的结论精确守恒
-/// （不同于 spot 的既有 ceiling 超可加性缺陷），故这里不需要像 `e2e_tests.rs` 那样把
-/// `maker_fee` 钉成 0 规避——两个费率都可以任意非零。
+/// 比例费期货 spec（同上，fee_scale_k 非零）。期货比例费按 Task 4 结论精确守恒（不同于 spot 的 ceiling 超可加性缺陷），两费率均可任意非零，无需像 e2e_tests.rs 那样钉 maker_fee=0。
 fn futures_spec_proportional_fee(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -178,9 +127,7 @@ fn new_seeded_futures_api(spec: CoreSymbolSpecification) -> ExchangeApi {
 }
 
 // ================================================================================================
-// 场景 A：多用户开多/开空对敲 → 双方持仓 → mark 变动后互相平仓 → PnL 结算 → 记录拆除。
-// 两个用户全程互为唯一对手方（开、平都对敲同一方），因此每一步**额外**满足任务简报字面公式
-// （仅 `accounts+adjustments+fees`），本场景顺带断言这一点作为双重验证。
+// 场景 A：多用户开多/开空对敲 → mark 变动后互相平仓 → PnL 结算 → 记录拆除；全程唯一对手方，额外满足 naive 公式，顺带验证。
 // ================================================================================================
 
 fn naive_conservation(api: &ExchangeApi, currency: i32) -> i64 {
@@ -269,8 +216,7 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
 }
 
 // ================================================================================================
-// 场景 B：同向加仓 → 部分减仓 → 完全平仓。TRADER 与 COUNTER 全程互为唯一对手方。
-// 精确手算见下方注释；用于交叉验证 `assert_futures_conservation` 本身没有算错。
+// 场景 B：同向加仓 → 部分减仓 → 完全平仓，唯一对手方，用手算结果交叉验证 `assert_futures_conservation` 本身没算错。
 // ================================================================================================
 
 #[test]
@@ -384,17 +330,13 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert!(api.user_position(TRADER, FUT_SYMBOL).is_none());
     assert!(api.user_position(COUNTER, FUT_SYMBOL).is_none());
 
-    // 精确手算：TRADER 全程 taker，fee = 10*(5+5+4+6) = 200；COUNTER 全程 maker，fee = 5*20 = 100。
-    // 最终平仓 close_notional=6*140=840，open_price_sum(剩余6单位成本基)=530
-    //   （1050-4*130释放=1050-520=530），pnl_raw=310，TRADER(+1)=+310，COUNTER(-1)=-310。
+    // 手算：TRADER taker fee=200，COUNTER maker fee=100，最终 pnl_raw=310（TRADER +310，COUNTER -310）。
     assert_eq!(api.user_account(TRADER, QUOTE), 100_000 - 200 + 310);
     assert_eq!(api.user_account(COUNTER, QUOTE), 100_000 - 100 - 310);
 }
 
 // ================================================================================================
-// 场景 C：FLIP —— 大额反向单先平满仓再反手开新仓，profit 递延到新仓非空为止。
-// FLIPPER 与 COUNTER 全程互为唯一对手方（同一笔反向 15 vs 15 的成交让双方同时翻仓），
-// 因此这里也额外满足 naive 公式（两次 close 都恰好在同一笔成交里对称完成）。
+// 场景 C：FLIP——大额反向单先平满仓再反手开新仓，profit 递延到新仓非空为止；唯一对手方对称翻仓，额外满足 naive 公式。
 // ================================================================================================
 
 #[test]
@@ -490,18 +432,13 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
 
     assert!(api.user_position(FLIPPER, FUT_SYMBOL).is_none(), "最终全平，记录拆除");
     assert!(api.user_position(COUNTER, FUT_SYMBOL).is_none());
-    // FLIPPER 累计已实现盈亏 = 200(翻仓腿) + 150(最终腿：(450-600)*(-1)) = 350，减去 4 笔 taker 费
-    // (100+50+100+50=300，逐笔见下方生产代码路径) 后入账；这里只做方向性 sanity check（精确手算
-    // 已在场景 B 完成过一次，交叉验证过 `assert_futures_conservation` 本身没有算错）。
+    // 这里只做方向性 sanity check，精确手算已在场景 B 交叉验证过 `assert_futures_conservation`。
     assert!(api.user_account(FLIPPER, QUOTE) > 100_000, "净盈利为正（先赚 200 后又赚 150，扣费仍为正）");
     assert!(api.user_account(COUNTER, QUOTE) < 100_000, "净亏损");
 }
 
 // ================================================================================================
-// 场景 D：MARGIN_ADJUSTMENT 追加保证金 → 平仓退还。ISOLATED 专属（Cross 走 balance_adjustment
-// 同款路径，见场景 F）。追加保证金那一步 naive 公式**不**成立（真实资金离开 accounts、进了
-// position.extra_margin，尚未回来）——这正是文件头文档解释的第一类偏差，这里显式断言出来，
-// 证明是预期行为而非遗漏；完整公式 [`assert_futures_conservation`] 全程精确成立。
+// 场景 D：MARGIN_ADJUSTMENT 追加保证金 → 平仓退还（ISOLATED 专属）；追加那一步 naive 公式不成立（文件头文档第一类偏差），显式断言为预期行为，完整公式全程精确成立。
 // ================================================================================================
 
 #[test]
@@ -539,8 +476,7 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
 
     let acct_before_margin = api.user_account(MARGIN_USER, QUOTE);
 
-    // 追加 500 isolated 保证金：action 字段在 ONEWAY 下被忽略（create_positions_key 恒返回
-    // symbol），故随意传 Bid。
+    // 追加 500 isolated 保证金：action 字段在 ONEWAY 下被忽略，故随意传 Bid。
     assert_eq!(
         api.margin_adjustment(MarginAdjustmentRequest {
             uid: MARGIN_USER, symbol: FUT_SYMBOL, action: OrderAction::Bid, amount: 500,
@@ -593,11 +529,7 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
 }
 
 // ================================================================================================
-// 场景 E：多用户 maker/taker（一个 maker 挂单被两个 taker 分两次吃完）+ 比例费 symbol。
-// 全程价格钉在同一价位（1000），任何一次全平的已实现 PnL 恒为 0——因此即便平仓对手方与开仓
-// 对手方不完全对应（MAKER 后续用一笔新 BID 平仓，由两个不同的 TAKER 分别对敲），naive 公式依旧
-// 精确成立（见文件头文档"若同一价格轨迹对敲"的说明）。用来验证 Task 4 的结论：期货比例费本身
-// 精确配对，不会像 spot 那样因 ceiling 超可加性漂移。
+// 场景 E：多用户 maker/taker（一个 maker 挂单被两个 taker 分两次吃完）+ 比例费 symbol，全程同价位（pnl恒0）naive 公式依旧精确成立；验证 Task 4 结论：期货比例费精确配对，不像 spot 那样因 ceiling 超可加性漂移。
 // ================================================================================================
 
 #[test]
@@ -761,9 +693,7 @@ fn scenario_f_cross_margin_mode_open_and_close_conserves() {
 }
 
 // ================================================================================================
-// Characterization：实证记录"naive 公式在两类场景下不精确成立，完整公式精确成立"——不是生产代码
-// bug，见文件头文档。这是本任务调试期间用来判定该现象性质的最小复现（保留在最终交付里，供审阅
-// 追溯这一判断的证据链）。
+// Characterization：实证记录 naive 公式在两类场景下不精确成立、完整公式精确成立——非生产代码 bug，见文件头文档。
 // ================================================================================================
 
 #[test]
@@ -845,10 +775,7 @@ enum FutGenCmd {
     SetMarkPrice { price: i64 },
 }
 
-/// 单条命令生成策略：`price`/`size` 有界（`price ∈ [50,200]`, `size ∈ [1,50]`），
-/// notional 上限 200*50=10_000，远低于 i64 溢出边界；杠杆固定在场景装配阶段按用户预生成
-/// （见 [`fut_scenario_strategy`]），避免同一用户对同一 symbol 出现杠杆不一致（`RiskLeverageMismatch`
-/// 只会让命令合式地被拒绝，不影响正确性，但固定杠杆能提高有效撮合的命中率、增强覆盖）。
+/// 单条命令生成策略：price/size 有界避免溢出；杠杆按用户预生成（见 [`fut_scenario_strategy`]）以避免同一用户杠杆不一致、提高有效撮合命中率。
 fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
     let place = (0..n_users, any::<bool>(), 50i64..=200, 1i64..=50)
         .prop_map(|(uid_idx, is_bid, price, size)| FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size });
@@ -859,9 +786,7 @@ fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
     prop_oneof![5 => place, 3 => close, 1 => margin_add, 1 => mark]
 }
 
-/// 顶层策略：`fixed_fee` 二选一、`n_users ∈ [2,4]`、每用户固定杠杆 `∈ [1,5]`、初始充值
-/// `∈ [1_000_000, 100_000_000]`（远超本文件价格/size 上界撑得起的最大 notional，NSF 摩擦最小化
-/// 但不刻意排除——偶发 NSF 拒绝也是合式覆盖）、命令流长度 `∈ [10,80)`。
+/// 顶层策略：fixed_fee 二选一、n_users∈[2,4]、每用户固定杠杆∈[1,5]、初始充值∈[1e6,1e8]（NSF 摩擦最小化但不排除偶发拒绝）、命令流长度∈[10,80)。
 fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<i64>, Vec<FutGenCmd>)> {
     (any::<bool>(), 2usize..=4).prop_flat_map(|(fixed_fee, n_users)| {
         let leverages = prop::collection::vec(1i32..=5, n_users);

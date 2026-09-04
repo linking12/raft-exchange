@@ -1,14 +1,5 @@
-//! 对应 Java: `exchange.core2.core.processors.RiskEngine`（现货子集：
-//! `placeOrderRiskCheck`/`placeOrder`/`placeExchangeOrder`，行 399–685，现货分支 633–685；
-//! P4 Task 3 新增期货分支：`placeOrder` 期货路径/`canPlaceMarginOrder`/`closePositionRiskCheck`/
-//! `maxClosableSize`，行 436–503/533–623/823–875）。
-//! 权威参考：`docs/superpowers/specs/2026-08-31-p3-spot-risk-reference.md` §2（现货）、
-//! `docs/superpowers/specs/2026-09-01-p4-futures-risk-reference.md` §3（期货 R1）。
-//!
-//! # Ruling P3-B（borrow 设计）
-//! `RiskEngine` 不持有 `UserProfileService`/`SymbolSpecificationProvider` 的所有权——方法按需
-//! 借用调用方传入的 `&mut`/`&` 引用。本期单 shard、单线程，不做 Java `uidForThisHandler` 分片，
-//! 视所有 uid 为本 shard（Task 10 引擎持有 ups/ssp 字段，逐命令借出）。
+//! 对应 Java `RiskEngine`（现货 :399-685，期货 :436-503/533-623/823-875）。
+//! Ruling P3-B：不持有 ups/ssp 所有权，按需借用；单 shard 单线程，不做 uid 分片。
 
 use std::collections::BTreeMap;
 
@@ -42,8 +33,7 @@ use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（`CoreArithmeticUtils` 里的
-/// 同名函数按 Task 1 零依赖 ruling 是私有的），风格对齐 `symbol_position_record.rs` 同款 helper。
+/// 对应 Java `Math.multiplyExact(long, long)`；局部私有重复，对齐 symbol_position_record.rs 同款 helper。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
@@ -53,55 +43,27 @@ fn sub_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
 
-/// 对应 Java `RiskEngine`（现货子集 + P4 期货 R1 子集）。shard 全局守恒桶（参考文档 §5/§6）：
-/// - `adjustments`：`BALANCE_ADJUSTMENT`（充提）的对冲桶——`accounts[cur] += amountDiff` 的同时
-///   `adjustments[cur] -= amountDiff`，使 `Σ accounts[cur] + adjustments[cur]` 恒定。
-/// - `fees`：现货成交平台手续费累计桶（Task 6/7 `handle_matcher_events_exchange_sell/buy` 写入）。
-/// - `last_price_cache`：对应 Java `lastPriceCache`（`IntObjectHashMap<LastPriceCacheRecord>`）
-///   ——P4 Task 3 简化子集：只存 `markPrice`（`i64`），完整 `LastPriceCacheRecord`
-///   （含 askPrice/bidPrice）延后到有消费者（清算/ADL，P6）时再补字段。symbol -> markPrice；
-///   缺失或 `0` 都表示"尚无有效标记价"（对应 Java `priceRecord == null || priceRecord.markPrice
-///   == 0` 两种情况，见 [`Self::mark_price`]）。
-/// - `cfg_margin_trading_enabled`：对应 Java `cfgMarginTradingEnabled` 配置开关。
-///
-/// Java 还有 `suspends`（`BalanceAdjustmentType::Suspend` 型对冲桶）——本任务按 brief 明确延后
-/// （SUSPEND_USER 命令未移植），故不建该字段，避免无命令路径写入的死字段。
+/// 对应 Java `RiskEngine`（现货+P4期货R1子集）。字段：adjustments=充提对冲桶，fees=现货手续费桶，
+/// last_price_cache=简化版 lastPriceCache（仅 markPrice），cfg_margin_trading_enabled=开关。
+/// suspends 桶延后未建（SUSPEND_USER 未移植）。
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
     pub last_price_cache: BTreeMap<i32, i64>,
     pub cfg_margin_trading_enabled: bool,
-    /// 对应 Java `RiskEngine.loanService`（P5 Task 3 有意未加，本 Task 补上）：per-shard 借贷
-    /// 池状态 + 利率模型，供 `LoanCommandDispatcher`（`is_loan()` 门守命中后）读写 4 个资金桶
-    /// / 两套利率模型。默认构造（全桶空、默认利率曲线）——现货/期货既有路径从不读它，新增
-    /// 字段对它们是纯 no-op。
+    /// 对应 Java `RiskEngine.loanService`：per-shard 借贷池状态+利率模型，供 LoanCommandDispatcher 读写；默认空，对现货/期货既有路径 no-op。
     pub loan_service: LoanService,
-    /// 对应 Java `RiskEngine.liquidationService`（P6 Task 5 新增）：per-shard 期货保险基金（IF）
-    /// 状态——`notionals`/`positions` 两个桶**都进 state_hash/snapshot**（Ruling P6-E，与
-    /// `loan_service` 的 4 个资金桶同级复制语义，但与 loan LIF 是完全独立的池子，见
-    /// `liquidation_service.rs` 模块文档）。默认构造（全空），现货/期货既有路径从不读它，新增
-    /// 字段对它们是纯 no-op。
+    /// 对应 Java `RiskEngine.liquidationService`：per-shard 期货保险基金（IF）状态，notionals/positions 都进 state_hash（Ruling P6-E），与 loan LIF 独立。
     pub liquidation_service: LiquidationService,
-    /// 对应 Java `RiskEngine.liquidationEngine`（P6 Task 7 新增）：per-shard 期货强平引擎——
-    /// 检测（`check_positions`）+ FORCE→IF→ADL 状态机（`advance_liquidation`）+ symbol→持有者
-    /// 索引 + 提交队列（`pending_commands`，由 `ExchangeCore` 排空重喂）。**只持非复制 leader-local
-    /// 状态**（索引/leader 门/队列），不进 state_hash/snapshot（Ruling P6-E），见
-    /// `liquidation_engine.rs` 模块文档。默认构造（`is_running=false`——follower 起步，server 侧
-    /// raft leadership 切换时 toggle）。既有现货/期货非强平路径从不读它，纯新增。
-    ///
-    /// **不进 snapshot**（`#[serde(skip)]`，Ruling P6-E）：换届恢复后由
-    /// `ExchangeCore::from_snapshot_bytes` 从复原的 `ups` 重建索引（等价 Java `updateProvider`）。
+    /// 对应 Java `RiskEngine.liquidationEngine`：per-shard 期货强平引擎（检测+FORCE→IF→ADL 状态机+索引+提交队列），仅 leader-local 状态，不进 state_hash/snapshot（Ruling P6-E）。
+    /// `#[serde(skip)]`：换届后由 from_snapshot_bytes 重建索引。
     #[serde(skip)]
     pub liquidation_engine: LiquidationEngine,
 }
 
 impl RiskEngine {
-    /// **Ruling P4-B**：`cfg_margin_trading_enabled` 默认 `true`（P4 期货测试路径默认可用）——
-    /// `#[derive(Default)]` 会给出 `false`，但全仓库唯一的构造入口是 `RiskEngine::new()`
-    /// （无调用点用 `RiskEngine::default()`，见任务报告核对），故这里手写默认值不影响
-    /// derive 出的 `Default` 对既有测试的行为。新增两个字段均以空/零值起步，不改变现货路径
-    /// （`place_exchange_order`）的既有行为——它从不读这两个字段。
+    /// Ruling P4-B：cfg_margin_trading_enabled 默认 true（唯一构造入口，derive Default 不受影响）。
     pub fn new() -> Self {
         RiskEngine {
             adjustments: BTreeMap::new(),
@@ -114,10 +76,7 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `lastPriceCache.get(symbol)` 之后取 `.markPrice`（简化子集，见结构体字段
-    /// 文档）：`None`（未缓存）与 `Some(0)`（缓存了但标记价为 0）统一折叠成 `None`——对应 Java
-    /// `priceRecord == null || priceRecord.markPrice == 0` 两个 null/零值分支合并成一个"不可用"
-    /// 结果，调用方（`place_order`/`can_place_margin_order`）不用重复判两次。
+    /// 对应 Java `lastPriceCache.get(symbol).markPrice`：None 与 Some(0) 统一折叠成 None（等价 Java 的 null/0 双判）。
     pub fn mark_price(&self, symbol: i32) -> Option<i64> {
         match self.last_price_cache.get(&symbol) {
             Some(&p) if p != 0 => Some(p),
@@ -125,36 +84,14 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `RiskEngine.preProcessCommand`（管线结构对齐重构新增）：R1 入口，按
-    /// `cmd.command` 路由，镜像 Java `preProcessCommand` 的主 switch 结构：
-    /// - 非交易命令（`is_non_trading()`）：整块委托（原 `ExchangeCore::dispatch_non_trading`
-    ///   的逻辑搬迁至此）——`AddUser`→[`Self::add_user`]、`BalanceAdjustment`→
-    ///   [`Self::balance_adjustment`]、`MarginAdjustment`→[`Self::margin_adjustment`]（P4
-    ///   Task 6）、`LeverageAdjustment`→[`Self::leverage_adjustment`]（P4 Task 6）、
-    ///   `MarkpriceAdjustment`→[`Self::markprice_adjustment`]（P4 Task 6），其余（本移植子集里
-    ///   只有 `BinaryDataCommand`）→ `MatchingUnsupportedCommand`（未移植该命令的处理器，不
-    ///   panic）。
-    /// - `PlaceOrder`：调用 [`Self::place_order_risk_check`] 做风控冻结（R1 hold，现货/期货
-    ///   两分支，见该方法文档）。
-    /// - `ClosePosition`（P4 Task 3 新增）：调用 [`Self::close_position_risk_check`]——期货纯
-    ///   减仓命令，无 NSF 检查（不开新敞口）。
-    /// - `CancelOrder`/`MoveOrder`/`ReduceOrder`/`OrderBookRequest`（以及本移植子集里的
-    ///   `Reset`/`Nop`）：R1 无动作，直落 ME，`cmd.result_code` 留给 ME/R2 决定——对应 Java
-    ///   `preProcessCommand` 里这些分支没有风控前置校验。
-    ///
-    /// Java `preProcessCommand` 返回 `boolean`（disruptor 批次控制信号：是否结束当前 grouping
-    /// batch），本移植单线程、无 grouping/批边界概念，该返回值无单线程语义，故此处返回 `()`。
+    /// 对应 Java `RiskEngine.preProcessCommand`：R1 入口，按 cmd.command 路由（非交易命令整块委托/PlaceOrder→风控冻结/ClosePosition→纯减仓/其余直落 ME）。返回 `()`（Java 的 boolean 批次控制信号无单线程语义）。
     pub fn pre_process_command(
         &mut self,
         cmd: &mut OrderCommand,
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) {
-        // 对应 Java `preProcessCommand`（`:260-264`）的第一级门守：`isLoan()` 命中 → 整块委托
-        // `LoanCommandDispatcher.dispatch`，主 switch/`isNonTrading()` 分支永远看不到 loan 命令
-        // （两条门守互斥，参考文档 §0）。P5 Task 4：`LoanCommandDispatcher` 只落 4 个 Isolated
-        // 生命周期命令，其余 10 个 `is_loan()` 码命中 `LoanNotImplemented`（dispatcher 内部处理，
-        // 见其模块文档）。
+        // 对应 Java preProcessCommand（:260-264）第一级门守：is_loan() 命中→整块委托 LoanCommandDispatcher（与 is_non_trading 互斥）。
         if cmd.command.is_loan() {
             cmd.result_code = Some(LoanCommandDispatcher::dispatch(self, cmd, ups, ssp));
             return;
@@ -182,41 +119,28 @@ impl RiskEngine {
         } else if cmd.command == OrderCommandType::ClosePosition {
             cmd.result_code = Some(self.close_position_risk_check(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::SettleFundingfees {
-            // `SETTLE_FUNDINGFEES` 不是 `is_non_trading()`（Task 1 已定），停留在主交易 switch，
-            // 见 `Self::settle_funding_fees_collect` 文档。
+            // SETTLE_FUNDINGFEES 不是 is_non_trading()，停留在主交易 switch。
             cmd.result_code = Some(self.settle_funding_fees_collect(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::ForceLiquidation {
-            // `FORCE_LIQUIDATION` R1（P6 Task 7b）：对应 Java `preProcessCommand:291`——只做
-            // `normalize_cmd_position_size`（按当前 openVolume 夹取 cmd.size），随后作为 IOC 平仓单
-            // 走 ME 撮合（R2 走通用期货保证金结算 + `collect_liquidation_fee`/`advance_liquidation`
-            // 后置钩子）。size 夹取是换届/陈旧命令安全的核心（参考文档 §1.5）。
+            // FORCE_LIQUIDATION R1，对应 Java :291：normalize_cmd_position_size 夹取 size 后走 IOC 平仓单撮合。
             cmd.result_code = Some(Self::normalize_cmd_position_size(cmd, ups));
         } else if cmd.command == OrderCommandType::IfTakeover {
-            // `IF_TAKEOVER` 同样不是 `is_non_trading()`（参考文档 §0 末段已确认），停留在主交易
-            // switch，见 `Self::if_takeover_collect` 文档。P6 Task 7b：先 `normalize_cmd_position_size`
-            // 夹取 cmd.size（对应 Java `:370`）再 collect（collect 的结果码覆盖 normalize 的）。
+            // IF_TAKEOVER 不是 is_non_trading()，对应 Java :370：先 normalize_cmd_position_size 再 collect（结果码以 collect 为准）。
             Self::normalize_cmd_position_size(cmd, ups);
             cmd.result_code = Some(self.if_takeover_collect(cmd));
         } else if cmd.command == OrderCommandType::AutoDeleveraging {
-            // `AUTO_DELEVERAGING` 同样不是 `is_non_trading()`，停留在主交易 switch，见
-            // `Self::adl_collect` 文档。P6 Task 7b：先 `normalize_cmd_position_size` 夹取 cmd.size
-            // （对应 Java `:378`）再 collect。
+            // AUTO_DELEVERAGING 不是 is_non_trading()，对应 Java :378：先 normalize_cmd_position_size 再 collect。
             Self::normalize_cmd_position_size(cmd, ups);
             cmd.result_code = Some(self.adl_collect(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::LiquidationScan {
-            // `LIQUIDATION_SCAN` R1（P6 Task 7b）：对应 Java `preProcessCommand:324`——纯扫描触发，
-            // 不撮合。委托 `check_positions`（全量整扫、按切片过滤，内部 `is_running` leader 门）。
-            // 单 shard = shard 0，结果码恒 `Success`（对应 Java `:325-327` shard-0-only SUCCESS）。
+            // LIQUIDATION_SCAN R1，对应 Java :324-327：纯扫描（check_positions），单 shard 恒 Success。
             self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
             cmd.result_code = Some(CommandResultCode::Success);
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
 
-    /// 对应 Java `placeOrderRiskCheck`（399–420）：加载 user profile（缺失 → `AuthInvalidUser`）、
-    /// 加载 symbol spec（缺失 → `InvalidSymbol`），转 [`Self::place_order`] 做现货/期货分派。
-    ///
-    /// 省略 Java 的 `cfgIgnoreRiskProcessing` 开关——P3 未移植该配置项，恒走风控路径。
+    /// 对应 Java `placeOrderRiskCheck`（:399-420）：加载 profile/spec（缺失分别→AuthInvalidUser/InvalidSymbol），转 place_order。省略 cfgIgnoreRiskProcessing（未移植，恒走风控）。
     pub fn place_order_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -234,20 +158,8 @@ impl RiskEngine {
         self.place_order(cmd, user_profile, spec, ssp)
     }
 
-    /// 对应 Java `placeOrder`（432–503）：现货 → [`Self::place_exchange_order`]；期货
-    /// （`isFuturesContract`）→ 校验（margin trading 开关/mark price/marginMode+leverage
-    /// 跨腿一致）→ 解析/分配 `SymbolPositionRecord`（NSF 通过前不插入 `positions`）→ ONEWAY
-    /// reduce-only 夹 → `isValidLeverage` → [`Self::can_place_margin_order`] NSF →
-    /// 成功后 `pendingHold[Budget]` + 提交仓入 map。非现货、非期货（当前只有 `Option`）→
-    /// `UnsupportedSymbolType`（对应 Java `:437-439`；这是 Raft 复制状态机的 R1 热路径，绝不
-    /// panic——`Option` 型 symbol 今天就能通过 `add_symbol` 注册，交易支持留给 P5/P6，但"不
-    /// panic"现在就要做到）。参考文档 §3 "placeOrder 期货分支检查序"。
-    ///
-    /// # Rust 对齐 Java 对象池"NSF 前不插入"的做法
-    /// Java 用对象池 new/put 一个可能被丢弃的 `SymbolPositionRecord`；Rust 无对象池，改为：
-    /// 从 `positions` map **clone** 出已有记录（或新建一个本地默认值）到局部变量 `position`，
-    /// 全程只读/只改这份本地副本，NSF 通过后再整体 `insert` 回 map（覆盖旧值或新建条目）——
-    /// 既不会在 NSF 失败时污染 map，也不需要"归还池"这一步。
+    /// 对应 Java `placeOrder`（:432-503）：现货→place_exchange_order；期货→校验→分配 position→ONEWAY reduce-only 夹→isValidLeverage→can_place_margin_order NSF→成功后 pendingHold+插回 map。非现货非期货→UnsupportedSymbolType（不 panic，对应 :437-439）。
+    /// Rust 对齐：clone 出本地 position 副本，NSF 通过后才整体 insert 回 map（替代 Java 对象池"NSF 前不插入"）。
     fn place_order(
         &mut self,
         cmd: &mut OrderCommand,
@@ -267,12 +179,7 @@ impl RiskEngine {
             return self.place_exchange_order(cmd, user_profile, spec, currency_spec, ssp);
         }
         if !spec.symbol_type.is_futures_contract() {
-            // 对应 Java `placeOrder`（:437-439）：非现货、非期货（当前只有 `Option`）返回
-            // `UnsupportedSymbolType`——绝不 panic。R1 是 Raft 复制状态机的热路径，`unimplemented!`
-            // 会让一条已合法落盘的命令直接 crash 整个确定性状态机；`add_symbol` 目前不校验
-            // `symbol_type`，`Option` 型 symbol 可以被注册，因此这条分支今天就可达，必须走正常
-            // 返回值而非占位 panic（P5/P6 排期的是"支持 Option 交易"，不是"不 panic"——不 panic
-            // 现在就要做到）。
+            // 对应 Java placeOrder（:437-439）：非现货非期货→UnsupportedSymbolType，绝不 panic（Option 型 symbol 今天已可注册，R1 热路径不能 crash）。
             return CommandResultCode::UnsupportedSymbolType;
         }
         if !self.cfg_margin_trading_enabled {
@@ -293,8 +200,7 @@ impl RiskEngine {
         }
 
         let position_key = user_profile.create_positions_key(spec.symbol_id, action, cmd.command);
-        // P6 Task 7b：新建仓位需登记进 `symbol_to_users` 索引（对应 Java `onPositionOpened`，
-        // `RiskEngine.java:490-491`——仅新仓，且在校验全过 commit 之后触发，见下方 insert 处）。
+        // P6：新仓需登记进 symbol_to_users 索引（对应 Java onPositionOpened，:490-491，仅新仓）。
         let is_new_position = !user_profile.positions.contains_key(&position_key);
         let mut position = match user_profile.positions.get(&position_key) {
             Some(existing) => existing.clone(),
@@ -305,8 +211,7 @@ impl RiskEngine {
             }
         };
 
-        // ONEWAY + reduce-only：裁剪 size 到 ≤ 当前反向可平量；同向/无仓直接 SUCCESS no-op
-        // （不开新敞口，也不必"归还"——position 只是本地副本，从未插入 map）。
+        // ONEWAY+reduce-only：裁剪 size 到可平量；同向/无仓直接 Success no-op。
         if user_profile.position_mode == PositionMode::OneWay && cmd.is_reduce_only() {
             cmd.size = Self::max_closable_size(&position, action, cmd.size);
             if cmd.size <= 0 {
@@ -327,16 +232,14 @@ impl RiskEngine {
             return CommandResultCode::RiskNsf;
         }
 
-        // 校验全过：pendingHold 占用（BUDGET 单 cmd.price 是总预算，用 pendingHoldBudget；
-        // 普通限价 cmd.price 是单价，用 pendingHold），再 commit 本地副本回 map。
+        // 校验全过：BUDGET 单用 pendingHoldBudget，普通限价用 pendingHold，再 commit 回 map。
         if matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget)) {
             position.pending_hold_budget(action, cmd.size, cmd.price);
         } else {
             position.pending_hold(action, cmd.size, cmd.price);
         }
         user_profile.positions.insert(position_key, position);
-        // P6 Task 7b：新仓 commit 后登记进强平索引（对应 Java `onPositionOpened`，仅新仓）。
-        // `user_profile` 借用在上一句 insert 后释放，可安全访问平级字段 `liquidation_engine`。
+        // P6：新仓 commit 后登记进强平索引（对应 Java onPositionOpened，仅新仓）。
         if is_new_position {
             self.liquidation_engine.on_position_opened(user_profile.uid, spec.symbol_id);
         }
@@ -344,13 +247,8 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 对应 Java `canPlaceMarginOrder`（`:533-623`）：期货下单 NSF 校验——五项加总（scale 到
-    /// currency 后比较）与账户可支配额度比较，`true` 表示可下单。参考文档 §3.3。
-    ///
-    /// `position_key` 替代 Java 的对象引用 `==` 恒等比较（`posRecord == position`）：
-    /// Rust 这里的 `position` 是从 `positions` map clone 出的独立副本而非同一对象，但 NSF 检查
-    /// 发生在把它插回 map 之前——此时 map 里对应 `position_key` 的记录（若存在）与本地副本状态
-    /// 完全一致，故用 key 相等判定"本仓"与 Java 的对象恒等语义等价。
+    /// 对应 Java `canPlaceMarginOrder`（:533-623）：期货下单 NSF 校验，五项加总 scale 后比较可支配额度。
+    /// position_key 相等替代 Java 的对象引用 == 恒等比较（NSF 检查发生在插回 map 之前，语义等价）。
     #[allow(clippy::too_many_arguments)] // 逐字对齐 Java canPlaceMarginOrder 的参数集，拆分反而失真
     fn can_place_margin_order(
         &self,
@@ -365,11 +263,7 @@ impl RiskEngine {
         let action = cmd.action.expect("PLACE_ORDER requires action");
         let is_budget_order = matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
 
-        // ────────────────────────────────────────────────────────────
-        // ① positionMargin：本仓含新挂单后的总保证金。BUDGET 单 cmd.price 已是总预算 notional；
-        //   LIMIT 单需 × size。-1 哨兵（新单不扩最坏敞口）→ 回退到含现有 pending 的
-        //   calculateRequiredMarginForFutures。
-        // ────────────────────────────────────────────────────────────
+        // ① positionMargin：本仓含新挂单后总保证金；-1 哨兵→回退 calculateRequiredMarginForFutures。
         let order_notional = if is_budget_order { cmd.price } else { mul_exact(cmd.size, cmd.price) };
         let new_order_margin = position.calculate_required_margin_for_order(spec, action, order_notional);
         let position_margin = if new_order_margin == -1 {
@@ -378,14 +272,7 @@ impl RiskEngine {
             new_order_margin
         };
 
-        // ────────────────────────────────────────────────────────────
-        // ② crossFreeMargin（currency scale，可负）：遍历账户所有仓位。
-        //   - 本仓（key == position_key）：仅 CROSS 才加自身浮盈（用本单 spec 缩放；margin 已含
-        //     在 positionMargin 里，不重复减）。
-        //   - 其它同 quoteCurrency 仓（含 HEDGE 对侧腿）：CROSS 加其浮盈（用其自身 otherSpec
-        //     缩放），且**无论 marginMode**都减其 calculateRequiredMarginForFutures——任何仓的
-        //     锁定保证金都要从可支配里剥离，只有 CROSS 的浮盈能加回来抵扣。
-        // ────────────────────────────────────────────────────────────
+        // ② crossFreeMargin：遍历账户所有仓位——本仓 CROSS 才加浮盈；其它仓 CROSS 加浮盈、且无论 marginMode 都减其占用保证金。
         let mut cross_free_margin: i64 = 0;
         for (&key, pos_record) in user_profile.positions.iter() {
             if key == position_key {
@@ -424,20 +311,14 @@ impl RiskEngine {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
         // ③ pendingFee：本单成交按 taker rate 预扣估算（NSF 预检用，不实收）。
-        // ────────────────────────────────────────────────────────────
         let pending_fee = if is_budget_order {
             position.calculate_pending_fee_for_order_budget(spec, action, cmd.size, cmd.price)
         } else {
             position.calculate_pending_fee_for_order(spec, action, cmd.size, cmd.price)
         };
 
-        // ────────────────────────────────────────────────────────────
-        // ④ openLoss：开仓瞬间浮亏预留（防"开仓即爆仓"）。BUDGET 单跳过（成交价由撮合决定）。
-        //   openingSize：ONEWAY 且反向于现仓时先抵掉 openVolume，剩余部分才是真正新开敞口；
-        //   否则（同向/无仓/HEDGE）openingSize = 全部 cmd.size。
-        // ────────────────────────────────────────────────────────────
+        // ④ openLoss：开仓瞬间浮亏预留（防"开仓即爆仓"），BUDGET 单跳过；openingSize 为 ONEWAY 反向时先抵掉 openVolume 的剩余部分，否则为全部 cmd.size。
         let mut open_loss: i64 = 0;
         if !is_budget_order {
             let opposite_to_pos = user_profile.position_mode == PositionMode::OneWay
@@ -459,10 +340,7 @@ impl RiskEngine {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押（loanCollateralLocked）；
-        //   需求 = scale(positionMargin + pendingFee + openLoss) − crossFreeMargin。
-        // ────────────────────────────────────────────────────────────
+        // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押；需求 = scale(positionMargin+pendingFee+openLoss) − crossFreeMargin。
         let currency = position.currency;
         let spendable = user_profile.account(currency) - user_profile.locked(currency)
             - self.loan_collateral_locked(user_profile, currency);
@@ -475,12 +353,7 @@ impl RiskEngine {
         required <= spendable
     }
 
-    /// 对应 Java `loanCollateralLocked`（`:1063-1072`）：借贷抵押虚拟锁定额（currency scale）——
-    /// ③ Isolated：`isolated_loans` 中 `collateral_currency == currency` 的各条 `collateral_amount`
-    /// 求和；④ Cross：账户级 `cross_loan_collateral` 池按 currency 直取（缺省 0，同 Java
-    /// `LongIntHashMap.get` 语义）。抵押物仍躺在 `accounts` 里从未被物理转移——本方法只是让
-    /// 借贷抵押不能被现货挂单 / 期货保证金 / 提现顶用，否则贷款变裸债，损失由借贷池承担
-    /// （P5-B：无任何 loan 的用户两个 map 皆空，两项累加恒 0，与 P4 stub 行为逐位相同）。
+    /// 对应 Java `loanCollateralLocked`（:1063-1072）：借贷抵押虚拟锁定额（currency scale）= Isolated 各 loan collateral_amount 求和 + Cross 池 currency 直取。抵押物仍在 accounts 里未物理转移，只是防止被顶用。
     fn loan_collateral_locked(&self, user_profile: &UserProfile, currency: i32) -> i64 {
         let mut locked: i64 = 0;
         for loan in user_profile.isolated_loans.values() {
@@ -492,11 +365,7 @@ impl RiskEngine {
         locked
     }
 
-    /// 对应 Java `calculateLockedMargin(SymbolPositionRecord, CoreSymbolSpecification,
-    /// CoreCurrencySpecification)`（`:1079-1083`）：单个仓位的期货保证金占用（含 pending +
-    /// 潜在 fee），折算到 currency 记账单位——好让 [`Self::calculate_locked`] 把不同 symbol 的
-    /// 占用累加到同一 currency 上（各 symbol 内部单位 `base_scale_k × quote_scale_k` 不同，不
-    /// 折算无法相加）。
+    /// 对应 Java `calculateLockedMargin`（:1079-1083）：单仓期货保证金占用折算到 currency 记账单位，供 calculate_locked 跨 symbol 累加。
     fn calculate_locked_margin(
         &self,
         position: &SymbolPositionRecord,
@@ -512,17 +381,7 @@ impl RiskEngine {
         )
     }
 
-    /// 对应 Java `calculateLocked(UserProfile, int)`（`:1040-1055`）：用户在某 currency 上的
-    /// 全量锁定额（currency scale），不变量 `free = accounts − locked`。三部分累加：
-    /// ① 所有同 currency 的期货持仓占用保证金（[`Self::calculate_locked_margin`]）；
-    /// ② 现货挂单冻结 `exchangeLocked`；
-    /// ③④ 借贷抵押（[`Self::loan_collateral_locked`]：Isolated collateralCurrency 匹配的各 loan +
-    /// Cross 账户级抵押池）。
-    ///
-    /// 注意（同 Java 文档）：提现 / 加保证金 / 现货下单 / 期货下单四处 NSF **不**直接调本方法
-    /// （它们各自算期货净盈余 [`Self::calculate_free_futures_margin`]），而是单独扣减
-    /// `loan_collateral_locked` 隔离借贷抵押——`calculate_locked` 只用于报表 / 事件下发 / 撮合
-    /// 结算后的余额校验等"纯占用"场景。
+    /// 对应 Java `calculateLocked`（:1040-1055）：用户某 currency 全量锁定额 = 期货保证金占用 + 现货冻结 + 借贷抵押。仅用于报表/事件/结算后余额校验，四处 NSF 场景不直接调用（各走 calculate_free_futures_margin）。
     pub fn calculate_locked(
         &self,
         user_profile: &UserProfile,
@@ -544,9 +403,7 @@ impl RiskEngine {
         locked
     }
 
-    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int)`（`:759-761`）：不指定
-    /// `curPosSymbol` 的双参重载，逐仓浮盈一律不计入分摊（更保守）——转发到三参版本、
-    /// `cur_pos_symbol = -1`（永不匹配任何真实 symbol id）。
+    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int)`（:759-761）：双参重载，转发三参版本 cur_pos_symbol=-1（逐仓浮盈一律不计入）。
     pub fn calculate_free_futures_margin(
         &self,
         user_profile: &UserProfile,
@@ -556,19 +413,8 @@ impl RiskEngine {
         self.calculate_free_futures_margin_for_symbol(user_profile, currency, -1, ssp)
     }
 
-    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int, int curPosSymbol)`（`:767-805`）：
-    /// 账户级"净期货盈余"（currency scale，可正可负），用作提现 / 现货下单 NSF 的可用额度补充。
-    /// 取两保守估计的 **min**：
-    /// ① 计入未实现盈亏：`realizedPnl + unrealizedPnl − crossInitialMargin − isolatedRequiredMargin`
-    ///   （CROSS 按**初始**保证金扣）；
-    /// ② 不计未实现盈亏：`realizedPnl − crossMaintenanceMargin − isolatedRequiredMargin`
-    ///   （CROSS 按**维持**保证金扣——维持保证金口径 = 把已锁的初始保证金换成维持保证金：
-    ///   `initialMargin − openInitMarginSum + calculateMaintenanceMargin`）。
-    ///
-    /// `cur_pos_symbol` 让该 symbol 上的 ISOLATED 仓浮盈也计入 ①/② 的 `unrealizedPnl`——现货
-    /// 下单场景下，用户在该 symbol 上逐仓仓位的浮盈可为同 symbol 的新现货单提供额度；不匹配的
-    /// ISOLATED 仓浮盈永不计入（PnL 不外借）。CROSS 仓的浮盈不受 `cur_pos_symbol` 限制，恒计入
-    /// （账户级池化）。
+    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int, int curPosSymbol)`（:767-805）：账户级净期货盈余（可正可负），取两保守估计的 min：①计未实现盈亏（CROSS 按初始保证金扣）②不计未实现盈亏（CROSS 按维持保证金扣）。
+    /// cur_pos_symbol：仅该 symbol 上的 ISOLATED 仓浮盈计入 unrealizedPnl；CROSS 仓浮盈恒计入，不受限制。
     fn calculate_free_futures_margin_for_symbol(
         &self,
         user_profile: &UserProfile,
@@ -576,10 +422,7 @@ impl RiskEngine {
         cur_pos_symbol: i32,
         ssp: &SymbolSpecificationProvider,
     ) -> i64 {
-        // **Ruling P4-A** 短路：该 currency 上没有任何期货持仓时，下面的五项累加器全恒为 0
-        // （`min(0, 0) = 0`），结果与 currency spec 无关——提前返回，避免为一个纯现货用户（没有
-        // 任何期货仓位）强制要求调用方在 `ssp` 里注册这个 currency 的 spec（`place_exchange_order`
-        // /`balance_adjustment` 两个 spot 调用点在移植 P4 前从不依赖期货 currency spec 注册）。
+        // Ruling P4-A 短路：该 currency 无期货持仓时五项累加器恒为 0，提前返回，避免纯现货用户被迫注册期货 currency spec。
         if !user_profile.positions.values().any(|p| p.currency == currency) {
             return 0;
         }
@@ -652,11 +495,7 @@ impl RiskEngine {
             .min(realized_pnl - cross_maintenance_margin - isolated_required_margin)
     }
 
-    /// 对应 Java `closePositionRiskCheck`（`:823-865`）：`CLOSE_POSITION` R1——纯减仓、无新敞口
-    /// math。同 `place_order` 期货分支的守卫序（symbol/futures type/margin trading 开关），
-    /// 缺仓或 `maxClosableSize<=0` 一律 `SUCCESS` no-op（不下单也不报错）；有效减仓则收敛
-    /// `cmd.size` 到可平量，`cmd.leverage`/`cmd.marginMode` 强制随仓（防止调用方传入与仓位不一致
-    /// 的值污染 ME 事件），`pendingHold` 占用挂单量。
+    /// 对应 Java `closePositionRiskCheck`（:823-865）：CLOSE_POSITION R1，纯减仓无新敞口。缺仓或可平量<=0 恒 Success no-op；否则收敛 size 到可平量，leverage/marginMode 强制随仓，pendingHold 占用。
     pub fn close_position_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -696,9 +535,7 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 对应 Java `maxClosableSize`（`:870-875`）：可平量——只有 `position.direction` 与
-    /// `action` 反向时才有意义（`isOppositeToAction`）；`EMPTY`/同向 直接返回 `0`，让上游
-    /// no-op，防止 reduce-only/CLOSE_POSITION 被误用成开新敞口。
+    /// 对应 Java `maxClosableSize`（:870-875）：可平量，仅方向相反时有意义，同向/EMPTY 返回 0（防止误开新敞口）。
     fn max_closable_size(pos: &SymbolPositionRecord, action: OrderAction, requested_size: i64) -> i64 {
         if !pos.direction.is_opposite_to_action(action) {
             return 0;
@@ -706,25 +543,9 @@ impl RiskEngine {
         requested_size.min(pos.open_volume)
     }
 
-    /// 对应 Java `placeExchangeOrder`（633–685）：现货下单冻结。BID 锁 quote，ASK 锁 base；
-    /// 成功只累加 `exchange_locked`，`accounts` 不动。逐行对照参考文档 §2：
-    /// - BID：reserve 价校验（BUDGET 要求 `reserve==price`，普通限价要求 `reserve>=price`，
-    ///   否则 `RiskInvalidReserveBidPrice`）→ BUDGET 用
-    ///   `calculate_amount_bid_taker_fee_for_budget(size, cmd.price, ...)`（`cmd.price` 是总预算），
-    ///   普通限价用 `calculate_amount_bid_taker_fee(size, cmd.reserve_bid_price, ...)`（保守价，
-    ///   非 `cmd.price`）→ `size_price_to_currency_scale` 缩放到 quote currency scale。
-    /// - ASK：`is_ask_price_too_low` 守卫（→ `RiskAskPriceLowerThanFee`）→
-    ///   `calculate_amount_ask(size) = size` → `symbol_to_currency_scale` 缩放到 base currency scale
-    ///   （ASK 侧不预留 fee，从卖出 quote 收益里扣，属 R2）。
-    /// - NSF：`accounts[currency] - exchange_locked[currency] - loan_locked - order_lock_amount +
-    ///   freeFuturesMargin < 0` → `RiskNsf`（P4 Task 5 新增 `freeFuturesMargin` 顶账，对应 Java
-    ///   `:666-669`；`cfg_margin_trading_enabled` 关闭或用户无期货持仓时恒 0——**Ruling P4-A**：
-    ///   对无期货仓的用户，`freeFuturesMargin` 项是纯 no-op。`loan_locked`
-    ///   = [`Self::loan_collateral_locked`]，对应 Java `:673`——**P5 Task 3**：补 P4 Task 5 遗留的
-    ///   carry（stub 恒 0 时是 no-op，接入真实实现后现货挂单不能再顶用借贷抵押）；无 loan 用户
-    ///   `loan_locked` 恒 0，NSF 判定与改动前逐位相同）。
-    /// - 成功：`user_profile.add_to_locked(currency, +order_lock_amount)`，返回
-    ///   `ValidForMatchingEngine`。
+    /// 对应 Java `placeExchangeOrder`（:633-685）：现货下单冻结，BID 锁 quote/ASK 锁 base，成功只加 exchange_locked。
+    /// BID：reserve 价校验→按 BUDGET/普通限价算 taker fee→缩放到 quote scale；ASK：ask-too-low 守卫→size 直接缩放到 base scale（不预留 fee）。
+    /// NSF：`accounts - exchange_locked - loan_locked - order_lock_amount + freeFuturesMargin < 0`（Ruling P4-A：无期货仓时 freeFuturesMargin 恒 0 no-op；loan_locked 对应 Java :673）。成功后 add_to_locked，返回 ValidForMatchingEngine。
     fn place_exchange_order(
         &mut self,
         cmd: &OrderCommand,

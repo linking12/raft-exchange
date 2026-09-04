@@ -16,8 +16,7 @@ impl PositionMode {
         }
     }
 
-    /// 对应 Java `PositionMode.of(byte code)`。未知码值 panic（对应 Java
-    /// `IllegalArgumentException`）。
+    /// 对应 Java `PositionMode.of(byte code)`：未知码值 panic（对应 Java `IllegalArgumentException`）。
     pub fn of_code(code: i8) -> Self {
         match code {
             0 => PositionMode::OneWay,

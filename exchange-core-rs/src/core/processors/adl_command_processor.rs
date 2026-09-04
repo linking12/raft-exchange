@@ -1,47 +1,7 @@
-//! 对应 Java: `exchange.core2.core.processors.ADLCommandProcessor`（257 行，`TwoStepCommandProcessor`
-//! 的一个实例）。`AUTO_DELEVERAGING` 两步处理器：R1 按 `risk_score` DESC 选盈利候选 + 预占
-//! `pending_adl_size`；merge 按分值 best-of-N 消费出实际执行量；R2 关 counterparty 仓位 + 走原表
-//! 对称释放 `pending_adl_size`。参考文档 §3、§11.1。
-//!
-//! # 事件载体的移植偏差（同 P5/P6 既有先例，Ruling P6-A/P6-C）
-//! Java 用 `MatcherEventType::ADL_EVENT`（`matchedOrderUid`/`size` 承载 uid / 实际消费量）在
-//! R1→ME(merge)→R2 之间传递数据，`OrderCommand.adlUserPositionsByShard[]`（按 shard 下标数组，
-//! 每项单链表头）承载 R1 输出。本移植不扩 `MatcherEventType`（Ruling P6-A），改用
-//! `OrderCommand.adl_user_positions: Vec<AdlUserPosition>`（R1 输出，单 shard 塌缩后退化为单个
-//! 有序列表，见 `adl_user_position.rs` 模块文档）+ `OrderCommand.adl_events: Vec<(i64, i64)>`
-//! （merge 输出：`(uid, exec_volume)`，空 = 全拒，对应 Java `REJECT` 事件）。由
-//! `RiskEngine::adl_collect`（R1+merge 合并，单 shard 下"跨 shard 归并"是恒等操作，同
-//! `if_takeover_collect`/`settle_funding_fees_collect` 先例）一次性完成，写入这两个字段；
-//! `RiskEngine::adl_apply`（R2 apply+finalize 合并，同 `if_takeover_apply` 先例）消费。
-//!
-//! 本文件只落地**不触碰用户账户/UserProfileService**的纯选择 + 归并算法（选候选 / 排序 / 贪心分配
-//! / merge 消费）——`RiskEngine::adl_collect`/`adl_apply` 负责账户结算落点（`pending_adl_size`
-//! 写回、counterparty 平仓、taker 平仓、extra_margin 退款、profit 结算），同 `if_command_processor.rs`
-//! 的三段式分工。
-//!
-//! # 无状态处理器
-//! 同 `IfCommandProcessor`/`FundingFeeCommandProcessor` 先例：所有方法都是关联函数，不持有任何
-//! 字段（Java 版本持有 `riskEngine`/`eventsHelper` 只是运行时门禁，单线程同步调用模型不需要）。
-//!
-//! # merge 的"克隆 vs 原表"——为什么本移植不需要真的 clone
-//! Java `buildMatcherEvents`（`:111-115` 注释）强调 merge 的游标数组**必须 clone**
-//! `cmd.adlUserPositionsByShard`：merge 循环会推进游标（`cursors[bestShard] = best.next`）、还会
-//! 在部分消费某个候选时原地 `best.volume -= execSize`——若不 clone、直接复用原数组，会污染
-//! R2 finalize 需要重新遍历的"原始 R1 表"（对称释放要按 R1 预占量释放，不是按 merge 实际消费量）。
-//!
-//! 本移植用 `Vec<AdlUserPosition>` + **只读迭代**取代链表 + 游标克隆：[`AdlCommandProcessor
-//! ::build_matcher_events`] 从不修改传入的 `candidates` 切片，只在本地累加一个 `remaining`
-//! 计数器、产出一份独立的 `(uid, exec_volume)` 列表——天然不存在"污染原表"的风险，不需要显式
-//! clone 就已经满足"R2 finalize 读到的是 R1 原始预占量"这条不变式。
-//!
-//! 另外，Java 的"部分消费导致原地改 `.volume`"这条分支（`execSize < best.volume`）**只有在跨
-//! 多个 shard 独立预占、总和超过 `remaining_size` 时才可能触发**——因为每个 shard 的 R1 各自拿
-//! `cmd.size` 当满额度独立预占，互不知晓对方，merge 阶段才需要跨 shard 裁剪。单 shard 塌缩下
-//! （Ruling P6-C）只有一份候选列表，R1 选取阶段本身已经用同一个 `remaining` 计数器顺序消费到 0
-//! 为止（[`AdlCommandProcessor::collect_input`]），列表内所有 `volume` 之和天然
-//! `<= remaining_size`；merge 阶段（[`AdlCommandProcessor::build_matcher_events`]）重新按同一个
-//! `remaining_size` 走一遍同一列表，因此**每个被摸到的候选都会被完整消费**，"部分消费"分支在单
-//! shard 下数学上不可达——不是本移植简化掉了这条分支，而是它在当前架构下本来就不会发生。
+//! 对应 Java `ADLCommandProcessor`（`TwoStepCommandProcessor` 实例）。`AUTO_DELEVERAGING` 两步处理器：
+//! R1 按 risk_score DESC 选盈利候选+预占 pending_adl_size，merge best-of-N 消费出执行量，R2 关
+//! counterparty 仓位+对称释放（参考文档 §3、§11.1）。事件载体用 `adl_user_positions`/`adl_events`
+//! 而非 Java `MatcherEventType::ADL_EVENT`（Ruling P6-A/P6-C），单 shard 下 merge 只读迭代取代克隆+游标。
 use crate::core::common::adl_user_position::AdlUserPosition;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
@@ -51,17 +11,7 @@ use crate::core::processors::liquidation::liquidation_service::LiquidationServic
 pub struct AdlCommandProcessor;
 
 impl AdlCommandProcessor {
-    /// R1：对应 Java `collectInput`（`:52-100`）——从候选池里选出本次 ADL 可摊派的仓位，按
-    /// `risk_score` DESC（稳定排序，同分保持原相对序，对应 Java `sortThisByLong(...).reverseThis()`
-    /// 是稳定排序，参考文档 §11.1）贪心分配，直至 `remaining_size` 耗尽或候选耗尽。
-    ///
-    /// 筛选条件（逐字对齐 Java `:60-70`）：`open_volume > 0`、`open_volume > pending_adl_size`
-    /// （还有余量可摊派）、候选自身方向与 `action` **相反**（`!is_same_as_action`）、
-    /// `unrealized_pnl(pos, bankruptcy_price) > 0`（按破产价估算仍有浮盈，只吃赚钱的仓位）。
-    ///
-    /// **不写回 `pending_adl_size`**——本函数是纯选择算法，不持有 `UserProfileService`，写回是
-    /// 调用方（`RiskEngine::adl_collect`）的职责：用返回值里每个 [`AdlUserPosition::volume`]
-    /// （= 本次预占量 `can_take`）去重新查活记录并 `+=`（见模块文档"事件载体的移植偏差"）。
+    /// R1：对应 Java `collectInput`（`:52-100`）——按 risk_score DESC（稳定排序）贪心分配，筛选反向+浮盈候选，直至 remaining_size 耗尽；不写回 pending_adl_size（调用方职责）。
     pub fn collect_input(
         candidates: Vec<SymbolPositionRecord>,
         symbol: i32,
@@ -79,11 +29,7 @@ impl AdlCommandProcessor {
             })
             .collect();
 
-        // 逐字复刻 Java `sortThisByLong(riskScore).reverseThis()`（`ADLCommandProcessor.java:70`）：
-        // **升序稳定排序，再整体 reverse**。注意这**不等价于**直接降序稳定排序——`reverseThis()` 会
-        // 把同分（tied）元素的相对序也一并反转（升序稳定后同分保持原序 [A,B]，reverse 后变 [B,A]），
-        // 而直接降序稳定排序会保留 [A,B]。同分时二者选中的对手方不同，故必须照抄 Java 的两步式以
-        // 保证跨实现 tie-break 一致（参考文档 §11.1）。只算一次分值，不在比较器里重复调用。
+        // 逐字复刻 Java `sortThisByLong(riskScore).reverseThis()`（`:70`）：升序稳定排序再整体 reverse，同分 tie-break 会反转相对序，不等价于直接降序稳定排序。
         let mut scored: Vec<(i64, SymbolPositionRecord)> =
             filtered.into_iter().map(|pos| (LiquidationService::risk_score(&pos, bankruptcy_price), pos)).collect();
         scored.sort_by(|a, b| a.0.cmp(&b.0)); // 升序稳定（对应 sortThisByLong）
@@ -103,15 +49,8 @@ impl AdlCommandProcessor {
         out
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:102-165`）——单 shard 塌缩版（Ruling P6-C，见模块
-    /// 文档"merge 的克隆 vs 原表"）。`candidates` 已经是 R1 按 `risk_score` DESC 排好的全局最优序
-    /// 列表，因此"跨 shard best-of-N 挑最高分候选"退化为顺序遍历这一个列表：对每个候选取
-    /// `exec = min(candidate.volume, remaining)`，`remaining` 归零即停。
-    ///
-    /// 返回 `(events, total_consumed)`：`events` 是 `(uid, exec_volume)` 列表（对应 Java 每消费一个
-    /// 候选产出一个 `ADL_EVENT`），`total_consumed` 是实际消费总量（调用方用它改写 `cmd.size`，
-    /// 对应 Java `cmd.size -= remaining`）。`candidates` 为空或 `remaining_size<=0` 时返回空
-    /// `events`（对应 Java `buildRejectEvent()`）。
+    /// merge：对应 Java `buildMatcherEvents`（`:102-165`）——单 shard 塌缩版（Ruling P6-C），顺序遍历
+    /// 已排序候选取 exec=min(volume,remaining)；返回 (events, total_consumed)，空/耗尽时返回空 events（对应 Java `buildRejectEvent()`）。
     pub fn build_matcher_events(candidates: &[AdlUserPosition], remaining_size: i64) -> (Vec<(i64, i64)>, i64) {
         let mut remaining = remaining_size;
         let mut events = Vec::new();
@@ -189,9 +128,7 @@ mod tests {
 
     #[test]
     fn collect_input_tie_break_reverses_input_order_like_java_reverse_this() {
-        // 分值相同（uid=1 与 uid=2 完全同构）时，Java `sortThisByLong().reverseThis()` 会**反转**
-        // 同分元素的相对序：升序稳定后为 [uid1, uid2]，reverseThis 后为 [uid2, uid1]。故先扫到的
-        // uid1 反而排在后面。这是逐字对齐 Java tie-break（不是直接降序稳定排序的"保留原序"）。
+        // 分值相同时 Java reverseThis 会反转相对序，先扫到的 uid1 反而排后——逐字对齐 tie-break。
         let a = candidate(1, PositionDirection::Short, 5, 750, 100, 50, 0);
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 50, 0);
         let picks = AdlCommandProcessor::collect_input(vec![a, b], 100, OrderAction::Bid, 100, 10);
@@ -262,8 +199,7 @@ mod tests {
 
     #[test]
     fn end_to_end_r1_then_merge_consumes_exactly_what_r1_selected_in_single_shard() {
-        // 单 shard 下：R1 已经用同一个 remaining 计数器顺序选到耗尽，merge 重新走一遍同一列表，
-        // 每个候选都被完整消费——不存在"部分消费导致原地改 volume"的分支（见模块文档）。
+        // 单 shard 下每个候选都被完整消费，不存在"部分消费改 volume"分支（见模块文档）。
         let a = candidate(1, PositionDirection::Short, 5, 750, 100, 100, 0);
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 90, 0);
         let picks = AdlCommandProcessor::collect_input(vec![a, b], 100, OrderAction::Bid, 100, 8);

@@ -1,21 +1,7 @@
-//! 对应 Java: `exchange.core2.core.processors.loan.LoanLiquidationEngine`（394 行）。**现货借贷强平
-//! 扫描器**——决定何时提交 `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`（P5 已移植其
-//! handlers；本移植 P6 Task 8 补齐触发端）。参考文档 §6、§11.3。
-//!
-//! 由 [`crate::core::processors::liquidation::liquidation_engine::LiquidationEngine::check_positions`]
-//! 尾部委托（调用方已过 leader 门）。`cmd.symbol >= 0` 走 targeted（三索引并集）；`cmd.symbol < 0`
-//! （`LIQUIDATION_SCAN`）全量兜底、按共享 [`crate::core::processors::liquidation::scheduler::
-//! covered_by_scan_slice`] 切片过滤。
-//!
-//! # 移植偏差（P6 既定 Ruling）
-//! - **无事件总线**（P6-B）：`sendMarginCall`/`ApiSystemLiquidationNotify` 不移植——越预警线分支
-//!   为 no-op（只判定不动作，告警外部拉 report）。
-//! - **submit → 队列**：生成的 force-liquidate 命令进 [`Self::pending_commands`]，由父
-//!   `LiquidationEngine.check_positions` 收拢进其队列、`ExchangeCore` 排空重喂（同 futures 侧）。
-//! - **provider 传参不持有**（P3-B）：`ups`/`ssp`/`last_price_cache`/`loan_service` 均为方法参数。
-//!   扫描器**只读 `ups`**（读 loans/collateral、算、提交命令，不改任何余额），故不需两阶段借用。
-//! - **索引维护由 `LoanCommandDispatcher` 同步调用**（所有节点确定性、不 leader-gate，Task 8 接线）：
-//!   [`Self::on_isolated_loan_opened`]/[`Self::on_isolated_loan_closed`]/[`Self::sync_cross_exposure`]。
+//! 对应 Java `LoanLiquidationEngine`：现货借贷强平扫描器，决定何时提交
+//! `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`（参考文档 §6、§11.3），由
+//! `LiquidationEngine::check_positions` 尾部委托，targeted 三索引并集/scan 切片兜底。
+//! 移植偏差：预警 no-op（P6-B）；submit→pending_commands 队列；provider 传参不持有（P3-B）。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -36,15 +22,14 @@ use crate::core::utils::core_arithmetic_utils::ceil_mul_div;
 /// 天→毫秒（对应 Java `MS_PER_DAY`），期限强平换算。
 const MS_PER_DAY: i64 = 86_400 * 1_000;
 
-/// 对应 Java `LoanLiquidationEngine`。只持有**非复制 leader-local 状态**：两个 targeted 索引 +
-/// 提交队列（见模块文档）。
+/// 对应 Java `LoanLiquidationEngine`：只持有非复制 leader-local 状态（两个 targeted 索引 + 提交队列）。
 #[derive(Debug, Default)]
 pub struct LoanLiquidationEngine {
     /// 对应 Java `isolatedLoanSymbolToUsers`：symbolId → 持有该 pair isolated loan 的 uid 集合。
     pub isolated_loan_symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
-    /// 对应 Java `crossLoanCurrencyToUsers`：currency → 对该币种有 cross 敞口（抵押或借款）的 uid。
+    /// 对应 Java `crossLoanCurrencyToUsers`：currency → 对该币种有 cross 敞口的 uid。
     pub cross_loan_currency_to_users: BTreeMap<i32, BTreeSet<i64>>,
-    /// 提交队列（生成的 force-liquidate 命令，由父 `LiquidationEngine` 收拢，见模块文档）。
+    /// 提交队列，由父 `LiquidationEngine` 收拢。
     pub pending_commands: Vec<OrderCommand>,
 }
 
@@ -53,9 +38,7 @@ impl LoanLiquidationEngine {
         LoanLiquidationEngine::default()
     }
 
-    /// 对应 Java `updateProvider`（`:70-88`）：快照恢复时从头重建两个索引（本移植不持有 provider，
-    /// 只做索引重建，provider 由调用方每次传入）。遍历所有 UserProfile：非空 isolated loan 登记进
-    /// symbol 索引；每个 profile 走一遍 `sync_cross_exposure`。
+    /// 对应 Java `updateProvider`（`:70-88`）：快照恢复时从头重建两个索引。
     pub fn rebuild_indices(&mut self, ups: &UserProfileService) {
         self.isolated_loan_symbol_to_users.clear();
         self.cross_loan_currency_to_users.clear();
@@ -69,9 +52,7 @@ impl LoanLiquidationEngine {
         }
     }
 
-    /// 对应 Java `checkLoans(cmd)`（`:98-126`）：强平检测入口。`cmd.symbol >= 0` 查三索引并集
-    /// （isolated[symbolId] ∪ cross[baseCurrency] ∪ cross[quoteCurrency]，dedup）；`cmd.symbol < 0`
-    /// 全量整扫、按切片过滤。
+    /// 对应 Java `checkLoans(cmd)`（`:98-126`）：强平检测入口，targeted 查三索引并集，`symbol<0` 全量整扫+切片过滤。
     pub fn check_loans(
         &mut self,
         cmd: &OrderCommand,
@@ -110,8 +91,7 @@ impl LoanLiquidationEngine {
         }
     }
 
-    /// 对应 Java `checkUser`（`:128-134`）：对该用户的每笔 isolated loan 跑 `check_isolated`，再跑
-    /// 一次账户级 `check_cross`。
+    /// 对应 Java `checkUser`（`:128-134`）：逐 isolated loan 跑 `check_isolated`，再跑账户级 `check_cross`。
     fn check_user(
         &mut self,
         up: &UserProfile,
@@ -126,10 +106,7 @@ impl LoanLiquidationEngine {
         self.check_cross(up, ts, ssp, last_price_cache, loan_service);
     }
 
-    /// 对应 Java `checkIsolated`（`:136-186`）：单笔 isolated loan 触发判定。realDebt 含 pending
-    /// 利息；`termExpired` 仅对 LOCKED（定息）+ `maxTermDays>0` 生效；触发（越 liquidationLtv 或
-    /// 期限到）则提交 `LOAN_FORCE_LIQUIDATE`（ASK/IOC，限价=破产价）。sub-lot 尘埃（`sellSizeLots<=0`）
-    /// skip（留到 LIF 接管时吸收）。越 marginCall 线仅预警（P6-B no-op）。
+    /// 对应 Java `checkIsolated`（`:136-186`）：越 liquidationLtv 或 LOCKED 定息超期则提交 `LOAN_FORCE_LIQUIDATE`（ASK/IOC，限价=破产价）；sub-lot 尘埃 skip；越 marginCall 线仅预警（P6-B no-op）。
     fn check_isolated(
         &mut self,
         loan: &IsolatedLoanRecord,
@@ -191,9 +168,7 @@ impl LoanLiquidationEngine {
         // 越 marginCall 线：仅预警（P6-B no-op，不移植 send_margin_call）——无动作。
     }
 
-    /// 对应 Java `checkCross`（`:195-247`）：账户级 cross 强平——越 crossLiquidationLtv 则每 tick 选
-    /// 一对 (卖出抵押币, 偿还目标 loan) 提交 `LOAN_CROSS_FORCE_LIQUIDATE`，多 tick 收敛。触发用加权
-    /// LTV，定价用 raw LTV（缺则回落加权）。越 marginCall 线仅预警（no-op）。
+    /// 对应 Java `checkCross`（`:195-247`）：越 crossLiquidationLtv 则每 tick 选一对(卖出抵押币,偿还目标 loan)提交 `LOAN_CROSS_FORCE_LIQUIDATE`，多 tick 收敛；触发用加权 LTV，定价用 raw LTV（缺则回落）。
     fn check_cross(
         &mut self,
         up: &UserProfile,
