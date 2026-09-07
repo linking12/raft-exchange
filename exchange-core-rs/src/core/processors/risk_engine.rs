@@ -1639,7 +1639,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java RiskEngineCommandDispatcher.adjustMarkPrice（:437-451）：更新 lastPriceCache，拒绝 price<=0（Java 允许 0 但本移植三处对 None panic，故加固避免复制状态机 panic）；对应 Java normalizeCmdPositionSize（:724-740）：FORCE/IF/ADL 的 R1 size 归一，cmd.size=min(cmd.size, open_volume)，FORCE 用平仓视角、IF/ADL 用接管视角。
+    /// 对应 Java normalizeCmdPositionSize（:724-740）：FORCE/IF/ADL 的 R1 size 归一，cmd.size=min(cmd.size, open_volume)，FORCE 用平仓视角、IF/ADL 用接管视角。
     fn normalize_cmd_position_size(cmd: &mut OrderCommand, ups: &UserProfileService) -> CommandResultCode {
         let action = match cmd.action {
             Some(a) => a,
@@ -1674,6 +1674,7 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java RiskEngineCommandDispatcher.adjustMarkPrice（:437-451）：更新 lastPriceCache，拒绝 price<=0（Java 允许 0 但本移植三处对 None panic，故加固避免复制状态机 panic）。
     pub fn markprice_adjustment(
         &mut self,
         cmd: &OrderCommand,

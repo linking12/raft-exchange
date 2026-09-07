@@ -427,7 +427,7 @@ impl LoanService {
 
     /// 对应 Java `takeOverCrossLoan`（`:287-385`）：Cross LIF 承接——按 `target_loan_id` 债务占账户总债的比例，从共享抵押池按 `collateralWeightBps` 降序、同权重按 currency 升序**定额**扣走等值抵押（不逐币种等比切，避免尘埃碎片化，见参考文档 §6.3）。**fail-closed**：任一价格/spec 缺失 → 返回 `false`，调用方须保留 loan 原样、不使用失真价格。
     ///
-    /// 只触碰 `up.cross_loan_collateral`/`up.accounts`（真实扣抵押）与 `self` 的 3 个资金桶（LIF/poolAvailable/poolBorrowed/interestRevenue）——**不**清零 `targetLoan` 本身的本金/利息字段，那是调用方（`LoanCommandDispatcher::close_and_recycle_cross_loan`）的职责，逐字对齐 Java：`takeOverCrossLoan` 只管钱，调用方决定何时清账 + 摘出 map。
+    /// 只触碰 `up.cross_loan_collateral`/`up.accounts`（真实扣抵押）与 `self` 的 4 个资金桶（LIF/poolAvailable/poolBorrowed/interestRevenue）——**不**清零 `targetLoan` 本身的本金/利息字段，那是调用方（`LoanCommandDispatcher::close_and_recycle_cross_loan`）的职责，逐字对齐 Java：`takeOverCrossLoan` 只管钱，调用方决定何时清账 + 摘出 map。
     ///
     /// 排序确定性是硬要求（R2 在所有副本执行，哈希序会导致状态分叉）——`BTreeMap` 天然升序迭代 + 显式按 weight 降序/currency 升序排序，逐字对齐 Java `Arrays.sort` 的比较器。
     pub fn take_over_cross_loan(
