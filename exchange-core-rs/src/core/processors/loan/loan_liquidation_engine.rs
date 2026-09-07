@@ -337,7 +337,7 @@ impl LoanLiquidationEngine {
         selling_currency_spec: &crate::core::common::core_currency_specification::CoreCurrencySpecification,
         loan_currency_spec: &crate::core::common::core_currency_specification::CoreCurrencySpecification,
     ) -> i64 {
-        let real_debt = target_loan.outstanding_principal + loan_service.calculate_display_interest(target_loan, now);
+        let real_debt = add_exact_local(target_loan.outstanding_principal, loan_service.calculate_display_interest(target_loan, now));
         if real_debt <= 0 || limit_price <= 0 {
             return 0;
         }
