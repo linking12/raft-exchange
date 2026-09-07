@@ -1,7 +1,6 @@
-//! 对应 Java `LoanLiquidationEngine`：现货借贷强平扫描器，决定何时提交
-//! `LOAN_FORCE_LIQUIDATE`/`LOAN_CROSS_FORCE_LIQUIDATE`（参考文档 §6、§11.3），由
-//! `LiquidationEngine::check_positions` 尾部委托，targeted 三索引并集/scan 切片兜底。
-//! 移植偏差：预警 no-op（P6-B）；submit→pending_commands 队列；provider 传参不持有（P3-B）。
+//! 对应 Java `LoanLiquidationEngine`：现货借贷强平扫描器，决定何时提交 `LOAN_FORCE_LIQUIDATE`/
+//! `LOAN_CROSS_FORCE_LIQUIDATE`（参考文档 §6、§11.3），由 `LiquidationEngine::check_positions` 尾部委托，
+//! targeted 三索引并集/scan 切片兜底。移植偏差：预警 no-op（P6-B）；submit→pending_commands 队列；provider 传参不持有（P3-B）。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -239,8 +238,8 @@ impl LoanLiquidationEngine {
         });
     }
 
-    /// 对应 Java `pickCrossCollateralToSell`（`:305-327`）：选卖出抵押币——权重 DESC → 数量 DESC →
-    /// 币种 ASC，且该币须能偿到某笔债（有就绪现货对）。无合格者返回 `None`。
+    /// 对应 Java `pickCrossCollateralToSell`（`:305-327`）：选卖出抵押币——权重 DESC → 数量 DESC → 币种 ASC，
+    /// 且该币须能偿到某笔债（有就绪现货对）。无合格者返回 `None`。
     fn pick_cross_collateral_to_sell(
         &self,
         up: &UserProfile,
@@ -278,8 +277,8 @@ impl LoanLiquidationEngine {
         best_currency
     }
 
-    /// 对应 Java `pickCrossLoanToRepay`（`:329-346`）：选偿还目标 loan——利率 DESC → 本金 DESC →
-    /// loanId ASC，且与 sellingCurrency 有就绪现货对。无则 `None`。返回 loan 的克隆（避免持 up 借用）。
+    /// 对应 Java `pickCrossLoanToRepay`（`:329-346`）：选偿还目标 loan——利率 DESC → 本金 DESC → loanId ASC，
+    /// 且与 sellingCurrency 有就绪现货对。无则 `None`。返回 loan 的克隆（避免持 up 借用）。
     fn pick_cross_loan_to_repay(
         &self,
         up: &UserProfile,
@@ -312,8 +311,7 @@ impl LoanLiquidationEngine {
         best.cloned()
     }
 
-    /// 对应 Java `hasReadySpotMarket`（`:347-356`）：卖 `selling_currency` 偿 `loan_currency` 的现货
-    /// 对存在且 markPrice 就绪（可真正成交的前提）。
+    /// 对应 Java `hasReadySpotMarket`（`:347-356`）：卖 `selling_currency` 偿 `loan_currency` 的现货对存在且 markPrice 就绪（可真正成交的前提）。
     fn has_ready_spot_market(
         selling_currency: i32,
         loan_currency: i32,
@@ -327,8 +325,7 @@ impl LoanLiquidationEngine {
     }
 
     /// 对应 Java `calculateCrossSellSize`（`:361-371`）：下单张数 = min(可卖抵押, 覆盖真实债务所需)。
-    /// **按 `limit_price`（破产折价）而非 markPrice 折算所需张数**——按市价定量却按折价卖必收不回债
-    /// （故"多 tick 收敛"，§6.6）。
+    /// **按 `limit_price`（破产折价）而非 markPrice 折算所需张数**——按市价定量却按折价卖必收不回债（故"多 tick 收敛"，§6.6）。
     #[allow(clippy::too_many_arguments)]
     fn calculate_cross_sell_size(
         target_loan: &CrossLoanRecord,
@@ -358,8 +355,7 @@ impl LoanLiquidationEngine {
         self.isolated_loan_symbol_to_users.entry(symbol_id).or_default().insert(uid);
     }
 
-    /// 对应 Java `onIsolatedLoanClosed`（`:266-277`）：isolated loan 清空——该 uid 在此 symbol 上已无
-    /// 其它**非空** loan 时才摘除（一 uid 可持多笔同 symbol）。
+    /// 对应 Java `onIsolatedLoanClosed`（`:266-277`）：isolated loan 清空——该 uid 在此 symbol 上已无其它**非空** loan 时才摘除（一 uid 可持多笔同 symbol）。
     pub fn on_isolated_loan_closed(&mut self, up: &UserProfile, symbol_id: i32) {
         let holds_other = up.isolated_loans.values().any(|l| !l.is_empty() && l.symbol_id == symbol_id);
         if holds_other {
@@ -373,9 +369,8 @@ impl LoanLiquidationEngine {
         }
     }
 
-    /// 对应 Java `syncCrossExposure`（`:279-299`）：cross 敞口变更后 reconcile 索引。登记当前敞口币种
-    /// （抵押>0 或有非空借款）；**非对称容忍**（§6.7）——部分币种退出留 stale（无害 over-trigger，
-    /// 下次 rebuild 清）；仅账户全退出（零抵押且零借款）才从各币种桶精确摘除。
+    /// 对应 Java `syncCrossExposure`（`:279-299`）：cross 敞口变更后 reconcile 索引。登记当前敞口币种（抵押>0 或有非空借款）；
+    /// **非对称容忍**（§6.7）——部分币种退出留 stale（无害 over-trigger，下次 rebuild 清）；仅账户全退出（零抵押且零借款）才从各币种桶精确摘除。
     pub fn sync_cross_exposure(&mut self, up: &UserProfile) {
         for (&currency, &amount) in up.cross_loan_collateral.iter() {
             if amount > 0 {

@@ -1,7 +1,6 @@
-//! 对应 Java `ADLCommandProcessor`（`TwoStepCommandProcessor` 实例）。`AUTO_DELEVERAGING` 两步处理器：
-//! R1 按 risk_score DESC 选盈利候选+预占 pending_adl_size，merge best-of-N 消费出执行量，R2 关
-//! counterparty 仓位+对称释放（参考文档 §3、§11.1）。事件载体用 `adl_user_positions`/`adl_events`
-//! 而非 Java `MatcherEventType::ADL_EVENT`（Ruling P6-A/P6-C），单 shard 下 merge 只读迭代取代克隆+游标。
+//! 对应 Java `ADLCommandProcessor`（`TwoStepCommandProcessor` 实例）。`AUTO_DELEVERAGING` 两步处理器：R1 按
+//! risk_score DESC 选盈利候选+预占 pending_adl_size，merge best-of-N 消费出执行量，R2 关 counterparty 仓位+对称释放
+//! （参考文档 §3、§11.1）。事件载体用 `adl_user_positions`/`adl_events` 而非 Java `MatcherEventType::ADL_EVENT`（Ruling P6-A/P6-C），单 shard 下 merge 只读迭代取代克隆+游标。
 use crate::core::common::adl_user_position::AdlUserPosition;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
@@ -49,8 +48,7 @@ impl AdlCommandProcessor {
         out
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:102-165`）——单 shard 塌缩版（Ruling P6-C），顺序遍历
-    /// 已排序候选取 exec=min(volume,remaining)；返回 (events, total_consumed)，空/耗尽时返回空 events（对应 Java `buildRejectEvent()`）。
+    /// merge：对应 Java `buildMatcherEvents`（`:102-165`）——单 shard 塌缩版（Ruling P6-C），顺序遍历已排序候选取 exec=min(volume,remaining)；返回 (events, total_consumed)，空/耗尽时返回空 events（对应 Java `buildRejectEvent()`）。
     pub fn build_matcher_events(candidates: &[AdlUserPosition], remaining_size: i64) -> (Vec<(i64, i64)>, i64) {
         let mut remaining = remaining_size;
         let mut events = Vec::new();

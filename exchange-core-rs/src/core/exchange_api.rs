@@ -1,6 +1,5 @@
 //! 对应 Java: `exchange.core2.core.ExchangeApi`（现货子集门面）。设计文档 §4。
-//! symbol/currency 注册走直接 API（不经 Disruptor/OrderCommand）；下单等交易操作构造
-//! `OrderCommand` 走 [`ExchangeCore::process_command`]。currency 必须先于引用它的 symbol 注册，否则 `add_symbol` 拒绝（`InvalidSymbol`），避免悬空引用导致下单时 panic。
+//! symbol/currency 注册走直接 API（不经 Disruptor/OrderCommand）；下单等交易操作构造 `OrderCommand` 走 [`ExchangeCore::process_command`]。currency 必须先于引用它的 symbol 注册，否则 `add_symbol` 拒绝（`InvalidSymbol`），避免悬空引用导致下单时 panic。
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::{OrderCommand, FLAG_REDUCE_ONLY};
@@ -17,8 +16,7 @@ use crate::core::processors::risk_engine::RiskEngine;
 
 use super::exchange_core::ExchangeCore;
 
-/// [`ExchangeApi::place_order`] 的入参（对应 Java `ExchangeApi.submitCommandAsync` 里手工拼
-/// `PlaceOrder` 建造器的那组字段）。
+/// [`ExchangeApi::place_order`] 的入参（对应 Java `ExchangeApi.submitCommandAsync` 里手工拼 `PlaceOrder` 建造器的那组字段）。
 #[derive(Debug, Clone)]
 pub struct PlaceOrderRequest {
     pub order_id: i64,
@@ -106,8 +104,7 @@ impl ExchangeApi {
         ExchangeApi { core: ExchangeCore::new() }
     }
 
-    /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。
-    /// **必须先于引用它的 symbol 调用**（见模块级文档）。
+    /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。**必须先于引用它的 symbol 调用**（见模块级文档）。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
     }
@@ -132,8 +129,7 @@ impl ExchangeApi {
         cmd.result_code.expect("process_command always sets result_code")
     }
 
-    /// `currency` 走 `cmd.symbol`、`amount` 走 `cmd.price`、`txid` 走 `cmd.order_id`
-    /// （对应 Java `BALANCE_ADJUSTMENT` 命令字段复用，见 `RiskEngine::balance_adjustment` 文档）。
+    /// `currency` 走 `cmd.symbol`、`amount` 走 `cmd.price`、`txid` 走 `cmd.order_id`（对应 Java `BALANCE_ADJUSTMENT` 命令字段复用，见 `RiskEngine::balance_adjustment` 文档）。
     pub fn balance_adjustment(
         &mut self,
         uid: i64,
@@ -231,8 +227,7 @@ impl ExchangeApi {
         self.add_symbol(spec)
     }
 
-    /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]`（对应 Java
-    /// `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
+    /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]`（对应 Java `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
         let mut cmd = OrderCommand {
             command: OrderCommandType::MarkpriceAdjustment,
@@ -244,8 +239,7 @@ impl ExchangeApi {
         cmd.result_code.expect("process_command always sets result_code")
     }
 
-    /// 期货下单：`PLACE_ORDER` + `leverage`/`margin_mode`/reduce-only 三个期货专属字段
-    /// （见 [`PlaceFuturesOrderRequest`] 文档）。
+    /// 期货下单：`PLACE_ORDER` + `leverage`/`margin_mode`/reduce-only 三个期货专属字段（见 [`PlaceFuturesOrderRequest`] 文档）。
     pub fn place_futures_order(&mut self, req: PlaceFuturesOrderRequest) -> CommandResultCode {
         let mut cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -282,8 +276,7 @@ impl ExchangeApi {
         cmd.result_code.expect("process_command always sets result_code")
     }
 
-    /// `MARGIN_ADJUSTMENT`：追加保证金（`Isolated`）/ 等价充值（`Cross`），见
-    /// [`MarginAdjustmentRequest`] 文档。
+    /// `MARGIN_ADJUSTMENT`：追加保证金（`Isolated`）/ 等价充值（`Cross`），见 [`MarginAdjustmentRequest`] 文档。
     pub fn margin_adjustment(&mut self, req: MarginAdjustmentRequest) -> CommandResultCode {
         let mut cmd = OrderCommand {
             command: OrderCommandType::MarginAdjustment,
@@ -299,8 +292,7 @@ impl ExchangeApi {
         cmd.result_code.expect("process_command always sets result_code")
     }
 
-    /// `LEVERAGE_ADJUSTMENT`：调整某 symbol 下用户全部仓位的杠杆（见
-    /// [`RiskEngine::leverage_adjustment`] 文档）。
+    /// `LEVERAGE_ADJUSTMENT`：调整某 symbol 下用户全部仓位的杠杆（见 [`RiskEngine::leverage_adjustment`] 文档）。
     pub fn leverage_adjustment(&mut self, uid: i64, symbol: i32, leverage: i32) -> CommandResultCode {
         let mut cmd = OrderCommand {
             command: OrderCommandType::LeverageAdjustment,
@@ -532,10 +524,9 @@ mod tests {
     }
 
     // ================================================================================
-    // P4 Task 7：期货端到端——经 ExchangeApi 走完整一笔期货开仓成交 + 平仓结算。
-    // 参考文档 §3/§4；手算见下方各断言旁注（`base_scale_k=quote_scale_k=currency_scale_k=1`
-    // 恒等缩放，`fee_scale_k=0` 固定费，`init_margin`/`max_leverage` 均未配置 →
-    // `calculateInitMargin = notional/leverage`，本例 `leverage=1` 恒等于 notional）。
+    // P4 Task 7：期货端到端——经 ExchangeApi 走完整一笔期货开仓成交 + 平仓结算。参考文档 §3/§4；手算见下方各断言旁注
+    // （`base_scale_k=quote_scale_k=currency_scale_k=1` 恒等缩放，`fee_scale_k=0` 固定费，`init_margin`/`max_leverage`
+    // 均未配置 → `calculateInitMargin = notional/leverage`，本例 `leverage=1` 恒等于 notional）。
     // ================================================================================
 
     const FUT_SYMBOL: i32 = 300;
@@ -567,11 +558,10 @@ mod tests {
         assert!(api.ssp().get_symbol(SYMBOL).is_none(), "拒绝的 symbol 不得注册");
     }
 
-    /// Step 1（RED→GREEN）：一笔期货 taker/maker 成交端到端——建期货 symbol/建用户/充值/设
-    /// mark 价 → 空方（SHORT_USER）先挂 ASK（maker，开空）、多方（LONG_USER）吃单 BID（taker，
-    /// 开多）完全成交 → 断言双方头寸（direction/open_volume/open_init_margin_sum）+ accounts
-    /// （仅 fees 流出）+ 全局守恒；再把 mark 价推高后双方互相平仓，断言已实现 PnL 结算进
-    /// accounts 且守恒依旧成立、position 记录被拆除。
+    /// Step 1（RED→GREEN）：一笔期货 taker/maker 成交端到端——建期货 symbol/建用户/充值/设 mark 价 → 空方
+    /// （SHORT_USER）先挂 ASK（maker，开空）、多方（LONG_USER）吃单 BID（taker，开多）完全成交 → 断言双方头寸
+    /// （direction/open_volume/open_init_margin_sum）+ accounts（仅 fees 流出）+ 全局守恒；再把 mark 价推高后双方互相平仓，
+    /// 断言已实现 PnL 结算进 accounts 且守恒依旧成立、position 记录被拆除。
     #[test]
     fn futures_long_short_full_match_then_close_settles_pnl_and_conserves_globally() {
         let mut api = ExchangeApi::new();
@@ -586,8 +576,7 @@ mod tests {
         assert_eq!(api.add_user(LONG_USER), CommandResultCode::Success);
         assert_eq!(api.add_user(SHORT_USER), CommandResultCode::Success);
 
-        // 双方各充值 10_000 quote（覆盖 leverage=1 时 required=1_000(positionMargin)+100(taker
-        // fee 估算) 远有余）。
+        // 双方各充值 10_000 quote（覆盖 leverage=1 时 required=1_000(positionMargin)+100(taker fee 估算) 远有余）。
         assert_eq!(api.balance_adjustment(LONG_USER, QUOTE, 10_000, 1), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(SHORT_USER, QUOTE, 10_000, 2), CommandResultCode::Success);
 
@@ -684,10 +673,9 @@ mod tests {
         assert!(api.user_position(LONG_USER, FUT_SYMBOL).is_none(), "多头完全平仓后 position 记录应被拆除");
         assert!(api.user_position(SHORT_USER, FUT_SYMBOL).is_none(), "空头完全平仓后 position 记录应被拆除");
 
-        // ---- accounts：已实现 PnL 结算进账户（手算：close_notional=150*10=1500，
-        // open_price_sum=1000，pnl_raw=500；LONG 方向乘数+1 → +500，SHORT 方向乘数-1 → -500）+
-        // 平仓手续费（LONG 是 taker 付 size(10)*taker_fee(10)=100；SHORT 是 maker 付
-        // size(10)*maker_fee(5)=50）----
+        // ---- accounts：已实现 PnL 结算进账户（手算：close_notional=150*10=1500，open_price_sum=1000，pnl_raw=500；
+        // LONG 方向乘数+1 → +500，SHORT 方向乘数-1 → -500）+ 平仓手续费（LONG 是 taker 付 size(10)*taker_fee(10)=100；
+        // SHORT 是 maker 付 size(10)*maker_fee(5)=50）----
         assert_eq!(
             api.user_account(LONG_USER, QUOTE),
             10_000 - 100 /* 开仓 taker fee */ - 100 /* 平仓 taker fee */ + 500, /* 已实现盈利 */

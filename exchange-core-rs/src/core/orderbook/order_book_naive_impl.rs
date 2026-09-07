@@ -91,9 +91,8 @@ impl OrderBookNaiveImpl {
         self.id_index.insert(order_id, (action, price, cmd.uid));
     }
 
-    /// 即时撮合 taker（GTC/IOC/FOK/move 共用，价格受限）：Bid 吃 ask_buckets 升序，Ask 吃 bid_buckets 降序。
-    /// 对应 Java tryMatchInstantly。taker_reserve_bid_price 须显式传入 taker 自己的 reserve_bid_price，
-    /// 不可用 cmd.reserve_bid_price（move 场景两者不等，P1 bug，2026-09-01 修复）。
+    /// 即时撮合 taker（GTC/IOC/FOK/move 共用，价格受限）：Bid 吃 ask_buckets 升序，Ask 吃 bid_buckets 降序。对应 Java tryMatchInstantly。
+    /// taker_reserve_bid_price 须显式传 taker 自己的值，不可用 cmd.reserve_bid_price（move 场景两者不等，P1 bug，2026-09-01 修复）。
     fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
@@ -128,8 +127,7 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// 无价格上限全量撮合（FOK_BUDGET 路径，预算已由调用方校验足够）。对应 Java 对应逻辑；
-    /// taker_reserve_bid_price 语义同 try_match_instantly。
+    /// 无价格上限全量撮合（FOK_BUDGET 路径，预算已由调用方校验足够）。对应 Java 对应逻辑；taker_reserve_bid_price 语义同 try_match_instantly。
     fn try_match_full(
         &mut self,
         taker_action: OrderAction,
@@ -245,8 +243,7 @@ impl OrderBookNaiveImpl {
         filled
     }
 
-    /// 预算受限撮合（IOC_BUDGET 专用）：逐桶吃单，每桶购量被 remaining_budget/price 封顶，预算耗尽即停。
-    /// 对应 Java tryMatchInstantlyWithBudget。
+    /// 预算受限撮合（IOC_BUDGET 专用）：逐桶吃单，每桶购量被 remaining_budget/price 封顶，预算耗尽即停。对应 Java tryMatchInstantlyWithBudget。
     fn match_against_budget(
         buckets: &mut BTreeMap<i64, OrdersBucketNaive>,
         id_index: &mut BTreeMap<i64, (OrderAction, i64, i64)>,
@@ -485,8 +482,7 @@ impl IOrderBook for OrderBookNaiveImpl {
         CommandResultCode::Success
     }
 
-    /// 撤单：定位桶移除、空桶删除、摘除 id_index，发 REDUCE 事件。未知 id 或非本人订单均返回 MatchingUnknownOrderId。
-    /// 对应 Java cancelOrder。
+    /// 撤单：定位桶移除、空桶删除、摘除 id_index，发 REDUCE 事件；未知 id 或非本人订单均返回 MatchingUnknownOrderId。对应 Java cancelOrder。
     fn cancel_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let (action, price, uid) = match self.id_index.get(&order_id) {
@@ -530,8 +526,7 @@ impl IOrderBook for OrderBookNaiveImpl {
         CommandResultCode::Success
     }
 
-    /// 部分撤销：剩余量减 cmd.size（超量则整单撤销），发 REDUCE 事件。size<=0 → MatchingReduceFailedWrongSize；
-    /// 未知/非本人 → MatchingUnknownOrderId（顺序对齐 Java 先判 size）。对应 Java reduceOrder。
+    /// 部分撤销：剩余量减 cmd.size（超量则整单撤销），发 REDUCE 事件。size<=0 → MatchingReduceFailedWrongSize；未知/非本人 → MatchingUnknownOrderId（顺序对齐 Java 先判 size）。对应 Java reduceOrder。
     fn reduce_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let requested = cmd.size;
@@ -692,8 +687,7 @@ impl IOrderBook for OrderBookNaiveImpl {
         L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
     }
 
-    /// 确定性状态 hash：ask 升序/bid 降序遍历挂单，h=h*31+orderHash 滚动折叠。对应 Java IOrderBook.stateHash
-    /// 整体形状，但省略 symbolSpec/orderType 等字段，不保证数值相等，只保证同状态同 hash。
+    /// 确定性状态 hash：ask 升序/bid 降序遍历挂单，h=h*31+orderHash 滚动折叠。对应 Java IOrderBook.stateHash 整体形状，但省略 symbolSpec/orderType 等字段，不保证数值相等，只保证同状态同 hash。
     fn state_hash(&self) -> i32 {
         fn order_hash(o: &Order) -> i64 {
             let mut h: i64 = 17;
@@ -2312,7 +2306,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // `multipleCommandsKeepInternalStateTest` 跳过：需要 Java 侧 `TestOrdersGenerator`
-    // （带种子的随机命令生成器）+ `IOrderBook.validateInternalState()`——两者都是测试基础设施而非
-    // 核心撮合逻辑，本任务未复刻该 harness（见 task-7-report.md skip 表）。
+    // `multipleCommandsKeepInternalStateTest` 跳过：需要 Java 侧 `TestOrdersGenerator`（带种子的随机命令生成器）+
+    // `IOrderBook.validateInternalState()`——两者都是测试基础设施而非核心撮合逻辑，本任务未复刻该 harness（见 task-7-report.md skip 表）。
 }
