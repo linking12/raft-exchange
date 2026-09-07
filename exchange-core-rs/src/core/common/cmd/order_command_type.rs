@@ -1,16 +1,6 @@
-/// 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`（现货子集 + P4 Task 1 期货
-/// `create_positions_key` 所需的 `CLOSE_POSITION`/`FORCE_LIQUIDATION` 两个变体 + P4 Task 6
-/// 新增 `LEVERAGE_ADJUSTMENT`/`MARGIN_ADJUSTMENT`/`MARKPRICE_ADJUSTMENT` 三个非交易命令 + P5
-/// Task 1 新增 14 个 loan/pool 变体 + `RepriceLoanRates` + P6 Task 1 新增 `InternalTransfer`/
-/// `IfTakeover`/`AutoDeleveraging`/期货 `IfDeposit`/`IfWithdraw`/`SettleFundingfees`/
-/// `LiquidationScan`/`SystemLiquidationNotify`；其余期货/清算变体本移植尚未列入）。
-/// `is_non_trading()` / `is_loan()` 对照 Java 的二级 dispatch 门守分类语义。
-///
-/// **Ruling P6-D**：本移植是独立 crate，无 wire-protocol 兼容需求，新增码只需在本枚举内部互异，
-/// 不必与 Java 字节码值逐位对齐。参考文档 §12.4 额外指出 Java 源码 `LIQUIDATION_SCAN`（码 64）
-/// 与 `LOAN_IF_DEPOSIT`（码 64）本身就重复——本移植 `LiquidationScan` 故意不选 64（已被
-/// `LoanIfDeposit` 占用），选 44，规避这个 Java 既有的重复码，不是"修正" Java，只是本枚举内部
-/// 互异约束下的必然选择。
+/// 对应 Java `OrderCommandType`（现货/期货/loan/清算全码子集）。`is_non_trading()`/`is_loan()` 对照
+/// Java 二级 dispatch 门守分类。Ruling P6-D：独立 crate，新码只需枚举内互异，不必逐位对齐 Java 字节
+/// （`LiquidationScan` 选 44 规避 Java 自身 64 与 `LoanIfDeposit` 的重复码）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderCommandType {
     PlaceOrder,
