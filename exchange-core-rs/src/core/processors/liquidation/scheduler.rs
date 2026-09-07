@@ -1,5 +1,4 @@
-//! 对应 Java `LiquidationScheduledService`（定时器 harness 部分）+ `coveredByScanSlice`，参考文档 §7、§11.4。
-//! 移植偏差（Ruling P6-F）：ScheduledExecutorService 简化为可手动 tick 的 harness，产出命令入 pending_commands 队列（同 submit→队列偏差），is_running/shard-0 门与 Java 契约一致。
+//! 对应 Java `LiquidationScheduledService`+`coveredByScanSlice`（§7/§11.4）：定时 harness，Ruling P6-F 简化为手动 tick，命令入 pending_commands 队列。
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 

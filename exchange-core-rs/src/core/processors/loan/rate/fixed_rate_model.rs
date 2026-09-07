@@ -1,5 +1,4 @@
-//! 对应 Java `FixedRateModel`：定期利率模型（Fixed/Lock），仅用于 Isolated LOCKED，开仓锁定 floating 当前利率+点差，此后固定线性计息。
-//! 移植偏差：不持有 `floating` 引用字段（禁 Rc/RefCell 铁律），`open_rate_bps` 改为显式接收 `&FloatingRateModel` 参数。
+//! 对应 Java `FixedRateModel`：定期利率模型，仅用于 Isolated LOCKED，开仓锁定 floating 利率+点差后固定计息；移植偏差：不持有 floating 引用（禁 Rc/RefCell），open_rate_bps 改显式传参。
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
