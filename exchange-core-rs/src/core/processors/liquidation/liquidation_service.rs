@@ -1,5 +1,5 @@
-//! 对应 Java `LiquidationService`，参考文档 §2.1/§2.3。保险基金（IF）复制状态：per-shard 单例，`RiskEngine` 持有；`notionals`/`positions` 进 state_hash/snapshot（Ruling P6-E）。
-//! ADL 候选构造 + 排序键（`unrealized_pnl`/`risk_score`/`compute_profitable_positions_by_symbol`/`add_cross_positions_if_user_safe`，逐字对齐 Java `:191-321`）已落地，provider 传参不持有（同 P3-B），`RiskEngine::adl_collect` 消费。
+//! 对应 Java `LiquidationService`（§2.1/§2.3）。保险基金（IF）复制状态：per-shard 单例，`RiskEngine` 持有；`notionals`/`positions` 进 state_hash/snapshot（Ruling P6-E）。
+//! ADL 候选构造+排序键（`unrealized_pnl`/`risk_score`/`compute_profitable_positions_by_symbol`/`add_cross_positions_if_user_safe`，逐字对齐 Java `:191-321`）已落地，provider 传参不持有（同 P3-B），`RiskEngine::adl_collect` 消费。
 
 use std::collections::BTreeMap;
 
@@ -70,38 +70,31 @@ impl LiquidationService {
         ((symbol as i64) << 32) | (uid_hash << 12) | (side_bit << 11) | ts_part
     }
 
-    /// 对应 Java `generateIFOrderId(long)`（`:190-193`）：IF 命令的 orderId 由根强平 orderId 派生，
-    /// 高位打 `'I'`（`0x49`）标签。
+    /// 对应 Java `generateIFOrderId(long)`（`:190-193`）：IF 命令 orderId 由根强平 orderId 派生，高位打 `'I'`（`0x49`）标签。
     pub fn generate_if_order_id(liquidation_order_id: i64) -> i64 {
         let if_order_tag: i64 = 0x49; // 'I'
         (if_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `generateADLOrderId(long)`（`:195-198`）：ADL 命令的 orderId 由根强平 orderId 派生，
-    /// 高位打 `'A'`（`0x41`）标签。
+    /// 对应 Java `generateADLOrderId(long)`（`:195-198`）：ADL 命令 orderId 由根强平 orderId 派生，高位打 `'A'`（`0x41`）标签。
     pub fn generate_adl_order_id(liquidation_order_id: i64) -> i64 {
         let adl_order_tag: i64 = 0x41; // 'A'
         (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池（Task 7
-    /// `collectLiquidationFee` 消费；本 Task 只落地这个记账原语本身）。
+    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池（Task 7 `collectLiquidationFee` 消费；本 Task 只落地这个记账原语本身）。
     pub fn credit_liquidation_fee(&mut self, symbol: i32, notional_fee: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_fee;
     }
 
-    /// 对应 Java `depositToInsuranceFund`：外部充值 IF 可用资金池（admin `IF_DEPOSIT`）。入参已是
-    /// notional（size*price）尺度，scale 换算由调用方（`RiskEngine::if_deposit`）完成。
+    /// 对应 Java `depositToInsuranceFund`：外部充值 IF 可用资金池（admin `IF_DEPOSIT`）。入参已是 notional（size*price）尺度，scale 换算由调用方（`RiskEngine::if_deposit`）完成。
     pub fn deposit_to_insurance_fund(&mut self, symbol: i32, notional_amount: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_amount;
     }
 
-    /// 对应 Java `withdrawFromInsuranceFund`：`IF_WITHDRAW` 支持——从 `available` 扣款，含非负
-    /// 校验。只扣 `available`、不动 `reserved`（reserved 是正在保护某笔强平的预冻结部分，运营不能
-    /// 拿走）。`false` = notional 不存在或 `available` 不足以覆盖（调用方据此返回
-    /// `RiskIfInsufficient`）。
+    /// 对应 Java `withdrawFromInsuranceFund`：`IF_WITHDRAW` 支持——从 `available` 扣款（含非负校验），不动 `reserved`（reserved 是正在保护某笔强平的预冻结部分，运营不能拿走）。`false` = notional 不存在或 `available` 不足覆盖（调用方据此返回 `RiskIfInsufficient`）。
     pub fn withdraw_from_insurance_fund(&mut self, symbol: i32, notional_amount: i64) -> bool {
         let Some(n) = self.notionals.get_mut(&symbol) else {
             return false;
@@ -113,10 +106,7 @@ impl LiquidationService {
         true
     }
 
-    /// 对应 Java `reserveIFNotional`（R1）：预冻结 IF 可用名义金额，返回实际能冻结的量
-    /// （`min(available - reserved, requestSize * price)`）——**自限、永不为负**：不管请求多大，
-    /// 最多只冻结当前真实可用的部分，caller 永远不会把 IF 推向负数（对比 loan LIF 允许为负，
-    /// 参考文档 §2.3 "natural braking"）。
+    /// 对应 Java `reserveIFNotional`（R1）：预冻结 IF 可用名义金额，返回实际能冻结的量（`min(available - reserved, requestSize * price)`）——**自限、永不为负**：不管请求多大，最多只冻结当前真实可用部分，caller 永远不会把 IF 推向负数（对比 loan LIF 允许为负，§2.3 "natural braking"）。
     pub fn reserve_if_notional(&mut self, symbol: i32, request_size: i64, price: i64) -> i64 {
         let n = self.notionals.entry(symbol).or_default();
         let available = n.available - n.reserved;
@@ -126,19 +116,14 @@ impl LiquidationService {
         can_cover
     }
 
-    /// 对应 Java `releaseReservedIFNotional`（R2 finalize）：释放 R1 预冻结的名义金额，与
-    /// `reserve_if_notional` 对称——`IFCommandProcessor::finalize` 无论接管成功/全拒都调用它
-    /// （参考文档 §2.2 "always release"）。
+    /// 对应 Java `releaseReservedIFNotional`（R2 finalize）：释放 R1 预冻结的名义金额，与 `reserve_if_notional` 对称——`IFCommandProcessor::finalize` 无论接管成功/全拒都调用它（§2.2 "always release"）。
     pub fn release_reserved_if_notional(&mut self, symbol: i32, reserved_notional: i64) {
         if let Some(n) = self.notionals.get_mut(&symbol) {
             n.reserved -= reserved_notional;
         }
     }
 
-    /// 对应 Java `acceptIFPosition`（R2 per-event）：IF 正式接管仓位——从 `available` 扣款，累加到
-    /// 该 symbol+方向 的持仓量与成本。要求 `notionals[symbol]` 已存在（由同一条命令的 R1
-    /// `reserve_if_notional` 保证，同 Java `notionals.get(symbol)` 的隐式非空契约——若在此之前从未
-    /// reserve 过，说明调用方违反了 R1→R2 顺序契约，panic 而非静默创建虚假余额）。
+    /// 对应 Java `acceptIFPosition`（R2 per-event）：IF 正式接管仓位——从 `available` 扣款，累加到该 symbol+方向的持仓量与成本。要求 `notionals[symbol]` 已存在（由同一条命令的 R1 `reserve_if_notional` 保证，同 Java `notionals.get(symbol)` 隐式非空契约——若从未 reserve 过说明调用方违反 R1→R2 顺序契约，panic 而非静默创建虚假余额）。
     pub fn accept_if_position(&mut self, symbol: i32, direction: PositionDirection, size: i64, price: i64) {
         let spend = mul_exact(size, price);
         let n = self
@@ -164,8 +149,7 @@ impl LiquidationService {
         self.positions.clear();
     }
 
-    /// 对应 Java `stateHash`：`notionals`/`positions` 都进复制态 hash（Ruling P6-E）。风格对齐
-    /// `LoanService::state_hash`（`h=h*31+field` 滚动折叠 + 高低 32 位异或收窄）。
+    /// 对应 Java `stateHash`：`notionals`/`positions` 都进复制态 hash（Ruling P6-E）。风格对齐 `LoanService::state_hash`（`h=h*31+field` 滚动折叠 + 高低 32 位异或收窄）。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         for (&symbol, n) in &self.notionals {
@@ -183,21 +167,14 @@ impl LiquidationService {
     // P6 Task 6：ADL 候选构造 + 排序键 —— 对应 Java `:191-321`
     // ================================================================
 
-    /// 对应 Java `unrealizedPnl(SymbolPositionRecord, long bankruptcyPrice)`（`:191-195`）：按
-    /// 破产价估算浮动盈亏（ADL 排序/筛选用，静态纯函数）。**全程饱和乘法**（`saturating_multiply`）
-    /// ——溢出时钳到 `i64::MIN`/`MAX` 而非 wrap，防止符号翻转。
+    /// 对应 Java `unrealizedPnl(SymbolPositionRecord, long bankruptcyPrice)`（`:191-195`）：按破产价估算浮动盈亏（ADL 排序/筛选用，静态纯函数）。**全程饱和乘法**（`saturating_multiply`）——溢出时钳到 `i64::MIN`/`MAX` 而非 wrap，防止符号翻转。
     pub fn unrealized_pnl(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
         let sign = pos.direction.multiplier() as i64;
         let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
         saturating_multiply(sign, notional - pos.open_price_sum)
     }
 
-    /// 对应 Java `riskScore(SymbolPositionRecord, long bankruptcyPrice)`（`:197-203`）：ADL 排序键
-    /// = 浮盈 × 实际杠杆 × 资格因子，越大越优先被摊派。**全程饱和乘法**——溢出翻转符号会直接
-    /// 反转排序结果，这是 load-bearing 正确性，不是防御性写法（参考文档 §3.1/§11.1）。
-    /// `actual_leverage = open_price_sum / open_init_margin_sum`：普通整除，非饱和（Java 同样是
-    /// 普通 `/`，`openInitMarginSum==0` 时与 Java 一样整数除零 panic——按 R1 filter 的前置条件
-    /// `open_volume>0`，正常持仓路径下 `open_init_margin_sum` 恒为正，不可达）。
+    /// 对应 Java `riskScore(SymbolPositionRecord, long bankruptcyPrice)`（`:197-203`）：ADL 排序键 = 浮盈 × 实际杠杆 × 资格因子，越大越优先被摊派。**全程饱和乘法**——溢出翻转符号会直接反转排序，这是 load-bearing 正确性、非防御性写法（§3.1/§11.1）。`actual_leverage = open_price_sum / open_init_margin_sum`：普通整除、非饱和（Java 同样是普通 `/`，`openInitMarginSum==0` 时与 Java 一样整数除零 panic——按 R1 filter 前置条件 `open_volume>0`，正常持仓路径下 `open_init_margin_sum` 恒为正、不可达）。
     pub fn risk_score(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
         let sign = pos.direction.multiplier() as i64;
         let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
@@ -206,30 +183,12 @@ impl LiquidationService {
         saturating_multiply(saturating_multiply(actual_leverage, unrealized_pnl), pos.adl_eligibility)
     }
 
-    /// 对应 Java `computeProfitablePositionsBySymbol()`（`:225-321`）：ADL 候选构造——按需从复制态
-    /// （`ups`/`ssp`/`last_price_cache`）现算出全部可被 ADL 摊派的仓位（symbol -> 候选列表），
-    /// **每次重算，不缓存**——leader-only 缓存会让 follower 在同一条 ADL 命令上看到不同候选，
-    /// 破坏确定性重放（Java 原版同一条 WHY 注释，逐字保留结论）。
+    /// 对应 Java `computeProfitablePositionsBySymbol()`（`:225-321`）：ADL 候选构造——按需从复制态（`ups`/`ssp`/`last_price_cache`）现算出全部可被 ADL 摊派的仓位（symbol -> 候选列表），**每次重算、不缓存**——leader-only 缓存会让 follower 在同一条 ADL 命令上看到不同候选、破坏确定性重放（Java 原版同一条 WHY 注释，逐字保留结论）。
     ///
-    /// ISOLATED 仓位直接判"浮盈 > 0"即入选（`adl_eligibility` 已由
-    /// [`SymbolPositionRecord::new`]/`initialize`/`reset` 按 margin_mode 归一为 `100`，本函数
-    /// 不再重复写它——对齐 Java `addProfitablePosition` 对 ISOLATED 分支同样不碰 `adlEligibility`
-    /// 字段，纯粹依赖构造时已设好的默认值）；CROSS 仓位先按 `quote_currency` 分组，交给
-    /// [`Self::add_cross_positions_if_user_safe`] 做账户级门 + factor + 入选（该函数会写回
-    /// `adl_eligibility`）。
+    /// ISOLATED 仓位直接判"浮盈 > 0"即入选（`adl_eligibility` 已由 [`SymbolPositionRecord::new`]/`initialize`/`reset` 按 margin_mode 归一为 `100`，本函数不再重复写它——对齐 Java `addProfitablePosition` 的 ISOLATED 分支同样不碰 `adlEligibility`，纯依赖构造默认值）；CROSS 仓位先按 `quote_currency` 分组，交给 [`Self::add_cross_positions_if_user_safe`] 做账户级门 + factor + 入选（该函数会写回 `adl_eligibility`）。
     ///
     /// # Rust 所有权改造：clone 返回值 + 调用方写回，取代 Java 的活引用列表
-    /// Java 版本 `IntObjectHashMap<MutableList<SymbolPositionRecord>>` 里存的是**活对象引用**——
-    /// 调用方（`ADLCommandProcessor.collectInput`）后续 `pos.pendingADLSize += canTake` 直接改的
-    /// 就是这个引用指向的同一份仓位记录，不需要二次查找。Rust 不能安全地把
-    /// "多个不同 `UserProfile` 的 `&mut SymbolPositionRecord`" 塞进一个跨越整个 `ups` 借用的返回值
-    /// 里，因此本函数返回的是**克隆快照**（`Vec<SymbolPositionRecord>`）；调用方
-    /// （`RiskEngine::adl_collect`）选中某候选后，必须用 `up.create_positions_key(...)` 重新查活
-    /// 记录再写 `pending_adl_size`（见 `adl_command_processor.rs` 模块文档）。这不改变可观察行为
-    /// ——同一条 ADL 命令的候选列表里每个元素对应**不同的 uid**（不会出现同一仓位在列表里出现两次
-    /// 从而需要"看到前一次选取造成的副作用"的情形），冻结快照与活引用在本函数的调用场景下行为
-    /// 等价，只是把"何时读取"从"扫描时"挪到"选取时"（选取发生在同一次 `adl_collect` 调用内、扫描
-    /// 之后几行代码，中间没有任何会改变这些字段的操作）。
+    /// Java `IntObjectHashMap<MutableList<SymbolPositionRecord>>` 存的是**活对象引用**——调用方（`ADLCommandProcessor.collectInput`）后续 `pos.pendingADLSize += canTake` 直接改的就是同一份仓位记录，无需二次查找。Rust 不能安全地把"多个不同 `UserProfile` 的 `&mut SymbolPositionRecord`"塞进一个跨越整个 `ups` 借用的返回值，故本函数返回**克隆快照**（`Vec<SymbolPositionRecord>`）；调用方（`RiskEngine::adl_collect`）选中候选后须用 `up.create_positions_key(...)` 重新查活记录再写 `pending_adl_size`（见 `adl_command_processor.rs` 模块文档）。不改变可观察行为——同一条 ADL 命令的候选列表里每个元素对应**不同的 uid**（不会出现同一仓位两次、需"看到前一次选取副作用"的情形），冻结快照与活引用在此调用场景下等价，只是把"何时读取"从扫描时挪到选取时（选取在同一次 `adl_collect` 调用内、扫描后几行，中间无任何改这些字段的操作）。
     pub fn compute_profitable_positions_by_symbol(
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
@@ -237,8 +196,7 @@ impl LiquidationService {
     ) -> BTreeMap<i32, Vec<SymbolPositionRecord>> {
         let mut result: BTreeMap<i32, Vec<SymbolPositionRecord>> = BTreeMap::new();
 
-        // uid 升序遍历：BTreeMap 天然确定序，无需额外排序（对应 Java `forEachValue` 在
-        // `IntObjectHashMap` 上迭代序不确定的问题——本移植全程 BTreeMap，规避该风险）。
+        // uid 升序遍历：BTreeMap 天然确定序，无需额外排序（规避 Java `forEachValue` 在 `IntObjectHashMap` 上迭代序不确定的问题——本移植全程 BTreeMap）。
         let uids: Vec<i64> = ups.users.keys().copied().collect();
         for uid in uids {
             let profile = match ups.users.get_mut(&uid) {
@@ -284,18 +242,11 @@ impl LiquidationService {
         result
     }
 
-    /// 对应 Java `addCrossPositionsIfUserSafe`（`:293-312`）：CROSS 用户单 currency 的 ADL 候选
-    /// 构造——聚合 + 用户级 gating + factor + 入选一次性完成。
+    /// 对应 Java `addCrossPositionsIfUserSafe`（`:293-312`）：CROSS 用户单 currency 的 ADL 候选构造——聚合 + 用户级 gating + factor + 入选一次性完成。
     ///
-    /// Gating（账户必须足够安全且净盈利才有资格被 ADL 吃）：`totalProfit > 0` 且
-    /// `equity >= 1.2 × totalMaintenance`（离强平线还有 20%+ 余量）。factor 语义：账户离强平线
-    /// 越远 factor 越大，`clamp` 到 `[0, 100]`，写回每条入选仓位的 `adl_eligibility`。
+    /// Gating（账户须足够安全且净盈利才有资格被 ADL 吃）：`totalProfit > 0` 且 `equity >= 1.2 × totalMaintenance`（离强平线还有 20%+ 余量）。factor 语义：账户离强平线越远 factor 越大，`clamp` 到 `[0, 100]`，写回每条入选仓位的 `adl_eligibility`。
     ///
-    /// `total_profit`/`total_maintenance`/`equity` 用普通 `+`/`-`（不用 `*_exact`）——逐字对齐
-    /// Java 的 `totalProfit +=`/`totalMaintenance +=`（Java 原版这几处确实不是
-    /// `Math.addExact`，只有 `warningThreshold`/`factor` 两处乘法用了 `Math.multiplyExact`，见下）；
-    /// 同一模式已见于 `UserProfile::cross_margin_base_allocation`（P4）的 `total_upnl`/`total_mm`
-    /// 累加，本函数与其保持同一套算术纪律。
+    /// `total_profit`/`total_maintenance`/`equity` 用普通 `+`/`-`（不用 `*_exact`）——逐字对齐 Java 的 `totalProfit +=`/`totalMaintenance +=`（原版这几处确实不是 `Math.addExact`，只有 `warningThreshold`/`factor` 两处乘法用了 `Math.multiplyExact`，见下）；同一模式已见于 `UserProfile::cross_margin_base_allocation`（P4）的 `total_upnl`/`total_mm` 累加，本函数保持同套算术纪律。
     fn add_cross_positions_if_user_safe(
         profile: &mut UserProfile,
         currency: i32,
@@ -359,11 +310,7 @@ impl LiquidationService {
     }
 }
 
-/// 对应 Java `saturatingMultiply(long, long)`（`LiquidationService.java:217-222`）：饱和乘法——
-/// 溢出时钳到 `i64::MAX`/`i64::MIN`（按符号）而非 wrap。WHY：ADL 排序键若用普通乘法，溢出截断
-/// 会翻转符号导致排序反转；饱和后仍保持单调，不改变排序语义。用 `i128` 中间精度检测溢出，
-/// 检测到后按 Java 版本 `((a ^ b) < 0) ? Long.MIN_VALUE : Long.MAX_VALUE` 的符号规则钳位
-/// （异或符号位判断两数是否异号——异号则乘积应为负，钳到 `MIN`；同号钳到 `MAX`）。
+/// 对应 Java `saturatingMultiply(long, long)`（`LiquidationService.java:217-222`）：饱和乘法——溢出时按符号钳到 `i64::MAX`/`i64::MIN` 而非 wrap。WHY：ADL 排序键若用普通乘法，溢出截断会翻转符号导致排序反转；饱和后仍单调、不改排序语义。用 `i128` 中间精度检测溢出，检测到后按 Java `((a ^ b) < 0) ? Long.MIN_VALUE : Long.MAX_VALUE` 符号规则钳位（异或符号位判两数异号——异号乘积应为负钳到 `MIN`，同号钳到 `MAX`）。
 fn saturating_multiply(a: i64, b: i64) -> i64 {
     match i64::try_from(a as i128 * b as i128) {
         Ok(v) => v,
@@ -641,29 +588,20 @@ mod tests {
 
     #[test]
     fn risk_score_saturating_overflow_does_not_flip_sign() {
-        // 精心构造一个会在 (actual_leverage * unrealized_pnl) 这步溢出 i64 的场景：
-        // actual_leverage 巨大（open_price_sum 大、open_init_margin_sum=1）、unrealized_pnl 也巨大。
-        // 若用普通 wrapping 乘法，溢出截断会把结果的符号翻转成负数，直接反转排序；
-        // saturating 必须钳在 i64::MAX（因为两个乘数同号，符号规则决定钳到 MAX 而非 MIN）。
+        // 构造在 (actual_leverage * unrealized_pnl) 这步溢出 i64 的场景：actual_leverage 巨大（open_price_sum 大、open_init_margin_sum=1）、unrealized_pnl 也巨大。普通 wrapping 乘法溢出截断会翻转符号导致排序反转；saturating 必须钳在 i64::MAX（两乘数同号，符号规则钳到 MAX）。
         let mut p = pos(PositionDirection::Long, 1, i64::MAX / 2, 1, 100);
         p.open_price_sum = 4_000_000_000_000_000_000; // 巨大成本基 -> actual_leverage 巨大
         let score = LiquidationService::risk_score(&p, 1); // bankruptcy_price=1，产生一个巨大的负 unrealizedPnl
-        // 无论怎么组合，钳位后必须落在 i64 合法范围内，且不能因为溢出 wrap 出一个"看起来对但符号
-        // 翻转"的值——这里直接断言落在饱和边界之一，验证没有发生 silent wrap。
+        // 钳位后必须落在 i64 合法范围内、不能 wrap 出"看似对但符号翻转"的值——直接断言落在饱和边界之一，验证无 silent wrap。
         assert!(score == i64::MAX || score == i64::MIN, "溢出必须钳到饱和边界，不能 wrap 出中间值");
     }
 
     #[test]
     fn risk_score_saturating_overflow_preserves_ranking_direction() {
-        // 两个候选：一个正常范围内正分值，一个会触发饱和溢出但语义上"更该被优先选中"（浮盈更大、
-        // 杠杆更高）——溢出后必须仍然排在前面（钳到 i64::MAX，天然大于任何未溢出的正常分值），
-        // 不能因为 wrap 截断而变成一个更小甚至负数从而被错误地排到后面。
+        // 两个候选：一个正常范围内正分值，一个触发饱和溢出但语义上"更该被优先"（浮盈更大、杠杆更高）——溢出后必须仍排在前面（钳到 i64::MAX，天然大于任何未溢出正常分值），不能因 wrap 截断变小甚至变负而被错误排后。
         //
-        // 夹具必须真正构造"巨大**正**浮盈 + 高杠杆"：Long 且 bankruptcy_price*open_volume >>
-        // open_price_sum（破产价远高于成本基 -> 浮盈为正），否则若破产价低于成本基，uPnl 为负、
-        // 乘积饱和到 i64::MIN，那才是数学上正确的结果（巨亏本就该垫底），测不出"该优先"的语义。
-        // overflow_pos: Long, vol=1, cost=2e18, margin=1 -> leverage=2e18；bankruptcy=4e18 ->
-        // uPnl=+1*(4e18-2e18)=2e18；2e18*2e18 溢出、同号 -> i64::MAX；再 *100 仍 i64::MAX。
+        // 夹具必须真正构造"巨大**正**浮盈 + 高杠杆"：Long 且 bankruptcy_price*open_volume >> open_price_sum（破产价远高于成本基 -> 浮盈为正），否则破产价低于成本基时 uPnl 为负、乘积饱和到 i64::MIN，那才是数学正确结果（巨亏本就垫底），测不出"该优先"语义。
+        // overflow_pos: Long, vol=1, cost=2e18, margin=1 -> leverage=2e18；bankruptcy=4e18 -> uPnl=+1*(4e18-2e18)=2e18；2e18*2e18 溢出同号 -> i64::MAX；再 *100 仍 i64::MAX。
         let normal = pos(PositionDirection::Long, 10, 900, 90, 50); // 正常范围
         let overflow_pos = pos(PositionDirection::Long, 1, 2_000_000_000_000_000_000, 1, 100);
         let normal_score = LiquidationService::risk_score(&normal, 100);
@@ -756,9 +694,7 @@ mod tests {
         let ssp = futures_ssp();
         let mut ups = UserProfileService::new();
         ups.add_empty_user_profile(1);
-        // CROSS Long: open_volume=10, open_price_sum=900(avg 90), mark=100 -> maintenance 由
-        // 未配置分档表兜底 = notional = 1000（见 CoreSymbolSpecification::calculate_maintenance_margin
-        // 文档）；pnl = estimate_pnl = 100（无 realized profit）。
+        // CROSS Long: open_volume=10, open_price_sum=900(avg 90), mark=100 -> maintenance 由未配置分档表兜底 = notional = 1000（见 CoreSymbolSpecification::calculate_maintenance_margin 文档）；pnl = estimate_pnl = 100（无 realized profit）。
         ups.get_mut(1).unwrap().positions.insert(
             SYMBOL,
             SymbolPositionRecord {
@@ -768,8 +704,7 @@ mod tests {
                 ..SymbolPositionRecord::new(1, SYMBOL, QUOTE, MarginMode::Cross, 1)
             },
         );
-        // equity = balance(0) + total_profit(100) = 100; totalMaintenance=1000 -> equity(100) <
-        // warning_threshold(1200)，门不过——先验证这条路径会被拒（下面单独测通过的场景）。
+        // equity = balance(0) + total_profit(100) = 100; totalMaintenance=1000 -> equity(100) < warning_threshold(1200)，门不过——先验证这条路径被拒（下面单独测通过的场景）。
         let mut last_price_cache = BTreeMap::new();
         last_price_cache.insert(SYMBOL, 100);
         let result = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
@@ -801,8 +736,7 @@ mod tests {
             },
         );
         // balance=1_300 -> equity = 1300+100 = 1400 >= threshold(1200)。
-        // factor = clamp((1400-1000)*100/1000, 0, 100) = clamp(40, 0, 100) = 40（非边界值，验证非
-        // 只有 0/100 两个极端 clamp 分支）。
+        // factor = clamp((1400-1000)*100/1000, 0, 100) = clamp(40, 0, 100) = 40（非边界值，验证非只有 0/100 两个极端 clamp 分支）。
         ups.get_mut(1).unwrap().add_to_account(QUOTE, 1_300);
         let mut last_price_cache = BTreeMap::new();
         last_price_cache.insert(SYMBOL, 100);
@@ -885,8 +819,7 @@ mod tests {
 
     #[test]
     fn compute_profitable_positions_recomputes_every_call_not_cached() {
-        // WHY 按需算而非缓存：同一 UserProfileService 状态在两次独立调用之间发生变化，第二次调用
-        // 必须反映最新状态——证明没有偷偷缓存第一次的结果。
+        // WHY 按需算而非缓存：同一 UserProfileService 状态在两次独立调用间变化，第二次调用必须反映最新状态——证明没有偷偷缓存第一次结果。
         let ssp = futures_ssp();
         let mut ups = UserProfileService::new();
         ups.add_empty_user_profile(1);

@@ -1,13 +1,12 @@
-//! 对应 Java `FundingFeeCommandProcessor`（`TwoStepCommandProcessor` 薄实例，全文移植）。`SETTLE_FUNDINGFEES`
-//! 两步处理器：资金费零和结算，payer 池精确算费、receiver 池 pro-rata 分摊，两者恒等（参考文档 §4）。
-//! `SETTLE_FUNDINGFEES` 不是 `is_non_trading()`，与 PLACE_ORDER 同级主交易 switch。R1 collect_input 扫
-//! ACTIVE 用户产出 payer_amounts/receiver_notionals；merge build_matcher_events 做两级 pro-rata 第一级
-//! （跨 shard 截断分配 + distribute_remainder_by_one 余数分配，shard-id 升序确定性）；R2 apply_event 做
-//! 第二级（精确扣 payer，receiver 按 notional 占比二次截断分配），经 settle_funding_fee 落账（活仓记
-//! profit，ghost 仓缩放进 accounts[quote_currency]）。事件载体用 `OrderCommand.funding_fee_event` 而非
-//! Java `MatcherEventType::FUNDING_EVENT`（Ruling P6-A/P6-C）。`distribute_remainder_by_one` 由本文件
-//! 提取为共享原语，IF/ADL 复用。`checkPositions` 钩子（Java `:977`）未落地，属 Task 7 排期。事件总线
-//! （`sendFundingFeeEvent` 等）未移植（Ruling P6-B）。
+//! 对应 Java `FundingFeeCommandProcessor`（`TwoStepCommandProcessor` 薄实例，全文移植）。`SETTLE_FUNDINGFEES` 两步
+//! 处理器：资金费零和结算，payer 池精确算费、receiver 池 pro-rata 分摊，两者恒等（参考文档 §4）。不是
+//! `is_non_trading()`，与 PLACE_ORDER 同级主交易 switch。R1 collect_input 扫 ACTIVE 用户产出
+//! payer_amounts/receiver_notionals；merge build_matcher_events 做两级 pro-rata 第一级（跨 shard 截断分配 +
+//! distribute_remainder_by_one 余数分配，shard-id 升序确定性）；R2 apply_event 做第二级（精确扣 payer，receiver 按
+//! notional 占比二次截断分配），经 settle_funding_fee 落账（活仓记 profit，ghost 仓缩放进 accounts[quote_currency]）。
+//! 事件载体用 `OrderCommand.funding_fee_event` 而非 Java `MatcherEventType::FUNDING_EVENT`（Ruling P6-A/P6-C）。
+//! `distribute_remainder_by_one` 提取为共享原语，IF/ADL 复用。`checkPositions` 钩子（Java `:977`）未落地，属 Task 7。
+//! 事件总线（`sendFundingFeeEvent` 等）未移植（Ruling P6-B）。
 
 use std::collections::BTreeMap;
 
@@ -19,37 +18,33 @@ use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::distribute_remainder_by_one;
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份，同 `risk_engine.rs`/
-/// `symbol_position_record.rs` 的同名 helper 风格（`CoreArithmeticUtils` 里的 `mulExact` 按
-/// Task 1 零依赖 ruling 是私有的，各消费点各自复制一份轻量实现）。
+/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份，同 `risk_engine.rs`/`symbol_position_record.rs`
+/// 的同名 helper（`CoreArithmeticUtils.mulExact` 按 Task 1 零依赖 ruling 私有，各消费点各自复制轻量实现）。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
 
-/// 对应 Java `FundingPaymentAndRecvNotional`（`OrderCommand.fundingPaymentAndRecvNotionalByShard[]`
-/// 数组元素类型）：单 shard 一份，`uid -> fee`（payer 侧，R1 已算好精确值）+
-/// `uid -> raw notional`（receiver 侧，原始名义价值，费用留到 merge/R2 两级 pro-rata 时再算）。
+/// 对应 Java `FundingPaymentAndRecvNotional`（`OrderCommand.fundingPaymentAndRecvNotionalByShard[]` 元素类型）：单
+/// shard 一份，`uid -> fee`（payer 侧，R1 已算好精确值）+ `uid -> raw notional`（receiver 侧，原始名义价值，费用留到
+/// merge/R2 两级 pro-rata 时再算）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FundingPaymentAndRecvNotional {
     pub payer_amounts: BTreeMap<i64, i64>,
     pub receiver_notionals: BTreeMap<i64, i64>,
 }
 
-/// 无状态处理器——所有方法都是关联函数，不持有任何字段（同 `InternalTransferProcessor`/
-/// `LoanRatePricingProcessor` 先例：Java 版本持有 `riskEngine`/`eventsHelper` 两个可选引用只是
-/// 为了在 R1/R2 实例与 merge 实例之间做运行时门禁校验，本移植单线程同步调用模型不需要这层
-/// 门禁）。
+/// 无状态处理器——所有方法都是关联函数，不持有任何字段（同 `InternalTransferProcessor`/`LoanRatePricingProcessor`
+/// 先例：Java 版持有 `riskEngine`/`eventsHelper` 两个可选引用只为在 R1/R2 实例与 merge 实例间做运行时门禁校验，本
+/// 移植单线程同步调用模型不需要这层门禁）。
 pub struct FundingFeeCommandProcessor;
 
 impl FundingFeeCommandProcessor {
-    /// R1：对应 Java `collectInput`（`:34-68`）。**不做** `cmd.size<=0`/mark price 缺失的前置
-    /// 门禁——那是 Java `RiskEngine.preProcessCommand` case `SETTLE_FUNDINGFEES` 外层（`spec`
-    /// 校验 + `LastPriceCacheRecord` 校验）与 `collectInput` 自身（`cmd.size<=0`）两层校验
-    /// 叠加的效果，本移植把这两层校验挪到调用方
-    /// [`crate::core::processors::risk_engine::RiskEngine::settle_funding_fees_collect`]
-    /// （见其文档"R1 前置门禁顺序"），本函数只负责"给定已验证的 `mark_price`/`rate`/
-    /// `rate_scale_k`，扫用户产出 payer/receiver 两个 map"这一步，与 Java `collectInput` 校验
-    /// 通过之后的主体逻辑（`:49-67`）一一对应：
+    /// R1：对应 Java `collectInput`（`:34-68`）。**不做** `cmd.size<=0`/mark price 缺失的前置门禁——那是 Java
+    /// `RiskEngine.preProcessCommand` case `SETTLE_FUNDINGFEES` 外层（`spec` 校验 + `LastPriceCacheRecord` 校验）与
+    /// `collectInput` 自身（`cmd.size<=0`）两层校验叠加的效果，本移植把这两层挪到调用方
+    /// [`crate::core::processors::risk_engine::RiskEngine::settle_funding_fees_collect`]（见其文档"R1 前置门禁顺序"）。
+    /// 本函数只负责"给定已验证的 `mark_price`/`rate`/`rate_scale_k`，扫用户产出 payer/receiver 两个 map"，与 Java
+    /// `collectInput` 校验通过后的主体逻辑（`:49-67`）一一对应：
     /// ```text
     /// for user in ACTIVE users:
     ///     position = user.positions[symbol]
@@ -93,24 +88,20 @@ impl FundingFeeCommandProcessor {
         shard
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:70-126`）——**两级 pro-rata 的第一级**：
-    /// `total_pay`（跨 shard payer 费用求和）按各 shard 的 receiver notional 占比截断分配 +
-    /// [`distribute_remainder_by_one`] 1-unit 余数分配（shard-id 升序，确定性，参考文档
-    /// §11.2）。`shards_data` 是每个 shard 各自的 [`Self::collect_input`] 输出（本移植单 shard
-    /// 场景下调用方传长度为 1 的切片，见 `risk_engine.rs::settle_funding_fees_collect`）。
+    /// merge：对应 Java `buildMatcherEvents`（`:70-126`）——**两级 pro-rata 的第一级**：`total_pay`（跨 shard payer
+    /// 费用求和）按各 shard 的 receiver notional 占比截断分配 + [`distribute_remainder_by_one`] 1-unit 余数分配
+    /// （shard-id 升序，确定性，参考文档 §11.2）。`shards_data` 是每个 shard 各自的 [`Self::collect_input`] 输出（本
+    /// 移植单 shard 场景下调用方传长度为 1 的切片，见 `risk_engine.rs::settle_funding_fees_collect`）。
     ///
-    /// `total_pay==0 || total_recv_notional==0` → 返回空 `Vec`（对应 Java `cmd.matcherEvent =
-    /// null`：没有可结算的东西，调用方据此判断"本次无事可做"）。
+    /// `total_pay==0 || total_recv_notional==0` → 返回空 `Vec`（对应 Java `cmd.matcherEvent = null`：没有可结算的东西，调用方据此判断"本次无事可做"）。
     ///
-    /// 每个 shard 是否参与分配（截断额与余数额两个环节共用同一判定）：`receiver_notionals`
-    /// 非空。对应 Java 判定条件技术上是两处不同表达（截断循环用 `notional==0` continue、
-    /// 余数循环用 `receiverNotionals.isEmpty()`），但在本域内恒等价——参与分配的 notional 恒
-    /// `> 0`（由 `open_volume!=0` 且 `mark_price` 必为正的 R1 前置门禁保证），故本函数用统一的
-    /// "非空"判定精确对齐 Java 的实际行为。
+    /// 每个 shard 是否参与分配（截断额与余数额两个环节共用同一判定）：`receiver_notionals` 非空。对应 Java 技术上是
+    /// 两处不同表达（截断循环用 `notional==0` continue、余数循环用 `receiverNotionals.isEmpty()`），但在本域内恒等价
+    /// ——参与分配的 notional 恒 `> 0`（由 `open_volume!=0` 且 `mark_price` 必为正的 R1 前置门禁保证），故用统一"非空"
+    /// 判定精确对齐 Java 实际行为。
     ///
-    /// 事件产出：`amount<=0 且 payer_amounts 为空` 的 shard 跳过（对应 Java `:111-113`），其余
-    /// shard 产出一条 `(shard_id, amount)`（对应 Java `ev.price=amount, ev.matchedOrderUid=
-    /// shardId`）。
+    /// 事件产出：`amount<=0 且 payer_amounts 为空` 的 shard 跳过（对应 Java `:111-113`），其余 shard 产出一条
+    /// `(shard_id, amount)`（对应 Java `ev.price=amount, ev.matchedOrderUid=shardId`）。
     pub fn build_matcher_events(shards_data: &[FundingPaymentAndRecvNotional]) -> Vec<(usize, i64)> {
         let total_pay: i64 = shards_data.iter().map(|s| s.payer_amounts.values().sum::<i64>()).sum();
         let total_recv_notional: i64 = shards_data.iter().map(|s| s.receiver_notionals.values().sum::<i64>()).sum();
@@ -138,17 +129,15 @@ impl FundingFeeCommandProcessor {
         events
     }
 
-    /// R2：对应 Java `applyEvent`（`:128-167`）——只处理 `ev.matchedOrderUid == shardId` 的事件
-    /// （本移植单 shard 恒匹配，调用方已只传本 shard 的数据，无需再比对 shard id）。**两级
-    /// pro-rata 的第二级**：先无条件精确扣 `payer_amounts`（R1 已算好精确值，逐用户
-    /// [`Self::settle_funding_fee`]，`is_payer=true`），再把 `shard_recv_amount`（merge 分给本
-    /// shard 的截断后金额）按 `receiver_notionals` 占比重新截断分配给具体用户（同一个
-    /// [`distribute_remainder_by_one`] 原语第二次调用，weights 换成 uid -> notional），
-    /// `fee==0` 的用户跳过（对应 Java `:163-164`）。
+    /// R2：对应 Java `applyEvent`（`:128-167`）——只处理 `ev.matchedOrderUid == shardId` 的事件（本移植单 shard 恒
+    /// 匹配，调用方已只传本 shard 数据，无需再比对 shard id）。**两级 pro-rata 的第二级**：先无条件精确扣
+    /// `payer_amounts`（R1 已算好精确值，逐用户 [`Self::settle_funding_fee`]，`is_payer=true`），再把
+    /// `shard_recv_amount`（merge 分给本 shard 的截断后金额）按 `receiver_notionals` 占比重新截断分配给具体用户（同
+    /// 一 [`distribute_remainder_by_one`] 原语第二次调用，weights 换成 uid -> notional），`fee==0` 的用户跳过（对应
+    /// Java `:163-164`）。
     ///
-    /// `shard_recv_amount<=0 || receiver_notionals.is_empty()` → 直接返回（对应 Java
-    /// `:147-149`：本 shard 没有分到钱或没有 receiver，跳过第二级分配，但 payer 一侧已在上面
-    /// 无条件处理过）。
+    /// `shard_recv_amount<=0 || receiver_notionals.is_empty()` → 直接返回（对应 Java `:147-149`：本 shard 没分到钱或
+    /// 没有 receiver，跳过第二级分配，但 payer 一侧已在上面无条件处理过）。
     #[allow(clippy::too_many_arguments)]
     pub fn apply_event(
         ups: &mut UserProfileService,
@@ -178,27 +167,23 @@ impl FundingFeeCommandProcessor {
 
     /// 对应 Java `settleFundingFee`（`:169-195`）：payer/receiver 共用的落账逻辑。
     ///
-    /// `position_side`：payer 用 `action` 本身（付款方持仓方向 == cmd.action，与 R1 payer 侧
-    /// 判定条件一致），receiver 用 `action.opposite()`（收款方持仓方向与 payer 相反）。
-    /// `signed_fee`：payer 为负（扣），receiver 为正（加）。
+    /// `position_side`：payer 用 `action` 本身（付款方持仓方向 == cmd.action，与 R1 payer 侧判定一致），receiver 用
+    /// `action.opposite()`（收款方与 payer 相反）。`signed_fee`：payer 为负（扣），receiver 为正（加）。
     ///
-    /// **HEDGE 双向持仓查找**：先查 `symbol`，若不存在或方向与 `position_side` 不符，退而查
-    /// `-symbol`（HEDGE 模式下正负 symbol 分别承载多/空两条独立持仓记录，对应 Java
-    /// `user.positions.get(symbol)` 失败后 `.get(-symbol)` 的两步查找）。
+    /// **HEDGE 双向持仓查找**：先查 `symbol`，若不存在或方向与 `position_side` 不符，退而查 `-symbol`（HEDGE 模式下
+    /// 正负 symbol 分别承载多/空两条独立持仓记录，对应 Java `user.positions.get(symbol)` 失败后 `.get(-symbol)`）。
     ///
-    /// **活仓命中**（最终解析到的持仓 `open_volume>0` 且方向与 `position_side` 一致）：直接
-    /// `position.profit += signed_fee`——不缩放，`profit` 与 `fee` 同 sizePrice scale。
+    /// **活仓命中**（解析到的持仓 `open_volume>0` 且方向与 `position_side` 一致）：直接 `position.profit += signed_fee`
+    /// ——不缩放，`profit` 与 `fee` 同 sizePrice scale。
     ///
-    /// **ghost 回落**（两次查找都未命中活仓——仓已在 R1/R2 之间被平掉，或用户从未在此 symbol
-    /// 开过仓）：用 `size_price_to_currency_scale` 把 `signed_fee` 缩放进
-    /// `accounts[spec.quote_currency]`——费跟着钱走，不跟着已经不存在的仓走（参考文档 §4.3
-    /// 明确措辞）。
+    /// **ghost 回落**（两次查找都未命中活仓——仓已在 R1/R2 之间被平掉，或用户从未在此 symbol 开过仓）：用
+    /// `size_price_to_currency_scale` 把 `signed_fee` 缩放进 `accounts[spec.quote_currency]`——费跟着钱走，不跟着已不
+    /// 存在的仓走（参考文档 §4.3 明确措辞）。
     ///
-    /// 用户缺失或非 `ACTIVE`：直接跳过（对应 Java `:172-174`，费"消失"——不影响零和总账，
-    /// 因为触发这一路径要求用户在 R1 阶段就已经不是这个 payer/receiver 的来源；本移植单命令
-    /// 内 R1→merge→R2 同步执行，这条分支在真实调用链路上不可达，只有测试直接调用
-    /// `apply_event` 且刻意在 R1/R2 之间改变用户状态时才会触发——同 ghost-position 场景的
-    /// 测试方法论）。
+    /// 用户缺失或非 `ACTIVE`：直接跳过（对应 Java `:172-174`，费"消失"——不影响零和总账，因为触发此路径要求用户在
+    /// R1 阶段就已不是这个 payer/receiver 的来源；本移植单命令内 R1→merge→R2 同步执行，这条分支在真实调用链路上不
+    /// 可达，只有测试直接调用 `apply_event` 且刻意在 R1/R2 之间改变用户状态时才触发——同 ghost-position 场景的测试
+    /// 方法论）。
     #[allow(clippy::too_many_arguments)]
     fn settle_funding_fee(
         ups: &mut UserProfileService,
@@ -365,8 +350,7 @@ mod tests {
     fn build_matcher_events_multi_shard_pro_rata_by_receiver_notional_with_deterministic_remainder() {
         // shard 0: payer 100; receiver notional sum = 30
         // shard 1: payer 0;   receiver notional sum = 70
-        // total_pay=100, total_recv_notional=100 -> shard0 应得 trunc(100*30/100)=30,
-        // shard1 应得 trunc(100*70/100)=70，恰好整除，无余数。
+        // total_pay=100, total_recv_notional=100 -> shard0 trunc(100*30/100)=30, shard1 trunc(100*70/100)=70，整除无余数。
         let mut shard0 = FundingPaymentAndRecvNotional::default();
         shard0.payer_amounts.insert(1, 100);
         shard0.receiver_notionals.insert(10, 30);
@@ -381,8 +365,7 @@ mod tests {
         // shard 0: payer 10; receiver notional 1
         // shard 1: payer 0;  receiver notional 1
         // shard 2: payer 0;  receiver notional 1
-        // total_pay=10, total_recv_notional=3 -> trunc(10*1/3)=3 每个 shard，distributed=9,
-        // remainder=1 -> shard 0（升序最小）拿到多的 1。
+        // total_pay=10, total_recv_notional=3 -> trunc(10*1/3)=3 每 shard，distributed=9，remainder=1 -> shard 0（升序最小）多拿 1。
         let mut shard0 = FundingPaymentAndRecvNotional::default();
         shard0.payer_amounts.insert(1, 10);
         shard0.receiver_notionals.insert(10, 1);
