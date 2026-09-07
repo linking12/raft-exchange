@@ -1,4 +1,4 @@
-//! P6 Task 10（收官）：期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（Ruling P6-I，本文件 scale 全 1 恒等缩放）。
+//! 期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（Ruling P6-I，本文件 scale 全 1 恒等缩放）。
 use proptest::prelude::*;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -172,7 +172,7 @@ enum GenCmd {
     Mark { price: i64 },
 }
 
-/// 生成器按 uid 奇偶固定方向（偶=BID/奇=ASK），刻意排除自成交——避免触发 P4 结算 maker `required=true` 不变式 panic（已知 hazard，非本任务范围，非隐藏 bug）。
+/// 生成器按 uid 奇偶固定方向（偶=BID/奇=ASK），刻意排除自成交——避免触发结算 maker `required=true` 不变式 panic（已知 hazard，非本任务范围，非隐藏 bug）。
 fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
     prop_oneof![
         (0usize..4, 80i64..120, 1i64..20).prop_map(|(uid_idx, price, size)| GenCmd::Place { uid_idx, price, size }),

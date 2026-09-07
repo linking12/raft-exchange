@@ -201,7 +201,7 @@ impl LiquidationEngine {
         if cross_by_currency.is_empty() {
             return;
         }
-        // alloc：整账户 CROSS 仓破产价 marginBase 回调（P4 已移植）。
+        // alloc：整账户 CROSS 仓破产价 marginBase 回调（已移植）。
         let alloc = profile.cross_margin_base_allocation(
             |s| ssp.get_symbol(s),
             |c| ssp.get_currency(c),

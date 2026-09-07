@@ -106,7 +106,7 @@ impl IsolatedLoanRecord {
         self.symbol_id = symbol_id;
         self.collateral_currency = collateral_currency;
         self.loan_currency = loan_currency;
-        self.rate_mode = LoanRateMode::Locked; // 默认 LOCKED；由 handle_loan_create（Task 2+）按 cmd 改写
+        self.rate_mode = LoanRateMode::Locked; // 默认 LOCKED；由 handle_loan_create 按 cmd 改写
         self.rate_bps = rate_bps;
         self.opened_at_ts = opened_at_ts;
         self.collateral_amount = 0;

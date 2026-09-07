@@ -907,7 +907,7 @@ impl Default for OrderBookDirectImpl {
 }
 
 impl IOrderBook for OrderBookDirectImpl {
-    /// 分派 `newOrder`（对应 Java `:106-126`）。Task 2/3 落地 GTC（挂单+撮合），Task 4 补齐 IOC/FOK_BUDGET/IOC_BUDGET。
+    /// 分派 `newOrder`（对应 Java `:106-126`）：GTC（挂单+撮合）+ IOC/FOK_BUDGET/IOC_BUDGET。
     /// 裸 FOK 在 Java Direct 侧本身也未落地（源码标注 `// TODO FOK support`），故仍走 `_` 分支报 `MatchingUnsupportedCommand`（同步写回 `cmd.result_code`），保证不 panic。
     fn new_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let rc = match cmd.order_type {
@@ -1157,7 +1157,7 @@ impl IOrderBook for OrderBookDirectImpl {
         L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
     }
 
-    /// 确定性状态 hash。**Ruling P2-2（约束）**：必须与 `OrderBookNaiveImpl::state_hash` 对同一逻辑订单簿（相同挂单集合）产出**同一个值**——Task 7 差分属性测试用 `direct.state_hash() == naive.state_hash()` 当 oracle。
+    /// 确定性状态 hash。**Ruling P2-2（约束）**：必须与 `OrderBookNaiveImpl::state_hash` 对同一逻辑订单簿（相同挂单集合）产出**同一个值**——差分属性测试用 `direct.state_hash() == naive.state_hash()` 当 oracle。
     ///
     /// **做法：镜像 Naive 现成公式，不引入共享函数**（Naive 见 `order_book_naive_impl.rs::state_hash`，其字段选取/常量/折叠方式的取舍原样照抄）：
     /// `order_hash = ((((17*31+order_id)*31+action.code())*31+price)*31+size)*31+filled)*31+reserve_bid_price)*31+uid`（`wrapping_*`，`i64` 全程），外层用同一 `h=h*31+order_hash` 滚动折叠，最终 `((h>>32) as i32) ^ (h as i32)` 折成 `i32`（对应 Java `Long.hashCode`）。
@@ -1309,11 +1309,11 @@ mod tests {
         assert_eq!(book.bucket(idx).num_orders, 3);
     }
 
-    // ---- IOrderBook 骨架占位：编译 + 不 panic，不做行为断言（Task 2-6 补全后再断言真实语义）----
+    // ---- IOrderBook 骨架占位：编译 + 不 panic，不做行为断言（补全后再断言真实语义）----
 
     #[test]
     fn skeleton_new_order_reports_unsupported_for_unimplemented_types() {
-        // GTC/IOC/FOK_BUDGET/IOC_BUDGET 从 Task 2/3/4 起都有真实实现（见下方 gtc_*/ioc_*/fok_budget_*/ioc_budget_* 测试）；
+        // GTC/IOC/FOK_BUDGET/IOC_BUDGET 都有真实实现（见下方 gtc_*/ioc_*/fok_budget_*/ioc_budget_* 测试）；
         // 裸 FOK 在 Java Direct 侧本身未落地（`// TODO FOK support`），此处覆盖它仍占位、保证骨架不 panic。
         let mut book = OrderBookDirectImpl::new();
         let mut cmd = OrderCommand {
@@ -1360,7 +1360,7 @@ mod tests {
         assert_eq!(book.state_hash(), 0);
     }
 
-    // ---- Task 2: insertOrder + GTC 挂单 + fill_l2 + validate_internal_state ----
+    // ---- insertOrder + GTC 挂单 + fill_l2 + validate_internal_state ----
 
     fn place_gtc(
         book: &mut OrderBookDirectImpl,
@@ -1535,7 +1535,7 @@ mod tests {
         book.validate_internal_state();
     }
 
-    // ---- Task 3: tryMatchInstantly 撮合主循环 + GTC 撮合（对拍 Naive） ----
+    // ---- tryMatchInstantly 撮合主循环 + GTC 撮合（对拍 Naive） ----
 
     use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
@@ -1677,7 +1677,7 @@ mod tests {
         direct.validate_internal_state();
     }
 
-    // ---- P6 Task 2: MatcherTradeEvent.matched_order_command_type（Ruling P6-G） ----
+    // ---- MatcherTradeEvent.matched_order_command_type（Ruling P6-G） ----
     //
     // 对照 Java `OrderBookEventsHelper.java:75`：字段取 maker（挂单方）自己的原命令类型，与触发本次撮合的 taker 命令无关。
     // **逐字节对拍 Naive**（不只是断言值，直接比对两簿产出的完整 `MatcherTradeEvent` 链），这正是 P6-G 要求的"两 book 必须逐字节相同地填"的直接证据。
@@ -1814,7 +1814,7 @@ mod tests {
         direct.validate_internal_state();
     }
 
-    // ---- Task 4: IOC / FOK_BUDGET / IOC_BUDGET（对拍 Naive） ----
+    // ---- IOC / FOK_BUDGET / IOC_BUDGET（对拍 Naive） ----
 
     fn taker_cmd(order_id: i64, action: OrderAction, order_type: OrderType, price: i64, size: i64) -> OrderCommand {
         OrderCommand {
@@ -2207,7 +2207,7 @@ mod tests {
         direct.validate_internal_state();
     }
 
-    // ---- P2 Task 5: cancel / reduce / move + removeOrder（对拍 Naive） ----
+    // ---- cancel / reduce / move + removeOrder（对拍 Naive） ----
 
     fn cancel_cmd(order_id: i64, uid: i64) -> OrderCommand {
         OrderCommand { order_id, symbol: 1, uid, ..Default::default() }
@@ -2702,7 +2702,7 @@ mod tests {
         book.validate_internal_state();
     }
 
-    // ---- P2 Task 6: state_hash（与 Naive 对齐）+ 完整 validate_internal_state §7 ----
+    // ---- state_hash（与 Naive 对齐）+ 完整 validate_internal_state §7 ----
 
     /// 在同一本 `IOrderBook` 上敲入一批混合 ask/bid、同价多单（FIFO）、跨桶的挂单，再用一笔会穿价的 taker 制造部分成交（非零 `filled`）——
     /// 用于 state_hash 的确定性/一致性测试：Naive 与 Direct 分别喂同一序列应落在逐位相同的逻辑状态。
@@ -2749,7 +2749,7 @@ mod tests {
 
     #[test]
     fn state_hash_matches_naive_on_identical_logical_book() {
-        // Ruling P2-2：Direct 与 Naive 对同一逻辑订单簿（同一操作序列喂两侧）必须产出同一个 state_hash——Task 7 差分属性测试拿它当 oracle。
+        // Ruling P2-2：Direct 与 Naive 对同一逻辑订单簿（同一操作序列喂两侧）必须产出同一个 state_hash——差分属性测试拿它当 oracle。
         // 见 `state_hash` 文档：Direct 天然的单链遍历序（best 沿 .prev 走）与 Naive 的桶图遍历序（BTreeMap 升/降序 × FIFO iter_orders）逐位相同，故直接镜像 Naive 现成公式，不必新增共享函数。
         let mut direct = OrderBookDirectImpl::new();
         let mut naive = OrderBookNaiveImpl::new();
@@ -2787,7 +2787,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "disagrees with its bucket's tail price")]
     fn validate_internal_state_catches_non_tail_order_price_disagreeing_with_bucket() {
-        // 不变式 3 要求"每个" order（不只是 tail）都满足 parent.tail.price==order.price。Task 2 版本只在 ART 图遍历里核对 tail 自己，
+        // 不变式 3 要求"每个" order（不只是 tail）都满足 parent.tail.price==order.price。早期版本只在 ART 图遍历里核对 tail 自己，
         // 故这里专门破坏一个**非 tail** 的 order（order 1，桶内两单中先挂入、更靠近 best 的那个）的 price 字段。
         let mut book = OrderBookDirectImpl::new();
         place_gtc(&mut book, 1, OrderAction::Ask, 100, 10);

@@ -43,7 +43,7 @@ fn sub_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
 
-/// 对应 Java `RiskEngine`（现货+P4期货R1子集）；suspends 桶未移植（SUSPEND_USER 未落地）。
+/// 对应 Java `RiskEngine`（现货+期货R1子集）；suspends 桶未移植（SUSPEND_USER 未落地）。
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
@@ -196,7 +196,7 @@ impl RiskEngine {
         }
 
         let position_key = user_profile.create_positions_key(spec.symbol_id, action, cmd.command);
-        // P6：新仓需登记进 symbol_to_users 索引（对应 Java onPositionOpened，:490-491，仅新仓）。
+        // 新仓需登记进 symbol_to_users 索引（对应 Java onPositionOpened，:490-491，仅新仓）。
         let is_new_position = !user_profile.positions.contains_key(&position_key);
         let mut position = match user_profile.positions.get(&position_key) {
             Some(existing) => existing.clone(),
@@ -235,7 +235,7 @@ impl RiskEngine {
             position.pending_hold(action, cmd.size, cmd.price);
         }
         user_profile.positions.insert(position_key, position);
-        // P6：新仓 commit 后登记进强平索引（对应 Java onPositionOpened，仅新仓）。
+        // 新仓 commit 后登记进强平索引（对应 Java onPositionOpened，仅新仓）。
         if is_new_position {
             self.liquidation_engine.on_position_opened(user_profile.uid, spec.symbol_id);
         }
@@ -590,7 +590,7 @@ impl RiskEngine {
 
         let balance = user_profile.account(currency);
         let existing_locked = user_profile.locked(currency);
-        // P4 Task 5：期货净盈余顶现货 NSF 额度（对应 Java `:666-669`）。
+        // 期货净盈余顶现货 NSF 额度（对应 Java `:666-669`）。
         let free_futures_margin = if self.cfg_margin_trading_enabled {
             self.calculate_free_futures_margin(user_profile, currency, ssp)
         } else {
@@ -636,14 +636,14 @@ impl RiskEngine {
         // IfTakeover 用 cmd.if_takeover_size/if_preview_cover 专属载体，不走 matcher_event 链，对应 Java handlerRiskRelease 的 IF_TAKEOVER 分支（:962-966/:987-988）。
         if cmd.command == OrderCommandType::IfTakeover {
             self.if_takeover_apply(cmd, ups, ssp);
-            // P6 Task 7b：对应 Java `handlerRiskRelease:997`——IF R2 结算后推进状态机（REJECT→ADL）。
+            // 对应 Java `handlerRiskRelease:997`——IF R2 结算后推进状态机（REJECT→ADL）。
             Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
         // AutoDeleveraging 用 cmd.adl_events/adl_user_positions 专属载体，对应 Java handlerRiskRelease 的 AUTO_DELEVERAGING 分支（:967-970 apply + :989-990 finalize）。
         if cmd.command == OrderCommandType::AutoDeleveraging {
             self.adl_apply(cmd, ups, ssp);
-            // P6 Task 7b：对应 Java `handlerRiskRelease:997`——ADL R2 结算后推进状态机（恒终态）。
+            // 对应 Java `handlerRiskRelease:997`——ADL R2 结算后推进状态机（恒终态）。
             Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
@@ -673,7 +673,7 @@ impl RiskEngine {
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency))
                 .clone();
 
-            // P6 Task 7b：ForceLiquidation 的 collect_liquidation_fee 需 TRADE 的 Σsize/Σ(size×price)，消费前先非破坏性 peek 一遍聚合（同 loan force-liquidate 先例）。
+            // ForceLiquidation 的 collect_liquidation_fee 需 TRADE 的 Σsize/Σ(size×price)，消费前先非破坏性 peek 一遍聚合（同 loan force-liquidate 先例）。
             let is_force = cmd.command == OrderCommandType::ForceLiquidation;
             let (force_taker_size, force_taker_size_price) = if is_force {
                 let mut taker_size: i64 = 0;
@@ -702,7 +702,7 @@ impl RiskEngine {
                 mark_price_for_futures,
             );
 
-            // P6 Task 7b：ForceLiquidation R2-finalize 钩子，对应 Java handlerRiskRelease :992 collectLiquidationFee + :997 advanceLiquidation。
+            // ForceLiquidation R2-finalize 钩子，对应 Java handlerRiskRelease :992 collectLiquidationFee + :997 advanceLiquidation。
             if is_force {
                 // 对应 Java collect_liquidation_fee（:1522-1550）：Σtrade 手续费从 taker 扣、计入 IFNotional.available；taker_size==0 时 no-op。
                 if force_taker_size > 0 {
@@ -732,7 +732,7 @@ impl RiskEngine {
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
 
-        // Task 7：loan force-liquidate 需 TRADE/REJECT 聚合（traded_size/notional/rejected_size），消费链前先非破坏性 peek 一遍算好，等价 Java 事后再遍历 cmd.matcherEvent。
+        // loan force-liquidate 需 TRADE/REJECT 聚合（traded_size/notional/rejected_size），消费链前先非破坏性 peek 一遍算好，等价 Java 事后再遍历 cmd.matcherEvent。
         let is_loan_force_liquidate = matches!(
             cmd.command,
             OrderCommandType::LoanForceLiquidate | OrderCommandType::LoanCrossForceLiquidate
@@ -1041,7 +1041,7 @@ impl RiskEngine {
         }
 
         if taker_size != 0 || maker_size != 0 {
-            // fees 池按均价重算 taker+maker 费单次入账，避免逐笔 ceil 累积 dust（dust 沉 exchangeLocked，sweep 属 Task 8+）。
+            // fees 池按均价重算 taker+maker 费单次入账，避免逐笔 ceil 累积 dust（dust 沉 exchangeLocked，sweep 属后续）。
             let avg_maker_price = if maker_size > 0 {
                 i64::try_from(maker_notional / maker_size as i128)
                     .unwrap_or_else(|_| panic!("overflow narrowing avg_maker_price"))
@@ -1242,7 +1242,7 @@ impl RiskEngine {
         }
     }
 
-    // ==== R2 主线：期货 handlers（P4 Task 4）—— 参考文档 §4；Java RiskEngine.java:1358-1511 ====
+    // ==== R2 主线：期货 handlers —— 参考文档 §4；Java RiskEngine.java:1358-1511 ====
 
     /// 对应 Java handlerRiskRelease 驱动 handleMatcherEventMargin 的外层 do-while 循环，把整条事件链逐个喂给 handle_matcher_event_margin_one；期货不像现货那样需先摘出链头 REJECT/REDUCE（同函数按 event_type 分支处理）。
     #[allow(clippy::too_many_arguments)]
@@ -1272,7 +1272,7 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `handleMatcherEventMargin`（:1358-1511）处理单个事件：taker 块恒执行 + maker 块仅 TRADE；maker 侧 createPositionsKey 用 mte.matched_order_command_type（非 cmd.command，对应 Java :1450，P6 Task 2），ONEWAY 下无影响，HEDGE 下才生效。
+    /// 对应 Java `handleMatcherEventMargin`（:1358-1511）处理单个事件：taker 块恒执行 + maker 块仅 TRADE；maker 侧 createPositionsKey 用 mte.matched_order_command_type（非 cmd.command，对应 Java :1450），ONEWAY 下无影响，HEDGE 下才生效。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin_one(
         cmd: &OrderCommand,
@@ -1488,7 +1488,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java RiskEngine.withdrawableBalance（:747-753）：提现/转账/加保证金(ISOLATED)共用 NSF 口径 = accounts − 现货冻结 − 借贷抵押 + 期货净盈余（margin trading 开启才计）；P6 Task 3 放宽到 pub(crate) 供跨模块复用。
+    /// 对应 Java RiskEngine.withdrawableBalance（:747-753）：提现/转账/加保证金(ISOLATED)共用 NSF 口径 = accounts − 现货冻结 − 借贷抵押 + 期货净盈余（margin trading 开启才计）；放宽到 pub(crate) 供跨模块复用。
     pub(crate) fn withdrawable_balance(
         &self,
         user_profile: &UserProfile,
@@ -1688,7 +1688,7 @@ impl RiskEngine {
             return CommandResultCode::RiskInvalidAmount;
         }
         self.set_mark_price(cmd.symbol, cmd.price);
-        // P6 Task 7b：对应 Java adjustMarkPrice:447，价格更新后触发 targeted 强平检测；产出的 FORCE 命令入 liquidation_engine.pending_commands，由 ExchangeCore 排空重喂。
+        // 对应 Java adjustMarkPrice:447，价格更新后触发 targeted 强平检测；产出的 FORCE 命令入 liquidation_engine.pending_commands，由 ExchangeCore 排空重喂。
         self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
         CommandResultCode::Success
     }
@@ -1725,7 +1725,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 测试 / Task 7 `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验直接写 last_price_cache，命令路径请走 markprice_adjustment。
+    /// 测试 / `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验直接写 last_price_cache，命令路径请走 markprice_adjustment。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
         self.last_price_cache.insert(symbol, price);
     }
@@ -1836,7 +1836,7 @@ impl RiskEngine {
         );
     }
 
-    // ==== IF_TAKEOVER（保险基金接管，P6 Task 5）—— 参考文档 §2.2/§2.3；Java IFCommandProcessor.java + RiskEngine.java:365-373(R1)/:962-988(R2) ====
+    // ==== IF_TAKEOVER（保险基金接管）—— 参考文档 §2.2/§2.3；Java IFCommandProcessor.java + RiskEngine.java:365-373(R1)/:962-988(R2) ====
 
     /// IfTakeover R1+merge：对应 Java case IF_TAKEOVER（:365-373）collectInput + buildMatcherEvents（:39-72）；preview=min(available-reserved,size*price) 写 cmd.if_preview_cover，覆盖不满→None（全拒）否则 Some(cmd.size) 写 cmd.if_takeover_size；结果码恒 Success（REJECT 是事件级信号）。
     fn if_takeover_collect(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
@@ -1904,7 +1904,7 @@ impl RiskEngine {
         self.liquidation_service.release_reserved_if_notional(symbol, cmd.if_preview_cover);
     }
 
-    // ==== AUTO_DELEVERAGING（自动减仓 ADL，P6 Task 6）—— 参考文档 §3/§11.1；Java ADLCommandProcessor.java + LiquidationService.java:191-321 + RiskEngine.java:374-380(R1)/:962-990(R2) ====
+    // ==== AUTO_DELEVERAGING（自动减仓 ADL）—— 参考文档 §3/§11.1；Java ADLCommandProcessor.java + LiquidationService.java:191-321 + RiskEngine.java:374-380(R1)/:962-990(R2) ====
 
     /// AutoDeleveraging R1+merge：对应 Java case AUTO_DELEVERAGING（:374-380）collectInput + buildMatcherEvents（:102-165）；候选取自 compute_profitable_positions_by_symbol，AdlCommandProcessor::collect_input 排序+贪心分配为 R1 最终预占量，写回 pending_adl_size 后 merge 产出 cmd.adl_events 并把 cmd.size 改写为实际消费量；结果码恒 Success。
     fn adl_collect(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
@@ -2491,7 +2491,7 @@ mod tests {
     fn bid_plain_limit_pure_reject_releases_full_lock_and_leaves_accounts_untouched() {
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
         let mut engine = RiskEngine::new();
-        // 先下单，Task 4 冻结 quote（保守价 reserve_bid_price=50=price）。
+        // 先下单，冻结 quote（保守价 reserve_bid_price=50=price）。
         let mut cmd = bid_cmd(1000, 50, 50, OrderType::Gtc);
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
         assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
@@ -2583,7 +2583,7 @@ mod tests {
             0,
             "REDUCE 不重复释放 + buy 结算全额释放 held_total，taker quote 冻结应归零"
         );
-        // 剩余 TRADE 链已被 buy 结算（Task 7）完全消费。
+        // 剩余 TRADE 链已被 buy 结算完全消费。
         assert!(cmd.matcher_event.is_none(), "TRADE 链应被 buy 结算完全消费");
     }
 
@@ -3385,7 +3385,7 @@ mod tests {
         assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
     }
 
-    // ==== Task 8 — ADD_USER / BALANCE_ADJUSTMENT + adjustments 守恒桶（参考文档 §5） ====
+    // ==== ADD_USER / BALANCE_ADJUSTMENT + adjustments 守恒桶（参考文档 §5） ====
 
     fn add_user_cmd(uid: i64) -> OrderCommand {
         OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() }
@@ -3530,7 +3530,7 @@ mod tests {
         assert_eq!(engine.balance_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::AuthInvalidUser);
     }
 
-    // ==== P4 Task 3：期货 R1 — place_order 期货分支/can_place_margin_order NSF/CLOSE_POSITION（参考文档 §3；Java RiskEngine.java:432-503,533-623,823-875）；搭建单 symbol（scale 全 1 恒等缩放）+ mark price + 已建档用户，leverage 默认 1 ====
+    // ==== 期货 R1 — place_order 期货分支/can_place_margin_order NSF/CLOSE_POSITION（参考文档 §3；Java RiskEngine.java:432-503,533-623,823-875）；搭建单 symbol（scale 全 1 恒等缩放）+ mark price + 已建档用户，leverage 默认 1 ====
 
     const FUT_SYMBOL: i32 = 200;
     const FUT_BASE: i32 = 1;
@@ -3555,7 +3555,7 @@ mod tests {
         futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k)
     }
 
-    /// 同 [`futures_spec`]，但 `maker_fee` 可配置（Task 4 R2 需要区分 taker/maker 费率的测试用）。
+    /// 同 [`futures_spec`]，但 `maker_fee` 可配置（R2 需要区分 taker/maker 费率的测试用）。
     fn futures_spec_with_fees(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
         CoreSymbolSpecification { maker_fee, ..futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k) }
     }
@@ -3626,7 +3626,7 @@ mod tests {
             ups.get_mut(UID).unwrap().positions.get(&FUT_SYMBOL).expect("NSF 通过后 position 必须已提交入 map");
         assert_eq!(position.pending_buy_size, 10);
         assert_eq!(position.pending_buy_avg_price, 100);
-        assert_eq!(position.open_volume, 0); // R1 只挂单占用，未成交（成交结算在 R2，P4 Task 4+）
+        assert_eq!(position.open_volume, 0); // R1 只挂单占用，未成交（成交结算在 R2）
         assert_eq!(position.leverage, 1);
         assert_eq!(position.margin_mode, MarginMode::Isolated);
     }
@@ -3962,7 +3962,7 @@ mod tests {
         assert_eq!(cmd.size, 5);
     }
 
-    // ==== P4 Task 4：期货 R2 — handleMatcherEventMargin（开/平/翻/PnL 结算，参考文档 §4/§6/§7；Java RiskEngine.java:1358-1511 + refundExtraMargin:1553-1574 + removePositionRecord:1580-1589）；两层测试：低层锁定 settle_margin_position_event 结算核心，集成层走 handler_risk_release 验证联动+守恒 ====
+    // ==== 期货 R2 — handleMatcherEventMargin（开/平/翻/PnL 结算，参考文档 §4/§6/§7；Java RiskEngine.java:1358-1511 + refundExtraMargin:1553-1574 + removePositionRecord:1580-1589）；两层测试：低层锁定 settle_margin_position_event 结算核心，集成层走 handler_risk_release 验证联动+守恒 ====
 
     const FUT2_MAKER_UID: i64 = 12;
 
@@ -3974,7 +3974,7 @@ mod tests {
         fut_trade_event_with_command(size, price, matched_order_uid, OrderCommandType::PlaceOrder)
     }
 
-    /// 同 fut_trade_event，但允许显式指定 matched_order_command_type（P6 Task 2 新增，供 ONEWAY 不回归测试：即便与 cmd.command 不同，create_positions_key 应忽略该差异）。
+    /// 同 fut_trade_event，但允许显式指定 matched_order_command_type（新增，供 ONEWAY 不回归测试：即便与 cmd.command 不同，create_positions_key 应忽略该差异）。
     fn fut_trade_event_with_command(
         size: i64,
         price: i64,
@@ -4290,7 +4290,7 @@ mod tests {
 
     #[test]
     fn settle_margin_proportional_fee_is_exact_no_ceil_drift_taker_and_maker() {
-        // P4-C watch：futures 费用同一次计算值借记 accounts+贷记 fees（无现货两套公式落差），比例费天然精确配对无 dust，本测试断言 EXACT 守恒。
+        // futures 费用同一次计算值借记 accounts+贷记 fees（无现货两套公式落差），比例费天然精确配对无 dust，本测试断言 EXACT 守恒。
         let spec = futures_spec_with_fees(333, 111, 10_000); // taker≈3.33%、maker≈1.11%，故意选不整除的比例
         let currency_spec = fut_currency_spec();
         let mut ups = UserProfileService::new();
@@ -4357,7 +4357,7 @@ mod tests {
         assert_eq!(taker_delta + maker_delta + fees_delta, 0, "开仓：唯一移动是费用配对");
     }
 
-    /// P6 Task 2 Step1(c)：create_positions_key maker 侧改用 mte.matched_order_command_type 后 ONEWAY 行为不变，即便与 cmd.command 故意不同（taker=ForceLiquidation/maker=PlaceOrder），断言与开仓用例逐项相同。
+    /// create_positions_key maker 侧改用 mte.matched_order_command_type 后 ONEWAY 行为不变，即便与 cmd.command 故意不同（taker=ForceLiquidation/maker=PlaceOrder），断言与开仓用例逐项相同。
     #[test]
     fn handler_risk_release_futures_trade_oneway_unaffected_by_matched_order_command_type_switch() {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
@@ -4498,7 +4498,7 @@ mod tests {
         assert_eq!(maker_pos.open_volume, 6, "maker 只在 TRADE 事件参与，REDUCE 与其无关");
     }
 
-    // ==== P4 Task 5：统一账户 — calculate_locked/calculate_free_futures_margin + 现货 NSF/withdrawable 顶账（参考文档 §4/§5；Java RiskEngine.java:759-805,1040-1055）；复用 setup_futures，leverage=1 无 pending 时 calculate_required_margin_for_futures 退化为 open_init_margin_sum ====
+    // ==== 统一账户 — calculate_locked/calculate_free_futures_margin + 现货 NSF/withdrawable 顶账（参考文档 §4/§5；Java RiskEngine.java:759-805,1040-1055）；复用 setup_futures，leverage=1 无 pending 时 calculate_required_margin_for_futures 退化为 open_init_margin_sum ====
 
     #[test]
     fn calculate_locked_zero_when_no_positions_and_no_exchange_locked() {
@@ -4527,7 +4527,7 @@ mod tests {
         assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
     }
 
-    // ---- P5 Task 3：loanCollateralLocked 虚拟锁——借贷抵押留在 accounts 但不能被挂单/保证金/提现顶用（对应 Java :1063-1072） ----
+    // ---- loanCollateralLocked 虚拟锁——借贷抵押留在 accounts 但不能被挂单/保证金/提现顶用（对应 Java :1063-1072） ----
 
     fn isolated_loan_with_collateral(loan_id: i64, collateral_currency: i32, collateral_amount: i64)
         -> crate::core::common::isolated_loan_record::IsolatedLoanRecord {
@@ -4559,7 +4559,7 @@ mod tests {
 
     #[test]
     fn loan_collateral_locked_zero_for_user_without_loans() {
-        // Ruling P5-B：无 loan 用户两个 map 皆空，虚拟锁恒 0，与 P4 stub 逐位相同。
+        // Ruling P5-B：无 loan 用户两个 map 皆空，虚拟锁恒 0，与此前 stub 逐位相同。
         let (engine, ups, _ssp) = setup_futures(0, 0, 1_000, 100);
         assert_eq!(engine.loan_collateral_locked(ups.get(UID).unwrap(), FUT_QUOTE), 0);
     }
@@ -4792,7 +4792,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 500 - 400);
     }
 
-    // ==== P4 Task 6 — MARGIN_ADJUSTMENT + mark-price 更新 + LEVERAGE_ADJUSTMENT（参考文档 §1(extraMargin)/§8；Java adjustMargin:213-277/adjustLeverage:287-333/adjustMarkPrice:437-451）；复用 setup_futures 治具 ====
+    // ==== MARGIN_ADJUSTMENT + mark-price 更新 + LEVERAGE_ADJUSTMENT（参考文档 §1(extraMargin)/§8；Java adjustMargin:213-277/adjustLeverage:287-333/adjustMarkPrice:437-451）；复用 setup_futures 治具 ====
 
     fn margin_adjustment_cmd(
         action: OrderAction,
@@ -4999,13 +4999,13 @@ mod tests {
 
     #[test]
     fn set_mark_price_test_hook_writes_cache_without_symbol_validation() {
-        // Task 7 `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验。
+        // `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验。
         let mut engine = RiskEngine::new();
         engine.set_mark_price(424_242, 777);
         assert_eq!(engine.mark_price(424_242), Some(777));
     }
 
-    // P4 终审 crash-safety 回归：markprice_adjustment 拒绝 price<=0，保住"有头寸⇒标记价有效"不变量，避免下游三处 mark_price().unwrap() panic（proptest 覆盖不到的非法输入角）。
+    // crash-safety 回归：markprice_adjustment 拒绝 price<=0，保住"有头寸⇒标记价有效"不变量，避免下游三处 mark_price().unwrap() panic（proptest 覆盖不到的非法输入角）。
     #[test]
     fn markprice_adjustment_rejects_zero_price_and_prior_mark_survives_without_panic() {
         // 复刻终审给出的可达崩溃序列：开逐仓仓位(mark=100) → 设 mark=0 → free-futures-margin。
@@ -5154,7 +5154,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().leverage, 2);
     }
 
-    // ==== Task 6 — apply_add_loan (ADD_LOAN 三段运行时配置) ====
+    // ==== apply_add_loan (ADD_LOAN 三段运行时配置) ====
     mod add_loan_tests {
         use super::*;
         use crate::core::common::batch_add_loan_command::{
@@ -5428,7 +5428,7 @@ mod tests {
         }
     }
 
-    // ==== P5 Task 8: REPRICE_LOAN_RATES 全管线（R1 pre_process_command → R2 handler_risk_release），对应参考文档 §4.2 + RiskEngine.java:906-913 ====
+    // ==== REPRICE_LOAN_RATES 全管线（R1 pre_process_command → R2 handler_risk_release），对应参考文档 §4.2 + RiskEngine.java:906-913 ====
     mod reprice_loan_rates_tests {
         use super::*;
         use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
@@ -5556,7 +5556,7 @@ mod tests {
         }
     }
 
-    // ==== P6 Task 3: INTERNAL_TRANSFER 全管线（R1 pre_process_command → R2 handler_risk_release），对应参考文档 §5 + InternalTransferProcessor.java ====
+    // ==== INTERNAL_TRANSFER 全管线（R1 pre_process_command → R2 handler_risk_release），对应参考文档 §5 + InternalTransferProcessor.java ====
     mod internal_transfer_tests {
         use super::*;
 
@@ -5706,7 +5706,7 @@ mod tests {
         }
     }
 
-    // ==== P6 Task 4: SETTLE_FUNDINGFEES 全管线（R1→R2，参考文档 §4 + FundingFeeCommandProcessor.java）；处理器函数级测试见其自己的 #[cfg(test)]，这里只测经 RiskEngine 两段管线的接线本身 ====
+    // ==== SETTLE_FUNDINGFEES 全管线（R1→R2，参考文档 §4 + FundingFeeCommandProcessor.java）；处理器函数级测试见其自己的 #[cfg(test)]，这里只测经 RiskEngine 两段管线的接线本身 ====
     mod funding_fee_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
@@ -5845,7 +5845,7 @@ mod tests {
         }
     }
 
-    /// P6 Task 5：`IF_TAKEOVER` 全流程（R1+merge+R2 apply+finalize）——参考文档 §2.2。
+    /// `IF_TAKEOVER` 全流程（R1+merge+R2 apply+finalize）——参考文档 §2.2。
     mod if_takeover_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
@@ -6062,7 +6062,7 @@ mod tests {
         }
     }
 
-    /// P6 Task 6：AUTO_DELEVERAGING 全流程（R1 选候选+预占→merge→R2 apply+finalize 对称释放，参考文档 §3/§11.1）；算法级测试见 adl_command_processor.rs/liquidation_service.rs 各自模块，这里只测 RiskEngine 两段管线接线本身。
+    /// AUTO_DELEVERAGING 全流程（R1 选候选+预占→merge→R2 apply+finalize 对称释放，参考文档 §3/§11.1）；算法级测试见 adl_command_processor.rs/liquidation_service.rs 各自模块，这里只测 RiskEngine 两段管线接线本身。
     mod adl_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;

@@ -1,6 +1,6 @@
-//! 定点算术纯函数——现货子集。对应 Java `CoreArithmeticUtils`；含共享原语 [`distribute_remainder_by_one`]（P6 Task 4，供 Funding/IF/ADL 复用）。
+//! 定点算术纯函数——现货子集。对应 Java `CoreArithmeticUtils`；含共享原语 [`distribute_remainder_by_one`]（供 Funding/IF/ADL 复用）。
 //! Rust 用原生 `i128` 统一覆盖 Java 的 fast/slow path（`*128` 变体），`ceil_mul_mul_div` 复刻 Java 的两步重排策略。
-//! Ruling（P3 Task 1）：本模块零依赖账户/规格模型，fee/scale 参数均为裸标量。
+//! Ruling：本模块零依赖账户/规格模型，fee/scale 参数均为裸标量。
 //! 取整语义（load-bearing）：手续费向 +∞ 取整（ceil），盈利/退款向零截断（trunc）——翻转会破坏资金守恒。
 
 /// 10^0..=10^18（`i64` 范围内的全部 10 次幂）。对应 Java `TenPowers.POW10`。
@@ -247,7 +247,7 @@ pub fn is_ask_price_too_low(price: i64, taker_fee: i64, fee_scale_k: i64) -> boo
 }
 
 // ========================================================================
-// P6 Task 1：强平数学原语 —— 对应 Java `CoreArithmeticUtils.java:180-240`；Ruling（P3 Task 1）零依赖模型层，
+// 强平数学原语 —— 对应 Java `CoreArithmeticUtils.java:180-240`；Ruling：零依赖模型层，
 // Java 版本从 position/spec 读取的标量改为裸入参，调用方先算好再传入。
 // ========================================================================
 
@@ -296,8 +296,8 @@ pub fn calculate_deficit_after_liquidate(
 }
 
 // ========================================================================
-// P6 Task 4：共享"截断分配 + 1-unit 余数分配"原语，提取自 `FundingFeeCommandProcessor` 两处同构模式
-// （:85-104, :150-161），供 IF/ADL（Task 5/6）复用。
+// 共享"截断分配 + 1-unit 余数分配"原语，提取自 `FundingFeeCommandProcessor` 两处同构模式
+// （:85-104, :150-161），供 IF/ADL 复用。
 // ========================================================================
 
 use std::collections::BTreeMap;
@@ -837,7 +837,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // P6 Task 1：强平数学原语 —— CoreArithmeticUtils.java:180-240
+    // 强平数学原语 —— CoreArithmeticUtils.java:180-240
     // ------------------------------------------------------------------
 
     #[test]
@@ -888,7 +888,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // distribute_remainder_by_one — P6 Task 4 共享余数分配原语
+    // distribute_remainder_by_one — 共享余数分配原语
     // ------------------------------------------------------------------
 
     #[test]

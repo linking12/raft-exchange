@@ -1,5 +1,5 @@
-//! 对应 Java: exchange.core2.core.common.cmd.OrderCommand（P1 撮合字段 + Task 2 现货路由字段
-//! + P4 Task 1 期货 `leverage`/`marginMode`/reduce-only 扩展）。
+//! 对应 Java: exchange.core2.core.common.cmd.OrderCommand（撮合字段 + 现货路由字段
+//! + 期货 `leverage`/`marginMode`/reduce-only 扩展）。
 use std::collections::BTreeMap;
 
 use crate::core::common::adl_user_position::AdlUserPosition;
@@ -17,7 +17,7 @@ pub const FLAG_REDUCE_ONLY: i32 = 1;
 #[derive(Debug, Clone, Default)]
 pub struct OrderCommand {
     /// 对应 Java `OrderCommand.command`：驱动 R1/R2 路由分派（`isNonTrading()`/`isLoan()` 门守 +
-    /// 主 switch），Task 2 之前的 P1 撮合路径未含此字段。
+    /// 主 switch），早期撮合路径未含此字段。
     pub command: OrderCommandType,
     pub order_id: i64,
     pub symbol: i32,
@@ -38,7 +38,7 @@ pub struct OrderCommand {
     /// 对应 Java `OrderCommand.marginMode`（默认 `MarginMode.ISOLATED`，码值 0，与 `MarginMode::default()`
     /// 一致，derive 零值恰为正确默认值）。
     pub margin_mode: MarginMode,
-    /// 对应 Java `OrderCommand.userCookie`（`public int userCookie;`）。P5 Task 4 新增：`LOAN_CREATE`
+    /// 对应 Java `OrderCommand.userCookie`（`public int userCookie;`）。新增：`LOAN_CREATE`
     /// 用其低字节承载 `rateMode`（`(byte) cmd.userCookie == IsolatedLoanRecord::RATE_MODE_FLOATING`
     /// 则 FLOATING，否则 LOCKED，见 `loan_command_dispatcher::handle_loan_create`）；其余命令不使用，
     /// derive 零值与 Java 默认值一致，不影响既有构造点。
@@ -46,22 +46,22 @@ pub struct OrderCommand {
     pub result_code: Option<CommandResultCode>,
     pub matcher_event: Option<Box<MatcherTradeEvent>>,
     pub market_data: Option<L2MarketData>,
-    /// P5 Task 8 新增：`REPRICE_LOAN_RATES` 专属的 R1→R2 载体（`(currency, util_bps)`，currency 升序）。
+    /// 新增：`REPRICE_LOAN_RATES` 专属的 R1→R2 载体（`(currency, util_bps)`，currency 升序）。
     /// 对应 Java 靠 `commonByShard[..].amounts`（R1 写）+ `matcherEvent` 单链表（merge 写、R2 读）横跨
     /// R1/ME/R2 传递；本移植的 `MatcherEventType`/`MatcherTradeEvent` 是撮合专用共享类型（多处穷尽匹配），
     /// 且 ME 层（`MatchingEngineRouter`）不持有 `LoanService`，故改用命令专属字段承载
     /// `LoanRatePricingProcessor` R1 collect_input + merge build_matcher_events 的合并结果（详见
     /// `loan_rate_pricing_processor.rs` 模块文档"事件载体的移植偏差"）。其余命令类型恒为空 `Vec`，无影响。
     pub loan_reprice_events: Vec<(i32, i64)>,
-    /// P6 Task 3 新增：`INTERNAL_TRANSFER` 专属的 R1→R2 载体，`(to_uid, currency, amount)`。对应 Java 靠
+    /// 新增：`INTERNAL_TRANSFER` 专属的 R1→R2 载体，`(to_uid, currency, amount)`。对应 Java 靠
     /// `MatcherEventType::INTERNAL_TRANSFER_EVENT`（共享事件类型，`matchedOrderUid`/`price`/`size` 分别
     /// 承载 `toUid`/`currency`/`amount`）在 R1→ME(merge)→R2 间传递；本移植不扩 `MatcherEventType`
-    /// （Ruling P6-A，同 P5 `loan_reprice_events` 先例：撮合共享事件类型不塞与撮合无关的变体），改用命令
+    /// （Ruling P6-A，同 `loan_reprice_events` 先例：撮合共享事件类型不塞与撮合无关的变体），改用命令
     /// 专属字段。单 shard 下（Ruling P6-C）R1 collect_input 与 merge build_matcher_events 由
     /// `RiskEngine::internal_transfer_collect` 一次性完成写入这里；R2 由 `RiskEngine::handler_risk_release`
     /// 专属分支消费（详见 `internal_transfer_processor.rs` 模块文档）。其余命令类型恒为 `None`，无影响。
     pub internal_transfer_event: Option<(i64, i32, i64)>,
-    /// P6 Task 4 新增：`SETTLE_FUNDINGFEES` 专属的 R1+merge→R2 载体，
+    /// 新增：`SETTLE_FUNDINGFEES` 专属的 R1+merge→R2 载体，
     /// `(payer_amounts, receiver_notionals, shard_recv_amount)`——前两项是 R1
     /// [`crate::core::processors::funding_fee_command_processor::FundingFeeCommandProcessor::collect_input`]
     /// 的输出（uid -> fee / uid -> raw notional，对应 Java 每 shard 一份的 `FundingPaymentAndRecvNotional`），
@@ -75,7 +75,7 @@ pub struct OrderCommand {
     /// [`RiskEngine::settle_funding_fees_apply`] 消费，`None` 时早退。其余命令类型恒为 `None`，无影响。
     #[allow(clippy::type_complexity)]
     pub funding_fee_event: Option<(BTreeMap<i64, i64>, BTreeMap<i64, i64>, i64)>,
-    /// P6 Task 5 新增：`IF_TAKEOVER` R1 专属载体——对应 Java
+    /// 新增：`IF_TAKEOVER` R1 专属载体——对应 Java
     /// `OrderCommand.ifPreviewCoverByShard[shardId]`（按 shard 下标数组）单 shard 塌缩后的标量形态
     /// （Ruling P6-C）：`RiskEngine::if_takeover_collect` 调用
     /// [`crate::core::processors::liquidation::liquidation_service::LiquidationService::reserve_if_notional`]
@@ -83,7 +83,7 @@ pub struct OrderCommand {
     /// `release_reserved_if_notional`（无论接管成功/全拒都要释放，跟 R1 对称，见 `if_command_processor.rs`
     /// 模块文档）。其余命令类型恒为 `0`（derive 零值，`release` 释放 0 是 no-op，无影响）。
     pub if_preview_cover: i64,
-    /// P6 Task 5 新增：`IF_TAKEOVER` merge 专属载体——对应 Java `MatcherEventType::IF_EVENT`/`REJECT`
+    /// 新增：`IF_TAKEOVER` merge 专属载体——对应 Java `MatcherEventType::IF_EVENT`/`REJECT`
     /// （`matchedOrderUid` 承载 shard id）在 R1→ME(merge)→R2 间传递；本移植不扩 `MatcherEventType`
     /// （Ruling P6-A），改用命令专属字段。`Some(size)` = 接管成功（`size` 恒等于 `cmd.size`，单 shard
     /// collapse 下 all-or-nothing 退化结果，见
@@ -92,7 +92,7 @@ pub struct OrderCommand {
     /// `RiskEngine::if_takeover_apply`（R2）消费——`Some` 时驱动 `accept_if_position` + 关 taker 仓，`None`
     /// 时两者都跳过（但下面的 `if_preview_cover` 释放不受影响，始终执行）。其余命令类型恒为 `None`。
     pub if_takeover_size: Option<i64>,
-    /// P6 Task 6 新增：`AUTO_DELEVERAGING` R1 专属载体——对应 Java
+    /// 新增：`AUTO_DELEVERAGING` R1 专属载体——对应 Java
     /// `OrderCommand.adlUserPositionsByShard[shardId]`（按 shard 下标数组、每项单链表头指针）单 shard
     /// 塌缩后的形态（Ruling P6-C）：`Vec<AdlUserPosition>` 取代链表（无对象池，见 `adl_user_position.rs`
     /// 模块文档），元素顺序 = R1 选中顺序（按 `risk_score` DESC 排序后贪心选取，已是 merge 阶段需要的
@@ -106,7 +106,7 @@ pub struct OrderCommand {
     /// 独立输出取代克隆，效果等价，见 `adl_command_processor.rs` 模块文档"merge 的克隆-vs-原表"一节）。
     /// 其余命令类型恒为空 `Vec`，无影响。
     pub adl_user_positions: Vec<AdlUserPosition>,
-    /// P6 Task 6 新增：`AUTO_DELEVERAGING` merge 专属载体，`(uid, exec_volume)`——对应 Java
+    /// 新增：`AUTO_DELEVERAGING` merge 专属载体，`(uid, exec_volume)`——对应 Java
     /// `MatcherEventType::ADL_EVENT` 单链表（`matchedOrderUid`/`size` 各承载 uid / 实际消费量）在 merge→R2
     /// 间传递；本移植不扩 `MatcherEventType`（Ruling P6-A，同 `if_takeover_size`/`internal_transfer_event`
     /// 先例），改用命令专属字段。空 `Vec` = 全拒（对应 Java `cmd.matcherEvent.eventType == REJECT`，即

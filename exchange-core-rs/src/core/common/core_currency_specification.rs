@@ -1,4 +1,4 @@
-//! 对应 Java `CoreCurrencySpecification`（现货子集 + P5 新增 `collateralWeightBps`，per-currency）。
+//! 对应 Java `CoreCurrencySpecification`（现货子集 + `collateralWeightBps`，per-currency）。
 
 /// 对应 Java `CoreCurrencySpecification`。Ruling P5-A：`#[derive(Default)]` 零值兜底（`0` = 不可作为 Cross 抵押）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

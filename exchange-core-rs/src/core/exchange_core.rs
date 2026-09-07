@@ -35,7 +35,7 @@ impl ExchangeCore {
         self.drain_liquidation_commands();
     }
 
-    /// P6 Task 7b：排空强平引擎提交队列，把生成的 FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING 命令逐条喂回 R1→ME→R2（替代 Java disruptor `submit` 重入）；FIFO 逐条弹出保序，链深≤3/仓位必然收敛。
+    /// 排空强平引擎提交队列，把生成的 FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING 命令逐条喂回 R1→ME→R2（替代 Java disruptor `submit` 重入）；FIFO 逐条弹出保序，链深≤3/仓位必然收敛。
     fn drain_liquidation_commands(&mut self) {
         while !self.risk.liquidation_engine.pending_commands.is_empty() {
             let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
@@ -271,7 +271,7 @@ mod tests {
     }
 }
 
-// P5 Task 7：LOAN_FORCE_LIQUIDATE / LOAN_CROSS_FORCE_LIQUIDATE 全链路（R1 pre-move→ME→R2/LIF 接管）集成测试，独立 mod 因需专属借贷治具。参考文档 §2.5/§2.10/§5.2/§6.3。
+// LOAN_FORCE_LIQUIDATE / LOAN_CROSS_FORCE_LIQUIDATE 全链路（R1 pre-move→ME→R2/LIF 接管）集成测试，独立 mod 因需专属借贷治具。参考文档 §2.5/§2.10/§5.2/§6.3。
 #[cfg(test)]
 mod loan_force_liquidate_tests {
     use super::*;
@@ -646,7 +646,7 @@ mod loan_force_liquidate_tests {
     }
 }
 
-// P6 Task 7b：期货强平全链路 e2e（markprice 触发→FORCE→IF→ADL 状态机→队列排空重喂→结算）。直接写 `ExchangeCore`（而非 `ExchangeApi`）因需 liquidation_engine/liquidation_service 内部访问。参考文档 §1。
+// 期货强平全链路 e2e（markprice 触发→FORCE→IF→ADL 状态机→队列排空重喂→结算）。直接写 `ExchangeCore`（而非 `ExchangeApi`）因需 liquidation_engine/liquidation_service 内部访问。参考文档 §1。
 #[cfg(test)]
 mod liquidation_engine_e2e_tests {
     use super::*;
@@ -796,7 +796,7 @@ mod liquidation_engine_e2e_tests {
             !core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT),
             "借款人 LONG 被 FORCE 全平，仓位移除"
         );
-        // 清算费进 IFNotional.available（精确公式由 Task 1 覆盖，这里只验证费用确实计入 IF）。
+        // 清算费进 IFNotional.available（精确公式另有覆盖，这里只验证费用确实计入 IF）。
         let if_available: i64 = core.risk.liquidation_service.notionals.values().map(|n| n.available).sum();
         assert!(if_available > 0, "清算费必须计入 IFNotional.available");
         assert_eq!(conserved(&core), before, "强平（含清算费转入 IF）全局守恒");
@@ -849,8 +849,8 @@ mod liquidation_engine_e2e_tests {
 }
 
 // ============================================================================
-// P6 Task 8：loan 清算扫描器全链路 e2e——LIQUIDATION_SCAN → check_positions 尾部委托 checkLoans → 检出越线
-// isolated loan → 提交 LOAN_FORCE_LIQUIDATE → 队列排空 → P5 handler 结算 → 守恒。
+// loan 清算扫描器全链路 e2e——LIQUIDATION_SCAN → check_positions 尾部委托 checkLoans → 检出越线
+// isolated loan → 提交 LOAN_FORCE_LIQUIDATE → 队列排空 → handler 结算 → 守恒。
 // ============================================================================
 #[cfg(test)]
 mod loan_scanner_e2e_tests {
@@ -948,7 +948,7 @@ mod loan_scanner_e2e_tests {
         let before_loanc = conserved(&core, LOANC);
 
         // LIQUIDATION_SCAN（symbol=-1、全扫）→ check_positions 尾部委托 checkLoans → 检出越线 loan →
-        // 提交 LOAN_FORCE_LIQUIDATE → drain 排空重喂 → P5 handler 结算。
+        // 提交 LOAN_FORCE_LIQUIDATE → drain 排空重喂 → handler 结算。
         let mut scan = OrderCommand {
             command: OrderCommandType::LiquidationScan,
             symbol: -1,

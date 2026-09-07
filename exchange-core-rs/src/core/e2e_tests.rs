@@ -1,4 +1,4 @@
-//! P3 Task 11：端到端现货场景 + 守恒 proptest（设计文档 §7 / 参考文档 §6 守恒不变式：Σ_users accounts+adjustments+fees == 0，每步恒成立）。
+//! 端到端现货场景 + 守恒 proptest（设计文档 §7 / 参考文档 §6 守恒不变式：Σ_users accounts+adjustments+fees == 0，每步恒成立）。
 
 use proptest::prelude::*;
 

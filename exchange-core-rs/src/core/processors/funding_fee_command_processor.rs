@@ -5,7 +5,7 @@
 //! distribute_remainder_by_one 余数分配，shard-id 升序确定性）；R2 apply_event 做第二级（精确扣 payer，receiver 按
 //! notional 占比二次截断分配），经 settle_funding_fee 落账（活仓记 profit，ghost 仓缩放进 accounts[quote_currency]）。
 //! 事件载体用 `OrderCommand.funding_fee_event` 而非 Java `MatcherEventType::FUNDING_EVENT`（Ruling P6-A/P6-C）。
-//! `distribute_remainder_by_one` 提取为共享原语，IF/ADL 复用。`checkPositions` 钩子（Java `:977`）未落地，属 Task 7。
+//! `distribute_remainder_by_one` 提取为共享原语，IF/ADL 复用。`checkPositions` 钩子（Java `:977`）未落地。
 //! 事件总线（`sendFundingFeeEvent` 等）未移植（Ruling P6-B）。
 
 use std::collections::BTreeMap;
@@ -19,7 +19,7 @@ use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::distribute_remainder_by_one;
 
 /// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份，同 `risk_engine.rs`/`symbol_position_record.rs`
-/// 的同名 helper（`CoreArithmeticUtils.mulExact` 按 Task 1 零依赖 ruling 私有，各消费点各自复制轻量实现）。
+/// 的同名 helper（`CoreArithmeticUtils.mulExact` 按零依赖 ruling 私有，各消费点各自复制轻量实现）。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }

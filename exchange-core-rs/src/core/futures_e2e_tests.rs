@@ -1,4 +1,4 @@
-//! P4 Task 8：期货 e2e 场景 + 守恒 proptest（任务简报 §"What to produce" / 参考文档 §7）。核心断言（[`assert_futures_conservation`]）：Σ_users accounts+adjustments+fees + Σ_open_positions(estimate_pnl(mark)+extra_margin) == 0——比简报的 naive 公式多出的两项（estimate_pnl/extra_margin）对应两类"资金已离开 accounts、尚未转回"的时间差场景（isolated MARGIN_ADJUSTMENT 递延退款、平仓对手方与开仓对手方不同导致的未实现浮亏递延），均非生产代码 bug，详见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`] 与场景 D。
+//! 期货 e2e 场景 + 守恒 proptest（任务简报 §"What to produce" / 参考文档 §7）。核心断言（[`assert_futures_conservation`]）：Σ_users accounts+adjustments+fees + Σ_open_positions(estimate_pnl(mark)+extra_margin) == 0——比简报的 naive 公式多出的两项（estimate_pnl/extra_margin）对应两类"资金已离开 accounts、尚未转回"的时间差场景（isolated MARGIN_ADJUSTMENT 递延退款、平仓对手方与开仓对手方不同导致的未实现浮亏递延），均非生产代码 bug，详见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`] 与场景 D。
 use proptest::prelude::*;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -53,7 +53,7 @@ fn assert_accounts_non_negative(api: &ExchangeApi) {
     }
 }
 
-/// 仓位记录内部不变式：`open_volume`/`open_init_margin_sum` 恒非负（双保险，触发即代表 Task 1-7 仓位原语有真实 bug）。
+/// 仓位记录内部不变式：`open_volume`/`open_init_margin_sum` 恒非负（双保险，触发即代表仓位原语有真实 bug）。
 fn assert_positions_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for pos in p.positions.values() {
@@ -102,7 +102,7 @@ fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecifica
     }
 }
 
-/// 比例费期货 spec（同上，fee_scale_k 非零）。期货比例费按 Task 4 结论精确守恒（不同于 spot 的 ceiling 超可加性缺陷），两费率均可任意非零，无需像 e2e_tests.rs 那样钉 maker_fee=0。
+/// 比例费期货 spec（同上，fee_scale_k 非零）。期货比例费按前述结论精确守恒（不同于 spot 的 ceiling 超可加性缺陷），两费率均可任意非零，无需像 e2e_tests.rs 那样钉 maker_fee=0。
 fn futures_spec_proportional_fee(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -528,7 +528,7 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
 }
 
 // ================================================================================================
-// 场景 E：多用户 maker/taker（一个 maker 挂单被两个 taker 分两次吃完）+ 比例费 symbol，全程同价位（pnl恒0）naive 公式依旧精确成立；验证 Task 4 结论：期货比例费精确配对，不像 spot 那样因 ceiling 超可加性漂移。
+// 场景 E：多用户 maker/taker（一个 maker 挂单被两个 taker 分两次吃完）+ 比例费 symbol，全程同价位（pnl恒0）naive 公式依旧精确成立；验证结论：期货比例费精确配对，不像 spot 那样因 ceiling 超可加性漂移。
 // ================================================================================================
 
 #[test]

@@ -15,7 +15,7 @@ pub enum OrderCommandType {
     BalanceAdjustment,
     BinaryDataCommand,
     /// 对应 Java `FORCE_LIQUIDATION`（码 20）：强平期货命令，`create_positions_key` 翻转逻辑
-    /// 与 `ClosePosition` 相同（P6 强平扫描消费；本移植 Task 1 只搬键计算）。
+    /// 与 `ClosePosition` 相同（强平扫描消费；本移植只搬键计算）。
     ForceLiquidation,
     /// 对应 Java `LEVERAGE_ADJUSTMENT`（码 21）：显式调整某 symbol 全部仓位的杠杆
     /// （`RiskEngineCommandDispatcher.adjustLeverage`）。
@@ -25,12 +25,12 @@ pub enum OrderCommandType {
     MarginAdjustment,
     /// 对应 Java `MARKPRICE_ADJUSTMENT`（码 24）：更新 `lastPriceCache`
     /// （`RiskEngineCommandDispatcher.adjustMarkPrice`；本移植未含 `liquidationEngine
-    /// .checkPositions` 清算钩子，P6 落地）。
+    /// .checkPositions` 清算钩子，后续落地）。
     MarkpriceAdjustment,
 
     // ================================================================
-    // P5 Task 1：现货借贷 —— `isLoan()` 恰好覆盖的 14 个码（参考文档 §0/§2.11）。
-    // handler 本身（`LoanCommandDispatcher`）留 Task 2+，这里只落变体 + 分类。
+    // 现货借贷 —— `isLoan()` 恰好覆盖的 14 个码（参考文档 §0/§2.11）。
+    // handler 本身（`LoanCommandDispatcher`）留后续，这里只落变体 + 分类。
     // ================================================================
     /// 码 50：Isolated 开仓。
     LoanCreate,
@@ -63,13 +63,13 @@ pub enum OrderCommandType {
 
     /// 对应 Java `REPRICE_LOAN_RATES`（码 63）：**不属于** `isLoan()` 的 14 码；走
     /// `isNonTrading()` → `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`
-    /// （TwoStep reprice 管线，参考文档 §4.2；本 Task 只落分类，管线本体留 Task 3+）。
+    /// （TwoStep reprice 管线，参考文档 §4.2；此处只落分类，管线本体留后续）。
     RepriceLoanRates,
 
     // ================================================================
-    // P6 Task 1：期货强平/ADL/资金费/内部转账命令码（参考文档 §0/§9/§12.4）。
+    // 期货强平/ADL/资金费/内部转账命令码（参考文档 §0/§9/§12.4）。
     // handler 本体（LiquidationEngine/IFCommandProcessor/ADLCommandProcessor/
-    // FundingFeeCommandProcessor/InternalTransferProcessor 等）留后续 Task，这里先落变体 +
+    // FundingFeeCommandProcessor/InternalTransferProcessor 等）留后续，这里先落变体 +
     // is_non_trading 分类。
     // ================================================================
     /// 对应 Java `INTERNAL_TRANSFER`（码 14）：账户间内部转账，`isNonTrading()` 命中，走
@@ -146,7 +146,7 @@ impl OrderCommandType {
             OrderCommandType::BinaryDataCommand => 91,
             OrderCommandType::Nop => 120,
             OrderCommandType::Reset => 124,
-            // P6 Task 1：见类文档 Ruling P6-D——本移植零依赖 wire-protocol 字节对齐，新码只需
+            // 见类文档 Ruling P6-D——本移植零依赖 wire-protocol 字节对齐，新码只需
             // 互异；InternalTransfer/SettleFundingfees/SystemLiquidationNotify/IfTakeover/
             // AutoDeleveraging/IfDeposit/IfWithdraw 数值对齐 Java（参考文档 §12.4），
             // LiquidationScan 故意不取 Java 的 64（已被 LoanIfDeposit 占用），改用 44。
@@ -164,11 +164,11 @@ impl OrderCommandType {
 
     /// 对应 Java `OrderCommandType.isNonTrading()`（`:110-134`）：命中即整块委托
     /// `RiskEngineCommandDispatcher.dispatch`，主 switch 只留交易/结算/引擎自身生命周期。
-    /// 现货子集 + P4 Task 6 期货非交易命令里命中的有 `ADD_USER` / `BALANCE_ADJUSTMENT` /
+    /// 现货子集 + 期货非交易命令里命中的有 `ADD_USER` / `BALANCE_ADJUSTMENT` /
     /// `BINARY_DATA_COMMAND` / `LEVERAGE_ADJUSTMENT` / `MARGIN_ADJUSTMENT` /
-    /// `MARKPRICE_ADJUSTMENT` + P5 Task 1 新增 `RepriceLoanRates`（**不含** 14 个
+    /// `MARKPRICE_ADJUSTMENT` + 新增 `RepriceLoanRates`（**不含** 14 个
     /// `is_loan()` 码——reprice 走 `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`，
-    /// loan 命令走独立 `LoanCommandDispatcher`，两条门守互斥，见参考文档 §0）+ P6 Task 1
+    /// loan 命令走独立 `LoanCommandDispatcher`，两条门守互斥，见参考文档 §0）+
     /// 新增 `InternalTransfer` / 期货 `IfDeposit` / `IfWithdraw`（参考文档 §0 末段："`isNonTrading()`
     /// now includes `INTERNAL_TRANSFER` and `MARKPRICE_ADJUSTMENT`"）。
     ///
@@ -274,7 +274,7 @@ mod tests {
         assert!(OrderCommandType::LeverageAdjustment.is_non_trading());
         assert!(OrderCommandType::MarginAdjustment.is_non_trading());
         assert!(OrderCommandType::MarkpriceAdjustment.is_non_trading());
-        // P5：REPRICE_LOAN_RATES 是 isNonTrading，不是 isLoan。
+        // REPRICE_LOAN_RATES 是 isNonTrading，不是 isLoan。
         assert!(OrderCommandType::RepriceLoanRates.is_non_trading());
         // 主 switch 交易 / 撮合直落命令：不命中。
         assert!(!OrderCommandType::PlaceOrder.is_non_trading());
@@ -327,7 +327,7 @@ mod tests {
     }
 
     // ================================================================
-    // P6 Task 1：新命令码 + is_non_trading 分类（参考文档 §0/§12.4）
+    // 新命令码 + is_non_trading 分类（参考文档 §0/§12.4）
     // ================================================================
 
     #[test]

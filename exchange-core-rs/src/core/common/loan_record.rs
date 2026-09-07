@@ -1,7 +1,7 @@
 //! 对应 Java `LoanRecord`：Isolated/Cross 贷款凭证共享的债务视图，金额均为 `loanCurrency` 的 currencyScale。
 
 /// 对应 Java `LoanRecord` 接口。`IsolatedLoanRecord`/`CrossLoanRecord` 均实现之；
-/// `LoanService`/`FloatingRateModel`/`FixedRateModel`（Task 2+）都只通过该接口操作 loan。
+/// `LoanService`/`FloatingRateModel`/`FixedRateModel` 都只通过该接口操作 loan。
 pub trait LoanRecord {
     fn loan_currency(&self) -> i32;
 
