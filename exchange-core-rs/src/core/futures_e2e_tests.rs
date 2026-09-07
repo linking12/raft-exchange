@@ -376,8 +376,7 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 120), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // 翻仓：COUNTER 先挂 BID@120 size15（maker，超过其现有 Short10，平满 10 再反手开多 5）；
-    // FLIPPER 吃单 ASK@120 size15（taker，非 reduce-only，超过其现有 Long10，平满 10 再反手开空 5）。
+    // 翻仓：COUNTER 先挂 BID@120 size15（maker，超过其现有 Short10，平满 10 再反手开多 5）；FLIPPER 吃单 ASK@120 size15（taker，非 reduce-only，超过其现有 Long10，平满 10 再反手开空 5）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 3, uid: COUNTER, symbol: FUT_SYMBOL, price: 120, size: 15,
@@ -749,10 +748,7 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
         CommandResultCode::Success
     );
 
-    // A 已全平并把 200 已实现盈利（(120-100)*10）整笔付进 accounts；B 仍持有对称的 -200
-    // 未实现浮亏，但那笔浮亏只存在于 B 的仓位字段（open_volume/open_price_sum），不在
-    // accounts/adjustments/fees 里——naive 公式因此偏差 +200；完整公式把 B 仓位的
-    // `estimate_pnl(mark)` 加回来后精确为 0。
+    // A 已全平并把 200 已实现盈利（(120-100)*10）整笔付进 accounts；B 仍持有对称的 -200 未实现浮亏，但那笔浮亏只存在于 B 的仓位字段（open_volume/open_price_sum），不在 accounts/adjustments/fees 里——naive 公式因此偏差 +200；完整公式把 B 仓位的 `estimate_pnl(mark)` 加回来后精确为 0。
     assert!(api.user_position(A, FUT_SYMBOL).is_none(), "A 已全平");
     assert_eq!(api.user_account(A, QUOTE), 10_000 + 200, "A 已实现盈利 200（费率为 0）");
     assert_eq!(
@@ -799,11 +795,7 @@ fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// 任意合式期货命令流跑完（且逐步）都不 panic，[`assert_futures_conservation`] 恒成立，
-    /// `accounts` 恒非负，仓位记录内部字段恒非负。**必须**用完整公式（含仓位 `estimate_pnl` +
-    /// `extra_margin`）——通用多用户随机撮合无法保证"每次全平都恰好对敲同一原始对手方"，见文件头
-    /// 文档；用 naive 公式会在几乎第一次"平仓对手方与开仓对手方不同"时就产生预期内的非零偏差
-    /// （不是 bug，见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`]）。
+    /// 任意合式期货命令流跑完（且逐步）都不 panic，[`assert_futures_conservation`] 恒成立，`accounts` 恒非负，仓位记录内部字段恒非负。**必须**用完整公式（含仓位 `estimate_pnl` + `extra_margin`）——通用多用户随机撮合无法保证"每次全平都恰好对敲同一原始对手方"，见文件头文档；用 naive 公式会在几乎第一次"平仓对手方与开仓对手方不同"时就产生预期内的非零偏差（不是 bug，见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`]）。
     #[test]
     fn conservation_holds_for_random_futures_command_stream(
         (fixed_fee, n_users, leverages, balances, cmds) in fut_scenario_strategy()
@@ -832,8 +824,7 @@ proptest! {
         prop_assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
         assert_futures_invariants(&api);
 
-        // 命令级 order_id 全局单调递增（同时充当 order book id 与 MARGIN_ADJUSTMENT 的幂等 txid
-        // 命名空间），从 1000 起跳，确保不与上面播种阶段用过的 1..=n_users 冲突。
+        // 命令级 order_id 全局单调递增（同时充当 order book id 与 MARGIN_ADJUSTMENT 的幂等 txid 命名空间），从 1000 起跳，确保不与上面播种阶段用过的 1..=n_users 冲突。
         let mut next_order_id: i64 = 1000;
 
         for cmd in &cmds {
@@ -858,8 +849,7 @@ proptest! {
                 }
                 FutGenCmd::ClosePosition { uid_idx, price, size } => {
                     let uid = uids[*uid_idx];
-                    // 按当前仓位方向选反向 action；无仓位/无敞口时随意选 Bid，
-                    // `close_position_risk_check` 会因 `max_closable_size==0` 静默 no-op。
+                    // 按当前仓位方向选反向 action；无仓位/无敞口时随意选 Bid，`close_position_risk_check` 会因 `max_closable_size==0` 静默 no-op。
                     let action = match api.user_position(uid, FUT_SYMBOL) {
                         Some(pos) if pos.direction == PositionDirection::Long => OrderAction::Ask,
                         Some(pos) if pos.direction == PositionDirection::Short => OrderAction::Bid,

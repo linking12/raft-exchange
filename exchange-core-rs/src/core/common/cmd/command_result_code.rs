@@ -15,10 +15,7 @@ pub enum CommandResultCode {
     RiskMarginModeMismatch,     // -2008（P4: 仓位模式不匹配）
     RiskMarginPositionNotExists, // -2009（P4 Task 6: MARGIN_ADJUSTMENT ISOLATED 目标仓位不存在）
     RiskMarkpriceNotAvailable,  // -2011（P4: mark price 缺失/为 0）
-    /// P6 Task 5：期货 `IF_WITHDRAW` 时 `available` 不足以覆盖提取额，逐字对齐 Java
-    /// `CommandResultCode.java:48`（`RISK_IF_INSUFFICIENT(-2012)`）。**与 loan 的
-    /// `LoanIfInsufficient`（-6053）是独立池子的独立错误码**，不可混用（同 `IfDeposit`/
-    /// `LoanIfDeposit` 互异先例，见 `order_command_type.rs`）。
+    /// P6 Task 5：期货 `IF_WITHDRAW` 时 `available` 不足以覆盖提取额，逐字对齐 Java `CommandResultCode.java:48`（`RISK_IF_INSUFFICIENT(-2012)`）。**与 loan 的 `LoanIfInsufficient`（-6053）是独立池子的独立错误码**，不可混用（同 `IfDeposit`/`LoanIfDeposit` 互异先例，见 `order_command_type.rs`）。
     RiskIfInsufficient, // -2012（P6: IF_WITHDRAW available 不足）
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
@@ -31,14 +28,12 @@ pub enum CommandResultCode {
     SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
 
     // ================================================================
-    // P6 Task 1：内部转账，逐字对应 Java `CommandResultCode.java:74`（handler 留后续 Task，
-    // 见参考文档 §5.1；这里只落码值，供 InternalTransferProcessor.collectInput 的 R1 校验用）。
+    // P6 Task 1：内部转账，逐字对应 Java `CommandResultCode.java:74`（handler 留后续 Task，见参考文档 §5.1；这里只落码值，供 InternalTransferProcessor.collectInput 的 R1 校验用）。
     // ================================================================
     InternalTransferInvalidSelf, // -4301，from == to 自转
 
     // ================================================================
-    // P5 Task 1：现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`
-    // （handler 本身留 Task 2+，这里先落码值，供后续 Task 直接引用）。
+    // P5 Task 1：现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`（handler 本身留 Task 2+，这里先落码值，供后续 Task 直接引用）。
     // ================================================================
     LoanNotEnabled,          // -6001，spec.loanConfig.initialLtvBps == 0
     LoanAlreadyExists,       // -6002，loanId 已存在（Isolated / Cross 命名空间独立）
@@ -163,8 +158,7 @@ mod tests {
 
     #[test]
     fn p6_futures_if_result_code_matches_java_and_differs_from_loan_lif() {
-        // Java `CommandResultCode.java:48`：RISK_IF_INSUFFICIENT(-2012)，与 loan
-        // LoanIfInsufficient(-6053) 是互异的独立池子错误码。
+        // Java `CommandResultCode.java:48`：RISK_IF_INSUFFICIENT(-2012)，与 loan LoanIfInsufficient(-6053) 是互异的独立池子错误码。
         assert_eq!(CommandResultCode::RiskIfInsufficient.code(), -2012);
         assert_ne!(CommandResultCode::RiskIfInsufficient.code(), CommandResultCode::LoanIfInsufficient.code());
     }

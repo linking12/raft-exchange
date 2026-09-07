@@ -247,8 +247,8 @@ pub fn is_ask_price_too_low(price: i64, taker_fee: i64, fee_scale_k: i64) -> boo
 }
 
 // ========================================================================
-// P6 Task 1：强平数学原语 —— 对应 Java `CoreArithmeticUtils.java:180-240`；
-// Ruling（P3 Task 1）零依赖模型层，Java 版本从 position/spec 读取的标量改为裸入参，调用方先算好再传入。
+// P6 Task 1：强平数学原语 —— 对应 Java `CoreArithmeticUtils.java:180-240`；Ruling（P3 Task 1）零依赖模型层，
+// Java 版本从 position/spec 读取的标量改为裸入参，调用方先算好再传入。
 // ========================================================================
 
 /// 对应 Java `calculateLiquidationFee(long size, long price, CoreSymbolSpecification spec)`：结构同 `calculate_taker_fee`/`calculate_maker_fee`，费率换成 `liquidation_fee`。
@@ -260,8 +260,7 @@ pub fn calculate_liquidation_fee(size: i64, price: i64, liquidation_fee: i64, fe
     }
 }
 
-/// 计算强平数量 x（使新权益回到维持保证金线）。对应 Java `calculateSizeToLiquidate(SymbolPositionRecord position,
-/// CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:201-214`）；入参为调用方预先算好的标量（equity/MM/openInitMarginSum/openVolume/openPriceSum/markPrice/sign）。
+/// 计算强平数量 x（使新权益回到维持保证金线）。对应 Java `calculateSizeToLiquidate(SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:201-214`）；入参为调用方预先算好的标量（equity/MM/openInitMarginSum/openVolume/openPriceSum/markPrice/sign）。
 pub fn calculate_size_to_liquidate(
     equity: i64,
     maintenance_margin: i64,
@@ -279,9 +278,7 @@ pub fn calculate_size_to_liquidate(
     ceil_divide(numerator, denominator)
 }
 
-/// 估算强平 x 手后对缺口（deficit = totalMM - totalEquity）的改善量 ΔD。对应 Java `calculateDeficitAfterLiquidate(long size,
-/// SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:228-240`）；
-/// `maintenance_margin_now`/`_after` 为调用方预先按强平前后 notional 查表算好的 MM。
+/// 估算强平 x 手后对缺口（deficit = totalMM - totalEquity）的改善量 ΔD。对应 Java `calculateDeficitAfterLiquidate(long size, SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:228-240`）；`maintenance_margin_now`/`_after` 为调用方预先按强平前后 notional 查表算好的 MM。
 pub fn calculate_deficit_after_liquidate(
     size: i64,
     sign: i64,
@@ -299,8 +296,8 @@ pub fn calculate_deficit_after_liquidate(
 }
 
 // ========================================================================
-// P6 Task 4：共享"截断分配 + 1-unit 余数分配"原语，提取自 `FundingFeeCommandProcessor`
-// 两处同构模式（:85-104, :150-161），供 IF/ADL（Task 5/6）复用。
+// P6 Task 4：共享"截断分配 + 1-unit 余数分配"原语，提取自 `FundingFeeCommandProcessor` 两处同构模式
+// （:85-104, :150-161），供 IF/ADL（Task 5/6）复用。
 // ========================================================================
 
 use std::collections::BTreeMap;

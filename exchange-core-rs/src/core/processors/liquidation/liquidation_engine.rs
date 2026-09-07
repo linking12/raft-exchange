@@ -1,7 +1,6 @@
-//! 对应 Java `LiquidationEngine`（+ 父类 `LiquidationScheduledService`）：期货强平引擎，事件驱动、
-//! on-lane 检测（命令 apply 内跑，只读复制态），FORCE→IF→ADL 状态机，参考文档 §1、§7。
-//! 移植偏差：无事件总线/预警 no-op（Ruling P6-B）；submit→pending_commands 队列（无 disruptor）；
-//! provider 传参不持有（Ruling P3-B）；is_running 替代 ScheduledExecutorService（Ruling P6-F）。
+//! 对应 Java `LiquidationEngine`（+父类 `LiquidationScheduledService`）：期货强平引擎，事件驱动、on-lane 检测
+//! （命令 apply 内跑，只读复制态），FORCE→IF→ADL 状态机，参考文档 §1、§7。移植偏差：无事件总线/预警 no-op
+//! （Ruling P6-B）；submit→pending_commands 队列（无 disruptor）；provider 传参不持有（Ruling P3-B）；is_running 替代 ScheduledExecutorService（Ruling P6-F）。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -424,8 +423,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `onIfTakeoverApplied`（`:363-374`）：IF 单 apply 回调。非 REJECT（接管成功）→ 闭环；
-    /// REJECT（IF 池不足、仅部分接管）→ 转 `WaitAdlExecution`、入队 ADL 命令。
+    /// 对应 Java `onIfTakeoverApplied`（`:363-374`）：IF 单 apply 回调。非 REJECT（接管成功）→ 闭环；REJECT（IF 池不足、仅部分接管）→ 转 `WaitAdlExecution`、入队 ADL 命令。
     fn on_if_takeover_applied(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         let rejected = matches!(&cmd.matcher_event, Some(ev) if ev.event_type == MatcherEventType::Reject);
         if !rejected {

@@ -1,9 +1,8 @@
-//! 对应 Java `InternalTransferProcessor`（`TwoStepCommandProcessor` 薄实例，全文移植）。`INTERNAL_TRANSFER`
-//! 两步处理器：用户间同币种原子转账（参考文档 §5）。字段映射：`cmd.uid=fromUid`、`cmd.size=toUid`（overloaded）、
-//! `cmd.symbol=currency`、`cmd.price=amount`、`cmd.order_id=transactionId`。R1 校验+立即扣款，merge 1:1 直传，
-//! R2 入账（收款方不存在则建 SUSPENDED 档）；守恒 from-=amount/to+=amount。事件载体用
-//! `OrderCommand.internal_transfer_event` 而非 Java `MatcherEventType::INTERNAL_TRANSFER_EVENT`（Ruling
-//! P6-A/P6-C）。无状态处理器。`emitSnapshot`（Java `:101-104`）未移植，纯外部事件下发（Ruling P6-B）。
+//! 对应 Java `InternalTransferProcessor`（`TwoStepCommandProcessor` 薄实例，全文移植）。`INTERNAL_TRANSFER` 两步
+//! 处理器：用户间同币种原子转账（参考文档 §5）。字段映射：`cmd.uid=fromUid`、`cmd.size=toUid`（overloaded）、
+//! `cmd.symbol=currency`、`cmd.price=amount`、`cmd.order_id=transactionId`。R1 校验+立即扣款，merge 1:1 直传，R2 入账
+//! （收款方不存在则建 SUSPENDED 档）；守恒 from-=amount/to+=amount。事件载体用 `OrderCommand.internal_transfer_event`
+//! 而非 Java `MatcherEventType::INTERNAL_TRANSFER_EVENT`（Ruling P6-A/P6-C）。无状态处理器。`emitSnapshot`（Java `:101-104`）未移植，纯外部事件下发（Ruling P6-B）。
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::processors::risk_engine::RiskEngine;
@@ -14,8 +13,7 @@ use crate::core::processors::user_profile_service::UserProfileService;
 pub struct InternalTransferProcessor;
 
 impl InternalTransferProcessor {
-    /// R1：对应 Java `collectInput`（`:37-69`）。校验顺序：self→amount<=0→from 缺失→NSF（同提现口径）→
-    /// 幂等（try_claim_tx，claim-and-keep）；成功后立即 `from.accounts[currency] -= amount`，返回 Success。
+    /// R1：对应 Java `collectInput`（`:37-69`）。校验顺序：self→amount<=0→from 缺失→NSF（同提现口径）→幂等（try_claim_tx，claim-and-keep）；成功后立即 `from.accounts[currency] -= amount`，返回 Success。
     #[allow(clippy::too_many_arguments)]
     pub fn collect_input(
         engine: &RiskEngine,

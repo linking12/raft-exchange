@@ -27,7 +27,7 @@ impl ExchangeCore {
         }
     }
 
-    /// 确定性顺序管线：R1(`RiskEngine::pre_process_command`)→ME(`MatchingEngineRouter::process_order`)→R2(`RiskEngine::handler_risk_release`)，镜像 Java disruptor 的 Grouping/ResultsHandler 语义（无对应线程编排概念，不建模）；所有命令统一流过三段，非交易命令靠 ME/R2 各自 no-op 守卫短路，等价 Java 全命令过三个 disruptor 处理器的结构。
+    /// 确定性顺序管线：R1(`RiskEngine::pre_process_command`)→ME(`MatchingEngineRouter::process_order`)→R2(`RiskEngine::handler_risk_release`)，镜像 Java disruptor 的 Grouping/ResultsHandler 语义（线程编排不建模）；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路，等价 Java 全命令过三个 disruptor 处理器。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
         self.matching.process_order(cmd); // ME
@@ -45,7 +45,7 @@ impl ExchangeCore {
         }
     }
 
-    // Snapshot 序列化：serde derive + bincode 整体序列化复制态，只需 round-trip 保真，不要求与 Java 字节格式互通。
+    // Snapshot：serde derive + bincode 整体序列化复制态，只需 round-trip 保真，不要求与 Java 字节格式互通。
     // Ruling P6-E：`liquidation_engine` 与 SPR 的 liquidation_flow/adl_eligibility/pending_adl_size 三个 scratch 字段 `#[serde(skip)]`，反序列化后经 `restore_non_replicated_state` 复原为"换届后新 leader"语义（等价 Java `updateProvider`）。
 
     /// 把整个复制态序列化成快照字节（bincode）；非复制 leader-local 状态经 `#[serde(skip)]` 自动排除。
@@ -804,8 +804,7 @@ mod liquidation_engine_e2e_tests {
 
     #[test]
     fn direct_force_size_clamped_by_normalize() {
-        // 直接投递一条 size 远超 open_volume 的 FORCE（模拟陈旧/换届命令）——normalize 必须夹到
-        // open_volume，绝不超平。走 advance_liquidation 的 flow=None + FORCE recovery 路径。
+        // 直接投递 size 远超 open_volume 的 FORCE（模拟陈旧/换届命令）——normalize 必须夹到 open_volume 绝不超平；走 advance_liquidation 的 flow=None + FORCE recovery 路径。
         let mut core = seeded();
         core.process_command(&mut markprice(100, 1_000));
         open_borrower_long(&mut core); // 借款人 LONG 10
@@ -834,8 +833,7 @@ mod liquidation_engine_e2e_tests {
 
     #[test]
     fn force_with_no_liquidity_cascades_force_if_adl_without_panic_and_conserves() {
-        // 无吸单流动性：FORCE 全 REJECT → 状态机转 WAIT_IF 并入队 IF → IF 池空 REJECT → 转 WAIT_ADL
-        // 入队 ADL → 无 ADL 候选 → 终态。整条级联经队列排空自动跑完，不 panic，守恒。
+        // 无吸单流动性：FORCE 全 REJECT → WAIT_IF 入队 IF → IF 池空 REJECT → WAIT_ADL 入队 ADL → 无 ADL 候选 → 终态。整条级联经队列排空自动跑完，不 panic，守恒。
         let mut core = seeded();
         core.process_command(&mut markprice(100, 1_000));
         open_borrower_long(&mut core); // 借款人 LONG 10；M1 SHORT 10（唯一对手，不挂 BID）
@@ -845,15 +843,14 @@ mod liquidation_engine_e2e_tests {
 
         // 级联跑完、队列排空、不 panic。
         assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "FORCE→IF→ADL 级联后队列排空");
-        // 无任何流动性/IF 池/ADL 候选 -> 借款人仓位仍在（没被平掉），但流程已推进到终态或等待。
-        // 关键断言：整个过程不 panic 且守恒（无凭空造钱）。
+        // 无任何流动性/IF 池/ADL 候选 -> 借款人仓位仍在（没被平掉），但流程已推进到终态或等待。关键断言：全程不 panic 且守恒（无凭空造钱）。
         assert_eq!(conserved(&core), before, "无成交的级联不改变任何余额，守恒");
     }
 }
 
 // ============================================================================
-// P6 Task 8：loan 清算扫描器全链路 e2e——LIQUIDATION_SCAN → check_positions 尾部委托 checkLoans →
-// 检出越线 isolated loan → 提交 LOAN_FORCE_LIQUIDATE → 队列排空 → P5 handler 结算 → 守恒。
+// P6 Task 8：loan 清算扫描器全链路 e2e——LIQUIDATION_SCAN → check_positions 尾部委托 checkLoans → 检出越线
+// isolated loan → 提交 LOAN_FORCE_LIQUIDATE → 队列排空 → P5 handler 结算 → 守恒。
 // ============================================================================
 #[cfg(test)]
 mod loan_scanner_e2e_tests {
@@ -974,10 +971,9 @@ mod loan_scanner_e2e_tests {
 }
 
 // ============================================================================
-// Snapshot 序列化 round-trip 测试（对应 Java writeMarshallable/BytesIn + updateProvider 重建）。
-// 构建富复制态（期货持仓 + 挂单簿 + isolated loan + 池子 + fees/adjustments），快照→恢复，
-// 验证：①复制态 round-trip 字节等价 ②非复制态复原（adl_eligibility 归一 + 索引重建）
-// ③恢复后功能正常（markprice 触发强平走 targeted 索引）。
+// Snapshot round-trip 测试（对应 Java writeMarshallable/BytesIn + updateProvider 重建）。构建富复制态
+// （期货持仓 + 挂单簿 + isolated loan + 池子 + fees/adjustments），快照→恢复，验证：①复制态 round-trip
+// 字节等价 ②非复制态复原（adl_eligibility 归一 + 索引重建）③恢复后功能正常（markprice 触发强平走 targeted 索引）。
 // ============================================================================
 #[cfg(test)]
 mod snapshot_tests {
@@ -1130,10 +1126,9 @@ mod snapshot_tests {
         assert!(restored.ups.get(U_LONG).unwrap().positions[&FUT].liquidation_flow.is_none());
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].pending_adl_size, 0);
 
-        // ② 索引重建：futures symbol_to_users 含有开仓的 U_LONG/U_SHORT。U_MAKER 只挂单未开仓
-        // （open_volume==0），rebuild 按 open_volume>0 过滤跳过它——**与 Java updateProvider 的
-        // `openVolume==0 return` 过滤一致**（在线维护 on_position_opened 在下单时就登记是 superset，
-        // rebuild 是 open-position-only 子集；resting-only 用户无仓可强平，scan-slice 兜底）。
+        // ② 索引重建：futures symbol_to_users 含开仓的 U_LONG/U_SHORT。U_MAKER 只挂单未开仓（open_volume==0），
+        // rebuild 按 open_volume>0 过滤跳过它——**与 Java updateProvider 的 `openVolume==0 return` 过滤一致**
+        // （在线维护 on_position_opened 下单时就登记是 superset，rebuild 是 open-position-only 子集；resting-only 用户无仓可强平，scan-slice 兜底）。
         let holders = restored.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("futures 索引重建");
         assert!(holders.contains(&U_LONG) && holders.contains(&U_SHORT));
         assert!(!holders.contains(&U_MAKER), "只挂单未开仓的用户按 open_volume>0 过滤，不入重建索引（对齐 Java）");
@@ -1147,8 +1142,7 @@ mod snapshot_tests {
 
     #[test]
     fn restored_core_liquidation_works_via_rebuilt_index() {
-        // 恢复后功能验证：markprice 暴跌触发 U_LONG（ISOLATED 期货多头）强平——依赖重建的
-        // symbol_to_users targeted 索引 + 归一的 adl_eligibility。
+        // 恢复后功能验证：markprice 暴跌触发 U_LONG（ISOLATED 期货多头）强平——依赖重建的 symbol_to_users targeted 索引 + 归一的 adl_eligibility。
         let core = build_rich_core();
         let bytes = core.to_snapshot_bytes();
         let mut restored = ExchangeCore::from_snapshot_bytes(&bytes);

@@ -65,8 +65,7 @@ impl GlobalLoanConfig {
 // SymbolLoanConfig —— 参考文档 §2.12 第二段
 // ========================================================================
 
-/// `UNSET` 哨兵值：override 字段未指定，按 `resolve` 从全局缓冲派生/默认。对应 Java
-/// `SymbolLoanConfig.UNSET`。
+/// `UNSET` 哨兵值：override 字段未指定，按 `resolve` 从全局缓冲派生/默认。对应 Java `SymbolLoanConfig.UNSET`。
 pub const UNSET: i32 = -1;
 /// `loan_max_amount`（`i64`）专用的 `UNSET` 哨兵值（类型不同于 `UNSET`）。
 pub const UNSET_AMOUNT: i64 = -1;
@@ -85,8 +84,7 @@ pub struct SymbolLoanConfig {
     pub loan_max_amount: i64,
     /// `UNSET` = 派生为 `0`（无期限）。
     pub loan_max_term_days: i32,
-    /// `UNSET` = 派生为 `loanInitialLtvBps`（抵押折价率默认等于该 LTV 本身）。落地时写到 base
-    /// currency，见 `RiskEngine::apply_add_loan` 文档。
+    /// `UNSET` = 派生为 `loanInitialLtvBps`（抵押折价率默认等于该 LTV 本身）。落地时写到 base currency，见 `RiskEngine::apply_add_loan` 文档。
     pub collateral_weight_bps: i32,
 }
 
@@ -142,8 +140,7 @@ impl Resolved {
     }
 }
 
-/// 对应 Java `SymbolLoanConfig.thresholdsValid(int, int, int)`（`:278-281`）：
-/// `initial < marginCall < liquidation < 100%`；`marginCall==0` 表示关预警（合法）。
+/// 对应 Java `SymbolLoanConfig.thresholdsValid(int, int, int)`（`:278-281`）：`initial < marginCall < liquidation < 100%`；`marginCall==0` 表示关预警（合法）。
 fn thresholds_valid(initial: i32, margin_call: i32, liquidation: i32) -> bool {
     liquidation > initial
         && liquidation < BPS_FULL
