@@ -1,4 +1,4 @@
-//! P2 Task 7：`OrderBookDirectImpl` ↔ `OrderBookNaiveImpl` 差分对拍（proptest + 定向场景）。
+//! `OrderBookDirectImpl` ↔ `OrderBookNaiveImpl` 差分对拍（proptest + 定向场景）。
 //!
 //! 对应参考文档 `docs/superpowers/specs/2026-09-01-p2-orderbook-direct-reference.md` §7/§8；唯一记录在案的内部差异
 //! （FOK_BUDGET BID 价界复用）已由 Ruling P2-1 收敛：Direct 镜像 Naive，不复刻 Java "复用 cmd.price 当每单价上限"的巧合。
@@ -8,7 +8,7 @@
 //! 命令生成器故意排除裸 `OrderType::Fok`：Java Direct 未实现（TODO），Naive 已补齐 IOC 价格过滤语义，属已知且刻意的行为差异，不纳入本任务差分范围。
 //!
 //! 数值边界：`price ∈ [1, 100_000]`、`size ∈ [1, 1_000]`，BUDGET `cmd.price ∈ [1, 20_000_000]`，最大 notional 远低于 `i64::MAX/4`，
-//! 避免触碰 Task 4 的溢出饱和路径（Direct 饱和/Naive wrap，故意不等价，不该被本测试意外命中）。
+//! 避免触碰溢出饱和路径（Direct 饱和/Naive wrap，故意不等价，不该被本测试意外命中）。
 
 use std::panic;
 
@@ -386,7 +386,7 @@ impl DiffHarness {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// P2 Task 7 核心：随机命令流逐步喂两簿，`result_code`/`matcher_event`/`fill_l2`/`state_hash` 须逐位相等，
+    /// 核心：随机命令流逐步喂两簿，`result_code`/`matcher_event`/`fill_l2`/`state_hash` 须逐位相等，
     /// 且 Direct 的 `validate_internal_state` 全程成立；任何分歧都是真实的 Direct 移植 bug（Naive 是 source of truth）。
     #[test]
     fn direct_matches_naive_for_random_command_stream((n_users, cmds) in scenario_strategy()) {

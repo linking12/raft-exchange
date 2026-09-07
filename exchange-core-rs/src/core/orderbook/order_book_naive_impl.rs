@@ -92,7 +92,7 @@ impl OrderBookNaiveImpl {
     }
 
     /// 即时撮合 taker（GTC/IOC/FOK/move 共用，价格受限）：Bid 吃 ask_buckets 升序，Ask 吃 bid_buckets 降序。对应 Java tryMatchInstantly。
-    /// taker_reserve_bid_price 须显式传 taker 自己的值，不可用 cmd.reserve_bid_price（move 场景两者不等，P1 bug，2026-09-01 修复）。
+    /// taker_reserve_bid_price 须显式传 taker 自己的值，不可用 cmd.reserve_bid_price（move 场景两者不等，bug，2026-09-01 修复）。
     fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
@@ -587,8 +587,8 @@ impl IOrderBook for OrderBookNaiveImpl {
     }
 
     /// 移价：撤旧价重新即时撮合，可能成交或挂新价；未知/非本人 → MatchingUnknownOrderId。对应 Java moveOrder。
-    /// 现货 BID 的 reserve_bid_price 上限守卫延后（见 processors/mod.rs TODO，Task 6 concerns）。
-    /// taker_reserve_bid_price 须传 order 自己的值而非 cmd 的（P1 bug 修复 2026-09-01，P2 Task 7 差分对拍发现）。
+    /// 现货 BID 的 reserve_bid_price 上限守卫延后（见 processors/mod.rs TODO）。
+    /// taker_reserve_bid_price 须传 order 自己的值而非 cmd 的（bug 修复 2026-09-01，差分对拍发现）。
     fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let new_price = cmd.price;
@@ -843,9 +843,9 @@ mod ob_tests {
         assert_eq!(l2.ask_volumes, vec![4]);
     }
 
-    // ---- P6 Task 2: matched_order_command_type 取 maker 命令类型，与 taker 无关（Ruling P6-G，对应 Java OrderBookEventsHelper.java:75）----
+    // ---- matched_order_command_type 取 maker 命令类型，与 taker 无关（Ruling P6-G，对应 Java OrderBookEventsHelper.java:75）----
 
-    /// matched_order_command_type 取 maker 的 PlaceOrder，非 taker 的 ForceLiquidation（Step1(b) 回归，P6 Task 2）。
+    /// matched_order_command_type 取 maker 的 PlaceOrder，非 taker 的 ForceLiquidation（Step1(b) 回归）。
     #[test]
     fn trade_event_matched_order_command_type_is_makers_command_not_takers() {
         let mut book = OrderBookNaiveImpl::new();
@@ -901,7 +901,7 @@ mod ob_tests {
         assert_eq!(ev.matched_order_command_type, OrderCommandType::ForceLiquidation);
     }
 
-    // ---- Task 3: bidder_hold_price/matched_order_uid，对应 Java OrdersBucketNaive.match（BID 一方的 reserve_bid_price；uid 恒为 maker）----
+    // ---- bidder_hold_price/matched_order_uid，对应 Java OrdersBucketNaive.match（BID 一方的 reserve_bid_price；uid 恒为 maker）----
 
     /// maker 是 BID：bidder_hold_price 应取 maker 的 reserve_bid_price（taker 值为哨兵，读错即失败）。
     #[test]
@@ -976,7 +976,7 @@ mod ob_tests {
         assert_eq!(book.fill_l2(10).bid_volumes, vec![10]);
     }
 
-    // ---- Task 6: cancel / reduce / move + fill_l2(0) ----
+    // ---- cancel / reduce / move + fill_l2(0) ----
 
     #[test]
     fn cancel_unknown_returns_error() {
@@ -1083,7 +1083,7 @@ mod ob_tests {
         assert!(book.fill_l2(10).ask_prices.is_empty());
     }
 
-    // ---- Task 7: uid 所有权校验（补 Task 6 遗留的 concerns）----
+    // ---- uid 所有权校验（补此前遗留的 concerns）----
 
     #[test]
     fn cancel_other_users_order_returns_unknown() {
@@ -1241,7 +1241,7 @@ mod ob_tests {
         assert!(l2.bid_volumes.is_empty());
     }
 
-    // ---- Task 7: dup-id reject + state_hash ----
+    // ---- dup-id reject + state_hash ----
 
     /// 覆盖"先撮合、再因重复 id 拒绝剩余"分支（dup-id 检查发生在 try_match_instantly 之后）。对应 Java newOrderPlaceGtc dup-id 分支。
     #[test]

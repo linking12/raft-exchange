@@ -82,7 +82,7 @@ impl LiquidationService {
         (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池（Task 7 `collectLiquidationFee` 消费；本 Task 只落地这个记账原语本身）。
+    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池（`collectLiquidationFee` 消费；本 Task 只落地这个记账原语本身）。
     pub fn credit_liquidation_fee(&mut self, symbol: i32, notional_fee: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_fee;
@@ -164,7 +164,7 @@ impl LiquidationService {
     }
 
     // ================================================================
-    // P6 Task 6：ADL 候选构造 + 排序键 —— 对应 Java `:191-321`
+    // ADL 候选构造 + 排序键 —— 对应 Java `:191-321`
     // ================================================================
 
     /// 对应 Java `unrealizedPnl(SymbolPositionRecord, long bankruptcyPrice)`（`:191-195`）：按破产价估算浮动盈亏（ADL 排序/筛选用，静态纯函数）。**全程饱和乘法**（`saturating_multiply`）——溢出时钳到 `i64::MIN`/`MAX` 而非 wrap，防止符号翻转。
@@ -246,7 +246,7 @@ impl LiquidationService {
     ///
     /// Gating（账户须足够安全且净盈利才有资格被 ADL 吃）：`totalProfit > 0` 且 `equity >= 1.2 × totalMaintenance`（离强平线还有 20%+ 余量）。factor 语义：账户离强平线越远 factor 越大，`clamp` 到 `[0, 100]`，写回每条入选仓位的 `adl_eligibility`。
     ///
-    /// `total_profit`/`total_maintenance`/`equity` 用普通 `+`/`-`（不用 `*_exact`）——逐字对齐 Java 的 `totalProfit +=`/`totalMaintenance +=`（原版这几处确实不是 `Math.addExact`，只有 `warningThreshold`/`factor` 两处乘法用了 `Math.multiplyExact`，见下）；同一模式已见于 `UserProfile::cross_margin_base_allocation`（P4）的 `total_upnl`/`total_mm` 累加，本函数保持同套算术纪律。
+    /// `total_profit`/`total_maintenance`/`equity` 用普通 `+`/`-`（不用 `*_exact`）——逐字对齐 Java 的 `totalProfit +=`/`totalMaintenance +=`（原版这几处确实不是 `Math.addExact`，只有 `warningThreshold`/`factor` 两处乘法用了 `Math.multiplyExact`，见下）；同一模式已见于 `UserProfile::cross_margin_base_allocation` 的 `total_upnl`/`total_mm` 累加，本函数保持同套算术纪律。
     fn add_cross_positions_if_user_safe(
         profile: &mut UserProfile,
         currency: i32,
@@ -554,7 +554,7 @@ mod tests {
     }
 
     // ================================================================
-    // P6 Task 6：unrealized_pnl / risk_score（saturating 乘法）
+    // unrealized_pnl / risk_score（saturating 乘法）
     // ================================================================
 
     fn pos(direction: PositionDirection, open_volume: i64, open_price_sum: i64, open_init_margin_sum: i64, adl_eligibility: i64) -> SymbolPositionRecord {
@@ -611,7 +611,7 @@ mod tests {
     }
 
     // ================================================================
-    // P6 Task 6：compute_profitable_positions_by_symbol —— ISOLATED / CROSS 资格构造
+    // compute_profitable_positions_by_symbol —— ISOLATED / CROSS 资格构造
     // ================================================================
 
     use crate::core::common::core_currency_specification::CoreCurrencySpecification;

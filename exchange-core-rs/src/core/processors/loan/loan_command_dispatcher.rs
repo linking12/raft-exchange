@@ -26,11 +26,11 @@ fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 对应 Java `LoanCommandDispatcher`（Task 4 范围子集）。零大小类型，见模块文档。
+/// 对应 Java `LoanCommandDispatcher`（范围子集）。零大小类型，见模块文档。
 pub struct LoanCommandDispatcher;
 
 impl LoanCommandDispatcher {
-    /// 对应 Java `dispatch(OrderCommand cmd)`（`:51-121`）：按 `cmd.command` 路由；分片自过滤单 shard 下恒真，未搬迁（同 P3/P4 ruling）。
+    /// 对应 Java `dispatch(OrderCommand cmd)`（`:51-121`）：按 `cmd.command` 路由；分片自过滤单 shard 下恒真，未搬迁（同既有 ruling）。
     pub fn dispatch(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -63,7 +63,7 @@ impl LoanCommandDispatcher {
             // 不可达：is_loan() 门守覆盖的 14 码上面已全部列举。
             _ => unreachable!("non-loan command dispatched to LoanCommandDispatcher: {:?}", cmd.command),
         };
-        // P6 Task 8：loan 变更后在 dispatch 出口按 uid 幂等 reconcile 强平扫描器索引（end-state 等价 Java 逐点增量维护，见 loan_liquidation_engine.rs）；pool/IF 运营命令跳过。
+        // loan 变更后在 dispatch 出口按 uid 幂等 reconcile 强平扫描器索引（end-state 等价 Java 逐点增量维护，见 loan_liquidation_engine.rs）；pool/IF 运营命令跳过。
         if matches!(
             cmd.command,
             OrderCommandType::LoanCreate
@@ -82,7 +82,7 @@ impl LoanCommandDispatcher {
         rc
     }
 
-    /// P6 Task 8：按 uid reconcile 借贷强平扫描器的 isolated/cross 两个 targeted 索引到当前敞口精确态（§6.7）。
+    /// 按 uid reconcile 借贷强平扫描器的 isolated/cross 两个 targeted 索引到当前敞口精确态（§6.7）。
     fn reconcile_loan_indices(engine: &mut RiskEngine, ups: &UserProfileService, uid: i64) {
         let up = match ups.get(uid) {
             Some(u) => u,
@@ -136,7 +136,7 @@ impl LoanCommandDispatcher {
 
     // LOAN_CREATE —— 参考文档 §2.1，Java handleLoanCreate（:130-209）
 
-    /// 开仓 Isolated 借贷（参考文档 §2.1，逐字对齐 Java `:141-176`）：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。`LOAN_BORROW` 事件不移植（无事件总线，同 P1-P4）。
+    /// 开仓 Isolated 借贷（参考文档 §2.1，逐字对齐 Java `:141-176`）：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。`LOAN_BORROW` 事件不移植（无事件总线）。
     fn handle_loan_create(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -900,7 +900,7 @@ impl LoanCommandDispatcher {
         if all_collateral_exhausted {
             Self::take_over_remaining_cross_loans(engine, taker_up, cmd.timestamp, target_loan_id, ssp);
         }
-        // Java 在此调用 syncCrossExposure（非复制 scanner 索引维护，P6 范围，本仓未移植 LoanLiquidationEngine，§5.2）——跳过，不影响账本结算正确性。
+        // Java 在此调用 syncCrossExposure（非复制 scanner 索引维护，本仓未移植 LoanLiquidationEngine，§5.2）——跳过，不影响账本结算正确性。
     }
 
     /// LIF 承接后收尾，对应 Java 私有 closeAndRecycleCrossLoan（:905-910）：无对象池，直接 remove 即等价于清零+摘出+回收；调用后 loan_id 已移除，不可再读。
@@ -1045,7 +1045,7 @@ mod tests {
         }
     }
 
-    /// 局部守恒断言（Task 9 前简化版，§6.2）：accounts 总额+poolAvailable+interestRevenue 在借/还前后守恒（loanPoolBorrowed 是 tracker 不参与）。
+    /// 局部守恒断言（前简化版，§6.2）：accounts 总额+poolAvailable+interestRevenue 在借/还前后守恒（loanPoolBorrowed 是 tracker 不参与）。
     fn conserved_quote_total(engine: &RiskEngine, ups: &UserProfileService) -> i64 {
         let accounts_quote: i64 = ups.users.values().map(|u| u.account(QUOTE)).sum();
         accounts_quote + engine.loan_service.get_loan_pool_available(QUOTE) + engine.loan_service.get_interest_revenue(QUOTE)
@@ -1895,7 +1895,7 @@ mod tests {
         );
     }
 
-    // Task 7 — LOAN_FORCE_LIQUIDATE R1（pre-move + compare-and-consume），§2.5；R2/LIF 全流程集成测试在 exchange_core.rs
+    // LOAN_FORCE_LIQUIDATE R1（pre-move + compare-and-consume），§2.5；R2/LIF 全流程集成测试在 exchange_core.rs
 
     fn force_liquidate_cmd(order_id: i64, uid: i64, loan_id: i64, lots: i64) -> OrderCommand {
         OrderCommand {
@@ -2024,7 +2024,7 @@ mod tests {
         );
     }
 
-    // Task 7 — LOAN_CROSS_FORCE_LIQUIDATE R1，参考文档 §2.10
+    // LOAN_CROSS_FORCE_LIQUIDATE R1，参考文档 §2.10
 
     fn cross_force_liquidate_cmd(order_id: i64, uid: i64, target_loan_id: i64, lots: i64) -> OrderCommand {
         OrderCommand {

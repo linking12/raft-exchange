@@ -17,7 +17,7 @@ pub struct LiquidationScheduler {
     pub scan_tick: i64,
     /// 扫描切片总数（round-robin，每 tick 扫一片）。
     pub scan_slice_count: i64,
-    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`（P5 §4.2）。
+    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`（§4.2）。
     pub reprice_every_n_ticks: i64,
     /// shard id：只有 shard 0 跑调度器（§7.2）。
     pub shard_id: i32,

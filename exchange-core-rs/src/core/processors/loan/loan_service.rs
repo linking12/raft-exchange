@@ -118,7 +118,7 @@ impl LoanService {
     }
 
     // ================================================================
-    // Task 4：金钱原语，对应 Java LoanCommandDispatcher.java:1045-1069 + LoanService.java:138-152,412-420
+    // 金钱原语，对应 Java LoanCommandDispatcher.java:1045-1069 + LoanService.java:138-152,412-420
     // ================================================================
 
     /// 对应 handleLoanCreate 处 `openRateBps` 二选一分派（`:186-188`）：按 rate_mode 选 floating 当前利率 / fixed 派生利率。
@@ -201,7 +201,7 @@ impl LoanService {
     }
 
     // ================================================================
-    // Task 5：Cross 账户级 LTV —— 参考文档 §3.2/§3.3，Java `LoanService.java:168-269,395-410,467-470`
+    // Cross 账户级 LTV —— 参考文档 §3.2/§3.3，Java `LoanService.java:168-269,395-410,467-470`
     // ================================================================
 
     /// 对应 Java 静态 `collateralWeightForBase`（`:467-470`）：币种作 Cross 抵押的折价率（bps），直接读币种级 `CoreCurrencySpecification.collateral_weight_bps`；未配置/spec 缺失返回 `0`（= 不可作抵押，`LOAN_COLLATERAL_NOT_ALLOWED`）。
@@ -324,7 +324,7 @@ impl LoanService {
         self.cross_ltv_bps(up, now, ssp, price_cache, fail_closed_on_missing_price, true)
     }
 
-    /// 对应 Java 公开 `calculateCrossRawLtvBps`（`:201-206`）：**不加权**市值口径（`applyWeight=false`），仅供破产价定价用（Task 7）——用加权口径定价会把破产价抬高 `1/weight` 倍（loan.md §18.3）。`fail_closed_on_missing_price` 恒 `false`（同 Java 该重载固定传 `false`，缺价保守返 0，由调用方兜底）。
+    /// 对应 Java 公开 `calculateCrossRawLtvBps`（`:201-206`）：**不加权**市值口径（`applyWeight=false`），仅供破产价定价用——用加权口径定价会把破产价抬高 `1/weight` 倍（loan.md §18.3）。`fail_closed_on_missing_price` 恒 `false`（同 Java 该重载固定传 `false`，缺价保守返 0，由调用方兜底）。
     pub fn calculate_cross_raw_ltv_bps(
         &self,
         up: &UserProfile,
@@ -336,7 +336,7 @@ impl LoanService {
     }
 
     // ================================================================
-    // Task 7：force-liquidate 结算原语 + Cross LIF 接管 —— 参考文档 §2.5/§2.10/§6.3，Java `LoanService.java:154-166,287-385,412-464`
+    // force-liquidate 结算原语 + Cross LIF 接管 —— 参考文档 §2.5/§2.10/§6.3，Java `LoanService.java:154-166,287-385,412-464`
     // ================================================================
 
     /// 对应 Java 静态 `lotsToCollateralAmount`（`:429-432`）：强平张数（lot，base symbolScale）→ 抵押金额（base currencyScale）——R1 pre-move 记账用，[`Self::collateral_amount_to_lots`] 的反向。
@@ -357,7 +357,7 @@ impl LoanService {
         arithmetic::convert_scale(amount, base_spec.currency_scale_k, spec.base_scale_k)
     }
 
-    /// 对应 Java 静态 `quoteAmountToLots`（`:435-438`）：借款币金额（quote currencyScale）→ 按 `mark_price`（此处传破产价 limit）折算的下单张数（lot，ceil 向上取整不少卖）。Task 8 Cross scanner `calculate_cross_sell_size` 消费。
+    /// 对应 Java 静态 `quoteAmountToLots`（`:435-438`）：借款币金额（quote currencyScale）→ 按 `mark_price`（此处传破产价 limit）折算的下单张数（lot，ceil 向上取整不少卖）。Cross scanner `calculate_cross_sell_size` 消费。
     pub fn quote_amount_to_lots(
         quote_amount: i64,
         mark_price: i64,
@@ -398,7 +398,7 @@ impl LoanService {
         self.apply_debt_payment(loan, account, received_quote - liq_fee)
     }
 
-    /// 对应 Java 静态 `isStructurallySellable`（`:446-464`）：该抵押币是否**结构上可变现**——只看永久能力，不看 `markPrice` 这类临时状态。`collateral_weight_bps > 0`（币种级白名单）且存在 base=该币、quote=本账户某笔未偿 Cross 债币种的现货对、量够 ≥1 lot（卖了能真的还上债）。与 `LoanLiquidationEngine.pickCrossCollateralToSell` 的永久性条件同源（P6 范围，未移植，本函数独立成立）。
+    /// 对应 Java 静态 `isStructurallySellable`（`:446-464`）：该抵押币是否**结构上可变现**——只看永久能力，不看 `markPrice` 这类临时状态。`collateral_weight_bps > 0`（币种级白名单）且存在 base=该币、quote=本账户某笔未偿 Cross 债币种的现货对、量够 ≥1 lot（卖了能真的还上债）。与 `LoanLiquidationEngine.pickCrossCollateralToSell` 的永久性条件同源（未移植，本函数独立成立）。
     pub fn is_structurally_sellable(
         currency: i32,
         amount: i64,
@@ -717,7 +717,7 @@ mod tests {
     }
 
     // ====================================================================
-    // Task 4：open_rate_bps / verify_pool_capacity / disburse_loan /
+    // open_rate_bps / verify_pool_capacity / disburse_loan /
     // apply_debt_payment / collateral_value_in_quote_currency
     // ====================================================================
 
@@ -854,7 +854,7 @@ mod tests {
     }
 
     // ====================================================================
-    // Task 5：Cross 账户级 LTV —— collateral_weight_for_base / value_in_numeraire /
+    // Cross 账户级 LTV —— collateral_weight_for_base / value_in_numeraire /
     // calculate_cross_account_ltv_bps (weighted) / calculate_cross_raw_ltv_bps (unweighted)
     // ====================================================================
 
@@ -1007,7 +1007,7 @@ mod tests {
     }
 
     // ====================================================================================
-    // Task 7：lots_to_collateral_amount / collateral_amount_to_lots / settle_liquidation_proceeds /
+    // lots_to_collateral_amount / collateral_amount_to_lots / settle_liquidation_proceeds /
     // is_structurally_sellable / take_over_cross_loan —— 参考文档 §2.5/§2.10/§6.3
     // ====================================================================================
 

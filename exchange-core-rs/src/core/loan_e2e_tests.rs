@@ -1,4 +1,4 @@
-//! P5 Task 9（收官）：loan 全局守恒扩展 + loan e2e 场景 + 全局守恒 proptest，逐桶对齐 Java `TotalCurrencyBalanceReportResult`（参考文档 §6.2/§6.3/§6.4），`loanPoolBorrowed` 作为 tracker 单独一致性核验、不入守恒式。
+//! loan 全局守恒扩展 + loan e2e 场景 + 全局守恒 proptest，逐桶对齐 Java `TotalCurrencyBalanceReportResult`（参考文档 §6.2/§6.3/§6.4），`loanPoolBorrowed` 作为 tracker 单独一致性核验、不入守恒式。
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
@@ -833,7 +833,7 @@ enum GenLoanCmd {
     PoolWithdraw { currency_idx: usize, amount: i64 },
     IfDeposit { currency_idx: usize, amount: i64 },
     IfWithdraw { currency_idx: usize, amount: i64 },
-    /// `full_drain`: Task 9 review coverage fix — forces `lots` to the loan's actual remaining collateral so the terminal LIF-takeover branch in `post_process_loan_force_liquidate` gets fuzzer coverage (previously 0 hits).
+    /// `full_drain`: review coverage fix — forces `lots` to the loan's actual remaining collateral so the terminal LIF-takeover branch in `post_process_loan_force_liquidate` gets fuzzer coverage (previously 0 hits).
     ForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64, full_drain: bool },
     CrossForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64 },
     Reprice,

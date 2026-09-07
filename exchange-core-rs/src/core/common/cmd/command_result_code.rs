@@ -4,36 +4,36 @@ pub enum CommandResultCode {
     Success,                // 100
     AuthInvalidUser,        // -1001
     InvalidSymbol,          // -1201
-    UnsupportedSymbolType,  // -1203（P4 Task 1: 非期货 symbol 走期货下单路径）
+    UnsupportedSymbolType,  // -1203（非期货 symbol 走期货下单路径）
     RiskNsf,                // -2001
     RiskInvalidReserveBidPrice, // -2002
     RiskAskPriceLowerThanFee,   // -2003
-    RiskMarginTradingDisabled,  // -2004（P4: cfgMarginTradingEnabled==false）
-    RiskInvalidAmount,          // -2005（P4 Task 6: MARGIN_ADJUSTMENT cmd.price<=0）
-    RiskInvalidLeverage,        // -2006（P4: 杠杆倍率不在 symbol 支持范围内）
-    RiskLeverageMismatch,       // -2007（P4: 新杠杆与当前仓位杠杆不匹配）
-    RiskMarginModeMismatch,     // -2008（P4: 仓位模式不匹配）
-    RiskMarginPositionNotExists, // -2009（P4 Task 6: MARGIN_ADJUSTMENT ISOLATED 目标仓位不存在）
-    RiskMarkpriceNotAvailable,  // -2011（P4: mark price 缺失/为 0）
-    /// P6 Task 5：期货 `IF_WITHDRAW` 时 `available` 不足以覆盖提取额，逐字对齐 Java `CommandResultCode.java:48`（`RISK_IF_INSUFFICIENT(-2012)`）。**与 loan 的 `LoanIfInsufficient`（-6053）是独立池子的独立错误码**，不可混用（同 `IfDeposit`/`LoanIfDeposit` 互异先例，见 `order_command_type.rs`）。
-    RiskIfInsufficient, // -2012（P6: IF_WITHDRAW available 不足）
+    RiskMarginTradingDisabled,  // -2004（cfgMarginTradingEnabled==false）
+    RiskInvalidAmount,          // -2005（MARGIN_ADJUSTMENT cmd.price<=0）
+    RiskInvalidLeverage,        // -2006（杠杆倍率不在 symbol 支持范围内）
+    RiskLeverageMismatch,       // -2007（新杠杆与当前仓位杠杆不匹配）
+    RiskMarginModeMismatch,     // -2008（仓位模式不匹配）
+    RiskMarginPositionNotExists, // -2009（MARGIN_ADJUSTMENT ISOLATED 目标仓位不存在）
+    RiskMarkpriceNotAvailable,  // -2011（mark price 缺失/为 0）
+    /// 期货 `IF_WITHDRAW` 时 `available` 不足以覆盖提取额，逐字对齐 Java `CommandResultCode.java:48`（`RISK_IF_INSUFFICIENT(-2012)`）。**与 loan 的 `LoanIfInsufficient`（-6053）是独立池子的独立错误码**，不可混用（同 `IfDeposit`/`LoanIfDeposit` 互异先例，见 `order_command_type.rs`）。
+    RiskIfInsufficient, // -2012（IF_WITHDRAW available 不足）
     MatchingUnknownOrderId, // -3002
     MatchingUnsupportedCommand, // -3004
-    MatchingInvalidOrderBookId, // -3005（Task 9: MatchingEngineRouter 未知 symbol）
-    MatchingMoveFailedPriceOverRiskLimit, // -3041（P2 Task 5: moveOrder 现货 BID 超出 reserveBidPrice 风控）
-    MatchingReduceFailedWrongSize, // -3051（Task 6: reduceOrder 请求量 <= 0）
+    MatchingInvalidOrderBookId, // -3005（MatchingEngineRouter 未知 symbol）
+    MatchingMoveFailedPriceOverRiskLimit, // -3041（moveOrder 现货 BID 超出 reserveBidPrice 风控）
+    MatchingReduceFailedWrongSize, // -3051（reduceOrder 请求量 <= 0）
     UserMgmtUserAlreadyExists, // -4001
     UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame, // -4101
     UserMgmtAccountBalanceAdjustmentNsf,                // -4103
     SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
 
     // ================================================================
-    // P6 Task 1：内部转账，逐字对应 Java `CommandResultCode.java:74`（handler 留后续 Task，见参考文档 §5.1；这里只落码值，供 InternalTransferProcessor.collectInput 的 R1 校验用）。
+    // 内部转账，逐字对应 Java `CommandResultCode.java:74`（handler 留后续，见参考文档 §5.1；这里只落码值，供 InternalTransferProcessor.collectInput 的 R1 校验用）。
     // ================================================================
     InternalTransferInvalidSelf, // -4301，from == to 自转
 
     // ================================================================
-    // P5 Task 1：现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`（handler 本身留 Task 2+，这里先落码值，供后续 Task 直接引用）。
+    // 现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`（handler 本身留后续，这里先落码值，供后续直接引用）。
     // ================================================================
     LoanNotEnabled,          // -6001，spec.loanConfig.initialLtvBps == 0
     LoanAlreadyExists,       // -6002，loanId 已存在（Isolated / Cross 命名空间独立）

@@ -55,7 +55,7 @@ pub struct ReduceOrderRequest {
     pub reduce_size: i64,
 }
 
-/// [`ExchangeApi::place_futures_order`] 的入参：`PLACE_ORDER` + P4 期货扩展字段；无 `reserve_bid_price`（现货专属字段，期货风控不读，故不建模）。
+/// [`ExchangeApi::place_futures_order`] 的入参：`PLACE_ORDER` + 期货扩展字段；无 `reserve_bid_price`（现货专属字段，期货风控不读，故不建模）。
 #[derive(Debug, Clone, Copy)]
 pub struct PlaceFuturesOrderRequest {
     pub order_id: i64,
@@ -216,7 +216,7 @@ impl ExchangeApi {
     }
 
     // ------------------------------------------------------------------
-    // 期货门面（P4 Task 7）：symbol 注册同 add_symbol 直接 API；mark price/下单/平仓/保证金/杠杆走 OrderCommand。
+    // 期货门面：symbol 注册同 add_symbol 直接 API；mark price/下单/平仓/保证金/杠杆走 OrderCommand。
     // ------------------------------------------------------------------
 
     /// 同 [`Self::add_symbol`]，多校验 `spec.symbol_type.is_futures_contract()`，非期货类型拒绝。
@@ -524,7 +524,7 @@ mod tests {
     }
 
     // ================================================================================
-    // P4 Task 7：期货端到端——经 ExchangeApi 走完整一笔期货开仓成交 + 平仓结算。参考文档 §3/§4；手算见下方各断言旁注
+    // 期货端到端——经 ExchangeApi 走完整一笔期货开仓成交 + 平仓结算。参考文档 §3/§4；手算见下方各断言旁注
     // （`base_scale_k=quote_scale_k=currency_scale_k=1` 恒等缩放，`fee_scale_k=0` 固定费，`init_margin`/`max_leverage`
     // 均未配置 → `calculateInitMargin = notional/leverage`，本例 `leverage=1` 恒等于 notional）。
     // ================================================================================

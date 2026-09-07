@@ -1,4 +1,4 @@
-//! 对应 Java `CoreSymbolSpecification`（现货子集 + P4 期货保证金字段扩展）。
+//! 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段扩展）。
 use std::collections::BTreeMap;
 
 use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
@@ -17,7 +17,7 @@ pub struct CoreSymbolSpecification {
     pub taker_fee: i64,
     pub maker_fee: i64,
     pub fee_scale_k: i64,
-    /// 对应 Java `liquidationFee`：强平费率（fee_scale_k==0 为固定费）。P6 新增，零值=未配置。
+    /// 对应 Java `liquidationFee`：强平费率（fee_scale_k==0 为固定费）。零值=未配置。
     pub liquidation_fee: i64,
 
     // ================================================================
@@ -32,7 +32,7 @@ pub struct CoreSymbolSpecification {
     pub max_leverage: BTreeMap<i64, i64>,
 
     // ================================================================
-    // 现货借贷（P5）：type=CURRENCY_EXCHANGE_PAIR only；非现货 symbol 全 0/禁用
+    // 现货借贷：type=CURRENCY_EXCHANGE_PAIR only；非现货 symbol 全 0/禁用
     // ================================================================
     /// 对应 Java `loanConfig`：默认全 0（禁用）；唯一 mutation point 是 `ADD_LOAN`。
     pub loan_config: SymbolLoanSpecification,

@@ -62,14 +62,14 @@ pub struct SymbolPositionRecord {
     /// 对应 Java `adlEligibility`：ADL 资格因子（ISOLATED=100/CROSS=0，安全门后 clamp）；`#[serde(skip)]`，Ruling P6-E。
     #[serde(skip)]
     pub adl_eligibility: i64,
-    /// 对应 Java `liquidationFlow`（P6 Task 7）：进行中的 FORCE→IF→ADL 状态机，`None`=无流程；`#[serde(skip)]`，Ruling P6-E。
+    /// 对应 Java `liquidationFlow`：进行中的 FORCE→IF→ADL 状态机，`None`=无流程；`#[serde(skip)]`，Ruling P6-E。
     #[serde(skip)]
     pub liquidation_flow: Option<LiquidationFlow>,
 }
 
 impl SymbolPositionRecord {
     /// 本移植新增便捷构造器（非 Java 逐字对应）：给定 identity 字段，其余取默认零值；`leverage` 经
-    /// [`Self::update_leverage`] 归一，`adl_eligibility` 按 `margin_mode` 归一（P6 Task 6）。
+    /// [`Self::update_leverage`] 归一，`adl_eligibility` 按 `margin_mode` 归一。
     pub fn new(uid: i64, symbol: i32, currency: i32, margin_mode: MarginMode, leverage: i32) -> Self {
         let mut r = SymbolPositionRecord { uid, symbol, currency, margin_mode, ..Default::default() };
         r.update_leverage(leverage);
@@ -107,7 +107,7 @@ impl SymbolPositionRecord {
         // 对应 Java `initialize` (`:110-111`)：ADL 资格因子按 margin_mode 归一，池复用清干净旧值。
         self.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
         self.pending_adl_size = 0;
-        // 对应 Java `initialize` (`:112`)：池化复用清理纯内存强平流程状态（P6 Task 7）。
+        // 对应 Java `initialize` (`:112`)：池化复用清理纯内存强平流程状态。
         self.liquidation_flow = None;
     }
 
@@ -144,7 +144,7 @@ impl SymbolPositionRecord {
         // 对应 Java `reset()` (`:706-709`)：无条件回落 ISOLATED 默认值，后续 `initialize()` 按真实 margin_mode 重设。
         self.adl_eligibility = 100;
         self.pending_adl_size = 0;
-        // 对应 Java `reset` (`:710`)：池化复用清理纯内存强平流程状态（P6 Task 7）。
+        // 对应 Java `reset` (`:710`)：池化复用清理纯内存强平流程状态。
         self.liquidation_flow = None;
     }
 
@@ -672,7 +672,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // P6 Task 1：非复制字段排除 state_hash（Ruling P6-E）+ calculate_bankruptcy_price。
+    // 非复制字段排除 state_hash（Ruling P6-E）+ calculate_bankruptcy_price。
     // ------------------------------------------------------------------
 
     #[test]
@@ -734,7 +734,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：pending hold / release —— Java `:160-226`
+    // pending hold / release —— Java `:160-226`
     // ================================================================
 
     #[test]
@@ -815,7 +815,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：estimate_unrealized_profit / estimate_pnl —— Java `:233-245`
+    // estimate_unrealized_profit / estimate_pnl —— Java `:233-245`
     // ================================================================
 
     #[test]
@@ -847,7 +847,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：calculate_maintenance_margin —— Java `:478-484`
+    // calculate_maintenance_margin —— Java `:478-484`
     // ================================================================
 
     #[test]
@@ -868,7 +868,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：calculate_required_margin_for_futures —— Java `:523-539`
+    // calculate_required_margin_for_futures —— Java `:523-539`
     // ================================================================
 
     fn fee_spec(taker_fee: i64) -> CoreSymbolSpecification {
@@ -917,7 +917,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：calculate_required_margin_for_order —— Java `:548-569`，-1 哨兵
+    // calculate_required_margin_for_order —— Java `:548-569`，-1 哨兵
     // ================================================================
 
     #[test]
@@ -949,7 +949,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：estimate_notional_for_order / calculate_pending_fee_for_order[_budget]
+    // estimate_notional_for_order / calculate_pending_fee_for_order[_budget]
     // —— Java `:574-615`
     // ================================================================
 
@@ -986,7 +986,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：open_position_margin —— Java `:660-669`
+    // open_position_margin —— Java `:660-669`
     // ================================================================
 
     #[test]
@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     // ================================================================
-    // Task 2：close_current_position_futures —— Java `:625-654`（三分支）
+    // close_current_position_futures —— Java `:625-654`（三分支）
     // ================================================================
 
     #[test]

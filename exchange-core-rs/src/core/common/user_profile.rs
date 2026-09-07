@@ -1,7 +1,7 @@
 //! 对应 Java: exchange.core2.core.common.UserProfile。现货子集 `uid`/`userStatus`/
-//! `accounts`/`exchangeLocked`；`processedTransactionIds` 按 Task 8 brief 简化为无过期窗口的
+//! `accounts`/`exchangeLocked`；`processedTransactionIds` 按 brief 简化为无过期窗口的
 //! `BTreeSet<i64>`（`TimeWindowDedupSet` 最小子集：只保留"claim 一次，重复即拒"，不做时间淘汰）。
-//! P4 Task 1 期货子集 `positionMode`/`positions` + `createPositionsKey`/`countPositionRecord`/
+//! 期货子集 `positionMode`/`positions` + `createPositionsKey`/`countPositionRecord`/
 //! `processPositionRecord`（见 §2）。
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,7 +36,7 @@ pub struct UserProfile {
     pub positions: BTreeMap<i32, SymbolPositionRecord>,
 
     // ================================================================
-    // 现货借贷（P5）：默认空，Task 2+ 消费；对应 Java `UserProfile.java:97,102,105`
+    // 现货借贷：默认空，后续消费；对应 Java `UserProfile.java:97,102,105`
     // ================================================================
     /// loanId -> record（对应 Java `LongObjectHashMap<IsolatedLoanRecord> isolatedLoans`）。
     pub isolated_loans: BTreeMap<i64, IsolatedLoanRecord>,
@@ -175,7 +175,7 @@ impl UserProfile {
     /// 对应 Java `crossMarginBaseAllocation(IntFunction, IntFunction, IntObjectHashMap)`
     /// （`UserProfile.java:263-312`）：一次算好整账户所有 CROSS 仓的破产价基础 `marginBase`
     /// （position key → marginBase，sizePrice scale，与 `SymbolPositionRecord.open_init_margin_sum`
-    /// 同 scale），直接喂 `SymbolPositionRecord::calculate_bankruptcy_price`（P6）的 CROSS 回调。
+    /// 同 scale），直接喂 `SymbolPositionRecord::calculate_bankruptcy_price`的 CROSS 回调。
     /// 按 currency 分组，组内账户级 `marginBalance` 按 MM 占比分给每个 CROSS 仓：
     /// ```text
     /// marginBalance = crossAvailable + Σ UPnL（该 currency 全部 CROSS 仓）
@@ -313,7 +313,7 @@ impl UserProfile {
         *self.exchange_locked.entry(currency).or_insert(0) += delta;
     }
 
-    /// 对应 Java `crossLoanCollateral.addToValue(currency, delta)`（P5 Task 5）：账户级 Cross 抵押池
+    /// 对应 Java `crossLoanCollateral.addToValue(currency, delta)`：账户级 Cross 抵押池
     /// 缺省 0 起累加，`delta` 可为负（`LOAN_CROSS_WITHDRAW_COLLATERAL` 的 subtract-then-check 与其失败
     /// 回滚都走这一入口）。
     pub fn add_to_cross_loan_collateral(&mut self, currency: i32, delta: i64) {
@@ -347,7 +347,7 @@ impl UserProfile {
             h = h.wrapping_mul(31).wrapping_add(key as i64);
             h = h.wrapping_mul(31).wrapping_add(record.state_hash() as i64);
         }
-        // P5：三个借贷字段折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:353-355`），
+        // 三个借贷字段折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:353-355`），
         // 覆盖 isolatedLoans/crossLoanCollateral/crossLoans；BTreeMap 天然有序满足确定性。
         for (&loan_id, loan) in &self.isolated_loans {
             h = h.wrapping_mul(31).wrapping_add(loan_id);
@@ -560,7 +560,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // calculate_cross_available — 对应 Java `UserProfile.java:229-240`（P4 Task 5 §5）
+    // calculate_cross_available — 对应 Java `UserProfile.java:229-240`（§5）
     // ------------------------------------------------------------------
 
     fn currency_spec_scale1(currency: i32) -> CoreCurrencySpecification {
@@ -701,7 +701,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // cross_margin_base_allocation — 对应 Java `UserProfile.java:263-312`（P4 Task 5 §5）
+    // cross_margin_base_allocation — 对应 Java `UserProfile.java:263-312`（§5）
     // ------------------------------------------------------------------
 
     #[test]

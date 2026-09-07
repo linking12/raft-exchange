@@ -157,7 +157,7 @@ impl LoanLiquidationEngine {
                 symbol: spec.symbol_id,
                 price: limit_price,
                 size: sell_size_lots,
-                reserve_bid_price: loan.loan_id, // P5 约定：loan_id 走 reserve_bid_price
+                reserve_bid_price: loan.loan_id, // 约定：loan_id 走 reserve_bid_price
                 action: Some(OrderAction::Ask),
                 order_type: Some(OrderType::Ioc),
                 timestamp: ts,
@@ -230,7 +230,7 @@ impl LoanLiquidationEngine {
             symbol: spec.symbol_id,
             price: limit_price,
             size: sell_size,
-            reserve_bid_price: target_loan.loan_id, // P5 约定：target_loan_id 走 reserve_bid_price
+            reserve_bid_price: target_loan.loan_id, // 约定：target_loan_id 走 reserve_bid_price
             action: Some(OrderAction::Ask),
             order_type: Some(OrderType::Ioc),
             timestamp: ts,
