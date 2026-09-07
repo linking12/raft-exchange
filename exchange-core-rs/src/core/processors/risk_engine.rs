@@ -43,9 +43,7 @@ fn sub_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
 
-/// 对应 Java `RiskEngine`（现货+P4期货R1子集）。字段：adjustments=充提对冲桶，fees=现货手续费桶，
-/// last_price_cache=简化版 lastPriceCache（仅 markPrice），cfg_margin_trading_enabled=开关。
-/// suspends 桶延后未建（SUSPEND_USER 未移植）。
+/// 对应 Java `RiskEngine`（现货+P4期货R1子集）；suspends 桶未移植（SUSPEND_USER 未落地）。
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
@@ -56,8 +54,7 @@ pub struct RiskEngine {
     pub loan_service: LoanService,
     /// 对应 Java `RiskEngine.liquidationService`：per-shard 期货保险基金（IF）状态，notionals/positions 都进 state_hash（Ruling P6-E），与 loan LIF 独立。
     pub liquidation_service: LiquidationService,
-    /// 对应 Java `RiskEngine.liquidationEngine`：per-shard 期货强平引擎（检测+FORCE→IF→ADL 状态机+索引+提交队列），仅 leader-local 状态，不进 state_hash/snapshot（Ruling P6-E）。
-    /// `#[serde(skip)]`：换届后由 from_snapshot_bytes 重建索引。
+    /// 对应 Java `RiskEngine.liquidationEngine`：per-shard 期货强平引擎，仅 leader-local 不进 state_hash/snapshot（Ruling P6-E）；`#[serde(skip)]` 换届后 from_snapshot_bytes 重建索引。
     #[serde(skip)]
     pub liquidation_engine: LiquidationEngine,
 }
@@ -158,8 +155,7 @@ impl RiskEngine {
         self.place_order(cmd, user_profile, spec, ssp)
     }
 
-    /// 对应 Java `placeOrder`（:432-503）：现货→place_exchange_order；期货→校验→分配 position→ONEWAY reduce-only 夹→isValidLeverage→can_place_margin_order NSF→成功后 pendingHold+插回 map。非现货非期货→UnsupportedSymbolType（不 panic，对应 :437-439）。
-    /// Rust 对齐：clone 出本地 position 副本，NSF 通过后才整体 insert 回 map（替代 Java 对象池"NSF 前不插入"）。
+    /// 对应 Java `placeOrder`（:432-503）：现货→place_exchange_order；期货→校验分配仓位后 can_place_margin_order NSF 检查；非现货非期货→UnsupportedSymbolType（不 panic，:437-439）。
     fn place_order(
         &mut self,
         cmd: &mut OrderCommand,
@@ -248,7 +244,6 @@ impl RiskEngine {
     }
 
     /// 对应 Java `canPlaceMarginOrder`（:533-623）：期货下单 NSF 校验，五项加总 scale 后比较可支配额度。
-    /// position_key 相等替代 Java 的对象引用 == 恒等比较（NSF 检查发生在插回 map 之前，语义等价）。
     #[allow(clippy::too_many_arguments)] // 逐字对齐 Java canPlaceMarginOrder 的参数集，拆分反而失真
     fn can_place_margin_order(
         &self,
@@ -413,8 +408,7 @@ impl RiskEngine {
         self.calculate_free_futures_margin_for_symbol(user_profile, currency, -1, ssp)
     }
 
-    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int, int curPosSymbol)`（:767-805）：账户级净期货盈余（可正可负），取两保守估计的 min：①计未实现盈亏（CROSS 按初始保证金扣）②不计未实现盈亏（CROSS 按维持保证金扣）。
-    /// cur_pos_symbol：仅该 symbol 上的 ISOLATED 仓浮盈计入 unrealizedPnl；CROSS 仓浮盈恒计入，不受限制。
+    /// 对应 Java `calculateFreeFuturesMargin(UserProfile, int, int curPosSymbol)`（:767-805）：账户净期货盈余取两保守估计 min（计/不计未实现盈亏两种 CROSS 保证金口径）；cur_pos_symbol 仅该 symbol ISOLATED 仓浮盈计入。
     fn calculate_free_futures_margin_for_symbol(
         &self,
         user_profile: &UserProfile,
@@ -543,9 +537,7 @@ impl RiskEngine {
         requested_size.min(pos.open_volume)
     }
 
-    /// 对应 Java `placeExchangeOrder`（:633-685）：现货下单冻结，BID 锁 quote/ASK 锁 base，成功只加 exchange_locked。
-    /// BID：reserve 价校验→按 BUDGET/普通限价算 taker fee→缩放到 quote scale；ASK：ask-too-low 守卫→size 直接缩放到 base scale（不预留 fee）。
-    /// NSF：`accounts - exchange_locked - loan_locked - order_lock_amount + freeFuturesMargin < 0`（Ruling P4-A：无期货仓时 freeFuturesMargin 恒 0 no-op；loan_locked 对应 Java :673）。成功后 add_to_locked，返回 ValidForMatchingEngine。
+    /// 对应 Java `placeExchangeOrder`（:633-685）：现货下单冻结（BID 锁 quote/ASK 锁 base）；NSF = accounts − exchange_locked − loan_locked − order_lock + freeFuturesMargin < 0（Ruling P4-A：无期货仓时恒 0）。
     fn place_exchange_order(
         &mut self,
         cmd: &OrderCommand,
@@ -604,9 +596,7 @@ impl RiskEngine {
         } else {
             0
         };
-        // P5 Task 3（补 P4 Task 5 carry）：借贷抵押必扣，不能被现货挂单锁走，否则贷款变裸债
-        // （对应 Java `:673`，`placeExchangeOrder` 单独减 `loanCollateralLocked`，不调 umbrella
-        // `calculateLocked`）。无 loan 用户 `loan_collateral_locked` 恒 0，判定与改动前逐位相同。
+        // 借贷抵押必扣不能被现货挂单锁走，对应 Java :673（单独减 loanCollateralLocked，不调 calculateLocked）；无 loan 用户恒 0。
         let loan_locked = self.loan_collateral_locked(user_profile, currency);
         if balance - existing_locked - loan_locked - order_lock_amount + free_futures_margin < 0 {
             return CommandResultCode::RiskNsf;
@@ -615,102 +605,42 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 对应 Java `handlerRiskRelease`（885–1023，现货分支 922–945）：R2 撮合后置分派骨架。
-    /// 参考文档 §3。链头 REJECT/REDUCE 释放（Task 5）+ TRADE 链 sell 结算（Task 6，
-    /// `handle_matcher_events_exchange_sell`）已落地；buy 结算留给 Task 7（`// TODO` 占位）。
-    ///
-    /// # 非交易命令 no-op 守卫（管线结构对齐 Java 之后新增）
-    /// `ExchangeCore::process_command` 重构后，**所有**命令（含 `AddUser`/`BalanceAdjustment` 等
-    /// 非交易命令）都会依次流过 R1→ME→R2 三段（对齐 Java 全命令过 disruptor 三阶段的结构）。
-    /// 非交易命令没有 symbol/matcher_event 语义——`cmd.symbol` 对 `BalanceAdjustment` 是**币种 id**
-    /// 而非 symbol id，若不提前拦截，下面 `ssp.get_symbol(cmd.symbol)` 会用币种 id 当 symbol id
-    /// 查（大概率 panic 或查到无关 symbol）。因此在最前面显式短路：非交易命令在 R1
-    /// （`pre_process_command`）已经把结果写进 `cmd.result_code`，R2 在这里直接返回、不做任何
-    /// 改动。（备注：即使没有这条显式 guard，非交易命令因为从未被设置过 `matcher_event`，也会被
-    /// 紧随其后的 `cmd.matcher_event.take() == None` 分支挡住——这条 guard 是双保险 + 把"非交易
-    /// 命令在 R2 无意义"这件事写进代码里，而非依赖一个巧合成立的空值检查。）
-    ///
-    /// 借用设计（vs. Java `takerUp = getUserProfileOrAddSuspended(cmd.uid)` 提前一次性取）：本期
-    /// 单 shard 恒 `uidForThisHandler == true`，但如果在这里先 `ups.get_or_add_suspended(cmd.uid)`
-    /// 拿到 `&mut UserProfile` 再传给下游 helper，sell 结算里额外借出 maker profile 时会与这个
-    /// 长生命周期借用冲突。故改为把 `&mut UserProfileService` 传进 helper，helper 内部按 uid
-    /// 现取，且只在各自需要的短作用域内持有——taker 与 maker（甚至自成交时同一 uid）都不会
-    /// 出现两个 `&mut` 同时借用同一 `UserProfile` 的冲突。
-    ///
-    /// `fees` 对应 Java 的平台手续费累计桶（`RiskEngine.fees`），Task 8 落地为本结构体字段
-    /// （之前以 `&mut` 参数形式由调用方持有）。`handle_matcher_events_exchange_sell/buy` 仍是
-    /// 关联函数、以 `&mut BTreeMap<i32,i64>` 参数接收 fees（Task 8 brief 的推荐做法）——这里
-    /// 用 `&mut self.fees` 分裂借用后传入，与 `ups`/`ssp`（调用方另行传入、非 `self` 字段）互不冲突，
-    /// 避免 `&mut self` 方法内部再借 `&mut UserProfileService` 时产生自借用冲突。
+    /// 对应 Java `handlerRiskRelease`（:885-1023，现货分支 :922-945）：R2 撮合后置分派骨架；非交易命令 R1 已定结果，此处直接返回。
     pub fn handler_risk_release(
         &mut self,
         cmd: &mut OrderCommand,
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) {
-        // `REPRICE_LOAN_RATES` 是 `is_non_trading()`（见 `OrderCommandType::is_non_trading`），
-        // 但它是本移植目前唯一需要真正 R2 处理的非交易命令（其余非交易命令的最终结果已在 R1
-        // 落定）——必须在下面的通用 `is_non_trading()` 早退**之前**特判，否则 R2 永远跑不到。
-        // 对应 Java `RiskEngine.handlerRiskRelease`（`:906-913`），见 `reprice_loan_rates_apply`
-        // 文档。
+        // RepriceLoanRates 虽 is_non_trading() 但需真正 R2 处理，须在通用 is_non_trading 早退前特判，对应 Java handlerRiskRelease（:906-913）。
         if cmd.command == OrderCommandType::RepriceLoanRates {
             self.reprice_loan_rates_apply(cmd);
             return;
         }
-        // `INTERNAL_TRANSFER` 是本移植目前第二个需要真正 R2 处理的非交易命令（同
-        // `REPRICE_LOAN_RATES`，见上面注释）——同理必须在下面的通用 `is_non_trading()` 早退
-        // **之前**特判，否则 to-shard 入账（R2）永远跑不到。对应 Java
-        // `RiskEngine.handlerRiskRelease` 处理 `MatcherEventType.INTERNAL_TRANSFER_EVENT` 的分支
-        // （`InternalTransferProcessor.applyEvent`）；本移植的载体是 `cmd.internal_transfer_event`
-        // 而非 `matcherEvent` 链（见 `internal_transfer_processor.rs` 模块文档"事件载体的移植
-        // 偏差"）。
+        // InternalTransfer 同理需在 is_non_trading 早退前特判，对应 Java handlerRiskRelease 的 INTERNAL_TRANSFER_EVENT 分支；载体为 cmd.internal_transfer_event 而非 matcher_event。
         if cmd.command == OrderCommandType::InternalTransfer {
             self.internal_transfer_apply(cmd, ups);
             return;
         }
-        // `SETTLE_FUNDINGFEES` 是本移植第三个需要真正 R2 处理、但**不是**通过共享
-        // `cmd.matcher_event` 链传数据的命令（同 `REPRICE_LOAN_RATES`/`INTERNAL_TRANSFER`，见
-        // 上面两条注释）——它也不是 `is_non_trading()`（停留在主交易 switch），但同样必须在下面
-        // 通用的 `cmd.matcher_event.take()` 提取**之前**特判：`funding_fee_command_processor.rs`
-        // 用 `cmd.funding_fee_event` 这个专属载体而非 `matcher_event`，若不提前拦截，
-        // `cmd.matcher_event.take()` 会取到 `None`（本命令从未写过它）而直接早退，R2 结算永远
-        // 跑不到。对应 Java `RiskEngine.handlerRiskRelease` 处理 `MatcherEventType.FUNDING_EVENT`
-        // 的分支（`:972-976`）。
+        // SettleFundingfees 非 is_non_trading，用 cmd.funding_fee_event 专属载体，须在 cmd.matcher_event.take() 之前特判，对应 Java handlerRiskRelease 的 FUNDING_EVENT 分支（:972-976）。
         if cmd.command == OrderCommandType::SettleFundingfees {
-            // Java 在 `handlerRiskRelease` 顶层用 `cmd.matcherEvent != null` 门控整个函数
-            // （`:888-890`），funding 无事件（`total_pay==0 || total_recv==0` → matcherEvent=null）时
-            // 根本进不到 `:977` 的 checkPositions。本移植的 funding 事件载体是 `cmd.funding_fee_event`
-            // （`None` = 无事件），故在结算消费它之前先捕获是否有事件，据此门控 check_positions，
-            // 与 Java 一致——无 funding 结算就不触发强平扫描。
+            // 对应 Java handlerRiskRelease :888-890 门控：无 funding 事件（cmd.funding_fee_event=None）则不触发 :977 checkPositions。
             let had_funding_event = cmd.funding_fee_event.is_some();
             self.settle_funding_fees_apply(cmd, ups, ssp);
-            // 对应 Java `handlerRiskRelease:977`——资金费 R2 结算后触发同 symbol 的强平检测
-            // （资金费结算本身可能把某仓推破产）。这是 Task 4 记的 checkPositions 钩子 retrofit。
+            // 对应 Java handlerRiskRelease:977：资金费结算后触发同 symbol 强平检测（结算可能致仓破产）。
             if had_funding_event {
                 self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
             }
             return;
         }
-        // `IF_TAKEOVER` 是本移植第四个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链传数据
-        // 的命令（同上面三条注释一样的理由）——用 `cmd.if_takeover_size`/`cmd.if_preview_cover`
-        // 这两个专属载体而非 `matcher_event`（见 `if_command_processor.rs` 模块文档"事件载体的
-        // 移植偏差"）。对应 Java `RiskEngine.handlerRiskRelease` 处理 `IF_TAKEOVER` 的分支
-        // （`:962-966`/`:987-988`：`ifProcessor.applyEvent` 循环 + `finalizeForCommand`）。
-        // **`liquidationEngine.advanceLiquidation` 钩子未落地**（Java `:997`，Task 7 排期，见
-        // `if_command_processor.rs` 模块文档）。
+        // IfTakeover 用 cmd.if_takeover_size/if_preview_cover 专属载体，不走 matcher_event 链，对应 Java handlerRiskRelease 的 IF_TAKEOVER 分支（:962-966/:987-988）。
         if cmd.command == OrderCommandType::IfTakeover {
             self.if_takeover_apply(cmd, ups, ssp);
             // P6 Task 7b：对应 Java `handlerRiskRelease:997`——IF R2 结算后推进状态机（REJECT→ADL）。
             Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
-        // `AUTO_DELEVERAGING` 是本移植第五个需要真正 R2 处理、但不经共享 `cmd.matcher_event` 链
-        // 传数据的命令（同上面四条注释一样的理由）——用 `cmd.adl_events`/`cmd.adl_user_positions`
-        // 这两个专属载体而非 `matcher_event`（见 `adl_command_processor.rs` 模块文档"事件载体的
-        // 移植偏差"）。对应 Java `RiskEngine.handlerRiskRelease` 处理 `AUTO_DELEVERAGING` 的分支
-        // （`:967-970` apply 循环 + `:989-990` finalize：`ADLCommandProcessor.applyEvent` 循环 +
-        // `finalizeForCommand`）。**`liquidationEngine.advanceLiquidation` 钩子未落地**（Java
-        // `:997`，Task 7 排期，同 `if_takeover_apply` 文档）。
+        // AutoDeleveraging 用 cmd.adl_events/adl_user_positions 专属载体，对应 Java handlerRiskRelease 的 AUTO_DELEVERAGING 分支（:967-970 apply + :989-990 finalize）。
         if cmd.command == OrderCommandType::AutoDeleveraging {
             self.adl_apply(cmd, ups, ssp);
             // P6 Task 7b：对应 Java `handlerRiskRelease:997`——ADL R2 结算后推进状态机（恒终态）。
@@ -720,12 +650,7 @@ impl RiskEngine {
         if cmd.command.is_non_trading() {
             return;
         }
-        // 期货分支专用（对应 Java `lastPriceCache.get(spec.symbolId)`）：提前算好（在
-        // `fees = &mut self.fees` 分裂借用 `self` 之前），避免下面 `self.mark_price(...)`
-        // （借用 `&self`）与已经存活的 `&mut self.fees` 借用冲突。R1 `place_order` 已强制要求
-        // mark price 存在才能通过风控（`RiskMarkpriceNotAvailable`），故任何能走到 R2 结算的
-        // 期货命令，其 symbol 必已有缓存的 mark price；`unwrap_or(0)` 只是防御性兜底（现货命令
-        // 走到这里时该值也不会被使用），不做 Java 那种"缺失即 NPE"的隐式假设。
+        // 期货分支专用，对应 Java lastPriceCache.get(spec.symbolId)；提前取值避免与后续 &mut self.fees 借用冲突，unwrap_or(0) 仅防御性兜底（R1 已保证 mark price 存在）。
         let mark_price_for_futures = self.mark_price(cmd.symbol).unwrap_or(0);
         let fees = &mut self.fees;
         let mut mte = match cmd.matcher_event.take() {
@@ -741,33 +666,14 @@ impl RiskEngine {
             .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", cmd.symbol))
             .clone();
         if spec.symbol_type != SymbolType::CurrencyExchangePair {
-            // 期货分支（P4 Task 4）：对应 Java `handlerRiskRelease`（:885-1023）非现货分支的
-            // "else"catch-all（`IF_TAKEOVER`/`AUTO_DELEVERAGING`/`SETTLE_FUNDINGFEES` 各自专属
-            // dispatch 到 P6 处理器，PLACE_ORDER/CLOSE_POSITION/FORCE_LIQUIDATION 等普通成交
-            // 命令统一走 `handleMatcherEventMargin` 循环）。当前 `OrderCommandType` 枚举尚未
-            // 移植 `IF_TAKEOVER`/`AUTO_DELEVERAGING`/`SETTLE_FUNDINGFEES` 三个变体（P6 排期），
-            // 因此没有对应分支可 match——今天能到达这里的期货命令（PLACE_ORDER/CLOSE_POSITION/
-            // ForceLiquidation/CancelOrder/MoveOrder/ReduceOrder）全部走这条统一结算路径，与
-            // Java 现状行为一致；`FORCE_LIQUIDATION` 专属的 `collectLiquidationFee`/
-            // `advanceLiquidation` 后置 hook 是 P6 范围，本任务不落地（不影响本任务的账户结算
-            // 正确性——那两个 hook 只在结算之后追加清算费/推进状态机，不改写本任务负责的
-            // accounts/fees/position 结算结果）。
-            //
-            // 与现货分支不同：现货把链头 REJECT/REDUCE 与后续 TRADE 链分两段处理；期货的
-            // `handle_matcher_event_margin` 对链上每个事件都按 `event_type`（TRADE 走
-            // close-then-open，REJECT/REDUCE 只退 pending）分支，因此不需要在这里预先摘取
-            // 链头，整条链直接交给它统一处理（对齐 Java `do { handleMatcherEventMargin(...); mte
-            // = mte.nextEvent; } while (mte != null);` 外循环）。
+            // 期货分支，对应 Java handlerRiskRelease（:885-1023）非现货 catch-all；PLACE_ORDER/CLOSE_POSITION/ForceLiquidation 等统一走 handle_matcher_event_margin，对齐 Java 外循环整条链处理（不像现货分两段）。
             let taker_action = cmd.action.expect("futures matcher event requires taker action");
             let quote_currency_spec = ssp
                 .get_currency(spec.quote_currency)
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency))
                 .clone();
 
-            // P6 Task 7b：`FORCE_LIQUIDATION` 的 `collect_liquidation_fee` 需要 TRADE 事件的
-            // Σsize / Σ(size×price)——但 `handle_matcher_event_margin` 会消费整条链、不回填
-            // `cmd.matcher_event`（同 loan force-liquidate 的 peek 先例，见上方现货分支注释）。故在
-            // 消费之前非破坏性 peek 一遍算好聚合量。非 FORCE 命令不产生额外开销（分支短路，恒 0）。
+            // P6 Task 7b：ForceLiquidation 的 collect_liquidation_fee 需 TRADE 的 Σsize/Σ(size×price)，消费前先非破坏性 peek 一遍聚合（同 loan force-liquidate 先例）。
             let is_force = cmd.command == OrderCommandType::ForceLiquidation;
             let (force_taker_size, force_taker_size_price) = if is_force {
                 let mut taker_size: i64 = 0;
@@ -796,14 +702,9 @@ impl RiskEngine {
                 mark_price_for_futures,
             );
 
-            // P6 Task 7b：`FORCE_LIQUIDATION` R2-finalize 后置钩子（对应 Java `handlerRiskRelease
-            // :992` collectLiquidationFee + `:997` advanceLiquidation）。`fees` 借用到此已不再使用
-            // （NLL 释放），可安全访问 `liquidation_service`/`liquidation_engine` 两个平级字段。
+            // P6 Task 7b：ForceLiquidation R2-finalize 钩子，对应 Java handlerRiskRelease :992 collectLiquidationFee + :997 advanceLiquidation。
             if is_force {
-                // collect_liquidation_fee（Java `:1522-1550`）：Σtrade 手续费从 taker 账户扣、计入
-                // IFNotional.available。taker_size==0（全 REJECT，无成交）→ no-op。`taker_spr.currency`
-                // /`.symbol` 用 `spec.quote_currency`/`cmd.symbol` 等价替代（full-fill 移仓后记录已不在，
-                // 但这两个量与仓位无关，见 Java 字段来源）。
+                // 对应 Java collect_liquidation_fee（:1522-1550）：Σtrade 手续费从 taker 扣、计入 IFNotional.available；taker_size==0 时 no-op。
                 if force_taker_size > 0 {
                     let avg_price = (force_taker_size_price / force_taker_size as i128) as i64;
                     let notional_fee = arithmetic::calculate_liquidation_fee(
@@ -818,32 +719,20 @@ impl RiskEngine {
                         spec.quote_scale_k,
                         quote_currency_spec.currency_scale_k,
                     );
-                    // debit 与 credit 必须对称/全有全无（对应 Java `collectLiquidationFee` 顶层
-                    // `if (takerSpr == null) return;` 守护）——taker profile 缺失时两者都不做，
-                    // 否则会凭空 credit IF、破坏守恒。当前不可达（FORCE target 的 profile 必已存在），
-                    // 但显式对齐 Java 的对称性，杜绝潜在守恒漏洞。
+                    // debit/credit 须对称全有全无，对应 Java collectLiquidationFee 的 takerSpr==null 守护，防守恒破坏。
                     if let Some(taker) = ups.get_mut(cmd.uid) {
                         taker.add_to_account(spec.quote_currency, -quote_fee);
                         self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
                     }
                 }
-                // advance_liquidation（Java `:997`）：FORCE apply 后推进状态机（全成交闭环 /
-                // REJECT→WAIT_IF 并入队 IF）。
+                // 对应 Java advance_liquidation（:997）：FORCE apply 后推进状态机（全成交闭环 / REJECT→WAIT_IF 入队 IF）。
                 Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             }
             return;
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
 
-        // Task 7（P5 loan force-liquidate R2 结算钩子）：两个强平命令码需要 TRADE/REJECT 的聚合
-        // 统计（traded_size/traded_notional/rejected_size），但下面的 REJECT/REDUCE 消费
-        // （`mte.next.take()`）与 TRADE 链消费（`handle_matcher_events_exchange_sell/buy`，
-        // Task 6，完全不改）会把整条事件链的所有权转移走、不回填 `cmd.matcher_event`。Java 版
-        // `cmd.matcherEvent` 全程不被置空，`postProcessLoanForceLiquidate`/`_Cross` 可以独立再
-        // 遍历一遍同一条链；本移植改为在这里、消费之前，先非破坏性 peek 一遍（`&mte` 只读遍历），
-        // 把三个聚合量算好存进局部变量，稍后原样传给 post_process 钩子——数值与 Java 重新遍历
-        // 得到的完全一致（同一条链，只是遍历时机提前到消费之前），行为无差异。非强平命令不产生
-        // 额外开销（分支短路，三个量恒 0）。
+        // Task 7：loan force-liquidate 需 TRADE/REJECT 聚合（traded_size/notional/rejected_size），消费链前先非破坏性 peek 一遍算好，等价 Java 事后再遍历 cmd.matcherEvent。
         let is_loan_force_liquidate = matches!(
             cmd.command,
             OrderCommandType::LoanForceLiquidate | OrderCommandType::LoanCrossForceLiquidate
@@ -949,13 +838,7 @@ impl RiskEngine {
             }
         }
 
-        // Loan 强平：spot 标准结算后钩子，把 quote proceeds 路由到 loan/pool/fees/LIF。对应 Java
-        // `handlerRiskRelease`（`:937-945`）——放在 `if (mte != null) {...}` 之后、
-        // `spec.type==CURRENCY_EXCHANGE_PAIR` 分支结束之前，无论上面那块是否跑过（例如整条链只有
-        // 一个 REJECT、没有后续 TRADE 时 `next` 是 `None`，Java 同样不会跳过这个钩子）。
-        // `fees` 最后一次使用在上面的 sell/buy 调用里，此处不再引用它——NLL 下 `self.fees` 的
-        // 字段借用已经结束，可以再借出整个 `&mut self` 传给 post_process（`self` 是
-        // `RiskEngine`，持有 `loan_service` 供接管/结算写桶）。
+        // Loan 强平：spot 标准结算后钩子，把 quote proceeds 路由到 loan/pool/fees/LIF，对应 Java handlerRiskRelease（:937-945），无论上面 TRADE 链是否跑过都执行。
         if is_loan_force_liquidate {
             let taker_up = ups.get_or_add_suspended(cmd.uid);
             match cmd.command {
@@ -988,24 +871,7 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `handleMatcherRejectReduceEventExchange`（1094–1125）：撤单/拒单释放冻结，
-    /// 只涉及单方（active 单的 owner），accounts 不动。参考文档 §3a：
-    /// - `currency = taker_sell ? base : quote`。
-    /// - ASK：`release = symbol_to_currency_scale(calculate_amount_ask(mte.size), ...)` = mte.size
-    ///   缩放（残量按 base 数量直退，下单时也是按 size 直冻，无 fee 预留）。
-    /// - BID 按订单类型：
-    ///   - `PLACE_ORDER` + `FOK_BUDGET`：`calculate_amount_bid_taker_fee_for_budget(mte.size, mte.price, ...)`
-    ///     （FOK 只可能整单成交或整单拒绝，`mte.price` 就是原始预算）。
-    ///   - `IOC_BUDGET` 且 `mte.next.is_none()`（全拒，无前置成交）：
-    ///     `calculate_amount_bid_taker_fee_for_budget(cmd.size, cmd.price, ...)`（释放整份预算）。
-    ///   - `IOC_BUDGET` 有前置 TRADE（部分成交后剩余的 REDUCE）：`release_sp = 0`——BUY 结算
-    ///     （Task 7）已经把整份预算的锁定释放过一次，这里再释放就是双重释放，破坏守恒。
-    ///   - 普通限价：`calculate_amount_bid_taker_fee(mte.size, mte.bidder_hold_price, ...)`
-    ///     （用下单时实际冻结所用的保守价 `bidder_hold_price`，而非 `cmd.price`）。
-    ///   - 缩放：`size_price_to_currency_scale(release_sp, ...)`。
-    /// - 应用：`user_profile.add_to_locked(currency, -release)`；accounts 不动。
-    ///   （Java 侧 `release>0` 才发 `sendUnLockEvent`——P3 未移植事件总线，此处不发事件，
-    ///   纯记账副作用。）
+    /// 对应 Java `handleMatcherRejectReduceEventExchange`（:1094-1125）：撤单/拒单释放单方冻结（ASK 按 size 直退，BID 按订单类型分档计算），accounts 不动。
     fn handle_matcher_reject_reduce_event_exchange(
         cmd: &OrderCommand,
         mte: &MatcherTradeEvent,
@@ -1058,21 +924,7 @@ impl RiskEngine {
         taker_up.add_to_locked(currency, -release);
     }
 
-    /// 对应 Java `handleMatcherEventsExchangeSell`（1134–1227）：taker 卖(ASK)、maker 买(BID) 的
-    /// 现货成交结算。参考文档 §3b。两阶段：
-    /// 1. 逐 TRADE 事件（`next` 链）结算本 shard maker（释放 quote 冻结 + 扣 quote 实付 + 入 base），
-    ///    同时把 `size`/`size*price`（`i128`，防 `size*price` 累加溢出 `i64`——单笔 `mul_exact`
-    ///    仍在 Task 1 里做 `i64` 溢出检查，这里只是多笔累加的容器更宽）累加进 taker/maker 的
-    ///    notional/size 局部变量。
-    /// 2. 循环结束后一次性结算 taker（释放 base 冻结 + 扣 base 实付 + 入 quote = notional −
-    ///    taker 费，用聚合 `avg_taker_price` 重算一次 taker 费，非逐笔求和）+ 用
-    ///    `avg_maker_price` 重算一次平台费入账（Java 1218-1220 注释：逐笔 ceil 会比合并算多产生
-    ///    dust，均价单次结算是刻意的不对称，dust 沉在 `exchange_locked`，不在本任务处理）。
-    ///
-    /// 借用设计：不预先长期持有任何 `UserProfile` 的 `&mut`——每个 maker、以及最后的 taker，
-    /// 都各自只在自己的一段短作用域里 `ups.get_or_add_suspended(uid)`；循环体内只把结果累加成
-    /// `i64`/`i128` 原语存到局部变量。这样即使 taker 与某个 maker 恰好同 uid（自成交），也不会
-    /// 出现两个 `&mut` 同时借用同一 `UserProfile` 的编译错误——它们是先后发生、不重叠的借用。
+    /// 对应 Java `handleMatcherEventsExchangeSell`（:1134-1227）：taker 卖(ASK)/maker 买(BID) 现货成交结算，逐笔累加 maker 后一次性按均价结算 taker（避免逐笔 ceil 多产 dust）。
     fn handle_matcher_events_exchange_sell(
         cmd: &OrderCommand,
         first_trade_mte: Box<MatcherTradeEvent>,
@@ -1136,8 +988,7 @@ impl RiskEngine {
                 // 净 quote 变动 = quote_refund − hold_quote = −(size·price + makerFee)。
                 maker_up.add_to_account(quote_currency, quote_refund - hold_quote);
 
-                // calculateAmountAsk(size) = size：ASK 侧不收费（费用走 quote 侧），maker 收到的
-                // base 数量就是成交量本身。
+                // calculateAmountAsk(size)=size：ASK 侧不收费（费用走 quote 侧），maker 收到 base 即成交量本身。
                 let base_gained = arithmetic::symbol_to_currency_scale(
                     arithmetic::calculate_amount_ask(ev.size),
                     spec.base_scale_k,
@@ -1190,10 +1041,7 @@ impl RiskEngine {
         }
 
         if taker_size != 0 || maker_size != 0 {
-            // fees 池入账用 avg-price 重算 takerFee+makerFee 后做单次 sizePriceToCurrencyScale，
-            // 避免 per-event ceil + 多次 scale 转换累积 dust（与 maker 块的 per-event 截断不对称是
-            // 有意的：单笔 dust 沉积在 exchangeLocked，SUSPEND 时 sweep 到 fees，全局守恒——
-            // sweep 路径属 Task 8+，本任务不处理）。
+            // fees 池按均价重算 taker+maker 费单次入账，避免逐笔 ceil 累积 dust（dust 沉 exchangeLocked，sweep 属 Task 8+）。
             let avg_maker_price = if maker_size > 0 {
                 i64::try_from(maker_notional / maker_size as i128)
                     .unwrap_or_else(|_| panic!("overflow narrowing avg_maker_price"))
@@ -1220,41 +1068,7 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `handleMatcherEventsExchangeBuy`（1238–1343）：taker 买(BID)、maker 卖(ASK) 的
-    /// 现货成交结算——`handle_matcher_events_exchange_sell` 的镜像。参考文档 §3c。两阶段：
-    /// 1. 逐 TRADE 事件结算本 shard maker（释放 base 冻结 + 扣 base 实付 + 入 quote = 名义 −
-    ///    maker 费），同时把 `size`/`size*price`/`size*bidder_hold_price` 累加进 taker/maker 的
-    ///    notional/size 局部变量（`i128`，理由同 sell：防多笔累加溢出 `i64`，单笔算术仍是
-    ///    `i64` `mul_exact`）。
-    /// 2. 循环结束后一次性结算 taker（BUDGET 与普通限价两条子路径分别算 `leftover`/`hold_quote`，
-    ///    见下）+ 用 `avg_maker_price` 重算一次平台费入账（与 sell 对称：dust 沉 exchange_locked，
-    ///    不在本任务处理）。
-    ///
-    /// taker 两条子路径（Java 1310–1325）：
-    /// - BUDGET（`PLACE_ORDER` + `FOK_BUDGET`/`IOC_BUDGET`）：下单时冻结的是预算上限
-    ///   `held_total = calculate_amount_bid_taker_fee_for_budget(cmd.size, cmd.price, ...)`
-    ///   （`cmd.price` 是总预算，非单价）——本次 `hold_quote` 就是这个 `held_total` 的原样缩放，
-    ///   即**释放当初锁定的全部预算**（无论本次是否全部成交）。`leftover = held_total −
-    ///   (taker_notional + taker_fee)` 是"预算 − 实际花费"的剩余部分；同时把
-    ///   `taker_hold_notional` 重赋值为 `taker_notional`（BUDGET 单没有逐笔 `bidder_hold_price`
-    ///   概念，退款公式统一走 `hold_notional − notional + leftover`）。
-    /// - 普通限价：冻结是"逐笔 `bidder_hold_price`"的聚合（`taker_hold_notional`），按
-    ///   `taker_hold_notional/taker_size` 均价重算一次 `fee_held`，`leftover = fee_held −
-    ///   taker_fee` 是"冻结费 − 实收费"的差额，`hold_quote = scale(taker_hold_notional +
-    ///   fee_held)`。
-    ///
-    /// 两条路径统一收尾：`quote_refund = scale(taker_hold_notional − taker_notional +
-    /// leftover)`（价差 + leftover）；`exchange_locked[quote] −= hold_quote`；
-    /// `accounts[quote] += quote_refund − hold_quote`（净 = `−(notional + taker_fee)`）；
-    /// `accounts[base] += scale(taker_size)`（taker 买方得 base，base 腿无费）。
-    ///
-    /// **Task 5/7 一致性**（`handle_matcher_reject_reduce_event_exchange` 的 IOC_BUDGET
-    /// "有前置 TRADE → release_sp=0" 分支依赖的前提）：上面 BUDGET 子路径的 `hold_quote` 恒等于
-    /// `scale(held_total)`——即 Task 4 下单时锁定的**整份预算**，与本次是否部分成交无关。因此
-    /// IOC_BUDGET 部分成交后，这里已经把整份预算的锁定全额释放（连同价内差额一起退回
-    /// `quote_refund`），Task 5 链头 REDUCE 若再释放非零金额就是双重释放——`release_sp=0` 与此处
-    /// 严格对齐，见下方 `bid_ioc_budget_partial_fill_full_budget_release_matches_task5_zero_release`
-    /// 测试的显式验证。
+    /// 对应 Java `handleMatcherEventsExchangeBuy`（:1238-1343）：taker 买/maker 卖现货结算，是 sell 的镜像；BUDGET 子路径 hold_quote 恒为整份预算，与 Task5 REDUCE release_sp=0 对齐（见文中测试）。
     fn handle_matcher_events_exchange_buy(
         cmd: &OrderCommand,
         first_trade_mte: Box<MatcherTradeEvent>,
@@ -1289,8 +1103,7 @@ impl RiskEngine {
                 // calculateAmountBid(size, price) = size × price：原始成交对价（未扣 maker fee）。
                 let quote_gained = arithmetic::calculate_amount_bid(ev.size, ev.price);
 
-                // maker 是卖方，下单时按 base 数量直接冻结（calculateAmountAsk(size) = size），
-                // 这里全释放并实际扣 base。
+                // maker 是卖方，下单时按 base 数量直接冻结（calculateAmountAsk(size)=size），全释放并扣 base。
                 let base_paid = arithmetic::symbol_to_currency_scale(
                     arithmetic::calculate_amount_ask(ev.size),
                     spec.base_scale_k,
@@ -1342,8 +1155,7 @@ impl RiskEngine {
             let is_budget = cmd.command == OrderCommandType::PlaceOrder
                 && matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
 
-            // effective_hold_notional：BUDGET 路径重赋值为 taker_notional（见下），普通路径保持
-            // 逐笔 bidder_hold_price 聚合——两条路径收尾用同一条 quote_refund 公式。
+            // effective_hold_notional：BUDGET 重赋值为 taker_notional，普通路径保持逐笔 bidder_hold_price 聚合，两路径共用同一 quote_refund 公式。
             let (leftover, hold_quote, effective_hold_notional) = if is_budget {
                 // FOK_BUDGET/IOC_BUDGET：冻结的是预算上限 heldTotal，未匹配部分 leftover 原样退。
                 let held_total = arithmetic::calculate_amount_bid_taker_fee_for_budget(
@@ -1361,8 +1173,7 @@ impl RiskEngine {
                 );
                 (leftover, hold_quote, taker_notional_i64)
             } else {
-                // 普通单：feeHeld 按 bidderHoldPrice 均价冻、takerFee 按实际成交均价收，差额
-                // leftover 退给用户。
+                // 普通单：feeHeld 按 bidderHoldPrice 均价冻、takerFee 按实际成交均价收，差额 leftover 退用户。
                 let taker_hold_notional_i64 = i64::try_from(taker_hold_notional)
                     .unwrap_or_else(|_| panic!("overflow narrowing taker_hold_notional"));
                 let avg_hold_price = taker_hold_notional_i64 / taker_size;
@@ -1431,16 +1242,9 @@ impl RiskEngine {
         }
     }
 
-    // ====================================================================================
-    // R2 主线：期货 handlers（P4 Task 4）—— 参考文档 §4；Java `RiskEngine.java:1358-1511`
-    // ====================================================================================
+    // ==== R2 主线：期货 handlers（P4 Task 4）—— 参考文档 §4；Java RiskEngine.java:1358-1511 ====
 
-    /// 对应 Java `handlerRiskRelease` 里驱动 `handleMatcherEventMargin` 的外层
-    /// `do { ...; mte = mte.nextEvent; } while (mte != null);` 循环：把整条事件链（可能以
-    /// REJECT/REDUCE 起头，后接 0..N 个 TRADE）逐个喂给 [`Self::handle_matcher_event_margin_one`]。
-    /// 与现货 `handle_matcher_events_exchange_sell/buy` 不同——期货不需要在 dispatch 层先把
-    /// 链头 REJECT/REDUCE 摘出来单独处理，因为 `handle_matcher_event_margin_one` 本身按
-    /// `mte.event_type` 分支（TRADE vs REJECT/REDUCE），两种事件都在同一函数里处理。
+    /// 对应 Java handlerRiskRelease 驱动 handleMatcherEventMargin 的外层 do-while 循环，把整条事件链逐个喂给 handle_matcher_event_margin_one；期货不像现货那样需先摘出链头 REJECT/REDUCE（同函数按 event_type 分支处理）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin(
         cmd: &OrderCommand,
@@ -1468,23 +1272,7 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `handleMatcherEventMargin`（`:1358-1511`）处理单个事件：taker 块（恒执行，
-    /// `taker_action` 就是 `cmd.action`）+ maker 块（仅 TRADE 事件，`uidForThisHandler` 单 shard
-    /// 恒真，`makerAction = taker_action.opposite()`）。
-    ///
-    /// # `matched_order_command_type`（P6 Task 2 接线）
-    /// Java 用 `mte.matchedOrderCommandType`（maker 挂单自身的命令类型）而非 `cmd.command`（taker
-    /// 命令类型）算 maker 的 `createPositionsKey`——`CLOSE_POSITION`/`FORCE_LIQUIDATION` 会翻转
-    /// HEDGE 模式的键符号，取决于 **maker** 自己的命令类型，可能与触发本次撮合的 taker 命令不同
-    /// （对应 Java `RiskEngine.java:1450`）。taker 块用 `cmd.command`（taker 自己的命令，天然正确，
-    /// Java 同样是 `cmd.command`——`RiskEngine.java` taker 侧 `createPositionsKey` 就是用触发本次
-    /// 事件的命令本身）；maker 块改用 `mte.matched_order_command_type`（Task 1 加字段、本任务在两
-    /// order book 撮合时按 maker 挂单的 `Order.command`/`DirectOrder.command` 逐字节相同地填充，
-    /// 见 `order_book_naive_impl.rs`/`order_book_direct_impl.rs`）。`ONEWAY`（当前唯一可达模式，
-    /// 无 `position_mode` writer）下 `create_positions_key` 完全忽略 `command` 参数，故此次切换
-    /// 对 ONEWAY 的正确性零影响（P4 期货测试不回归，见
-    /// `handler_risk_release_futures_trade_opens_both_sides_and_conserves` 等既有测试原样通过）；
-    /// `HEDGE` 模式下（目前不可达）现在会用 maker 真正的原始命令类型，接线正确。
+    /// 对应 Java `handleMatcherEventMargin`（:1358-1511）处理单个事件：taker 块恒执行 + maker 块仅 TRADE；maker 侧 createPositionsKey 用 mte.matched_order_command_type（非 cmd.command，对应 Java :1450，P6 Task 2），ONEWAY 下无影响，HEDGE 下才生效。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin_one(
         cmd: &OrderCommand,
@@ -1500,8 +1288,7 @@ impl RiskEngine {
         {
             let taker_up = ups.get_or_add_suspended(cmd.uid);
             let position_key = taker_up.create_positions_key(spec.symbol_id, taker_action, cmd.command);
-            // 对应 Java `if (takerUp != null && takerSpr == null) { log.warn(...); }`（防御性跳过，
-            // 非法/竞态下不 panic）：taker 仓位记录理论上必已在 R1 建立，但不强制假设。
+            // 对应 Java takerSpr==null 的 log.warn 防御性跳过（不 panic）：taker 仓位理论上 R1 已建立，但不强制假设。
             Self::settle_margin_position_event(
                 taker_up,
                 position_key,
@@ -1522,9 +1309,7 @@ impl RiskEngine {
             let maker_up = ups.get_or_add_suspended(mte.matched_order_uid);
             let position_key =
                 maker_up.create_positions_key(spec.symbol_id, maker_action, mte.matched_order_command_type);
-            // 对应 Java `makerUp.getPositionRecordOrThrowEx(...)`：maker 侧仓位记录必须已存在
-            // （TRADE 事件的 `matched_order_uid` 一定对应曾经建过仓/挂单的 uid），缺失即数据损坏，
-            // panic 而非静默吞掉。
+            // 对应 Java makerUp.getPositionRecordOrThrowEx：maker 仓位记录必须已存在，缺失即数据损坏，panic 而非静默吞掉。
             Self::settle_margin_position_event(
                 maker_up,
                 position_key,
@@ -1540,28 +1325,7 @@ impl RiskEngine {
         }
     }
 
-    /// 单个用户、单个 position、单个事件的结算核心——taker/maker 共用（差异只在
-    /// `is_taker`：决定 `calculate_taker_fee` 还是 `calculate_maker_fee`）。对应 Java
-    /// `handleMatcherEventMargin` taker 块 `:1369-1443` / maker 块 `:1445-1510` 里去掉纯
-    /// 事件负载（`sendXxxEvent` 的 free/locked 快照——本移植无事件总线，§4 已注明这些字段只喂
-    /// 事件，不参与状态迁移）之后剩下的状态迁移部分：
-    ///
-    /// TRADE：`pendingRelease` 释放本笔挂单 → `closeCurrentPositionFutures` 平反向仓
-    /// （`closedSize`，收 close-fee，PnL 递延进剩余仓成本基或按 direction 全平累进
-    /// `position.profit`——两者都在 primitive 内部完成，这里只管平仓后的 fee）→ 剩余 `sizeToOpen`
-    /// 走 `openPositionMargin` 反手/新开（收 open-fee，`mark_price` 定保证金、`mte.price` 定成本基）。
-    /// REJECT/REDUCE：仅 `pendingRelease`，不动 accounts。
-    /// 两类事件结束后统一检查 `is_empty()`：对应 Java `refundExtraMargin` + `removePositionRecord`
-    /// ——extraMargin 与 profit 分别经 `size_price_to_currency_scale` 一次性打入 accounts，
-    /// position 记录从 `positions` map 移除（Rust 无对象池，直接 `remove`）。
-    ///
-    /// # 借用结构
-    /// 不持有横跨"改仓位"与"改账户/fees"两类操作的单一 `&mut SymbolPositionRecord` 借用——每次
-    /// 只在需要改/读 position 的那一条语句里 `up.positions.get_mut(&position_key)`（NLL 下借用
-    /// 随语句结束即释放），中间穿插的 `up.add_to_account`/`fees` 更新因此不会与仍存活的 position
-    /// 借用冲突。`position_key` 存在性只在函数开头判一次——中途不会有其它代码把它从
-    /// `up.positions` 移除，因此后续 `.unwrap()` 是安全的（对应 Java "非 null 后全程非 null"的
-    /// 隐式契约，这里用一次前置检查 + 注释显式化，而非到处判 `Option`）。
+    /// 对应 Java handleMatcherEventMargin taker 块（:1369-1443）/maker 块（:1445-1510）的状态迁移核心：TRADE 走 pendingRelease→closeCurrentPositionFutures→openPositionMargin，REJECT/REDUCE 仅 pendingRelease；is_empty() 后走 refundExtraMargin+removePositionRecord。
     #[allow(clippy::too_many_arguments)]
     fn settle_margin_position_event(
         up: &mut UserProfile,
@@ -1649,15 +1413,12 @@ impl RiskEngine {
             }
         }
 
-        // 对应 Java `if (takerSpr.isEmpty()) { refundExtraMargin(...); ...; removePositionRecord(...); }`：
-        // 仓位清零（无持仓、无挂单）才触发 extraMargin 退款 + profit 结算 + 拆记录。
+        // 对应 Java takerSpr.isEmpty() 分支：仓位清零才触发 extraMargin 退款 + profit 结算 + 拆记录。
         let is_empty = up.positions.get(&position_key).unwrap().is_empty();
         if is_empty {
             let currency = up.positions.get(&position_key).unwrap().currency;
 
-            // `refundExtraMargin`(:1553-1574)：extraMargin 以 sizePriceScale 存储，退款经
-            // `size_price_to_currency_scale`（非 `symbol_to_currency_scale`——输入是
-            // baseScaleK×quoteScaleK 乘积单位）换算回 accounts。
+            // 对应 Java refundExtraMargin（:1553-1574）：extraMargin 以 sizePriceScale 存储，经 size_price_to_currency_scale（非 symbol_to_currency_scale）换算回 accounts。
             let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
             if extra_margin > 0 {
                 let refund = arithmetic::size_price_to_currency_scale(
@@ -1670,8 +1431,7 @@ impl RiskEngine {
                 up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
             }
 
-            // `removePositionRecord`(:1580-1589)：残余已实现盈亏一次性打入 accounts（普通成交里
-            // 已实现 PnL 唯一入账户处），再从 map 摘除（Rust 无对象池，直接 remove）。
+            // 对应 Java removePositionRecord（:1580-1589）：残余已实现盈亏一次性打入 accounts，再从 map 摘除。
             let profit = up.positions.get(&position_key).unwrap().profit;
             if profit != 0 {
                 let profit_scaled = arithmetic::size_price_to_currency_scale(
@@ -1686,37 +1446,12 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.addUser`（177–181）：`UserProfileService
-    /// .addEmptyUserProfile` 建空 `UserProfile(uid, ACTIVE)`；已存在 → `UserMgmtUserAlreadyExists`。
-    /// `uidForThisHandler` 分片门本期未移植（单 shard、恒真），由调用方（Task 10 引擎）决定是否
-    /// 派发到这里。
+    /// 对应 Java RiskEngineCommandDispatcher.addUser（:177-181）：建空 UserProfile，已存在→UserMgmtUserAlreadyExists；uidForThisHandler 分片门未移植（单 shard 恒真）。
     pub fn add_user(&mut self, cmd: &OrderCommand, ups: &mut UserProfileService) -> CommandResultCode {
         ups.add_empty_user_profile(cmd.uid)
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.adjustBalance`（183–211）+ `UserProfileService
-    /// .balanceAdjustment`（71–89）两层校验叠加；参考文档 §5：
-    /// - `currency = cmd.symbol`、`amount_diff = cmd.price`；用户不存在 → `AuthInvalidUser`。
-    /// - **外层（dispatcher）现货 NSF**：`withdrawable = account(cur) - locked(cur)`；提现
-    ///   （`amount_diff < 0`）时 `withdrawable + amount_diff < 0` → `RiskNsf`。
-    /// - **内层（`UserProfileService.balanceAdjustment`）NSF**：`amount_diff < 0 &&
-    ///   account(cur) + amount_diff < 0` → `UserMgmtAccountBalanceAdjustmentNsf`。给定外层已通过，
-    ///   此内层对 `BALANCE_ADJUSTMENT` 恒不可达（`locked >= 0` ⟹ `account + amount_diff =
-    ///   account - withdrawal_amount >= locked >= 0`）——Java 两层都在（内层是 `UserProfileService`
-    ///   的通用防线，供 `MARGIN_ADJUSTMENT`/`INTERNAL_TRANSFER` 等未经过外层现货 NSF 的调用方共用，
-    ///   本移植未含那些调用方），逐字复刻两层顺序而非合并，为未来接线这些调用方留出正确的插入点。
-    /// - **幂等**：`cmd.order_id` 在 `UserProfile.processed_tx_ids` 里 claim；已存在 →
-    ///   `UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame`。**两条 NSF 路径都在 claim 之前
-    ///   return，不 claim id**——NSF 后调用方用修正过的金额重试同一 `order_id` 必须放行（Java
-    ///   注释："NSF 时不 claim id，避免污染后续修正重试"）。
-    /// - **成功**：`account(cur) += amount_diff`；随后（对应 dispatcher `applyBalanceAdjustment`
-    ///   的 `ADJUSTMENT` 分支）`adjustments[cur] -= amount_diff`——`Σ account[cur] + adjustments[cur]`
-    ///   恒定。`BalanceAdjustmentType::Suspend` 对冲桶延后（`RiskEngine` 无 `suspends` 字段，
-    ///   见结构体注释），本任务恒按 `Adjustment` 型处理。
-    ///
-    /// P4 Task 5 起，提现分支的 `withdrawable` 额外加 [`Self::calculate_free_futures_margin`]
-    /// （`cfg_margin_trading_enabled` 关闭或用户无期货持仓 → 恒 0，**Ruling P4-A**：无期货仓的用户
-    /// 此改动是纯 no-op，逐位对齐改动前行为）。
+    /// 对应 Java RiskEngineCommandDispatcher.adjustBalance（:183-211）+ UserProfileService.balanceAdjustment（:71-89）两层校验叠加：外层现货 NSF→内层 NSF→幂等 claim→成功后 account += amount_diff 且 adjustments -= amount_diff（Σ恒定）；提现额度叠加 free futures margin（Ruling P4-A：无期货仓恒 0 no-op）。
     pub fn balance_adjustment(
         &mut self,
         cmd: &OrderCommand,
@@ -1753,16 +1488,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java `RiskEngine.withdrawableBalance`（`:747-753`）：提现 / 转账 / 加保证金（ISOLATED）
-    /// 共用的 NSF 口径——`accounts − 现货冻结 − 借贷抵押 + 期货净盈余（仅
-    /// margin trading 开启才计）`。现货冻结 / 借贷抵押必扣（都不能提走 / 转走 / 挪作 isolated
-    /// margin，否则贷款变裸债），期货净盈余按 [`Self::calculate_free_futures_margin`]（不指定
-    /// `curPosSymbol`，逐仓浮盈一律不计入，更保守）。
-    ///
-    /// P6 Task 3：可见性放宽到 `pub(crate)`（原为纯私有）——`InternalTransferProcessor::
-    /// collect_input`（`internal_transfer_processor.rs`）需要跨模块复用同一 NSF 口径，同
-    /// `LoanCommandDispatcher` 复用 `calculate_locked`/`mark_price`（均 `pub`）的先例，是同一类
-    /// "跨处理器模块复用 `RiskEngine` 只读方法"偏差，非新设计。
+    /// 对应 Java RiskEngine.withdrawableBalance（:747-753）：提现/转账/加保证金(ISOLATED)共用 NSF 口径 = accounts − 现货冻结 − 借贷抵押 + 期货净盈余（margin trading 开启才计）；P6 Task 3 放宽到 pub(crate) 供跨模块复用。
     pub(crate) fn withdrawable_balance(
         &self,
         user_profile: &UserProfile,
@@ -1779,20 +1505,7 @@ impl RiskEngine {
             + free_futures_margin
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.adjustMargin`（`:213-277`）：给持仓追加保证金。
-    /// **CROSS**：无 `extraMargin` 概念（同 currency 所有 CROSS 仓共享 accounts），直接转发到
-    /// [`Self::balance_adjustment`]——与 Java `applyBalanceAdjustment(..., ADJUSTMENT, ...)`
-    /// 是同一条原语（`accounts[cur] += price`、`adjustments[cur] -= price` 对冲），调用方约定
-    /// `cmd.symbol` 此时已是 currency id（对应 Java `ExchangeApi` 翻译器 `cmd.symbol =
-    /// marginMode==ISOLATED ? api.symbol : api.currency`，本移植 Task 7 落地时接入）。
-    /// **ISOLATED**：从 `accounts` 转入 `position.extra_margin`——纯仓↔账户内部搬移，**不碰
-    /// `adjustments` 桶**（Java 注释原文："ISOLATED 无 adjustments bucket 对冲，按 cmd.orderId
-    /// 自行幂等"）；NSF 用 [`Self::withdrawable_balance`]（现货冻结 / 借贷抵押必扣，不能拨进
-    /// isolated margin）。
-    ///
-    /// Java 只支持追加（`cmd.price <= 0` → `RiskInvalidAmount`），**没有**"移出保证金"的路径——
-    /// `extraMargin` 只能在仓位清零时经 `refundExtraMargin` 整额退回（Task 4 已实现），本方法
-    /// 逐字对齐 Java 的加保证金语义，不发明 Java 没有的移出能力。
+    /// 对应 Java RiskEngineCommandDispatcher.adjustMargin（:213-277）：CROSS 直接转发 balance_adjustment（同一原语）；ISOLATED 从 accounts 转入 position.extra_margin（不碰 adjustments 桶）；仅支持追加，无"移出保证金"路径。
     pub fn margin_adjustment(
         &mut self,
         cmd: &OrderCommand,
@@ -1807,8 +1520,7 @@ impl RiskEngine {
         }
 
         if cmd.margin_mode == MarginMode::Cross {
-            // CROSS：cmd.symbol 承载 currency id（见方法文档），语义与 BALANCE_ADJUSTMENT 的
-            // ADJUSTMENT 型充值完全一致，直接复用同一原语（含用户存在性校验/幂等/adjustments 桶）。
+            // CROSS：cmd.symbol 是 currency id，语义等价 BALANCE_ADJUSTMENT 的 ADJUSTMENT 充值，直接复用同一原语。
             return self.balance_adjustment(cmd, ups, ssp);
         }
 
@@ -1837,9 +1549,7 @@ impl RiskEngine {
             return CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame;
         }
 
-        // accounts −= price（currency scale），extraMargin += price（sizePrice scale，须与
-        // open_init_margin_sum 同单位换算，否则爆仓价/破产价严重偏低）——一增一减是同一笔钱的
-        // 内部搬移，不是新造/销毁资金，故不touch `adjustments` 全局对冲桶。
+        // accounts −= price，extraMargin += price（须换算到 sizePrice scale，否则爆仓/破产价严重偏低）：同一笔钱内部搬移，不 touch adjustments 桶。
         user_profile.add_to_account(currency, -cmd.price);
         let spec = ssp
             .get_symbol(symbol)
@@ -1858,16 +1568,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.adjustLeverage`（`:287-333`，调用方已确认
-    /// margin trading 开启）：调整某 symbol 下用户全部仓位（`ONEWAY` 0/1 条，`HEDGE` 0/2 条）的
-    /// 杠杆。无仓位 → `SUCCESS` no-op；任一仓在新杠杆下 `notional` 超出 `spec` 的杠杆分档 →
-    /// `RiskInvalidLeverage`；新杠杆下总所需保证金比旧杠杆更高时做一次性 NSF（`calculate_locked`
-    /// 全量口径，非 `withdrawable_balance`——与 Java `engine.calculateLocked` 一致）；全部校验通过
-    /// 才落地 `update_leverage`（要么全改、要么全不改，不会出现半数仓位改了杠杆的中间态）。
-    ///
-    /// `cmd.leverage == 0` 按 Java `updateLeverage` 惯例归一为 `1`（避免除零，与 `OrderCommand`
-    /// 字段文档的 P4-B ruling 一致）。持仓存在但 mark price 缺失是不可达的不变式违反
-    /// （开仓前 R1 已要求 mark price 可用），比照文件内其它同类调用点用 panic 显式暴露。
+    /// 对应 Java RiskEngineCommandDispatcher.adjustLeverage（:287-333）：调整 symbol 下用户全部仓位杠杆，全部校验通过才落地（全改或全不改）；leverage==0 归一为 1；持仓存在但 mark price 缺失 panic（不可达不变量）。
     pub fn leverage_adjustment(
         &mut self,
         cmd: &OrderCommand,
@@ -1938,28 +1639,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.adjustMarkPrice`（`:437-451`）：更新
-    /// `lastPriceCache[symbol]`。本移植省略 `liquidationEngine.checkPositions(cmd)`（P6 强平/ADL
-    /// 扫描钩子，本任务只搬"设标记价"这一步，不实现清算联动）。symbol 未注册 → `InvalidSymbol`。
-    ///
-    /// **移植加固（相对 Java 有意收窄）**：拒绝 `cmd.price <= 0`（→ `RiskInvalidAmount`）。Java
-    /// `adjustMarkPrice` 无 `price>0` 校验，把 0 存进 `lastPriceCache`，下游 `estimatePnl` 用
-    /// `markPrice==0` 做垃圾算术但**不崩**；本移植的 [`Self::mark_price`] 把 `0→None`，而 `:509`
-    /// (`calculate_free_futures_margin_for_symbol`)、`leverage_adjustment`、`can_place_margin_order`
-    /// 三处对 `None` 直接 `panic!`（用作"有头寸⇒标记价必有效"的不变量断言）。在 Raft 复制的确定性
-    /// 状态机里，已提交命令上的 panic 是集群级 liveness + 重放灾难——严格劣于 Java 的优雅降级。
-    /// 故在 setter 侧拒绝经济上无意义的 `≤0` 标记价，保留那三处 panic 作为真正的不可达不变量守卫。
-    /// 唯一可观测分歧：非法运维命令 `set_mark_price(sym, ≤0)` 的返回码（Java `Success` / 本移植
-    /// `RiskInvalidAmount`）；不影响守恒，两副本一致（确定性保持）。
-    /// 对应 Java `normalizeCmdPositionSize`（`RiskEngine.java:724-740`）：`FORCE_LIQUIDATION`/
-    /// `IF_TAKEOVER`/`AUTO_DELEVERAGING` 的 R1 size 归一——按 `create_positions_key(symbol, action,
-    /// command)` 定位仓位，`cmd.size = min(cmd.size, open_volume)`。
-    ///
-    /// **视角**：FORCE 用被强平者平仓视角（action 与 position direction 反向）；IF/ADL 用
-    /// counterparty 接管视角（action 与 direction 同向）——同一 `create_positions_key` 因 `command`
-    /// 不同而在 HEDGE 下解析到不同仓位（见 `build_force/if/adl_cmd`）。这是换届/陈旧命令安全的
-    /// 核心：即便 scanner 决策与 R1 apply 之间仓位缩小，size 也永不超平当前 `open_volume`
-    /// （参考文档 §1.5/§1.6）。仓位不存在 → `Success`（no-op）；用户不存在 → `AuthInvalidUser`。
+    /// 对应 Java RiskEngineCommandDispatcher.adjustMarkPrice（:437-451）：更新 lastPriceCache，拒绝 price<=0（Java 允许 0 但本移植三处对 None panic，故加固避免复制状态机 panic）；对应 Java normalizeCmdPositionSize（:724-740）：FORCE/IF/ADL 的 R1 size 归一，cmd.size=min(cmd.size, open_volume)，FORCE 用平仓视角、IF/ADL 用接管视角。
     fn normalize_cmd_position_size(cmd: &mut OrderCommand, ups: &UserProfileService) -> CommandResultCode {
         let action = match cmd.action {
             Some(a) => a,
@@ -1977,12 +1657,7 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 对应 Java `handlerRiskRelease:996-999`：强平类命令（FORCE/IF/ADL）R2 结算后推进
-    /// FORCE→IF→ADL 状态机。按 `create_positions_key(symbol, cmd.action, cmd.command)` 定位 taker
-    /// 仓位（= 携带 `liquidation_flow` 的那条），存在则调 `advance_liquidation`。仓位已被本命令
-    /// 完全平掉移除（full fill）→ 无仓可推进、flow 随记录一并消失，skip（对齐 Java：full-fill 下
-    /// advance 对 detached record 置 flow=None 也是 moot；REJECT/部分成交则仓位仍在、advance 推进
-    /// 到下一级并入队后继命令）。借用：`liquidation_engine` 显式传引用，避免 `&mut self` 重借。
+    /// 对应 Java handlerRiskRelease:996-999：强平类命令 R2 结算后推进 FORCE→IF→ADL 状态机；仓位若已 full-fill 移除则 skip，否则调 advance_liquidation。
     fn advance_liquidation_for(engine: &mut LiquidationEngine, cmd: &OrderCommand, ups: &mut UserProfileService) {
         let action = match cmd.action {
             Some(a) => a,
@@ -2012,23 +1687,12 @@ impl RiskEngine {
             return CommandResultCode::RiskInvalidAmount;
         }
         self.set_mark_price(cmd.symbol, cmd.price);
-        // P6 Task 7b：对应 Java `RiskEngineCommandDispatcher.adjustMarkPrice:447`——价格更新后触发
-        // targeted 强平检测（`cmd.symbol >= 0` 只查该 symbol 的持有者）。内部 `is_running` leader
-        // 门；产出的 FORCE 命令入 `liquidation_engine.pending_commands`，由 `ExchangeCore` 排空重喂。
+        // P6 Task 7b：对应 Java adjustMarkPrice:447，价格更新后触发 targeted 强平检测；产出的 FORCE 命令入 liquidation_engine.pending_commands，由 ExchangeCore 排空重喂。
         self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
         CommandResultCode::Success
     }
 
-    /// 对应 Java `RiskEngine.settlePnl`（`:695-717`）+ R1 dispatch `case SETTLE_PNL`（`:311-321`）：
-    /// **交割合约到期结算**。校验 spec 存在且 `type == FUTURES_CONTRACT_DELIVERY`（否则 `InvalidSymbol`）；
-    /// 遍历所有用户在该 symbol 上的每条持仓（ONEWAY 1 条 / HEDGE `±symbol` 2 条），`open_volume>0`
-    /// 者按交割价 `cmd.price` **整仓平仓**（close_action = LONG?ASK:BID）、退还 `extra_margin`、
-    /// 结算已实现盈亏入账户、移除仓位记录——复用 [`Self::adl_close_and_settle`] 的
-    /// close→refund→settle→remove（ADL/IF/settle_pnl 三处共用，均不收手续费）。
-    ///
-    /// 全部效果在 R1 完成，ME/R2 no-op（`is_non_trading()`），对齐 Java `case SETTLE_PNL` 返回
-    /// `false`（不下撮合）。单 shard = shard 0，结果码 `Success`（对齐 Java `shardId==0` SUCCESS）。
-    /// 无事件总线故不发 `sendPnlSettlementEvent`（Ruling P6-B）。
+    /// 对应 Java RiskEngine.settlePnl（:695-717）+ R1 dispatch SETTLE_PNL（:311-321）：交割合约到期，按交割价整仓平仓+退 extra_margin+结算盈亏+移除记录，复用 adl_close_and_settle；全在 R1 完成 R2 no-op，不发事件（Ruling P6-B）。
     fn settle_pnl(&mut self, cmd: &OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let symbol = cmd.symbol;
         let spec = match ssp.get_symbol(symbol) {
@@ -2041,8 +1705,7 @@ impl RiskEngine {
         };
         let price = cmd.price;
         for up in ups.users.values_mut() {
-            // 该 symbol 上所有非空持仓的 key（ONEWAY: symbol；HEDGE: ±symbol）。先收集再改，
-            // 避免迭代中改容器（adl_close_and_settle 会 remove 仓位记录）。
+            // 该 symbol 上所有非空持仓 key（ONEWAY: symbol；HEDGE: ±symbol），先收集再改避免迭代中改容器。
             let keys: Vec<i32> = up
                 .positions
                 .iter()
@@ -2061,42 +1724,19 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 测试 / Task 7 `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验，
-    /// 直接写 `last_price_cache`。命令路径请走 [`Self::markprice_adjustment`]。
+    /// 测试 / Task 7 `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验直接写 last_price_cache，命令路径请走 markprice_adjustment。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
         self.last_price_cache.insert(symbol, price);
     }
 
-    /// `REPRICE_LOAN_RATES` R1：对应 Java `RiskEngineCommandDispatcher` 的
-    /// `case REPRICE_LOAN_RATES: engine.getLoanRatePricingProcessor().collectInput(cmd);`
-    /// （参考文档 §4.2）。
-    ///
-    /// # 路由偏差（相对 Java，刻意记录）
-    /// Java 版本 R1 只做 `collectInput`，随后交给 `MatchingEngineRouter` 的独立
-    /// `LoanRatePricingProcessor` 实例在 ME 段调用 `buildMatcherEvents`（merge）。本移植的
-    /// `MatchingEngineRouter`（`matching_engine_router.rs`）按现有设计只持有各 symbol 的
-    /// order book，不持有 `LoanService`——没有数据可做归并，且它对所有 `is_non_trading()`
-    /// 命令（`REPRICE_LOAN_RATES` 在其中）统一 no-op 短路（详见该文件模块文档）。单 shard 下
-    /// "跨 shard 归并"本身是恒等操作，因此在这里把 R1 `collect_input` 与 merge
-    /// `build_matcher_events` 一次性做完，结果写入 `cmd.loan_reprice_events`（Task 8 新增字段，
-    /// 见 `OrderCommand` 文档），供 R2（[`Self::handler_risk_release`]）消费——数值/顺序/语义
-    /// 与 Java 完全一致，只是"谁在哪一段调用 build_matcher_events"这件事不同。
+    /// RepriceLoanRates R1：对应 Java case REPRICE_LOAN_RATES（collectInput，参考文档 §4.2）；单 shard 下归并恒等，本移植把 R1 collect_input 与 ME 段 merge 一次性做完，写入 cmd.loan_reprice_events 供 R2 消费。
     fn reprice_loan_rates_collect(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let shard_data = LoanRatePricingProcessor::collect_input(&self.loan_service);
         cmd.loan_reprice_events = LoanRatePricingProcessor::build_matcher_events(&[shard_data]);
         CommandResultCode::Success
     }
 
-    /// `REPRICE_LOAN_RATES` R2：对应 Java `RiskEngine.handlerRiskRelease`（`:906-913`）。逐个
-    /// `(currency, util_bps)` 事件调用 [`LoanRatePricingProcessor::apply_event`]（内部先
-    /// `advance_accumulator` 后 `reprice_currency`，顺序不可颠倒——见该函数文档），事件循环
-    /// **结束后**统一调用一次 `set_last_reprice_ts`（不是每个事件调一次）。
-    ///
-    /// **空事件早退**：`cmd.loan_reprice_events` 为空（借贷池全空，`build_matcher_events` 没有
-    /// 任何 currency 可报）时**完全不做任何事**，包括不推进 `last_reprice_ts`——对应 Java
-    /// `buildMatcherEvents` 把 `cmd.matcherEvent` 置 `null`，`handlerRiskRelease` 顶层
-    /// `if (mte == null || ...) return false;` 早退，`REPRICE_LOAN_RATES` 专属分支（含
-    /// `setLastRepriceTs`）根本没机会执行。
+    /// RepriceLoanRates R2：对应 Java handlerRiskRelease（:906-913），逐事件调 apply_event（advance_accumulator 先于 reprice_currency，顺序不可颠倒），循环后统一 set_last_reprice_ts 一次；空事件完全不做任何事（含不推进 ts）。
     fn reprice_loan_rates_apply(&mut self, cmd: &mut OrderCommand) {
         let events = std::mem::take(&mut cmd.loan_reprice_events);
         if events.is_empty() {
@@ -2108,22 +1748,7 @@ impl RiskEngine {
         self.loan_service.floating_rate.set_last_reprice_ts(cmd.timestamp);
     }
 
-    /// `INTERNAL_TRANSFER` R1+merge：对应 Java `RiskEngineCommandDispatcher` 的
-    /// `case INTERNAL_TRANSFER: engine.getInternalTransferProcessor().collectInput(cmd);`
-    /// （参考文档 §5，`ExchangeApi.java:1216-1226` 字段映射）。字段映射：`cmd.uid = from_uid`、
-    /// `cmd.size = to_uid`（**overloaded**——size 承载 uid，非金额）、`cmd.symbol = currency`、
-    /// `cmd.price = amount`、`cmd.order_id = transaction_id`。
-    ///
-    /// # 路由偏差（相对 Java，同 `reprice_loan_rates_collect` 先例，刻意记录）
-    /// Java 版本 R1 只做 `collectInput`，随后交给 `MatchingEngineRouter` 的独立
-    /// `InternalTransferProcessor` 实例在 ME 段调用 `buildMatcherEvents`（merge）。本移植的
-    /// `MatchingEngineRouter` 不持有 `UserProfileService`——没有数据可做归并，且它对所有
-    /// `is_non_trading()` 命令（`INTERNAL_TRANSFER` 在其中）统一 no-op 短路。单 shard 下
-    /// （Ruling P6-C）"跨 shard 归并"本身是恒等操作，因此在这里把 R1
-    /// [`InternalTransferProcessor::collect_input`] 与 merge
-    /// [`InternalTransferProcessor::build_matcher_events`] 一次性做完：R1 失败（self/金额非法/
-    /// 用户缺失/NSF/幂等重复）直接返回对应拒绝码，不写载体；R1 成功则把 `(to_uid, currency,
-    /// amount)` 写入 `cmd.internal_transfer_event`，供 R2（[`Self::handler_risk_release`]）消费。
+    /// InternalTransfer R1+merge：对应 Java case INTERNAL_TRANSFER collectInput（参考文档 §5，字段映射 cmd.uid=from_uid/cmd.size=to_uid/cmd.symbol=currency/cmd.price=amount）；单 shard 归并恒等（Ruling P6-C），R1 失败直接返回拒绝码，成功写入 cmd.internal_transfer_event 供 R2 消费。
     fn internal_transfer_collect(
         &mut self,
         cmd: &mut OrderCommand,
@@ -2145,11 +1770,7 @@ impl RiskEngine {
         rc
     }
 
-    /// `INTERNAL_TRANSFER` R2：对应 Java `RiskEngine.handlerRiskRelease` 处理
-    /// `MatcherEventType.INTERNAL_TRANSFER_EVENT` 的分支（`InternalTransferProcessor.applyEvent`，
-    /// `:84-98`）。消费 `cmd.internal_transfer_event`（R1 失败时为 `None`，早退，to-shard 无事
-    /// 可做——对应 Java `mte == null` 早退），成功时给 to-shard 入账（未知 to 自动建 `SUSPENDED`
-    /// 档）。
+    /// InternalTransfer R2：对应 Java handlerRiskRelease 的 INTERNAL_TRANSFER_EVENT 分支（applyEvent，:84-98），消费 cmd.internal_transfer_event 给 to-shard 入账（未知 to 自动建 SUSPENDED）。
     fn internal_transfer_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService) {
         let Some((to_uid, currency, amount)) = cmd.internal_transfer_event.take() else {
             return;
@@ -2157,31 +1778,7 @@ impl RiskEngine {
         InternalTransferProcessor::apply_event(ups, to_uid, currency, amount);
     }
 
-    /// `SETTLE_FUNDINGFEES` R1+merge：对应 Java `RiskEngine.preProcessCommand` case
-    /// `SETTLE_FUNDINGFEES`（`:294-309`），叠加 `FundingFeeCommandProcessor.collectInput`
-    /// （`:34-68`）与 `buildMatcherEvents`（`:70-126`，merge）。参考文档 §4.1/§4.2，
-    /// `ExchangeApi.java:1083-1093` 字段映射：`cmd.action` = BID（多付空）/ASK（空付多）、
-    /// `cmd.price = fundingRate`、`cmd.size = rateScaleK`。
-    ///
-    /// # R1 前置门禁顺序（逐字对齐 Java 两层嵌套校验，非本移植随意排序）
-    /// Java 把这一命令的校验拆在两层：外层 `preProcessCommand`（在调用 `collectInput` **之前**）
-    /// 校验 `symbol` spec 存在且类型是 `FUTURES_CONTRACT_PERPETUAL`（否则 `INVALID_SYMBOL`），
-    /// 再校验 `LastPriceCacheRecord` 存在（否则 `RISK_MARKPRICE_NOT_AVAILABLE`）——**这两步都
-    /// 在调用 `collectInput` 之前就会短路返回**，`collectInput` 自身的 `cmd.size<=0` 校验
-    /// （`RISK_INVALID_AMOUNT`）根本没有机会跑到。因此，若 `size<=0` 与 markPrice 缺失同时
-    /// 为真，Java 实际观测到的结果码是 `RISK_MARKPRICE_NOT_AVAILABLE`（markPrice 检查在外层
-    /// 更早），不是 `RISK_INVALID_AMOUNT`——本函数按这个真实嵌套顺序实现：
-    /// `InvalidSymbol` → `RiskMarkpriceNotAvailable` → `RiskInvalidAmount` → 收集。
-    ///
-    /// # 路由偏差（相对 Java，同 `internal_transfer_collect`/`reprice_loan_rates_collect` 先例）
-    /// Java 版本 R1 只做 `collectInput`，随后交给 `MatchingEngineRouter` 的独立
-    /// `FundingFeeCommandProcessor` 实例在 ME 段调用 `buildMatcherEvents`（merge）。单 shard 下
-    /// （Ruling P6-C）"跨 shard 归并"是恒等操作，因此这里把 R1
-    /// [`FundingFeeCommandProcessor::collect_input`] 与 merge
-    /// [`FundingFeeCommandProcessor::build_matcher_events`] 一次性做完，结果写入
-    /// `cmd.funding_fee_event`（`None` 表示 `total_pay==0` 或 `total_recv_notional==0`，
-    /// 对应 Java `cmd.matcherEvent=null`——命令仍是 `Success`，只是没有可结算的事件），供 R2
-    /// （[`Self::settle_funding_fees_apply`]）消费。
+    /// SettleFundingfees R1+merge：对应 Java case SETTLE_FUNDINGFEES（:294-309）+ collectInput/buildMatcherEvents（:34-68/:70-126）；门禁顺序逐字对齐 Java：InvalidSymbol → RiskMarkpriceNotAvailable → RiskInvalidAmount；单 shard 归并恒等（Ruling P6-C），结果写入 cmd.funding_fee_event 供 R2 消费。
     fn settle_funding_fees_collect(
         &mut self,
         cmd: &mut OrderCommand,
@@ -2209,15 +1806,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// `SETTLE_FUNDINGFEES` R2：对应 Java `RiskEngine.handlerRiskRelease` 处理
-    /// `MatcherEventType.FUNDING_EVENT` 的分支（`:972-976`，`FundingFeeCommandProcessor
-    /// .applyEvent`，`:128-167`）。消费 `cmd.funding_fee_event`（R1 无可结算事件时为 `None`，
-    /// 早退——对应 Java `mte == null` 早退，`SETTLE_FUNDINGFEES` 专属分支根本没机会执行）。
-    ///
-    /// **`liquidationEngine.checkPositions(cmd)` 钩子未落地**（Java `:977`，R2 事件循环结束后
-    /// 追加调用）——`LiquidationEngine` 属 Task 7 排期，见
-    /// `funding_fee_command_processor.rs` 模块文档"checkPositions 钩子"一节，不影响本 Task
-    /// 负责的账户/持仓结算正确性。
+    /// SettleFundingfees R2：对应 Java handlerRiskRelease 的 FUNDING_EVENT 分支（:972-976，applyEvent :128-167），消费 cmd.funding_fee_event（None 时早退）。
     fn settle_funding_fees_apply(
         &mut self,
         cmd: &mut OrderCommand,
@@ -2246,29 +1835,9 @@ impl RiskEngine {
         );
     }
 
-    // ====================================================================================
-    // `IF_TAKEOVER`（futures 保险基金接管，P6 Task 5）—— 参考文档 §2.2/§2.3，
-    // Java `IFCommandProcessor.java`（129 行）+ `RiskEngine.java:365-373`（R1）/`:962-988`（R2）。
-    // ====================================================================================
+    // ==== IF_TAKEOVER（保险基金接管，P6 Task 5）—— 参考文档 §2.2/§2.3；Java IFCommandProcessor.java + RiskEngine.java:365-373(R1)/:962-988(R2) ====
 
-    /// `IF_TAKEOVER` R1+merge：对应 Java `RiskEngine.java` case `IF_TAKEOVER`（`:365-373`）里
-    /// `ifProcessor.collectInput(cmd)` 这一步，叠加 `IFCommandProcessor.buildMatcherEvents`
-    /// （`:39-72`，merge）。单 shard 下（Ruling P6-C）"跨 shard 归并"是恒等操作，同
-    /// `settle_funding_fees_collect`/`internal_transfer_collect` 先例，一次性做完 R1+merge：
-    /// 1. R1 [`IfCommandProcessor::collect_input`]（薄封装
-    ///    [`LiquidationService::reserve_if_notional`]）：`preview = min(available-reserved,
-    ///    size*price)`，写入 `cmd.if_preview_cover`。
-    /// 2. merge [`IfCommandProcessor::build_matcher_event`]：`preview/price`（floor）
-    ///    与 `cmd.size` 比较，覆盖不满 → `None`（全拒，all-or-nothing），否则 `Some(cmd.size)`，
-    ///    写入 `cmd.if_takeover_size`。
-    ///
-    /// 结果码恒 `Success`（对应 Java `TwoStepCommandProcessor.process()`：`buildMatcherEvents`
-    /// 跑完后固定返回 `SUCCESS`，REJECT 是 matcher-event 级别的信号，不是命令级别的失败——调用方
-    /// 靠 `cmd.if_takeover_size == None` 判断"这次没接管成"，同 ADL/FundingFee 先例）。
-    ///
-    /// **未落地 `normalizeCmdPositionSize`**（Java `:369-370`，在 `collectInput` 之后、
-    /// 结果码落定之前按 taker `openVolume` 收敛 `cmd.size`）——`LiquidationEngine` 编排层职责，
-    /// Task 7 排期，见 `if_command_processor.rs` 模块文档"未移植"一节。
+    /// IfTakeover R1+merge：对应 Java case IF_TAKEOVER（:365-373）collectInput + buildMatcherEvents（:39-72）；preview=min(available-reserved,size*price) 写 cmd.if_preview_cover，覆盖不满→None（全拒）否则 Some(cmd.size) 写 cmd.if_takeover_size；结果码恒 Success（REJECT 是事件级信号）。
     fn if_takeover_collect(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let preview = IfCommandProcessor::collect_input(&mut self.liquidation_service, cmd.symbol, cmd.size, cmd.price);
         cmd.if_preview_cover = preview;
@@ -2276,35 +1845,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// `IF_TAKEOVER` R2（apply + finalize 合并）：对应 Java `RiskEngine.handlerRiskRelease`
-    /// 处理 `IF_TAKEOVER` 的两段（`:962-966` apply 循环 + `:987-988` finalize）+
-    /// `IFCommandProcessor.applyEvent`（`:75-86`）+ `IFCommandProcessor.finalizeForCommand`
-    /// （`:100-127`）。
-    ///
-    /// - **apply**（`cmd.if_takeover_size == Some(size)` 时）：`direction =
-    ///   PositionDirection::of_action(cmd.action)`（对应 Java `cmd.action == BID ? LONG :
-    ///   SHORT`），调用 [`IfCommandProcessor::apply_event`]（薄封装 `accept_if_position`）。
-    /// - **finalize 前半（关 taker 仓）**：只在接管成功（`Some`）且 taker 在
-    ///   `up.create_positions_key(cmd.symbol, cmd.action, cmd.command)` 上确有持仓记录时执行——
-    ///   对应 Java `takerSpr != null && matcherEvent.eventType != REJECT` 双重门，其中 `takerSpr`
-    ///   由 `takerUp.positions.get(takerUp.createPositionsKey(symbol, cmd.action, cmd.command))`
-    ///   取得（`RiskEngine.handlerRiskRelease:947-948`）——**不是**裸 `symbol`，与
-    ///   `settle_margin_position_event`/`margin_adjustment` 等其它全部结算落点用同一套查找规则
-    ///   （ONEWAY 下二者退化为同一个值，是当前唯一可达路径；HEDGE 才会分叉，见
-    ///   `if_command_processor.rs` 模块文档）。`close_current_position_futures(action.opposite(),
-    ///   cmd.size, cmd.price)`（不收手续费——对应 Java `finalizeForCommand` 确实没有算
-    ///   taker/maker fee，纯粹是 IFCommandProcessor 与 `handleMatcherEventMargin` 的差异点，非本
-    ///   移植遗漏）；随后 `is_empty()` 才触发 extra_margin 退款 + profit 结算入账户 + 移除持仓
-    ///   记录——这段逻辑与 `settle_margin_position_event` 里 TRADE 分支收尾几乎逐字相同（同一套
-    ///   "仓位清空后结算"语义，含 key 查找方式，见 `if_command_processor.rs` 模块文档"三段式与
-    ///   账户结算的落点分工"一节，解释了为什么在这里内联而不是抽成第三个共享函数）。
-    /// - **finalize 后半（释放 reserved）**：**无论接管成功/全拒都执行**——对称于 R1 的
-    ///   `reserve_if_notional`（对应 Java `finalizeForCommand` 末尾 `releaseReservedIFNotional`
-    ///   永远跑，不在任何 `if` 分支内）。
-    ///
-    /// **`liquidationEngine.advanceLiquidation` 钩子未落地**（Java `:996-998`，R2 finalize 之后
-    /// 推进 FORCE→IF→ADL 状态机）——`LiquidationEngine` 属 Task 7 排期，不影响本 Task 负责的
-    /// IF 状态/账户结算正确性（钩子只是"结算后决定下一步降级到 ADL 与否"，不改写结算结果本身）。
+    /// IfTakeover R2（apply+finalize 合并）：对应 Java handlerRiskRelease（:962-966/:987-988）+ IFCommandProcessor.applyEvent/finalizeForCommand（:75-86/:100-127）；成功则按 create_positions_key 关 taker 仓（不收手续费）+ 结算退款，释放 reserved 无论成败都执行。
     fn if_takeover_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
         let symbol = cmd.symbol;
         let price = cmd.price;
@@ -2322,13 +1863,7 @@ impl RiskEngine {
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
 
             let up = ups.get_or_add_suspended(cmd.uid);
-            // 对应 Java `RiskEngine.handlerRiskRelease:947-948`：`takerSpr = takerUp.positions.get(
-            // takerUp.createPositionsKey(symbol, cmd.action, cmd.command))`——按 `create_positions_key`
-            // 算出的 key 查 taker 仓位，不是裸 `symbol`。ONEWAY 下两者退化为同一个值（`create_positions_key`
-            // 忽略 action/command），本次切换对当前唯一可达路径（ONEWAY）是 no-op；但与
-            // `settle_margin_position_event`（P4 Task 4）/`margin_adjustment`/`calculate_locked` 等
-            // 其它全部结算落点保持同一套查找规则，为将来 HEDGE（`cmd.action==Ask` 时会查到错误的
-            // 那条腿）铺好正确的接线。
+            // 对应 Java handlerRiskRelease:947-948：按 create_positions_key 查 taker 仓（非裸 symbol），ONEWAY 下等价 no-op，为 HEDGE 铺好正确接线。
             let position_key = up.create_positions_key(symbol, action, cmd.command);
             if up.positions.contains_key(&position_key) {
                 up.positions.get_mut(&position_key).unwrap().close_current_position_futures(action.opposite(), cmd.size, price);
@@ -2368,36 +1903,9 @@ impl RiskEngine {
         self.liquidation_service.release_reserved_if_notional(symbol, cmd.if_preview_cover);
     }
 
-    // ====================================================================================
-    // `AUTO_DELEVERAGING`（自动减仓 ADL，P6 Task 6）—— 参考文档 §3、§11.1，
-    // Java `ADLCommandProcessor.java`（257 行）+ `LiquidationService.java:191-321`（排序键 + 候选
-    // 构造）+ `RiskEngine.java:374-380`（R1）/`:962-990`（R2）。
-    // ====================================================================================
+    // ==== AUTO_DELEVERAGING（自动减仓 ADL，P6 Task 6）—— 参考文档 §3/§11.1；Java ADLCommandProcessor.java + LiquidationService.java:191-321 + RiskEngine.java:374-380(R1)/:962-990(R2) ====
 
-    /// `AUTO_DELEVERAGING` R1+merge：对应 Java `RiskEngine.java` case `AUTO_DELEVERAGING`
-    /// （`:374-380`）里 `adlProcessor.collectInput(cmd)` 这一步，叠加
-    /// `ADLCommandProcessor.buildMatcherEvents`（`:102-165`，merge）。单 shard 下（Ruling P6-C）
-    /// "跨 shard 归并"是恒等操作，同 `if_takeover_collect` 先例，一次性做完 R1+merge：
-    ///
-    /// 1. [`LiquidationService::compute_profitable_positions_by_symbol`] 现算全体 ADL 候选（按需
-    ///    重算，不缓存，见其文档），取出 `cmd.symbol` 这一档。
-    /// 2. [`AdlCommandProcessor::collect_input`]（纯选择算法）：筛选 + 按 `risk_score` DESC 排序 +
-    ///    贪心分配，产出候选列表——**这就是 R1 的最终预占量**，写入 `cmd.adl_user_positions`
-    ///    （R2 finalize 释放时读的"原始表"，见 `adl_command_processor.rs` 模块文档）。
-    /// 3. **写回 `pending_adl_size`**（Java 版本这一步是 R1 `collectInput` 里对活引用直接
-    ///    `pos.pendingADLSize += canTake`；本移植因为候选是克隆快照，必须显式按
-    ///    `up.create_positions_key(symbol, action.opposite(), AutoDeleveraging)` 重新查活记录再
-    ///    写，见 `compute_profitable_positions_by_symbol` 文档"Rust 所有权改造"一节）——
-    ///    **在 merge 之前完成**，对应 Java R1 阶段就已经预占（跟 merge 阶段是否真消费无关，
-    ///    merge 只决定"这次命令实际用掉多少"，不影响"预占了多少"这个事实）。
-    /// 4. [`AdlCommandProcessor::build_matcher_events`]（merge）：产出 `cmd.adl_events`（消费
-    ///    序列）并把 `cmd.size` 改写为实际消费总量（对应 Java `cmd.size -= remaining`，R2 finalize
-    ///    平 taker 自己的仓要用这个真实数）。
-    ///
-    /// 结果码恒 `Success`（同 `if_takeover_collect`：`buildMatcherEvents` 跑完固定 `SUCCESS`，
-    /// 空 `adl_events` 是"这次没减成"的信号，不是命令失败）。
-    ///
-    /// **未落地 `normalizeCmdPositionSize`**（同 `if_takeover_collect` 文档，Task 7 排期）。
+    /// AutoDeleveraging R1+merge：对应 Java case AUTO_DELEVERAGING（:374-380）collectInput + buildMatcherEvents（:102-165）；候选取自 compute_profitable_positions_by_symbol，AdlCommandProcessor::collect_input 排序+贪心分配为 R1 最终预占量，写回 pending_adl_size 后 merge 产出 cmd.adl_events 并把 cmd.size 改写为实际消费量；结果码恒 Success。
     fn adl_collect(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         cmd.adl_user_positions.clear();
         cmd.adl_events.clear();
@@ -2433,14 +1941,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// ADL 专属的关仓 + 清算 helper——`adl_apply` 的 R2 apply（关 counterparty 仓）与 finalize
-    /// （关 taker 自己的仓）共用同一套逻辑（对应 Java `ADLCommandProcessor.applyEvent:196-212` 与
-    /// `finalizeForCommand:220-235` 里几乎逐字重复的 close-and-cleanup 三段：
-    /// `closeCurrentPositionFutures` → `isEmpty()` 判定 → 退 `extraMargin` + 结算 `profit` + 移除
-    /// 持仓记录）——ADL 不收手续费（同 IF_TAKEOVER，对应 Java 两处都没有算 taker/maker fee 那段），
-    /// 因此可以安全共享，不像 `if_command_processor.rs` 模块文档解释的
-    /// "为什么不与 `settle_margin_position_event` 共享"那样有 fee 差异顾虑——这里在 ADL 自己的两个
-    /// 调用点之间是真正等价的重复逻辑（参考文档 §3.3 "worth factoring into one shared helper"）。
+    /// ADL 关仓+清算 helper：apply（关 counterparty 仓）与 finalize（关 taker 仓）共用，对应 Java ADLCommandProcessor.applyEvent（:196-212）/finalizeForCommand（:220-235）的重复三段；ADL 不收手续费（同 IF_TAKEOVER）故可安全共享。
     fn adl_close_and_settle(
         up: &mut UserProfile,
         position_key: i32,
@@ -2486,34 +1987,7 @@ impl RiskEngine {
         up.positions.remove(&position_key);
     }
 
-    /// `AUTO_DELEVERAGING` R2（apply + finalize 合并）：对应 Java `RiskEngine.handlerRiskRelease`
-    /// 处理 `AUTO_DELEVERAGING` 的两段（`:967-970` apply 循环 + `:989-990` finalize）+
-    /// `ADLCommandProcessor.applyEvent`（`:167-213`）+ `ADLCommandProcessor.finalizeForCommand`
-    /// （`:215-255`）。
-    ///
-    /// - **apply**（`cmd.adl_events` 逐条）：counterparty `UserProfile`/仓位记录都可能在 R1 选中
-    ///   与 R2 应用之间消失（对应 Java `[CASCADE-DEBUG]` 日志两处）——**best-effort skip，不是
-    ///   error**：`pending_adl_size` 的修正统一在 finalize 阶段做，不依赖 apply 是否成功
-    ///   （参考文档 §3.3）。用 `up.create_positions_key(symbol, action.opposite(),
-    ///   AutoDeleveraging)`（不是裸 `symbol`，同 `if_takeover_apply` 先例）查 counterparty 仓位，
-    ///   `close_current_position_futures(action, exec_size, price)`（`adlPosSide.opposite() ==
-    ///   cmd.action`，见 Java `:196` 与本函数文档推导）。
-    /// - **finalize 前半（关 taker 仓）**：只在 `cmd.adl_events` 非空时执行（对应 Java
-    ///   `matcherEvent.eventType != REJECT`——空事件列表就是"这次没减成"，没有仓位可关）。taker
-    ///   用 `ups.get_or_add_suspended` 取（同 `if_takeover_apply`：Java `handlerRiskRelease` 顶层
-    ///   对 taker 统一 `getUserProfileOrAddSuspended`，不像 counterparty 那样允许整个 profile
-    ///   缺失），仓位用 `up.create_positions_key(symbol, action, AutoDeleveraging)` 查（对应 Java
-    ///   `RiskEngine.handlerRiskRelease:947-948` 同款 key 规则），`close_current_position_futures
-    ///   (action.opposite(), cmd.size, price)`（`cmd.size` 此时已被 `adl_collect` 改写为真实消费
-    ///   量）。
-    /// - **finalize 后半（释放 pending_adl_size）**：走 **`cmd.adl_user_positions`**（R1 原始表，
-    ///   `mem::take` 取走整体消费一次），对每个候选 `pos.pending_adl_size -= pick.volume`——
-    ///   **不管 apply 阶段实际消费了多少**，对称于 `adl_collect` 的 `+=`（参考文档 §3.4：
-    ///   "proposed-but-not-picked 的候选也要释放"）。`pending_adl_size > 0` 才减（对应 Java
-    ///   `pos.pendingADLSize > 0` 防御性门，避免在极端时序下减成负数）。
-    ///
-    /// **`liquidationEngine.advanceLiquidation` 钩子未落地**（同 `if_takeover_apply` 文档，Task 7
-    /// 排期，不影响本 Task 负责的账户结算正确性）。
+    /// AutoDeleveraging R2（apply+finalize 合并）：对应 Java handlerRiskRelease（:967-970 apply/:989-990 finalize）+ ADLCommandProcessor.applyEvent/finalizeForCommand（:167-213/:215-255）；apply 逐条关 counterparty 仓（缺失 best-effort skip），finalize 前半按 cmd.size（真实消费量）关 taker 仓，后半按 cmd.adl_user_positions 原始表释放 pending_adl_size（与 R1 += 对称，不管 apply 实际消费多少）。
     fn adl_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
         let symbol = cmd.symbol;
         let price = cmd.price;
@@ -2566,23 +2040,7 @@ impl RiskEngine {
         }
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.processIFDeposit`（`:465-495`）：futures `IF_DEPOSIT`
-    /// 运营充值——**与 loan `LOAN_IF_DEPOSIT`（`loan_command_dispatcher.rs::handle_loan_if_deposit`）
-    /// 是完全独立的池子**，字段映射也不同：`cmd.symbol` = 期货 symbol（不是币种！`LiquidationService
-    /// .notionals` 是按 symbol 记账），`cmd.price` = currency 记账单位下的充值额（不是
-    /// `cmd.size`——futures IF 与 loan LIF 的字段布局不同，逐字对齐 Java）。
-    ///
-    /// 单 shard 下省略 Java 的定向 shard 路由判断（`(int) cmd.uid == engine.getShardId()`）——同
-    /// `loan_command_dispatcher.rs` 的 `handle_pool_deposit`/`handle_loan_if_deposit` 既有先例，
-    /// 单 shard 该判断恒真，未搬迁；`cmd.uid` 在本移植里对这四类运营命令没有实际语义。
-    ///
-    /// 校验序（逐字对齐 Java）：`symbol` spec 存在 → `currency_amount > 0` → `quote_currency`
-    /// 的 `CoreCurrencySpecification` 存在 → **精度可逆校验**（`currency_to_size_price_scale`
-    /// 换算成 notional 后再 `size_price_to_currency_scale` 换算回来，必须严格等于原值，否则
-    /// `adjustments` 对冲会有截断残量、对账漂移）→ 全部通过才写状态：
-    /// `deposit_to_insurance_fund` + `adjustments[quote_currency] -= currency_amount`（对冲，
-    /// `Σ IFNotional.available（换算成 currency scale）+ adjustments[currency]` 恒定，同
-    /// `balance_adjustment`/loan pool 充提先例）。
+    /// 对应 Java RiskEngineCommandDispatcher.processIFDeposit（:465-495）：futures IF_DEPOSIT 运营充值，与 loan LOAN_IF_DEPOSIT 完全独立池子；校验序 symbol→amount>0→currency spec→精度可逆校验，全过才 deposit_to_insurance_fund + adjustments[quote_currency] -= amount（对冲恒定）。
     fn if_deposit(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let spec = match ssp.get_symbol(cmd.symbol) {
             Some(s) => s,
@@ -2617,11 +2075,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.processIFWithdraw`（`:502-531`）：语义跟
-    /// [`Self::if_deposit`] 对称，差别只在正负号 + 非负校验——`available` 不足以覆盖时返回
-    /// `RiskIfInsufficient`（**futures 独立错误码，与 loan 的 `LoanIfInsufficient` 互异**，见
-    /// `command_result_code.rs`）。非负校验在 `LiquidationService::withdraw_from_insurance_fund`
-    /// 内部；只扣 `available`，不动 `reserved`（正在保护某笔强平的预冻结部分，运营不能拿走）。
+    /// 对应 Java RiskEngineCommandDispatcher.processIFWithdraw（:502-531）：语义与 if_deposit 对称，available 不足→RiskIfInsufficient（与 loan 的 LoanIfInsufficient 互异）；只扣 available 不动 reserved。
     fn if_withdraw(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let spec = match ssp.get_symbol(cmd.symbol) {
             Some(s) => s,
@@ -2658,45 +2112,7 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
-    /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage`（`ADD_LOAN` 分支，
-    /// `:563-646`）：批量运行时配置命令，三段（`global`/`symbol`/`rate_curve`）独立可选、独立
-    /// 校验——一段非法只跳过，不影响另外两段（参考文档 §2.12）。
-    ///
-    /// # 路由偏差（相对 Java，刻意记录，非"偷懒少做"）
-    /// Java 侧 `ADD_LOAN` 是 `BinaryDataCommand`（`BinaryCommandType.ADD_LOAN`），经
-    /// `OrderCommand.command == BINARY_DATA_COMMAND` 的组帧回调
-    /// `RiskEngineCommandDispatcher.handleBinaryMessage`——**不**经 `isLoan()`/
-    /// `LoanCommandDispatcher`。本仓库当前完全没有 binary-command 组帧基建：`OrderCommand`
-    /// 结构体没有携带任意二进制负载的字段，`handleBinaryMessage` 另外三个姊妹分支
-    /// （`BatchAddCurrenciesCommand`/`BatchAddSymbolsCommand`/`BatchAddAccountsCommand`）在本
-    /// 仓库同样不存在——现有的 `SymbolSpecificationProvider::add_symbol`/`add_currency` 都是直调
-    /// 的普通方法，从未经过任何 `OrderCommand`/`BINARY_DATA_COMMAND` 管线。故本任务遵循 Java 的
-    /// **落点**（挂在 `RiskEngine` 上，对应 `RiskEngineCommandDispatcher`，不是
-    /// `LoanCommandDispatcher`）但不假装有一条不存在的 binary-frame 管线：直接开放
-    /// `apply_add_loan(&BatchAddLoanCommand, &mut SymbolSpecificationProvider)` 作为配置入口，
-    /// 与 `add_symbol`/`add_currency` 同等地位——调用方（管理端 / 未来的 `BINARY_DATA_COMMAND`
-    /// 组帧层）拿到解码后的 `BatchAddLoanCommand` 值后直接调用即可。不经 `preamble`/幂等/结果码
-    /// （Java 版 `handleBinaryMessage` 本身也是 `void`，不返回每条子命令的结果码，只有
-    /// `log.info`/`log.warn`；本移植无日志基建，三段各自静默跳过非法输入，调用方若要观测哪段
-    /// 被拒，需自行在调用前后比对状态）。
-    ///
-    /// 三段语义（逐字对应 Java）：
-    /// - **global**：`thresholds_valid_given_current` 通过，且（`numeraire_currency>0` 时）
-    ///   目标币种的 `CoreCurrencySpecification` 必须存在，才 apply-all-or-nothing 写回 7 个
-    ///   partial-update 字段（`<=0` = 不改）。
-    /// - **symbol**：`spec` 存在且 `symbol_type==CurrencyExchangePair`，`resolve(...)` 派生后的
-    ///   `Resolved::valid()` 通过才 apply——**这一步就是 Task 5 遗留前置义务的收口**：
-    ///   `Resolved::valid()` 强制 `collateral_weight_bps ∈ [0,10000]`，是当前唯一能写这个字段
-    ///   的命令，写坏了就会让 `LoanService::cross_ltv_bps` 里"权重不可能越界所以
-    ///   `trunc_mul_div` panic 不可达"的论断失效。`initial==0`（kill-switch）只清
-    ///   `initial_ltv_bps`，保留 `liquidation`/`margin_call`/`max_amount`/`max_term_days`
-    ///   原值（存量贷款不因关闭新借款而被连带强平）；否则五字段整体写回
-    ///   `SymbolLoanSpecification::update`，并把 `collateral_weight_bps` **额外**写到 base
-    ///   currency 的 `CoreCurrencySpecification`（per-currency，非 per-symbol，同 base 的多个
-    ///   pair 后写覆盖前写）。
-    /// - **rate_curve**：`valid()` 通过才整体替换 `FloatingRateModel` 的 4 个曲线参数 +
-    ///   `FixedRateModel::locked_rate_adjust_bps`（存在即全量替换，无 partial-update——`0` 是
-    ///   合法曲线值）。
+    /// 对应 Java RiskEngineCommandDispatcher.handleBinaryMessage（ADD_LOAN 分支，:563-646）：批量运行时配置命令，global/symbol/rate_curve 三段独立可选独立校验（一段非法只跳过）；本仓无 binary-command 组帧基建，故直接开放 apply_add_loan 作为配置入口（不经 preamble/幂等/结果码），逐字对齐 Java 三段语义（symbol 段强制 collateral_weight_bps∈[0,10000]，kill-switch 只清 initial_ltv_bps 保留存量）。
     pub fn apply_add_loan(&mut self, cmd: &BatchAddLoanCommand, ssp: &mut SymbolSpecificationProvider) {
         if let Some(g) = &cmd.global {
             let current_liq = self.loan_service.global_config.cross_liquidation_ltv_bps;
@@ -2739,8 +2155,7 @@ impl RiskEngine {
                 let base_currency = ssp.symbols.get(&s.symbol_id).unwrap().base_currency;
                 let spec = ssp.symbols.get_mut(&s.symbol_id).unwrap();
                 if resolved.initial_ltv_bps == 0 {
-                    // 停借只关开关：liquidation/marginCall/maxAmount/maxTermDays 由原值保留，
-                    // 跟着归零会把存量贷款连带强平，故不动它们（也不派生 collateralWeightBps）。
+                    // 停借只关开关：liquidation/marginCall/maxAmount/maxTermDays 保留原值，避免存量贷款被连带强平。
                     let cur = spec.loan_config;
                     spec.loan_config.update(
                         0,
@@ -2757,8 +2172,7 @@ impl RiskEngine {
                         resolved.max_amount,
                         resolved.max_term_days,
                     );
-                    // collateralWeightBps 是 base 币的账户级折价率，同 base 的多个 pair 共享，
-                    // 后写覆盖前写（Java 注释原文同此）。
+                    // collateralWeightBps 是 base 币账户级折价率，同 base 多 pair 共享，后写覆盖前写。
                     if let Some(base_spec) = ssp.currencies.get_mut(&base_currency) {
                         base_spec.collateral_weight_bps = resolved.collateral_weight_bps;
                     }
@@ -2805,10 +2219,7 @@ mod tests {
         }
     }
 
-    /// 搭建：一个现货 symbol（BASE/QUOTE，base_scale_k=100/quote_scale_k=1_000_000，
-    /// 均非平凡缩放）+ 两种 currency spec（base currency_scale_k=100 对齐 base_scale_k，
-    /// ASK 侧缩放天然恒等；quote currency_scale_k=1_000_000 < 乘积 scale 1e8，BID 侧缩放非恒等）
-    /// + 一个已建档、按需充值的用户。
+    /// 搭建：一个现货 symbol（base/quote_scale_k 均非平凡）+ 两种 currency spec（ASK 侧缩放恒等，BID 侧非恒等）+ 一个已建档充值用户。
     fn setup(
         taker_fee: i64,
         fee_scale_k: i64,
@@ -2864,9 +2275,7 @@ mod tests {
         }
     }
 
-    // ------------------------------------------------------------------
-    // BID — 固定费
-    // ------------------------------------------------------------------
+    // ---- BID — 固定费 ----
 
     #[test]
     fn bid_limit_order_sufficient_balance_locks_notional_plus_fixed_fee() {
@@ -2910,9 +2319,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 0);
     }
 
-    // ------------------------------------------------------------------
-    // BID — 比例费
-    // ------------------------------------------------------------------
+    // ---- BID — 比例费 ----
 
     #[test]
     fn bid_limit_order_proportional_fee_locks_notional_plus_ceil_fee() {
@@ -2956,9 +2363,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 0);
     }
 
-    // ------------------------------------------------------------------
-    // ASK — 固定费 / 比例费
-    // ------------------------------------------------------------------
+    // ---- ASK — 固定费 / 比例费 ----
 
     #[test]
     fn ask_order_locks_base_size_scaled_fixed_fee() {
@@ -3031,9 +2436,7 @@ mod tests {
         assert_eq!(p.account(BASE), 10);
     }
 
-    // ------------------------------------------------------------------
-    // 用户 / symbol 缺失
-    // ------------------------------------------------------------------
+    // ---- 用户 / symbol 缺失 ----
 
     #[test]
     fn auth_invalid_user_when_profile_missing() {
@@ -3059,9 +2462,7 @@ mod tests {
         assert_eq!(result, CommandResultCode::InvalidSymbol);
     }
 
-    // ------------------------------------------------------------------
-    // R2 — handler_risk_release：reject/reduce 释放冻结
-    // ------------------------------------------------------------------
+    // ---- R2 — handler_risk_release：reject/reduce 释放冻结 ----
 
     fn reject_or_reduce_event(
         event_type: MatcherEventType,
@@ -3162,8 +2563,7 @@ mod tests {
         let locked_after_place = ups.get(UID).unwrap().locked(QUOTE);
         assert!(locked_after_place > 0);
 
-        // 部分成交：REJECT/REDUCE 链头后面挂着一个 TRADE（400/1000 成交，matched_order_uid=0——
-        // 本测试不关心 maker 侧记账，只关心 taker 侧 quote 冻结的完整生命周期）。
+        // 部分成交：REDUCE 链头后接一个 TRADE（400/1000 成交），本测试只关心 taker 侧 quote 冻结的完整生命周期。
         let trailing_trade =
             reject_or_reduce_event(MatcherEventType::Trade, 400, 55, 60_000, None);
         cmd.matcher_event = Some(reject_or_reduce_event(
@@ -3176,9 +2576,7 @@ mod tests {
 
         engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
-        // 端到端一致性：REDUCE 释放 0（不重复释放）+ 紧接着 buy 结算（Task 7）把整份
-        // held_total(60030) 全额释放 → taker quote 冻结最终清零。Task 5 的 release_sp=0
-        // 正是建立在"Task 7 会把整份预算释放干净"这个前提上，这里端到端验证该前提成立。
+        // 端到端验证：REDUCE 释放 0 + buy 结算全额释放 held_total → taker quote 冻结清零，验证 Task5 release_sp=0 的前提成立。
         assert_eq!(
             ups.get(UID).unwrap().locked(QUOTE),
             0,
@@ -3188,19 +2586,12 @@ mod tests {
         assert!(cmd.matcher_event.is_none(), "TRADE 链应被 buy 结算完全消费");
     }
 
-    // ------------------------------------------------------------------
-    // R2 — handler_risk_release / handle_matcher_events_exchange_sell：
-    // taker 卖(ASK)结算，逐 maker + 聚合 taker + 平台费，全程守恒断言。
-    // ------------------------------------------------------------------
+    // ---- R2 — handler_risk_release/handle_matcher_events_exchange_sell：taker 卖(ASK)结算，逐 maker+聚合 taker+平台费，全程守恒断言 ----
 
     const BUYER1: i64 = 8;
     const BUYER2: i64 = 9;
 
-    /// 与 [`spec_with_fee`] 的区别：额外暴露 `maker_fee`；quote currency 的 `currency_scale_k`
-    /// 取 `base_scale_k * quote_scale_k`（乘积单位本身），让 `size_price_to_currency_scale`
-    /// 在这组测试里恒等（`from_k == to_k` 直接返回，见 `convert_scale`）——这样才能把 §3b 公式的
-    /// 每一步都断言到精确整数，而不必额外操心"乘积 scale 换算到 quote currency scale"这次独立
-    /// 取整引入的 dust；ceil 手续费本身的取整路径（`ceil_mul_mul_div`/`ceil_mul_div`）仍完整走到。
+    /// 与 spec_with_fee 的区别：额外暴露 maker_fee，quote currency_scale_k 取乘积单位使 size_price_to_currency_scale 恒等，便于精确整数断言。
     fn spec_with_fees(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id: SYMBOL,
@@ -3267,8 +2658,7 @@ mod tests {
         })
     }
 
-    /// 断言这笔结算的全局守恒不变式（参考文档 §6）：base 腿逐笔精确守恒（无 fee）；
-    /// quote 腿守恒 modulo `fees[quote]`（`Σ accounts[quote] delta + fees[quote] delta == 0`）。
+    /// 断言结算全局守恒不变式（参考文档 §6）：base 腿逐笔精确守恒；quote 腿守恒 modulo fees[quote]。
     fn assert_conserved(
         base_deltas: &[i64],
         quote_deltas: &[i64],
@@ -3363,8 +2753,7 @@ mod tests {
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 60, BUYER1, None));
         engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
-        // quoteRefund = tradeAmountDiff(10000) + feeDiff(ceil(1000*(60*100-50*20)/10000)=ceil(5_000_000/10000)=500) = 10500。
-        // maker quote 净变动 = 10500 - 60600 = -50100。
+        // quoteRefund = tradeAmountDiff(10000) + feeDiff(500) = 10500；maker quote 净变动 = 10500 - 60600 = -50100。
         let buyer = ups.get(BUYER1).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -50_100);
@@ -3419,8 +2808,7 @@ mod tests {
         let buyer2_quote_before = ups.get(BUYER2).unwrap().account(QUOTE);
         let buyer2_base_before = ups.get(BUYER2).unwrap().account(BASE);
 
-        // 两笔 TRADE：event1 对 BUYER1（size1000@50，holdPrice55，价格改善）；
-        // event2 对 BUYER2（size1000@60，holdPrice60，无改善）。
+        // 两笔 TRADE：event1 对 BUYER1（size1000@50, holdPrice55，价格改善）；event2 对 BUYER2（size1000@60, holdPrice60，无改善）。
         let event2 = trade_event(1000, 60, 60, BUYER2, None);
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 55, BUYER1, Some(event2)));
         engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
@@ -3440,8 +2828,7 @@ mod tests {
         let buyer2_base_delta = buyer2.account(BASE) - buyer2_base_before;
         assert_eq!(buyer2_base_delta, 1000);
 
-        // taker：avgTakerPrice=(1000*50+1000*60)/2000=55；takerFee=2000*3=6000（固定费与价格无关）。
-        // quote += (110000-6000)=104000。
+        // taker：avgTakerPrice=55；takerFee=2000*3=6000（固定费与价格无关）；quote += 110000-6000=104000。
         let seller = ups.get(UID).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -3505,23 +2892,20 @@ mod tests {
         let buyer1 = ups.get(BUYER1).unwrap();
         assert_eq!(buyer1.locked(QUOTE), 0);
         let buyer1_quote_delta = buyer1.account(QUOTE) - buyer1_quote_before;
-        // holdQuote=1000*40+ceil(1000*40*100/10000)=40000+400=40400；
-        // quoteRefund=0+ceil(1000*(40*100-40*20)/10000)=ceil(3_200_000/10000)=320；净=320-40400=-40080。
+        // holdQuote=40400；quoteRefund=320；净=320-40400=-40080。
         assert_eq!(buyer1_quote_delta, -40_080);
         let buyer1_base_delta = buyer1.account(BASE) - buyer1_base_before;
         assert_eq!(buyer1_base_delta, 1000);
 
         let buyer2 = ups.get(BUYER2).unwrap();
         assert_eq!(buyer2.locked(QUOTE), 0);
-        // holdQuote=1000*60+ceil(1000*60*100/10000)=60000+600=60600；
-        // quoteRefund=0+ceil(1000*(60*100-60*20)/10000)=ceil(4_800_000/10000)=480；净=480-60600=-60120。
+        // holdQuote=60600；quoteRefund=480；净=480-60600=-60120。
         let buyer2_quote_delta = buyer2.account(QUOTE) - buyer2_quote_before;
         assert_eq!(buyer2_quote_delta, -60_120);
         let buyer2_base_delta = buyer2.account(BASE) - buyer2_base_before;
         assert_eq!(buyer2_base_delta, 1000);
 
-        // avgTakerPrice=(1000*40+1000*60)/2000=50；takerFee=ceil(2000*50*100/10000)=1000。
-        // quote += (100000-1000)=99000。
+        // avgTakerPrice=50；takerFee=1000；quote += 100000-1000=99000。
         let seller = ups.get(UID).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -3540,11 +2924,7 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // R2 — handler_risk_release / handle_matcher_events_exchange_buy：
-    // taker 买(BID)结算，逐 maker(卖方) + 聚合 taker + 平台费，全程守恒断言。
-    // 与上面 sell 测试组镜像（角色对调：taker=买方锁 quote，maker=卖方锁 base）。
-    // ------------------------------------------------------------------
+    // ---- R2 — handler_risk_release/handle_matcher_events_exchange_buy：taker 买(BID)结算（sell 镜像，角色对调），逐 maker+聚合 taker+平台费，全程守恒断言 ----
 
     const SELLER1: i64 = 10;
     const SELLER2: i64 = 11;
@@ -3667,9 +3047,7 @@ mod tests {
         assert_eq!(seller.account(BASE) - seller_base_before, -1000);
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_900);
 
-        // takerFee(avgPrice=50) = ceil(1000*50*100/10000) = 500；feeHeld(holdPrice=60) =
-        // ceil(1000*60*100/10000) = 600；leftover = 600-500 = 100；
-        // quoteRefund = (60000-50000+100) = 10100；净 = 10100-60600 = -50500。
+        // takerFee=500；feeHeld=600；leftover=100；quoteRefund=10100；净=10100-60600=-50500。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -50_500);
@@ -3739,9 +3117,7 @@ mod tests {
         let seller2_base_delta = seller2.account(BASE) - seller2_base_before;
         assert_eq!(seller2_base_delta, -1000);
 
-        // taker：avgTakerPrice=(1000*50+1000*60)/2000=55；takerFee=2000*3=6000（固定与价格无关）；
-        // holdPrice 恒60（own 保守价）：feeHeld=2000*3=6000；leftover=0；holdQuote=126000（匹配下单锁定）；
-        // quoteRefund=(120000-110000+0)=10000；净=10000-126000=-116000。
+        // taker：avgTakerPrice=55；takerFee=6000（固定与价格无关）；leftover=0；holdQuote=126000；quoteRefund=10000；净=10000-126000=-116000。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -3818,9 +3194,7 @@ mod tests {
         let seller2_base_delta = seller2.account(BASE) - seller2_base_before;
         assert_eq!(seller2_base_delta, -1000);
 
-        // avgTakerPrice=(1000*40+1000*60)/2000=50；takerFee=ceil(2000*50*100/10000)=1000；
-        // holdPrice 恒60：feeHeld=ceil(2000*60*100/10000)=1200；leftover=200；holdQuote=121200
-        // （匹配下单锁定）；quoteRefund=(120000-100000+200)=20200；净=20200-121200=-101000。
+        // avgTakerPrice=50；takerFee=1000；feeHeld=1200；leftover=200；holdQuote=121200；quoteRefund=20200；净=20200-121200=-101000。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -3839,20 +3213,14 @@ mod tests {
         );
     }
 
-    /// **Task 5/7 一致性证明**：IOC_BUDGET 部分成交时，本函数（Task 7）必须释放**整份**
-    /// `held_total`（用 `cmd.size`/`cmd.price` 算出的原始预算，而非本次成交量），因为 Task 5 的
-    /// `handle_matcher_reject_reduce_event_exchange` 在"IOC_BUDGET 有前置 TRADE"分支上releases 0
-    /// （见 `bid_ioc_budget_partial_fill_then_reduce_releases_zero_to_avoid_double_release`），
-    /// 假设这里已经把整份预算释放干净。本测试显式断言 `hold_quote`（本函数内部释放的量）等于
-    /// 下单时 Task 4 锁定的 `locked_after_place`，即使只成交了原始 size 的 40%。
+    /// Task5/7 一致性证明：IOC_BUDGET 部分成交时须释放整份 held_total（非本次成交量），对应 Task5 的 release_sp=0 假设；断言 hold_quote 等于下单时锁定的 locked_after_place。
     #[test]
     fn buy_ioc_budget_partial_fill_releases_full_held_total_matching_task5_assumption() {
         // taker_fee=500/1_000_000=0.05%，maker_fee=100/1_000_000=0.01%。
         let (mut ups, ssp) = setup_buy(500, 100, 1_000_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
         let mut engine = RiskEngine::new();
 
-        // maker：seller ASK size=400（本次成交量，等于 maker 挂单全部数量）。
-        // price(2000) >= ceil(1_000_000/500)=2000，不触发 too-low。
+        // maker：seller ASK size=400（等于挂单全部数量），price(2000)>=ceil(1_000_000/500)=2000 不触发 too-low。
         let mut seller_cmd = ask_cmd(400, 2000);
         seller_cmd.uid = SELLER1;
         assert_eq!(
@@ -3876,13 +3244,11 @@ mod tests {
         let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
         let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
 
-        // 只成交 400（原始 1000 的 40%）；bidder_hold_price 对 BUDGET 分支无意义（被
-        // taker_hold_notional=taker_notional 覆盖），此处填 60000 仅表示"字段存在但未被读取"。
+        // 只成交 400（40%）；bidder_hold_price 对 BUDGET 分支无意义（被 taker_hold_notional=taker_notional 覆盖），填 60000 仅占位。
         buyer_cmd.matcher_event = Some(trade_event(400, 50, 60_000, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // 核心断言：taker quote 冻结应清零——即本函数释放的 hold_quote 恰好等于 held_total 全额，
-        // 与部分成交量(400)无关。这正是 Task 5 IOC_BUDGET+prior-trade 分支 release_sp=0 的前提。
+        // 核心断言：taker quote 冻结应清零，hold_quote 恰等于 held_total 全额，与部分成交量无关，即 Task5 release_sp=0 的前提。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(
             buyer.locked(QUOTE),
@@ -3898,8 +3264,7 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 19_998);
 
-        // taker：takerFee(avg=50)=ceil(400*50*500/1_000_000)=10；leftover=heldTotal-(20000+10)=40020；
-        // quoteRefund=(20000-20000+40020)=40020；净=40020-60030=-20010；base+=400。
+        // taker：takerFee=10；leftover=40020；quoteRefund=40020；净=40020-60030=-20010；base+=400。
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
         assert_eq!(buyer_quote_delta, -20_010);
         let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
@@ -4004,8 +3369,7 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 54_000);
 
-        // taker：takerFee=1000*3=3000；leftover=63000-(55000+3000)=5000；quoteRefund=5000；
-        // 净=5000-63000=-58000。
+        // taker：takerFee=3000；leftover=5000；quoteRefund=5000；净=5000-63000=-58000。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -4020,9 +3384,7 @@ mod tests {
         assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
     }
 
-    // ========================================================================================
-    // Task 8 — ADD_USER / BALANCE_ADJUSTMENT + adjustments 守恒桶（参考文档 §5）
-    // ========================================================================================
+    // ==== Task 8 — ADD_USER / BALANCE_ADJUSTMENT + adjustments 守恒桶（参考文档 §5） ====
 
     fn add_user_cmd(uid: i64) -> OrderCommand {
         OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() }
@@ -4167,14 +3529,7 @@ mod tests {
         assert_eq!(engine.balance_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::AuthInvalidUser);
     }
 
-    // ================================================================================
-    // P4 Task 3：期货 R1 — place_order 期货分支 / can_place_margin_order NSF / CLOSE_POSITION
-    // 参考文档 §3；Java `RiskEngine.java:432-503,533-623,823-875`。
-    //
-    // 搭建：单 symbol（FUT_SYMBOL，base/quote/currency scale 全 1——恒等缩放，NSF 算式手推
-    // 便于核对）+ mark price 缓存 + 一个已建档、按需充值的用户。leverage 默认 1（未配置
-    // init_margin 表 → calculateInitMargin = notional/leverage，即 100% 名义价值）。
-    // ================================================================================
+    // ==== P4 Task 3：期货 R1 — place_order 期货分支/can_place_margin_order NSF/CLOSE_POSITION（参考文档 §3；Java RiskEngine.java:432-503,533-623,823-875）；搭建单 symbol（scale 全 1 恒等缩放）+ mark price + 已建档用户，leverage 默认 1 ====
 
     const FUT_SYMBOL: i32 = 200;
     const FUT_BASE: i32 = 1;
@@ -4252,9 +3607,7 @@ mod tests {
         }
     }
 
-    // --------------------------------------------------------------------------
-    // 成功开仓 + pending 记录 —— 固定费（fee_scale_k=0）+ ISOLATED 一组
-    // --------------------------------------------------------------------------
+    // ---- 成功开仓 + pending 记录 —— 固定费（fee_scale_k=0）+ ISOLATED 一组 ----
 
     #[test]
     fn futures_place_order_long_sufficient_margin_fixed_fee_is_valid_and_records_pending() {
@@ -4262,8 +3615,7 @@ mod tests {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
 
-        // 手推：positionMargin=1000（新开 notional 1000/leverage 1）+ pendingFee=20（10*2 固定费）
-        // + openLoss=0（cmd.price==mark）= required 1020 ≤ spendable 10_000。
+        // 手推：positionMargin=1000+pendingFee=20+openLoss=0=required 1020 ≤ spendable 10_000。
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
             CommandResultCode::ValidForMatchingEngine
@@ -4291,14 +3643,11 @@ mod tests {
         );
     }
 
-    // --------------------------------------------------------------------------
-    // 成功开仓 / NSF 边界 —— 比例费（fee_scale_k>0）+ ISOLATED 一组
-    // --------------------------------------------------------------------------
+    // ---- 成功开仓 / NSF 边界 —— 比例费（fee_scale_k>0）+ ISOLATED 一组 ----
 
     #[test]
     fn futures_place_order_proportional_fee_sufficient_margin_is_valid() {
-        // taker_fee=100/fee_scale_k=10_000（1% 比例费率）：pendingFee=ceil(10*100*100/10_000)=10。
-        // required=1000(positionMargin)+10(pendingFee)+0(openLoss)=1010 ≤ spendable 2_000。
+        // taker_fee=100/fee_scale_k=10_000（1%）：pendingFee=10；required=1000+10+0=1010 ≤ spendable 2_000。
         let (mut engine, mut ups, ssp) = setup_futures(100, 10_000, 2_000, 100);
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
         assert_eq!(
@@ -4315,14 +3664,11 @@ mod tests {
         assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
     }
 
-    // --------------------------------------------------------------------------
-    // 杠杆超档 → RiskInvalidLeverage
-    // --------------------------------------------------------------------------
+    // ---- 杠杆超档 → RiskInvalidLeverage ----
 
     #[test]
     fn futures_place_order_leverage_exceeds_tier_is_invalid_leverage() {
-        // max_leverage 表只配一档 {floor:0 -> 5}：floor_value 对任意 notional 都定位到这唯一档，
-        // 相当于全局杠杆上限 5x（语义见 CoreSymbolSpecification::floor_value 文档）。
+        // max_leverage 只配一档 {floor:0->5}，相当于全局杠杆上限 5x（见 floor_value 文档）。
         let mut spec = futures_spec(2, 0);
         spec.max_leverage.insert(0, 5);
         let mut ssp = SymbolSpecificationProvider::new();
@@ -4345,12 +3691,7 @@ mod tests {
         );
     }
 
-    // --------------------------------------------------------------------------
-    // 崩溃安全性回归：非现货、非期货 symbol（当前只有 Option）绝不 panic（对应 Java
-    // `placeOrder`:437-439 的 UnsupportedSymbolType，而非 unimplemented!）——`add_symbol` 不校验
-    // symbol_type，Option 型 symbol 今天就能注册，R1 是 Raft 复制状态机热路径，panic 会直接
-    // crash 整个确定性状态机。
-    // --------------------------------------------------------------------------
+    // ---- 崩溃安全性回归：非现货非期货 symbol 绝不 panic（对应 Java placeOrder:437-439 UnsupportedSymbolType，非 unimplemented!） ----
 
     #[test]
     fn futures_place_order_option_symbol_type_returns_unsupported_not_panic() {
@@ -4389,8 +3730,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 走 pre_process_command（真实 R1 入口），断言 cmd.result_code——若实现仍是
-        // unimplemented!/panic!，本测试进程会直接 abort，而不是走到下面的 assert_eq 失败。
+        // 走 pre_process_command（真实 R1 入口）；若实现仍是 unimplemented!/panic! 会直接 abort 而非落到下面 assert_eq。
         engine.pre_process_command(&mut cmd, &mut ups, &ssp);
         assert_eq!(cmd.result_code, Some(CommandResultCode::UnsupportedSymbolType));
         assert!(
@@ -4399,9 +3739,7 @@ mod tests {
         );
     }
 
-    // --------------------------------------------------------------------------
-    // marginMode / leverage 跨腿一致性
-    // --------------------------------------------------------------------------
+    // ---- marginMode / leverage 跨腿一致性 ----
 
     #[test]
     fn futures_place_order_margin_mode_mismatch_against_existing_position() {
@@ -4435,9 +3773,7 @@ mod tests {
         );
     }
 
-    // --------------------------------------------------------------------------
-    // ONEWAY + reduce-only 夹（§2 "ONEWAY 只减仓特例"）
-    // --------------------------------------------------------------------------
+    // ---- ONEWAY + reduce-only 夹（§2 "ONEWAY 只减仓特例"） ----
 
     #[test]
     fn futures_place_order_oneway_reduce_only_clamps_size_to_open_volume_and_succeeds() {
@@ -4471,9 +3807,7 @@ mod tests {
         assert!(!ups.get_mut(UID).unwrap().positions.contains_key(&FUT_SYMBOL));
     }
 
-    // --------------------------------------------------------------------------
-    // crossFreeMargin 循环 —— CROSS 浮盈可抵扣 / ISOLATED 只扣不抵（§3.3 ②，最易出错的部分）
-    // --------------------------------------------------------------------------
+    // ---- crossFreeMargin 循环 —— CROSS 浮盈可抵扣 / ISOLATED 只扣不抵（§3.3 ②） ----
 
     #[test]
     fn futures_place_order_cross_position_unrealized_profit_credits_other_symbol_order() {
@@ -4482,9 +3816,7 @@ mod tests {
         assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
         engine.last_price_cache.insert(OTHER_SYMBOL, 200); // OTHER_SYMBOL mark 涨到 200
 
-        // 已有 CROSS 仓（OTHER_SYMBOL，LONG open_volume=10 @ 均价 100）：
-        // estimatePnl = (10*200 - 1000)*+1 = 1000；calculateRequiredMarginForFutures = 500
-        //（openInitMarginSum=500，无 pending，新增敞口 0）。
+        // 已有 CROSS 仓（LONG open_volume=10@100）：estimatePnl=1000；calculateRequiredMarginForFutures=500。
         let mut other_pos = SymbolPositionRecord::new(UID, OTHER_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
         other_pos.direction = PositionDirection::Long;
         other_pos.open_volume = 10;
@@ -4492,10 +3824,7 @@ mod tests {
         other_pos.open_init_margin_sum = 500;
         ups.get_mut(UID).unwrap().positions.insert(OTHER_SYMBOL, other_pos);
 
-        // 新单（FUT_SYMBOL，全新仓）required(不计cross抵扣)=1020（同 fixed_fee 成功用例）；
-        // crossFreeMargin = scale(1000) - scale(500) = 500 → required 实际 = 1020-500=520。
-        // spendable=600 ≥ 520：若没有 CROSS 抵扣（cross_free_margin 算错成 0），600 < 1020 应报
-        // NSF——本测试断言 ValidForMatchingEngine，专门锁定"CROSS 其它仓浮盈能抵扣"这条通路。
+        // 新单 required（不计抵扣）=1020；crossFreeMargin=500 → 实际 required=520 ≤ spendable=600；断言 ValidForMatchingEngine 锁定 CROSS 浮盈抵扣通路。
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
@@ -4506,10 +3835,7 @@ mod tests {
     #[test]
     fn futures_place_order_isolated_other_position_margin_is_deducted_without_pnl_credit() {
         const OTHER_SYMBOL: i32 = 201;
-        // balance=1_000：若 ISOLATED 其它仓的锁定保证金被错误地"抵扣浮盈但不扣保证金"（对称处理），
-        // 1_000 会 ≥ 1020 通过；正确实现须把该仓 calculateRequiredMarginForFutures(=500) 也从
-        // spendable 里剥离（不加浮盈抵扣，因为 marginMode=ISOLATED），required 实际 = 1020-(0-500)
-        // = 1520 > 1_000 → 必须 NSF。
+        // balance=1_000：ISOLATED 其它仓需把 calculateRequiredMarginForFutures(=500) 从 spendable 剥离（不加浮盈抵扣）；required 实际=1520 > 1_000 → 必须 NSF。
         let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 1_000, 100);
         assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
         engine.last_price_cache.insert(OTHER_SYMBOL, 200);
@@ -4525,9 +3851,7 @@ mod tests {
         assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
     }
 
-    // --------------------------------------------------------------------------
-    // CLOSE_POSITION（§3 CLOSE_POSITION）
-    // --------------------------------------------------------------------------
+    // ---- CLOSE_POSITION（§3 CLOSE_POSITION） ----
 
     #[test]
     fn close_position_risk_check_no_position_is_noop_success() {
@@ -4612,9 +3936,7 @@ mod tests {
         );
     }
 
-    // --------------------------------------------------------------------------
-    // pre_process_command 路由：CLOSE_POSITION → close_position_risk_check
-    // --------------------------------------------------------------------------
+    // ---- pre_process_command 路由：CLOSE_POSITION → close_position_risk_check ----
 
     #[test]
     fn pre_process_command_routes_close_position_to_close_position_risk_check() {
@@ -4639,18 +3961,7 @@ mod tests {
         assert_eq!(cmd.size, 5);
     }
 
-    // ================================================================================
-    // P4 Task 4：期货 R2 — handleMatcherEventMargin（开/平/翻/PnL 结算）
-    // 参考文档 §4/§6/§7；Java `RiskEngine.java:1358-1511` + `refundExtraMargin`(:1553-1574) +
-    // `removePositionRecord`(:1580-1589)。
-    //
-    // 两层测试：
-    // - 低层：直接调用私有 `RiskEngine::settle_margin_position_event`（单用户 + 单 position +
-    //   单事件的结算核心），精确锁定 close-then-open / PnL-only-at-empty / fee 配对语义，
-    //   不需要搭 taker+maker 两侧 + `UserProfileService` 全套。
-    // - 集成层：走真实入口 `handler_risk_release`，验证 taker+maker 双侧联动、链路分派
-    //   （不像现货预先摘取链头 REJECT/REDUCE）、以及跨用户全局守恒。
-    // ================================================================================
+    // ==== P4 Task 4：期货 R2 — handleMatcherEventMargin（开/平/翻/PnL 结算，参考文档 §4/§6/§7；Java RiskEngine.java:1358-1511 + refundExtraMargin:1553-1574 + removePositionRecord:1580-1589）；两层测试：低层锁定 settle_margin_position_event 结算核心，集成层走 handler_risk_release 验证联动+守恒 ====
 
     const FUT2_MAKER_UID: i64 = 12;
 
@@ -4662,9 +3973,7 @@ mod tests {
         fut_trade_event_with_command(size, price, matched_order_uid, OrderCommandType::PlaceOrder)
     }
 
-    /// 同 `fut_trade_event`，但允许显式指定 `matched_order_command_type`（P6 Task 2 新增，
-    /// 供 `handle_matcher_event_margin_one` maker 块 ONEWAY 不回归测试使用：即便它与
-    /// `cmd.command` 不同，ONEWAY 下 `create_positions_key` 也应忽略该差异，见该函数文档）。
+    /// 同 fut_trade_event，但允许显式指定 matched_order_command_type（P6 Task 2 新增，供 ONEWAY 不回归测试：即便与 cmd.command 不同，create_positions_key 应忽略该差异）。
     fn fut_trade_event_with_command(
         size: i64,
         price: i64,
@@ -4686,12 +3995,7 @@ mod tests {
         }
     }
 
-    /// R1 `place_order` 恒在 ME 撮合前把 position 记录（连同 pending hold）提交进 map（Task 3
-    /// 已验证的不变式：NSF 通过后才 insert，但一旦通过就必已在 map 里）。集成测试用它模拟
-    /// "R1 已挂单、正等待撮合"的前置状态——`handler_risk_release` 的期货分支不会、也不该凭空
-    /// 生造一条从未在 R1 出现过的 position 记录（taker 缺失时防御性跳过，maker 缺失时 panic，
-    /// 见 [`RiskEngine::settle_margin_position_event`] 文档）。若该 uid/symbol 已有记录（例如
-    /// 平仓测试里在开仓成交之后再挂平仓单），在其基础上叠加 pending，而非覆盖。
+    /// 模拟 R1 已挂单待撮合的前置状态（NSF 通过后才 insert 但一旦通过必已在 map 里）；已有记录则叠加 pending 而非覆盖。
     fn seed_pending_position(ups: &mut UserProfileService, uid: i64, action: OrderAction, size: i64, price: i64) {
         if ups.get(uid).is_none() {
             ups.add_empty_user_profile(uid);
@@ -4722,9 +4026,7 @@ mod tests {
         }
     }
 
-    // --------------------------------------------------------------------------
-    // 低层：settle_margin_position_event —— TRADE 开/平/翻 + REJECT/REDUCE + teardown
-    // --------------------------------------------------------------------------
+    // ---- 低层：settle_margin_position_event —— TRADE 开/平/翻 + REJECT/REDUCE + teardown ----
 
     #[test]
     fn settle_margin_open_new_position_no_pnl_charges_taker_fee_exact_conservation() {
@@ -4735,9 +4037,7 @@ mod tests {
         {
             let up = ups.get_mut(UID).unwrap();
             up.add_to_account(FUT_QUOTE, 10_000);
-            // R1 `place_order` 恒在 ME 撮合前把（哪怕仍是空仓）position 记录连同 pending
-            // hold 一起提交进 map（Task 3 已验证的不变式）——这里用一个刚挂单、尚未成交的
-            // 空仓记录模拟"R1 已建档"，而非假设 R2 能凭空插入一条全新记录。
+            // 用刚挂单尚未成交的空仓记录模拟"R1 已建档"，而非假设 R2 能凭空插入新记录。
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.pending_buy_size = 10;
             pos.pending_buy_avg_price = 100;
@@ -4863,8 +4163,7 @@ mod tests {
         assert_eq!(pos.open_init_margin_sum, 500); // mark(100)*5/leverage(1)（保证金按 mark price）
         assert_eq!(pos.profit, 200, "平仓腿已实现盈亏累进 profit，但因新仓非空未结算入账户");
 
-        // fee：close 腿 taker_fee(2)*10=20 + open 腿 taker_fee(2)*5=10，各自独立收取 = 30。
-        // account 只扣 fee（profit 未结算，因 isEmpty()==false）。
+        // fee：close 腿 20 + open 腿 10 = 30；account 只扣 fee（profit 未结算，isEmpty()==false）。
         assert_eq!(up.account(FUT_QUOTE), 10_000 - 30);
         assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 30);
     }
@@ -4906,8 +4205,7 @@ mod tests {
         {
             let up = ups.get_mut(UID).unwrap();
             up.add_to_account(FUT_QUOTE, 1_000);
-            // 合成场景：open_volume=0（已平），但仍有残余 pending 阻止此前 teardown，且带
-            // extraMargin/profit 残留——验证 teardown 一次性把两者都结清。
+            // 合成场景：open_volume=0 但残余 pending 阻止此前 teardown，带 extraMargin/profit 残留，验证 teardown 一次性结清。
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.pending_sell_size = 3;
             pos.profit = 50;
@@ -4991,10 +4289,7 @@ mod tests {
 
     #[test]
     fn settle_margin_proportional_fee_is_exact_no_ceil_drift_taker_and_maker() {
-        // P4-C watch：futures 费用是"同一次计算值同时借记 accounts、贷记 fees"（无现货那种
-        // "逐笔冻结公式 vs 均价重算公式"两套不同公式的落差），故比例费（ceil）在这里天然
-        // 精确配对，不会像现货 P3 缺陷 #2 那样出现 dust——本测试用比例费直接断言 EXACT 守恒
-        // （非近似/容差），验证这个架构性差异。
+        // P4-C watch：futures 费用同一次计算值借记 accounts+贷记 fees（无现货两套公式落差），比例费天然精确配对无 dust，本测试断言 EXACT 守恒。
         let spec = futures_spec_with_fees(333, 111, 10_000); // taker≈3.33%、maker≈1.11%，故意选不整除的比例
         let currency_spec = fut_currency_spec();
         let mut ups = UserProfileService::new();
@@ -5021,9 +4316,7 @@ mod tests {
         assert_eq!((up.account(FUT_QUOTE) - 100_000) + *fees.get(&FUT_QUOTE).unwrap(), 0, "EXACT 守恒，非近似");
     }
 
-    // --------------------------------------------------------------------------
-    // 集成层：handler_risk_release —— taker+maker 联动 / 链路分派 / 跨用户全局守恒
-    // --------------------------------------------------------------------------
+    // ---- 集成层：handler_risk_release —— taker+maker 联动 / 链路分派 / 跨用户全局守恒 ----
 
     #[test]
     fn handler_risk_release_futures_trade_opens_both_sides_and_conserves() {
@@ -5063,13 +4356,7 @@ mod tests {
         assert_eq!(taker_delta + maker_delta + fees_delta, 0, "开仓：唯一移动是费用配对");
     }
 
-    /// P6 Task 2 Step1(c)：`create_positions_key` maker 侧改用 `mte.matched_order_command_type`
-    /// 而非 `cmd.command` 后，ONEWAY 下行为不变——即便两者**故意不同**（taker=ForceLiquidation，
-    /// maker=PlaceOrder，对应真实的 FORCE_LIQUIDATION 撮合普通挂单场景）。断言与上面
-    /// `handler_risk_release_futures_trade_opens_both_sides_and_conserves`（taker=PlaceOrder，
-    /// `matched_order_command_type` 默认同为 PlaceOrder）逐项相同：ONEWAY 下
-    /// `create_positions_key` 完全忽略 `command` 参数，故这两种命令组合的最终仓位/账户/费用结果
-    /// 必须完全一致——若切换引入了回归，这里会先于任何 P4 期货测试察觉。
+    /// P6 Task 2 Step1(c)：create_positions_key maker 侧改用 mte.matched_order_command_type 后 ONEWAY 行为不变，即便与 cmd.command 故意不同（taker=ForceLiquidation/maker=PlaceOrder），断言与开仓用例逐项相同。
     #[test]
     fn handler_risk_release_futures_trade_oneway_unaffected_by_matched_order_command_type_switch() {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
@@ -5078,8 +4365,7 @@ mod tests {
         seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
         seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 10, 100);
 
-        // taker 命令是 ForceLiquidation；maker 的 matched_order_command_type 是 PlaceOrder——
-        // 两者故意不同，模拟 taker=ForceLiquidation 撮 maker=普通挂单的真实场景。
+        // taker 命令 ForceLiquidation，maker matched_order_command_type 是 PlaceOrder，故意不同，模拟真实场景。
         let mut cmd = OrderCommand {
             command: OrderCommandType::ForceLiquidation,
             symbol: FUT_SYMBOL,
@@ -5166,8 +4452,7 @@ mod tests {
         // maker(空头) profit=-(120-100)*10=-200，close_fee=maker_fee(0)*10=0。
         assert_eq!(maker_final - maker_after_open, -200);
 
-        // 全局守恒：两用户开仓到平仓全程净变动 + fees 净变动 == 0（zero-sum PnL + fee 是唯一真实
-        // 转移，且每次转移都是 accounts↔fees 等额配对）。
+        // 全局守恒：两用户全程净变动 + fees 净变动 == 0（zero-sum PnL+fee 是唯一真实转移）。
         let total_user_delta = (taker_final - 10_000) + (maker_final - 10_000);
         let fees_total = *engine.fees.get(&FUT_QUOTE).unwrap();
         assert_eq!(total_user_delta + fees_total, 0);
@@ -5175,8 +4460,7 @@ mod tests {
 
     #[test]
     fn handler_risk_release_futures_chain_head_reduce_then_trade_applies_both_in_one_call() {
-        // 验证"不像现货预先摘取链头 REJECT/REDUCE"的分派设计：REDUCE(4) 紧跟 TRADE(6) 的同一条
-        // 链，一次 handler_risk_release 调用应把两个事件都结算掉（而非只处理链头就返回）。
+        // 验证期货不预摘链头设计：REDUCE(4)+TRADE(6) 同链，一次 handler_risk_release 应把两事件都结算。
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
         assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
         ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
@@ -5188,8 +4472,7 @@ mod tests {
             pos.pending_buy_avg_price = 100;
             up.positions.insert(FUT_SYMBOL, pos);
         }
-        // maker 只参与 TRADE(6) 这一腿（REDUCE 是 taker 自己订单的撤单，与 maker 无关），
-        // 故 maker 的 pending 只需覆盖 TRADE 的 size=6。
+        // maker 只参与 TRADE(6)（REDUCE 是 taker 自己撤单，与 maker 无关），故 pending 只需覆盖 size=6。
         seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 6, 100);
 
         let mut cmd = OrderCommand {
@@ -5214,15 +4497,7 @@ mod tests {
         assert_eq!(maker_pos.open_volume, 6, "maker 只在 TRADE 事件参与，REDUCE 与其无关");
     }
 
-    // ================================================================================
-    // P4 Task 5：统一账户 — calculate_locked / calculate_free_futures_margin + 现货 NSF/withdrawable
-    // 顶账接线。参考文档 §4/§5；Java `RiskEngine.java:759-805,1040-1055`。
-    //
-    // 复用 §3 的 setup_futures（FUT_SYMBOL/FUT_BASE/FUT_QUOTE，base/quote/currency scale
-    // 全 1 恒等缩放）。`open_init_margin_sum` 手工摆放（同 user_profile 测试注释）：leverage=1 +
-    // 无 pending 挂单时 `calculate_required_margin_for_futures` 退化为直接返回
-    // `open_init_margin_sum`，测试算术不被 scale/pending 噪声干扰。
-    // ================================================================================
+    // ==== P4 Task 5：统一账户 — calculate_locked/calculate_free_futures_margin + 现货 NSF/withdrawable 顶账（参考文档 §4/§5；Java RiskEngine.java:759-805,1040-1055）；复用 setup_futures，leverage=1 无 pending 时 calculate_required_margin_for_futures 退化为 open_init_margin_sum ====
 
     #[test]
     fn calculate_locked_zero_when_no_positions_and_no_exchange_locked() {
@@ -5251,11 +4526,7 @@ mod tests {
         assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
     }
 
-    // --------------------------------------------------------------------------
-    // P5 Task 3：loanCollateralLocked 虚拟锁——借贷抵押物留在 accounts，但不能被现货挂单 /
-    // 期货保证金 / 提现顶用（对应 Java RiskEngine.loanCollateralLocked :1063-1072 + 四站点
-    // 单独扣减 :673/withdrawableBalance/spendable + calculate_locked ③④）。
-    // --------------------------------------------------------------------------
+    // ---- P5 Task 3：loanCollateralLocked 虚拟锁——借贷抵押留在 accounts 但不能被挂单/保证金/提现顶用（对应 Java :1063-1072） ----
 
     fn isolated_loan_with_collateral(loan_id: i64, collateral_currency: i32, collateral_amount: i64)
         -> crate::core::common::isolated_loan_record::IsolatedLoanRecord {
@@ -5308,8 +4579,7 @@ mod tests {
 
     #[test]
     fn place_exchange_order_nsf_when_loan_collateral_locks_the_balance() {
-        // accounts=100（其中 100 是某 isolated loan 的抵押物，物理仍在 accounts）。无 loan 时
-        // notional=50 的现货 bid 本可放行（100 ≥ 50）；但借贷抵押虚拟锁走 100 → free=0 → NSF。
+        // accounts=100（其中 100 是 isolated loan 抵押物）：无 loan 时 notional=50 可放行，但借贷抵押虚拟锁走 100 → free=0 → NSF。
         let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 100, 100);
         add_spot_symbol_sharing_fut_quote(&mut ssp);
         ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 100));
@@ -5371,8 +4641,7 @@ mod tests {
 
     #[test]
     fn calculate_free_futures_margin_cross_position_takes_min_of_two_conservative_estimates() {
-        // 维持保证金分档：单档 5%（rate=50/scale_k=1000），覆盖任意 notional——不能复用
-        // setup_futures（它内部用零配置的 futures_spec），改手工搭建。
+        // 维持保证金分档：单档 5%（rate=50/scale_k=1000），覆盖任意 notional，故不复用 setup_futures，改手工搭建。
         let mut fut_spec = futures_spec(0, 0);
         fut_spec.maintenance_margin_scale_k = 1000;
         fut_spec.maintenance_margin.insert(i64::MAX, 50);
@@ -5396,19 +4665,13 @@ mod tests {
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let up = ups.get(UID).unwrap();
-        // mark=200 → notional=2000，unrealized=1*(2000-900)=1100，maintenanceMargin=2000*0.05=100。
-        // ①（计浮盈，扣初始保证金）= 500 + 1100 - 200 = 1400。
-        // ②（不计浮盈，扣维持保证金，maintenanceMargin 口径 = required-openInitMarginSum+MM = 0+100=100）
-        //   = 500 - 100 = 400。
-        // min(1400, 400) = 400（更保守的估计胜出）。
+        // ①（计浮盈扣初始保证金）=500+1100-200=1400；②（不计浮盈扣维持保证金）=500-100=400；min=400（更保守胜出）。
         assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 400);
     }
 
     #[test]
     fn calculate_free_futures_margin_flat_cross_position_with_carried_profit() {
-        // open_volume=0（已平仓但 profit 累加器尚未因 isEmpty() 派发——同一 flip 循环内的过渡态，
-        // 见 SymbolPositionRecord 文档 §1"全平/翻仓"）：required margin 恒 0，浮盈也恒 0，
-        // 净期货盈余 = 已实现 profit 全额，两个估计相等。
+        // open_volume=0（同一 flip 循环内 profit 未派发的过渡态）：required margin/浮盈恒 0，净期货盈余=已实现 profit 全额。
         let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
@@ -5420,10 +4683,7 @@ mod tests {
         assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 500);
     }
 
-    // --------------------------------------------------------------------------
-    // Ruling P4-A 接线验证：无期货仓的用户，现货 NSF/withdrawable 分支是纯 no-op
-    // （改动前后逐位相同）；有期货 CROSS 浮盈的用户，两处 NSF 额度顶账。
-    // --------------------------------------------------------------------------
+    // ---- Ruling P4-A 接线验证：无期货仓用户现货 NSF/withdrawable 是纯 no-op；有 CROSS 浮盈用户两处 NSF 额度顶账 ----
 
     const SPOT_SYMBOL: i32 = 300;
     const SPOT_BASE: i32 = 3;
@@ -5475,10 +4735,7 @@ mod tests {
 
     #[test]
     fn place_exchange_order_spot_nsf_topped_up_by_futures_cross_profit() {
-        // 与上一测试相同的现货余额/订单（本应 NSF），但用户在同 quote currency 上有一条 CROSS
-        // 期货仓，携带已实现浮盈 500（flat carried profit，见上方 free_futures_margin 测试）——
-        // Java `:666-669` 的现货 NSF 顶账：accounts − exchangeLocked − orderLockAmount +
-        // freeFuturesMargin >= 0 才放行。
+        // 同上测试参数（本应 NSF），但用户有 CROSS 期货仓携带浮盈 500，对应 Java :666-669 现货 NSF 顶账公式。
         let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 0, 100);
         add_spot_symbol_sharing_fut_quote(&mut ssp);
         {
@@ -5511,8 +4768,7 @@ mod tests {
 
     #[test]
     fn withdrawable_topped_up_by_futures_cross_profit() {
-        // account=500、locked=200 → 不顶账时 withdrawable=300；提现 400 会先撞外层现货 NSF，但
-        // 内层 `account + amount_diff >= 0`（500-400=100）不受影响——只有外层需要顶账。
+        // account=500/locked=200：不顶账 withdrawable=300，提现 400 先撞外层 NSF；内层 account+amount_diff 不受影响。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 500, 100);
         {
             let up = ups.get_mut(UID).unwrap();
@@ -5535,12 +4791,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 500 - 400);
     }
 
-    // ================================================================================
-    // P4 Task 6 — MARGIN_ADJUSTMENT + mark-price 更新 + LEVERAGE_ADJUSTMENT
-    // 参考文档 §1(extraMargin)/§8；Java `RiskEngineCommandDispatcher.adjustMargin`(:213-277)/
-    // `adjustLeverage`(:287-333)/`adjustMarkPrice`(:437-451)。复用上面 `setup_futures`/
-    // `FUT_SYMBOL`/`FUT_QUOTE`/`FUT_BASE`/`UID` 治具。
-    // ================================================================================
+    // ==== P4 Task 6 — MARGIN_ADJUSTMENT + mark-price 更新 + LEVERAGE_ADJUSTMENT（参考文档 §1(extraMargin)/§8；Java adjustMargin:213-277/adjustLeverage:287-333/adjustMarkPrice:437-451）；复用 setup_futures 治具 ====
 
     fn margin_adjustment_cmd(
         action: OrderAction,
@@ -5567,8 +4818,7 @@ mod tests {
 
     #[test]
     fn margin_adjustment_isolated_add_debits_accounts_credits_extra_margin_and_conserves() {
-        // base_scale_k=quote_scale_k=currency_scale_k=1（setup_futures 治具全 1 恒等缩放）：
-        // currency_to_size_price_scale 是恒等映射，price 直接等于 extra_margin 增量。
+        // scale 全 1 恒等缩放：currency_to_size_price_scale 恒等映射，price 直接等于 extra_margin 增量。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
 
@@ -5658,8 +4908,7 @@ mod tests {
 
     #[test]
     fn margin_adjustment_cross_credits_account_directly_and_touches_adjustments_bucket() {
-        // CROSS：cmd.symbol 即 currency（ExchangeApi 翻译器约定），无需已有 position，直接转发
-        // balance_adjustment 原语——accounts += price、adjustments -= price 成对对冲。
+        // CROSS：cmd.symbol 即 currency，无需已有 position，直接转发 balance_adjustment（accounts+=price、adjustments-=price 对冲）。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
 
         let cmd = margin_adjustment_cmd(OrderAction::Bid, FUT_QUOTE, 300, MarginMode::Cross, 1);
@@ -5693,9 +4942,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().extra_margin, 200);
     }
 
-    // --------------------------------------------------------------------------
-    // mark-price 更新命令：last_price_cache 写入 + R1 消费方可见。
-    // --------------------------------------------------------------------------
+    // ---- mark-price 更新命令：last_price_cache 写入 + R1 消费方可见 ----
 
     fn markprice_adjustment_cmd(symbol: i32, price: i64) -> OrderCommand {
         OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, ..Default::default() }
@@ -5719,8 +4966,7 @@ mod tests {
 
     #[test]
     fn markprice_adjustment_then_place_order_risk_check_sees_new_mark_price() {
-        // 前置：mark price 缺失时期货下单必须 RISK_MARKPRICE_NOT_AVAILABLE；MARKPRICE_ADJUSTMENT
-        // 设价后同一 symbol 的 place_order 才能看到它并算出正确保证金。
+        // 前置：mark price 缺失时期货下单须 RiskMarkpriceNotAvailable；MARKPRICE_ADJUSTMENT 设价后 place_order 才能看到并算出保证金。
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(futures_spec(0, 0)), CommandResultCode::Success);
         ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
@@ -5758,9 +5004,7 @@ mod tests {
         assert_eq!(engine.mark_price(424_242), Some(777));
     }
 
-    // P4 终审 crash-safety 加固回归：markprice_adjustment 拒绝 price<=0，保住"有头寸⇒标记价有效"
-    // 不变量，避免下游 free-futures-margin/leverage/can_place_margin_order 三处 mark_price().unwrap()
-    // panic。这正是 256-case proptest 生成器（mark∈[50,200]）结构性覆盖不到的非法输入角。
+    // P4 终审 crash-safety 回归：markprice_adjustment 拒绝 price<=0，保住"有头寸⇒标记价有效"不变量，避免下游三处 mark_price().unwrap() panic（proptest 覆盖不到的非法输入角）。
     #[test]
     fn markprice_adjustment_rejects_zero_price_and_prior_mark_survives_without_panic() {
         // 复刻终审给出的可达崩溃序列：开逐仓仓位(mark=100) → 设 mark=0 → free-futures-margin。
@@ -5772,8 +5016,7 @@ mod tests {
         assert_eq!(engine.markprice_adjustment(&zero, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100), "被拒的 0 标记价不得污染缓存");
 
-        // 步骤3：free-futures-margin 走到 :508 mark_price()——修复前 mark 已变 None 会 panic；
-        // 修复后 mark 仍是 Some(100)，正常返回。此调用不 panic 本身即回归断言。
+        // 步骤3：free-futures-margin 走到 mark_price()——修复前会因 None panic，修复后仍 Some(100)；不 panic 本身即回归断言。
         let free = engine.calculate_free_futures_margin(ups.get(UID).unwrap(), FUT_QUOTE, &ssp);
         assert_eq!(free, 0, "空逐仓仓位(open_volume=0)净期货盈余为 0，且未 panic");
     }
@@ -5786,10 +5029,7 @@ mod tests {
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100));
     }
 
-    // --------------------------------------------------------------------------
-    // LEVERAGE_ADJUSTMENT：仅在有 pending 挂单时才改变 required margin（openInitMarginSum 是
-    // 开仓时按当时杠杆锁定的历史值，杠杆变更不追溯重算已开仓部分，只影响未来的挂单/新开仓）。
-    // --------------------------------------------------------------------------
+    // ---- LEVERAGE_ADJUSTMENT：仅有 pending 挂单时才改变 required margin（杠杆变更不追溯已开仓部分） ----
 
     fn leverage_adjustment_cmd(symbol: i32, leverage: i32) -> OrderCommand {
         OrderCommand { command: OrderCommandType::LeverageAdjustment, uid: UID, symbol, leverage, ..Default::default() }
@@ -5822,8 +5062,7 @@ mod tests {
 
     #[test]
     fn leverage_adjustment_decrease_sufficient_balance_succeeds_and_updates() {
-        // leverage 2 -> 1：required 从 500 升到 1000，diff=500；balance=2000，locked(旧)=500，
-        // free=1500 >= 500 → 通过。
+        // leverage 2->1：required 500升到1000，diff=500；balance=2000，free=1500 ≥ 500 → 通过。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 2_000, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(2, 10, 100));
 
@@ -5845,8 +5084,7 @@ mod tests {
 
     #[test]
     fn leverage_adjustment_invalid_leverage_returns_error_and_leaves_leverage_unchanged() {
-        // max_leverage 表只配一档 {floor:0 -> 1}：任意 notional 都命中，等同全局上限 1x
-        // （同 `futures_place_order_leverage_exceeds_tier_is_invalid_leverage` 治具手法）。
+        // max_leverage 只配一档 {floor:0->1}，等同全局上限 1x（同前面用例治具手法）。
         let mut spec = futures_spec(0, 0);
         spec.max_leverage.insert(0, 1);
         let mut ssp = SymbolSpecificationProvider::new();
@@ -5873,8 +5111,7 @@ mod tests {
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(2, 10, 100));
 
         let cmd = leverage_adjustment_cmd(FUT_SYMBOL, 0); // 归一到 1（比 2 更严格 -> 需要更多保证金）
-        // required 从 500(lev2) 升到 1000(lev1)，diff=500 > free(0) → NSF；验证 leverage==0 走归一
-        // 分支而不是被当成"不变"或除零 panic。
+        // required 500(lev2)升到1000(lev1)，diff=500>free(0)→NSF；验证 leverage==0 走归一分支而非除零 panic。
         assert_eq!(engine.leverage_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
     }
 
@@ -5916,9 +5153,7 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().leverage, 2);
     }
 
-    // ================================================================
-    // Task 6 — apply_add_loan (ADD_LOAN 三段运行时配置)
-    // ================================================================
+    // ==== Task 6 — apply_add_loan (ADD_LOAN 三段运行时配置) ====
     mod add_loan_tests {
         use super::*;
         use crate::core::common::batch_add_loan_command::{
@@ -5971,9 +5206,7 @@ mod tests {
             }
         }
 
-        // ------------------------------------------------------------
-        // global 段
-        // ------------------------------------------------------------
+        // ---- global 段 ----
 
         #[test]
         fn global_section_applies_partial_update_fields_and_skips_non_positive_ones() {
@@ -6022,9 +5255,7 @@ mod tests {
             assert_eq!(engine.loan_service.global_config, LoanGlobalConfig::default());
         }
 
-        // ------------------------------------------------------------
-        // symbol 段
-        // ------------------------------------------------------------
+        // ---- symbol 段 ----
 
         #[test]
         fn symbol_section_resolves_unset_fields_and_writes_collateral_weight_to_base_currency() {
@@ -6066,8 +5297,7 @@ mod tests {
 
         #[test]
         fn symbol_section_rejects_collateral_weight_above_10000_and_applies_nothing() {
-            // Forward-obligation test: this is the guard that keeps Task 5's cross-LTV
-            // trunc_mul_div panic unreachable — collateral_weight_bps must never leave [0,10000].
+            // 前瞻性护栏测试：保证 collateral_weight_bps 恒在 [0,10000]，防 Task5 cross-LTV trunc_mul_div panic 不可达失效。
             let (mut engine, mut ssp) = add_loan_setup();
             let s = SymbolLoanConfig {
                 symbol_id: SYMBOL,
@@ -6114,9 +5344,7 @@ mod tests {
             assert_eq!(ssp.symbols.get(&999_999), None); // no spec created
         }
 
-        // ------------------------------------------------------------
-        // rate_curve 段
-        // ------------------------------------------------------------
+        // ---- rate_curve 段 ----
 
         #[test]
         fn rate_curve_section_replaces_floating_curve_and_fixed_spread() {
@@ -6156,9 +5384,7 @@ mod tests {
             assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, 0);
         }
 
-        // ------------------------------------------------------------
-        // 三段独立性：一段非法只 warn-skip，不影响另外两段
-        // ------------------------------------------------------------
+        // ---- 三段独立性：一段非法只 warn-skip，不影响另外两段 ----
 
         #[test]
         fn one_invalid_section_does_not_prevent_the_other_two_from_applying() {
@@ -6201,10 +5427,7 @@ mod tests {
         }
     }
 
-    // ================================================================================
-    // P5 Task 8: REPRICE_LOAN_RATES 全管线（R1 pre_process_command → R2
-    // handler_risk_release），对应参考文档 §4.2 + `RiskEngine.java:906-913`。
-    // ================================================================================
+    // ==== P5 Task 8: REPRICE_LOAN_RATES 全管线（R1 pre_process_command → R2 handler_risk_release），对应参考文档 §4.2 + RiskEngine.java:906-913 ====
     mod reprice_loan_rates_tests {
         use super::*;
         use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
@@ -6242,10 +5465,7 @@ mod tests {
 
         #[test]
         fn advance_accumulator_runs_before_reprice_settling_the_old_interval_at_the_old_rate() {
-            // 冷启动先设一个"旧"生效利率与 last_reprice_ts，模拟"上一次 reprice 之后经过了一段
-            // 时间才做本次 reprice"——`advance_accumulator` 必须用旧利率结清这段旧区间，若顺序
-            // 反了会错误按新利率结算（对应 `FloatingRateModel::advance_accumulator` 文档 + 参考
-            // 文档 §4.2 "must happen before repricing"）。
+            // 模拟"距上次 reprice 已过一段时间"：advance_accumulator 须用旧利率结清旧区间，顺序颠倒会错按新利率结算。
             let mut engine = RiskEngine::new();
             let cur = 3;
             engine.loan_service.floating_rate.last_reprice_ts = 1_000;
@@ -6307,10 +5527,7 @@ mod tests {
 
         #[test]
         fn empty_pool_does_not_advance_last_reprice_ts_mirroring_java_null_matcher_event_early_return() {
-            // 借贷池全空 -> build_matcher_events 无 currency 可报 -> R2 完全不做任何事，含不推进
-            // last_reprice_ts（对应 Java `buildMatcherEvents` 空事件时 `cmd.matcherEvent = null`，
-            // `handlerRiskRelease` 顶层 `mte == null` 早退，REPRICE_LOAN_RATES 专属分支根本没机会
-            // 执行——见参考文档 §4.2 及 `reprice_loan_rates_apply` 文档）。
+            // 借贷池全空→build_matcher_events 无 currency 可报→R2 完全不做任何事（含不推进 ts），对应 Java mte==null 早退（§4.2）。
             let mut engine = RiskEngine::new();
             engine.loan_service.floating_rate.last_reprice_ts = 42;
 
@@ -6338,10 +5555,7 @@ mod tests {
         }
     }
 
-    // ================================================================================
-    // P6 Task 3: INTERNAL_TRANSFER 全管线（R1 pre_process_command → R2
-    // handler_risk_release），对应参考文档 §5 + `InternalTransferProcessor.java`（106 行）。
-    // ================================================================================
+    // ==== P6 Task 3: INTERNAL_TRANSFER 全管线（R1 pre_process_command → R2 handler_risk_release），对应参考文档 §5 + InternalTransferProcessor.java ====
     mod internal_transfer_tests {
         use super::*;
 
@@ -6459,9 +5673,7 @@ mod tests {
 
         #[test]
         fn loan_collateral_lock_makes_an_otherwise_sufficient_balance_nsf() {
-            // accounts=300 nominally covers a 300 transfer, but 300 of it is locked as isolated
-            // loan collateral (same currency) -> withdrawable_balance = 300 - 0 - 300 + 0 = 0 < 300.
-            // Proves NSF respects the same lock as a withdrawal (via withdrawable_balance reuse).
+            // accounts=300 但同额被 isolated loan 抵押锁住 → withdrawable_balance=0<300，证明 NSF 复用与提现相同的锁。
             let (mut engine, mut ups, ssp) = setup_futures(0, 0, 300, 100);
             ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
             let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
@@ -6480,8 +5692,7 @@ mod tests {
             assert_eq!(cmd1.result_code, Some(CommandResultCode::Success));
             assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 900);
 
-            // Same order_id again; balance (900) is still nominally sufficient for another 100,
-            // isolating the claim check (not a fresh NSF failure) as the actual blocker.
+            // 同 order_id 重放，余额(900)本还够再转100，隔离出 claim 检查（而非 NSF）才是真正拦截点。
             let mut cmd2 = transfer_cmd(UID, TO_UID, FUT_QUOTE, 100, 42);
             run_full_pipeline(&mut engine, &mut cmd2, &mut ups, &ssp);
 
@@ -6494,13 +5705,7 @@ mod tests {
         }
     }
 
-    // ================================================================================
-    // P6 Task 4: SETTLE_FUNDINGFEES 全管线（R1 pre_process_command → R2
-    // handler_risk_release），对应参考文档 §4 + `FundingFeeCommandProcessor.java`（197 行）。
-    // 处理器函数级测试（collect_input/build_matcher_events/apply_event 直调）见
-    // `funding_fee_command_processor.rs` 自己的 `#[cfg(test)]` 模块；这里只测经
-    // `RiskEngine` 两段管线（R1 门禁 + 完整成功路径 + 守恒）的接线本身。
-    // ================================================================================
+    // ==== P6 Task 4: SETTLE_FUNDINGFEES 全管线（R1→R2，参考文档 §4 + FundingFeeCommandProcessor.java）；处理器函数级测试见其自己的 #[cfg(test)]，这里只测经 RiskEngine 两段管线的接线本身 ====
     mod funding_fee_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
@@ -6530,17 +5735,14 @@ mod tests {
             engine.handler_risk_release(cmd, ups, ssp);
         }
 
-        /// `setup_futures` 治具全 1 恒等缩放（base_scale_k=quote_scale_k=currency_scale_k=1）：
-        /// notional/fee 手推便于核对。PAYER_UID 开多头（LONG），RECEIVER_UID 开空头（SHORT），
-        /// mark_price 传入 `setup_futures`。
+        /// setup_futures 治具全 1 恒等缩放，便于手推核对；PAYER_UID 开多头，RECEIVER_UID 开空头。
         fn setup_with_payer_and_receiver(
             mark_price: i64,
             payer_volume: i64,
             receiver_volume: i64,
         ) -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
             let (engine, mut ups, ssp) = setup_futures(0, 0, 0, mark_price);
-            // `setup_futures` pre-registers `UID` (const = 7), not our `PAYER_UID`/`RECEIVER_UID`
-            // fixture uids — start from a clean slate and register both explicitly.
+            // setup_futures 预注册的是 UID(=7)，非本组 PAYER_UID/RECEIVER_UID，故清空后显式重新注册两者。
             ups.users.clear();
             assert_eq!(ups.add_empty_user_profile(PAYER_UID), CommandResultCode::Success);
             assert_eq!(ups.add_empty_user_profile(RECEIVER_UID), CommandResultCode::Success);
@@ -6587,9 +5789,7 @@ mod tests {
 
         #[test]
         fn missing_mark_price_rejected_before_size_gate() {
-            // No mark price cached at all AND size<=0 simultaneously: Java's nested check
-            // order means RISK_MARKPRICE_NOT_AVAILABLE wins (outer gate runs before collectInput's
-            // own size<=0 check ever executes) — see settle_funding_fees_collect doc.
+            // mark price 缺失且 size<=0 同时成立：Java 嵌套校验顺序下 RiskMarkpriceNotAvailable 胜出（外层门先于 collectInput 的 size 校验）。
             let mut ssp = SymbolSpecificationProvider::new();
             assert_eq!(ssp.add_symbol(futures_spec(0, 0)), CommandResultCode::Success);
             ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
@@ -6613,8 +5813,7 @@ mod tests {
 
         #[test]
         fn full_pipeline_settles_zero_sum_and_conserves_total() {
-            // payer LONG 100 @ mark=10 -> notional=1000; rate=5/1000 -> fee=trunc(1000*5/1000)=5.
-            // receiver SHORT 100 -> notional=1000 (sole receiver, gets full 5).
+            // payer LONG 100@mark=10→notional=1000，rate=5/1000→fee=5；receiver SHORT 100（唯一接收方，收全部 5）。
             let (mut engine, mut ups, ssp) = setup_with_payer_and_receiver(10, 100, 100);
             let before = total_conserved(&ups);
             let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
@@ -6676,8 +5875,7 @@ mod tests {
             }
         }
 
-        /// taker（即将被 IF 接管的破产用户）持一笔 LONG 仓位：`open_volume`/`open_price_sum`
-        /// 由调用方指定成本基（用于制造非零 PnL，验证 finalize 的 profit 结算路径）。
+        /// taker（即将被 IF 接管的破产用户）持一笔 LONG 仓位，open_volume/open_price_sum 由调用方指定成本基（制造非零 PnL）。
         fn setup_with_taker_long_position(
             mark_price: i64,
             open_volume: i64,
@@ -6788,8 +5986,7 @@ mod tests {
             assert_eq!(engine.liquidation_service.notionals[&FUT_SYMBOL].available, 400);
             assert_eq!(*engine.adjustments.get(&FUT_QUOTE).unwrap(), -400, "withdraw 反向抵消一部分 deposit 的对冲");
 
-            // Σ IFNotional.available + adjustments[currency] 恒定（对冲闭环，同 balance_adjustment/
-            // loan pool 充提先例）。
+            // Σ IFNotional.available + adjustments[currency] 恒定（对冲闭环，同 balance_adjustment/loan pool 先例）。
             assert_eq!(
                 engine.liquidation_service.notionals[&FUT_SYMBOL].available + engine.adjustments[&FUT_QUOTE],
                 0,
@@ -6848,11 +6045,7 @@ mod tests {
 
         #[test]
         fn taker_position_lookup_goes_through_create_positions_key_not_raw_symbol() {
-            // 对应 Java `RiskEngine.handlerRiskRelease:947-948`：`takerSpr = takerUp.positions.get(
-            // takerUp.createPositionsKey(symbol, cmd.action, cmd.command))`——不是裸 symbol。
-            // ONEWAY 下 `create_positions_key` 退化为裸 symbol（唯一当前可达路径），这里显式断言
-            // 这个退化关系本身，并证明 finalize 确实是通过这个 key（不是巧合地用了同一个值）找到
-            // 并关闭 taker 仓位的。
+            // 对应 Java handlerRiskRelease:947-948：按 create_positions_key 查 taker 仓（非裸 symbol）；本测试显式断言 ONEWAY 下退化为裸 symbol 且 finalize 确实经此 key 找到并关闭仓位。
             let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
             engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 100_000);
 
@@ -6863,19 +6056,12 @@ mod tests {
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-            // 仓位确实是在 `position_key` 这个 key 上被关闭/移除的（ONEWAY 下与裸 symbol 数值相同，
-            // 但查找路径必须走 create_positions_key——回归防护同 sibling 结算落点一致的规则）。
+            // 仓位在 position_key 这个 key 上被关闭（ONEWAY 下数值同裸 symbol，但查找路径须走 create_positions_key）。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&position_key));
         }
     }
 
-    /// P6 Task 6：`AUTO_DELEVERAGING` 全流程（R1 选候选+预占 → merge best-of-N → R2 apply+finalize
-    /// 对称释放）——参考文档 §3、§11.1。纯算法级测试（`collect_input`/`build_matcher_events` 的
-    /// 筛选/排序/贪心分配）见 `adl_command_processor.rs` 自己的 `#[cfg(test)]` 模块；
-    /// `risk_score`/`unrealized_pnl`/`compute_profitable_positions_by_symbol` 的饱和乘法与
-    /// ISOLATED/CROSS 资格构造见 `liquidation_service.rs` 自己的 `#[cfg(test)]` 模块。这里只测经
-    /// `RiskEngine` 两段管线接线本身：taker 视角、pending_adl_size 预占/释放对称、counterparty
-    /// 消失 skip、cmd.size 改写、HEDGE key 查找、守恒。
+    /// P6 Task 6：AUTO_DELEVERAGING 全流程（R1 选候选+预占→merge→R2 apply+finalize 对称释放，参考文档 §3/§11.1）；算法级测试见 adl_command_processor.rs/liquidation_service.rs 各自模块，这里只测 RiskEngine 两段管线接线本身。
     mod adl_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
@@ -6918,10 +6104,7 @@ mod tests {
             }
         }
 
-        /// taker LONG 100（成本基 9000，均价 90），三个 ISOLATED SHORT 候选：
-        /// CP_A（60 手、score 最高）> CP_B（80 手、score 次高）> CP_C（50 手、score 最低，预算耗尽后
-        /// 摸不到）。bankruptcy_price = 100：三者按破产价都仍有浮盈（open_price_sum 各自均价 >
-        /// 100*volume 的 short 侧盈利条件）。
+        /// taker LONG 100（成本基9000）+ 三个 ISOLATED SHORT 候选：CP_A(60手,score最高)>CP_B(80手)>CP_C(50手,预算耗尽摸不到)。
         fn setup_taker_and_three_candidates() -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
             let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
             ups.users.clear();
@@ -6973,9 +6156,7 @@ mod tests {
         fn merge_rewrites_cmd_size_to_actual_consumed_when_candidates_fall_short() {
             // remaining=200 请求，但 A+B+C 总可用只有 60+80+50=190 -> 实际消费=190，cmd.size 必须改写。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
-            // P6 Task 7b：R1 现在先经 normalize_cmd_position_size 把 cmd.size 夹到 taker 自己的
-            // open_volume（默认 100）。本用例要验证的是"候选不足→按实际消费改写"，与 taker 自身仓量
-            // 无关，故把 taker 仓放大到 300（>200 请求），让 normalize 不夹取，隔离出候选不足这条路径。
+            // R1 先经 normalize_cmd_position_size 把 cmd.size 夹到 taker open_volume；本用例把 taker 仓放大到 300，让 normalize 不夹取，隔离候选不足路径。
             ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_volume = 300;
             ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 27_000; // 300*90
             let mut cmd = adl_cmd(OrderAction::Bid, 200, 100);
@@ -6999,12 +6180,9 @@ mod tests {
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-            // A 全平仓 -> 仓位记录被移除（is_empty），无从查 pending_adl_size 残留（本就该是 0，
-            // 位置已经不存在了，等价于确认没有孤儿预占）。
+            // A 全平仓→仓位记录被移除，无从查 pending_adl_size 残留，等价确认无孤儿预占。
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL), "A 60 手全部被吃，仓位清空后移除");
-            // B 只被吃掉 40（部分平仓），剩余 40 手仓位还在，pending_adl_size 必须归 0（对称释放，
-            // 不管 apply 实际消费了多少——这里巧合是"消费了多少就释放多少"，因为单 shard 下
-            // R1/merge 用同一个 remaining 计数器，见 adl_command_processor.rs 模块文档）。
+            // B 部分平仓(40)，仓位还在，pending_adl_size 须归 0（对称释放，不管 apply 实际消费多少）。
             let b_pos = &ups.get(CP_B).unwrap().positions[&FUT_SYMBOL];
             assert_eq!(b_pos.pending_adl_size, 0, "finalize 必须把 B 的 pending_adl_size 释放回 0");
             assert_eq!(b_pos.open_volume, 40, "B 原 80 手，被吃 40，剩 40");
@@ -7015,14 +6193,7 @@ mod tests {
 
         #[test]
         fn full_pipeline_closes_taker_and_settles_realized_pnl_exactly() {
-            // 注意：不同于 funding fee（真正的零和 peer transfer）或 IF_TAKEOVER（连同 IF 池子
-            // bucket 一起看才守恒），ADL 的 taker 与 counterparty 并不是彼此的原始成交对手——
-            // 二者各自的持仓成本基来自各自独立的历史成交（对手在这个测试夹具之外，不在
-            // `ups` 里），所以 Σaccounts+Σposition.profit 在"仅 taker+counterparty 这几个用户"的
-            // 局部视角下**不必然守恒**（真正的全局零和只在"整个交易所全部持仓"这个更大范围成立，
-            // 超出本处理器级测试的夹具规模，参考文档 §10 对 IF 扩展守恒恒等式的类似讨论）。
-            // 这里改为断言每个账户的**精确期望值**，验证 close-and-cleanup helper 本身没有算错
-            // /算漏/算重，而不是断言一个在这个夹具规模下本就不成立的全局不变量。
+            // ADL taker 与 counterparty 非原始成交对手，局部 Σaccounts+Σprofit 不必然守恒（全局零和需整个交易所范围）；本测试改断言每账户精确期望值。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
 
@@ -7060,8 +6231,7 @@ mod tests {
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success), "counterparty 消失不影响命令级结果码");
             // A（仍存在）正常被平仓结算。
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL));
-            // taker 仍然按 cmd.size（改写后的真实消费量 100）被全部平仓——不受 B 消失影响
-            // （pendingADLSize 修正是 finalize 阶段统一做的，不依赖 apply 是否成功，参考文档 §3.3）。
+            // taker 仍按 cmd.size 全部平仓，不受 B 消失影响（pendingADLSize 修正统一在 finalize 做，不依赖 apply 是否成功）。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL));
         }
 
@@ -7087,14 +6257,11 @@ mod tests {
 
         #[test]
         fn hedge_mode_uses_create_positions_key_not_raw_symbol() {
-            // 对应 Java `up.createPositionsKey(cmd.symbol, adlPosSide, cmd.command)`
-            // （`ADLCommandProcessor.applyEvent`/`finalizeForCommand` 与
-            // `RiskEngine.handlerRiskRelease:947-948`）——HEDGE 下 key = ±symbol，不是裸 symbol。
+            // 对应 Java up.createPositionsKey（ADLCommandProcessor.applyEvent/finalizeForCommand + handlerRiskRelease:947-948）：HEDGE 下 key=±symbol，非裸 symbol。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             ups.get_mut(TAKER_UID).unwrap().position_mode = PositionMode::Hedge;
             ups.get_mut(CP_A).unwrap().position_mode = PositionMode::Hedge;
-            // taker 的 open_volume 从 100 收窄到 60，恰好与本测试请求的 ADL size 相等——否则 60 <
-            // 100 只会触发部分平仓（仓位记录还在），断言"仓位记录被移除"就测不出 key 是否用对。
+            // taker open_volume 收窄到 60，恰好等于 ADL 请求量，否则只会部分平仓，测不出 key 是否用对。
             ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_volume = 60;
             ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 5_400; // 60*90
             // taker LONG -> HEDGE key = +FUT_SYMBOL；重新按 HEDGE 规则插入（键必须与 direction 一致）。
