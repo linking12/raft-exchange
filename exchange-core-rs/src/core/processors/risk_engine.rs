@@ -122,11 +122,16 @@ impl RiskEngine {
             // FORCE_LIQUIDATION R1，对应 Java :291：normalize_cmd_position_size 夹取 size 后走 IOC 平仓单撮合。
             cmd.result_code = Some(Self::normalize_cmd_position_size(cmd, ups));
         } else if cmd.command == OrderCommandType::IfTakeover {
-            // IF_TAKEOVER 不是 is_non_trading()，对应 Java :370：先 normalize_cmd_position_size 再 collect（结果码以 collect 为准）。
+            // IF_TAKEOVER 不是 is_non_trading()。注意：Java（RiskEngine.java:368-370）是 collectInput 在前、normalizeCmdPositionSize
+            // 在后；本移植刻意反过来先 normalize 再 collect。scanner 生成命令时 cmd.size 恒 ≤ taker(cmd.uid) 自己的仓位，
+            // normalize 是 no-op，两序等价；仅在 cmd.size 被人为放大到超过 taker 仓位的病态输入下有别——此时先夹再 collect
+            // 更稳（IF 只按 taker 能实际接管的量预留/接管），不会像 Java 那样按放大 size 预留后再夹 taker 自己的平仓量。结果码以 collect 为准。
             Self::normalize_cmd_position_size(cmd, ups);
             cmd.result_code = Some(self.if_takeover_collect(cmd));
         } else if cmd.command == OrderCommandType::AutoDeleveraging {
-            // AUTO_DELEVERAGING 不是 is_non_trading()，对应 Java :378：先 normalize_cmd_position_size 再 collect。
+            // AUTO_DELEVERAGING 不是 is_non_trading()。同 IF_TAKEOVER：Java（:376-378）collectInput 在前、normalize 在后，
+            // 本移植刻意先 normalize 再 collect。正常 scanner 路径 normalize 为 no-op 故等价；病态放大输入下先夹更稳——
+            // 避免 Java 那样按放大 size 摊派对手方、再夹 taker 平仓量导致对手方平仓多于 taker 平仓。
             Self::normalize_cmd_position_size(cmd, ups);
             cmd.result_code = Some(self.adl_collect(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::LiquidationScan {

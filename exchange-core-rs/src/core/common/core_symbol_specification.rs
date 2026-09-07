@@ -5,6 +5,11 @@ use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{ceil_mul_div, trunc_mul_div};
 
+/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。本地重复一份保依赖边界（同 `symbol_position_record.rs`）。
+fn add_exact(a: i64, b: i64) -> i64 {
+    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
+}
+
 /// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。Ruling P4-B：`#[derive(Default)]` 零值兜底 = 未配置期货保证金（100%初始/维持保证金率、不限杠杆）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoreSymbolSpecification {
@@ -71,14 +76,14 @@ impl CoreSymbolSpecification {
         let mut prev_rate: i64 = first_rate;
         for (&floor, &rate) in self.maintenance_margin.iter() {
             let seg = notional.min(floor) - prev_floor;
-            mm += trunc_mul_div(seg, prev_rate, self.maintenance_margin_scale_k);
+            mm = add_exact(mm, trunc_mul_div(seg, prev_rate, self.maintenance_margin_scale_k));
             if notional <= floor {
                 return mm;
             }
             prev_floor = floor;
             prev_rate = rate;
         }
-        mm + trunc_mul_div(notional - prev_floor, prev_rate, self.maintenance_margin_scale_k)
+        add_exact(mm, trunc_mul_div(notional - prev_floor, prev_rate, self.maintenance_margin_scale_k))
     }
 
     /// 对应 Java `isValidLeverage(long, int)`（`:118-130`）：负杠杆非法；空表不限上限；否则按 floor 分档查表。

@@ -900,7 +900,10 @@ impl LoanCommandDispatcher {
         if all_collateral_exhausted {
             Self::take_over_remaining_cross_loans(engine, taker_up, cmd.timestamp, target_loan_id, ssp);
         }
-        // Java 在此调用 syncCrossExposure（非复制 scanner 索引维护，本仓未移植 LoanLiquidationEngine，§5.2）——跳过，不影响账本结算正确性。
+        // Java 在此调用 syncCrossExposure 维护 scanner 的 cross 索引（cross_loan_currency_to_users）。本仓 R2 postProcess
+        // 直接从 risk_engine 调入、绕过 dispatch，故 reconcile_loan_indices（仅 R1/用户命令跑）在此不触发——刻意跳过。
+        // 该索引是 leader 本地、非复制、不进 state hash：清算平掉一笔 cross loan 后残留的 uid 至多让下次扫描多 check 一次，
+        // 而 check_cross 从实际 loan 状态现算，命中即 no-op；只会缩集、绝不漏清算也不凭空造清算，故不影响账本正确性与跨节点一致。
     }
 
     /// LIF 承接后收尾，对应 Java 私有 closeAndRecycleCrossLoan（:905-910）：无对象池，直接 remove 即等价于清零+摘出+回收；调用后 loan_id 已移除，不可再读。
