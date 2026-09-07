@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::order_action::OrderAction;
+use crate::core::common::position_mode::PositionMode;
+use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_status::UserStatus;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
@@ -44,18 +46,22 @@ impl FundingFeeCommandProcessor {
     /// `collectInput` 自身（`cmd.size<=0`）两层校验叠加的效果，本移植把这两层挪到调用方
     /// [`crate::core::processors::risk_engine::RiskEngine::settle_funding_fees_collect`]（见其文档"R1 前置门禁顺序"）。
     /// 本函数只负责"给定已验证的 `mark_price`/`rate`/`rate_scale_k`，扫用户产出 payer/receiver 两个 map"，与 Java
-    /// `collectInput` 校验通过后的主体逻辑（`:49-67`）一一对应：
+    /// `collectInput` 校验通过后的主体逻辑（`:49-67`）一一对应。**每个用户的仓位遍历对齐 Java
+    /// `UserProfile.processPositionRecord`（`:202-213`）：`ONEWAY` 只处理 `symbol`，`HEDGE` 追加处理 `-symbol`
+    /// 空头腿**（同 [`UserProfile::process_position_record`]）——否则 HEDGE 用户挂在 `-symbol` 的空头腿不进
+    /// payer/receiver 池，破坏零和（`settle` 路径已按 `-symbol` 结算，collect 侧必须对称）：
     /// ```text
     /// for user in ACTIVE users:
-    ///     position = user.positions[symbol]
-    ///     if position.open_volume == 0: skip
-    ///     notional = open_volume * mark_price
-    ///     if position.direction == action:          // payer 侧
-    ///         fee = trunc_mul_div(notional, rate, rate_scale_k)
-    ///         if fee > 0: payer_amounts[uid] = fee
-    ///     else:                                      // receiver 侧
-    ///         receiver_notionals[uid] = notional     // 原始 notional，merge/R2 时再算 fee
+    ///     for position in {symbol} ∪ (HEDGE ? {-symbol} : {}):   // ← processPositionRecord 语义
+    ///         if position.open_volume == 0: skip
+    ///         notional = open_volume * mark_price
+    ///         if position.direction == action:          // payer 侧
+    ///             fee = trunc_mul_div(notional, rate, rate_scale_k)
+    ///             if fee > 0: payer_amounts[uid] = fee
+    ///         else:                                      // receiver 侧
+    ///             receiver_notionals[uid] = notional     // 原始 notional，merge/R2 时再算 fee
     /// ```
+    /// 一个 HEDGE 用户的多空两腿方向恒相反，必然一腿落 payer、一腿落 receiver，按 `uid` 键不会互相覆盖。
     pub fn collect_input(
         ups: &UserProfileService,
         symbol: i32,
@@ -69,20 +75,28 @@ impl FundingFeeCommandProcessor {
             if user.user_status != UserStatus::Active {
                 continue;
             }
-            let Some(position) = user.positions.get(&symbol) else {
-                continue;
-            };
-            if position.open_volume == 0 {
-                continue;
-            }
-            let notional = mul_exact(position.open_volume, mark_price);
-            if position.direction.is_same_as_action(action) {
-                let fee = arithmetic::trunc_mul_div(notional, rate, rate_scale_k);
-                if fee > 0 {
-                    shard.payer_amounts.insert(user.uid, fee);
+            let uid = user.uid;
+            let mut process = |position: &SymbolPositionRecord| {
+                if position.open_volume == 0 {
+                    return;
                 }
-            } else {
-                shard.receiver_notionals.insert(user.uid, notional);
+                let notional = mul_exact(position.open_volume, mark_price);
+                if position.direction.is_same_as_action(action) {
+                    let fee = arithmetic::trunc_mul_div(notional, rate, rate_scale_k);
+                    if fee > 0 {
+                        shard.payer_amounts.insert(uid, fee);
+                    }
+                } else {
+                    shard.receiver_notionals.insert(uid, notional);
+                }
+            };
+            if let Some(position) = user.positions.get(&symbol) {
+                process(position);
+            }
+            if user.position_mode == PositionMode::Hedge {
+                if let Some(position) = user.positions.get(&-symbol) {
+                    process(position);
+                }
             }
         }
         shard
@@ -317,6 +331,45 @@ mod tests {
         let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
         assert!(shard.payer_amounts.is_empty());
         assert!(shard.receiver_notionals.is_empty());
+    }
+
+    #[test]
+    fn collect_input_hedge_processes_both_long_and_short_legs() {
+        // HEDGE 用户同时持 +symbol 多腿与 -symbol 空腿：两腿方向恒相反，必然一腿 payer、一腿 receiver。
+        // 对应 Java UserProfile.processPositionRecord 在 HEDGE 下追加处理 -symbol（回归 collect 漏结空头腿的 bug）。
+        let mut ups = ups_with_user(1);
+        ups.get_mut(1).unwrap().position_mode = PositionMode::Hedge;
+        ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
+        ups.get_mut(1).unwrap().positions.insert(-SYMBOL, position(1, PositionDirection::Short, 100));
+
+        let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
+        // action=Bid: LONG 同向 -> payer fee=trunc(1000*5/1000)=5；SHORT 反向 -> receiver notional=1000。
+        assert_eq!(shard.payer_amounts.get(&1), Some(&5), "多腿必须进 payer 池");
+        assert_eq!(shard.receiver_notionals.get(&1), Some(&1000), "HEDGE 空腿（-symbol）必须被结算进 receiver 池");
+    }
+
+    #[test]
+    fn collect_input_hedge_collects_lone_short_leg_at_negative_symbol() {
+        // 只有 -symbol 空腿的 HEDGE 用户：修复前 collect 只查 +symbol，会整条漏掉，破坏零和。
+        let mut ups = ups_with_user(2);
+        ups.get_mut(2).unwrap().position_mode = PositionMode::Hedge;
+        ups.get_mut(2).unwrap().positions.insert(-SYMBOL, position(2, PositionDirection::Short, 100));
+
+        let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
+        assert_eq!(shard.receiver_notionals.get(&2), Some(&1000), "孤立空腿也必须被结算");
+        assert!(shard.payer_amounts.is_empty());
+    }
+
+    #[test]
+    fn collect_input_oneway_ignores_negative_symbol_key() {
+        // ONEWAY 用户即便 map 里意外存在 -symbol 记录，也不得被读取（对齐 processPositionRecord 仅 HEDGE 追加 -symbol）。
+        let mut ups = ups_with_user(3);
+        // position_mode 默认 OneWay。
+        ups.get_mut(3).unwrap().positions.insert(-SYMBOL, position(3, PositionDirection::Short, 100));
+
+        let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
+        assert!(shard.receiver_notionals.is_empty(), "ONEWAY 不得读取 -symbol");
+        assert!(shard.payer_amounts.is_empty());
     }
 
     // ---- merge build_matcher_events ----

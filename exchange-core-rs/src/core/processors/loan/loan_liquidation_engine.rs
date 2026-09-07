@@ -132,7 +132,7 @@ impl LoanLiquidationEngine {
         if collateral_value <= 0 {
             return; // 抵押估值 <=0 无法定破产价（除零）
         }
-        let real_debt = loan.outstanding_principal + loan_service.calculate_display_interest(loan, ts);
+        let real_debt = add_exact_local(loan.outstanding_principal, loan_service.calculate_display_interest(loan, ts));
         let ltv_scaled = mul_exact_local(real_debt, BPS_SCALE);
 
         let term_expired = loan.rate_mode == LoanRateMode::Locked
@@ -402,6 +402,11 @@ impl LoanLiquidationEngine {
 /// 对应 Java `Math.multiplyExact`：`i128` 中间精度、溢出 panic（同仓库既有 helper 风格）。
 fn mul_exact_local(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
+}
+
+/// 对应 Java `Math.addExact`：`i128` 中间精度、溢出 panic（对齐 dispatcher/settle 各路径的 `add_exact`，避免 release 下 `real_debt` 静默 wrap）。
+fn add_exact_local(a: i64, b: i64) -> i64 {
+    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
 #[cfg(test)]
