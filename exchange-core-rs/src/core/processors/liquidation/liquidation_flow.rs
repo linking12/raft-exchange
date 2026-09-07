@@ -17,8 +17,7 @@ impl LiquidationFlow {
     }
 }
 
-/// 对应 Java `LiquidationFlow.LiquidationState`：强平推进方向——先市价强平（FORCE），失败转 IF
-/// 接管，再失败转 ADL 摊派。
+/// 对应 Java `LiquidationFlow.LiquidationState`：强平推进方向，FORCE→IF→ADL 逐级降级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiquidationState {
     /// FORCE_LIQUIDATION 已提交、等待其 apply（对应 Java `LIQUIDATING`）。
