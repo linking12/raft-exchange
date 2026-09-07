@@ -1,4 +1,4 @@
-//! 对应 Java `SymbolPositionRecord`：期货保证金持仓记录。`adl_eligibility`/`pending_adl_size`/`liquidation_flow` 是 leader-local 非复制 scratch 状态，不进 `state_hash`（Ruling P6-E）。
+//! 对应 Java `SymbolPositionRecord`：期货保证金持仓记录。`adl_eligibility`/`pending_adl_size`/`liquidation_flow` 是 leader-local 非复制 scratch，不进 `state_hash`（Ruling P6-E）。
 use std::collections::BTreeMap;
 
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -8,7 +8,7 @@ use crate::core::common::position_direction::PositionDirection;
 use crate::core::processors::liquidation::liquidation_flow::LiquidationFlow;
 use crate::core::utils::core_arithmetic_utils::{calculate_taker_fee, ceil_divide, ceil_mul_div, trunc_mul_div};
 
-/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。本地重复一份以保持依赖边界。
+/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。本地重复一份保依赖边界。
 fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
@@ -68,7 +68,7 @@ pub struct SymbolPositionRecord {
 }
 
 impl SymbolPositionRecord {
-    /// 本移植新增的便捷构造器（非 Java 逐字对应）：给定 identity 字段，其余取默认零值；`leverage` 经
+    /// 本移植新增便捷构造器（非 Java 逐字对应）：给定 identity 字段，其余取默认零值；`leverage` 经
     /// [`Self::update_leverage`] 归一，`adl_eligibility` 按 `margin_mode` 归一（P6 Task 6）。
     pub fn new(uid: i64, symbol: i32, currency: i32, margin_mode: MarginMode, leverage: i32) -> Self {
         let mut r = SymbolPositionRecord { uid, symbol, currency, margin_mode, ..Default::default() };
@@ -302,13 +302,12 @@ impl SymbolPositionRecord {
     }
 
     /// 对应 Java `calculateRequiredMarginForFutures(CoreSymbolSpecification, int leverage)`
-    /// （`:523-539`）：持仓 + 挂单需要锁定的总保证金。
+    /// （`:523-539`）：持仓 + 挂单需锁定的总保证金。
     ///
-    /// 数学：把仓位有向化，比较 BID 全成 vs ASK 全成两种极端下的敞口最大值——
-    /// `worstCaseNotional = max(|open+bid|, |open−ask|)`，减去 `|open|` 得
-    /// `newExposureNotional`（挂单只对"能扩大最坏敞口"的部分收保证金，纯减仓的反向挂单在
-    /// `openVolume` 范围内成交只会释放保证金，不占额外保证金）。返回
-    /// `openInitMarginSum + calculateInitMargin(newExposure, leverage) + max(bidFee, askFee)`。
+    /// 数学：仓位有向化，取 BID 全成 vs ASK 全成两极端敞口最大值
+    /// `worstCaseNotional = max(|open+bid|, |open−ask|)`，减 `|open|` 得 `newExposureNotional`
+    /// （挂单只对"能扩大最坏敞口"部分收保证金；纯减仓的反向挂单在 `openVolume` 内成交只释放保证金，
+    /// 不占额外保证金）。返回 `openInitMarginSum + calculateInitMargin(newExposure, leverage) + max(bidFee, askFee)`。
     pub fn calculate_required_margin_for_futures_with_leverage(
         &self,
         spec: &CoreSymbolSpecification,
@@ -337,10 +336,9 @@ impl SymbolPositionRecord {
     }
 
     /// 对应 Java `calculateRequiredMarginForOrder(CoreSymbolSpecification, OrderAction, long)`
-    /// （`:548-569`）：把新单 `order_notional` 落在 `action` 侧后，仓位需要的总保证金——
-    /// "有此单 vs 无此单"最坏敞口差。敞口口径与 [`Self::calculate_required_margin_for_futures_with_leverage`]
-    /// 一致。新单不扩大最坏敞口（纯反向或抵消现有 pending）时返回 **-1 哨兵**，caller 回退到
-    /// `calculate_required_margin_for_futures`。
+    /// （`:548-569`）：新单 `order_notional` 落在 `action` 侧后仓位需的总保证金——"有此单 vs 无此单"
+    /// 最坏敞口差。敞口口径同 [`Self::calculate_required_margin_for_futures_with_leverage`]。新单不扩大
+    /// 最坏敞口（纯反向或抵消现有 pending）时返回 **-1 哨兵**，caller 回退到 `calculate_required_margin_for_futures`。
     pub fn calculate_required_margin_for_order(
         &self,
         spec: &CoreSymbolSpecification,
@@ -391,8 +389,8 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `estimateNotionalForOrder`（`:574-579`）：假设 pending 部分以及新下单的 size
-    /// 都能开出来，估算仓位名义价值（保守估计，仅 `isValidLeverage` 检查用）。
+    /// 对应 Java `estimateNotionalForOrder`（`:574-579`）：假设 pending 与新单 size 都能开出来，
+    /// 估算仓位名义价值（保守估计，仅 `isValidLeverage` 检查用）。
     pub fn estimate_notional_for_order(&self, action: OrderAction, size: i64, price: i64) -> i64 {
         let new_pending_buy_size =
             if action == OrderAction::Bid { add_exact(self.pending_buy_size, size) } else { self.pending_buy_size };
@@ -476,18 +474,16 @@ impl SymbolPositionRecord {
     // ================================================================
 
     /// 对应 Java `closeCurrentPositionFutures(OrderAction, long tradeSize, long tradePrice)`
-    /// （`:625-654`）：唯一平/翻仓原语，用一笔反向成交去平当前持仓，返回平完后【还需新开】的
-    /// 手数（reverse 单超出部分，由 [`Self::open_position_margin`] 接手）。三分支：
+    /// （`:625-654`）：唯一平/翻仓原语，用一笔反向成交平当前持仓，返回平完后【还需新开】的手数
+    /// （reverse 单超出部分，由 [`Self::open_position_margin`] 接手）。三分支：
     ///
     /// - 无仓 (`open_volume==0`) 或同向成交：无可平，原样返回 `trade_size`（整笔用于开仓）。
     /// - 部分平（`open_volume > trade_size`）：**不结算盈亏**——按比例 `truncMulDiv(openInitMarginSum,
-    ///   tradeSize, openVolume)` 释放保证金、减 `openVolume`，`openPriceSum` 按【成交价】而非开仓
-    ///   均价扣减（把被平部分的盈亏"递延"进剩余仓位的成本基，剩余仓位最终全平时一并释放，全程
-    ///   总盈亏守恒），返回 `0`。
-    /// - 全平/翻仓（`trade_size >= open_volume`）：结算整仓已实现盈亏
-    ///   `sign × (openVolume × tradePrice − openPriceSum)` 累加进 `profit`，清零
-    ///   `openInitMarginSum`/`openPriceSum`/`openVolume`，返回 `tradeSize − openVolume`
-    ///   （翻仓超出部分反手开新仓）。
+    ///   tradeSize, openVolume)` 释放保证金、减 `openVolume`，`openPriceSum` 按【成交价】而非开仓均价扣减
+    ///   （被平部分盈亏"递延"进剩余仓位成本基，剩余仓位全平时一并释放，全程总盈亏守恒），返回 `0`。
+    /// - 全平/翻仓（`trade_size >= open_volume`）：结算整仓已实现盈亏 `sign × (openVolume × tradePrice
+    ///   − openPriceSum)` 累加进 `profit`，清零 `openInitMarginSum`/`openPriceSum`/`openVolume`，返回
+    ///   `tradeSize − openVolume`（翻仓超出部分反手开新仓）。
     pub fn close_current_position_futures(&mut self, action: OrderAction, trade_size: i64, trade_price: i64) -> i64 {
         if self.open_volume == 0 || self.direction == PositionDirection::of_action(action) {
             return trade_size; // 无反向仓可平，整笔用于开仓
@@ -516,9 +512,9 @@ impl SymbolPositionRecord {
     }
 
     /// 对应 Java `openPositionMargin(OrderAction, long sizeToOpen, long tradePrice,
-    /// CoreSymbolSpecification, LastPriceCacheRecord)`（`:660-669`）：成交开新敞口，按
-    /// `size_to_open` 累加持仓。初始保证金按【标记价 `mark_price`】名义计（更保守、与强平口径
-    /// 一致），成本基 `open_price_sum` 按【成交价 `trade_price`】记（用于后续平仓算盈亏）。
+    /// CoreSymbolSpecification, LastPriceCacheRecord)`（`:660-669`）：成交开新敞口，按 `size_to_open`
+    /// 累加持仓。初始保证金按【标记价 `mark_price`】名义计（更保守、与强平口径一致），成本基
+    /// `open_price_sum` 按【成交价 `trade_price`】记（用于后续平仓算盈亏）。
     pub fn open_position_margin(
         &mut self,
         action: OrderAction,
@@ -537,8 +533,8 @@ impl SymbolPositionRecord {
     }
 }
 
-/// 对应 Java `positions` map 的 key，形如 `BTreeMap<i32, SymbolPositionRecord>`（HEDGE 模式用
-/// ±symbol 区分多空）；本移植归属 `UserProfile`（见 `user_profile.rs`）。
+/// 对应 Java `positions` map 的 key，形如 `BTreeMap<i32, SymbolPositionRecord>`（HEDGE 模式用 ±symbol
+/// 区分多空）；本移植归属 `UserProfile`（见 `user_profile.rs`）。
 pub type PositionsMapKey = i32;
 pub type PositionsMap = BTreeMap<PositionsMapKey, SymbolPositionRecord>;
 
@@ -634,7 +630,7 @@ mod tests {
         assert_eq!(r.open_init_margin_sum, 0);
         assert_eq!(r.open_price_sum, 0);
         // Java `reset()`（`:693-711`）逐字不清 `profit`——已实现盈亏累加器在池复用清零时保留
-        // （非遗漏；本移植逐字对齐，不做"看起来更对"的修正）。
+        // （非遗漏；逐字对齐，不做"看起来更对"的修正）。
         assert_eq!(r.profit, 40);
         assert_eq!(r.pending_sell_size, 0);
         assert_eq!(r.pending_buy_size, 0);
