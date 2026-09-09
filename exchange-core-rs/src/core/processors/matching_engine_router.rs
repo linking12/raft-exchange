@@ -1,4 +1,6 @@
-//! ME（Matching Engine）路由：按 symbol 分派到 `OrderBookNaiveImpl`，对应 Java `MatchingEngineRouter` +
+//! ME（Matching Engine）路由：按 symbol 分派到 `OrderBookDirectImpl`（高性能 slab 撮合，撮合 O(log N)；
+//! 对齐 Java 性能档 `latencyPerformanceBuilder`/`throughputPerformanceBuilder` 用 DirectImpl。Naive 仅作差分 oracle）。
+//! 对应 Java `MatchingEngineRouter` +
 //! `IOrderBook.processCommand`（`:182-227`）；R1 门：只有 `ValidForMatchingEngine` 才真正撮合，否则保留 R1 结果不覆盖。
 use std::collections::BTreeMap;
 
@@ -7,12 +9,12 @@ use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::orderbook::i_order_book::IOrderBook;
-use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
+use crate::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
 
 /// 对应 Java `MatchingEngineRouter`（现货子集，只保留 symbol→book 路由 + 撮合分派）。
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct MatchingEngineRouter {
-    books: BTreeMap<i32, OrderBookNaiveImpl>,
+    books: BTreeMap<i32, OrderBookDirectImpl>,
 }
 
 impl MatchingEngineRouter {
@@ -23,7 +25,7 @@ impl MatchingEngineRouter {
     /// 对应 Java `MatchingEngineRouter.addSymbol`（`:276-289`，现货子集，重复 add 幂等忽略）。
     pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
         // 幂等：已存在则保留原簿；用 with_symbol_spec 注入真实 spec 供 move_order 现货 BID 风控用。
-        self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookNaiveImpl::with_symbol_spec(spec.clone()));
+        self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookDirectImpl::with_symbol_spec(spec.clone()));
     }
 
     /// 对应 Java `MatchingEngineRouter.processMatchingCommand`（`:291-312`）+ `IOrderBook.processCommand`
