@@ -75,6 +75,114 @@ pub struct OrderBookDirectImpl {
     symbol_spec: Option<CoreSymbolSpecification>,
 }
 
+// ── 规范化序列化（对应 Java `OrderBookDirectImpl.writeMarshallable`/`OrderBookDirectImpl(BytesIn)`）──────────
+// slab / free-list / next / prev / 槽位索引都是纯物理缓存，不进快照——否则逻辑相同、操作历史不同的两个簿会因槽位
+// 布局不同而序列化出不同字节，触发 raft 假分叉。故：序列化沿 best_ask/best_bid 的 `.prev` 链按撮合序（价格优先 +
+// 桶内 FIFO，与本文件 `state_hash` 同一遍历、与 Naive 逐位等价）dump **纯逻辑订单流**；反序列化按同序 `insert_order`
+// 重挂重建 slab。逻辑状态相同 → 订单流相同 → 字节相同 → state_hash 相同，满足跨节点一致。
+
+/// 快照里的单笔挂单：仅逻辑字段，无 slab 索引/指针。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapOrder {
+    order_id: i64,
+    price: i64,
+    size: i64,
+    filled: i64,
+    filled_notional: i64,
+    reserve_bid_price: i64,
+    action: OrderAction,
+    order_type: OrderType,
+    command: OrderCommandType,
+    uid: i64,
+    timestamp: i64,
+    user_cookie: i32,
+}
+
+/// Direct 簿的规范化快照表示：symbol_spec + 按撮合序的 ask/bid 订单流。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DirectSnapshot {
+    symbol_spec: Option<CoreSymbolSpecification>,
+    asks: Vec<SnapOrder>,
+    bids: Vec<SnapOrder>,
+}
+
+impl OrderBookDirectImpl {
+    /// 沿 `start`(best) 的 `.prev` 链收集逻辑订单流（最优→最差、桶内最老→最新）。与 `state_hash` 同一遍历。
+    fn chain_snapshot(&self, start: Option<usize>) -> Vec<SnapOrder> {
+        let mut out = Vec::new();
+        let mut cur = start;
+        while let Some(idx) = cur {
+            let o = self.order(idx);
+            out.push(SnapOrder {
+                order_id: o.order_id,
+                price: o.price,
+                size: o.size,
+                filled: o.filled,
+                filled_notional: o.filled_notional,
+                reserve_bid_price: o.reserve_bid_price,
+                action: o.action,
+                order_type: o.order_type,
+                command: o.command,
+                uid: o.uid,
+                timestamp: o.timestamp,
+                user_cookie: o.user_cookie,
+            });
+            cur = o.prev;
+        }
+        out
+    }
+
+    /// 把快照订单原样重挂进 slab（保留 filled，不撮合）。按 `chain_snapshot` 同序调用即复现链序与 best 指针。
+    fn rebuild_insert(&mut self, so: SnapOrder) {
+        let order = DirectOrder {
+            order_id: so.order_id,
+            price: so.price,
+            size: so.size,
+            filled: so.filled,
+            filled_notional: so.filled_notional,
+            reserve_bid_price: so.reserve_bid_price,
+            action: so.action,
+            order_type: so.order_type,
+            command: so.command,
+            uid: so.uid,
+            timestamp: so.timestamp,
+            user_cookie: so.user_cookie,
+            parent: None,
+            next: None,
+            prev: None,
+        };
+        let idx = self.alloc_order(order);
+        self.order_id_index.insert(so.order_id, idx);
+        self.insert_order(idx, None);
+    }
+}
+
+impl serde::Serialize for OrderBookDirectImpl {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        DirectSnapshot {
+            symbol_spec: self.symbol_spec.clone(),
+            asks: self.chain_snapshot(self.best_ask),
+            bids: self.chain_snapshot(self.best_bid),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for OrderBookDirectImpl {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let snap = DirectSnapshot::deserialize(deserializer)?;
+        let mut book = OrderBookDirectImpl::new();
+        book.symbol_spec = snap.symbol_spec;
+        for so in snap.asks {
+            book.rebuild_insert(so);
+        }
+        for so in snap.bids {
+            book.rebuild_insert(so);
+        }
+        Ok(book)
+    }
+}
+
 impl OrderBookDirectImpl {
     /// 建空簿。对应 Java 构造函数 `OrderBookDirectImpl(...)`（`:60-73`），仅保留 `symbolSpec`。
     pub fn new() -> Self {
@@ -2910,5 +3018,56 @@ mod tests {
         let idx1 = slab_idx_of(&book, 1);
         book.order_mut(idx1).action = OrderAction::Bid;
         book.validate_internal_state();
+    }
+
+    // ── 规范化快照 round-trip ────────────────────────────────────────────────
+    #[test]
+    fn snapshot_roundtrip_preserves_state_and_is_deterministic() {
+        // 混合簿：同价 FIFO（1&2 @100，4&5 @90）+ 部分成交（order 1 被吃 4）。
+        let mut a = OrderBookDirectImpl::new();
+        seed_mixed_book(&mut a);
+        a.validate_internal_state();
+
+        // 序列化 → 反序列化（重建 slab）。
+        let bytes = bincode::serialize(&a).expect("serialize");
+        let restored: OrderBookDirectImpl = bincode::deserialize(&bytes).expect("deserialize");
+        restored.validate_internal_state();
+
+        // 逻辑状态逐位一致。
+        assert_eq!(a.state_hash(), restored.state_hash(), "round-trip state_hash 必须一致");
+        assert_eq!(a.fill_l2(-1), restored.fill_l2(-1), "round-trip fill_l2（价/量）必须一致");
+        // 重复序列化字节等价（确定性）。
+        assert_eq!(
+            bincode::serialize(&restored).expect("re-serialize"),
+            bytes,
+            "对同一逻辑状态重复序列化必须字节等价"
+        );
+    }
+
+    #[test]
+    fn snapshot_is_canonical_across_operation_history() {
+        // A：直接建混合簿。
+        let mut a = OrderBookDirectImpl::new();
+        seed_mixed_book(&mut a);
+
+        // B：先挂 4 笔再全撤，制造 free-list/槽位错位，使随后 seed 的 order 1..7 落进被回收的槽位
+        //    （物理 slab 布局与 A 不同），但最终逻辑状态与 A 完全相同。
+        let mut b = OrderBookDirectImpl::new();
+        for id in [900i64, 901, 902, 903] {
+            b.new_order(&mut gtc_cmd(id, OrderAction::Ask, 2_000 + id, 3)); // 高价，不与混合簿撮合
+        }
+        for id in [900i64, 901, 902, 903] {
+            let mut c = OrderCommand { order_id: id, symbol: 1, uid: id, ..Default::default() };
+            assert_eq!(b.cancel_order(&mut c), CommandResultCode::Success, "撤单应成功");
+        }
+        seed_mixed_book(&mut b);
+
+        // 逻辑状态相同 → 序列化字节必须相同（规范化：不含物理 slab 布局），否则 raft 会误判节点分叉。
+        assert_eq!(a.state_hash(), b.state_hash(), "两种操作历史应达到相同逻辑状态");
+        assert_eq!(
+            bincode::serialize(&a).expect("serialize a"),
+            bincode::serialize(&b).expect("serialize b"),
+            "逻辑相同、物理 slab 布局不同的两个簿必须序列化出相同字节（规范化，防 raft 假分叉）"
+        );
     }
 }
