@@ -6,11 +6,13 @@ use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::symbol_type::SymbolType;
 
-/// 对应 Java `SymbolSpecificationProvider`；`spot_pair_index` 对应派生索引 `spotPairIndex`（不进 stateHash/序列化）。
+/// 对应 Java `SymbolSpecificationProvider`；`spot_pair_index` 对应派生索引 `spotPairIndex`（不进 stateHash/序列化，
+/// `#[serde(skip)]` 排除，快照恢复后由 `rebuild_spot_pair_index` 从 `symbols` 重建，对齐 Java `rebuildSpotPairIndex`）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SymbolSpecificationProvider {
     pub symbols: BTreeMap<i32, CoreSymbolSpecification>,
     pub currencies: BTreeMap<i32, CoreCurrencySpecification>,
+    #[serde(skip)]
     pub spot_pair_index: BTreeSet<(i32, i32)>,
 }
 
@@ -46,6 +48,17 @@ impl SymbolSpecificationProvider {
 
     pub fn get_currency(&self, currency: i32) -> Option<&CoreCurrencySpecification> {
         self.currencies.get(&currency)
+    }
+
+    /// 从 `symbols` 重建现货对索引（派生态，不序列化）。快照恢复后由 `ExchangeCore::restore_non_replicated_state` 调用，
+    /// 对应 Java `rebuildSpotPairIndex`（`:87-90`，`BytesIn` 构造末尾调用）。
+    pub fn rebuild_spot_pair_index(&mut self) {
+        self.spot_pair_index.clear();
+        for spec in self.symbols.values() {
+            if spec.symbol_type == SymbolType::CurrencyExchangePair {
+                self.spot_pair_index.insert((spec.base_currency, spec.quote_currency));
+            }
+        }
     }
 
     /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`（`:77-81`）：反查 base/quote 现货对 spec，线性扫 BTreeMap。

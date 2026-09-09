@@ -14,6 +14,12 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 proptest = "1"
 
+# 纯引擎吞吐基准（绕开 Raft，直接灌 process_command）。自带 main（harness=false），零额外依赖，用 std::time 计时。
+# 跑：cargo bench --bench engine_throughput
+[[bench]]
+name = "engine_throughput"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1

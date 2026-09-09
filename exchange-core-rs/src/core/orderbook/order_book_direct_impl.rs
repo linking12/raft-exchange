@@ -582,6 +582,49 @@ impl OrderBookDirectImpl {
         }
     }
 
+    /// 限价内可撮合总量探测（纯函数，不改簿），镜像 Naive `available_volume_for_match`；供裸 FOK 判定用。
+    /// 逐桶累加（`bucket.volume` 为整桶剩余量，跳桶用 `bucket.tail.prev`，同 `check_budget_to_fill`），限价外即停；
+    /// 用 `i128` 累加并在达到 `taker_size` 时提前饱和返回 `taker_size`，避免深簿求和溢出——FOK 只需判定 `>= size`。
+    fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64, taker_size: i64) -> i64 {
+        let is_bid = taker_action == OrderAction::Bid;
+        let mut maker = if is_bid { self.best_ask } else { self.best_bid };
+        let mut available: i128 = 0;
+
+        while let Some(idx) = maker {
+            let o = self.order(idx);
+            let price = o.price;
+            let within_limit = if is_bid { price <= taker_price } else { price >= taker_price };
+            if !within_limit {
+                break;
+            }
+            let parent = o.parent.expect("maker must have parent bucket");
+            let bucket = self.bucket(parent);
+            available += bucket.volume as i128;
+            if available >= taker_size as i128 {
+                return taker_size;
+            }
+            maker = self.order(bucket.tail).prev;
+        }
+
+        available.min(taker_size as i128) as i64
+    }
+
+    /// 裸 FOK：探测限价内可撮合总量，够则整单成交、否则整单 REJECT 不改簿。
+    /// 对齐 Rust Naive `new_order_match_fok`（Java Direct/Naive 均未落地裸 FOK，本移植统一补齐，两簿行为一致）。
+    fn new_order_match_fok(&mut self, cmd: &mut OrderCommand) {
+        let action = cmd.action.expect("FOK order requires action");
+        let price = cmd.price;
+        let size = cmd.size;
+        let reserve_bid_price = cmd.reserve_bid_price;
+
+        if self.available_volume_for_match(action, price, size) >= size {
+            // 已证限价内流动性足够吃满 size：调用限价 try_match_instantly，必然全成、之后不再 reject。
+            self.try_match_instantly(action, size, reserve_bid_price, Some(price), cmd);
+        } else {
+            Self::attach_reject_event(cmd, size);
+        }
+    }
+
     /// IOC_BUDGET：仅支持 BID（用预算上限买），ASK 语义模糊整单 REJECT（同 Naive），对应 Java `newOrderMatchIocBudget`(`:133-145`)。
     fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC_BUDGET order requires action");
@@ -907,8 +950,9 @@ impl Default for OrderBookDirectImpl {
 }
 
 impl IOrderBook for OrderBookDirectImpl {
-    /// 分派 `newOrder`（对应 Java `:106-126`）：GTC（挂单+撮合）+ IOC/FOK_BUDGET/IOC_BUDGET。
-    /// 裸 FOK 在 Java Direct 侧本身也未落地（源码标注 `// TODO FOK support`），故仍走 `_` 分支报 `MatchingUnsupportedCommand`（同步写回 `cmd.result_code`），保证不 panic。
+    /// 分派 `newOrder`（对应 Java `:106-126`）：GTC（挂单+撮合）+ IOC/FOK/FOK_BUDGET/IOC_BUDGET。
+    /// 裸 FOK 在 Java Direct/Naive 侧均未落地（源码标注 `// TODO FOK support`），本移植统一补齐、两簿行为一致（all-or-nothing）；
+    /// 仅 `order_type` 未设置（`None`）等未知类型走 `_` 分支报 `MatchingUnsupportedCommand`（同步写回 `cmd.result_code`），保证不 panic。
     fn new_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let rc = match cmd.order_type {
             Some(OrderType::Gtc) => {
@@ -917,6 +961,10 @@ impl IOrderBook for OrderBookDirectImpl {
             }
             Some(OrderType::Ioc) => {
                 self.new_order_match_ioc(cmd);
+                CommandResultCode::Success
+            }
+            Some(OrderType::Fok) => {
+                self.new_order_match_fok(cmd);
                 CommandResultCode::Success
             }
             Some(OrderType::FokBudget) => {
@@ -1312,9 +1360,9 @@ mod tests {
     // ---- IOrderBook 骨架占位：编译 + 不 panic，不做行为断言（补全后再断言真实语义）----
 
     #[test]
-    fn skeleton_new_order_reports_unsupported_for_unimplemented_types() {
-        // GTC/IOC/FOK_BUDGET/IOC_BUDGET 都有真实实现（见下方 gtc_*/ioc_*/fok_budget_*/ioc_budget_* 测试）；
-        // 裸 FOK 在 Java Direct 侧本身未落地（`// TODO FOK support`），此处覆盖它仍占位、保证骨架不 panic。
+    fn skeleton_new_order_reports_unsupported_for_unset_order_type() {
+        // GTC/IOC/FOK/FOK_BUDGET/IOC_BUDGET 均有真实实现（见下方对应测试）；
+        // 仅 order_type 未设置（None）等未知类型走 `_` 分支报 MatchingUnsupportedCommand、保证不 panic。
         let mut book = OrderBookDirectImpl::new();
         let mut cmd = OrderCommand {
             order_id: 1,
@@ -1322,7 +1370,7 @@ mod tests {
             price: 100,
             size: 10,
             action: Some(OrderAction::Bid),
-            order_type: Some(OrderType::Fok),
+            order_type: None,
             uid: 1,
             ..Default::default()
         };
