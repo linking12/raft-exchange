@@ -328,12 +328,18 @@ impl UserProfile {
     /// 确定性状态 hash：折叠 `uid`、`user_status`、`accounts`/`exchange_locked`、`position_mode`、
     /// `positions`（`BTreeMap` 天然按 key 升序，满足"排序"要求）。风格对齐
     /// `orderbook::order_book_naive_impl::OrderBookNaiveImpl::state_hash`（`h = h*31 + field` 滚动
-    /// 折叠 + i64->i32 fold，对应 Java `Long.hashCode`）。不保证与 Java `Objects.hash(...)` 数值相等
-    /// （现货子集未含 loans/processedTransactionIds 字段），只保证「同状态 → 同 hash，不同状态 → 不同 hash」。
+    /// 折叠 + i64->i32 fold，对应 Java `Long.hashCode`）。折入的字段集与 Java `stateHash()` 一致
+    /// （uid/user_status/processed_tx_ids/accounts/exchange_locked/position_mode/positions/三个借贷字段），
+    /// 但算法不同，不保证与 Java `Objects.hash(...)` 数值相等，只保证「同状态 → 同 hash，不同状态 → 不同 hash」。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
         h = h.wrapping_mul(31).wrapping_add(self.user_status.code() as i64);
+        // 去重集折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:347` processedTransactionIds）；
+        // BTreeSet 天然升序满足确定性。缺此项时两节点仅去重集不同会算出相同 hash，削弱 raft 跨节点分叉探测。
+        for &tx_id in &self.processed_tx_ids {
+            h = h.wrapping_mul(31).wrapping_add(tx_id);
+        }
         for (&cur, &amt) in &self.accounts {
             h = h.wrapping_mul(31).wrapping_add(cur as i64);
             h = h.wrapping_mul(31).wrapping_add(amt);

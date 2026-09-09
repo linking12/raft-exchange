@@ -5,7 +5,7 @@
 //!
 //! 构造约定（Ruling P2-3）：两簿均用 `new()` 且 `symbol_spec=None`，Direct 现货 BID 移价风控守卫天然惰性，同 Naive 无此风控，不构成分歧源。
 //!
-//! 命令生成器故意排除裸 `OrderType::Fok`：Java Direct 未实现（TODO），Naive 已补齐 IOC 价格过滤语义，属已知且刻意的行为差异，不纳入本任务差分范围。
+//! 裸 `OrderType::Fok` 现已纳入差分范围：Java Direct/Naive 均未落地（TODO），本移植统一在两簿补齐 all-or-nothing 语义，Direct 镜像 Naive，故须逐位一致。
 //!
 //! 数值边界：`price ∈ [1, 100_000]`、`size ∈ [1, 1_000]`，BUDGET `cmd.price ∈ [1, 20_000_000]`，最大 notional 远低于 `i64::MAX/4`，
 //! 避免触碰溢出饱和路径（Direct 饱和/Naive wrap，故意不等价，不该被本测试意外命中）。
@@ -28,7 +28,7 @@ use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 // 命令生成器
 // ============================================================================================
 
-/// 随机命令：`Place` 覆盖 GTC/IOC/FOK_BUDGET/IOC_BUDGET（裸 FOK 排除，见模块头）；`Cancel`/`Reduce`/`Move` 的
+/// 随机命令：`Place` 覆盖 GTC/IOC/FOK/FOK_BUDGET/IOC_BUDGET；`Cancel`/`Reduce`/`Move` 的
 /// `target_idx` 按取模选取此前签发过的 GTC 订单（同 `e2e_tests.rs`）。
 #[derive(Debug, Clone, Copy)]
 enum GenCmd {
@@ -75,6 +75,7 @@ fn gen_cmd(n_users: usize) -> impl Strategy<Value = GenCmd> {
     prop_oneof![
         4 => gen_place_unit_priced(n_users, OrderType::Gtc),
         3 => gen_place_unit_priced(n_users, OrderType::Ioc),
+        2 => gen_place_unit_priced(n_users, OrderType::Fok),
         2 => gen_place_budget(n_users, OrderType::FokBudget),
         2 => gen_place_budget(n_users, OrderType::IocBudget),
         2 => cancel,
@@ -511,6 +512,35 @@ mod scenario_tests {
             place(0, true, OrderType::Gtc, 300, 5, 0),
             place(1, false, OrderType::FokBudget, 1_400, 5, 0), // 5*300=1500 > 1400 收入门槛不满足(ASK 要求 calc>=limit)
             place(1, false, OrderType::FokBudget, 1_000, 5, 0), // 1500>=1000 满足 -> 整单成交
+        ];
+        run_scenario(uids, &cmds);
+    }
+
+    /// 裸 FOK：探测限价内可撮合总量，够则整单成交、否则整单 reject 不改簿。Direct 补齐后须镜像 Naive。
+    /// 覆盖：空簿 reject、限价内正好够→全成、差一手→reject（不改簿）、跨价位限价边界（限价外流动性不计入）、ASK 方向。
+    #[test]
+    fn fok_matches_naive() {
+        let uids = vec![1, 2, 3];
+        let cmds = vec![
+            // 1) 空簿：BID FOK 无对手 -> 整单 reject，不改簿。
+            place(0, true, OrderType::Fok, 100, 5, 0),
+            // 2) 限价内正好够（100:3 + 101:2 = 5）：BID FOK@101 size5 -> 整单成交，扫空两档。
+            place(1, false, OrderType::Gtc, 100, 3, 0),
+            place(1, false, OrderType::Gtc, 101, 2, 0),
+            place(0, true, OrderType::Fok, 101, 5, 0),
+            // 3) 差一手：ASK@100 只剩 4，BID FOK@100 size5 -> 整单 reject，ASK@100(4) 留簿不动。
+            place(1, false, OrderType::Gtc, 100, 4, 0),
+            place(0, true, OrderType::Fok, 100, 5, 0),
+            // 4) 跨价位限价边界：再挂 ASK@200 size5（簿内 ASK@100:4 + ASK@200:5）。
+            place(1, false, OrderType::Gtc, 200, 5, 0),
+            //    BID FOK@100 size5：限价内只有 100 档 4 手（200 档在限价外不计入）-> reject，不改簿。
+            place(0, true, OrderType::Fok, 100, 5, 0),
+            //    BID FOK@200 size9：限价内 100(4)+200(5)=9 -> 整单成交，扫空两档。
+            place(0, true, OrderType::Fok, 200, 9, 0),
+            // 5) ASK 方向：挂 BID@50 size10，ASK FOK@50 size6 -> 全成（BID 剩 4）；再 size10 -> 差量 reject。
+            place(1, true, OrderType::Gtc, 50, 10, 0),
+            place(0, false, OrderType::Fok, 50, 6, 0),
+            place(0, false, OrderType::Fok, 50, 10, 0),
         ];
         run_scenario(uids, &cmds);
     }
