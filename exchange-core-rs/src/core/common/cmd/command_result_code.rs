@@ -59,6 +59,13 @@ pub enum CommandResultCode {
     LoanInvalidSymbolType,     // -6070，试图给非-CURRENCY_EXCHANGE_PAIR（期货/交割）配置 loan
     LoanNumeraireNotConfigured, // -6080，Cross BORROW / WITHDRAW fail-close：numeraireCurrency 未设
     LoanNotImplemented,        // -6099，reserved
+
+    RiskMarginPositionExists,
+    UserMgmtUserNotSuspendableHasPositions,
+    UserMgmtUserNotSuspendableNonEmptyAccounts,
+    UserMgmtUserNotSuspended,
+    UserMgmtUserAlreadySuspended,
+    UserMgmtUserNotFound,
 }
 
 impl CommandResultCode {
@@ -114,6 +121,12 @@ impl CommandResultCode {
             CommandResultCode::LoanInvalidSymbolType => -6070,
             CommandResultCode::LoanNumeraireNotConfigured => -6080,
             CommandResultCode::LoanNotImplemented => -6099,
+            CommandResultCode::RiskMarginPositionExists => -2010,
+            CommandResultCode::UserMgmtUserNotSuspendableHasPositions => -4130,
+            CommandResultCode::UserMgmtUserNotSuspendableNonEmptyAccounts => -4131,
+            CommandResultCode::UserMgmtUserNotSuspended => -4132,
+            CommandResultCode::UserMgmtUserAlreadySuspended => -4133,
+            CommandResultCode::UserMgmtUserNotFound => -4201,
         }
     }
 }

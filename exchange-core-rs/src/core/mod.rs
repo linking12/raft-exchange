@@ -7,6 +7,7 @@ pub mod utils;
 
 pub mod exchange_core;
 pub mod exchange_api;
+pub mod reports;
 
 #[cfg(test)]
 mod e2e_tests;

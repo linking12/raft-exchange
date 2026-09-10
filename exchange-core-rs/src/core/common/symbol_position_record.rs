@@ -295,6 +295,83 @@ impl SymbolPositionRecord {
         spec.calculate_maintenance_margin(notional)
     }
 
+    pub fn estimate_liquidation_price(
+        &self,
+        spec: &CoreSymbolSpecification,
+        mark_price: i64,
+        total_balance: i64,
+        total_pnl: i64,
+        total_mm: i64,
+    ) -> i64 {
+        if self.open_volume == 0 {
+            return 0;
+        }
+        let sign = self.direction.multiplier() as i64;
+        let mark_notional = mul_exact(self.open_volume, mark_price);
+        let mm_at_mark = spec.calculate_maintenance_margin(mark_notional);
+
+        let refine = |external_margin: i64, mut liquidation_price: i64| -> i64 {
+            for _ in 1..3 {
+                let lp_notional = mul_exact(liquidation_price, self.open_volume).abs();
+                let mm_at_lp = spec.calculate_maintenance_margin(lp_notional);
+                let next_lp =
+                    add_exact(mul_exact(sign, sub_exact(mm_at_lp, external_margin)), self.open_price_sum)
+                        / self.open_volume;
+                if next_lp == liquidation_price {
+                    break;
+                }
+                let crossed_bracket = if self.direction == PositionDirection::Long {
+                    next_lp <= 0 || next_lp >= mark_price
+                } else {
+                    next_lp <= mark_price
+                };
+                if crossed_bracket {
+                    break;
+                }
+                liquidation_price = next_lp;
+            }
+            liquidation_price
+        };
+
+        if self.margin_mode == MarginMode::Isolated {
+            let total_isolated_margin = add_exact(self.open_init_margin_sum, self.extra_margin);
+            let lp0 = add_exact(mul_exact(sign, sub_exact(mm_at_mark, total_isolated_margin)), self.open_price_sum)
+                / self.open_volume;
+            return refine(total_isolated_margin, lp0);
+        }
+
+        let pnl_other = sub_exact(total_pnl, self.estimate_unrealized_profit(mark_price));
+        let mm_other = sub_exact(total_mm, mm_at_mark);
+        let cross_external_margin = sub_exact(add_exact(total_balance, pnl_other), mm_other);
+
+        let numerator =
+            add_exact(sub_exact(sub_exact(mul_exact(sign, self.open_price_sum), total_balance), pnl_other), mm_other);
+        let diff = sub_exact(mul_exact(sign, mark_notional), mm_at_mark);
+        if diff == 0 {
+            return -1;
+        }
+        let denom = mul_exact(self.open_volume, diff);
+        let lp0 = trunc_mul_div(numerator, mark_notional, denom);
+        if lp0 < 0
+            || (self.direction == PositionDirection::Long && lp0 > mark_price)
+            || (self.direction == PositionDirection::Short && lp0 < mark_price)
+        {
+            return -1;
+        }
+        refine(cross_external_margin, lp0)
+    }
+
+    pub fn estimate_margin_ratio_scale_k(&self, spec: &CoreSymbolSpecification, mark_price: i64, total_margin: i64) -> i64 {
+        if self.open_volume == 0 {
+            return 0;
+        }
+        if total_margin <= 0 {
+            return mul_exact(spec.maintenance_margin_scale_k, -1);
+        }
+        let maintenance_margin = self.calculate_maintenance_margin(spec, mark_price);
+        mul_exact(spec.maintenance_margin_scale_k, maintenance_margin) / total_margin
+    }
+
     /// 对应 Java `calculateRequiredMarginForFutures(CoreSymbolSpecification)`（`:494-496`）：
     /// 单参重载，杠杆取本仓 `self.leverage`。
     pub fn calculate_required_margin_for_futures(&self, spec: &CoreSymbolSpecification) -> i64 {

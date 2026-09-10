@@ -7,6 +7,7 @@ use crate::core::common::user_profile::UserProfile;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::fund_event::{FundEvent, FundEventType, SYSTEM_TRIGGERED_ORDER_ID};
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::matcher_event_type::MatcherEventType;
@@ -48,6 +49,7 @@ fn sub_exact(a: i64, b: i64) -> i64 {
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
+    pub suspends: BTreeMap<i32, i64>,
     pub last_price_cache: BTreeMap<i32, i64>,
     pub cfg_margin_trading_enabled: bool,
     /// 对应 Java `RiskEngine.loanService`：per-shard 借贷池状态+利率模型，供 LoanCommandDispatcher 读写；默认空，对现货/期货既有路径 no-op。
@@ -65,6 +67,7 @@ impl RiskEngine {
         RiskEngine {
             adjustments: BTreeMap::new(),
             fees: BTreeMap::new(),
+            suspends: BTreeMap::new(),
             last_price_cache: BTreeMap::new(),
             cfg_margin_trading_enabled: true,
             loan_service: LoanService::new(),
@@ -105,14 +108,42 @@ impl RiskEngine {
                 OrderCommandType::IfDeposit => self.if_deposit(cmd, ssp),
                 OrderCommandType::IfWithdraw => self.if_withdraw(cmd, ssp),
                 OrderCommandType::SettlePnl => self.settle_pnl(cmd, ups, ssp),
+                OrderCommandType::SuspendUser => self.suspend_user(cmd, ups),
+                OrderCommandType::ResumeUser => ups.resume_user_profile(cmd.uid),
+                OrderCommandType::PositionModeAdjustment => self.position_mode_adjustment(cmd, ups),
+                OrderCommandType::ResetFee => self.reset_fee(cmd),
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
+            if rc == CommandResultCode::Success {
+                match cmd.command {
+                    OrderCommandType::BalanceAdjustment => self.emit_balance_adjustment_event(cmd, ups, ssp),
+                    OrderCommandType::MarginAdjustment => self.emit_margin_adjust_events(cmd, ups, ssp),
+                    _ => {}
+                }
+            }
             cmd.result_code = Some(rc);
             return;
         }
 
         if cmd.command == OrderCommandType::PlaceOrder {
-            cmd.result_code = Some(self.place_order_risk_check(cmd, ups, ssp));
+            let rc = self.place_order_risk_check(cmd, ups, ssp);
+            cmd.result_code = Some(rc);
+            if rc == CommandResultCode::Success {
+                if let Some(spec) = ssp.get_symbol(cmd.symbol) {
+                    let (oid, uid) = (cmd.order_id, cmd.uid);
+                    if spec.symbol_type == SymbolType::CurrencyExchangePair {
+                        let cur = if cmd.action == Some(OrderAction::Bid) { spec.quote_currency } else { spec.base_currency };
+                        Self::push_spot_balance_event(cmd, ups, ssp, FundEventType::Locked, oid, uid, cur);
+                    } else if let Some(action) = cmd.action {
+                        if let Some(up) = ups.get(uid) {
+                            let key = up.create_positions_key(spec.symbol_id, action, cmd.command);
+                            if let Some(pos) = up.positions.get(&key) {
+                                Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::LockPending, oid, pos, spec, up, ssp);
+                            }
+                        }
+                    }
+                }
+            }
         } else if cmd.command == OrderCommandType::ClosePosition {
             cmd.result_code = Some(self.close_position_risk_check(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::SettleFundingfees {
@@ -136,7 +167,11 @@ impl RiskEngine {
             cmd.result_code = Some(self.adl_collect(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::LiquidationScan {
             // LIQUIDATION_SCAN R1，对应 Java :324-327：纯扫描（check_positions），单 shard 恒 Success。
-            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
+            let mut _alerts = Vec::new();
+
+            self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut _alerts);
+
+            cmd.fund_events.append(&mut _alerts);
             cmd.result_code = Some(CommandResultCode::Success);
         }
         // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
@@ -343,7 +378,7 @@ impl RiskEngine {
         // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押；需求 = scale(positionMargin+pendingFee+openLoss) − crossFreeMargin。
         let currency = position.currency;
         let spendable = user_profile.account(currency) - user_profile.locked(currency)
-            - self.loan_collateral_locked(user_profile, currency);
+            - Self::loan_collateral_locked(user_profile, currency);
         let required = arithmetic::size_price_to_currency_scale(
             position_margin + pending_fee + open_loss,
             spec.base_scale_k,
@@ -354,7 +389,7 @@ impl RiskEngine {
     }
 
     /// 对应 Java `loanCollateralLocked`（:1063-1072）：借贷抵押虚拟锁定额（currency scale）= Isolated 各 loan collateral_amount 求和 + Cross 池 currency 直取。抵押物仍在 accounts 里未物理转移，只是防止被顶用。
-    fn loan_collateral_locked(&self, user_profile: &UserProfile, currency: i32) -> i64 {
+    fn loan_collateral_locked(user_profile: &UserProfile, currency: i32) -> i64 {
         let mut locked: i64 = 0;
         for loan in user_profile.isolated_loans.values() {
             if loan.collateral_currency == currency {
@@ -367,7 +402,6 @@ impl RiskEngine {
 
     /// 对应 Java `calculateLockedMargin`（:1079-1083）：单仓期货保证金占用折算到 currency 记账单位，供 calculate_locked 跨 symbol 累加。
     fn calculate_locked_margin(
-        &self,
         position: &SymbolPositionRecord,
         spec: &CoreSymbolSpecification,
         currency_spec: &CoreCurrencySpecification,
@@ -383,7 +417,6 @@ impl RiskEngine {
 
     /// 对应 Java `calculateLocked`（:1040-1055）：用户某 currency 全量锁定额 = 期货保证金占用 + 现货冻结 + 借贷抵押。仅用于报表/事件/结算后余额校验，四处 NSF 场景不直接调用（各走 calculate_free_futures_margin）。
     pub fn calculate_locked(
-        &self,
         user_profile: &UserProfile,
         currency: i32,
         ssp: &SymbolSpecificationProvider,
@@ -395,11 +428,11 @@ impl RiskEngine {
                 let spec = ssp
                     .get_symbol(position.symbol)
                     .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", position.symbol));
-                locked += self.calculate_locked_margin(position, spec, currency_spec);
+                locked += Self::calculate_locked_margin(position, spec, currency_spec);
             }
         }
         locked += user_profile.locked(currency);
-        locked += self.loan_collateral_locked(user_profile, currency);
+        locked += Self::loan_collateral_locked(user_profile, currency);
         locked
     }
 
@@ -486,7 +519,7 @@ impl RiskEngine {
                         currency_spec.currency_scale_k,
                     );
                 }
-                isolated_required_margin += self.calculate_locked_margin(position, spec, currency_spec);
+                isolated_required_margin += Self::calculate_locked_margin(position, spec, currency_spec);
             }
         }
 
@@ -602,7 +635,7 @@ impl RiskEngine {
             0
         };
         // 借贷抵押必扣不能被现货挂单锁走，对应 Java :673（单独减 loanCollateralLocked，不调 calculateLocked）；无 loan 用户恒 0。
-        let loan_locked = self.loan_collateral_locked(user_profile, currency);
+        let loan_locked = Self::loan_collateral_locked(user_profile, currency);
         if balance - existing_locked - loan_locked - order_lock_amount + free_futures_margin < 0 {
             return CommandResultCode::RiskNsf;
         }
@@ -624,7 +657,7 @@ impl RiskEngine {
         }
         // InternalTransfer 同理需在 is_non_trading 早退前特判，对应 Java handlerRiskRelease 的 INTERNAL_TRANSFER_EVENT 分支；载体为 cmd.internal_transfer_event 而非 matcher_event。
         if cmd.command == OrderCommandType::InternalTransfer {
-            self.internal_transfer_apply(cmd, ups);
+            self.internal_transfer_apply(cmd, ups, ssp);
             return;
         }
         // SettleFundingfees 非 is_non_trading，用 cmd.funding_fee_event 专属载体，须在 cmd.matcher_event.take() 之前特判，对应 Java handlerRiskRelease 的 FUNDING_EVENT 分支（:972-976）。
@@ -634,7 +667,11 @@ impl RiskEngine {
             self.settle_funding_fees_apply(cmd, ups, ssp);
             // 对应 Java handlerRiskRelease:977：资金费结算后触发同 symbol 强平检测（结算可能致仓破产）。
             if had_funding_event {
-                self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
+                let mut _alerts = Vec::new();
+
+                self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut _alerts);
+
+                cmd.fund_events.append(&mut _alerts);
             }
             return;
         }
@@ -658,6 +695,7 @@ impl RiskEngine {
         // 期货分支专用，对应 Java lastPriceCache.get(spec.symbolId)；提前取值避免与后续 &mut self.fees 借用冲突，unwrap_or(0) 仅防御性兜底（R1 已保证 mark price 存在）。
         let mark_price_for_futures = self.mark_price(cmd.symbol).unwrap_or(0);
         let fees = &mut self.fees;
+        let last_price_cache = &self.last_price_cache;
         let mut mte = match cmd.matcher_event.take() {
             Some(m) => m,
             None => return,
@@ -696,8 +734,15 @@ impl RiskEngine {
                 (0i64, 0i128)
             };
 
+            let cmd_uid = cmd.uid;
+            let cmd_command = cmd.command;
+            let fund_events = &mut cmd.fund_events;
             Self::handle_matcher_event_margin(
-                cmd,
+                cmd_uid,
+                cmd_command,
+                fund_events,
+                ssp,
+                last_price_cache,
                 mte,
                 &spec,
                 taker_action,
@@ -705,6 +750,7 @@ impl RiskEngine {
                 fees,
                 &quote_currency_spec,
                 mark_price_for_futures,
+                is_force,
             );
 
             // ForceLiquidation R2-finalize 钩子，对应 Java handlerRiskRelease :992 collectLiquidationFee + :997 advanceLiquidation。
@@ -725,9 +771,17 @@ impl RiskEngine {
                         quote_currency_spec.currency_scale_k,
                     );
                     // debit/credit 须对称全有全无，对应 Java collectLiquidationFee 的 takerSpr==null 守护，防守恒破坏。
-                    if let Some(taker) = ups.get_mut(cmd.uid) {
+                    let liq_fee_uid = cmd.uid;
+                    let liq_fee_order_id = cmd.order_id;
+                    let liq_fee_currency = spec.quote_currency;
+                    let liq_fee_symbol = spec.symbol_id;
+                    if let Some(taker) = ups.get_mut(liq_fee_uid) {
                         taker.add_to_account(spec.quote_currency, -quote_fee);
                         self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
+                        let bal = taker.account(liq_fee_currency);
+                        let mut ev = FundEvent::spot(FundEventType::LiquidationFee, liq_fee_order_id, liq_fee_uid, liq_fee_currency, bal, quote_fee);
+                        ev.symbol = liq_fee_symbol;
+                        cmd.fund_events.push(ev);
                     }
                 }
                 // 对应 Java advance_liquidation（:997）：FORCE apply 后推进状态机（全成交闭环 / REJECT→WAIT_IF 入队 IF）。
@@ -779,6 +833,7 @@ impl RiskEngine {
                     .get_currency(currency)
                     .unwrap_or_else(|| panic!("currency spec missing for currency {currency}"))
                     .clone();
+                let mut reject_events = Vec::new();
                 let taker_up = ups.get_or_add_suspended(cmd.uid);
                 Self::handle_matcher_reject_reduce_event_exchange(
                     cmd,
@@ -787,7 +842,10 @@ impl RiskEngine {
                     &currency_spec,
                     taker_sell,
                     taker_up,
+                    &mut reject_events,
+                    ssp,
                 );
+                cmd.fund_events.append(&mut reject_events);
                 mte.next.take()
             } else {
                 Some(mte)
@@ -807,6 +865,7 @@ impl RiskEngine {
                         panic!("currency spec missing for currency {}", spec.quote_currency)
                     })
                     .clone();
+                let mut spot_events = Vec::new();
                 Self::handle_matcher_events_exchange_sell(
                     cmd,
                     remaining,
@@ -815,7 +874,10 @@ impl RiskEngine {
                     &quote_currency_spec,
                     ups,
                     fees,
+                    &mut spot_events,
+                    ssp,
                 );
+                cmd.fund_events.append(&mut spot_events);
                 // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 REJECT/REDUCE 消费后清空的模式）。
             } else {
                 let base_currency_spec = ssp
@@ -830,6 +892,7 @@ impl RiskEngine {
                         panic!("currency spec missing for currency {}", spec.quote_currency)
                     })
                     .clone();
+                let mut spot_events = Vec::new();
                 Self::handle_matcher_events_exchange_buy(
                     cmd,
                     remaining,
@@ -838,7 +901,10 @@ impl RiskEngine {
                     &quote_currency_spec,
                     ups,
                     fees,
+                    &mut spot_events,
+                    ssp,
                 );
+                cmd.fund_events.append(&mut spot_events);
                 // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 sell 分支）。
             }
         }
@@ -877,6 +943,7 @@ impl RiskEngine {
     }
 
     /// 对应 Java `handleMatcherRejectReduceEventExchange`（:1094-1125）：撤单/拒单释放单方冻结（ASK 按 size 直退，BID 按订单类型分档计算），accounts 不动。
+    #[allow(clippy::too_many_arguments)]
     fn handle_matcher_reject_reduce_event_exchange(
         cmd: &OrderCommand,
         mte: &MatcherTradeEvent,
@@ -884,6 +951,8 @@ impl RiskEngine {
         currency_spec: &CoreCurrencySpecification,
         taker_sell: bool,
         taker_up: &mut UserProfile,
+        fund_events: &mut Vec<FundEvent>,
+        ssp: &SymbolSpecificationProvider,
     ) {
         let currency = if taker_sell { spec.base_currency } else { spec.quote_currency };
 
@@ -927,9 +996,30 @@ impl RiskEngine {
         };
 
         taker_up.add_to_locked(currency, -release);
+
+        if let Some(cspec) = ssp.get_currency(currency) {
+            fund_events.push(Self::spot_snapshot_event(FundEventType::Unlocked, cmd.order_id, taker_up, currency, ssp, cspec, spec.symbol_id));
+        }
+    }
+
+    fn spot_snapshot_event(
+        event_type: FundEventType,
+        order_id: i64,
+        up: &UserProfile,
+        currency: i32,
+        ssp: &SymbolSpecificationProvider,
+        currency_spec: &CoreCurrencySpecification,
+        symbol_id: i32,
+    ) -> FundEvent {
+        let locked = Self::calculate_locked(up, currency, ssp, currency_spec);
+        let mut ev = FundEvent::spot(event_type, order_id, up.uid, currency, up.account(currency) - locked, locked);
+        ev.symbol = symbol_id;
+        ev.currency_scale_k = currency_spec.currency_scale_k;
+        ev
     }
 
     /// 对应 Java `handleMatcherEventsExchangeSell`（:1134-1227）：taker 卖(ASK)/maker 买(BID) 现货成交结算，逐笔累加 maker 后一次性按均价结算 taker（避免逐笔 ceil 多产 dust）。
+    #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_sell(
         cmd: &OrderCommand,
         first_trade_mte: Box<MatcherTradeEvent>,
@@ -938,6 +1028,8 @@ impl RiskEngine {
         quote_currency_spec: &CoreCurrencySpecification,
         ups: &mut UserProfileService,
         fees: &mut BTreeMap<i32, i64>,
+        fund_events: &mut Vec<FundEvent>,
+        ssp: &SymbolSpecificationProvider,
     ) {
         let base_currency = spec.base_currency;
         let quote_currency = spec.quote_currency;
@@ -1000,6 +1092,9 @@ impl RiskEngine {
                     base_currency_spec.currency_scale_k,
                 );
                 maker_up.add_to_account(base_currency, base_gained);
+
+                fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, ev.maker_order_id, maker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
+                fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, ev.maker_order_id, maker_up, base_currency, ssp, base_currency_spec, spec.symbol_id));
             }
 
             maker_notional += ev.size as i128 * ev.price as i128;
@@ -1043,6 +1138,9 @@ impl RiskEngine {
                 quote_currency_spec.currency_scale_k,
             );
             taker_up.add_to_account(quote_currency, to_be_added);
+
+            fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, cmd.order_id, taker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
+            fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, cmd.order_id, taker_up, base_currency, ssp, base_currency_spec, spec.symbol_id));
         }
 
         if taker_size != 0 || maker_size != 0 {
@@ -1074,6 +1172,7 @@ impl RiskEngine {
     }
 
     /// 对应 Java `handleMatcherEventsExchangeBuy`（:1238-1343）：taker 买/maker 卖现货结算，是 sell 的镜像；BUDGET 子路径 hold_quote 恒为整份预算，与 Task5 REDUCE release_sp=0 对齐（见文中测试）。
+    #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_buy(
         cmd: &OrderCommand,
         first_trade_mte: Box<MatcherTradeEvent>,
@@ -1082,6 +1181,8 @@ impl RiskEngine {
         quote_currency_spec: &CoreCurrencySpecification,
         ups: &mut UserProfileService,
         fees: &mut BTreeMap<i32, i64>,
+        fund_events: &mut Vec<FundEvent>,
+        ssp: &SymbolSpecificationProvider,
     ) {
         let base_currency = spec.base_currency;
         let quote_currency = spec.quote_currency;
@@ -1131,6 +1232,9 @@ impl RiskEngine {
                     quote_currency_spec.currency_scale_k,
                 );
                 maker_up.add_to_account(quote_currency, to_be_added);
+
+                fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, ev.maker_order_id, maker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
+                fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, ev.maker_order_id, maker_up, base_currency, ssp, base_currency_spec, spec.symbol_id));
             }
 
             maker_notional += ev.size as i128 * ev.price as i128;
@@ -1218,6 +1322,9 @@ impl RiskEngine {
                 base_currency_spec.currency_scale_k,
             );
             taker_up.add_to_account(base_currency, to_be_added);
+
+            fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, cmd.order_id, taker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
+            fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, cmd.order_id, taker_up, base_currency, ssp, base_currency_spec, spec.symbol_id));
         }
 
         if taker_size != 0 || maker_size != 0 {
@@ -1252,7 +1359,11 @@ impl RiskEngine {
     /// 对应 Java handlerRiskRelease 驱动 handleMatcherEventMargin 的外层 do-while 循环，把整条事件链逐个喂给 handle_matcher_event_margin_one；期货不像现货那样需先摘出链头 REJECT/REDUCE（同函数按 event_type 分支处理）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin(
-        cmd: &OrderCommand,
+        cmd_uid: i64,
+        cmd_command: OrderCommandType,
+        fund_events: &mut Vec<FundEvent>,
+        ssp: &SymbolSpecificationProvider,
+        last_price_cache: &BTreeMap<i32, i64>,
         first_mte: Box<MatcherTradeEvent>,
         spec: &CoreSymbolSpecification,
         taker_action: OrderAction,
@@ -1260,11 +1371,16 @@ impl RiskEngine {
         fees: &mut BTreeMap<i32, i64>,
         quote_currency_spec: &CoreCurrencySpecification,
         mark_price: i64,
+        is_liquidation: bool,
     ) {
         let mut node = Some(first_mte);
         while let Some(mut ev) = node {
             Self::handle_matcher_event_margin_one(
-                cmd,
+                cmd_uid,
+                cmd_command,
+                fund_events,
+                ssp,
+                last_price_cache,
                 &ev,
                 spec,
                 taker_action,
@@ -1272,6 +1388,7 @@ impl RiskEngine {
                 fees,
                 quote_currency_spec,
                 mark_price,
+                is_liquidation,
             );
             node = ev.next.take();
         }
@@ -1280,7 +1397,11 @@ impl RiskEngine {
     /// 对应 Java `handleMatcherEventMargin`（:1358-1511）处理单个事件：taker 块恒执行 + maker 块仅 TRADE；maker 侧 createPositionsKey 用 mte.matched_order_command_type（非 cmd.command，对应 Java :1450），ONEWAY 下无影响，HEDGE 下才生效。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin_one(
-        cmd: &OrderCommand,
+        cmd_uid: i64,
+        cmd_command: OrderCommandType,
+        fund_events: &mut Vec<FundEvent>,
+        ssp: &SymbolSpecificationProvider,
+        last_price_cache: &BTreeMap<i32, i64>,
         mte: &MatcherTradeEvent,
         spec: &CoreSymbolSpecification,
         taker_action: OrderAction,
@@ -1288,13 +1409,17 @@ impl RiskEngine {
         fees: &mut BTreeMap<i32, i64>,
         quote_currency_spec: &CoreCurrencySpecification,
         mark_price: i64,
+        is_liquidation: bool,
     ) {
         // taker 块：单 shard 简化下 taker 恒本地（`uidForThisHandler(cmd.uid)` 恒真）。
         {
-            let taker_up = ups.get_or_add_suspended(cmd.uid);
-            let position_key = taker_up.create_positions_key(spec.symbol_id, taker_action, cmd.command);
+            let taker_up = ups.get_or_add_suspended(cmd_uid);
+            let position_key = taker_up.create_positions_key(spec.symbol_id, taker_action, cmd_command);
             // 对应 Java takerSpr==null 的 log.warn 防御性跳过（不 panic）：taker 仓位理论上 R1 已建立，但不强制假设。
             Self::settle_margin_position_event(
+                fund_events,
+                ssp,
+                last_price_cache,
                 taker_up,
                 position_key,
                 /* required = */ false,
@@ -1305,6 +1430,7 @@ impl RiskEngine {
                 quote_currency_spec,
                 mark_price,
                 /* is_taker = */ true,
+                is_liquidation,
             );
         }
 
@@ -1316,6 +1442,9 @@ impl RiskEngine {
                 maker_up.create_positions_key(spec.symbol_id, maker_action, mte.matched_order_command_type);
             // 对应 Java makerUp.getPositionRecordOrThrowEx：maker 仓位记录必须已存在，缺失即数据损坏，panic 而非静默吞掉。
             Self::settle_margin_position_event(
+                fund_events,
+                ssp,
+                last_price_cache,
                 maker_up,
                 position_key,
                 /* required = */ true,
@@ -1326,6 +1455,7 @@ impl RiskEngine {
                 quote_currency_spec,
                 mark_price,
                 /* is_taker = */ false,
+                is_liquidation,
             );
         }
     }
@@ -1333,6 +1463,9 @@ impl RiskEngine {
     /// 对应 Java handleMatcherEventMargin taker 块（:1369-1443）/maker 块（:1445-1510）的状态迁移核心：TRADE 走 pendingRelease→closeCurrentPositionFutures→openPositionMargin，REJECT/REDUCE 仅 pendingRelease；is_empty() 后走 refundExtraMargin+removePositionRecord。
     #[allow(clippy::too_many_arguments)]
     fn settle_margin_position_event(
+        fund_events: &mut Vec<FundEvent>,
+        ssp: &SymbolSpecificationProvider,
+        last_price_cache: &BTreeMap<i32, i64>,
         up: &mut UserProfile,
         position_key: i32,
         required: bool,
@@ -1343,6 +1476,7 @@ impl RiskEngine {
         quote_currency_spec: &CoreCurrencySpecification,
         mark_price: i64,
         is_taker: bool,
+        is_liquidation: bool,
     ) {
         if !up.positions.contains_key(&position_key) {
             if required {
@@ -1361,6 +1495,8 @@ impl RiskEngine {
             MatcherEventType::Trade => {
                 let pre_volume = up.positions.get(&position_key).unwrap().open_volume;
                 up.positions.get_mut(&position_key).unwrap().pending_release(action, mte.size);
+
+                Self::push_futures_event(fund_events, last_price_cache, FundEventType::UnlockPending, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
 
                 let size_to_open = up
                     .positions
@@ -1383,6 +1519,9 @@ impl RiskEngine {
                     );
                     up.add_to_account(quote_currency, -fee);
                     *fees.entry(quote_currency).or_insert(0) += fee;
+
+                    let close_type = if is_liquidation { FundEventType::LiquidationClose } else { FundEventType::ClosePosition };
+                    Self::push_futures_event(fund_events, last_price_cache, close_type, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
                 }
 
                 if size_to_open > 0 {
@@ -1408,10 +1547,13 @@ impl RiskEngine {
                     );
                     up.add_to_account(quote_currency, -fee);
                     *fees.entry(quote_currency).or_insert(0) += fee;
+
+                    Self::push_futures_event(fund_events, last_price_cache, FundEventType::OpenPosition, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
                 }
             }
             MatcherEventType::Reject | MatcherEventType::Reduce => {
                 up.positions.get_mut(&position_key).unwrap().pending_release(action, mte.size);
+                Self::push_futures_event(fund_events, last_price_cache, FundEventType::UnlockPending, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
             }
             MatcherEventType::BinaryEvent => {
                 // 不可达：`handler_risk_release` 顶层已对 BINARY_EVENT 短路返回，链上不会再出现。
@@ -1433,6 +1575,7 @@ impl RiskEngine {
                     quote_currency_spec.currency_scale_k,
                 );
                 up.add_to_account(currency, refund);
+                Self::push_futures_event(fund_events, last_price_cache, FundEventType::MarginRefund, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
                 up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
             }
 
@@ -1447,6 +1590,9 @@ impl RiskEngine {
                 );
                 up.add_to_account(currency, profit_scaled);
             }
+
+            Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
+
             up.positions.remove(&position_key);
         }
     }
@@ -1493,6 +1639,196 @@ impl RiskEngine {
         CommandResultCode::Success
     }
 
+    fn suspend_user(&mut self, cmd: &OrderCommand, ups: &mut UserProfileService) -> CommandResultCode {
+        const DUST_SAFETY_LIMIT: i64 = 1000;
+        if let Some(up) = ups.get_mut(cmd.uid) {
+            if !up.positions.values().any(|p| !p.is_empty()) {
+                let mut eligible = up
+                    .exchange_locked
+                    .iter()
+                    .all(|(&c, &locked)| locked < DUST_SAFETY_LIMIT && up.accounts.get(&c).copied().unwrap_or(0) == locked);
+                if eligible {
+                    eligible = up
+                        .accounts
+                        .iter()
+                        .all(|(&c, &acc)| acc == 0 || up.exchange_locked.get(&c).copied().unwrap_or(0) == acc);
+                }
+                if eligible {
+                    let dust: Vec<(i32, i64)> =
+                        up.exchange_locked.iter().filter(|(_, &v)| v > 0).map(|(&c, &v)| (c, v)).collect();
+                    for (c, d) in dust {
+                        *up.accounts.entry(c).or_insert(0) -= d;
+                        *self.fees.entry(c).or_insert(0) += d;
+                    }
+                    up.exchange_locked.clear();
+                }
+            }
+        }
+        ups.suspend_user_profile(cmd.uid)
+    }
+
+    fn position_mode_adjustment(&self, cmd: &OrderCommand, ups: &mut UserProfileService) -> CommandResultCode {
+        let Some(up) = ups.get_mut(cmd.uid) else {
+            return CommandResultCode::AuthInvalidUser;
+        };
+        let target = PositionMode::of_code(cmd.action.map(|a| a.code()).unwrap_or(0));
+        if up.position_mode == target {
+            return CommandResultCode::Success;
+        }
+        if !up.positions.is_empty() {
+            return CommandResultCode::RiskMarginPositionExists;
+        }
+        up.position_mode = target;
+        CommandResultCode::Success
+    }
+
+    fn reset_fee(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
+        let mut harvested: BTreeMap<i32, i64> = BTreeMap::new();
+        Self::harvest_into(&mut self.fees, &mut self.adjustments, &mut harvested);
+        Self::harvest_into(&mut self.loan_service.interest_revenue, &mut self.adjustments, &mut harvested);
+        for (c, amount) in harvested {
+            cmd.fund_events.push(FundEvent::spot(FundEventType::ResetFee, SYSTEM_TRIGGERED_ORDER_ID, 0, c, amount, 0));
+        }
+        CommandResultCode::Success
+    }
+
+    fn harvest_into(map: &mut BTreeMap<i32, i64>, adjustments: &mut BTreeMap<i32, i64>, harvested: &mut BTreeMap<i32, i64>) {
+        for (&c, v) in map.iter_mut() {
+            let amount = std::mem::replace(v, 0);
+            if amount != 0 {
+                *adjustments.entry(c).or_insert(0) += amount;
+                *harvested.entry(c).or_insert(0) += amount;
+            }
+        }
+    }
+
+    fn mark_of(last_price_cache: &BTreeMap<i32, i64>, symbol: i32) -> i64 {
+        last_price_cache.get(&symbol).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn futures_estimates(last_price_cache: &BTreeMap<i32, i64>, up: &UserProfile, pos: &SymbolPositionRecord, spec: &CoreSymbolSpecification, ssp: &SymbolSpecificationProvider) -> (i64, i64, i64, i64) {
+        if pos.open_volume == 0 {
+            return (0, 0, 0, 0);
+        }
+        let mark = Self::mark_of(last_price_cache, pos.symbol);
+        let upnl = pos.estimate_unrealized_profit(mark);
+        let mmsk = spec.maintenance_margin_scale_k;
+        if pos.margin_mode == MarginMode::Isolated {
+            let total_margin = pos.open_init_margin_sum + upnl + pos.extra_margin;
+            let liq = pos.estimate_liquidation_price(spec, mark, 0, 0, 0);
+            let mr = pos.estimate_margin_ratio_scale_k(spec, mark, total_margin);
+            return (upnl, liq, mr, mmsk);
+        }
+        let mut total_pnl = 0i64;
+        let mut total_mm = 0i64;
+        for p in up.positions.values() {
+            if p.margin_mode != MarginMode::Cross || p.currency != pos.currency {
+                continue;
+            }
+            let Some(p_spec) = ssp.get_symbol(p.symbol) else { continue };
+            let p_mark = Self::mark_of(last_price_cache, p.symbol);
+            total_pnl += p.estimate_pnl(p_mark);
+            total_mm += p.calculate_maintenance_margin(p_spec, p_mark);
+        }
+        let Some(cspec) = ssp.get_currency(pos.currency) else { return (upnl, 0, 0, mmsk) };
+        let balance_ccy = up.calculate_cross_available(pos.currency, cspec, |sid| ssp.get_symbol(sid));
+        let balance = crate::core::utils::core_arithmetic_utils::currency_to_size_price_scale(balance_ccy, spec.base_scale_k, spec.quote_scale_k, cspec.currency_scale_k);
+        let total_margin = balance + total_pnl;
+        let liq = pos.estimate_liquidation_price(spec, mark, balance, total_pnl, total_mm);
+        let mr = pos.estimate_margin_ratio_scale_k(spec, mark, total_margin);
+        (upnl, liq, mr, mmsk)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_futures_event(
+        fund_events: &mut Vec<FundEvent>,
+        last_price_cache: &BTreeMap<i32, i64>,
+        event_type: FundEventType,
+        order_id: i64,
+        pos: &SymbolPositionRecord,
+        spec: &CoreSymbolSpecification,
+        up: &UserProfile,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        let (upnl, liq, mr, mmsk) = Self::futures_estimates(last_price_cache, up, pos, spec, ssp);
+        let (free, locked, cur_scale) = match ssp.get_currency(pos.currency) {
+            Some(cspec) => {
+                let locked = Self::calculate_locked(up, pos.currency, ssp, cspec);
+                (up.account(pos.currency) - locked, locked, cspec.currency_scale_k)
+            }
+            None => (0, 0, 0),
+        };
+        fund_events.push(FundEvent {
+            event_type,
+            order_id,
+            uid: pos.uid,
+            currency: pos.currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
+            symbol: pos.symbol,
+            base_scale_k: spec.base_scale_k,
+            quote_scale_k: spec.quote_scale_k,
+            direction: pos.direction,
+            open_volume: pos.open_volume,
+            open_init_margin_sum: pos.open_init_margin_sum,
+            open_price_sum: pos.open_price_sum,
+            profit: pos.profit,
+            leverage: pos.leverage,
+            margin_mode: pos.margin_mode,
+            extra_margin: pos.extra_margin,
+            unrealized_profit: upnl,
+            liquidation_price: liq,
+            margin_ratio_scale_k: mr,
+            maintenance_margin_scale_k: mmsk,
+            mark_price: Self::mark_of(last_price_cache, pos.symbol),
+            ..Default::default()
+        });
+    }
+
+    fn emit_balance_adjustment_event(&self, cmd: &mut OrderCommand, ups: &UserProfileService, ssp: &SymbolSpecificationProvider) {
+        let ev_type = if cmd.price >= 0 { FundEventType::Deposit } else { FundEventType::Withdraw };
+        Self::push_spot_balance_event(cmd, ups, ssp, ev_type, cmd.order_id, cmd.uid, cmd.symbol);
+    }
+
+    fn emit_margin_adjust_events(&self, cmd: &mut OrderCommand, ups: &UserProfileService, ssp: &SymbolSpecificationProvider) {
+        let Some(up) = ups.get(cmd.uid) else { return };
+        let order_id = cmd.order_id;
+        let lpc = &self.last_price_cache;
+        if cmd.margin_mode == MarginMode::Cross {
+            let currency = cmd.symbol;
+            for pos in up.positions.values() {
+                if pos.margin_mode == MarginMode::Cross && pos.currency == currency {
+                    if let Some(spec) = ssp.get_symbol(pos.symbol) {
+                        Self::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::MarginAdjust, order_id, pos, spec, up, ssp);
+                    }
+                }
+            }
+        } else if let Some(action) = cmd.action {
+            let key = up.create_positions_key(cmd.symbol, action, cmd.command);
+            if let Some(pos) = up.positions.get(&key) {
+                if let Some(spec) = ssp.get_symbol(pos.symbol) {
+                    Self::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::MarginAdjust, order_id, pos, spec, up, ssp);
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_spot_balance_event(
+        cmd: &mut OrderCommand,
+        ups: &UserProfileService,
+        ssp: &SymbolSpecificationProvider,
+        event_type: FundEventType,
+        order_id: i64,
+        uid: i64,
+        currency: i32,
+    ) {
+        let Some(cspec) = ssp.get_currency(currency) else { return };
+        let Some(up) = ups.get(uid) else { return };
+        cmd.fund_events.push(Self::spot_snapshot_event(event_type, order_id, up, currency, ssp, cspec, 0));
+    }
+
     /// 对应 Java RiskEngine.withdrawableBalance（:747-753）：提现/转账/加保证金(ISOLATED)共用 NSF 口径 = accounts − 现货冻结 − 借贷抵押 + 期货净盈余（margin trading 开启才计）；放宽到 pub(crate) 供跨模块复用。
     pub(crate) fn withdrawable_balance(
         &self,
@@ -1506,7 +1842,7 @@ impl RiskEngine {
             0
         };
         user_profile.account(currency) - user_profile.locked(currency)
-            - self.loan_collateral_locked(user_profile, currency)
+            - Self::loan_collateral_locked(user_profile, currency)
             + free_futures_margin
     }
 
@@ -1631,7 +1967,7 @@ impl RiskEngine {
                 currency_spec.currency_scale_k,
             );
             let balance = user_profile.account(spec.quote_currency);
-            let locked = self.calculate_locked(user_profile, spec.quote_currency, ssp, currency_spec);
+            let locked = Self::calculate_locked(user_profile, spec.quote_currency, ssp, currency_spec);
             if diff > balance - locked {
                 return CommandResultCode::RiskNsf;
             }
@@ -1694,13 +2030,13 @@ impl RiskEngine {
         }
         self.set_mark_price(cmd.symbol, cmd.price);
         // 对应 Java adjustMarkPrice:447，价格更新后触发 targeted 强平检测；产出的 FORCE 命令入 liquidation_engine.pending_commands，由 ExchangeCore 排空重喂。
-        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service);
+        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut Vec::new());
         CommandResultCode::Success
     }
 
-    /// 对应 Java RiskEngine.settlePnl（:695-717）+ R1 dispatch SETTLE_PNL（:311-321）：交割合约到期，按交割价整仓平仓+退 extra_margin+结算盈亏+移除记录，复用 adl_close_and_settle；全在 R1 完成 R2 no-op，不发事件（Ruling P6-B）。
-    fn settle_pnl(&mut self, cmd: &OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
+    fn settle_pnl(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let symbol = cmd.symbol;
+        let order_id = cmd.order_id;
         let spec = match ssp.get_symbol(symbol) {
             Some(s) if s.symbol_type == SymbolType::FuturesContractDelivery => s.clone(),
             _ => return CommandResultCode::InvalidSymbol,
@@ -1724,7 +2060,7 @@ impl RiskEngine {
                     let action = if pos.direction == PositionDirection::Long { OrderAction::Ask } else { OrderAction::Bid };
                     (action, pos.open_volume)
                 };
-                Self::adl_close_and_settle(up, key, close_action, size, price, &spec, &currency_spec);
+                Self::adl_close_and_settle(up, key, close_action, size, price, &spec, &currency_spec, &mut cmd.fund_events, &self.last_price_cache, ssp, FundEventType::PnlSettlement, order_id);
             }
         }
         CommandResultCode::Success
@@ -1772,16 +2108,19 @@ impl RiskEngine {
         if rc == CommandResultCode::Success {
             cmd.internal_transfer_event =
                 Some(InternalTransferProcessor::build_matcher_events(to_uid, currency, amount));
+            Self::push_spot_balance_event(cmd, ups, ssp, FundEventType::InternalTransfer, order_id, from_uid, currency);
         }
         rc
     }
 
     /// InternalTransfer R2：对应 Java handlerRiskRelease 的 INTERNAL_TRANSFER_EVENT 分支（applyEvent，:84-98），消费 cmd.internal_transfer_event 给 to-shard 入账（未知 to 自动建 SUSPENDED）。
-    fn internal_transfer_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService) {
+    fn internal_transfer_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
         let Some((to_uid, currency, amount)) = cmd.internal_transfer_event.take() else {
             return;
         };
         InternalTransferProcessor::apply_event(ups, to_uid, currency, amount);
+        let order_id = cmd.order_id;
+        Self::push_spot_balance_event(cmd, ups, ssp, FundEventType::InternalTransfer, order_id, to_uid, currency);
     }
 
     /// SettleFundingfees R1+merge：对应 Java case SETTLE_FUNDINGFEES（:294-309）+ collectInput/buildMatcherEvents（:34-68/:70-126）；门禁顺序逐字对齐 Java：InvalidSymbol → RiskMarkpriceNotAvailable → RiskInvalidAmount；单 shard 归并恒等（Ruling P6-C），结果写入 cmd.funding_fee_event 供 R2 消费。
@@ -1839,6 +2178,18 @@ impl RiskEngine {
             &spec,
             &currency_spec,
         );
+
+        let order_id = cmd.order_id;
+        let lpc = &self.last_price_cache;
+        let payer_dir = PositionDirection::of_action(action);
+        let recv_dir = PositionDirection::of_action(action.opposite());
+        for (&uid, dir) in payer_amounts.keys().map(|u| (u, payer_dir)).chain(receiver_notionals.keys().map(|u| (u, recv_dir))) {
+            if let Some(up) = ups.get(uid) {
+                if let Some(pos) = up.positions.values().find(|p| p.symbol == symbol && p.open_volume != 0 && p.direction == dir) {
+                    Self::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::FundingfeeSettlement, order_id, pos, &spec, up, ssp);
+                }
+            }
+        }
     }
 
     // ==== IF_TAKEOVER（保险基金接管）—— 参考文档 §2.2/§2.3；Java IFCommandProcessor.java + RiskEngine.java:365-373(R1)/:962-988(R2) ====
@@ -1874,6 +2225,9 @@ impl RiskEngine {
             if up.positions.contains_key(&position_key) {
                 up.positions.get_mut(&position_key).unwrap().close_current_position_futures(action.opposite(), cmd.size, price);
 
+                let order_id = cmd.order_id;
+                Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::IfPositionClose, order_id, up.positions.get(&position_key).unwrap(), &spec, up, ssp);
+
                 let is_empty = up.positions.get(&position_key).unwrap().is_empty();
                 if is_empty {
                     let currency = up.positions.get(&position_key).unwrap().currency;
@@ -1887,6 +2241,7 @@ impl RiskEngine {
                             currency_spec.currency_scale_k,
                         );
                         up.add_to_account(currency, refund);
+                        Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::MarginRefund, order_id, up.positions.get(&position_key).unwrap(), &spec, up, ssp);
                         up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
                     }
 
@@ -1899,6 +2254,7 @@ impl RiskEngine {
                             currency_spec.currency_scale_k,
                         );
                         up.add_to_account(currency, profit_scaled);
+                        Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&position_key).unwrap(), &spec, up, ssp);
                     }
                     up.positions.remove(&position_key);
                 }
@@ -1948,6 +2304,7 @@ impl RiskEngine {
     }
 
     /// ADL 关仓+清算 helper：apply（关 counterparty 仓）与 finalize（关 taker 仓）共用，对应 Java ADLCommandProcessor.applyEvent（:196-212）/finalizeForCommand（:220-235）的重复三段；ADL 不收手续费（同 IF_TAKEOVER）故可安全共享。
+    #[allow(clippy::too_many_arguments)]
     fn adl_close_and_settle(
         up: &mut UserProfile,
         position_key: i32,
@@ -1956,11 +2313,18 @@ impl RiskEngine {
         price: i64,
         spec: &CoreSymbolSpecification,
         currency_spec: &CoreCurrencySpecification,
+        fund_events: &mut Vec<FundEvent>,
+        last_price_cache: &BTreeMap<i32, i64>,
+        ssp: &SymbolSpecificationProvider,
+        close_event_type: FundEventType,
+        order_id: i64,
     ) {
         let Some(pos) = up.positions.get_mut(&position_key) else {
             return;
         };
         pos.close_current_position_futures(close_action, size, price);
+
+        Self::push_futures_event(fund_events, last_price_cache, close_event_type, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
 
         let is_empty = up.positions.get(&position_key).map(|p| p.is_empty()).unwrap_or(false);
         if !is_empty {
@@ -1977,6 +2341,7 @@ impl RiskEngine {
                 currency_spec.currency_scale_k,
             );
             up.add_to_account(currency, refund);
+            Self::push_futures_event(fund_events, last_price_cache, FundEventType::MarginRefund, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
             up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
         }
 
@@ -1989,6 +2354,7 @@ impl RiskEngine {
                 currency_spec.currency_scale_k,
             );
             up.add_to_account(currency, profit_scaled);
+            Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
         }
         up.positions.remove(&position_key);
     }
@@ -2018,17 +2384,19 @@ impl RiskEngine {
                 // counterparty 仓位在 R1/R2 之间已被关掉 -> skip，不是 error。
                 continue;
             }
-            Self::adl_close_and_settle(up, position_key, action, exec_size, price, &spec, &currency_spec);
+            let order_id = cmd.order_id;
+            Self::adl_close_and_settle(up, position_key, action, exec_size, price, &spec, &currency_spec, &mut cmd.fund_events, &self.last_price_cache, ssp, FundEventType::AdlPositionClose, order_id);
         }
 
         // finalize 前半：关 taker 自己的仓（只在有实际成交时，对应 Java != REJECT）。
         if !events.is_empty() {
             let taker_uid = cmd.uid;
             let taker_size = cmd.size;
+            let order_id = cmd.order_id;
             let up = ups.get_or_add_suspended(taker_uid);
             let taker_key = up.create_positions_key(symbol, action, OrderCommandType::AutoDeleveraging);
             if up.positions.contains_key(&taker_key) {
-                Self::adl_close_and_settle(up, taker_key, action.opposite(), taker_size, price, &spec, &currency_spec);
+                Self::adl_close_and_settle(up, taker_key, action.opposite(), taker_size, price, &spec, &currency_spec, &mut cmd.fund_events, &self.last_price_cache, ssp, FundEventType::AdlOriginClose, order_id);
             }
         }
 
@@ -4053,8 +4421,8 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false,
         );
 
         let pos = up.positions.get(&FUT_SYMBOL).expect("open 后仍非空（open_volume>0），不应被拆记录");
@@ -4091,8 +4459,8 @@ mod tests {
         let mte = fut_trade_event(5, 110, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false,
         );
 
         let pos = up.positions.get(&FUT_SYMBOL).expect("部分平仍非空，不应拆记录");
@@ -4127,8 +4495,8 @@ mod tests {
         let mte = fut_trade_event(10, 120, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false,
         );
 
         assert!(!up.positions.contains_key(&FUT_SYMBOL), "全平且无残余挂单 → isEmpty → 拆记录");
@@ -4158,8 +4526,8 @@ mod tests {
         let mte = fut_trade_event(15, 120, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false,
         );
 
         let pos = up.positions.get(&FUT_SYMBOL).expect("翻仓后新方向仓位非空，不拆记录");
@@ -4192,8 +4560,8 @@ mod tests {
         let mte = fut_reject_reduce_event(MatcherEventType::Reject, 4);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false,
         );
 
         let pos = up.positions.get(&FUT_SYMBOL).unwrap();
@@ -4222,8 +4590,8 @@ mod tests {
         let mte = fut_reject_reduce_event(MatcherEventType::Reduce, 3); // 释放全部剩余 pending → isEmpty
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false,
         );
 
         assert!(!up.positions.contains_key(&FUT_SYMBOL), "isEmpty 后应拆记录");
@@ -4241,8 +4609,8 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false,
         );
 
         assert!(!up.positions.contains_key(&FUT_SYMBOL), "缺失 position 时 required=false 应静默跳过");
@@ -4261,8 +4629,8 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, true, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, false,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, true, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, false, false,
         );
     }
 
@@ -4284,9 +4652,10 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100,
             false, // is_taker=false → 必须用 maker_fee(3)，不是 taker_fee(10)
+            false,
         );
 
         assert_eq!(up.account(FUT_QUOTE), 10_000 - 30); // maker_fee(3)*size(10)=30
@@ -4312,8 +4681,8 @@ mod tests {
         let mte = fut_trade_event(7, 101, 0); // 刻意用不整除的 size/price 组合放大 ceil 效应
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(
-            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true,
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+            up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false,
         );
         let taker_fee = arithmetic::calculate_taker_fee(7, 101, 333, 10_000);
         assert_ne!(taker_fee, 0);
@@ -4510,7 +4879,7 @@ mod tests {
         let (engine, ups, ssp) = setup_futures(0, 0, 0, 100);
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
-        assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 0);
+        assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 0);
     }
 
     #[test]
@@ -4529,7 +4898,7 @@ mod tests {
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
         // ① 期货保证金(1000) + ② 现货冻结(200) + ③④ 借贷抵押(0, 本用户无 loan)。
-        assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
+        assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
     }
 
     // ---- loanCollateralLocked 虚拟锁——借贷抵押留在 accounts 但不能被挂单/保证金/提现顶用（对应 Java :1063-1072） ----
@@ -4556,17 +4925,17 @@ mod tests {
         }
         let up = ups.get(UID).unwrap();
         // ③ Isolated(300+50，FUT_BASE 的 999 不算) + ④ Cross(100) = 450。
-        assert_eq!(engine.loan_collateral_locked(up, FUT_QUOTE), 450);
-        assert_eq!(engine.loan_collateral_locked(up, FUT_BASE), 999);
+        assert_eq!(RiskEngine::loan_collateral_locked(up, FUT_QUOTE), 450);
+        assert_eq!(RiskEngine::loan_collateral_locked(up, FUT_BASE), 999);
         // 无任何抵押的币种恒 0。
-        assert_eq!(engine.loan_collateral_locked(up, 12345), 0);
+        assert_eq!(RiskEngine::loan_collateral_locked(up, 12345), 0);
     }
 
     #[test]
     fn loan_collateral_locked_zero_for_user_without_loans() {
         // Ruling P5-B：无 loan 用户两个 map 皆空，虚拟锁恒 0，与此前 stub 逐位相同。
         let (engine, ups, _ssp) = setup_futures(0, 0, 1_000, 100);
-        assert_eq!(engine.loan_collateral_locked(ups.get(UID).unwrap(), FUT_QUOTE), 0);
+        assert_eq!(RiskEngine::loan_collateral_locked(ups.get(UID).unwrap(), FUT_QUOTE), 0);
     }
 
     #[test]
@@ -4580,7 +4949,7 @@ mod tests {
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
         // ① 期货(0) + ② 现货冻结(200) + ③④ 借贷抵押(300) = 500。
-        assert_eq!(engine.calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 500);
+        assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 500);
     }
 
     #[test]

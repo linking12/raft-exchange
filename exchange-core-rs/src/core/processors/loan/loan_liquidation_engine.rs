@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::cross_loan_record::CrossLoanRecord;
+use crate::core::common::fund_event::{FundEvent, FundEventType};
 use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
@@ -59,6 +60,7 @@ impl LoanLiquidationEngine {
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
         loan_service: &LoanService,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         if cmd.symbol >= 0 {
             let spec = match ssp.get_symbol(cmd.symbol) {
@@ -77,7 +79,7 @@ impl LoanLiquidationEngine {
             }
             for uid in uids {
                 if let Some(up) = ups.get(uid) {
-                    self.check_user(up, cmd.timestamp, ssp, last_price_cache, loan_service);
+                    self.check_user(up, cmd.timestamp, ssp, last_price_cache, loan_service, fund_events);
                 }
             }
             return;
@@ -86,7 +88,7 @@ impl LoanLiquidationEngine {
             if !covered_by_scan_slice(cmd, up.uid) {
                 continue;
             }
-            self.check_user(up, cmd.timestamp, ssp, last_price_cache, loan_service);
+            self.check_user(up, cmd.timestamp, ssp, last_price_cache, loan_service, fund_events);
         }
     }
 
@@ -98,11 +100,12 @@ impl LoanLiquidationEngine {
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
         loan_service: &LoanService,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         for loan in up.isolated_loans.values() {
-            self.check_isolated(loan, ts, ssp, last_price_cache, loan_service);
+            self.check_isolated(loan, ts, ssp, last_price_cache, loan_service, fund_events);
         }
-        self.check_cross(up, ts, ssp, last_price_cache, loan_service);
+        self.check_cross(up, ts, ssp, last_price_cache, loan_service, fund_events);
     }
 
     /// 对应 Java `checkIsolated`（`:136-186`）：越 liquidationLtv 或 LOCKED 定息超期则提交 `LOAN_FORCE_LIQUIDATE`（ASK/IOC，限价=破产价）；sub-lot 尘埃 skip；越 marginCall 线仅预警（P6-B no-op）。
@@ -113,6 +116,7 @@ impl LoanLiquidationEngine {
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
         loan_service: &LoanService,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         if loan.is_empty() {
             return;
@@ -163,8 +167,20 @@ impl LoanLiquidationEngine {
                 timestamp: ts,
                 ..Default::default()
             });
+        } else if ltv_scaled >= mul_exact_local(collateral_value, spec.loan_config.margin_call_ltv_bps as i64) {
+            fund_events.push(FundEvent {
+                event_type: FundEventType::LoanMarginCall,
+                order_id: loan.loan_id,
+                uid: loan.uid,
+                currency: loan.loan_currency,
+                loan_mode: 0,
+                loan_ltv_bps: ltv_scaled / collateral_value,
+                loan_threshold_bps: spec.loan_config.margin_call_ltv_bps as i64,
+                loan_collateral_currency: loan.collateral_currency,
+                loan_collateral_pledged: loan.collateral_amount,
+                ..Default::default()
+            });
         }
-        // 越 marginCall 线：仅预警（P6-B no-op，不移植 send_margin_call）——无动作。
     }
 
     /// 对应 Java `checkCross`（`:195-247`）：越 crossLiquidationLtv 则每 tick 选一对(卖出抵押币,偿还目标 loan)提交 `LOAN_CROSS_FORCE_LIQUIDATE`，多 tick 收敛；触发用加权 LTV，定价用 raw LTV（缺则回落）。
@@ -175,6 +191,7 @@ impl LoanLiquidationEngine {
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
         loan_service: &LoanService,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         if up.cross_loans.is_empty() {
             return;
@@ -182,7 +199,16 @@ impl LoanLiquidationEngine {
         // 触发用加权 LTV（scanner 走 fail_closed=false：缺价保守返 0 不误强平）。
         let ltv_bps = loan_service.calculate_cross_account_ltv_bps(up, ts, ssp, last_price_cache, false);
         if ltv_bps < loan_service.global_config.cross_liquidation_ltv_bps as i64 {
-            // 越 marginCall 线仅预警（P6-B no-op）。
+            if ltv_bps >= loan_service.global_config.cross_margin_call_ltv_bps as i64 {
+                fund_events.push(FundEvent {
+                    event_type: FundEventType::LoanMarginCall,
+                    uid: up.uid,
+                    loan_mode: 1,
+                    loan_ltv_bps: ltv_bps,
+                    loan_threshold_bps: loan_service.global_config.cross_margin_call_ltv_bps as i64,
+                    ..Default::default()
+                });
+            }
             return;
         }
         let selling_currency = match self.pick_cross_collateral_to_sell(up, ssp, last_price_cache) {
@@ -518,7 +544,7 @@ mod tests {
         let ls = LoanService::new();
         let cmd = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: SYMBOL, timestamp: 5_000, ..Default::default() };
         // targeted：需索引里有 uid。
-        e.check_loans(&cmd, &ups, ssp, &price_cache(), &ls);
+        e.check_loans(&cmd, &ups, ssp, &price_cache(), &ls, &mut Vec::new());
     }
 
     #[test]
@@ -585,7 +611,7 @@ mod tests {
         ups.users.insert(UID, up);
         let ls = LoanService::new();
         let cmd = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: SYMBOL, timestamp: 2 * MS_PER_DAY, ..Default::default() };
-        e.check_loans(&cmd, &ups, &ssp, &price_cache(), &ls);
+        e.check_loans(&cmd, &ups, &ssp, &price_cache(), &ls, &mut Vec::new());
 
         assert_eq!(e.pending_commands.len(), 1, "LOCKED 超期 -> 强平（不看 LTV）");
     }
@@ -704,7 +730,7 @@ mod tests {
         let ls = LoanService::new();
         // markprice on SYMBOL(base=COLL, quote=LOANC)：并集 = isolated[SYMBOL] ∪ cross[COLL] ∪ cross[LOANC]。
         let cmd = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: SYMBOL, timestamp: 5_000, ..Default::default() };
-        e.check_loans(&cmd, &ups, &ssp, &price_cache(), &ls);
+        e.check_loans(&cmd, &ups, &ssp, &price_cache(), &ls, &mut Vec::new());
 
         // A 的 isolated loan 越线 -> 一条 FORCE；B 无 cross loan（只有抵押无借款）-> checkCross 早退。
         assert_eq!(e.pending_commands.len(), 1);

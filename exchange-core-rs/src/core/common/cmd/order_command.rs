@@ -10,6 +10,7 @@ use crate::core::common::order_type::OrderType;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::l2_market_data::L2MarketData;
+use crate::core::common::fund_event::FundEvent;
 
 /// 对应 Java `OrderCommand.FLAG_REDUCE_ONLY`：`orderFlags` 位标记，仅在 `PLACE_ORDER` 中表示"只减仓"（不开新敞口）。
 pub const FLAG_REDUCE_ONLY: i32 = 1;
@@ -115,6 +116,8 @@ pub struct OrderCommand {
     /// "跨 shard 归并"是恒等操作，同 `if_takeover_collect` 先例）写入，同时把 `cmd.size` 改写为实际消费
     /// 总量（对应 Java `cmd.size -= remaining`）。其余命令类型恒为空 `Vec`。
     pub adl_events: Vec<(i64, i64)>,
+
+    pub fund_events: Vec<FundEvent>,
 }
 
 impl OrderCommand {

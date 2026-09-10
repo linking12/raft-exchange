@@ -2,6 +2,7 @@
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::fund_event::{FundEvent, FundEventType};
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::cross_loan_record::CrossLoanRecord;
 use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
@@ -134,6 +135,75 @@ impl LoanCommandDispatcher {
         LoanService::collateral_value_in_quote_currency(amount, spec, mark_price, base_spec, quote_spec)
     }
 
+    fn push_isolated_loan_event(
+        cmd: &mut OrderCommand,
+        engine: &RiskEngine,
+        ssp: &SymbolSpecificationProvider,
+        loan: &IsolatedLoanRecord,
+        event_type: FundEventType,
+    ) {
+        let ltv_bps = match ssp.get_symbol(loan.symbol_id) {
+            Some(spec) => {
+                let mark = engine.mark_price(loan.symbol_id).unwrap_or(0);
+                let coll = Self::eval_collateral_in_loan_currency(ssp, loan.collateral_amount, spec, mark);
+                let debt = add_exact(loan.outstanding_principal, loan.accumulated_interest);
+                if coll > 0 { mul_exact(debt, BPS_SCALE) / coll } else { 0 }
+            }
+            None => 0,
+        };
+        cmd.fund_events.push(FundEvent {
+            event_type,
+            order_id: loan.loan_id,
+            uid: loan.uid,
+            currency: loan.loan_currency,
+            loan_mode: 0,
+            loan_debt_principal: loan.outstanding_principal,
+            loan_debt_interest: loan.accumulated_interest,
+            loan_interest_paid_total: loan.cum_interest_paid,
+            loan_ltv_bps: ltv_bps,
+            loan_collateral_currency: loan.collateral_currency,
+            loan_collateral_pledged: loan.collateral_amount,
+            ..Default::default()
+        });
+    }
+
+    fn push_cross_loan_event(
+        cmd: &mut OrderCommand,
+        engine: &RiskEngine,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        loan: &CrossLoanRecord,
+        event_type: FundEventType,
+        timestamp: i64,
+    ) {
+        let ltv_bps =
+            engine.loan_service.calculate_cross_account_ltv_bps(up, timestamp, ssp, &engine.last_price_cache, true);
+        cmd.fund_events.push(FundEvent {
+            event_type,
+            order_id: loan.loan_id,
+            uid: loan.uid,
+            currency: loan.loan_currency,
+            loan_mode: 1,
+            loan_debt_principal: loan.outstanding_principal,
+            loan_debt_interest: loan.accumulated_interest,
+            loan_interest_paid_total: loan.cum_interest_paid,
+            loan_ltv_bps: ltv_bps,
+            ..Default::default()
+        });
+    }
+
+    fn push_cross_collateral_change_event(cmd: &mut OrderCommand, uid: i64, currency: i32, pledged: i64, ltv_bps: i64) {
+        cmd.fund_events.push(FundEvent {
+            event_type: FundEventType::LoanCollateralChange,
+            uid,
+            loan_mode: 1,
+            loan_ltv_bps: ltv_bps,
+            loan_collateral_currency: currency,
+            loan_collateral_pledged: pledged,
+            ..Default::default()
+        });
+    }
+
     // LOAN_CREATE —— 参考文档 §2.1，Java handleLoanCreate（:130-209）
 
     /// 开仓 Isolated 借贷（参考文档 §2.1，逐字对齐 Java `:141-176`）：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。`LOAN_BORROW` 事件不移植（无事件总线）。
@@ -193,7 +263,7 @@ impl LoanCommandDispatcher {
             .get_currency(collateral_currency)
             .unwrap_or_else(|| panic!("currency spec missing for currency {collateral_currency}"));
         let free_collateral_currency = up.account(collateral_currency)
-            - engine.calculate_locked(up, collateral_currency, ssp, collateral_currency_spec);
+            - RiskEngine::calculate_locked(up, collateral_currency, ssp, collateral_currency_spec);
         if free_collateral_currency < collateral_amount {
             return CommandResultCode::LoanCollateralInsufficient;
         }
@@ -230,6 +300,9 @@ impl LoanCommandDispatcher {
 
         engine.loan_service.disburse_loan(up, loan_currency, principal);
 
+        let loan_ref = up.isolated_loans.get(&loan_id).expect("just inserted");
+        Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanBorrow);
+
         CommandResultCode::Success
     }
 
@@ -261,7 +334,7 @@ impl LoanCommandDispatcher {
         let loan_currency_spec = ssp
             .get_currency(loan_currency)
             .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
-        let free = up.account(loan_currency) - engine.calculate_locked(up, loan_currency, ssp, loan_currency_spec);
+        let free = up.account(loan_currency) - RiskEngine::calculate_locked(up, loan_currency, ssp, loan_currency_spec);
         if free < actual_repay {
             return CommandResultCode::LoanAccountInsufficient;
         }
@@ -296,6 +369,10 @@ impl LoanCommandDispatcher {
         let rc = Self::settle_repay_isolated(engine, up, loan_id, cmd, ssp);
         if rc != CommandResultCode::Success {
             return rc;
+        }
+
+        if let Some(loan_ref) = up.isolated_loans.get(&loan_id) {
+            Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanRepay);
         }
 
         let is_empty = up.isolated_loans.get(&loan_id).map(|l| l.is_empty()).unwrap_or(true);
@@ -337,7 +414,7 @@ impl LoanCommandDispatcher {
             .get_currency(collateral_currency)
             .unwrap_or_else(|| panic!("currency spec missing for currency {collateral_currency}"));
         let free = up.account(collateral_currency)
-            - engine.calculate_locked(up, collateral_currency, ssp, collateral_currency_spec);
+            - RiskEngine::calculate_locked(up, collateral_currency, ssp, collateral_currency_spec);
         if free < amount {
             return CommandResultCode::LoanCollateralInsufficient;
         }
@@ -345,6 +422,9 @@ impl LoanCommandDispatcher {
         let loan = up.isolated_loans.get_mut(&loan_id).expect("loan existence checked above");
         engine.loan_service.accrue_to(loan, cmd.timestamp);
         loan.collateral_amount = add_exact(loan.collateral_amount, amount);
+
+        let loan_ref = up.isolated_loans.get(&loan_id).expect("just updated");
+        Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanCollateralChange);
         CommandResultCode::Success
     }
 
@@ -413,6 +493,10 @@ impl LoanCommandDispatcher {
         let loan = up.isolated_loans.get_mut(&loan_id).expect("loan existence checked above");
         loan.collateral_amount = new_collateral;
         let is_empty = loan.is_empty();
+
+        let loan_ref = up.isolated_loans.get(&loan_id).expect("just updated");
+        Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanCollateralChange);
+
         if is_empty {
             up.isolated_loans.remove(&loan_id);
         }
@@ -469,11 +553,10 @@ impl LoanCommandDispatcher {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// R2：结算完 spot ASK IOC 后调用（owner shard；单 shard 恒真），对应 Java postProcessLoanForceLiquidate（:423-525）：REJECT 回填 collateralAmount，TRADE 所得走 [`LoanService::settle_liquidation_proceeds`]，接不住或抵押成尘埃时由 LIF 承接（[`Self::take_over_by_insurance_fund`]）；三聚合量由调用方非破坏性 peek `cmd.matcher_event` 后传入以替代重新遍历（数值与 Java 逐字一致）；无 FundEvent 事件总线故不发 LOAN_LIQUIDATED，账本状态是权威真相源。
     #[allow(clippy::too_many_arguments)]
     pub fn post_process_loan_force_liquidate(
         engine: &mut RiskEngine,
-        cmd: &OrderCommand,
+        cmd: &mut OrderCommand,
         spec: &CoreSymbolSpecification,
         taker_up: &mut UserProfile,
         ssp: &SymbolSpecificationProvider,
@@ -529,7 +612,8 @@ impl LoanCommandDispatcher {
             (loan.outstanding_principal, loan.accumulated_interest, loan.collateral_amount);
 
         // ④ 终态判定：债清关 loan / 接不住转 LIF / 其余保留等下轮。
-        if remain_debt > 0 && (traded_size == 0 || sellable_lots == 0) {
+        let lif_takeover = remain_debt > 0 && (traded_size == 0 || sellable_lots == 0);
+        if lif_takeover {
             // 全拒或抵押已碎成卖不掉的尘埃而债务仍在 → LIF 承接，避免无限重试。
             Self::take_over_by_insurance_fund(
                 engine,
@@ -540,11 +624,15 @@ impl LoanCommandDispatcher {
                 collateral_currency,
                 collateral,
             );
-            taker_up.isolated_loans.remove(&loan_id);
-        } else if principal == 0 && interest == 0 && collateral == 0 {
+        }
+        if traded_size > 0 || lif_takeover {
+            if let Some(loan_ref) = taker_up.isolated_loans.get(&loan_id) {
+                Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanLiquidated);
+            }
+        }
+        if lif_takeover || (principal == 0 && interest == 0 && collateral == 0) {
             taker_up.isolated_loans.remove(&loan_id);
         }
-        // else：部分成交，loan 原样保留（无事件快照，见方法文档"无事件缺口"）。
     }
 
     /// LIF 承接不良 Isolated 贷款，对应 Java 私有 takeOverByInsuranceFund（:921-933）：按债务全额代偿、取走全部抵押；LIF 允许为负（垫资非损失），抵押从 accounts 真实划转，是整个借贷子系统唯一的物理资金转移（§6.3/§3.4）。
@@ -594,12 +682,17 @@ impl LoanCommandDispatcher {
         let currency_spec = ssp
             .get_currency(currency)
             .expect("collateral_weight_for_base>0 implies the currency spec exists");
-        let free = up.account(currency) - engine.calculate_locked(up, currency, ssp, currency_spec);
+        let free = up.account(currency) - RiskEngine::calculate_locked(up, currency, ssp, currency_spec);
         if free < amount {
             return CommandResultCode::LoanCollateralInsufficient;
         }
 
         up.add_to_cross_loan_collateral(currency, amount);
+
+        let uid = cmd.uid;
+        let ltv = engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
+        let pledged = up.cross_loan_collateral.get(&currency).copied().unwrap_or(0);
+        Self::push_cross_collateral_change_event(cmd, uid, currency, pledged, ltv);
         CommandResultCode::Success
     }
 
@@ -635,6 +728,10 @@ impl LoanCommandDispatcher {
             up.add_to_cross_loan_collateral(currency, amount); // revert
             return CommandResultCode::LoanCrossLtvTooHighAfterWithdraw;
         }
+
+        let uid = cmd.uid;
+        let pledged = up.cross_loan_collateral.get(&currency).copied().unwrap_or(0);
+        Self::push_cross_collateral_change_event(cmd, uid, currency, pledged, new_ltv);
         CommandResultCode::Success
     }
 
@@ -694,6 +791,10 @@ impl LoanCommandDispatcher {
         }
 
         engine.loan_service.disburse_loan(up, loan_currency, principal);
+
+        let ts = cmd.timestamp;
+        let loan_ref = up.cross_loans.get(&loan_id).expect("just inserted");
+        Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanBorrow, ts);
         CommandResultCode::Success
     }
 
@@ -721,7 +822,7 @@ impl LoanCommandDispatcher {
         let loan_currency_spec = ssp
             .get_currency(loan_currency)
             .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
-        let free = up.account(loan_currency) - engine.calculate_locked(up, loan_currency, ssp, loan_currency_spec);
+        let free = up.account(loan_currency) - RiskEngine::calculate_locked(up, loan_currency, ssp, loan_currency_spec);
         if free < actual_repay {
             return CommandResultCode::LoanAccountInsufficient;
         }
@@ -755,6 +856,11 @@ impl LoanCommandDispatcher {
         let rc = Self::settle_repay_cross(engine, up, loan_id, cmd, ssp);
         if rc != CommandResultCode::Success {
             return rc;
+        }
+
+        let ts = cmd.timestamp;
+        if let Some(loan_ref) = up.cross_loans.get(&loan_id) {
+            Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanRepay, ts);
         }
 
         let is_empty = up.cross_loans.get(&loan_id).map(|l| l.is_empty()).unwrap_or(true);
@@ -811,11 +917,10 @@ impl LoanCommandDispatcher {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// R2：结算完 spot ASK IOC 后调用，对应 Java postProcessLoanCrossForceLiquidate（:753-863）：REJECT 回填账户级 cross_loan_collateral，TRADE 所得走 [`LoanService::settle_liquidation_proceeds`] 偿 targetLoan，抵押结构性耗尽（或全拒）且债务未清则 LIF 按占比承接目标 loan（[`LoanService::take_over_cross_loan`]）及其余 Cross 债务（[`Self::take_over_remaining_cross_loans`]）；三聚合量/fail-closed/无事件说明同 [`Self::post_process_loan_force_liquidate`]。
     #[allow(clippy::too_many_arguments)]
     pub fn post_process_loan_cross_force_liquidate(
         engine: &mut RiskEngine,
-        cmd: &OrderCommand,
+        cmd: &mut OrderCommand,
         spec: &CoreSymbolSpecification,
         taker_up: &mut UserProfile,
         ssp: &SymbolSpecificationProvider,
@@ -878,14 +983,23 @@ impl LoanCommandDispatcher {
         }
 
         // 市场按破产价都接不住（全拒），或抵押结构上已无法变现，而债务仍在 → LIF 按债务占比承接。
+        let ts = cmd.timestamp;
         if remain_target_debt > 0 && (traded_size == 0 || all_collateral_exhausted) {
             let taken_over =
                 engine.loan_service.take_over_cross_loan(taker_up, target_loan_id, cmd.timestamp, ssp, &engine.last_price_cache);
             if taken_over {
+                if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
+                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts);
+                }
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
             }
             // else：喂价缺失无法估值 → fail-closed，保留 loan 原样等下一轮（Java 打 warn log）。
         } else {
+            if traded_size > 0 {
+                if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
+                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts);
+                }
+            }
             let is_empty = {
                 let l = taker_up.cross_loans.get(&target_loan_id).expect("checked above");
                 l.outstanding_principal == 0 && l.accumulated_interest == 0
@@ -893,12 +1007,10 @@ impl LoanCommandDispatcher {
             if is_empty {
                 taker_up.cross_loans.remove(&target_loan_id);
             }
-            // else：部分成交，loan 原样保留（无事件快照）。
         }
 
-        // 抵押结构性耗尽 → 账户其余未偿债务一并由 LIF 承接（按 loanId 升序，见方法文档）。
         if all_collateral_exhausted {
-            Self::take_over_remaining_cross_loans(engine, taker_up, cmd.timestamp, target_loan_id, ssp);
+            Self::take_over_remaining_cross_loans(engine, cmd, taker_up, cmd.timestamp, target_loan_id, ssp);
         }
         // Java 在此调用 syncCrossExposure 维护 scanner 的 cross 索引（cross_loan_currency_to_users）。本仓 R2 postProcess
         // 直接从 risk_engine 调入、绕过 dispatch，故 reconcile_loan_indices（仅 R1/用户命令跑）在此不触发——刻意跳过。
@@ -912,8 +1024,10 @@ impl LoanCommandDispatcher {
     }
 
     /// 抵押结构性耗尽时把账户其余未偿 Cross 债务一并交给 LIF 承接，对应 Java 私有 takeOverRemainingCrossLoans（:873-902）：按 loanId 升序遍历（BTreeMap 天然升序，对齐 Java 显式 sort，必须确定性），跳过 target_loan_id 及 fail-closed 的笔；事件缺口同其余各处说明。
+    #[allow(clippy::too_many_arguments)]
     fn take_over_remaining_cross_loans(
         engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
         up: &mut UserProfile,
         now: i64,
         target_loan_id: i64,
@@ -936,6 +1050,9 @@ impl LoanCommandDispatcher {
             if !taken_over {
                 // fail-closed：Java 打 warn log，跳过继续下一笔。
                 continue;
+            }
+            if let Some(l) = up.cross_loans.get(&loan_id) {
+                Self::push_cross_loan_event(cmd, engine, ssp, up, l, FundEventType::LoanLiquidated, now);
             }
             Self::close_and_recycle_cross_loan(up, loan_id);
         }
