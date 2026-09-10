@@ -106,6 +106,11 @@ pub enum OrderCommandType {
     /// `is_non_trading()`（ME/R2 no-op），与 Java `case SETTLE_PNL` 返回 `false`（不下 ME）等价。
     SettlePnl,
 
+    SuspendUser,
+    ResumeUser,
+    PositionModeAdjustment,
+    ResetFee,
+
     Reset,
     Nop,
 }
@@ -159,6 +164,10 @@ impl OrderCommandType {
             OrderCommandType::IfWithdraw => 43,
             OrderCommandType::LiquidationScan => 44,
             OrderCommandType::SettlePnl => 26, // 对齐 Java SETTLE_PNL((byte)26)
+            OrderCommandType::SuspendUser => 12,
+            OrderCommandType::ResumeUser => 13,
+            OrderCommandType::PositionModeAdjustment => 22,
+            OrderCommandType::ResetFee => 27,
         }
     }
 
@@ -190,6 +199,10 @@ impl OrderCommandType {
                 | OrderCommandType::IfDeposit
                 | OrderCommandType::IfWithdraw
                 | OrderCommandType::SettlePnl
+                | OrderCommandType::SuspendUser
+                | OrderCommandType::ResumeUser
+                | OrderCommandType::PositionModeAdjustment
+                | OrderCommandType::ResetFee
         )
     }
 

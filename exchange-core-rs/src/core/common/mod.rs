@@ -6,6 +6,7 @@ pub mod batch_add_loan_command;
 pub mod cmd;
 pub mod core_currency_specification;
 pub mod core_symbol_specification;
+pub mod fund_event;
 pub mod cross_loan_record;
 pub mod isolated_loan_record;
 pub mod l2_market_data;

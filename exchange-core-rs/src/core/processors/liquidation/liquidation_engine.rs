@@ -8,6 +8,7 @@ use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::matcher_event_type::MatcherEventType;
+use crate::core::common::fund_event::{FundEvent, FundEventType};
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
 use crate::core::common::position_direction::PositionDirection;
@@ -29,6 +30,12 @@ struct LiquidationDecision {
     position_key: i32,
     bankruptcy_price: i64,
     size: i64,
+}
+
+enum IsolatedCheck {
+    Liquidate(LiquidationDecision),
+    Alert,
+    Healthy,
 }
 
 /// 对应 Java `LiquidationEngine`：只持有非复制 leader-local 状态（provider 传参不持有）。
@@ -74,6 +81,7 @@ impl LiquidationEngine {
     }
 
     /// 对应 Java `checkPositions(cmd)`（`:130-148`）：强平检测入口（leader-only）。targeted（`symbol>=0`）查索引；`LIQUIDATION_SCAN`（`symbol<0`）全量整扫+切片过滤兜底。
+    #[allow(clippy::too_many_arguments)]
     pub fn check_positions(
         &mut self,
         cmd: &OrderCommand,
@@ -81,6 +89,7 @@ impl LiquidationEngine {
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
         loan_service: &LoanService,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         if !self.is_running {
             return;
@@ -95,7 +104,7 @@ impl LiquidationEngine {
             ups.users.keys().copied().filter(|&uid| Self::covered_by_scan_slice(cmd, uid)).collect()
         };
         for uid in &uids {
-            self.check_user(*uid, cmd.timestamp, ups, ssp, last_price_cache);
+            self.check_user(*uid, cmd.timestamp, ups, ssp, last_price_cache, fund_events);
         }
 
         // lazy-prune：targeted 检测时顺带清理已无该 symbol 仓位的持有者（等效 Java eager 摘除，索引精度不影响正确性）。
@@ -110,11 +119,12 @@ impl LiquidationEngine {
             }
         }
         // 尾部委托借贷扫描器（对应 Java `checkPositions:147` loanLiquidationEngine.checkLoans）。
-        self.loan_liquidation_engine.check_loans(cmd, ups, ssp, last_price_cache, loan_service);
+        self.loan_liquidation_engine.check_loans(cmd, ups, ssp, last_price_cache, loan_service, fund_events);
         self.pending_commands.append(&mut self.loan_liquidation_engine.pending_commands);
     }
 
     /// 对应 Java `checkUser`（`:171-197`）：逐仓分类，ISOLATED 立即判定、CROSS 交给 `check_cross_decisions`；拆两阶段（只读算决策/`&mut` 应用）应对 Rust 借用规则，行为与 Java 一步到位等价。
+    #[allow(clippy::too_many_arguments)]
     fn check_user(
         &mut self,
         uid: i64,
@@ -122,6 +132,7 @@ impl LiquidationEngine {
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         // ---- 阶段 1：只读 profile，算全部决策 ----
         let decisions: Vec<LiquidationDecision> = {
@@ -148,8 +159,10 @@ impl LiquidationEngine {
                     None => continue,
                 };
                 if position.margin_mode == MarginMode::Isolated {
-                    if let Some(d) = Self::check_isolated_decision(key, position, spec, mark_price) {
-                        decisions.push(d);
+                    match Self::check_isolated_decision(key, position, spec, mark_price) {
+                        IsolatedCheck::Liquidate(d) => decisions.push(d),
+                        IsolatedCheck::Alert => fund_events.push(Self::notification_event(FundEventType::MarginAlert, uid, position)),
+                        IsolatedCheck::Healthy => {}
                     }
                 } else {
                     cross_by_currency.entry(spec.quote_currency).or_default().push(key);
@@ -165,29 +178,48 @@ impl LiquidationEngine {
                 Some(p) => p,
                 None => return,
             };
+            if let Some(pos) = profile.positions.get(&d.position_key) {
+                fund_events.push(Self::notification_event(FundEventType::LiquidationAlert, uid, pos));
+            }
             self.start_liquidation_flow(profile, d, ts);
         }
     }
 
-    /// 对应 Java `checkIsolated`（`:199-215`）——纯判定版：`equity`（含 extra_margin）`< MM` 触发；逐字对齐 Java，equity 与 `calculate_size_to_liquidate` 内部的 E（不含 extra_margin）是两个不同量。越预警线 no-op（Ruling P6-B）。
+    fn notification_event(event_type: FundEventType, uid: i64, position: &SymbolPositionRecord) -> FundEvent {
+        FundEvent {
+            event_type,
+            uid,
+            symbol: position.symbol,
+            currency: position.currency,
+            direction: position.direction,
+            open_volume: position.open_volume,
+            open_price_sum: position.open_price_sum,
+            margin_mode: position.margin_mode,
+            ..Default::default()
+        }
+    }
+
     fn check_isolated_decision(
         position_key: i32,
         position: &SymbolPositionRecord,
         spec: &CoreSymbolSpecification,
         mark_price: i64,
-    ) -> Option<LiquidationDecision> {
+    ) -> IsolatedCheck {
         let profit = position.estimate_unrealized_profit(mark_price);
         let equity = position.open_init_margin_sum + profit + position.extra_margin;
         let maintenance_margin = position.calculate_maintenance_margin(spec, mark_price);
         if equity >= maintenance_margin {
-            return None; // >= MM：健康或仅越预警线（P6-B no-op）
+            if maintenance_margin > 0 && equity < maintenance_margin.saturating_mul(12) / 10 {
+                return IsolatedCheck::Alert;
+            }
+            return IsolatedCheck::Healthy;
         }
         let bankruptcy_price = position.calculate_bankruptcy_price(spec, |_| 0); // NO_CROSS
         let size_to_liquidate = position.open_volume.min(Self::size_to_liquidate_for(position, maintenance_margin, mark_price));
         if size_to_liquidate <= 0 {
-            return None;
+            return IsolatedCheck::Healthy;
         }
-        Some(LiquidationDecision { position_key, bankruptcy_price, size: size_to_liquidate })
+        IsolatedCheck::Liquidate(LiquidationDecision { position_key, bankruptcy_price, size: size_to_liquidate })
     }
 
     /// 对应 Java `checkCross`（`:218-264`）+ `forceCrossLiquidation`（`:266-286`）——纯判定版：逐 quote 币种算账户级 equity/风险度，`equity < MM` 时按风险度升序逐仓强平至覆盖 deficit；`MM<=equity<1.2×MM` 仅预警（P6-B no-op）。
@@ -632,7 +664,7 @@ mod tests {
         insert_long(&mut ups, UID);
         lpc.insert(FUT_SYMBOL, 50); // 深度水下
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
         assert!(engine.pending_commands.is_empty(), "follower 不检测、不提交");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
     }
@@ -647,7 +679,7 @@ mod tests {
         lpc.insert(FUT_SYMBOL, 50); // mark=50：profit=-500，equity=-400 < MM=25 -> 触发
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
         assert_eq!(engine.pending_commands.len(), 1, "触发一条 FORCE");
         let force = &engine.pending_commands[0];
@@ -673,7 +705,7 @@ mod tests {
         lpc.insert(FUT_SYMBOL, 100); // mark=100：profit=0，equity=100 >= MM=50 -> 健康
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
 
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
         assert!(engine.pending_commands.is_empty(), "健康仓不触发");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
@@ -687,8 +719,8 @@ mod tests {
         lpc.insert(FUT_SYMBOL, 50);
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new());
-        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new()); // 第二次：flow 已存在 -> 幂等跳过
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
         assert_eq!(engine.pending_commands.len(), 1, "flow 已在 -> 第二次不重复提交（幂等门）");
     }
@@ -704,7 +736,7 @@ mod tests {
         // scan slice：sliceCount=2、scanSlice=1 -> 只查 uid mod 2 == 1（uid=1），跳过 uid=2。
         let scan = OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid: 1, size: 2, timestamp: 5_000, ..Default::default() };
 
-        engine.check_positions(&scan, &mut ups, &ssp, &lpc, &LoanService::new());
+        engine.check_positions(&scan, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
         assert_eq!(engine.pending_commands.len(), 1, "只 uid=1 在切片内");
         assert_eq!(engine.pending_commands[0].uid, 1);

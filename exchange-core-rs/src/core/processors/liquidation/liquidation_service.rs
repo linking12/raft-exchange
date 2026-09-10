@@ -41,6 +41,11 @@ pub struct IfPositionRecord {
 }
 
 impl IfPositionRecord {
+    pub fn position_value(&self, mark: i64) -> i64 {
+        let unrealized = self.direction.multiplier() as i64 * (self.open_volume * mark - self.open_price_sum);
+        self.open_price_sum + unrealized
+    }
+
     fn fold_hash(&self, h: i64) -> i64 {
         // direction 用 multiplier() 保持跨节点/版本稳定（同 Java 注释）。
         let h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);

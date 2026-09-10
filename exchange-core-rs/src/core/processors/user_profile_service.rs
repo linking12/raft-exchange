@@ -33,6 +33,40 @@ impl UserProfileService {
         self.users.get_mut(&uid)
     }
 
+    pub fn suspend_user_profile(&mut self, uid: i64) -> CommandResultCode {
+        let Some(up) = self.users.get(&uid) else {
+            return CommandResultCode::UserMgmtUserNotFound;
+        };
+        if up.user_status == UserStatus::Suspended {
+            return CommandResultCode::UserMgmtUserAlreadySuspended;
+        }
+        if up.positions.values().any(|p| !p.is_empty()) {
+            return CommandResultCode::UserMgmtUserNotSuspendableHasPositions;
+        }
+        if up.accounts.values().any(|&v| v != 0) {
+            return CommandResultCode::UserMgmtUserNotSuspendableNonEmptyAccounts;
+        }
+        if up.exchange_locked.values().any(|&v| v != 0) {
+            return CommandResultCode::UserMgmtUserNotSuspendableNonEmptyAccounts;
+        }
+        self.users.remove(&uid);
+        CommandResultCode::Success
+    }
+
+    pub fn resume_user_profile(&mut self, uid: i64) -> CommandResultCode {
+        match self.users.get_mut(&uid) {
+            None => {
+                self.users.insert(uid, UserProfile::new(uid, UserStatus::Active));
+                CommandResultCode::Success
+            }
+            Some(up) if up.user_status != UserStatus::Suspended => CommandResultCode::UserMgmtUserNotSuspended,
+            Some(up) => {
+                up.user_status = UserStatus::Active;
+                CommandResultCode::Success
+            }
+        }
+    }
+
     /// 对应 Java `getUserProfileOrAddSuspended`：不存在则以 SUSPENDED 状态创建（他 shard 用户首次引用时的兜底路径）。
     pub fn get_or_add_suspended(&mut self, uid: i64) -> &mut UserProfile {
         self.users
