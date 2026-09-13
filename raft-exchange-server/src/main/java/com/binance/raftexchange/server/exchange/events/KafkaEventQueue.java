@@ -5,15 +5,19 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.LockSupport;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,6 +45,8 @@ public final class KafkaEventQueue implements KafkaEventSink, Closeable {
 
     private volatile boolean running = true;
     private final Thread senderThread;
+
+    private static final int MAX_SEND_BATCH = 1000;
 
     // Chronicle index 编码 cycle+seq 不能直接相减；用两个 adder 算 backlog。
     private final LongAdder enqueuedCount = new LongAdder();
@@ -119,6 +125,7 @@ public final class KafkaEventQueue implements KafkaEventSink, Closeable {
             }
         }
 
+        List<PendingSend> batch = new ArrayList<>(MAX_SEND_BATCH);
         while (running) {
             // Kafka producer 尚未 bind（Kafka init 还在后台）→ park 等待 bindProducers 唤醒。
             // 期间 enqueue 走 Chronicle 累积，不会丢。
@@ -126,44 +133,64 @@ public final class KafkaEventQueue implements KafkaEventSink, Closeable {
                 LockSupport.parkNanos(TimeUnit.SECONDS.toNanos(1));
                 continue;
             }
+            batch.clear();
+            drainBatch(tailer, groups, batch);
+            if (batch.isEmpty()) {
+                LockSupport.parkNanos(100_000L); // 100µs idle poll
+                continue;
+            }
+            sendBatchWithRetry(batch);
+        }
+        tailer.close();
+    }
+
+    private void drainBatch(ExcerptTailer tailer, IEventsHandlerByKafka.TopicGroup[] groups, List<PendingSend> batch) {
+        while (batch.size() < MAX_SEND_BATCH) {
             try (DocumentContext dc = tailer.readingDocument()) {
                 if (!dc.isPresent()) {
-                    LockSupport.parkNanos(100_000L); // 100µs idle poll
-                    continue;
+                    return;
                 }
-
                 long entryIndex = dc.index();
-
                 Bytes<?> b = dc.wire().bytes();
                 IEventsHandlerByKafka.TopicGroup group = groups[b.readUnsignedByte()];
                 long key = b.readLong();
                 int len = b.readInt();
                 byte[] payload = new byte[len];
                 b.read(payload);
-                sendWithRetry(group, key, payload, entryIndex);
+                batch.add(new PendingSend(group, key, payload, entryIndex));
             }
         }
-        tailer.close();
     }
 
-    private void sendWithRetry(IEventsHandlerByKafka.TopicGroup group, long key, byte[] payload, long entryIndex) {
-        ProducerRecord<Long, byte[]> record = new ProducerRecord<>(topics.get(group), key, payload);
-        long sendStart = System.nanoTime();
-        while (running) {
+    private void sendBatchWithRetry(List<PendingSend> batch) {
+        int next = 0;
+        while (running && next < batch.size()) {
+            int base = next;
+            List<Future<RecordMetadata>> futures = new ArrayList<>(batch.size() - base);
+            long sendStart = System.nanoTime();
+            for (int i = base; i < batch.size(); i++) {
+                PendingSend p = batch.get(i);
+                futures.add(producers.get(p.group()).send(new ProducerRecord<>(topics.get(p.group()), p.key(), p.payload())));
+            }
             try {
-                producers.get(group).send(record).get();
-                RaftExchangeMetrics.Kafka.recordSendSuccess(group.name(), System.nanoTime() - sendStart);
-                sentCount.increment();
-                saveCursor(entryIndex);
-                return;
+                while (next < batch.size()) {
+                    futures.get(next - base).get();
+                    RaftExchangeMetrics.Kafka.recordSendSuccess(batch.get(next).group().name(), System.nanoTime() - sendStart);
+                    sentCount.increment();
+                    next++;
+                }
             } catch (Exception e) {
-                RaftExchangeMetrics.Kafka.recordSendFailure(group.name());
-                LOG.error("Kafka send failed, retrying in 1s, group={} key={}", group, key, e);
+                RaftExchangeMetrics.Kafka.recordSendFailure(batch.get(next).group().name());
+                LOG.error("Kafka batch send failed at offset {}/{}, retrying in 1s", next, batch.size(), e);
                 LockSupport.parkNanos(TimeUnit.SECONDS.toNanos(1));
-                sendStart = System.nanoTime();
+            }
+            if (next > base) {
+                saveCursor(batch.get(next - 1).entryIndex());
             }
         }
     }
+
+    private record PendingSend(IEventsHandlerByKafka.TopicGroup group, long key, byte[] payload, long entryIndex) {}
 
     private long readCursor() {
         if (!Files.exists(cursorFile))

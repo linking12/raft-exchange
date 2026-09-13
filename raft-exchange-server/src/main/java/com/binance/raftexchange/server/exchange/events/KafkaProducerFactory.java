@@ -58,7 +58,7 @@ public final class KafkaProducerFactory {
         Properties p = new Properties();
         p.put("retries", 3);
         p.put("retry.backoff.ms", 500);
-        p.put("linger.ms", 100);
+        p.put("linger.ms", 0);
         p.put("batch.size", 512 * 1024);
         p.put("buffer.memory", 512 * 1024 * 1024);
         p.put("compression.type", "lz4");
@@ -70,8 +70,7 @@ public final class KafkaProducerFactory {
         p.put("max.block.ms", 5000);
         p.put("auto.include.jmx.reporter", false);
         p.put("max.in.flight.requests.per.connection", 5);
-        // idempotence=false：重试 / leader 切换 / broker 挂掉时允许重复 + 局部乱序
-        p.put("enable.idempotence", false);
+        p.put("enable.idempotence", true);
         p.put("connections.max.idle.ms", 60000);
         p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.LongSerializer");
         p.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
