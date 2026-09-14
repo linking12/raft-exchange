@@ -22,6 +22,7 @@ pub mod position_direction;
 pub mod position_mode;
 pub mod symbol_loan_specification;
 pub mod symbol_position_record;
+pub mod time_window_dedup_set;
 pub mod symbol_type;
 pub mod user_profile;
 pub mod user_status;

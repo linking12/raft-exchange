@@ -1288,8 +1288,7 @@ impl IOrderBook for OrderBookDirectImpl {
     }
 
     /// L2 快照。对应 Java `fillAsks`/`fillBids`(`:916-935`)：**纯桶图迭代、不走链**——ask 按 `ask_price_buckets` 升序、bid 按 `bid_price_buckets` 降序（`.rev()`），均最优价最先，
-    /// 每档取 `bucket.tail.price`/`bucket.volume`，按 `size` 截断。`size==0`→零档、负数→不限档、正数→截断到该档数——与 `OrderBookNaiveImpl::fill_l2` 语义逐位一致
-    /// （L2MarketData 本移植未含 `ask_orders`/`bid_orders` 字段，故不填 `num_orders`）。
+    /// 每档取 `bucket.tail.price`/`bucket.volume`/`bucket.num_orders`，按 `size` 截断。`size==0`→零档、负数→不限档、正数→截断到该档数——与 `OrderBookNaiveImpl::fill_l2` 语义逐位一致。
     fn fill_l2(&self, size: i32) -> L2MarketData {
         let take: usize = match size {
             0 => 0,

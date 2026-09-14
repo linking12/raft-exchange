@@ -44,6 +44,34 @@ pub struct CoreSymbolSpecification {
 }
 
 impl CoreSymbolSpecification {
+    /// 对应 Java `CoreSymbolSpecification.stateHash()`：折入 symbol config 全部业务字段供 raft 跨节点分叉探测
+    /// （14 字段，逐字对齐 Java——刻意排除 `init_margin`/`init_margin_scale_k`，Java `stateHash` 亦不含）。
+    /// `maintenance_margin`/`max_leverage` 是分层 `BTreeMap`（天然升序，确定性）。
+    pub fn state_hash(&self) -> i32 {
+        let mut h: i64 = 17;
+        h = h.wrapping_mul(31).wrapping_add(self.symbol_id as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.symbol_type.code() as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.base_currency as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.quote_currency as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.base_scale_k);
+        h = h.wrapping_mul(31).wrapping_add(self.quote_scale_k);
+        h = h.wrapping_mul(31).wrapping_add(self.taker_fee);
+        h = h.wrapping_mul(31).wrapping_add(self.maker_fee);
+        h = h.wrapping_mul(31).wrapping_add(self.liquidation_fee);
+        h = h.wrapping_mul(31).wrapping_add(self.fee_scale_k);
+        for (&k, &v) in &self.maintenance_margin {
+            h = h.wrapping_mul(31).wrapping_add(k);
+            h = h.wrapping_mul(31).wrapping_add(v);
+        }
+        h = h.wrapping_mul(31).wrapping_add(self.maintenance_margin_scale_k);
+        for (&k, &v) in &self.max_leverage {
+            h = h.wrapping_mul(31).wrapping_add(k);
+            h = h.wrapping_mul(31).wrapping_add(v);
+        }
+        h = h.wrapping_mul(31).wrapping_add(self.loan_config.state_hash() as i64);
+        ((h >> 32) as i32) ^ (h as i32)
+    }
+
     /// 对应 Java `CoreSymbolSpecification.isFixedFee()`：`feeScaleK == 0` 表示固定费用（非比例费率）。
     pub fn is_fixed_fee(&self) -> bool {
         self.fee_scale_k == 0
@@ -112,6 +140,20 @@ impl CoreSymbolSpecification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_hash_deterministic_and_sensitive_to_fee_and_loan_config() {
+        let base = spot_spec(1_000_000);
+        assert_eq!(base.state_hash(), base.clone().state_hash());
+        // 费率变化必改 hash（原折叠漏掉 taker_fee 会漏检）。
+        let mut fee_changed = base.clone();
+        fee_changed.taker_fee += 1;
+        assert_ne!(base.state_hash(), fee_changed.state_hash());
+        // loan_config 变化必改 hash（ADD_LOAN 会改它）。
+        let mut loan_changed = base.clone();
+        loan_changed.loan_config.initial_ltv_bps += 1;
+        assert_ne!(base.state_hash(), loan_changed.state_hash());
+    }
 
     fn spot_spec(fee_scale_k: i64) -> CoreSymbolSpecification {
         CoreSymbolSpecification {

@@ -29,12 +29,29 @@ impl ExchangeCore {
 
     /// 确定性顺序管线：R1(`RiskEngine::pre_process_command`)→ME(`MatchingEngineRouter::process_order`)→R2(`RiskEngine::handler_risk_release`)，镜像 Java disruptor 的 Grouping/ResultsHandler 语义（线程编排不建模）；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路，等价 Java 全命令过三个 disruptor 处理器。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
+        if cmd.command == crate::core::common::cmd::order_command_type::OrderCommandType::Reset {
+            // 对应 Java RiskEngine `case RESET: reset()`（`:329-334`）：清空全引擎业务态并回 SUCCESS，不过 R1→ME→R2。
+            self.reset();
+            cmd.result_code = Some(crate::core::common::cmd::command_result_code::CommandResultCode::Success);
+            return;
+        }
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
         self.matching.process_order(cmd); // ME
         // R2 只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游 `SimpleEventsProcessor` 读取（对齐 Java：
         // handlerRiskRelease 从不 null matcherEvent，链存活到结果处理器）。
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
         self.drain_liquidation_commands();
+    }
+
+    /// 对应 Java `RiskEngine.reset()` + 各 provider `reset()`：RESET 命令清空全引擎业务态（用户/仓位/费用/specs/
+    /// 价格缓存/loan+IF 服务/撮合簿）。保留 leader-local 的 `liquidation_engine`（同 Java 不 reset liquidationEngine）。
+    fn reset(&mut self) {
+        self.risk.reset();
+        self.ups.users.clear();
+        self.ssp.symbols.clear();
+        self.ssp.currencies.clear();
+        self.ssp.rebuild_spot_pair_index();
+        self.matching.reset();
     }
 
     /// 排空强平引擎提交队列，把生成的 FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING 命令逐条喂回 R1→ME→R2（替代 Java disruptor `submit` 重入）；FIFO 逐条弹出保序，链深≤3/仓位必然收敛。
@@ -147,6 +164,40 @@ mod tests {
         // 非交易命令不进 ME：cmd.market_data/matcher_event 均未被触碰。
         assert!(cmd.matcher_event.is_none());
         assert!(cmd.market_data.is_none());
+    }
+
+    #[test]
+    fn reset_wipes_all_engine_state() {
+        let mut core = seeded_core();
+        core.ups.add_empty_user_profile(1);
+        core.risk.set_mark_price(spot_spec().symbol_id, 100);
+        core.ups.get_mut(1).unwrap().add_to_account(QUOTE, 5_000);
+        *core.risk.fees.entry(QUOTE).or_insert(0) += 7;
+        // 挂一笔 GTC 进簿。
+        let mut place = OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 10,
+            uid: 1,
+            symbol: spot_spec().symbol_id,
+            price: 100,
+            size: 5,
+            action: Some(crate::core::common::order_action::OrderAction::Bid),
+            order_type: Some(crate::core::common::order_type::OrderType::Gtc),
+            reserve_bid_price: 100,
+            ..Default::default()
+        };
+        core.process_command(&mut place);
+        assert!(!core.ups.users.is_empty() && !core.ssp.symbols.is_empty());
+
+        let mut reset = OrderCommand { command: OrderCommandType::Reset, ..Default::default() };
+        core.process_command(&mut reset);
+
+        assert_eq!(reset.result_code, Some(CommandResultCode::Success));
+        assert!(core.ups.users.is_empty(), "用户清空");
+        assert!(core.ssp.symbols.is_empty() && core.ssp.currencies.is_empty(), "specs 清空");
+        assert!(core.risk.fees.is_empty() && core.risk.adjustments.is_empty() && core.risk.suspends.is_empty(), "费用/对冲桶清空");
+        assert!(core.risk.last_price_cache.is_empty(), "价格缓存清空");
+        assert_eq!(core.matching.order_books_state_hash(), 17, "撮合簿清空（空 hash 种子 17）");
     }
 
     #[test]

@@ -22,6 +22,21 @@ impl MatchingEngineRouter {
         MatchingEngineRouter { books: BTreeMap::new() }
     }
 
+    /// 撮合簿子状态哈希（对应 Java StateHashReport `MATCHING_ORDER_BOOKS`）：按 symbol 升序折入各簿 `state_hash`。
+    pub fn order_books_state_hash(&self) -> i64 {
+        let mut h: i64 = 17;
+        for (&sym, book) in &self.books {
+            h = h.wrapping_mul(31).wrapping_add(sym as i64);
+            h = h.wrapping_mul(31).wrapping_add(book.state_hash() as i64);
+        }
+        h
+    }
+
+    /// 对应 Java `MatchingEngineRouter.reset()`：清空全部撮合簿（RESET 命令用）。
+    pub fn reset(&mut self) {
+        self.books.clear();
+    }
+
     /// 对应 Java `MatchingEngineRouter.addSymbol`（`:276-289`，现货子集，重复 add 幂等忽略）。
     pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
         // 幂等：已存在则保留原簿；用 with_symbol_spec 注入真实 spec 供 move_order 现货 BID 风控用。
