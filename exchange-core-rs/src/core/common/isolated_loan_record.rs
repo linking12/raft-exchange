@@ -89,7 +89,7 @@ impl IsolatedLoanRecord {
         r
     }
 
-    /// 对应 Java `initialize(...)`（`:80-96`）：复用一条记录前必须先重置 identity + 可变状态。
+    /// 对应 Java `initialize(...)`：复用一条记录前必须先重置 identity + 可变状态。
     #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         &mut self,
@@ -117,12 +117,12 @@ impl IsolatedLoanRecord {
         self.cum_interest_paid = 0;
     }
 
-    /// 对应 Java `isEmpty()`（`:98-100`）：三个金额字段全 0 才算空（可清理回收）。
+    /// 对应 Java `isEmpty()`：三个金额字段全 0 才算空（可清理回收）。
     pub fn is_empty(&self) -> bool {
         self.collateral_amount == 0 && self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `stateHash()`（`:192-197`），风格对齐 `UserProfile::state_hash`；不保证与 Java 数值相等，仅保证同态同 hash。
+    /// 对应 Java `stateHash()`，风格对齐 `UserProfile::state_hash`；不保证与 Java 数值相等，仅保证同态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);

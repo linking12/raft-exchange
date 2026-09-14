@@ -1,14 +1,7 @@
-//! `OrderBookDirectImpl` ↔ `OrderBookNaiveImpl` 差分对拍（proptest + 定向场景）。
+//! `OrderBookDirectImpl` ↔ `OrderBookNaiveImpl` 差分对拍（proptest + 定向场景）：Direct 镜像 Naive，须逐位一致。
+//! 两簿均用 `new()`（`symbol_spec=None`），现货 BID 移价风控守卫惰性，不构成分歧源。裸 FOK 也纳入差分范围（两簿统一补齐 all-or-nothing 语义）。
 //!
-//! 对应参考文档 `docs/superpowers/specs/2026-09-01-p2-orderbook-direct-reference.md` §7/§8；唯一记录在案的内部差异
-//! （FOK_BUDGET BID 价界复用）已由 Ruling P2-1 收敛：Direct 镜像 Naive，不复刻 Java "复用 cmd.price 当每单价上限"的巧合。
-//!
-//! 构造约定（Ruling P2-3）：两簿均用 `new()` 且 `symbol_spec=None`，Direct 现货 BID 移价风控守卫天然惰性，同 Naive 无此风控，不构成分歧源。
-//!
-//! 裸 `OrderType::Fok` 现已纳入差分范围：Java Direct/Naive 均未落地（TODO），本移植统一在两簿补齐 all-or-nothing 语义，Direct 镜像 Naive，故须逐位一致。
-//!
-//! 数值边界：`price ∈ [1, 100_000]`、`size ∈ [1, 1_000]`，BUDGET `cmd.price ∈ [1, 20_000_000]`，最大 notional 远低于 `i64::MAX/4`，
-//! 避免触碰溢出饱和路径（Direct 饱和/Naive wrap，故意不等价，不该被本测试意外命中）。
+//! 数值边界 `price ∈ [1, 100_000]`、`size ∈ [1, 1_000]`、BUDGET `cmd.price ∈ [1, 20_000_000]` 均远低于 `i64::MAX/4`，避免触碰溢出饱和路径（Direct 饱和/Naive wrap，故意不等价）。
 
 use std::panic;
 
@@ -191,7 +184,7 @@ fn matcher_events_diff(
 // 差分执行 harness：两簿并行喂同一条命令流，每步后比对全部可观测面。
 // ============================================================================================
 
-/// 两簿 + 共享的 GTC 已签发订单登记表（供 Cancel/Reduce/Move 选取目标）；两簿均不带交易对 spec（见模块头），Direct 现货 BID 移价风控守卫（Ruling P2-3）惰性，不构成分歧源。
+/// 两簿 + 共享的 GTC 已签发订单登记表（供 Cancel/Reduce/Move 选取目标）；两簿均不带交易对 spec（见模块头）。
 struct DiffHarness {
     naive: OrderBookNaiveImpl,
     direct: OrderBookDirectImpl,
@@ -448,7 +441,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
-    /// cancel + move：撤中间一笔 BID，另一笔移到能撮合对手 ASK 的新价（move 作为 taker 重新撮合路径；两簿均不带 symbol_spec，Direct BID 移价守卫惰性，不构成分歧源）。
+    /// cancel + move：撤中间一笔 BID，另一笔移到能撮合对手 ASK 的新价（move 作为 taker 重新撮合路径）。
     #[test]
     fn cancel_and_move_matches_naive() {
         let uids = vec![1, 2, 3];
@@ -465,9 +458,7 @@ mod scenario_tests {
     }
 
     /// move 到能立即成交的新价：验证 move 后作为 taker 撮合，部分成交重挂新价/全部成交不重挂两条分支。
-    ///
-    /// `issued` 下标提醒：ASK 是 `issued[0]`、BID 是 `issued[1]`，`target_idx` 须用 `1` 才能移动 BID 与 ASK 交叉
-    /// （早期误用 0 挪动了 ASK 导致测试未测到预期路径，复现了与 proptest 相同的 `bidder_hold_price` 分歧，见 `p2-task7-report.md`）。
+    /// `issued` 下标：ASK 是 `issued[0]`、BID 是 `issued[1]`，`target_idx` 须用 `1` 才能让 BID 移到与 ASK 交叉。
     #[test]
     fn move_into_crossing_price_matches_naive() {
         let uids = vec![1, 2];
@@ -497,13 +488,13 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
-    /// FOK_BUDGET：满足/不满足两条路径，含 §8 专测——小预算恰好覆盖高价 ASK，验证 Ruling P2-1（Direct 镜像 Naive、不设每单价上限）下两簿判定一致；及预算不足的整单 reject 对照。
+    /// FOK_BUDGET：满足/不满足两条路径，含小预算恰好覆盖高价 ASK（Direct 镜像 Naive、不设每单价上限）与预算不足整单 reject 的对照。
     #[test]
     fn fok_budget_matches_naive_including_ruling_p2_1_case() {
         let uids = vec![1, 2];
         let cmds = vec![
             place(0, false, OrderType::Gtc, 480, 1, 0), // 唯一一档 ASK@480 size1
-            // 预算 500 >= 480*1，应整单成交（Ruling P2-1 场景）。
+            // 预算 500 >= 480*1，应整单成交。
             place(1, true, OrderType::FokBudget, 500, 1, 0),
             // 重新铺一档更贵的 ASK，验证预算不足的 reject 路径。
             place(0, false, OrderType::Gtc, 1_000, 2, 0),

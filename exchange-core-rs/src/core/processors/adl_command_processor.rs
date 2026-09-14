@@ -1,6 +1,4 @@
-//! 对应 Java `ADLCommandProcessor`（`TwoStepCommandProcessor` 实例）。`AUTO_DELEVERAGING` 两步处理器：R1 按
-//! risk_score DESC 选盈利候选+预占 pending_adl_size，merge best-of-N 消费出执行量，R2 关 counterparty 仓位+对称释放
-//! （参考文档 §3、§11.1）。事件载体用 `adl_user_positions`/`adl_events` 而非 Java `MatcherEventType::ADL_EVENT`（Ruling P6-A/P6-C），单 shard 下 merge 只读迭代取代克隆+游标。
+//! 对应 Java `ADLCommandProcessor`（两步处理器）：`AUTO_DELEVERAGING` R1 按 risk_score DESC 选盈利候选 + 预占 pending_adl_size，merge 消费出执行量，R2 关 counterparty 仓位 + 对称释放。
 use crate::core::common::adl_user_position::AdlUserPosition;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
@@ -10,7 +8,7 @@ use crate::core::processors::liquidation::liquidation_service::LiquidationServic
 pub struct AdlCommandProcessor;
 
 impl AdlCommandProcessor {
-    /// R1：对应 Java `collectInput`（`:52-100`）——按 risk_score DESC（稳定排序）贪心分配，筛选反向+浮盈候选，直至 remaining_size 耗尽；不写回 pending_adl_size（调用方职责）。
+    /// R1：对应 Java `collectInput`——按 risk_score DESC 贪心分配，筛选反向+浮盈候选，直至 remaining_size 耗尽；不写回 pending_adl_size（调用方职责）。
     pub fn collect_input(
         candidates: Vec<SymbolPositionRecord>,
         symbol: i32,
@@ -28,11 +26,11 @@ impl AdlCommandProcessor {
             })
             .collect();
 
-        // 逐字复刻 Java `sortThisByLong(riskScore).reverseThis()`（`:70`）：升序稳定排序再整体 reverse，同分 tie-break 会反转相对序，不等价于直接降序稳定排序。
+        // 逐字复刻 Java `sortThisByLong(riskScore).reverseThis()`：升序稳定排序再整体 reverse，同分 tie-break 会反转相对序，不等价于直接降序稳定排序。
         let mut scored: Vec<(i64, SymbolPositionRecord)> =
             filtered.into_iter().map(|pos| (LiquidationService::risk_score(&pos, bankruptcy_price), pos)).collect();
-        scored.sort_by(|a, b| a.0.cmp(&b.0)); // 升序稳定（对应 sortThisByLong）
-        scored.reverse(); // 整体反转（对应 reverseThis，同分序也反转）
+        scored.sort_by(|a, b| a.0.cmp(&b.0)); // 升序稳定
+        scored.reverse(); // 整体反转（同分序也反转）
 
         let mut remaining = remaining_size;
         let mut out = Vec::new();
@@ -48,7 +46,7 @@ impl AdlCommandProcessor {
         out
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:102-165`）——单 shard 塌缩版（Ruling P6-C），顺序遍历已排序候选取 exec=min(volume,remaining)；返回 (events, total_consumed)，空/耗尽时返回空 events（对应 Java `buildRejectEvent()`）。
+    /// merge：对应 Java `buildMatcherEvents`（单 shard 塌缩版）——顺序遍历已排序候选取 exec=min(volume,remaining)；返回 (events, total_consumed)，空/耗尽时返回空 events。
     pub fn build_matcher_events(candidates: &[AdlUserPosition], remaining_size: i64) -> (Vec<(i64, i64)>, i64) {
         let mut remaining = remaining_size;
         let mut events = Vec::new();

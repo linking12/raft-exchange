@@ -1,23 +1,17 @@
-//! 对应 Java `IFCommandProcessor`（`TwoStepCommandProcessor` 薄实例）。`IF_TAKEOVER` 两步处理器：R1 各 shard 在 IF
-//! balance 上 reserve notional，merge 按 floor(reserved/price) 算能承接多少（全拒非部分拒），R2 落账 counterparty
-//! 仓位+关 taker+释放 reserved（参考文档 §2.2）。R2 finalize 内联复用 `risk_engine.rs::settle_margin_position_event`
-//! 同款仓位清理逻辑（不收手续费），须经 `create_positions_key` 取 key。事件载体用 `if_preview_cover`/`if_takeover_size`
-//! 而非 Java `MatcherEventType::IF_EVENT`（Ruling P6-A/P6-C）。`normalizeCmdPositionSize` 未移植，属 Task 7 `LiquidationEngine` 编排层职责，不影响本文件 all-or-nothing/conservation 语义。
+//! 对应 Java `IFCommandProcessor`（两步处理器）：`IF_TAKEOVER` R1 在 IF balance 上 reserve notional，merge 按 floor(reserved/price) 算能承接多少（全拒非部分拒），R2 落账 counterparty 仓位 + 关 taker + 释放 reserved。
 
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 
-/// 无状态处理器——同 `FundingFeeCommandProcessor`/`InternalTransferProcessor` 先例，不持有字段。
+/// 无状态处理器——不持有字段。
 pub struct IfCommandProcessor;
 
 impl IfCommandProcessor {
-    /// R1：对应 Java `collectInput`（`:31-36`）——薄封装 [`LiquidationService::reserve_if_notional`]（caps to coverable，never over-promises）。
+    /// R1：对应 Java `collectInput`——薄封装 [`LiquidationService::reserve_if_notional`]（自限、永不超额承诺）。
     pub fn collect_input(liquidation: &mut LiquidationService, symbol: i32, size: i64, price: i64) -> i64 {
         liquidation.reserve_if_notional(symbol, size, price)
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:39-72`）——单 shard 塌缩版（Ruling P6-C）。前置门 `remaining_size<=0
-    /// || price<=0` → 全拒；`floor(preview_cover/price) < remaining_size` → 全拒（all-or-nothing，覆盖不满即整单拒绝，
-    /// 是 IF undersize 降级到 ADL 的触发条件，参考文档 §1.5）；否则 `Some(take_size)` 恒等于 remaining_size（单 shard 下无中间态）。
+    /// merge：对应 Java `buildMatcherEvents`（单 shard 塌缩版）。前置门 `remaining_size<=0 || price<=0` → 全拒；`floor(preview_cover/price) < remaining_size` → 全拒（all-or-nothing，是 IF undersize 降级到 ADL 的触发条件）；否则 `Some(take_size)` 恒等于 remaining_size。
     pub fn build_matcher_event(preview_cover: i64, remaining_size: i64, price: i64) -> Option<i64> {
         if remaining_size <= 0 || price <= 0 {
             return None;
@@ -29,7 +23,7 @@ impl IfCommandProcessor {
         Some(max_size_by_notional.min(remaining_size))
     }
 
-    /// R2 per-event：对应 Java `applyEvent`（`:75-86`）——薄封装 [`LiquidationService::accept_if_position`]。
+    /// R2 per-event：对应 Java `applyEvent`——薄封装 [`LiquidationService::accept_if_position`]。
     pub fn apply_event(
         liquidation: &mut LiquidationService,
         symbol: i32,

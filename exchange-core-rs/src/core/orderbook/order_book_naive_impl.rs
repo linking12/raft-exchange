@@ -219,7 +219,7 @@ impl OrderBookNaiveImpl {
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
                     matched_order_uid: f.uid,
-                    // maker 自己的原命令类型，非 taker 命令（Ruling P6-G）。对应 Java OrderBookEventsHelper.java:75。
+                    // maker 自己的原命令类型，非 taker 命令。对应 Java OrderBookEventsHelper。
                     matched_order_command_type: f.command,
                     filled: taker_filled,
                     filled_notional: taker_filled_notional,
@@ -314,7 +314,7 @@ impl OrderBookNaiveImpl {
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
                     matched_order_uid: f.uid,
-                    // 同 match_against：maker 自己的原命令类型（P6-G）。
+                    // 同 match_against：maker 自己的原命令类型。
                     matched_order_command_type: f.command,
                     filled: taker_filled,
                     filled_notional: taker_filled_notional,
@@ -598,8 +598,7 @@ impl IOrderBook for OrderBookNaiveImpl {
     }
 
     /// 移价：撤旧价重新即时撮合，可能成交或挂新价；未知/非本人 → MatchingUnknownOrderId。对应 Java moveOrder。
-    /// 现货 BID 的 reserve_bid_price 上限守卫延后（见 processors/mod.rs TODO）。
-    /// taker_reserve_bid_price 须传 order 自己的值而非 cmd 的（bug 修复 2026-09-01，差分对拍发现）。
+    /// 注意 taker_reserve_bid_price 须传 order 自己的值而非 cmd 的（差分对拍发现的 bug）。
     fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let new_price = cmd.price;
@@ -615,8 +614,8 @@ impl IOrderBook for OrderBookNaiveImpl {
         // cmd.action 在风控守卫之前回填（Naive 与 Direct 的既有差异：Direct 在守卫后设）。对应 Java OrderBookNaiveImpl.java:492。
         cmd.action = Some(action);
 
-        // 现货 BID 风控守卫（Ruling P2-3）：move 目标价不得超过挂单自身 reserve_bid_price，否则
-        // MatchingMoveFailedPriceOverRiskLimit 且不改簿；symbol_spec=None 时跳过。对应 Java OrderBookNaiveImpl.java:495-497。
+        // 现货 BID 风控守卫：move 目标价不得超过挂单自身 reserve_bid_price，否则
+        // MatchingMoveFailedPriceOverRiskLimit 且不改簿；symbol_spec=None 时跳过。
         if let Some(spec) = &self.symbol_spec {
             if spec.symbol_type == SymbolType::CurrencyExchangePair && action == OrderAction::Bid {
                 let reserve = self
@@ -873,9 +872,9 @@ mod ob_tests {
         assert_eq!(l2.ask_volumes, vec![4]);
     }
 
-    // ---- matched_order_command_type 取 maker 命令类型，与 taker 无关（Ruling P6-G，对应 Java OrderBookEventsHelper.java:75）----
+    // ---- matched_order_command_type 取 maker 命令类型，与 taker 无关（对应 Java OrderBookEventsHelper）----
 
-    /// matched_order_command_type 取 maker 的 PlaceOrder，非 taker 的 ForceLiquidation（Step1(b) 回归）。
+    /// matched_order_command_type 取 maker 的 PlaceOrder，非 taker 的 ForceLiquidation。
     #[test]
     fn trade_event_matched_order_command_type_is_makers_command_not_takers() {
         let mut book = OrderBookNaiveImpl::new();
@@ -1205,7 +1204,7 @@ mod ob_tests {
 
     #[test]
     fn move_bid_over_reserve_price_rejected_on_exchange_pair_spec() {
-        // 现货 BID move 目标价不得超过 reserve_bid_price（Ruling P2-3）。对应 Java OrderBookNaiveImpl.java:495-497。
+        // 现货 BID move 目标价不得超过 reserve_bid_price。
         let mut book = OrderBookNaiveImpl::with_symbol_spec(exchange_pair_spec());
         // GTC BID @90，reserve_bid_price=95（挂单时冻结价）。
         let mut place = OrderCommand {
@@ -1379,8 +1378,8 @@ mod ob_tests {
 
 
 // =======================================================================================
-// 翻译自 Java OrderBookBaseTest（40 个 @Test，Ruling E 范围：L2/GTC/IOC/FOK(_BUDGET)/cancel/reduce/move 等子集；
-// 跳过 getOrderById/validateInternalState 相关断言与 bidderHoldPrice 参数比对，见文末注释/task-7-report.md skip 表）。
+// 翻译自 Java OrderBookBaseTest（L2/GTC/IOC/FOK(_BUDGET)/cancel/reduce/move 等子集；
+// 跳过 getOrderById/validateInternalState 相关断言与 bidderHoldPrice 参数比对）。
 // =======================================================================================
 #[cfg(test)]
 mod ob_base_tests {

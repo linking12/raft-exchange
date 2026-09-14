@@ -5,7 +5,7 @@ use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::utils::core_arithmetic_utils::trunc_mul_div;
 
-/// 对应 Java `Math.addExact(long, long)`：局部私有重复一份（arithmetic 层零依赖 ruling）。
+/// 对应 Java `Math.addExact`。
 fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
@@ -25,7 +25,7 @@ pub const DEFAULT_KINK_UTIL_BPS: i32 = 8000; // 拐点 80%
 pub const DEFAULT_SLOPE1_BPS: i32 = 400; // 0→kink 增幅
 pub const DEFAULT_SLOPE2_BPS: i32 = 6000; // kink→100% 陡增幅
 
-/// 对应 Java `FloatingRateModel`（字段子集，`:47-53`）；`current_rate_bps`/`acc_rate_bps_ms` 用 `BTreeMap` 保持确定性迭代序（禁 HashMap）。
+/// current_rate_bps/acc_rate_bps_ms 用 BTreeMap 保持确定性迭代序（禁 HashMap）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FloatingRateModel {
     /// 零利用率基础利率。
@@ -45,7 +45,7 @@ pub struct FloatingRateModel {
 }
 
 impl FloatingRateModel {
-    /// 对应 Java `stateHash()`（`:192-196`）：改为对排序后 (key,value) 对逐个折叠，仅保证同状态同 hash。
+    /// 对排序后 (key,value) 对逐个折叠，仅保证同状态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.base_bps as i64);
@@ -64,13 +64,13 @@ impl FloatingRateModel {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 利用率（bps）= borrowed / (borrowed + available)；空池返 0。对应 Java `utilizationBps`（`:76-79`）。
+    /// 利用率（bps）= borrowed / (borrowed + available)；空池返 0。
     pub fn utilization_bps(borrowed: i64, available: i64) -> i64 {
         let total = add_exact(borrowed, available);
         if total <= 0 { 0 } else { trunc_mul_div(borrowed, BPS_SCALE, total) }
     }
 
-    /// kinked 曲线：util（clamp 到 `[0, BPS_SCALE]`）过曲线得 rateBps，纯整数。对应 Java `curveRateBps`（`:82-93`，两个重载合并为一个方法）。
+    /// kinked 曲线：util（clamp 到 [0, BPS_SCALE]）过曲线得 rateBps，纯整数。
     pub fn curve_rate_bps(&self, util_bps: i64) -> i64 {
         let util = if util_bps < 0 { 0 } else { util_bps.min(BPS_SCALE) };
         let kink = self.kink_util_bps as i64;
@@ -84,7 +84,7 @@ impl FloatingRateModel {
         }
     }
 
-    /// 某币种当前利率，未 reprice 过时回退 `base_bps`。对应 Java `currentRateBpsOrBase`（`:96-98`）——含窄化，按位复刻。
+    /// 某币种当前利率，未 reprice 过时回退 base_bps。
     pub fn current_rate_bps_or_base(&self, currency: i32) -> i32 {
         match self.current_rate_bps.get(&currency) {
             Some(&v) => v as i32,
@@ -92,7 +92,7 @@ impl FloatingRateModel {
         }
     }
 
-    /// reprice 前半步：旧利率结算 `[last_reprice_ts, tick_ts)` 区间入累加器，必须先于 [`Self::reprice_currency`] 调用。对应 Java `advanceAccumulator`（`:105-112`）。
+    /// reprice 前半步：旧利率结算 [last_reprice_ts, tick_ts) 区间入累加器，必须先于 reprice_currency 调用。
     pub fn advance_accumulator(&mut self, currency: i32, tick_ts: i64) {
         if self.last_reprice_ts > 0 && tick_ts > self.last_reprice_ts {
             let elapsed = tick_ts - self.last_reprice_ts;
@@ -102,18 +102,18 @@ impl FloatingRateModel {
         }
     }
 
-    /// reprice 后半步：util 过曲线写入 `current_rate_bps`，成为新生效利率。对应 Java `repriceCurrency`（`:115-117`）。
+    /// reprice 后半步：util 过曲线写入 current_rate_bps，成为新生效利率。
     pub fn reprice_currency(&mut self, currency: i32, util_bps: i64) {
         let rate = self.curve_rate_bps(util_bps);
         self.current_rate_bps.insert(currency, rate);
     }
 
-    /// 开仓利率 = 当前生效利率（未 reprice 过则回退 base）。对应 Java `openRateBps`（`:119-121`）。
+    /// 开仓利率 = 当前生效利率（未 reprice 过则回退 base）。
     pub fn open_rate_bps(&self, loan_currency: i32) -> i32 {
         self.current_rate_bps_or_base(loan_currency)
     }
 
-    /// 累加器实时值：用当前生效利率把上次 reprice 之后的区间外推到 `now`，冷启动不外推。对应 Java `liveAccRateBpsMs`（`:123-131`）。
+    /// 累加器实时值：用当前生效利率把上次 reprice 之后的区间外推到 now，冷启动不外推。
     pub fn live_acc_rate_bps_ms(&self, currency: i32, now: i64) -> i64 {
         let acc = *self.acc_rate_bps_ms.get(&currency).unwrap_or(&0);
         let elapsed = now - self.last_reprice_ts;
@@ -123,13 +123,13 @@ impl FloatingRateModel {
         add_exact(acc, mul_exact(self.current_rate_bps_or_base(currency) as i64, elapsed))
     }
 
-    /// 开仓：`acc_snapshot` 定在当前 liveAcc，此后只计从此刻起新增的利息。对应 Java `initOpenSnapshot`（`:134-136`）。
+    /// 开仓：acc_snapshot 定在当前 liveAcc，此后只计从此刻起新增的利息。
     pub fn init_open_snapshot<L: LoanRecord>(&self, loan: &mut L, now: i64) {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         loan.set_acc_snapshot(live);
     }
 
-    /// pending = `(liveAcc − accSnapshot)` 换算成本金对应的利息；`deltaAcc<=0` 或无本金则免息。对应 Java 私有静态 `pending`（`:161-169`）。
+    /// pending = (liveAcc − accSnapshot) 换算成本金对应的利息；deltaAcc<=0 或无本金则免息。
     fn pending_from_live<L: LoanRecord>(loan: &L, live_acc: i64) -> i64 {
         let delta_acc = sub_exact(live_acc, loan.acc_snapshot());
         if delta_acc <= 0 || loan.outstanding_principal() <= 0 {
@@ -139,20 +139,20 @@ impl FloatingRateModel {
         }
     }
 
-    /// 读路径小工具：截至 `now` 的 pending 利息（不含 `accumulated_interest`），不改 loan。对应 Java 私有 `pending(loan, liveAccRateBpsMs(...))` 组合调用。
+    /// 读路径：截至 now 的 pending 利息（不含 accumulated_interest），不改 loan。
     pub fn pending_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         Self::pending_from_live(loan, live)
     }
 
-    /// 写路径：按累加器差值补计利息到 `now`，推进 `acc_snapshot`。对应 Java `accrue`（`:139-153`）；truncated-but-chargeable（F1）截断得 0 时保留 `acc_snapshot` 避免吞息。
+    /// 写路径：按累加器差值补计利息到 now，推进 acc_snapshot；truncated-but-chargeable（F1）截断得 0 时保留 acc_snapshot 避免吞息。
     pub fn accrue<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         let delta = Self::pending_from_live(loan, live);
         if delta > 0 {
             loan.set_accumulated_interest(add_exact(loan.accumulated_interest(), delta));
         }
-        // Java 用普通减法（`:147`），非 subtractExact：数学上必不溢出，按字面写法风格对齐。
+        // 普通减法（非 subtractExact）：数学上必不溢出。
         let delta_acc = live - loan.acc_snapshot();
         let truncated_but_chargeable = delta == 0 && loan.outstanding_principal() > 0 && delta_acc > 0;
         if !truncated_but_chargeable {
@@ -161,20 +161,19 @@ impl FloatingRateModel {
         delta
     }
 
-    /// 读路径：`accumulated_interest` + 到 `now` 的 pending，不改 loan。对应 Java `displayInterest`（`:156-159`）。
+    /// 读路径：accumulated_interest + 到 now 的 pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         add_exact(loan.accumulated_interest(), Self::pending_from_live(loan, live))
     }
 
-    /// 对应 Java lombok `setLastRepriceTs`：字段本是 `pub`，此方法供处理器按 Java 调用习惯使用。
+    /// 字段本是 pub，此 setter 供处理器按 Java 调用习惯使用。
     pub fn set_last_reprice_ts(&mut self, ts: i64) {
         self.last_reprice_ts = ts;
     }
 }
 
 impl Default for FloatingRateModel {
-    /// 对应 Java `FloatingRateModel()` 构造器（`:55-63`）。
     fn default() -> Self {
         FloatingRateModel {
             base_bps: DEFAULT_BASE_BPS,

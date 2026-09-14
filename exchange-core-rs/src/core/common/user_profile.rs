@@ -1,7 +1,5 @@
-//! 对应 Java: exchange.core2.core.common.UserProfile。现货子集 `uid`/`userStatus`/
-//! `accounts`/`exchangeLocked`；`processedTransactionIds` 用 [`TimeWindowDedupSet`]（时间窗+hardCap 淘汰，
-//! 对齐 Java）。期货子集 `positionMode`/`positions` + `createPositionsKey`/`countPositionRecord`/
-//! `processPositionRecord`（见 §2）。
+//! 对应 Java `UserProfile`：现货子集（accounts/exchangeLocked/processedTransactionIds）+ 期货子集
+//! （positionMode/positions）+ 现货借贷字段。
 use std::collections::BTreeMap;
 
 use crate::core::common::time_window_dedup_set::TimeWindowDedupSet;
@@ -36,9 +34,7 @@ pub struct UserProfile {
     /// [`Self::create_positions_key`] 统一计算。
     pub positions: BTreeMap<i32, SymbolPositionRecord>,
 
-    // ================================================================
-    // 现货借贷：默认空，后续消费；对应 Java `UserProfile.java:97,102,105`
-    // ================================================================
+    // 现货借贷
     /// loanId -> record（对应 Java `LongObjectHashMap<IsolatedLoanRecord> isolatedLoans`）。
     pub isolated_loans: BTreeMap<i64, IsolatedLoanRecord>,
     /// currency -> amount（对应 Java `IntLongHashMap crossLoanCollateral`）：账户级 Cross 抵押池，多笔 Cross debt 共享。
@@ -64,12 +60,8 @@ impl UserProfile {
         }
     }
 
-    /// 对应 Java `createPositionsKey(int symbol, OrderAction orderAction, OrderCommandType command)`
-    /// （`UserProfile.java:163-172`）：
-    /// - `ONEWAY`：恒返回 `symbol`（键与方向无关）。
-    /// - `HEDGE`：`action==BID` 用 `+symbol`（多头腿），否则 `-symbol`（空头腿）；若 `command` 是
-    ///   `CLOSE_POSITION`/`FORCE_LIQUIDATION`（其 `action` 表达的是"平仓侧"，即目标仓位的反向），
-    ///   再整体翻符号 `-key` 指向被平的那条腿。
+    /// 对应 Java `createPositionsKey`：`ONEWAY` 恒返回 `symbol`；`HEDGE` 下 `BID -> +symbol`（多头腿）、
+    /// `ASK -> -symbol`（空头腿），`CLOSE_POSITION`/`FORCE_LIQUIDATION` 再整体翻符号指向被平的那条腿。
     pub fn create_positions_key(&self, symbol: i32, action: OrderAction, command: OrderCommandType) -> i32 {
         if self.position_mode == PositionMode::Hedge {
             let key = if action == OrderAction::Bid { symbol } else { -symbol };
@@ -82,9 +74,8 @@ impl UserProfile {
         }
     }
 
-    /// 对应 Java `createPositionsKey(SymbolPositionRecord position)`（`:174-179`）：
-    /// `HEDGE` 下键 = `direction.multiplier * symbol`（`LONG -> +symbol`，`SHORT -> -symbol`，
-    /// `EMPTY -> 0`）；`ONEWAY` 恒为 `symbol`。
+    /// 对应 Java `createPositionsKey(SymbolPositionRecord)`：`HEDGE` 下键 = `direction.multiplier * symbol`
+    /// （`EMPTY -> 0`）；`ONEWAY` 恒为 `symbol`。
     pub fn create_positions_key_of(&self, position: &SymbolPositionRecord) -> i32 {
         if self.position_mode == PositionMode::Hedge {
             position.direction.multiplier() * position.symbol
@@ -132,19 +123,10 @@ impl UserProfile {
         }
     }
 
-    /// 对应 Java `calculateCrossAvailable(int currency, CoreCurrencySpecification, IntFunction)`
-    /// （`UserProfile.java:229-240`）：cross 可支配余额（currency scale）=
-    /// `accounts − exchangeLocked − Σ 同 currency 各 ISOLATED 仓的虚拟锁定保证金`。
-    ///
-    /// **不**减 CROSS 仓保证金（CROSS 是账户级虚拟分配，见 [`Self::cross_margin_base_allocation`]），
-    /// **不**加任何 UPnL（由 caller 按需另加，如 `cross_margin_base_allocation` 里加 CROSS UPnL）。
-    /// `openInitMarginSum` 开仓未从 accounts 物理扣除（仅仓位记录里虚拟锁定），故 ISOLATED 仓要显式
-    /// 剥离；`extraMargin` 已在 `MARGIN_ADJUSTMENT` 时从 accounts 扣走，
-    /// `calculate_required_margin_for_futures` 内部已含其抵扣（详见该方法），不重复处理。
-    ///
-    /// `symbol_spec_lookup` 用闭包解耦，避免 `common` 反向依赖 `processors` 的
-    /// `SymbolSpecificationProvider`；caller 通常传 `|symbol| ssp.get_symbol(symbol)`。
-    /// spec 缺失的仓跳过不扣（宁可 equity 略高估也不 panic）。
+    /// 对应 Java `calculateCrossAvailable`：cross 可支配余额（currency scale）=
+    /// `accounts − exchangeLocked − Σ 同 currency 各 ISOLATED 仓的虚拟锁定保证金`。**不**减 CROSS 仓保证金
+    /// （账户级虚拟分配，见 [`Self::cross_margin_base_allocation`]），**不**加 UPnL。`symbol_spec_lookup`
+    /// 用闭包解耦避免 `common` 反向依赖 `processors`；spec 缺失的仓跳过不扣（宁可 equity 略高估也不 panic）。
     pub fn calculate_cross_available<'a, F>(
         &self,
         currency: i32,
@@ -173,29 +155,17 @@ impl UserProfile {
         cross_available
     }
 
-    /// 对应 Java `crossMarginBaseAllocation(IntFunction, IntFunction, IntObjectHashMap)`
-    /// （`UserProfile.java:263-312`）：一次算好整账户所有 CROSS 仓的破产价基础 `marginBase`
-    /// （position key → marginBase，sizePrice scale，与 `SymbolPositionRecord.open_init_margin_sum`
-    /// 同 scale），直接喂 `SymbolPositionRecord::calculate_bankruptcy_price`的 CROSS 回调。
-    /// 按 currency 分组，组内账户级 `marginBalance` 按 MM 占比分给每个 CROSS 仓：
+    /// 对应 Java `crossMarginBaseAllocation`：一次算好整账户所有 CROSS 仓的破产价基础 `marginBase`
+    /// （position key → marginBase，与 `open_init_margin_sum` 同 sizePrice scale），喂
+    /// `calculate_bankruptcy_price` 的 CROSS 回调。按 currency 分组，组内账户级 `marginBalance` 按 MM 占比分摊：
     /// ```text
     /// marginBalance = crossAvailable + Σ UPnL（该 currency 全部 CROSS 仓）
-    /// allocated_i   = truncMulDiv(marginBalance, mm_i, ΣMM)   （按 MM 占比分账户余额，向零截断）
+    /// allocated_i   = truncMulDiv(marginBalance, mm_i, ΣMM)   （向零截断）
     /// marginBase_i  = allocated_i − UPnL_i                    （currency scale）
-    /// 返回值        = currencyToSizePriceScale(marginBase_i, spec_i, currencySpec)
     /// ```
-    /// 守恒不变式（连续数学意义下）：`Σ marginBase_i(currency scale) = crossAvailable`——
-    /// `truncMulDiv` 的整数截断在 `ΣMM` 不能整除 `marginBalance × mm_i` 时引入 ≤ (n−1) 个 currency
-    /// 最小单位的截断误差，与 Java 逐字一致（非本移植引入的新误差）。
-    ///
-    /// 边界：某 currency 组 `ΣMM == 0` → 该组不产出任何 entry（caller 对未出现的 position key 取默认
-    /// 0）；单个仓 spec 或 mark price 缺失 → 该仓跳过（不计入 UPnL/MM 累加、也不产出 entry），其余仓
-    /// 照常分摊。`marginBalance` 用 `i128` 中间精度承接 `crossAvailable + totalUpnl` 的加法（Java 原版
-    /// 此处有过 `long` 溢出修复，本移植直接用 `i128` 规避，参考文档 §5 "before you begin" 提示）。
-    ///
-    /// `symbol_spec_lookup`/`currency_spec_lookup`/`mark_price_lookup` 均用闭包解耦，避免 `common`
-    /// 反向依赖 `processors` 的 provider；caller 通常传 `|s| ssp.get_symbol(s)` /
-    /// `|c| ssp.get_currency(c)` / `|s| engine.mark_price(s)`。
+    /// 守恒不变式：`Σ marginBase_i = crossAvailable`——`truncMulDiv` 截断引入 ≤ (n−1) 个 currency 最小单位
+    /// 的误差，与 Java 逐字一致（非本移植新引入）。边界：`ΣMM == 0` 的 currency 组不产出 entry；单个仓
+    /// spec/mark price 缺失则跳过。三个 lookup 用闭包解耦避免 `common` 反向依赖 `processors`。
     pub fn cross_margin_base_allocation<'a, FS, FC, FM>(
         &self,
         symbol_spec_lookup: FS,
@@ -326,18 +296,14 @@ impl UserProfile {
         *self.cross_loan_collateral.get(&currency).unwrap_or(&0)
     }
 
-    /// 确定性状态 hash：折叠 `uid`、`user_status`、`accounts`/`exchange_locked`、`position_mode`、
-    /// `positions`（`BTreeMap` 天然按 key 升序，满足"排序"要求）。风格对齐
-    /// `orderbook::order_book_naive_impl::OrderBookNaiveImpl::state_hash`（`h = h*31 + field` 滚动
-    /// 折叠 + i64->i32 fold，对应 Java `Long.hashCode`）。折入的字段集与 Java `stateHash()` 一致
-    /// （uid/user_status/processed_tx_ids/accounts/exchange_locked/position_mode/positions/三个借贷字段），
-    /// 但算法不同，不保证与 Java `Objects.hash(...)` 数值相等，只保证「同状态 → 同 hash，不同状态 → 不同 hash」。
+    /// 确定性状态 hash：折入的字段集与 Java `stateHash()` 一致（uid/user_status/processed_tx_ids/accounts/
+    /// exchange_locked/position_mode/positions/三个借贷字段；`BTreeMap` 天然升序保证确定性），算法不同，
+    /// 不保证与 Java 数值相等，只保证同状态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
         h = h.wrapping_mul(31).wrapping_add(self.user_status.code() as i64);
-        // 去重集折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:347` processedTransactionIds）；
-        // 按 FIFO 逻辑序折 (id, time)（物理布局不影响）。缺此项时两节点仅去重集不同会算出相同 hash，削弱 raft 跨节点分叉探测。
+        // 去重集折入 state_hash（对齐 Java）：按 FIFO 逻辑序折 (id, time)；缺此项时两节点仅去重集不同会算出相同 hash，削弱 raft 分叉探测。
         h = self.processed_tx_ids.fold_hash(h);
         for (&cur, &amt) in &self.accounts {
             h = h.wrapping_mul(31).wrapping_add(cur as i64);
@@ -352,8 +318,7 @@ impl UserProfile {
             h = h.wrapping_mul(31).wrapping_add(key as i64);
             h = h.wrapping_mul(31).wrapping_add(record.state_hash() as i64);
         }
-        // 三个借贷字段折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:353-355`），
-        // 覆盖 isolatedLoans/crossLoanCollateral/crossLoans；BTreeMap 天然有序满足确定性。
+        // 三个借贷字段折入 state_hash（对齐 Java）：isolatedLoans/crossLoanCollateral/crossLoans。
         for (&loan_id, loan) in &self.isolated_loans {
             h = h.wrapping_mul(31).wrapping_add(loan_id);
             h = h.wrapping_mul(31).wrapping_add(loan.state_hash() as i64);
@@ -436,9 +401,7 @@ mod tests {
         assert!(p.positions.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // create_positions_key — 对应 Java `UserProfile.java:163-172`
-    // ------------------------------------------------------------------
+    // create_positions_key
 
     #[test]
     fn create_positions_key_oneway_is_always_raw_symbol() {
@@ -564,9 +527,7 @@ mod tests {
         assert_ne!(h0, diff_positions.state_hash());
     }
 
-    // ------------------------------------------------------------------
-    // calculate_cross_available — 对应 Java `UserProfile.java:229-240`（§5）
-    // ------------------------------------------------------------------
+    // calculate_cross_available
 
     fn currency_spec_scale1(currency: i32) -> CoreCurrencySpecification {
         CoreCurrencySpecification { currency, currency_scale_k: 1, ..Default::default() }
@@ -705,9 +666,7 @@ mod tests {
         assert_eq!(available, 100_000);
     }
 
-    // ------------------------------------------------------------------
-    // cross_margin_base_allocation — 对应 Java `UserProfile.java:263-312`（§5）
-    // ------------------------------------------------------------------
+    // cross_margin_base_allocation
 
     #[test]
     fn cross_margin_base_allocation_invariant_sum_equals_cross_available_with_even_mm_split() {

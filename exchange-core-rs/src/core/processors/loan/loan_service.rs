@@ -1,4 +1,4 @@
-//! 对应 Java `LoanService`：per-shard 单例，纯状态 + 纯函数工具类，不持有 `RiskEngine` 引用（`loan.md` line 105），参考文档 §1.6/§3/§4/§6。
+//! Java `LoanService`：per-shard 单例，纯状态 + 纯函数工具类，不持有 RiskEngine 引用。
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -13,12 +13,12 @@ use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-/// 对应 Java `LoanService.YEAR_MS`（`:41`）：1 年（ms），跨节点唯一确定性形式，不依赖日历/闰年。
+/// 1 年（ms），跨节点确定性形式，不依赖日历/闰年。
 pub const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
-/// 对应 Java `LoanService.BPS_SCALE`（`:42`）：bps 精度基准（10000 = 100%）。
+/// bps 精度基准（10000 = 100%）。
 pub const BPS_SCALE: i64 = 10_000;
 
-/// force-sell orderId 命名空间/子类型/位掩码（对应 Java `LoanService.java:44-49`），顶字节 `'L'` 独占命名空间，避开期货 `'I'`/ADL `'A'`。
+/// force-sell orderId 命名空间/子类型/位掩码，顶字节 'L' 独占命名空间，避开期货 'I'/ADL 'A'。
 pub const ORDERID_NAMESPACE_TAG: i64 = 0x4C; // 'L'
 pub const ORDERID_SUBTYPE_ISOLATED: i64 = 0x53; // 'S'
 pub const ORDERID_SUBTYPE_CROSS: i64 = 0x43; // 'C'
@@ -26,7 +26,7 @@ const ORDERID_UID_MASK: i64 = 0xF_FFFF; // 20 bit uid hash
 const ORDERID_LOANID_MASK: i64 = 0xFFFF; // 16 bit loanId hash
 const ORDERID_TS_MASK: i64 = 0xFFF; // 12 bit 秒
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（arithmetic 层零依赖 ruling）。
+/// 对应 Java `Math.multiplyExact`。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
@@ -36,12 +36,12 @@ fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 对应 Java `crossLtvBps`（`:220-263`）里 try/catch 溢出折哨兵值的 `Math.addExact` 用法，与其余 panic-on-overflow 的 `add_exact` 语义不同故单独起名。
+/// crossLtvBps 里 try/catch 溢出折哨兵值的加法，与 panic-on-overflow 的 add_exact 语义不同故单独起名。
 fn checked_add_i64(a: i64, b: i64) -> Option<i64> {
     i64::try_from(a as i128 + b as i128).ok()
 }
 
-/// 对应 Java `LoanService`（字段子集，`:51-59`）：4 个资金桶进 raft snapshot 参与全局守恒对账（§6），`loan_pool_borrowed` 是 tracker 不参与守恒（§6.2），`BTreeMap` 保确定序（禁 HashMap）。
+/// 4 个资金桶进 raft snapshot 参与全局守恒对账，loan_pool_borrowed 是 tracker 不参与守恒；BTreeMap 保确定序（禁 HashMap）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct LoanService {
     pub loan_pool_available: BTreeMap<i32, i64>,
@@ -53,17 +53,17 @@ pub struct LoanService {
     pub global_config: LoanGlobalConfig,
     /// 活期利率：Isolated FLOATING + 全部 Cross。
     pub floating_rate: FloatingRateModel,
-    /// 定期利率：Isolated LOCKED，开仓时锚定 `floating_rate` 当前利率（不持有其引用字段，见 `rate::fixed_rate_model` 模块文档）。
+    /// 定期利率：Isolated LOCKED，开仓时锚定 floating_rate 当前利率。
     pub fixed_rate: FixedRateModel,
 }
 
 impl LoanService {
-    /// 对应 Java `LoanService()` 构造器（`:61-69`）：全部桶空、各字段默认值。
+    /// 全部桶空、各字段默认值。
     pub fn new() -> Self {
         LoanService::default()
     }
 
-    // 桶存取：对应 Java `IntLongHashMap.get`/`.addToValue`（缺省 0，delta 可为负）。
+    // 桶存取（缺省 0，delta 可为负）。
 
     pub fn get_loan_pool_available(&self, currency: i32) -> i64 {
         *self.loan_pool_available.get(&currency).unwrap_or(&0)
@@ -97,7 +97,7 @@ impl LoanService {
         *self.loan_insurance_fund.entry(currency).or_insert(0) += delta;
     }
 
-    // 利率模型二分派：对应 Java `accrueTo`/`calculateDisplayInterest`（`:123-131`），按 `loan.isFixedRate()` 分派。
+    // 利率模型二分派：按 loan.is_fixed_rate() 分派。
 
     /// 写路径：补计截至 `now` 的利息进 `loan.accumulated_interest` 并推进游标，返回本次新增利息（≥ 0）。
     pub fn accrue_to<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
@@ -118,10 +118,10 @@ impl LoanService {
     }
 
     // ================================================================
-    // 金钱原语，对应 Java LoanCommandDispatcher.java:1045-1069 + LoanService.java:138-152,412-420
+    // 金钱原语
     // ================================================================
 
-    /// 对应 handleLoanCreate 处 `openRateBps` 二选一分派（`:186-188`）：按 rate_mode 选 floating 当前利率 / fixed 派生利率。
+    /// 按 rate_mode 选 floating 当前利率 / fixed 派生利率。
     pub fn open_rate_bps(&self, rate_mode: LoanRateMode, loan_currency: i32) -> i32 {
         match rate_mode {
             LoanRateMode::Floating => self.floating_rate.open_rate_bps(loan_currency),
@@ -129,7 +129,7 @@ impl LoanService {
         }
     }
 
-    /// 对应 Java 私有静态 `verifyPoolCapacity`（`:1045-1062`）：池容量+利用率校验，LOAN_CREATE 与 LOAN_CROSS_BORROW 共用，逐字对齐 Java。
+    /// 池容量+利用率校验，LOAN_CREATE 与 LOAN_CROSS_BORROW 共用。
     pub fn verify_pool_capacity(&self, loan_currency: i32, principal: i64) -> CommandResultCode {
         let available = self.get_loan_pool_available(loan_currency);
         let borrowed = self.get_loan_pool_borrowed(loan_currency);
@@ -149,14 +149,14 @@ impl LoanService {
         CommandResultCode::Success
     }
 
-    /// 对应 Java 私有静态 `disburseLoan`（`:1065-1069`）：借款划账——`loanPoolAvailable` → 用户 `accounts`，`loanPoolBorrowed` 记账 `+principal`（tracker，不参与守恒，见模块文档）。
+    /// 借款划账：loan_pool_available → 用户 accounts，loan_pool_borrowed 记 +principal（tracker，不参与守恒）。
     pub fn disburse_loan(&mut self, up: &mut UserProfile, loan_currency: i32, principal: i64) {
         up.add_to_account(loan_currency, principal);
         self.add_to_loan_pool_available(loan_currency, -principal);
         self.add_to_loan_pool_borrowed(loan_currency, principal);
     }
 
-    /// 对应 Java `applyDebtPayment`（`:138-152`）：fund 按利息优先、本金其次抵债，封顶未偿本息之和，返回本次抵扣的利息部分；REPAY/强平/Cross 共用。
+    /// fund 按利息优先、本金其次抵债，封顶未偿本息之和，返回本次抵扣的利息部分；REPAY/强平/Cross 共用。
     pub fn apply_debt_payment<L: LoanRecord>(
         &mut self,
         loan: &mut L,
@@ -178,7 +178,7 @@ impl LoanService {
         interest_part
     }
 
-    /// 对应 Java 静态 `collateralValueInQuoteCurrency`（`:412-420`）：base amount（base currencyScale）经 `mark_price` 折算成 quote 等值量（quote currencyScale）——Isolated LTV 开仓/减抵押判定与 scanner 估值共用。`base_currency_spec`/`quote_currency_spec` 任一缺失（对应 Java 传 `null`）→ `-1`（价格未就绪，交由上层按各自的 `LOAN_MARKPRICE_NOT_READY` 语义 skip）。
+    /// base amount 经 mark_price 折算成 quote 等值量；任一 currency spec 缺失 → -1（价格未就绪，上层 skip）。
     pub fn collateral_value_in_quote_currency(
         amount: i64,
         spec: &CoreSymbolSpecification,
@@ -201,15 +201,15 @@ impl LoanService {
     }
 
     // ================================================================
-    // Cross 账户级 LTV —— 参考文档 §3.2/§3.3，Java `LoanService.java:168-269,395-410,467-470`
+    // Cross 账户级 LTV
     // ================================================================
 
-    /// 对应 Java 静态 `collateralWeightForBase`（`:467-470`）：币种作 Cross 抵押的折价率（bps），直接读币种级 `CoreCurrencySpecification.collateral_weight_bps`；未配置/spec 缺失返回 `0`（= 不可作抵押，`LOAN_COLLATERAL_NOT_ALLOWED`）。
+    /// 币种作 Cross 抵押的折价率（bps），读 collateral_weight_bps；未配置/spec 缺失返回 0（不可作抵押）。
     pub fn collateral_weight_for_base(currency: i32, ssp: &SymbolSpecificationProvider) -> i32 {
         ssp.get_currency(currency).map(|s| s.collateral_weight_bps).unwrap_or(0)
     }
 
-    /// 对应 Java 私有静态 `valueInNumeraire`（`:395-410`）：把 `amount`（`currency` 的 currencyScale）折算成 `numeraireCurrency` 的 currencyScale，经 `findSpotSymbol(currency, numeraireCurrency)` 的现货对 markPrice 折算；`currency == numeraireCurrency` 直接返回 `amount`（同币种恒等）。任一 spec / markPrice 缺失 → `-1` 哨兵（"价格未就绪"，由调用方按 `failClosedOnMissingPrice` 决定取舍）。`price_cache` 对应 Java `IntObjectHashMap<LastPriceCacheRecord> priceCache`——本移植 `RiskEngine.last_price_cache` 直接就是 `symbol -> markPrice`（无 record 包装），故这里签名比 Java 简单一层。
+    /// 把 amount 经 find_spot_symbol(currency, numeraire) 现货对 markPrice 折算成 numeraire 的 currencyScale；同币种恒等返回 amount。任一 spec/markPrice 缺失 → -1（价格未就绪，调用方按 fail_closed 取舍）。
     pub fn value_in_numeraire(
         currency: i32,
         amount: i64,
@@ -229,20 +229,15 @@ impl LoanService {
             Some(&p) if p > 0 => p,
             _ => return -1,
         };
-        // currency 视作 base、numeraire 视作 quote，复用 Isolated LTV 同一套折算（Java 注释同）。
+        // currency 视作 base、numeraire 视作 quote，复用 Isolated LTV 同套折算。
         let currency_spec = ssp.get_currency(currency);
         Self::collateral_value_in_quote_currency(amount, spec, mark_price, currency_spec, Some(numeraire_spec))
     }
 
-    /// 对应 Java 私有 `crossLtvBps`（`:208-269`）：账户级 LTV 核心，`calculateCrossAccountLtvBps`（`apply_weight=true`，触发/BORROW/WITHDRAW 用）与 `calculateCrossRawLtvBps`（`apply_weight=false`，仅定价用）共享。
-    ///
-    /// `numeraireCurrency` 直接读 `self.global_config.numeraire_currency`——Java 版作显式参数传入，但两个公开重载的调用方（`LoanCommandDispatcher`）永远传同一 `LoanService` 实例的 `getGlobalConfig().numeraireCurrency`，本移植直接读自身字段，无行为差异。
-    ///
-    /// `crossLoans.isEmpty() || numeraireCurrency==0` → `0`（无债或未配置 numeraire，LTV 恒安全）；numeraireSpec 缺失 → `unevaluable`（`fail_closed_on_missing_price ? i64::MAX : 0`）。
-    ///
-    /// 三处溢出捕获逐字对齐 Java `try { Math.addExact(...) } catch (ArithmeticException)`：①②（debt 侧：单笔 realDebt 相加、累加进 totalDebt）溢出 → **恒定** `i64::MAX`（不受 `fail_closed_on_missing_price` 影响，溢出视作无限大 LTV，倾向拒绝/强平而非放行）；③（collateral 侧：weight 折算后累加进 totalCollateral）溢出 → `unevaluable`（溢出不放大抵押，保守按不可估值处理）。用 [`checked_add_i64`] 而非 panic-on-overflow 的 `add_exact` 复刻"捕获而非崩溃"的语义。
-    ///
-    /// `totalCollateral<=0`（无合格抵押币，或全被 `weight<=0` 过滤掉）→ `i64::MAX`（无抵押则 LTV 无穷大，同样不受 `fail_closed_on_missing_price` 影响）。
+    /// 账户级 LTV 核心，calculate_cross_account_ltv_bps（apply_weight=true）与 calculate_cross_raw_ltv_bps（false）共享。numeraire 读 self.global_config。
+    /// 无债或未配 numeraire → 0；numeraire spec 缺失 → unevaluable（fail_closed ? i64::MAX : 0）。
+    /// debt 侧加法溢出 → 恒 i64::MAX（视作无穷大 LTV 倾向拒绝，不受 fail_closed 影响）；collateral 侧溢出 → unevaluable；用 checked_add_i64 复刻"捕获而非崩溃"。
+    /// total_collateral<=0（无合格抵押币）→ i64::MAX。
     fn cross_ltv_bps(
         &self,
         up: &UserProfile,
@@ -312,7 +307,7 @@ impl LoanService {
         arithmetic::trunc_mul_div(total_debt, BPS_SCALE, total_collateral)
     }
 
-    /// 对应 Java 公开 `calculateCrossAccountLtvBps(..., boolean failClosedOnMissingPrice)`（`:184-195`）：**加权**分母口径（`applyWeight=true`），trigger 决策与 Cross BORROW/WITHDRAW 前置 guard 共用。`fail_closed_on_missing_price`：`true` = 缺价 → `i64::MAX`（拒绝，BORROW/WITHDRAW 用，防超借/提空）；`false` = 缺价 → `0`（保守 skip，scanner/展示用）。Java 另有一个 6 参"默认 `failClosedOnMissingPrice=false`"的重载——本移植不做重载，调用方必须对这个安全相关的 flag 显式表态。
+    /// 加权口径（apply_weight=true），trigger 决策与 Cross BORROW/WITHDRAW guard 共用。fail_closed_on_missing_price：true=缺价拒绝（i64::MAX，防超借/提空），false=缺价保守 skip（0，scanner/展示）。
     pub fn calculate_cross_account_ltv_bps(
         &self,
         up: &UserProfile,
@@ -324,7 +319,7 @@ impl LoanService {
         self.cross_ltv_bps(up, now, ssp, price_cache, fail_closed_on_missing_price, true)
     }
 
-    /// 对应 Java 公开 `calculateCrossRawLtvBps`（`:201-206`）：**不加权**市值口径（`applyWeight=false`），仅供破产价定价用——用加权口径定价会把破产价抬高 `1/weight` 倍（loan.md §18.3）。`fail_closed_on_missing_price` 恒 `false`（同 Java 该重载固定传 `false`，缺价保守返 0，由调用方兜底）。
+    /// 不加权市值口径（apply_weight=false），仅供破产价定价——加权口径会把破产价抬高 1/weight 倍。缺价恒保守返 0。
     pub fn calculate_cross_raw_ltv_bps(
         &self,
         up: &UserProfile,
@@ -336,10 +331,10 @@ impl LoanService {
     }
 
     // ================================================================
-    // force-liquidate 结算原语 + Cross LIF 接管 —— 参考文档 §2.5/§2.10/§6.3，Java `LoanService.java:154-166,287-385,412-464`
+    // force-liquidate 结算原语 + Cross LIF 接管
     // ================================================================
 
-    /// 对应 Java 静态 `lotsToCollateralAmount`（`:429-432`）：强平张数（lot，base symbolScale）→ 抵押金额（base currencyScale）——R1 pre-move 记账用，[`Self::collateral_amount_to_lots`] 的反向。
+    /// 强平张数（lot, base symbolScale）→ 抵押金额（base currencyScale）；collateral_amount_to_lots 的反向。
     pub fn lots_to_collateral_amount(
         lots: i64,
         spec: &CoreSymbolSpecification,
@@ -348,7 +343,7 @@ impl LoanService {
         arithmetic::symbol_to_currency_scale(lots, spec.base_scale_k, base_spec.currency_scale_k)
     }
 
-    /// 对应 Java 静态 `collateralAmountToLots`（`:422-426`）：抵押金额（base currencyScale）→ 强平下单张数（lot，base symbolScale）；不足一张截断为 0——R2 用"是否还有可卖整张"而非 `collateralAmount==0` 判定尘埃，见参考文档 §2.5。
+    /// 抵押金额（base currencyScale）→ 下单张数（lot, base symbolScale）；不足一张截断为 0（R2 用"是否还有可卖整张"而非 ==0 判尘埃）。
     pub fn collateral_amount_to_lots(
         amount: i64,
         spec: &CoreSymbolSpecification,
@@ -357,7 +352,7 @@ impl LoanService {
         arithmetic::convert_scale(amount, base_spec.currency_scale_k, spec.base_scale_k)
     }
 
-    /// 对应 Java 静态 `quoteAmountToLots`（`:435-438`）：借款币金额（quote currencyScale）→ 按 `mark_price`（此处传破产价 limit）折算的下单张数（lot，ceil 向上取整不少卖）。Cross scanner `calculate_cross_sell_size` 消费。
+    /// 借款币金额 → 按 mark_price（破产价 limit）折算的下单张数（ceil 向上取整不少卖）。
     pub fn quote_amount_to_lots(
         quote_amount: i64,
         mark_price: i64,
@@ -373,7 +368,7 @@ impl LoanService {
         arithmetic::ceil_divide(notional, mark_price)
     }
 
-    /// 对应 Java 静态 `forceSellOrderId`（`:481-486`）：force-sell orderId 位编码——`tag<<56 | subtype<<48 | uidHash<<28 | loanIdHash<<12 | tsSec`。`subtype` 取 [`ORDERID_SUBTYPE_ISOLATED`]/[`ORDERID_SUBTYPE_CROSS`]。`tickTimeMs` 用触发命令 timestamp（确定性，同 futures `generate_liquidation_order_id` 的偏差，leader-only 生成经 raft 复制）。
+    /// force-sell orderId 位编码：tag<<56 | subtype<<48 | uidHash<<28 | loanIdHash<<12 | tsSec。tick_time_ms 用触发命令 timestamp（确定性）。
     pub fn force_sell_order_id(subtype: i64, uid: i64, loan_id: i64, tick_time_ms: i64) -> i64 {
         let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & ORDERID_UID_MASK;
         let loan_id_hash = (loan_id.wrapping_mul(31).wrapping_add(17)) & ORDERID_LOANID_MASK;
@@ -381,7 +376,7 @@ impl LoanService {
         (ORDERID_NAMESPACE_TAG << 56) | (subtype << 48) | (uid_hash << 28) | (loan_id_hash << 12) | ts_sec
     }
 
-    /// 对应 Java `settleLiquidationProceeds`（`:159-166`）：强平所得 `received_quote`（已扣撮合 takerFee）的统一去向——先按 `loanLiquidationFeeBps` 抽强平费（ceil 向交易所取整，不少收）进 `loan_insurance_fund`，再 `accrue_to` 补计利息后走 [`Self::apply_debt_payment`] 抵债，剩余 overpay 留在 `account`。返回本次结算的利息部分（≥ 0）。Isolated / Cross 强平共用。
+    /// 强平所得 received_quote（已扣 takerFee）：先按 loan_liquidation_fee_bps 抽费（ceil 不少收）进 LIF，再 accrue+apply_debt_payment 抵债，overpay 留 account。返回结算的利息部分。Isolated/Cross 共用。
     pub fn settle_liquidation_proceeds<L: LoanRecord>(
         &mut self,
         loan: &mut L,
@@ -398,7 +393,7 @@ impl LoanService {
         self.apply_debt_payment(loan, account, received_quote - liq_fee)
     }
 
-    /// 对应 Java 静态 `isStructurallySellable`（`:446-464`）：该抵押币是否**结构上可变现**——只看永久能力，不看 `markPrice` 这类临时状态。`collateral_weight_bps > 0`（币种级白名单）且存在 base=该币、quote=本账户某笔未偿 Cross 债币种的现货对、量够 ≥1 lot（卖了能真的还上债）。与 `LoanLiquidationEngine.pickCrossCollateralToSell` 的永久性条件同源（未移植，本函数独立成立）。
+    /// 该抵押币是否结构上可变现——只看永久能力，不看 markPrice 临时状态。weight>0 且存在到某笔未偿 Cross 债币种的现货对、量够 ≥1 lot。
     pub fn is_structurally_sellable(
         currency: i32,
         amount: i64,
@@ -425,11 +420,11 @@ impl LoanService {
         false
     }
 
-    /// 对应 Java `takeOverCrossLoan`（`:287-385`）：Cross LIF 承接——按 `target_loan_id` 债务占账户总债的比例，从共享抵押池按 `collateralWeightBps` 降序、同权重按 currency 升序**定额**扣走等值抵押（不逐币种等比切，避免尘埃碎片化，见参考文档 §6.3）。**fail-closed**：任一价格/spec 缺失 → 返回 `false`，调用方须保留 loan 原样、不使用失真价格。
+    /// Cross LIF 承接：按 target 债占账户总债比例，从共享抵押池按 weight 降序、同权重 currency 升序定额扣等值抵押（不逐币种等比切，避免尘埃碎片化）。fail-closed：任一价格/spec 缺失 → false，调用方须保留 loan 原样。
     ///
-    /// 只触碰 `up.cross_loan_collateral`/`up.accounts`（真实扣抵押）与 `self` 的 4 个资金桶（LIF/poolAvailable/poolBorrowed/interestRevenue）——**不**清零 `targetLoan` 本身的本金/利息字段，那是调用方（`LoanCommandDispatcher::close_and_recycle_cross_loan`）的职责，逐字对齐 Java：`takeOverCrossLoan` 只管钱，调用方决定何时清账 + 摘出 map。
+    /// 只动 up.cross_loan_collateral/accounts 与 self 的 4 个资金桶；不清 targetLoan 本身本金/利息字段（调用方 close_and_recycle_cross_loan 的职责）。
     ///
-    /// 排序确定性是硬要求（R2 在所有副本执行，哈希序会导致状态分叉）——`BTreeMap` 天然升序迭代 + 显式按 weight 降序/currency 升序排序，逐字对齐 Java `Arrays.sort` 的比较器。
+    /// 排序确定性是硬要求（R2 在所有副本执行，哈希序会导致状态分叉）。
     pub fn take_over_cross_loan(
         &mut self,
         up: &mut UserProfile,
@@ -488,7 +483,7 @@ impl LoanService {
         let mut total_collateral_in_num: i64 = 0;
         for &currency in &ordered {
             let amount = *up.cross_loan_collateral.get(&currency).unwrap_or(&0);
-            // 零权重币不撑 LTV（口径同 calculateCrossAccountLtvBps），接管也不能取。
+            // 零权重币不撑 LTV，接管也不能取。
             if amount <= 0 || Self::collateral_weight_for_base(currency, ssp) <= 0 {
                 continue;
             }
@@ -536,7 +531,7 @@ impl LoanService {
         true
     }
 
-    /// 确定性状态 hash：折叠排序后的 4 个资金桶 + `global_config`/`floating_rate`/`fixed_rate` 各自的 `state_hash()`。风格对齐 `UserProfile::state_hash`（`h=h*31+field` 滚动折叠）；不保证与 Java `Objects.hash(...)`-style 数值相等，只保证「同状态 -> 同 hash，不同状态 -> 不同 hash」。
+    /// 确定性状态 hash：折叠排序后的 4 个资金桶 + global_config/floating_rate/fixed_rate 各自 state_hash()。只保证同状态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         for (&cur, &amt) in &self.loan_pool_available {

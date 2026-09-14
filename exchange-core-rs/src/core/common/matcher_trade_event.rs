@@ -16,7 +16,7 @@ pub struct MatcherTradeEvent {
     pub bidder_hold_price: i64,
     /// 对应 Java `matchedOrderUid`：maker 的 uid；仅 TRADE 有意义，REDUCE/REJECT 恒为 0。
     pub matched_order_uid: i64,
-    /// 对应 Java `matchedOrderCommandType`（`:52`）：maker 挂单时的原命令类型（`OrderBookEventsHelper.java:75`），非 taker 命令；`RiskEngine`（`.java:1450`）用它算 maker 侧 createPositionsKey；仅 TRADE 有意义，REDUCE/REJECT 恒默认 `PlaceOrder`。
+    /// 对应 Java `matchedOrderCommandType`：maker 挂单时的原命令类型（非 taker 命令），用于算 maker 侧 createPositionsKey；仅 TRADE 有意义，REDUCE/REJECT 恒默认 `PlaceOrder`。
     pub matched_order_command_type: OrderCommandType,
     /// 对应 Java `MatcherTradeEvent.filled`：taker（active order）本命令累计成交量（含本笔后）。
     pub filled: i64,

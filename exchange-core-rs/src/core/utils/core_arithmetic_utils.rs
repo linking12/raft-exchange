@@ -1,6 +1,4 @@
-//! 定点算术纯函数——现货子集。对应 Java `CoreArithmeticUtils`；含共享原语 [`distribute_remainder_by_one`]（供 Funding/IF/ADL 复用）。
-//! Rust 用原生 `i128` 统一覆盖 Java 的 fast/slow path（`*128` 变体），`ceil_mul_mul_div` 复刻 Java 的两步重排策略。
-//! Ruling：本模块零依赖账户/规格模型，fee/scale 参数均为裸标量。
+//! 定点算术纯函数——现货子集。对应 Java `CoreArithmeticUtils`。
 //! 取整语义（load-bearing）：手续费向 +∞ 取整（ceil），盈利/退款向零截断（trunc）——翻转会破坏资金守恒。
 
 /// 10^0..=10^18（`i64` 范围内的全部 10 次幂）。对应 Java `TenPowers.POW10`。
@@ -57,7 +55,7 @@ fn sub_exact(a: i64, b: i64) -> i64 {
     i64::try_from(diff).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
 
-/// `ceil(n / d)`，向 +∞ 取整，`n`/`d` 任意符号、`d` 非零。对应 Java `ceilMulDiv128` 步骤 4 的符号还原逻辑。
+/// `ceil(n / d)`，向 +∞ 取整，`n`/`d` 任意符号、`d` 非零。
 fn ceil_div_i128(n: i128, d: i128) -> i128 {
     assert!(d != 0, "/ by zero");
     let q = n / d; // Rust `/` 对 i128 向零截断，语义同 Java `long` 除法
@@ -77,14 +75,14 @@ fn narrow_i128(v: i128, ctx: &str) -> i64 {
 // 取整乘除基础算子
 // ============================================================================
 
-/// `ceil((a × b) / c)`。对应 Java `ceilMulDiv`/`ceilMulDiv128` 的合并等价实现；前提 `c > 0`，`a`/`b` 任意符号。
+/// `ceil((a × b) / c)`。对应 Java `ceilMulDiv`；前提 `c > 0`，`a`/`b` 任意符号。
 pub fn ceil_mul_div(a: i64, b: i64, c: i64) -> i64 {
     assert!(c > 0, "c must be positive: {c}");
     let product = a as i128 * b as i128;
     narrow_i128(ceil_div_i128(product, c as i128), "ceil_mul_div")
 }
 
-/// `(a × b) / c`，向零截断。对应 Java `truncMulDiv`/`truncMulDiv128` 的合并等价实现；`c` 可为负，前提 `c != 0`。
+/// `(a × b) / c`，向零截断。对应 Java `truncMulDiv`；`c` 可为负，前提 `c != 0`。
 pub fn trunc_mul_div(a: i64, b: i64, c: i64) -> i64 {
     assert!(c != 0, "/ by zero");
     let product = a as i128 * b as i128;
@@ -114,7 +112,7 @@ pub fn ceil_divide(dividend: i64, divisor: i64) -> i64 {
 // scale 换算
 // ============================================================================
 
-/// 通用 scale 换算：`from_k`/`to_k` 必须都是 10 的整数次幂。对应 Java `CoreArithmeticUtils#convertScale`；缩小走整除，放大走乘法（`i128` 收窄回 `i64`）。
+/// 通用 scale 换算：`from_k`/`to_k` 必须都是 10 的整数次幂。缩小走整除，放大走乘法。对应 Java `convertScale`。
 pub fn convert_scale(amount: i64, from_k: i64, to_k: i64) -> i64 {
     if from_k == to_k {
         return amount;
@@ -138,7 +136,7 @@ pub fn size_price_to_currency_scale(
     convert_scale(amount, mul_exact(base_scale_k, quote_scale_k), currency_scale_k)
 }
 
-/// 币种记账单位（`currency_scale_k`）→ 撮合内部乘积单位（`base_scale_k * quote_scale_k`）。对应 Java `currencyToSizePriceScale`，[`size_price_to_currency_scale`] 的反向换算。
+/// 币种记账单位（`currency_scale_k`）→ 撮合内部乘积单位（`base_scale_k * quote_scale_k`），`size_price_to_currency_scale` 的反向换算。对应 Java `currencyToSizePriceScale`。
 pub fn currency_to_size_price_scale(
     amount: i64,
     base_scale_k: i64,
@@ -148,7 +146,7 @@ pub fn currency_to_size_price_scale(
     convert_scale(amount, currency_scale_k, mul_exact(base_scale_k, quote_scale_k))
 }
 
-/// 币对交易单位（base 或 quote 各自的 `scale_k`）→ 币种记账单位。对应 Java `symbolToCurrencyScale`；本函数只做纯换算，currency 选择下放给调用方。
+/// 币对交易单位（base 或 quote 各自的 `scale_k`）→ 币种记账单位；纯换算，currency 选择由调用方负责。对应 Java `symbolToCurrencyScale`。
 pub fn symbol_to_currency_scale(amount: i64, scale_k: i64, currency_scale_k: i64) -> i64 {
     convert_scale(amount, scale_k, currency_scale_k)
 }
@@ -247,11 +245,10 @@ pub fn is_ask_price_too_low(price: i64, taker_fee: i64, fee_scale_k: i64) -> boo
 }
 
 // ========================================================================
-// 强平数学原语 —— 对应 Java `CoreArithmeticUtils.java:180-240`；Ruling：零依赖模型层，
-// Java 版本从 position/spec 读取的标量改为裸入参，调用方先算好再传入。
+// 强平数学原语 —— 对应 Java `CoreArithmeticUtils`；从 position/spec 读取的标量改为裸入参，调用方先算好再传入。
 // ========================================================================
 
-/// 对应 Java `calculateLiquidationFee(long size, long price, CoreSymbolSpecification spec)`：结构同 `calculate_taker_fee`/`calculate_maker_fee`，费率换成 `liquidation_fee`。
+/// 结构同 `calculate_taker_fee`，费率换成 `liquidation_fee`。对应 Java `calculateLiquidationFee`。
 pub fn calculate_liquidation_fee(size: i64, price: i64, liquidation_fee: i64, fee_scale_k: i64) -> i64 {
     if fee_scale_k == 0 {
         mul_exact(size, liquidation_fee)
@@ -260,7 +257,7 @@ pub fn calculate_liquidation_fee(size: i64, price: i64, liquidation_fee: i64, fe
     }
 }
 
-/// 计算强平数量 x（使新权益回到维持保证金线）。对应 Java `calculateSizeToLiquidate(SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:201-214`）；入参为调用方预先算好的标量（equity/MM/openInitMarginSum/openVolume/openPriceSum/markPrice/sign）。
+/// 计算强平数量 x（使新权益回到维持保证金线）。入参为调用方预先算好的标量。对应 Java `calculateSizeToLiquidate`。
 pub fn calculate_size_to_liquidate(
     equity: i64,
     maintenance_margin: i64,
@@ -278,7 +275,7 @@ pub fn calculate_size_to_liquidate(
     ceil_divide(numerator, denominator)
 }
 
-/// 估算强平 x 手后对缺口（deficit = totalMM - totalEquity）的改善量 ΔD。对应 Java `calculateDeficitAfterLiquidate(long size, SymbolPositionRecord position, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord)`（`:228-240`）；`maintenance_margin_now`/`_after` 为调用方预先按强平前后 notional 查表算好的 MM。
+/// 估算强平 x 手后对缺口（deficit = totalMM - totalEquity）的改善量 ΔD。`maintenance_margin_now`/`_after` 为调用方预先按强平前后 notional 查表算好的 MM。对应 Java `calculateDeficitAfterLiquidate`。
 pub fn calculate_deficit_after_liquidate(
     size: i64,
     sign: i64,
@@ -296,8 +293,7 @@ pub fn calculate_deficit_after_liquidate(
 }
 
 // ========================================================================
-// 共享"截断分配 + 1-unit 余数分配"原语，提取自 `FundingFeeCommandProcessor` 两处同构模式
-// （:85-104, :150-161），供 IF/ADL 复用。
+// 共享"截断分配 + 1-unit 余数分配"原语，供 Funding/IF/ADL 复用。
 // ========================================================================
 
 use std::collections::BTreeMap;

@@ -1,10 +1,11 @@
-//! 对应 Java `FixedRateModel`：定期利率模型，仅用于 Isolated LOCKED，开仓锁定 floating 利率+点差后固定计息；移植偏差：不持有 floating 引用（禁 Rc/RefCell），open_rate_bps 改显式传参。
+//! Java `FixedRateModel`：Isolated LOCKED 定期利率，开仓锁定 floating 利率+点差后固定计息。
+//! 不持有 floating 引用（禁 Rc/RefCell），open_rate_bps 改显式传参。
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::utils::core_arithmetic_utils::trunc_mul_div;
 
-/// 对应 Java `Math.addExact(long, long)`：局部私有重复一份（arithmetic 层零依赖 ruling）。
+/// 对应 Java `Math.addExact`。
 fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
@@ -16,26 +17,24 @@ pub struct FixedRateModel {
 }
 
 impl FixedRateModel {
-    /// 对应 Java `reset()`（`:89-91`）。
     pub fn reset(&mut self) {
         self.locked_rate_adjust_bps = 0;
     }
 
-    /// 对应 Java `stateHash()`（`:98-100`，`Objects.hash(lockedRateAdjustBps)`）。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.locked_rate_adjust_bps as i64);
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 对应 Java `openRateBps`（`:50-53`）：floating 当前利率 + spread，下限 0，固化进 `loan.rate_bps`。
+    /// floating 当前利率 + spread，下限 0，固化进 loan.rate_bps。
     pub fn open_rate_bps(&self, floating: &FloatingRateModel, loan_currency: i32) -> i32 {
         let adjusted =
             floating.current_rate_bps_or_base(loan_currency) as i64 + self.locked_rate_adjust_bps as i64;
         adjusted.max(0) as i32
     }
 
-    /// 对应 Java `accrue`（`:56-68`）：按 `rate_bps` 补计利息到 `now`，推进游标；truncated-but-chargeable（F1）截断得 0 时保留游标避免吞息。
+    /// 按 rate_bps 补计利息到 now，推进游标；truncated-but-chargeable（F1）截断得 0 时保留游标避免吞息。
     pub fn accrue<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         let delta =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
@@ -50,14 +49,14 @@ impl FixedRateModel {
         delta
     }
 
-    /// 对应 Java `displayInterest`（`:71-74`）：`accumulated_interest` + pending，不改 loan。
+    /// accumulated_interest + pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let pending =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
         add_exact(loan.accumulated_interest(), pending)
     }
 
-    /// 对应 Java `accrueDelta`（`:76-87`）：分两步 `trunc_mul_div`（先/YEAR_MS 再/BPS_SCALE），不可合并为一次连乘。
+    /// 分两步 trunc_mul_div（先 /YEAR_MS 再 /BPS_SCALE），不可合并为一次连乘。
     fn accrue_delta(outstanding_principal: i64, rate_bps: i32, last_accrue_ts: i64, now: i64) -> i64 {
         if outstanding_principal <= 0 || rate_bps <= 0 {
             return 0;
@@ -72,7 +71,6 @@ impl FixedRateModel {
 }
 
 impl Default for FixedRateModel {
-    /// 对应 Java `FixedRateModel(FloatingRateModel floating)` 构造器：`lockedRateAdjustBps = 0`。
     fn default() -> Self {
         FixedRateModel { locked_rate_adjust_bps: 0 }
     }

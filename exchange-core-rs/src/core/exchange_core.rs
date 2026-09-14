@@ -1,6 +1,5 @@
 //! 对应 Java `exchange.core2.core.ExchangeCore`（Disruptor 五段编排入口），本移植塌缩为单线程确定性顺序管线：R1→ME→R2。
-//!
-//! Ruling P3-B：`risk`/`matching`/`ups`/`ssp` 作为平级字段直接持有（非 `Rc<RefCell<_>>`），靠字段级借用而非 `&mut self` 中间方法过借用检查，故 `process_command` 不拆分成私有 r1/r2 辅助方法。
+//! `risk`/`matching`/`ups`/`ssp` 作为平级字段直接持有，靠字段级借用过借用检查，故 `process_command` 不拆分成私有 r1/r2 辅助方法。
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -27,24 +26,24 @@ impl ExchangeCore {
         }
     }
 
-    /// 确定性顺序管线：R1(`RiskEngine::pre_process_command`)→ME(`MatchingEngineRouter::process_order`)→R2(`RiskEngine::handler_risk_release`)，镜像 Java disruptor 的 Grouping/ResultsHandler 语义（线程编排不建模）；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路，等价 Java 全命令过三个 disruptor 处理器。
+    /// 确定性顺序管线：R1(`pre_process_command`)→ME(`process_order`)→R2(`handler_risk_release`)；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
         if cmd.command == crate::core::common::cmd::order_command_type::OrderCommandType::Reset {
-            // 对应 Java RiskEngine `case RESET: reset()`（`:329-334`）：清空全引擎业务态并回 SUCCESS，不过 R1→ME→R2。
+            // 对应 Java RiskEngine `case RESET`：清空全引擎业务态并回 SUCCESS，不过 R1→ME→R2。
             self.reset();
             cmd.result_code = Some(crate::core::common::cmd::command_result_code::CommandResultCode::Success);
             return;
         }
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
         self.matching.process_order(cmd); // ME
-        // R2 只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游 `SimpleEventsProcessor` 读取（对齐 Java：
-        // handlerRiskRelease 从不 null matcherEvent，链存活到结果处理器）。
+        // R2 只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游读取（链存活到结果处理器）。
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
+        // 现货成交动态更新 markPrice（对齐 Java handlerRiskRelease 尾部 applyTradePrice）：供 loan 现货抵押估值。
+        self.risk.apply_spot_trade_price_from(cmd, &self.ssp);
         self.drain_liquidation_commands();
     }
 
-    /// 对应 Java `RiskEngine.reset()` + 各 provider `reset()`：RESET 命令清空全引擎业务态（用户/仓位/费用/specs/
-    /// 价格缓存/loan+IF 服务/撮合簿）。保留 leader-local 的 `liquidation_engine`（同 Java 不 reset liquidationEngine）。
+    /// 对应 Java `RiskEngine.reset()` + 各 provider `reset()`：RESET 清空全引擎业务态（用户/仓位/费用/specs/价格缓存/loan+IF 服务/撮合簿）。保留 leader-local 的 `liquidation_engine`。
     fn reset(&mut self) {
         self.risk.reset();
         self.ups.users.clear();
@@ -54,18 +53,20 @@ impl ExchangeCore {
         self.matching.reset();
     }
 
-    /// 排空强平引擎提交队列，把生成的 FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING 命令逐条喂回 R1→ME→R2（替代 Java disruptor `submit` 重入）；FIFO 逐条弹出保序，链深≤3/仓位必然收敛。
+    /// 排空强平引擎提交队列，把生成的 FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING 命令逐条喂回 R1→ME→R2；FIFO 逐条弹出保序，链深≤3/仓位必然收敛。
     fn drain_liquidation_commands(&mut self) {
         while !self.risk.liquidation_engine.pending_commands.is_empty() {
             let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
             self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
             self.matching.process_order(&mut generated);
             self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
+            // loan-force 卖抵押也在现货簿成交，同样回写现货 markPrice。
+            self.risk.apply_spot_trade_price_from(&generated, &self.ssp);
         }
     }
 
-    // Snapshot：serde derive + bincode 整体序列化复制态，只需 round-trip 保真，不要求与 Java 字节格式互通。
-    // Ruling P6-E：`liquidation_engine` 与 SPR 的 liquidation_flow/adl_eligibility/pending_adl_size 三个 scratch 字段 `#[serde(skip)]`，反序列化后经 `restore_non_replicated_state` 复原为"换届后新 leader"语义（等价 Java `updateProvider`）。
+    // Snapshot：serde derive + bincode 整体序列化复制态，只需 round-trip 保真。
+    // `liquidation_engine` 与 SPR 的 liquidation_flow/adl_eligibility/pending_adl_size 三个 scratch 字段 `#[serde(skip)]`，反序列化后经 `restore_non_replicated_state` 复原为"换届后新 leader"语义。
 
     /// 把整个复制态序列化成快照字节（bincode）；非复制 leader-local 状态经 `#[serde(skip)]` 自动排除。
     pub fn to_snapshot_bytes(&self) -> Vec<u8> {
@@ -80,7 +81,7 @@ impl ExchangeCore {
         core
     }
 
-    /// 复原非复制 leader-local 状态到"换届后新 leader"语义（对应 Java `updateProvider`）：0. 重建 `ssp` 现货对派生索引（`#[serde(skip)]`）；1. 仓位 `adl_eligibility` 按 margin_mode 归一（ISOLATED=100/CROSS=0）；2. 重建 `liquidation_engine` 的 targeted 索引（futures symbol_to_users + loan 扫描器双索引）。
+    /// 复原非复制 leader-local 状态到"换届后新 leader"语义（对应 Java `updateProvider`）：0. 重建 `ssp` 现货对派生索引；1. 仓位 `adl_eligibility` 按 margin_mode 归一（ISOLATED=100/CROSS=0）；2. 重建 `liquidation_engine` 的 targeted 索引（futures symbol_to_users + loan 扫描器双索引）。
     fn restore_non_replicated_state(&mut self) {
         // 0. 重建现货对派生索引（不序列化，从 symbols 复原，对齐 Java `rebuildSpotPairIndex`）。
         self.ssp.rebuild_spot_pair_index();
@@ -326,7 +327,7 @@ mod tests {
     }
 }
 
-// LOAN_FORCE_LIQUIDATE / LOAN_CROSS_FORCE_LIQUIDATE 全链路（R1 pre-move→ME→R2/LIF 接管）集成测试，独立 mod 因需专属借贷治具。参考文档 §2.5/§2.10/§5.2/§6.3。
+// LOAN_FORCE_LIQUIDATE / LOAN_CROSS_FORCE_LIQUIDATE 全链路（R1 pre-move→ME→R2/LIF 接管）集成测试，独立 mod 因需专属借贷治具。
 #[cfg(test)]
 mod loan_force_liquidate_tests {
     use super::*;
@@ -421,7 +422,7 @@ mod loan_force_liquidate_tests {
         }
     }
 
-    /// 全局守恒（§6.2 telescoped 恒等式）：Σaccounts + loanPoolAvailable + interestRevenue + loanInsuranceFund + fees + adjustments 操作前后不变（loanPoolBorrowed 是 tracker 明确排除）。
+    /// 全局守恒：Σaccounts + loanPoolAvailable + interestRevenue + loanInsuranceFund + fees + adjustments 操作前后不变（loanPoolBorrowed 是 tracker 明确排除）。
     fn conserved_total(core: &ExchangeCore, currency: i32) -> i64 {
         let accounts_sum: i64 = core.ups.users.values().map(|u| u.account(currency)).sum();
         accounts_sum
@@ -701,7 +702,7 @@ mod loan_force_liquidate_tests {
     }
 }
 
-// 期货强平全链路 e2e（markprice 触发→FORCE→IF→ADL 状态机→队列排空重喂→结算）。直接写 `ExchangeCore`（而非 `ExchangeApi`）因需 liquidation_engine/liquidation_service 内部访问。参考文档 §1。
+// 期货强平全链路 e2e（markprice 触发→FORCE→IF→ADL 状态机→队列排空重喂→结算）。直接写 `ExchangeCore`（而非 `ExchangeApi`）因需 liquidation_engine/liquidation_service 内部访问。
 #[cfg(test)]
 mod liquidation_engine_e2e_tests {
     use super::*;
@@ -781,7 +782,7 @@ mod liquidation_engine_e2e_tests {
         OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price, timestamp: ts, ..Default::default() }
     }
 
-    /// 守恒（含 IF，Ruling P6-I）：Σaccounts + fees + adjustments + Σ仓位(pnl+extra_margin) + ΣIFNotional.available + ΣIF接管仓pnl，scale 全 1 可直接相加。
+    /// 守恒（含 IF）：Σaccounts + fees + adjustments + Σ仓位(pnl+extra_margin) + ΣIFNotional.available + ΣIF接管仓pnl，scale 全 1 可直接相加。
     fn conserved(core: &ExchangeCore) -> i64 {
         let cur = QUOTE;
         let mark = *core.risk.last_price_cache.get(&FUT).unwrap_or(&0);
