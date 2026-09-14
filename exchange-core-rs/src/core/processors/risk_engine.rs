@@ -696,12 +696,16 @@ impl RiskEngine {
         let mark_price_for_futures = self.mark_price(cmd.symbol).unwrap_or(0);
         let fees = &mut self.fees;
         let last_price_cache = &self.last_price_cache;
-        let mut mte = match cmd.matcher_event.take() {
+        // 事件链取到局部、结算只按引用读（不销毁），R2 各出口把整条链原样放回 cmd，供下游 SimpleEventsProcessor 读取
+        // （对齐 Java：matcherEvent 存活到结果处理器；无克隆）。结算与 advance_liquidation 期间 cmd.matcher_event 为 None，
+        // 与既有语义完全一致（on_force_applied 等的 reject 判定行为不变）。
+        let mte_owned = cmd.matcher_event.take();
+        let mte = match mte_owned.as_deref() {
             Some(m) => m,
             None => return,
         };
         if mte.event_type == MatcherEventType::BinaryEvent {
-            cmd.matcher_event = Some(mte);
+            cmd.matcher_event = mte_owned;
             return;
         }
         let spec = ssp
@@ -716,12 +720,12 @@ impl RiskEngine {
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency))
                 .clone();
 
-            // ForceLiquidation 的 collect_liquidation_fee 需 TRADE 的 Σsize/Σ(size×price)，消费前先非破坏性 peek 一遍聚合（同 loan force-liquidate 先例）。
+            // ForceLiquidation 的 collect_liquidation_fee 需 TRADE 的 Σsize/Σ(size×price)，先遍历链聚合（同 loan force-liquidate 先例）。
             let is_force = cmd.command == OrderCommandType::ForceLiquidation;
             let (force_taker_size, force_taker_size_price) = if is_force {
                 let mut taker_size: i64 = 0;
                 let mut taker_size_price: i128 = 0;
-                let mut cursor = Some(mte.as_ref());
+                let mut cursor = Some(mte);
                 while let Some(ev) = cursor {
                     if ev.event_type == MatcherEventType::Trade {
                         taker_size += ev.size;
@@ -753,6 +757,9 @@ impl RiskEngine {
                 is_force,
             );
 
+            // R2 结算后放回事件链：advance/on_force_applied 需 matcher_event 可见判 REJECT 升级 IF（对齐 Java），
+            // 下游 SimpleEventsProcessor 也读它。不变量：take 后每个出口都必须回填，勿新增遗漏回填的 early-return。
+            cmd.matcher_event = mte_owned;
             // ForceLiquidation R2-finalize 钩子，对应 Java handlerRiskRelease :992 collectLiquidationFee + :997 advanceLiquidation。
             if is_force {
                 // 对应 Java collect_liquidation_fee（:1522-1550）：Σtrade 手续费从 taker 扣、计入 IFNotional.available；taker_size==0 时 no-op。
@@ -791,7 +798,7 @@ impl RiskEngine {
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
 
-        // loan force-liquidate 需 TRADE/REJECT 聚合（traded_size/notional/rejected_size），消费链前先非破坏性 peek 一遍算好，等价 Java 事后再遍历 cmd.matcherEvent。
+        // loan force-liquidate 需 TRADE/REJECT 聚合（traded_size/notional/rejected_size），先遍历链算好，等价 Java 事后再遍历 cmd.matcherEvent。
         let is_loan_force_liquidate = matches!(
             cmd.command,
             OrderCommandType::LoanForceLiquidate | OrderCommandType::LoanCrossForceLiquidate
@@ -800,7 +807,7 @@ impl RiskEngine {
             let mut traded_size: i64 = 0;
             let mut traded_notional: i128 = 0;
             let mut rejected_size: i64 = 0;
-            let mut cursor = Some(mte.as_ref());
+            let mut cursor = Some(mte);
             while let Some(ev) = cursor {
                 match ev.event_type {
                     MatcherEventType::Trade => {
@@ -824,7 +831,7 @@ impl RiskEngine {
         };
 
         // REJECT 总在链头；REDUCE 单独成事件，同样只可能出现在链头。
-        let next: Option<Box<MatcherTradeEvent>> =
+        let next: Option<&MatcherTradeEvent> =
             if mte.event_type == MatcherEventType::Reduce
                 || mte.event_type == MatcherEventType::Reject
             {
@@ -837,7 +844,7 @@ impl RiskEngine {
                 let taker_up = ups.get_or_add_suspended(cmd.uid);
                 Self::handle_matcher_reject_reduce_event_exchange(
                     cmd,
-                    &mte,
+                    mte,
                     &spec,
                     &currency_spec,
                     taker_sell,
@@ -846,7 +853,7 @@ impl RiskEngine {
                     ssp,
                 );
                 cmd.fund_events.append(&mut reject_events);
-                mte.next.take()
+                mte.next.as_deref()
             } else {
                 Some(mte)
             };
@@ -878,7 +885,6 @@ impl RiskEngine {
                     ssp,
                 );
                 cmd.fund_events.append(&mut spot_events);
-                // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 REJECT/REDUCE 消费后清空的模式）。
             } else {
                 let base_currency_spec = ssp
                     .get_currency(spec.base_currency)
@@ -905,7 +911,6 @@ impl RiskEngine {
                     ssp,
                 );
                 cmd.fund_events.append(&mut spot_events);
-                // TRADE 链已完全结算消费，不回填 cmd.matcher_event（对齐 sell 分支）。
             }
         }
 
@@ -940,6 +945,8 @@ impl RiskEngine {
                 _ => unreachable!("is_loan_force_liquidate implies one of the two force-liquidate codes"),
             }
         }
+
+        cmd.matcher_event = mte_owned; // 现货结算/loan 钩子后放回链，供 SimpleEventsProcessor 读取
     }
 
     /// 对应 Java `handleMatcherRejectReduceEventExchange`（:1094-1125）：撤单/拒单释放单方冻结（ASK 按 size 直退，BID 按订单类型分档计算），accounts 不动。
@@ -1022,7 +1029,7 @@ impl RiskEngine {
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_sell(
         cmd: &OrderCommand,
-        first_trade_mte: Box<MatcherTradeEvent>,
+        first_trade_mte: &MatcherTradeEvent,
         spec: &CoreSymbolSpecification,
         base_currency_spec: &CoreCurrencySpecification,
         quote_currency_spec: &CoreCurrencySpecification,
@@ -1100,7 +1107,7 @@ impl RiskEngine {
             maker_notional += ev.size as i128 * ev.price as i128;
             maker_size += ev.size;
 
-            node = ev.next;
+            node = ev.next.as_deref();
         }
 
         // hoist：taker_fee 在 taker 结算块和下面 fees 池都要用，避免重复算一次 ceil。
@@ -1175,7 +1182,7 @@ impl RiskEngine {
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_buy(
         cmd: &OrderCommand,
-        first_trade_mte: Box<MatcherTradeEvent>,
+        first_trade_mte: &MatcherTradeEvent,
         spec: &CoreSymbolSpecification,
         base_currency_spec: &CoreCurrencySpecification,
         quote_currency_spec: &CoreCurrencySpecification,
@@ -1240,7 +1247,7 @@ impl RiskEngine {
             maker_notional += ev.size as i128 * ev.price as i128;
             maker_size += ev.size;
 
-            node = ev.next;
+            node = ev.next.as_deref();
         }
 
         // hoist：taker_fee 在 taker 结算块和下面 fees 池都要用，避免重复算一次 ceil。
@@ -1364,7 +1371,7 @@ impl RiskEngine {
         fund_events: &mut Vec<FundEvent>,
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, i64>,
-        first_mte: Box<MatcherTradeEvent>,
+        first_mte: &MatcherTradeEvent,
         spec: &CoreSymbolSpecification,
         taker_action: OrderAction,
         ups: &mut UserProfileService,
@@ -1374,14 +1381,14 @@ impl RiskEngine {
         is_liquidation: bool,
     ) {
         let mut node = Some(first_mte);
-        while let Some(mut ev) = node {
+        while let Some(ev) = node {
             Self::handle_matcher_event_margin_one(
                 cmd_uid,
                 cmd_command,
                 fund_events,
                 ssp,
                 last_price_cache,
-                &ev,
+                ev,
                 spec,
                 taker_action,
                 ups,
@@ -1390,7 +1397,7 @@ impl RiskEngine {
                 mark_price,
                 is_liquidation,
             );
-            node = ev.next.take();
+            node = ev.next.as_deref();
         }
     }
 
@@ -1782,6 +1789,10 @@ impl RiskEngine {
             margin_ratio_scale_k: mr,
             maintenance_margin_scale_k: mmsk,
             mark_price: Self::mark_of(last_price_cache, pos.symbol),
+            pending_buy_size: pos.pending_buy_size,
+            pending_buy_avg_price: pos.pending_buy_avg_price,
+            pending_sell_size: pos.pending_sell_size,
+            pending_sell_avg_price: pos.pending_sell_avg_price,
             ..Default::default()
         });
     }
@@ -2856,6 +2867,15 @@ mod tests {
             bidder_hold_price,
             matched_order_uid: 0,
             matched_order_command_type: OrderCommandType::PlaceOrder,
+            filled: 0,
+            filled_notional: 0,
+            matched_order_size: 0,
+            matched_order_price: 0,
+            matched_order_type: crate::core::common::order_type::OrderType::Gtc,
+            matched_order_timestamp: 0,
+            matched_user_cookie: 0,
+            matched_order_filled: 0,
+            matched_order_filled_notional: 0,
             next,
         })
     }
@@ -2881,7 +2901,7 @@ mod tests {
         assert_eq!(p.locked(QUOTE), 0, "纯 REJECT 应把冻结全额释放回 0");
         assert_eq!(p.account(QUOTE), 1_000_000, "accounts 不动");
         assert_eq!(p.account(BASE), 0, "accounts 不动");
-        assert!(cmd.matcher_event.is_none(), "REJECT 是唯一事件，链头消费后应清空");
+        assert!(cmd.matcher_event.is_some(), "R2 只读不消费，链保留供事件处理");
     }
 
     #[test]
@@ -2905,7 +2925,7 @@ mod tests {
         assert_eq!(p.locked(BASE), locked_after_place - 300, "REDUCE 只释放剩余量对应的锁定");
         assert_eq!(p.account(BASE), 1_000_000, "accounts 不动");
         assert_eq!(p.account(QUOTE), 0, "accounts 不动");
-        assert!(cmd.matcher_event.is_none(), "REDUCE 是唯一事件，链头消费后应清空");
+        assert!(cmd.matcher_event.is_some(), "R2 只读不消费，链保留供事件处理");
     }
 
     #[test]
@@ -2957,7 +2977,7 @@ mod tests {
             "REDUCE 不重复释放 + buy 结算全额释放 held_total，taker quote 冻结应归零"
         );
         // 剩余 TRADE 链已被 buy 结算完全消费。
-        assert!(cmd.matcher_event.is_none(), "TRADE 链应被 buy 结算完全消费");
+        assert!(cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
     }
 
     // ---- R2 — handler_risk_release/handle_matcher_events_exchange_sell：taker 卖(ASK)结算，逐 maker+聚合 taker+平台费，全程守恒断言 ----
@@ -3028,6 +3048,15 @@ mod tests {
             bidder_hold_price,
             matched_order_uid,
             matched_order_command_type: OrderCommandType::PlaceOrder,
+            filled: 0,
+            filled_notional: 0,
+            matched_order_size: 0,
+            matched_order_price: 0,
+            matched_order_type: crate::core::common::order_type::OrderType::Gtc,
+            matched_order_timestamp: 0,
+            matched_user_cookie: 0,
+            matched_order_filled: 0,
+            matched_order_filled_notional: 0,
             next,
         })
     }
@@ -3092,7 +3121,7 @@ mod tests {
         // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
         assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 4000);
 
-        assert!(seller_cmd.matcher_event.is_none(), "TRADE 链结算后应清空");
+        assert!(seller_cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
 
         assert_conserved(&[-1000, 1000], &[47_000, -51_000], 4000);
     }
@@ -3380,7 +3409,7 @@ mod tests {
         // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
         assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 4000);
 
-        assert!(buyer_cmd.matcher_event.is_none(), "TRADE 链结算后应清空");
+        assert!(buyer_cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
 
         assert_conserved(&[1000, -1000], &[-53_000, 49_000], 4000);
     }
@@ -4365,6 +4394,15 @@ mod tests {
             bidder_hold_price: 0, // 期货不用 bidderHoldPrice（现货专用字段，参考文档 §4）。
             matched_order_uid,
             matched_order_command_type,
+            filled: 0,
+            filled_notional: 0,
+            matched_order_size: 0,
+            matched_order_price: 0,
+            matched_order_type: crate::core::common::order_type::OrderType::Gtc,
+            matched_order_timestamp: 0,
+            matched_user_cookie: 0,
+            matched_order_filled: 0,
+            matched_order_filled_notional: 0,
             next: None,
         }
     }
@@ -4396,6 +4434,15 @@ mod tests {
             bidder_hold_price: 0,
             matched_order_uid: 0,
             matched_order_command_type: OrderCommandType::PlaceOrder,
+            filled: 0,
+            filled_notional: 0,
+            matched_order_size: 0,
+            matched_order_price: 0,
+            matched_order_type: crate::core::common::order_type::OrderType::Gtc,
+            matched_order_timestamp: 0,
+            matched_user_cookie: 0,
+            matched_order_filled: 0,
+            matched_order_filled_notional: 0,
             next: None,
         }
     }
@@ -4715,7 +4762,7 @@ mod tests {
 
         engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
-        assert!(cmd.matcher_event.is_none(), "TRADE 链结算后应清空（对齐现货分支的消费语义）");
+        assert!(cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
         let taker_pos = ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
         assert_eq!(taker_pos.direction, PositionDirection::Long);
         assert_eq!(taker_pos.open_volume, 10);
@@ -4760,7 +4807,7 @@ mod tests {
 
         engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
-        assert!(cmd.matcher_event.is_none());
+        assert!(cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
         let taker_pos = ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap();
         assert_eq!(taker_pos.direction, PositionDirection::Long);
         assert_eq!(taker_pos.open_volume, 10);

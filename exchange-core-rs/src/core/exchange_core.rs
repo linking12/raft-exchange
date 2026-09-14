@@ -31,6 +31,8 @@ impl ExchangeCore {
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
         self.matching.process_order(cmd); // ME
+        // R2 只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游 `SimpleEventsProcessor` 读取（对齐 Java：
+        // handlerRiskRelease 从不 null matcherEvent，链存活到结果处理器）。
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
         self.drain_liquidation_commands();
     }

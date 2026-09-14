@@ -35,14 +35,15 @@ fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
             }
         }
     }
-    // IF：available（quote notional）+ IF 接管仓的 estimate_pnl(mark)。
+    // IF：available（quote notional）+ IF 接管仓的全额市值 position_value = open_price_sum + 未实现 pnl
+    // （与生产报告 `reports.rs` if_balances 及 `IfPositionRecord::position_value` 同口径）。IF 花的 spend 已从
+    // available 扣、成为仓位成本基，故须按全额市值计入，未实现 pnl 单独计会漏掉 spend（守恒破坏）。
     if cur == QUOTE {
         for n in core.risk.liquidation_service.notionals.values() {
             total += n.available;
         }
         for ifp in core.risk.liquidation_service.positions.values() {
-            let sign = ifp.direction.multiplier() as i64;
-            total += sign * (mark * ifp.open_volume - ifp.open_price_sum);
+            total += ifp.position_value(mark);
         }
     }
     total

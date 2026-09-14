@@ -449,7 +449,7 @@ impl OrderBookDirectImpl {
             command: cmd.command,
             uid: cmd.uid,
             timestamp: cmd.timestamp,
-            user_cookie: 0, // OrderCommand（本移植子集）未含 userCookie 字段
+            user_cookie: cmd.user_cookie,
             parent: None,
             next: None,
             prev: None,
@@ -503,11 +503,12 @@ impl OrderBookDirectImpl {
         loop {
             let midx = maker.expect("loop body only runs while maker is Some");
 
-            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_reserve_bid_price, m_command) = {
+            let (m_size, m_filled_before, m_filled_notional_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_reserve_bid_price, m_command, m_order_type, m_timestamp, m_user_cookie) = {
                 let o = self.order(midx);
                 (
                     o.size,
                     o.filled,
+                    o.filled_notional,
                     o.price,
                     o.parent.expect("maker must have parent bucket"),
                     o.prev,
@@ -515,6 +516,9 @@ impl OrderBookDirectImpl {
                     o.order_id,
                     o.reserve_bid_price,
                     o.command,
+                    o.order_type,
+                    o.timestamp,
+                    o.user_cookie,
                 )
             };
 
@@ -554,6 +558,15 @@ impl OrderBookDirectImpl {
                 matched_order_uid: m_uid,
                 // maker 自己的原命令类型（Java `OrderBookEventsHelper.java:75`，P6-G：须与 Naive 逐字节一致）。
                 matched_order_command_type: m_command,
+                filled: taker_filled,
+                filled_notional: taker_filled_notional,
+                matched_order_size: m_size,
+                matched_order_price: m_price,
+                matched_order_type: m_order_type,
+                matched_order_timestamp: m_timestamp,
+                matched_user_cookie: m_user_cookie,
+                matched_order_filled: m_filled_before + trade_size,
+                matched_order_filled_notional: m_filled_notional_before + trade_size * trade_price,
                 next: None,
             });
 
@@ -799,9 +812,9 @@ impl OrderBookDirectImpl {
                 price_bucket_tail = self.bucket(parent).tail;
             }
 
-            let (m_size, m_filled_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_command) = {
+            let (m_size, m_filled_before, m_filled_notional_before, m_price, m_parent, m_prev, m_uid, m_order_id, m_command, m_order_type, m_timestamp, m_user_cookie) = {
                 let o = self.order(midx);
-                (o.size, o.filled, o.price, o.parent.expect("maker must have parent bucket"), o.prev, o.uid, o.order_id, o.command)
+                (o.size, o.filled, o.filled_notional, o.price, o.parent.expect("maker must have parent bucket"), o.prev, o.uid, o.order_id, o.command, o.order_type, o.timestamp, o.user_cookie)
             };
 
             let trade_price = m_price;
@@ -840,6 +853,15 @@ impl OrderBookDirectImpl {
                 matched_order_uid: m_uid,
                 // 同 try_match_instantly：maker 自己的原命令类型（P6-G）。
                 matched_order_command_type: m_command,
+                filled: taker_filled,
+                filled_notional: taker_filled_notional,
+                matched_order_size: m_size,
+                matched_order_price: m_price,
+                matched_order_type: m_order_type,
+                matched_order_timestamp: m_timestamp,
+                matched_user_cookie: m_user_cookie,
+                matched_order_filled: m_filled_before + trade_size,
+                matched_order_filled_notional: m_filled_notional_before + trade_size * trade_price,
                 next: None,
             });
 
@@ -882,16 +904,12 @@ impl OrderBookDirectImpl {
         let event = MatcherTradeEvent {
             event_type: MatcherEventType::Reject,
             active_order_completed: true,
-            maker_order_id: 0,
-            maker_order_completed: false,
             price: cmd.price,
             size: rejected_size,
-            bid_gt_ask: false,
+            // REJECT 无 maker，其余字段取默认（同 Naive 的 attach_reject_event）。
             bidder_hold_price: cmd.reserve_bid_price,
-            matched_order_uid: 0,
-            // REJECT 无 maker，字段无意义，取默认值（同 Naive 的 attach_reject_event）。
-            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: cmd.matcher_event.take(),
+            ..Default::default()
         };
         cmd.matcher_event = Some(Box::new(event));
     }
@@ -1119,16 +1137,11 @@ impl IOrderBook for OrderBookDirectImpl {
         cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
             event_type: MatcherEventType::Reduce,
             active_order_completed: true,
-            maker_order_id: 0,
-            maker_order_completed: false,
             price,
             size: size - filled,
-            bid_gt_ask: false,
+            // REDUCE 无 maker，其余字段取默认（同 attach_reject_event）。
             bidder_hold_price: reserve_bid_price,
-            matched_order_uid: 0,
-            // REDUCE 无 maker，同 attach_reject_event 语义。
-            matched_order_command_type: OrderCommandType::PlaceOrder,
-            next: None,
+            ..Default::default()
         }));
 
         self.free_order(order_idx);
@@ -1185,15 +1198,11 @@ impl IOrderBook for OrderBookDirectImpl {
         cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
             event_type: MatcherEventType::Reduce,
             active_order_completed: can_remove,
-            maker_order_id: 0,
-            maker_order_completed: false,
             price,
             size: reduce_by,
-            bid_gt_ask: false,
+            // REDUCE 无 maker，其余字段取默认。
             bidder_hold_price: reserve_bid_price,
-            matched_order_uid: 0,
-            matched_order_command_type: OrderCommandType::PlaceOrder,
-            next: None,
+            ..Default::default()
         }));
         cmd.action = Some(action);
 
@@ -1290,6 +1299,7 @@ impl IOrderBook for OrderBookDirectImpl {
 
         let mut ask_prices = Vec::new();
         let mut ask_volumes = Vec::new();
+        let mut ask_orders = Vec::new();
         for &bucket_idx in self.ask_price_buckets.values() {
             if ask_prices.len() == take {
                 break;
@@ -1297,10 +1307,12 @@ impl IOrderBook for OrderBookDirectImpl {
             let b = self.bucket(bucket_idx);
             ask_prices.push(self.order(b.tail).price);
             ask_volumes.push(b.volume);
+            ask_orders.push(b.num_orders as i64);
         }
 
         let mut bid_prices = Vec::new();
         let mut bid_volumes = Vec::new();
+        let mut bid_orders = Vec::new();
         for &bucket_idx in self.bid_price_buckets.values().rev() {
             if bid_prices.len() == take {
                 break;
@@ -1308,9 +1320,10 @@ impl IOrderBook for OrderBookDirectImpl {
             let b = self.bucket(bucket_idx);
             bid_prices.push(self.order(b.tail).price);
             bid_volumes.push(b.volume);
+            bid_orders.push(b.num_orders as i64);
         }
 
-        L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
+        L2MarketData { ask_prices, ask_volumes, ask_orders, bid_prices, bid_volumes, bid_orders }
     }
 
     /// 确定性状态 hash。**Ruling P2-2（约束）**：必须与 `OrderBookNaiveImpl::state_hash` 对同一逻辑订单簿（相同挂单集合）产出**同一个值**——差分属性测试用 `direct.state_hash() == naive.state_hash()` 当 oracle。

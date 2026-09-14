@@ -593,6 +593,15 @@ mod tests {
             bidder_hold_price: 0,
             matched_order_uid: 0,
             matched_order_command_type: OrderCommandType::PlaceOrder,
+            filled: 0,
+            filled_notional: 0,
+            matched_order_size: 0,
+            matched_order_price: 0,
+            matched_order_type: crate::core::common::order_type::OrderType::Gtc,
+            matched_order_timestamp: 0,
+            matched_user_cookie: 0,
+            matched_order_filled: 0,
+            matched_order_filled_notional: 0,
             next: None,
         })
     }

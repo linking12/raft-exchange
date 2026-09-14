@@ -1,7 +1,6 @@
 //! 整簿撮合实现。对应 Java: exchange.core2.core.orderbook.OrderBookNaiveImpl
 use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command::OrderCommand;
-use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -10,6 +9,7 @@ use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::order::Order;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
+use crate::core::orderbook::orders_bucket_naive::MakerFill;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::orders_bucket_naive::OrdersBucketNaive;
@@ -59,7 +59,7 @@ impl OrderBookNaiveImpl {
         let price = cmd.price;
         let size = cmd.size;
 
-        let filled = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
+        let (filled, filled_notional) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
         if filled == size {
             // 完全成交，无需挂单（对应 Java: filledSize == size -> return）
             return;
@@ -77,10 +77,13 @@ impl OrderBookNaiveImpl {
             price,
             size,
             filled,
+            filled_notional,
             reserve_bid_price: cmd.reserve_bid_price,
             action,
+            order_type: cmd.order_type.expect("GTC order requires order_type"),
             uid: cmd.uid,
             timestamp: cmd.timestamp,
+            user_cookie: cmd.user_cookie,
             command: cmd.command,
         };
 
@@ -100,7 +103,7 @@ impl OrderBookNaiveImpl {
         taker_size: i64,
         taker_reserve_bid_price: i64,
         cmd: &mut OrderCommand,
-    ) -> i64 {
+    ) -> (i64, i64) {
         match taker_action {
             // Bid taker 撮 asks：升序遍历（BTreeMap 天然升序）。
             OrderAction::Bid => Self::match_against(
@@ -134,7 +137,7 @@ impl OrderBookNaiveImpl {
         taker_size: i64,
         taker_reserve_bid_price: i64,
         cmd: &mut OrderCommand,
-    ) -> i64 {
+    ) -> (i64, i64) {
         match taker_action {
             OrderAction::Bid => Self::match_against(
                 &mut self.ask_buckets,
@@ -171,7 +174,7 @@ impl OrderBookNaiveImpl {
         taker_reserve_bid_price: i64,
         ascending: bool,
         cmd: &mut OrderCommand,
-    ) -> i64 {
+    ) -> (i64, i64) {
         // 对手侧价格优先级序列：bid taker 升序 (..=price)，ask taker 降序 [price..).rev()；无上限则取全部。
         let prices: Vec<i64> = match (ascending, taker_price_limit) {
             (true, Some(limit)) => buckets.range(..=limit).map(|(p, _)| *p).collect(),
@@ -181,6 +184,8 @@ impl OrderBookNaiveImpl {
         };
 
         let mut filled: i64 = 0;
+        let mut taker_filled: i64 = 0;
+        let mut taker_filled_notional: i64 = 0;
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut emptied: Vec<i64> = Vec::new();
 
@@ -193,31 +198,42 @@ impl OrderBookNaiveImpl {
 
             // remaining_in_call 从 size_left 递减，归零即 taker 本轮成交完毕（对应 Java volumeToCollect==0）。
             let mut remaining_in_call = size_left;
-            bucket.match_forward(size_left, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price, maker_command| {
-                remaining_in_call -= trade;
+            bucket.match_forward(size_left, &mut |f: MakerFill| {
+                remaining_in_call -= f.trade;
                 let active_order_completed = remaining_in_call == 0;
+                taker_filled += f.trade;
+                taker_filled_notional += f.trade * p;
                 // bidder_hold_price = 成交双方中 BID 一方的 reserve_bid_price（对应 Java OrdersBucketNaive.match）。
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
                 } else {
-                    maker_reserve_bid_price
+                    f.reserve_bid_price
                 };
                 events.push(MatcherTradeEvent {
                     event_type: MatcherEventType::Trade,
                     active_order_completed,
-                    maker_order_id: maker_id,
-                    maker_order_completed: maker_completed,
+                    maker_order_id: f.order_id,
+                    maker_order_completed: f.completed,
                     price: p, // 成交价 = maker 挂单价（对照 Java: event.price = matchingOrder.getPrice()）
-                    size: trade,
+                    size: f.trade,
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
-                    matched_order_uid: maker_uid,
+                    matched_order_uid: f.uid,
                     // maker 自己的原命令类型，非 taker 命令（Ruling P6-G）。对应 Java OrderBookEventsHelper.java:75。
-                    matched_order_command_type: maker_command,
+                    matched_order_command_type: f.command,
+                    filled: taker_filled,
+                    filled_notional: taker_filled_notional,
+                    matched_order_size: f.size,
+                    matched_order_price: f.price,
+                    matched_order_type: f.order_type,
+                    matched_order_timestamp: f.timestamp,
+                    matched_user_cookie: f.user_cookie,
+                    matched_order_filled: f.filled,
+                    matched_order_filled_notional: f.filled_notional,
                     next: None,
                 });
-                if maker_completed {
-                    id_index.remove(&maker_id);
+                if f.completed {
+                    id_index.remove(&f.order_id);
                 }
             });
 
@@ -240,7 +256,7 @@ impl OrderBookNaiveImpl {
         }
         cmd.matcher_event = chain;
 
-        filled
+        (filled, taker_filled_notional)
     }
 
     /// 预算受限撮合（IOC_BUDGET 专用）：逐桶吃单，每桶购量被 remaining_budget/price 封顶，预算耗尽即停。对应 Java tryMatchInstantlyWithBudget。
@@ -255,6 +271,8 @@ impl OrderBookNaiveImpl {
         let prices: Vec<i64> = buckets.keys().copied().collect();
 
         let mut filled: i64 = 0;
+        let mut taker_filled: i64 = 0;
+        let mut taker_filled_notional: i64 = 0;
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut emptied: Vec<i64> = Vec::new();
 
@@ -275,32 +293,43 @@ impl OrderBookNaiveImpl {
             let bucket = buckets.get_mut(&p).expect("bucket must exist for collected price");
 
             let mut remaining_in_call = size_cap;
-            bucket.match_forward(size_cap, &mut |maker_id, trade, maker_completed, maker_uid, maker_reserve_bid_price, maker_command| {
-                remaining_in_call -= trade;
+            bucket.match_forward(size_cap, &mut |f: MakerFill| {
+                remaining_in_call -= f.trade;
                 let active_order_completed = remaining_in_call == 0;
+                taker_filled += f.trade;
+                taker_filled_notional += f.trade * p;
                 // 同 match_against 的 bidderHoldPrice 语义（见该处注释）。
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
                 } else {
-                    maker_reserve_bid_price
+                    f.reserve_bid_price
                 };
                 events.push(MatcherTradeEvent {
                     event_type: MatcherEventType::Trade,
                     active_order_completed,
-                    maker_order_id: maker_id,
-                    maker_order_completed: maker_completed,
+                    maker_order_id: f.order_id,
+                    maker_order_completed: f.completed,
                     price: p,
-                    size: trade,
+                    size: f.trade,
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
-                    matched_order_uid: maker_uid,
+                    matched_order_uid: f.uid,
                     // 同 match_against：maker 自己的原命令类型（P6-G）。
-                    matched_order_command_type: maker_command,
+                    matched_order_command_type: f.command,
+                    filled: taker_filled,
+                    filled_notional: taker_filled_notional,
+                    matched_order_size: f.size,
+                    matched_order_price: f.price,
+                    matched_order_type: f.order_type,
+                    matched_order_timestamp: f.timestamp,
+                    matched_user_cookie: f.user_cookie,
+                    matched_order_filled: f.filled,
+                    matched_order_filled_notional: f.filled_notional,
                     next: None,
                 });
-                remaining_budget -= trade * p;
-                if maker_completed {
-                    id_index.remove(&maker_id);
+                remaining_budget -= f.trade * p;
+                if f.completed {
+                    id_index.remove(&f.order_id);
                 }
             });
 
@@ -330,18 +359,12 @@ impl OrderBookNaiveImpl {
         let event = MatcherTradeEvent {
             event_type: MatcherEventType::Reject,
             active_order_completed: true,
-            maker_order_id: 0,
-            maker_order_completed: false,
             price: cmd.price,
             size: rejected_size,
-            bid_gt_ask: false,
-            // 对应 Java attachRejectEvent: bidderHoldPrice = cmd.reserveBidPrice。
+            // 对应 Java attachRejectEvent: bidderHoldPrice = cmd.reserveBidPrice。REJECT 无 maker，其余字段取默认。
             bidder_hold_price: cmd.reserve_bid_price,
-            // 对应 Java 注释 "matchedOrderUid; // 0 for rejection"：REJECT 无 maker，恒为 0。
-            matched_order_uid: 0,
-            // REJECT 无 maker，字段无意义；Java 侧从不写它，取语义中性的默认值（同 matcher_trade_event.rs 文档）。
-            matched_order_command_type: OrderCommandType::PlaceOrder,
             next: cmd.matcher_event.take(),
+            ..Default::default()
         };
         cmd.matcher_event = Some(Box::new(event));
     }
@@ -387,7 +410,7 @@ impl OrderBookNaiveImpl {
         let price = cmd.price;
         let size = cmd.size;
 
-        let filled = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
+        let (filled, _) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
         let rejected_size = size - filled;
         if rejected_size != 0 {
             Self::attach_reject_event(cmd, rejected_size);
@@ -508,18 +531,11 @@ impl IOrderBook for OrderBookNaiveImpl {
         cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
             event_type: MatcherEventType::Reduce,
             active_order_completed: true,
-            maker_order_id: 0,
-            maker_order_completed: false,
             price: order.price,
             size: remaining,
-            bid_gt_ask: false,
-            // 对应 Java sendReduceEvent: bidderHoldPrice = order.reserveBidPrice。
+            // 对应 Java sendReduceEvent: bidderHoldPrice = order.reserveBidPrice。REDUCE 无 maker，其余字段取默认。
             bidder_hold_price: order.reserve_bid_price,
-            // 对应 Java `sendReduceEvent` 未赋值 matchedOrderUid（恒为默认 0）。
-            matched_order_uid: 0,
-            // REDUCE 无 maker，同 attach_reject_event 语义。
-            matched_order_command_type: OrderCommandType::PlaceOrder,
-            next: None,
+            ..Default::default()
         }));
         cmd.action = Some(order.action);
 
@@ -570,16 +586,11 @@ impl IOrderBook for OrderBookNaiveImpl {
         cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
             event_type: MatcherEventType::Reduce,
             active_order_completed: can_remove,
-            maker_order_id: 0,
-            maker_order_completed: false,
             price: order.price,
             size: reduce_by,
-            bid_gt_ask: false,
-            // 同 cancel_order：对应 Java `sendReduceEvent` 的 bidderHoldPrice/matchedOrderUid 语义。
+            // 同 cancel_order：对应 Java `sendReduceEvent` 的 bidderHoldPrice 语义。REDUCE 无 maker，其余字段取默认。
             bidder_hold_price: order.reserve_bid_price,
-            matched_order_uid: 0,
-            matched_order_command_type: OrderCommandType::PlaceOrder,
-            next: None,
+            ..Default::default()
         }));
         cmd.action = Some(order.action);
 
@@ -636,7 +647,7 @@ impl IOrderBook for OrderBookNaiveImpl {
 
         // 重新走撮合主路径，taker_size=订单剩余量，返回值叠加到既有 filled 上（等价 Java tryMatchInstantly）。
         let remaining = order.size - order.filled;
-        let matched_now =
+        let (matched_now, matched_notional_now) =
             self.try_match_instantly(action, new_price, remaining, order.reserve_bid_price, cmd);
         let total_filled = order.filled + matched_now;
 
@@ -647,6 +658,7 @@ impl IOrderBook for OrderBookNaiveImpl {
         }
 
         order.filled = total_filled;
+        order.filled_notional += matched_notional_now;
         self.buckets_by_action_mut(action)
             .entry(new_price)
             .or_insert_with(|| OrdersBucketNaive::new(new_price))
@@ -666,25 +678,29 @@ impl IOrderBook for OrderBookNaiveImpl {
 
         let mut ask_prices = Vec::new();
         let mut ask_volumes = Vec::new();
+        let mut ask_orders = Vec::new();
         for (price, bucket) in self.ask_buckets.iter() {
             if ask_prices.len() == take {
                 break;
             }
             ask_prices.push(*price);
             ask_volumes.push(bucket.total_volume());
+            ask_orders.push(bucket.num_orders() as i64);
         }
 
         let mut bid_prices = Vec::new();
         let mut bid_volumes = Vec::new();
+        let mut bid_orders = Vec::new();
         for (price, bucket) in self.bid_buckets.iter().rev() {
             if bid_prices.len() == take {
                 break;
             }
             bid_prices.push(*price);
             bid_volumes.push(bucket.total_volume());
+            bid_orders.push(bucket.num_orders() as i64);
         }
 
-        L2MarketData { ask_prices, ask_volumes, bid_prices, bid_volumes }
+        L2MarketData { ask_prices, ask_volumes, ask_orders, bid_prices, bid_volumes, bid_orders }
     }
 
     /// 确定性状态 hash：ask 升序/bid 降序遍历挂单，h=h*31+orderHash 滚动折叠。对应 Java IOrderBook.stateHash 整体形状，但省略 symbolSpec/orderType 等字段，不保证数值相等，只保证同状态同 hash。
@@ -722,7 +738,8 @@ impl IOrderBook for OrderBookNaiveImpl {
 #[cfg(test)]
 mod ob_tests {
     use super::*;
-    
+    use crate::core::common::cmd::order_command_type::OrderCommandType;
+
     
 
     fn place(book: &mut OrderBookNaiveImpl, id: i64, act: OrderAction, price: i64, size: i64) -> OrderCommand {
@@ -1455,13 +1472,12 @@ mod ob_base_tests {
             Self { ask_prices, ask_volumes, bid_prices, bid_volumes }
         }
 
-        fn to_l2(&self) -> L2MarketData {
-            L2MarketData {
-                ask_prices: self.ask_prices.clone(),
-                ask_volumes: self.ask_volumes.clone(),
-                bid_prices: self.bid_prices.clone(),
-                bid_volumes: self.bid_volumes.clone(),
-            }
+        /// 只比对价/量档位（本 helper 不建模逐档挂单数；`ask_orders`/`bid_orders` 的跨簿一致由差分测试保证）。
+        fn assert_matches(&self, actual: &L2MarketData) {
+            assert_eq!(actual.ask_prices, self.ask_prices);
+            assert_eq!(actual.ask_volumes, self.ask_volumes);
+            assert_eq!(actual.bid_prices, self.bid_prices);
+            assert_eq!(actual.bid_volumes, self.bid_volumes);
         }
 
         fn insert_ask(&mut self, idx: usize, price: i64, vol: i64) -> &mut Self {
@@ -1565,7 +1581,7 @@ mod ob_base_tests {
             vec![40, 21, 20, 13, 2],
         );
 
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         (book, expected)
     }
 
@@ -1593,8 +1609,17 @@ mod ob_base_tests {
     #[test]
     fn should_initialize_without_errors() {
         let (mut book, expected) = setup_book();
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
+    }
+
+    /// fill_l2 逐档挂单数：setup_book 里 81599(id2,id3)/201000(id8,id9)/81590(id5,id6)/10000(id11,id12) 各 2 单，其余 1 单。
+    #[test]
+    fn fill_l2_reports_per_level_order_counts() {
+        let (book, _) = setup_book();
+        let l2 = book.fill_l2(25);
+        assert_eq!(l2.ask_orders, vec![2, 1, 1, 2]);
+        assert_eq!(l2.bid_orders, vec![1, 2, 1, 2, 1]);
     }
 
     /// Java `shouldAddGtcOrders`
@@ -1608,7 +1633,7 @@ mod ob_base_tests {
         place_order(&mut book, OrderType::Gtc, 94, UID_1, 81594, MAX_PRICE, 9_000_000_000, OrderAction::Bid);
         expected.insert_bid(0, 81594, 9_000_000_000);
 
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
 
         place_order(&mut book, OrderType::Gtc, 95, UID_1, 130000, 0, 13_000_000_000, OrderAction::Ask);
         expected.insert_ask(3, 130000, 13_000_000_000);
@@ -1616,7 +1641,7 @@ mod ob_base_tests {
         place_order(&mut book, OrderType::Gtc, 96, UID_1, 1000, MAX_PRICE, 4, OrderAction::Bid);
         expected.insert_bid(6, 1000, 4);
 
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1631,7 +1656,7 @@ mod ob_base_tests {
         check_reject(events[0], 100, 81600);
 
         // 簿完全未变
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1644,7 +1669,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.set_bid_volume(1, 1);
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         assert_eq!(cmd.action, Some(OrderAction::Bid));
 
         let events = events_list(&cmd);
@@ -1663,7 +1688,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.set_ask_volume(0, 25);
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         assert_eq!(cmd.action, Some(OrderAction::Ask));
 
         let events = events_list(&cmd);
@@ -1682,7 +1707,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.decrement_bid_volume(1, 3);
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         assert_eq!(cmd.action, Some(OrderAction::Bid));
 
         let events = events_list(&cmd);
@@ -1701,7 +1726,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.remove_ask(1);
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         assert_eq!(cmd.action, Some(OrderAction::Ask));
 
         let events = events_list(&cmd);
@@ -1728,7 +1753,7 @@ mod ob_base_tests {
         assert_eq!(cmd3.action, Some(OrderAction::Ask));
 
         expected.remove_ask(0);
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
 
         let events3 = events_list(&cmd3);
         assert_eq!(events3.len(), 1);
@@ -1743,7 +1768,7 @@ mod ob_base_tests {
         let (mut book, expected) = setup_book();
         let (rc, cmd) = cancel_cmd(&mut book, 5291, UID_1);
         assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         assert_eq!(events_list(&cmd).len(), 0);
         clear_order_book(&mut book);
     }
@@ -1755,7 +1780,7 @@ mod ob_base_tests {
         let (rc, cmd) = cancel_cmd(&mut book, 3, UID_2);
         assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
         assert!(cmd.matcher_event.is_none());
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1772,7 +1797,7 @@ mod ob_base_tests {
         assert_eq!(rc2, CommandResultCode::MatchingUnknownOrderId);
         assert!(cmd2.matcher_event.is_none());
 
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1782,7 +1807,7 @@ mod ob_base_tests {
         let (mut book, expected) = setup_book();
         let (rc, cmd) = move_cmd(&mut book, 2433, UID_1, 300);
         assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
         assert_eq!(events_list(&cmd).len(), 0);
         clear_order_book(&mut book);
     }
@@ -1794,7 +1819,7 @@ mod ob_base_tests {
         let (rc, cmd) = reduce_cmd(&mut book, 3, UID_2, 1);
         assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
         assert!(cmd.matcher_event.is_none());
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1815,7 +1840,7 @@ mod ob_base_tests {
         assert_eq!(rc3, CommandResultCode::MatchingReduceFailedWrongSize);
         assert!(cmd3.matcher_event.is_none());
 
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1826,7 +1851,7 @@ mod ob_base_tests {
         let (rc, cmd) = reduce_cmd(&mut book, 8, UID_2, 3);
         assert_eq!(rc, CommandResultCode::MatchingUnknownOrderId);
         assert!(cmd.matcher_event.is_none());
-        assert_eq!(book.fill_l2(25), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
@@ -1838,7 +1863,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.set_bid_volume(1, 41).remove_bid(2);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
         assert_eq!(events_list(&cmd).len(), 0);
 
         clear_order_book(&mut book);
@@ -1852,7 +1877,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.remove_bid(2).insert_bid(0, 81594, 20);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
         assert_eq!(events_list(&cmd).len(), 0);
 
         clear_order_book(&mut book);
@@ -1867,7 +1892,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, 1, 0, 10, OrderAction::Ask);
 
         expected.set_bid_volume(0, 30);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -1883,7 +1908,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, 1, 0, 40, OrderAction::Ask);
 
         expected.remove_bid(0);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -1899,7 +1924,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, 1, 0, 41, OrderAction::Ask);
 
         expected.remove_bid(0).set_bid_volume(0, 20);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 2);
@@ -1916,7 +1941,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, MAX_PRICE, MAX_PRICE, 175, OrderAction::Bid);
 
         expected.remove_ask(0).remove_ask(0);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 3);
@@ -1938,7 +1963,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Ioc, 123, UID_2, MAX_PRICE, MAX_PRICE + 1, 270, OrderAction::Bid);
 
         expected.remove_all_asks();
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 7);
@@ -1959,7 +1984,7 @@ mod ob_base_tests {
 
         let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
 
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -1979,7 +2004,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
 
         expected.remove_ask(0).remove_ask(0).set_ask_volume(0, 5);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 4);
@@ -2002,7 +2027,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
 
         expected.remove_ask(0).remove_ask(0).set_ask_volume(0, 9);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 4);
@@ -2024,7 +2049,7 @@ mod ob_base_tests {
 
         let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
 
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -2044,7 +2069,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
 
         expected.remove_bid(0).set_bid_volume(0, 1);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 2);
@@ -2065,7 +2090,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::FokBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
 
         expected.remove_bid(0).remove_bid(0);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 3);
@@ -2088,7 +2113,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
 
         expected.remove_ask(0).remove_ask(0).set_ask_volume(0, 5);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 4);
@@ -2110,7 +2135,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
 
         expected.remove_ask(0);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 3);
@@ -2130,7 +2155,7 @@ mod ob_base_tests {
 
         let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, buy_budget, buy_budget, size, OrderAction::Bid);
 
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -2148,7 +2173,7 @@ mod ob_base_tests {
 
         let cmd = place_order(&mut book, OrderType::IocBudget, 123, UID_2, sell_expectation, sell_expectation, size, OrderAction::Ask);
 
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -2166,7 +2191,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 81599, MAX_PRICE, 1, OrderAction::Bid);
 
         expected.set_ask_volume(0, 74);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 1);
@@ -2182,7 +2207,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 81599, MAX_PRICE, 77, OrderAction::Bid);
 
         expected.remove_ask(0).insert_bid(0, 81599, 2);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 2);
@@ -2199,7 +2224,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 81600, MAX_PRICE, 77, OrderAction::Bid);
 
         expected.remove_ask(0).set_ask_volume(0, 98);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 3);
@@ -2217,7 +2242,7 @@ mod ob_base_tests {
         let cmd = place_order(&mut book, OrderType::Gtc, 123, UID_2, 220000, MAX_PRICE, 1000, OrderAction::Bid);
 
         expected.remove_all_asks().insert_bid(0, 220000, 755);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd);
         assert_eq!(events.len(), 6);
@@ -2245,13 +2270,13 @@ mod ob_base_tests {
         assert_eq!(events_list(&cmd).len(), 0);
 
         expected.set_bid_volume(2, 40);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let (rc, cmd2) = move_cmd(&mut book, 83, UID_2, 81602);
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.set_bid_volume(2, 20).set_ask_volume(0, 55);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd2);
         assert_eq!(events.len(), 1);
@@ -2271,7 +2296,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.remove_ask(0).set_ask_volume(0, 75);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd2);
         assert_eq!(events.len(), 3);
@@ -2292,7 +2317,7 @@ mod ob_base_tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         expected.remove_all_asks().insert_bid(0, 201000, 1);
-        assert_eq!(book.fill_l2(10), expected.to_l2());
+        expected.assert_matches(&book.fill_l2(10));
 
         let events = events_list(&cmd2);
         assert_eq!(events.len(), 6);
