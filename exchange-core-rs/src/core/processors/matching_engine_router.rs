@@ -8,6 +8,7 @@ use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::order::Order;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
 
@@ -23,6 +24,17 @@ impl MatchingEngineRouter {
     }
 
     /// 撮合簿子状态哈希（对应 Java StateHashReport `MATCHING_ORDER_BOOKS`）：按 symbol 升序折入各簿 `state_hash`。
+    /// 按 uid 反查全部簿的挂单，返回 `(symbol, Order)`（按 symbol、再 order_id 升序，确定性）。报表冷路径用，按需扫簿。
+    pub fn user_orders(&self, uid: i64) -> Vec<(i32, Order)> {
+        let mut out = Vec::new();
+        for (&sym, book) in &self.books {
+            for o in book.find_user_orders(uid) {
+                out.push((sym, o));
+            }
+        }
+        out
+    }
+
     pub fn order_books_state_hash(&self) -> i64 {
         let mut h: i64 = 17;
         for (&sym, book) in &self.books {

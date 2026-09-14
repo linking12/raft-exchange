@@ -2,6 +2,7 @@
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::l2_market_data::L2MarketData;
+use crate::core::common::order::Order;
 
 /// 订单簿 trait，定义撮合引擎与订单簿的交互接口。
 pub trait IOrderBook {
@@ -23,4 +24,8 @@ pub trait IOrderBook {
 
     /// 返回订单簿的状态 hash（用于一致性检查）。
     fn state_hash(&self) -> i32;
+
+    /// 对应 Java `IOrderBook.findUserOrders`：按 uid 反查该用户在本簿的全部挂单，**按 order_id 升序**返回
+    /// （报表冷路径按需扫簿，无热路径索引；排序使 naive/direct 输出可比对）。
+    fn find_user_orders(&self, uid: i64) -> Vec<Order>;
 }

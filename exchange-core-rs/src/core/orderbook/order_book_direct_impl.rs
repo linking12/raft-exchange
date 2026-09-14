@@ -12,6 +12,7 @@ use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::matcher_event_type::MatcherEventType;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::order_action::OrderAction;
+use crate::core::common::order::Order;
 use crate::core::common::order_type::OrderType;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
@@ -1363,6 +1364,29 @@ impl IOrderBook for OrderBookDirectImpl {
             cur = o.prev;
         }
         ((h >> 32) as i32) ^ (h as i32)
+    }
+
+    fn find_user_orders(&self, uid: i64) -> Vec<Order> {
+        // order_id_index 是 BTreeMap<order_id, slab_idx>，天然按 order_id 升序 → 与 naive 输出可比对。
+        self.order_id_index
+            .values()
+            .map(|&idx| self.order(idx))
+            .filter(|o| o.uid == uid)
+            .map(|o| Order {
+                order_id: o.order_id,
+                price: o.price,
+                size: o.size,
+                filled: o.filled,
+                filled_notional: o.filled_notional,
+                reserve_bid_price: o.reserve_bid_price,
+                action: o.action,
+                order_type: o.order_type,
+                uid: o.uid,
+                timestamp: o.timestamp,
+                user_cookie: o.user_cookie,
+                command: o.command,
+            })
+            .collect()
     }
 }
 
