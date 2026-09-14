@@ -64,7 +64,15 @@ pub struct PositionView {
     pub direction: PositionDirection,
     pub open_volume: i64,
     pub open_price_sum: i64,
+    pub open_init_margin_sum: i64,
+    pub profit: i64,
     pub extra_margin: i64,
+    pub leverage: i32,
+    pub margin_mode: crate::core::common::margin_mode::MarginMode,
+    pub pending_sell_size: i64,
+    pub pending_buy_size: i64,
+    pub pending_sell_avg_price: i64,
+    pub pending_buy_avg_price: i64,
     pub mark_price: i64,
     pub unrealized_pnl: i64,
     pub liquidation_price: i64,
@@ -80,8 +88,12 @@ pub struct SingleUserReport {
     pub accounts: BTreeMap<i32, i64>,
     pub exchange_locked: BTreeMap<i32, i64>,
     pub positions: Vec<PositionView>,
-    pub isolated_loans: Vec<(i64, i32, i32, i64, i64)>,
-    pub cross_loans: Vec<(i64, i32, i64)>,
+    /// 账户级 Cross 加权 LTV（bps），对应 Java `SingleUserReportResult.crossAccountLtvBps`。
+    pub cross_account_ltv_bps: i64,
+    /// (loan_id, symbol_id, loan_currency, collateral_currency, collateral_amount, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts)。
+    pub isolated_loans: Vec<(i64, i32, i32, i32, i64, i64, i64, i32, i64)>,
+    /// (loan_id, symbol_id, loan_currency, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts)。
+    pub cross_loans: Vec<(i64, i32, i32, i64, i64, i32, i64)>,
     pub cross_loan_collateral: BTreeMap<i32, i64>,
 }
 
@@ -247,6 +259,7 @@ impl ExchangeCore {
                 accounts: BTreeMap::new(),
                 exchange_locked: BTreeMap::new(),
                 positions: Vec::new(),
+                cross_account_ltv_bps: 0,
                 isolated_loans: Vec::new(),
                 cross_loans: Vec::new(),
                 cross_loan_collateral: BTreeMap::new(),
@@ -264,7 +277,15 @@ impl ExchangeCore {
                     direction: pos.direction,
                     open_volume: pos.open_volume,
                     open_price_sum: pos.open_price_sum,
+                    open_init_margin_sum: pos.open_init_margin_sum,
+                    profit: pos.profit,
                     extra_margin: pos.extra_margin,
+                    leverage: pos.leverage,
+                    margin_mode: pos.margin_mode,
+                    pending_sell_size: pos.pending_sell_size,
+                    pending_buy_size: pos.pending_buy_size,
+                    pending_sell_avg_price: pos.pending_sell_avg_price,
+                    pending_buy_avg_price: pos.pending_buy_avg_price,
                     mark_price: mark,
                     unrealized_pnl: pos.estimate_unrealized_profit(mark),
                     liquidation_price,
@@ -276,9 +297,27 @@ impl ExchangeCore {
         let isolated_loans = up
             .isolated_loans
             .values()
-            .map(|l| (l.loan_id, l.symbol_id, l.collateral_currency, l.collateral_amount, l.outstanding_principal))
+            .map(|l| {
+                (l.loan_id, l.symbol_id, l.loan_currency, l.collateral_currency, l.collateral_amount,
+                 l.outstanding_principal, l.accumulated_interest, l.rate_bps, l.opened_at_ts)
+            })
             .collect();
-        let cross_loans = up.cross_loans.values().map(|l| (l.loan_id, l.symbol_id, l.outstanding_principal)).collect();
+        let cross_loans = up
+            .cross_loans
+            .values()
+            .map(|l| {
+                (l.loan_id, l.symbol_id, l.loan_currency, l.outstanding_principal,
+                 l.accumulated_interest, l.rate_bps, l.opened_at_ts)
+            })
+            .collect();
+        // 账户级 Cross 加权 LTV（fail-open：报表口径不误判，缺价按 0）。报表无命令时间，用最新价缓存对应的估值时点 0。
+        let cross_account_ltv_bps = self.risk.loan_service.calculate_cross_account_ltv_bps(
+            up,
+            0,
+            &self.ssp,
+            &self.risk.last_price_cache,
+            false,
+        );
         SingleUserReport {
             uid,
             found: true,
@@ -286,6 +325,7 @@ impl ExchangeCore {
             accounts: up.accounts.clone(),
             exchange_locked: up.exchange_locked.clone(),
             positions,
+            cross_account_ltv_bps,
             isolated_loans,
             cross_loans,
             cross_loan_collateral: up.cross_loan_collateral.clone(),
@@ -365,19 +405,19 @@ impl ExchangeCore {
         components.insert("risk_fees".to_string(), hash_bucket(&self.risk.fees));
         components.insert("risk_adjustments".to_string(), hash_bucket(&self.risk.adjustments));
         components.insert("risk_suspends".to_string(), hash_bucket(&self.risk.suspends));
+        // 折入每个 symbol 的完整 config hash（费率/保证金/杠杆/loan_config），否则费率等业务字段分歧不被 raft 探测。
         let mut symbols_h: i64 = 17;
         for (&id, s) in &self.ssp.symbols {
             symbols_h = symbols_h.wrapping_mul(31).wrapping_add(id as i64);
-            symbols_h = symbols_h.wrapping_mul(31).wrapping_add(s.base_currency as i64);
-            symbols_h = symbols_h.wrapping_mul(31).wrapping_add(s.quote_currency as i64);
-            symbols_h = symbols_h.wrapping_mul(31).wrapping_add(s.base_scale_k);
-            symbols_h = symbols_h.wrapping_mul(31).wrapping_add(s.quote_scale_k);
+            symbols_h = symbols_h.wrapping_mul(31).wrapping_add(s.state_hash() as i64);
         }
         components.insert("symbol_specs".to_string(), symbols_h);
         let mut ccy_h: i64 = 17;
         for (&id, c) in &self.ssp.currencies {
             ccy_h = ccy_h.wrapping_mul(31).wrapping_add(id as i64);
             ccy_h = ccy_h.wrapping_mul(31).wrapping_add(c.currency_scale_k);
+            // collateral_weight_bps 被 ADD_LOAN 改，须折入否则跨节点抵押权重分歧漏检。
+            ccy_h = ccy_h.wrapping_mul(31).wrapping_add(c.collateral_weight_bps as i64);
         }
         components.insert("currency_specs".to_string(), ccy_h);
         let mut users_h: i64 = 17;
@@ -386,6 +426,10 @@ impl ExchangeCore {
             users_h = users_h.wrapping_mul(31).wrapping_add(up.state_hash() as i64);
         }
         components.insert("user_profiles".to_string(), users_h);
+        // 对应 Java StateHashReport 的 MATCHING_ORDER_BOOKS + RISK_LAST_PRICE_CACHE 子模块哈希：撮合簿与价格缓存
+        // 也须折入，否则两节点仅在这两块子状态分歧时算出相同 hash，raft 跨节点分叉探测漏检。
+        components.insert("order_books".to_string(), self.matching.order_books_state_hash());
+        components.insert("risk_last_price_cache".to_string(), hash_bucket(&self.risk.last_price_cache));
         StateHashReport { components }
     }
 }

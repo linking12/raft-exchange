@@ -76,6 +76,18 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java `RiskEngine.reset()`（`:329-334` case RESET）：清空全部风控业务态（fees/adjustments/suspends/价格缓存/
+    /// loan+IF 服务）。保留 `cfg_margin_trading_enabled`（config），且不动 `liquidation_engine`（Java reset 只 reset
+    /// liquidationService 不 reset liquidationEngine；scanner is_running/索引由 leader 维护，wipe 后 ups 空自然 lazy-prune）。
+    pub fn reset(&mut self) {
+        self.adjustments.clear();
+        self.fees.clear();
+        self.suspends.clear();
+        self.last_price_cache.clear();
+        self.loan_service = LoanService::new();
+        self.liquidation_service = LiquidationService::new();
+    }
+
     /// 对应 Java `lastPriceCache.get(symbol).markPrice`：None 与 Some(0) 统一折叠成 None（等价 Java 的 null/0 双判）。
     pub fn mark_price(&self, symbol: i32) -> Option<i64> {
         match self.last_price_cache.get(&symbol) {
@@ -112,6 +124,8 @@ impl RiskEngine {
                 OrderCommandType::ResumeUser => ups.resume_user_profile(cmd.uid),
                 OrderCommandType::PositionModeAdjustment => self.position_mode_adjustment(cmd, ups),
                 OrderCommandType::ResetFee => self.reset_fee(cmd),
+                // 对应 Java RiskEngine SYSTEM_LIQUIDATION_NOTIFY（:359-363）：单-shard no-op，仅置 SUCCESS（Rust 强平不生成此命令，为 host/proto 转发兜底）。
+                OrderCommandType::SystemLiquidationNotify => CommandResultCode::Success,
                 _ => CommandResultCode::MatchingUnsupportedCommand,
             };
             if rc == CommandResultCode::Success {
@@ -1587,6 +1601,8 @@ impl RiskEngine {
             }
 
             // 对应 Java removePositionRecord（:1580-1589）：残余已实现盈亏一次性打入 accounts，再从 map 摘除。
+            // PNL_SETTLEMENT 事件与账户入账同门控在 `profit != 0`（对齐 Java `sendPnlSettlementEvent` 的 profitToSettle!=0，
+            // 与 adl_close_and_settle 一致；零利润不发多余事件）。
             let profit = up.positions.get(&position_key).unwrap().profit;
             if profit != 0 {
                 let profit_scaled = arithmetic::size_price_to_currency_scale(
@@ -1596,9 +1612,8 @@ impl RiskEngine {
                     quote_currency_spec.currency_scale_k,
                 );
                 up.add_to_account(currency, profit_scaled);
+                Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
             }
-
-            Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, mte.maker_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
 
             up.positions.remove(&position_key);
         }
@@ -1635,13 +1650,23 @@ impl RiskEngine {
             return CommandResultCode::UserMgmtAccountBalanceAdjustmentNsf;
         }
 
-        if !user_profile.try_claim_tx(cmd.order_id) {
+        if !user_profile.try_claim_tx(cmd.order_id, cmd.timestamp) {
             return CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame;
         }
 
         user_profile.add_to_account(currency, amount_diff);
 
-        *self.adjustments.entry(currency).or_insert(0) -= amount_diff;
+        // 守恒对冲入桶：SUSPEND 类型（挂起前清零余额）入 `suspends`，否则入 `adjustments`（对齐 Java
+        // `applyBalanceAdjustment` 按 `BalanceAdjustmentType.of(cmd.orderType.getCode())` 分桶）。
+        let adj_type = cmd
+            .order_type
+            .map(|ot| crate::core::common::balance_adjustment_type::BalanceAdjustmentType::of(ot.code()))
+            .unwrap_or(crate::core::common::balance_adjustment_type::BalanceAdjustmentType::Adjustment);
+        let bucket = match adj_type {
+            crate::core::common::balance_adjustment_type::BalanceAdjustmentType::Suspend => &mut self.suspends,
+            crate::core::common::balance_adjustment_type::BalanceAdjustmentType::Adjustment => &mut self.adjustments,
+        };
+        *bucket.entry(currency).or_insert(0) -= amount_diff;
 
         CommandResultCode::Success
     }
@@ -1897,7 +1922,7 @@ impl RiskEngine {
         }
 
         // ISOLATED 无 adjustments 桶对冲，按 cmd.order_id 自行幂等；NSF 通过后再 claim。
-        if !user_profile.try_claim_tx(cmd.order_id) {
+        if !user_profile.try_claim_tx(cmd.order_id, cmd.timestamp) {
             return CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame;
         }
 
@@ -2029,7 +2054,7 @@ impl RiskEngine {
     /// 对应 Java RiskEngineCommandDispatcher.adjustMarkPrice（:437-451）：更新 lastPriceCache，拒绝 price<=0（Java 允许 0 但本移植三处对 None panic，故加固避免复制状态机 panic）。
     pub fn markprice_adjustment(
         &mut self,
-        cmd: &OrderCommand,
+        cmd: &mut OrderCommand,
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
     ) -> CommandResultCode {
@@ -2040,8 +2065,11 @@ impl RiskEngine {
             return CommandResultCode::RiskInvalidAmount;
         }
         self.set_mark_price(cmd.symbol, cmd.price);
-        // 对应 Java adjustMarkPrice:447，价格更新后触发 targeted 强平检测；产出的 FORCE 命令入 liquidation_engine.pending_commands，由 ExchangeCore 排空重喂。
-        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut Vec::new());
+        // 对应 Java adjustMarkPrice:447，价格更新后触发 targeted 强平检测；产出的 FORCE 命令入 liquidation_engine.pending_commands，
+        // 由 ExchangeCore 排空重喂。价格波动是主强平触发，产出的 margin/liquidation 告警须并入 cmd.fund_events（同 scan/funding 两路）。
+        let mut alerts = Vec::new();
+        self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut alerts);
+        cmd.fund_events.append(&mut alerts);
         CommandResultCode::Success
     }
 
@@ -2113,9 +2141,10 @@ impl RiskEngine {
         let currency = cmd.symbol;
         let amount = cmd.price;
         let order_id = cmd.order_id;
+        let timestamp = cmd.timestamp;
 
         let rc =
-            InternalTransferProcessor::collect_input(self, ups, ssp, from_uid, to_uid, currency, amount, order_id);
+            InternalTransferProcessor::collect_input(self, ups, ssp, from_uid, to_uid, currency, amount, order_id, timestamp);
         if rc == CommandResultCode::Success {
             cmd.internal_transfer_event =
                 Some(InternalTransferProcessor::build_matcher_events(to_uid, currency, amount));
@@ -4923,7 +4952,7 @@ mod tests {
 
     #[test]
     fn calculate_locked_zero_when_no_positions_and_no_exchange_locked() {
-        let (engine, ups, ssp) = setup_futures(0, 0, 0, 100);
+        let (_engine, ups, ssp) = setup_futures(0, 0, 0, 100);
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
         assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 0);
@@ -4931,7 +4960,7 @@ mod tests {
 
     #[test]
     fn calculate_locked_sums_futures_margin_and_exchange_locked() {
-        let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+        let (_engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
             up.add_to_locked(FUT_QUOTE, 200); // 现货挂单冻结
@@ -4962,7 +4991,7 @@ mod tests {
 
     #[test]
     fn loan_collateral_locked_sums_isolated_and_cross_by_currency() {
-        let (engine, mut ups, _ssp) = setup_futures(0, 0, 0, 100);
+        let (_engine, mut ups, _ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
             up.isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
@@ -4981,13 +5010,13 @@ mod tests {
     #[test]
     fn loan_collateral_locked_zero_for_user_without_loans() {
         // Ruling P5-B：无 loan 用户两个 map 皆空，虚拟锁恒 0，与此前 stub 逐位相同。
-        let (engine, ups, _ssp) = setup_futures(0, 0, 1_000, 100);
+        let (_engine, ups, _ssp) = setup_futures(0, 0, 1_000, 100);
         assert_eq!(RiskEngine::loan_collateral_locked(ups.get(UID).unwrap(), FUT_QUOTE), 0);
     }
 
     #[test]
     fn calculate_locked_includes_loan_collateral() {
-        let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
+        let (_engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
             up.add_to_locked(FUT_QUOTE, 200); // ② 现货冻结
@@ -5373,16 +5402,16 @@ mod tests {
     #[test]
     fn markprice_adjustment_sets_last_price_cache() {
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100); // 治具已设 mark=100
-        let cmd = markprice_adjustment_cmd(FUT_SYMBOL, 250);
-        assert_eq!(engine.markprice_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::Success);
+        let mut cmd = markprice_adjustment_cmd(FUT_SYMBOL, 250);
+        assert_eq!(engine.markprice_adjustment(&mut cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(250));
     }
 
     #[test]
     fn markprice_adjustment_unknown_symbol_is_invalid_symbol_and_does_not_write_cache() {
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
-        let cmd = markprice_adjustment_cmd(9999, 250);
-        assert_eq!(engine.markprice_adjustment(&cmd, &mut ups, &ssp), CommandResultCode::InvalidSymbol);
+        let mut cmd = markprice_adjustment_cmd(9999, 250);
+        assert_eq!(engine.markprice_adjustment(&mut cmd, &mut ups, &ssp), CommandResultCode::InvalidSymbol);
         assert_eq!(engine.mark_price(9999), None);
     }
 
@@ -5434,8 +5463,8 @@ mod tests {
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
 
         // 步骤2：mark=0 被拒（Java 会存 0；本移植收窄为 RiskInvalidAmount），缓存保持上一有效值。
-        let zero = markprice_adjustment_cmd(FUT_SYMBOL, 0);
-        assert_eq!(engine.markprice_adjustment(&zero, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
+        let mut zero = markprice_adjustment_cmd(FUT_SYMBOL, 0);
+        assert_eq!(engine.markprice_adjustment(&mut zero, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100), "被拒的 0 标记价不得污染缓存");
 
         // 步骤3：free-futures-margin 走到 mark_price()——修复前会因 None panic，修复后仍 Some(100)；不 panic 本身即回归断言。
@@ -5446,8 +5475,8 @@ mod tests {
     #[test]
     fn markprice_adjustment_rejects_negative_price_and_keeps_cache() {
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
-        let neg = markprice_adjustment_cmd(FUT_SYMBOL, -5);
-        assert_eq!(engine.markprice_adjustment(&neg, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
+        let mut neg = markprice_adjustment_cmd(FUT_SYMBOL, -5);
+        assert_eq!(engine.markprice_adjustment(&mut neg, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100));
     }
 

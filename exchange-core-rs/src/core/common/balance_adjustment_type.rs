@@ -12,6 +12,14 @@ impl BalanceAdjustmentType {
             BalanceAdjustmentType::Suspend => 1,
         }
     }
+
+    /// 对应 Java `BalanceAdjustmentType.of(code)`：由 code 反查类型；未知码回落 `Adjustment`。
+    pub fn of(code: i8) -> Self {
+        match code {
+            1 => BalanceAdjustmentType::Suspend,
+            _ => BalanceAdjustmentType::Adjustment,
+        }
+    }
 }
 
 #[cfg(test)]

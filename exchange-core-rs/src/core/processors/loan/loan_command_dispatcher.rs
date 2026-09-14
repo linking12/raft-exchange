@@ -117,7 +117,7 @@ impl LoanCommandDispatcher {
         if up.user_status == UserStatus::Suspended {
             return Err(CommandResultCode::LoanUserSuspended);
         }
-        if !up.try_claim_tx(cmd.order_id) {
+        if !up.try_claim_tx(cmd.order_id, cmd.timestamp) {
             return Err(CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame);
         }
         Ok(up)
@@ -135,10 +135,23 @@ impl LoanCommandDispatcher {
         LoanService::collateral_value_in_quote_currency(amount, spec, mark_price, base_spec, quote_spec)
     }
 
+    /// 某币种在某用户上的 (free, locked, currency_scale_k)：free = accounts − calculateLocked，供 loan 事件填余额快照
+    /// （对应 Java `sendLoan*Event` 用 `engine.calculateLocked`）。缺 currency spec 返回全 0。
+    fn currency_free_locked(ssp: &SymbolSpecificationProvider, up: &UserProfile, currency: i32) -> (i64, i64, i64) {
+        match ssp.get_currency(currency) {
+            Some(cspec) => {
+                let locked = RiskEngine::calculate_locked(up, currency, ssp, cspec);
+                (up.account(currency) - locked, locked, cspec.currency_scale_k)
+            }
+            None => (0, 0, 0),
+        }
+    }
+
     fn push_isolated_loan_event(
         cmd: &mut OrderCommand,
         engine: &RiskEngine,
         ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
         loan: &IsolatedLoanRecord,
         event_type: FundEventType,
     ) {
@@ -151,18 +164,26 @@ impl LoanCommandDispatcher {
             }
             None => 0,
         };
+        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
+        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, loan.collateral_currency);
         cmd.fund_events.push(FundEvent {
             event_type,
             order_id: loan.loan_id,
             uid: loan.uid,
             currency: loan.loan_currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
             loan_mode: 0,
             loan_debt_principal: loan.outstanding_principal,
             loan_debt_interest: loan.accumulated_interest,
             loan_interest_paid_total: loan.cum_interest_paid,
             loan_ltv_bps: ltv_bps,
             loan_collateral_currency: loan.collateral_currency,
+            loan_collateral_currency_scale_k: coll_scale,
             loan_collateral_pledged: loan.collateral_amount,
+            loan_collateral_free: coll_free,
+            loan_collateral_locked: coll_locked,
             ..Default::default()
         });
     }
@@ -178,11 +199,15 @@ impl LoanCommandDispatcher {
     ) {
         let ltv_bps =
             engine.loan_service.calculate_cross_account_ltv_bps(up, timestamp, ssp, &engine.last_price_cache, true);
+        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
         cmd.fund_events.push(FundEvent {
             event_type,
             order_id: loan.loan_id,
             uid: loan.uid,
             currency: loan.loan_currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
             loan_mode: 1,
             loan_debt_principal: loan.outstanding_principal,
             loan_debt_interest: loan.accumulated_interest,
@@ -192,14 +217,49 @@ impl LoanCommandDispatcher {
         });
     }
 
-    fn push_cross_collateral_change_event(cmd: &mut OrderCommand, uid: i64, currency: i32, pledged: i64, ltv_bps: i64) {
+    fn push_cross_collateral_change_event(
+        cmd: &mut OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        uid: i64,
+        currency: i32,
+        pledged: i64,
+        ltv_bps: i64,
+    ) {
+        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, currency);
         cmd.fund_events.push(FundEvent {
             event_type: FundEventType::LoanCollateralChange,
             uid,
             loan_mode: 1,
             loan_ltv_bps: ltv_bps,
             loan_collateral_currency: currency,
+            loan_collateral_currency_scale_k: coll_scale,
             loan_collateral_pledged: pledged,
+            loan_collateral_free: coll_free,
+            loan_collateral_locked: coll_locked,
+            ..Default::default()
+        });
+    }
+
+    /// LIF 接管后的 cross LOAN_LIQUIDATED：债务已转 LIF，principal/interest 报 0（对齐 Java takeover snap=0）；带 loan-currency 余额快照。
+    fn push_cross_loan_liquidated_zeroed(
+        cmd: &mut OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        loan_id: i64,
+        loan_currency: i32,
+        uid: i64,
+    ) {
+        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan_currency);
+        cmd.fund_events.push(FundEvent {
+            event_type: FundEventType::LoanLiquidated,
+            order_id: loan_id,
+            uid,
+            currency: loan_currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
+            loan_mode: 1,
             ..Default::default()
         });
     }
@@ -301,7 +361,7 @@ impl LoanCommandDispatcher {
         engine.loan_service.disburse_loan(up, loan_currency, principal);
 
         let loan_ref = up.isolated_loans.get(&loan_id).expect("just inserted");
-        Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanBorrow);
+        Self::push_isolated_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanBorrow);
 
         CommandResultCode::Success
     }
@@ -372,7 +432,7 @@ impl LoanCommandDispatcher {
         }
 
         if let Some(loan_ref) = up.isolated_loans.get(&loan_id) {
-            Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanRepay);
+            Self::push_isolated_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanRepay);
         }
 
         let is_empty = up.isolated_loans.get(&loan_id).map(|l| l.is_empty()).unwrap_or(true);
@@ -424,7 +484,7 @@ impl LoanCommandDispatcher {
         loan.collateral_amount = add_exact(loan.collateral_amount, amount);
 
         let loan_ref = up.isolated_loans.get(&loan_id).expect("just updated");
-        Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanCollateralChange);
+        Self::push_isolated_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanCollateralChange);
         CommandResultCode::Success
     }
 
@@ -495,7 +555,7 @@ impl LoanCommandDispatcher {
         let is_empty = loan.is_empty();
 
         let loan_ref = up.isolated_loans.get(&loan_id).expect("just updated");
-        Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanCollateralChange);
+        Self::push_isolated_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanCollateralChange);
 
         if is_empty {
             up.isolated_loans.remove(&loan_id);
@@ -624,10 +684,27 @@ impl LoanCommandDispatcher {
                 collateral_currency,
                 collateral,
             );
-        }
-        if traded_size > 0 || lif_takeover {
+            // 接管后债务/抵押已转 LIF，LOAN_LIQUIDATED 报 0（对齐 Java takeover 分支 snapPrincipal/Interest/Collateral=0）。
+            let (free, locked, cur_scale) = Self::currency_free_locked(ssp, taker_up, loan_currency);
+            let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, taker_up, collateral_currency);
+            cmd.fund_events.push(FundEvent {
+                event_type: FundEventType::LoanLiquidated,
+                order_id: loan_id,
+                uid: taker_up.uid,
+                currency: loan_currency,
+                currency_scale_k: cur_scale,
+                free,
+                locked,
+                loan_mode: 0,
+                loan_collateral_currency: collateral_currency,
+                loan_collateral_currency_scale_k: coll_scale,
+                loan_collateral_free: coll_free,
+                loan_collateral_locked: coll_locked,
+                ..Default::default()
+            });
+        } else if traded_size > 0 {
             if let Some(loan_ref) = taker_up.isolated_loans.get(&loan_id) {
-                Self::push_isolated_loan_event(cmd, engine, ssp, loan_ref, FundEventType::LoanLiquidated);
+                Self::push_isolated_loan_event(cmd, engine, ssp, taker_up, loan_ref, FundEventType::LoanLiquidated);
             }
         }
         if lif_takeover || (principal == 0 && interest == 0 && collateral == 0) {
@@ -692,7 +769,7 @@ impl LoanCommandDispatcher {
         let uid = cmd.uid;
         let ltv = engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
         let pledged = up.cross_loan_collateral.get(&currency).copied().unwrap_or(0);
-        Self::push_cross_collateral_change_event(cmd, uid, currency, pledged, ltv);
+        Self::push_cross_collateral_change_event(cmd, ssp, up, uid, currency, pledged, ltv);
         CommandResultCode::Success
     }
 
@@ -731,7 +808,7 @@ impl LoanCommandDispatcher {
 
         let uid = cmd.uid;
         let pledged = up.cross_loan_collateral.get(&currency).copied().unwrap_or(0);
-        Self::push_cross_collateral_change_event(cmd, uid, currency, pledged, new_ltv);
+        Self::push_cross_collateral_change_event(cmd, ssp, up, uid, currency, pledged, new_ltv);
         CommandResultCode::Success
     }
 
@@ -988,8 +1065,9 @@ impl LoanCommandDispatcher {
             let taken_over =
                 engine.loan_service.take_over_cross_loan(taker_up, target_loan_id, cmd.timestamp, ssp, &engine.last_price_cache);
             if taken_over {
-                if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
-                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts);
+                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid));
+                if let Some((lid, lcur, luid)) = liq {
+                    Self::push_cross_loan_liquidated_zeroed(cmd, ssp, taker_up, lid, lcur, luid);
                 }
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
             }
@@ -1051,8 +1129,9 @@ impl LoanCommandDispatcher {
                 // fail-closed：Java 打 warn log，跳过继续下一笔。
                 continue;
             }
-            if let Some(l) = up.cross_loans.get(&loan_id) {
-                Self::push_cross_loan_event(cmd, engine, ssp, up, l, FundEventType::LoanLiquidated, now);
+            let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid));
+            if let Some((lid, lcur, luid)) = liq {
+                Self::push_cross_loan_liquidated_zeroed(cmd, ssp, up, lid, lcur, luid);
             }
             Self::close_and_recycle_cross_loan(up, loan_id);
         }

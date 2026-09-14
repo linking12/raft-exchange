@@ -1,9 +1,10 @@
 //! 对应 Java: exchange.core2.core.common.UserProfile。现货子集 `uid`/`userStatus`/
-//! `accounts`/`exchangeLocked`；`processedTransactionIds` 按 brief 简化为无过期窗口的
-//! `BTreeSet<i64>`（`TimeWindowDedupSet` 最小子集：只保留"claim 一次，重复即拒"，不做时间淘汰）。
-//! 期货子集 `positionMode`/`positions` + `createPositionsKey`/`countPositionRecord`/
+//! `accounts`/`exchangeLocked`；`processedTransactionIds` 用 [`TimeWindowDedupSet`]（时间窗+hardCap 淘汰，
+//! 对齐 Java）。期货子集 `positionMode`/`positions` + `createPositionsKey`/`countPositionRecord`/
 //! `processPositionRecord`（见 §2）。
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+
+use crate::core::common::time_window_dedup_set::TimeWindowDedupSet;
 
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
@@ -25,9 +26,9 @@ pub struct UserProfile {
     pub accounts: BTreeMap<i32, i64>,
     /// currency -> locked amount（对应 Java `IntLongHashMap exchangeLocked`；现货挂单冻结）。
     pub exchange_locked: BTreeMap<i32, i64>,
-    /// 对应 Java `UserProfile.processedTransactionIds`（简化：无过期窗口）：
-    /// `BALANCE_ADJUSTMENT`/`INTERNAL_TRANSFER`/loan 等命令按 `orderId` 幂等去重。
-    pub processed_tx_ids: BTreeSet<i64>,
+    /// 对应 Java `UserProfile.processedTransactionIds`：`BALANCE_ADJUSTMENT`/`INTERNAL_TRANSFER`/loan 等命令
+    /// 按 `orderId` + 命令时间幂等去重（时间窗+hardCap 淘汰，见 [`TimeWindowDedupSet`]）。
+    pub processed_tx_ids: TimeWindowDedupSet,
     /// 对应 Java `UserProfile.positionMode`：单向 / 双向持仓，默认 `ONEWAY`。
     pub position_mode: PositionMode,
     /// 对应 Java `UserProfile.positions`（`IntObjectHashMap<SymbolPositionRecord>`）：
@@ -54,7 +55,7 @@ impl UserProfile {
             user_status,
             accounts: BTreeMap::new(),
             exchange_locked: BTreeMap::new(),
-            processed_tx_ids: BTreeSet::new(),
+            processed_tx_ids: TimeWindowDedupSet::new(),
             position_mode: PositionMode::default(),
             positions: BTreeMap::new(),
             isolated_loans: BTreeMap::new(),
@@ -287,10 +288,10 @@ impl UserProfile {
         margin_base_by_pos
     }
 
-    /// 对应 Java `TimeWindowDedupSet.tryClaim(id, nowMs)`（简化：省略时间窗口淘汰）：
-    /// 首次见到该 `tx_id` → 记录并返回 `true`；已见过 → 返回 `false`，不重复记录。
-    pub fn try_claim_tx(&mut self, tx_id: i64) -> bool {
-        self.processed_tx_ids.insert(tx_id)
+    /// 对应 Java `TimeWindowDedupSet.tryClaim(id, nowMs)`：首次见到该 `tx_id`（且未超窗）→ 记录返回 `true`；
+    /// 窗口内已见过 → `false`。`now_ms` 须为确定性命令时间（`cmd.timestamp`，随 raft 复制）。
+    pub fn try_claim_tx(&mut self, tx_id: i64, now_ms: i64) -> bool {
+        self.processed_tx_ids.try_claim(tx_id, now_ms)
     }
 
     /// 对应 Java `accounts.get(currency)`：Eclipse Collections 原始类型 map 缺省值语义，缺省 0。
@@ -336,10 +337,8 @@ impl UserProfile {
         h = h.wrapping_mul(31).wrapping_add(self.uid);
         h = h.wrapping_mul(31).wrapping_add(self.user_status.code() as i64);
         // 去重集折入 state_hash，对齐 Java `UserProfile.stateHash()`（`:347` processedTransactionIds）；
-        // BTreeSet 天然升序满足确定性。缺此项时两节点仅去重集不同会算出相同 hash，削弱 raft 跨节点分叉探测。
-        for &tx_id in &self.processed_tx_ids {
-            h = h.wrapping_mul(31).wrapping_add(tx_id);
-        }
+        // 按 FIFO 逻辑序折 (id, time)（物理布局不影响）。缺此项时两节点仅去重集不同会算出相同 hash，削弱 raft 跨节点分叉探测。
+        h = self.processed_tx_ids.fold_hash(h);
         for (&cur, &amt) in &self.accounts {
             h = h.wrapping_mul(31).wrapping_add(cur as i64);
             h = h.wrapping_mul(31).wrapping_add(amt);

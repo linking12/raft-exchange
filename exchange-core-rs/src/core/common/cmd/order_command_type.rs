@@ -182,9 +182,9 @@ impl OrderCommandType {
     /// now includes `INTERNAL_TRANSFER` and `MARKPRICE_ADJUSTMENT`"）。
     ///
     /// **不命中**（参考文档 §0 末段逐字确认）：`IfTakeover` / `AutoDeleveraging` /
-    /// `SettleFundingfees` / `ForceLiquidation` / `LiquidationScan` /
-    /// `SystemLiquidationNotify`——这些留在 `RiskEngine.preProcessCommand` 主 switch 与
-    /// `MatchingEngineRouter.processOrder` 的显式分支里，不走 `isNonTrading()` dispatcher。
+    /// `SettleFundingfees` / `ForceLiquidation` / `LiquidationScan`——这些留在
+    /// `RiskEngine.preProcessCommand` 主 switch 与 `MatchingEngineRouter.processOrder` 的显式分支里，不走
+    /// `isNonTrading()` dispatcher。（`SystemLiquidationNotify` 单-shard 是纯 SUCCESS no-op，归 isNonTrading。）
     pub fn is_non_trading(self) -> bool {
         matches!(
             self,
@@ -203,6 +203,7 @@ impl OrderCommandType {
                 | OrderCommandType::ResumeUser
                 | OrderCommandType::PositionModeAdjustment
                 | OrderCommandType::ResetFee
+                | OrderCommandType::SystemLiquidationNotify
         )
     }
 
@@ -420,7 +421,7 @@ mod tests {
         assert!(!OrderCommandType::SettleFundingfees.is_non_trading());
         assert!(!OrderCommandType::ForceLiquidation.is_non_trading());
         assert!(!OrderCommandType::LiquidationScan.is_non_trading());
-        assert!(!OrderCommandType::SystemLiquidationNotify.is_non_trading());
+        assert!(OrderCommandType::SystemLiquidationNotify.is_non_trading());
     }
 
     #[test]

@@ -24,6 +24,7 @@ impl InternalTransferProcessor {
         currency: i32,
         amount: i64,
         order_id: i64,
+        timestamp: i64,
     ) -> CommandResultCode {
         if from_uid == to_uid {
             return CommandResultCode::InternalTransferInvalidSelf;
@@ -38,7 +39,7 @@ impl InternalTransferProcessor {
         if engine.withdrawable_balance(from, currency, ssp) < amount {
             return CommandResultCode::RiskNsf;
         }
-        if !from.try_claim_tx(order_id) {
+        if !from.try_claim_tx(order_id, timestamp) {
             return CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame;
         }
         from.add_to_account(currency, -amount);
