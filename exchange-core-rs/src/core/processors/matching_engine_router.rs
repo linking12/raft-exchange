@@ -1,7 +1,5 @@
-//! ME（Matching Engine）路由：按 symbol 分派到 `OrderBookDirectImpl`（高性能 slab 撮合，撮合 O(log N)；
-//! 对齐 Java 性能档 `latencyPerformanceBuilder`/`throughputPerformanceBuilder` 用 DirectImpl。Naive 仅作差分 oracle）。
-//! 对应 Java `MatchingEngineRouter` +
-//! `IOrderBook.processCommand`（`:182-227`）；R1 门：只有 `ValidForMatchingEngine` 才真正撮合，否则保留 R1 结果不覆盖。
+//! 对应 Java `MatchingEngineRouter` + `IOrderBook.processCommand`：按 symbol 分派到 `OrderBookDirectImpl`（撮合 O(log N)）。
+//! R1 门：只有 `ValidForMatchingEngine` 才真正撮合，否则保留 R1 结果不覆盖。
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -49,14 +47,13 @@ impl MatchingEngineRouter {
         self.books.clear();
     }
 
-    /// 对应 Java `MatchingEngineRouter.addSymbol`（`:276-289`，现货子集，重复 add 幂等忽略）。
+    /// 对应 Java `MatchingEngineRouter.addSymbol`（现货子集，重复 add 幂等忽略）。
     pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
         // 幂等：已存在则保留原簿；用 with_symbol_spec 注入真实 spec 供 move_order 现货 BID 风控用。
         self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookDirectImpl::with_symbol_spec(spec.clone()));
     }
 
-    /// 对应 Java `MatchingEngineRouter.processMatchingCommand`（`:291-312`）+ `IOrderBook.processCommand`
-    /// （`:176-227`）；非交易命令与借贷生命周期命令（两强平码除外）原样短路保留 R1 结果（Java allowlist `:204-212`）。
+    /// 对应 Java `MatchingEngineRouter.processMatchingCommand` + `IOrderBook.processCommand`；非交易命令与借贷生命周期命令（两强平码除外）原样短路保留 R1 结果。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         if cmd.command.is_non_trading()
             || (cmd.command.is_loan()
@@ -82,7 +79,7 @@ impl MatchingEngineRouter {
             | OrderCommandType::ForceLiquidation
             | OrderCommandType::LoanForceLiquidate
             | OrderCommandType::LoanCrossForceLiquidate => {
-                // PlaceOrder/ClosePosition/两强平码/ForceLiquidation 共用 new_order 分支（Java allowlist `:206-214`）。
+                // PlaceOrder/ClosePosition/两强平码/ForceLiquidation 共用 new_order 分支。
                 if cmd.result_code == Some(CommandResultCode::ValidForMatchingEngine) {
                     // new_order 内部已写 cmd.result_code，此处透传其返回值。
                     book.new_order(cmd)
@@ -242,7 +239,7 @@ mod tests {
         assert_eq!(md.bid_volumes, vec![10]);
     }
 
-    // ClosePosition 与 PlaceOrder 共用 newOrder 分支的回归测试（对应 Java `IOrderBook.processCommand:191-199`）。
+    // ClosePosition 与 PlaceOrder 共用 newOrder 分支的回归测试。
 
     fn close_position_cmd(order_id: i64, symbol: i32, result_code: CommandResultCode) -> OrderCommand {
         OrderCommand {
@@ -303,7 +300,7 @@ mod tests {
         assert!(md.ask_prices.is_empty());
     }
 
-    // ForceLiquidation 与 PlaceOrder/ClosePosition 共用 newOrder 分支的回归测试（Java `MatchingEngineRouter.java:206-214`）。
+    // ForceLiquidation 与 PlaceOrder/ClosePosition 共用 newOrder 分支的回归测试。
 
     fn force_liquidation_cmd(order_id: i64, symbol: i32, result_code: CommandResultCode) -> OrderCommand {
         OrderCommand {

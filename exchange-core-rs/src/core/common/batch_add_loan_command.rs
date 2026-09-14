@@ -1,4 +1,4 @@
-//! 对应 Java `BatchAddLoanCommand`（`ADD_LOAN` 配置命令 DTO+校验，参考文档 §2.12）：三段独立可选独立校验，一段非法跳过不影响另外两段；不移植 Chronicle 序列化。
+//! 对应 Java `BatchAddLoanCommand`（`ADD_LOAN` 配置命令 DTO+校验）：三段独立可选独立校验，一段非法跳过不影响另外两段；不移植 Chronicle 序列化。
 
 /// bps 满量程（100%）。对应 Java `BatchAddLoanCommand.BPS_FULL`。
 pub const BPS_FULL: i32 = 10_000;
@@ -35,7 +35,7 @@ pub struct GlobalLoanConfig {
 }
 
 impl GlobalLoanConfig {
-    /// 对应 Java `thresholdsValidGivenCurrent(int, int)`（`:199-209`）：校验应用更新后生效的有效值（未提供的沿用当前值）。
+    /// 对应 Java `thresholdsValidGivenCurrent`：校验应用更新后生效的有效值（未提供的沿用当前值）。
     pub fn thresholds_valid_given_current(
         &self,
         current_cross_liquidation_ltv_bps: i32,
@@ -84,12 +84,12 @@ pub struct SymbolLoanConfig {
     pub loan_max_amount: i64,
     /// `UNSET` = 派生为 `0`（无期限）。
     pub loan_max_term_days: i32,
-    /// `UNSET` = 派生为 `loanInitialLtvBps`（抵押折价率默认等于该 LTV 本身）。落地时写到 base currency，见 `RiskEngine::apply_add_loan` 文档。
+    /// `UNSET` = 派生为 `loanInitialLtvBps`（抵押折价率默认等于该 LTV 本身）；落地时写到 base currency。
     pub collateral_weight_bps: i32,
 }
 
 impl SymbolLoanConfig {
-    /// 对应 Java `resolve(int liqBufferBps, int mcBufferBps)`（`:283-290`）：把 `UNSET` 字段填实成 [`Resolved`]；`marginCall` 默认值依赖已派生的 `liq`，不是原始字段。
+    /// 对应 Java `resolve`：把 `UNSET` 字段填实成 [`Resolved`]；`marginCall` 默认值依赖已派生的 `liq`，不是原始字段。
     pub fn resolve(&self, liq_buffer_bps: i32, mc_buffer_bps: i32) -> Resolved {
         let liq = if self.loan_liquidation_ltv_bps == UNSET {
             self.loan_initial_ltv_bps + liq_buffer_bps
@@ -127,7 +127,7 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    /// 对应 Java `Resolved.valid()`（`:269-274`）：LTV/金额/期限范围校验；`collateralWeightBps ∈ [0,10000]` 是 `LoanService::cross_ltv_bps` 免 overflow-panic 的前置义务收口点。
+    /// 对应 Java `Resolved.valid()`：LTV/金额/期限范围校验；`collateralWeightBps ∈ [0,10000]` 是 `LoanService::cross_ltv_bps` 免 overflow-panic 的前置义务收口点。
     pub fn valid(&self) -> bool {
         self.initial_ltv_bps >= 0
             && self.initial_ltv_bps < BPS_FULL
@@ -140,7 +140,7 @@ impl Resolved {
     }
 }
 
-/// 对应 Java `SymbolLoanConfig.thresholdsValid(int, int, int)`（`:278-281`）：`initial < marginCall < liquidation < 100%`；`marginCall==0` 表示关预警（合法）。
+/// 对应 Java `SymbolLoanConfig.thresholdsValid`：`initial < marginCall < liquidation < 100%`；`marginCall==0` 表示关预警（合法）。
 fn thresholds_valid(initial: i32, margin_call: i32, liquidation: i32) -> bool {
     liquidation > initial
         && liquidation < BPS_FULL
@@ -167,7 +167,7 @@ pub struct RateCurveConfig {
 }
 
 impl RateCurveConfig {
-    /// 对应 Java `RateCurveConfig.valid()`（`:323-326`）：`base ∈ [0,10000)`、`0 < kink < 10000`、`slope1/slope2 >= 0`。
+    /// 对应 Java `RateCurveConfig.valid()`：`base ∈ [0,10000)`、`0 < kink < 10000`、`slope1/slope2 >= 0`。
     pub fn valid(&self) -> bool {
         self.base_bps >= 0
             && self.base_bps < BPS_FULL

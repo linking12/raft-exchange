@@ -1,7 +1,7 @@
-//! 对应 Java `ADLUserPosition`（42 行）：ADL 候选视图；Java 侵入式链表+对象池不移植，改用 `Vec`（Ruling：不移植对象池化）。
+//! 对应 Java `ADLUserPosition`：ADL 候选视图；Java 侵入式链表+对象池不移植，改用 `Vec`。
 use crate::core::common::position_direction::PositionDirection;
 
-/// 对应 Java `ADLUserPosition`（`uid`/`symbol`/`direction`/`volume`/`score`；`next` 见模块文档）。
+/// 对应 Java `ADLUserPosition`（`uid`/`symbol`/`direction`/`volume`/`score`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdlUserPosition {
     pub uid: i64,

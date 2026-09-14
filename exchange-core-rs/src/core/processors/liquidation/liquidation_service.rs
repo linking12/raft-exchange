@@ -1,5 +1,4 @@
-//! 对应 Java `LiquidationService`（§2.1/§2.3）。保险基金（IF）复制状态：per-shard 单例，`RiskEngine` 持有；`notionals`/`positions` 进 state_hash/snapshot（Ruling P6-E）。
-//! ADL 候选构造+排序键（`unrealized_pnl`/`risk_score`/`compute_profitable_positions_by_symbol`/`add_cross_positions_if_user_safe`，逐字对齐 Java `:191-321`）已落地，provider 传参不持有（同 P3-B），`RiskEngine::adl_collect` 消费。
+//! 对应 Java `LiquidationService`：保险基金（IF）复制状态（per-shard 单例，`RiskEngine` 持有）+ ADL 候选构造/排序键。
 
 use std::collections::BTreeMap;
 
@@ -11,7 +10,7 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::size_price_to_currency_scale;
 
-/// 对应 Java `Math.multiplyExact(long, long)`：局部私有重复一份（同仓库既有 helper 风格）。
+/// 对应 Java `Math.multiplyExact`：溢出 panic。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
@@ -24,7 +23,7 @@ pub struct IfNotional {
 }
 
 impl IfNotional {
-    /// 折叠进 `state_hash` 的 rolling hash（`h=h*31+field`，风格对齐 `UserProfile`/`LoanService`，不要求与 Java `Objects.hash` 数值相等）。
+    /// 折叠进 state_hash 的 rolling hash（h=h*31+field）。
     fn fold_hash(&self, h: i64) -> i64 {
         let h = h.wrapping_mul(31).wrapping_add(self.available);
         h.wrapping_mul(31).wrapping_add(self.reserved)
@@ -47,7 +46,7 @@ impl IfPositionRecord {
     }
 
     fn fold_hash(&self, h: i64) -> i64 {
-        // direction 用 multiplier() 保持跨节点/版本稳定（同 Java 注释）。
+        // direction 用 multiplier() 保持跨节点/版本稳定。
         let h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);
         let h = h.wrapping_mul(31).wrapping_add(self.direction.multiplier() as i64);
         let h = h.wrapping_mul(31).wrapping_add(self.open_volume);
@@ -55,7 +54,7 @@ impl IfPositionRecord {
     }
 }
 
-/// 对应 Java `LiquidationService`（IF 状态子集）：`notionals: symbol -> IFNotional`（sizePrice scale 可动用余额），`positions: (direction.multiplier()*symbol) -> IFPositionRecord`（符号编码 key 区分多空）。
+/// IF 状态子集：`notionals: symbol -> IFNotional`；`positions: (direction.multiplier()*symbol) -> IFPositionRecord`（符号编码 key 区分多空）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LiquidationService {
     pub notionals: BTreeMap<i32, IfNotional>,
@@ -67,7 +66,7 @@ impl LiquidationService {
         LiquidationService::default()
     }
 
-    /// 对应 Java `generateLiquidationOrderId`（`LiquidationService.java:182-188`）：生成根 orderId，位布局 `symbol<<32|uidHash<<12|sideBit<<11|tsPart`；tsPart 刻意改用 `cmd.timestamp` 而非 wall-clock 以保确定性。
+    /// 对应 Java `generateLiquidationOrderId`：根 orderId，位布局 `symbol<<32|uidHash<<12|sideBit<<11|tsPart`；tsPart 用 `cmd.timestamp` 而非 wall-clock 保确定性。
     pub fn generate_liquidation_order_id(uid: i64, symbol: i32, direction: PositionDirection, timestamp: i64) -> i64 {
         let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & 0xFFFFF; // 20 bit
         let side_bit: i64 = if direction == PositionDirection::Short { 1 } else { 0 };
@@ -75,31 +74,31 @@ impl LiquidationService {
         ((symbol as i64) << 32) | (uid_hash << 12) | (side_bit << 11) | ts_part
     }
 
-    /// 对应 Java `generateIFOrderId(long)`（`:190-193`）：IF 命令 orderId 由根强平 orderId 派生，高位打 `'I'`（`0x49`）标签。
+    /// 对应 Java `generateIFOrderId`：IF 命令 orderId 由根强平 orderId 派生，高位打 `'I'`（`0x49`）标签。
     pub fn generate_if_order_id(liquidation_order_id: i64) -> i64 {
         let if_order_tag: i64 = 0x49; // 'I'
         (if_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `generateADLOrderId(long)`（`:195-198`）：ADL 命令 orderId 由根强平 orderId 派生，高位打 `'A'`（`0x41`）标签。
+    /// 对应 Java `generateADLOrderId`：ADL 命令 orderId 由根强平 orderId 派生，高位打 `'A'`（`0x41`）标签。
     pub fn generate_adl_order_id(liquidation_order_id: i64) -> i64 {
         let adl_order_tag: i64 = 0x41; // 'A'
         (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池（`collectLiquidationFee` 消费；本 Task 只落地这个记账原语本身）。
+    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池。
     pub fn credit_liquidation_fee(&mut self, symbol: i32, notional_fee: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_fee;
     }
 
-    /// 对应 Java `depositToInsuranceFund`：外部充值 IF 可用资金池（admin `IF_DEPOSIT`）。入参已是 notional（size*price）尺度，scale 换算由调用方（`RiskEngine::if_deposit`）完成。
+    /// 对应 Java `depositToInsuranceFund`：外部充值 IF 可用资金池（admin `IF_DEPOSIT`）；入参已是 notional 尺度，scale 换算由调用方完成。
     pub fn deposit_to_insurance_fund(&mut self, symbol: i32, notional_amount: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_amount;
     }
 
-    /// 对应 Java `withdrawFromInsuranceFund`：`IF_WITHDRAW` 支持——从 `available` 扣款（含非负校验），不动 `reserved`（reserved 是正在保护某笔强平的预冻结部分，运营不能拿走）。`false` = notional 不存在或 `available` 不足覆盖（调用方据此返回 `RiskIfInsufficient`）。
+    /// 对应 Java `withdrawFromInsuranceFund`：从 `available` 扣款（含非负校验），不动 `reserved`（正在保护强平的预冻结部分，运营不能拿走）。`false` = notional 不存在或余额不足。
     pub fn withdraw_from_insurance_fund(&mut self, symbol: i32, notional_amount: i64) -> bool {
         let Some(n) = self.notionals.get_mut(&symbol) else {
             return false;
@@ -111,7 +110,7 @@ impl LiquidationService {
         true
     }
 
-    /// 对应 Java `reserveIFNotional`（R1）：预冻结 IF 可用名义金额，返回实际能冻结的量（`min(available - reserved, requestSize * price)`）——**自限、永不为负**：不管请求多大，最多只冻结当前真实可用部分，caller 永远不会把 IF 推向负数（对比 loan LIF 允许为负，§2.3 "natural braking"）。
+    /// 对应 Java `reserveIFNotional`（R1）：预冻结 IF 名义金额，返回实际能冻结量（`min(available-reserved, size*price)`）——自限、永不为负（对比 loan LIF 允许为负）。
     pub fn reserve_if_notional(&mut self, symbol: i32, request_size: i64, price: i64) -> i64 {
         let n = self.notionals.entry(symbol).or_default();
         let available = n.available - n.reserved;
@@ -121,14 +120,14 @@ impl LiquidationService {
         can_cover
     }
 
-    /// 对应 Java `releaseReservedIFNotional`（R2 finalize）：释放 R1 预冻结的名义金额，与 `reserve_if_notional` 对称——`IFCommandProcessor::finalize` 无论接管成功/全拒都调用它（§2.2 "always release"）。
+    /// 对应 Java `releaseReservedIFNotional`（R2 finalize）：释放 R1 预冻结金额，与 `reserve_if_notional` 对称——finalize 无论接管成功/全拒都调用。
     pub fn release_reserved_if_notional(&mut self, symbol: i32, reserved_notional: i64) {
         if let Some(n) = self.notionals.get_mut(&symbol) {
             n.reserved -= reserved_notional;
         }
     }
 
-    /// 对应 Java `acceptIFPosition`（R2 per-event）：IF 正式接管仓位——从 `available` 扣款，累加到该 symbol+方向的持仓量与成本。要求 `notionals[symbol]` 已存在（由同一条命令的 R1 `reserve_if_notional` 保证，同 Java `notionals.get(symbol)` 隐式非空契约——若从未 reserve 过说明调用方违反 R1→R2 顺序契约，panic 而非静默创建虚假余额）。
+    /// 对应 Java `acceptIFPosition`（R2 per-event）：IF 正式接管仓位——从 `available` 扣款并累加该 symbol+方向的持仓量/成本。要求 `notionals[symbol]` 已存在（R1 reserve 保证）；否则违反 R1→R2 顺序契约，panic 而非静默建虚假余额。
     pub fn accept_if_position(&mut self, symbol: i32, direction: PositionDirection, size: i64, price: i64) {
         let spend = mul_exact(size, price);
         let n = self
@@ -154,7 +153,7 @@ impl LiquidationService {
         self.positions.clear();
     }
 
-    /// 对应 Java `stateHash`：`notionals`/`positions` 都进复制态 hash（Ruling P6-E）。风格对齐 `LoanService::state_hash`（`h=h*31+field` 滚动折叠 + 高低 32 位异或收窄）。
+    /// 对应 Java `stateHash`：`notionals`/`positions` 都进复制态 hash（h=h*31+field 滚动折叠 + 高低 32 位异或收窄）。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         for (&symbol, n) in &self.notionals {
@@ -169,17 +168,17 @@ impl LiquidationService {
     }
 
     // ================================================================
-    // ADL 候选构造 + 排序键 —— 对应 Java `:191-321`
+    // ADL 候选构造 + 排序键
     // ================================================================
 
-    /// 对应 Java `unrealizedPnl(SymbolPositionRecord, long bankruptcyPrice)`（`:191-195`）：按破产价估算浮动盈亏（ADL 排序/筛选用，静态纯函数）。**全程饱和乘法**（`saturating_multiply`）——溢出时钳到 `i64::MIN`/`MAX` 而非 wrap，防止符号翻转。
+    /// 对应 Java `unrealizedPnl`：按破产价估算浮动盈亏（ADL 排序/筛选用）。全程饱和乘法——溢出钳到 i64::MIN/MAX 防符号翻转。
     pub fn unrealized_pnl(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
         let sign = pos.direction.multiplier() as i64;
         let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
         saturating_multiply(sign, notional - pos.open_price_sum)
     }
 
-    /// 对应 Java `riskScore(SymbolPositionRecord, long bankruptcyPrice)`（`:197-203`）：ADL 排序键 = 浮盈 × 实际杠杆 × 资格因子，越大越优先被摊派。**全程饱和乘法**——溢出翻转符号会直接反转排序，这是 load-bearing 正确性、非防御性写法（§3.1/§11.1）。`actual_leverage = open_price_sum / open_init_margin_sum`：普通整除、非饱和（Java 同样是普通 `/`，`openInitMarginSum==0` 时与 Java 一样整数除零 panic——按 R1 filter 前置条件 `open_volume>0`，正常持仓路径下 `open_init_margin_sum` 恒为正、不可达）。
+    /// 对应 Java `riskScore`：ADL 排序键 = 浮盈 × 实际杠杆 × 资格因子，越大越优先摊派。全程饱和乘法——溢出翻转符号会反转排序，是 load-bearing 正确性。`actual_leverage` 用普通整除（正常持仓 `open_init_margin_sum>0`，除零不可达）。
     pub fn risk_score(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
         let sign = pos.direction.multiplier() as i64;
         let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
@@ -188,12 +187,9 @@ impl LiquidationService {
         saturating_multiply(saturating_multiply(actual_leverage, unrealized_pnl), pos.adl_eligibility)
     }
 
-    /// 对应 Java `computeProfitablePositionsBySymbol()`（`:225-321`）：ADL 候选构造——按需从复制态（`ups`/`ssp`/`last_price_cache`）现算出全部可被 ADL 摊派的仓位（symbol -> 候选列表），**每次重算、不缓存**——leader-only 缓存会让 follower 在同一条 ADL 命令上看到不同候选、破坏确定性重放（Java 原版同一条 WHY 注释，逐字保留结论）。
+    /// 对应 Java `computeProfitablePositionsBySymbol`：按需从复制态现算全部可被 ADL 摊派的仓位（symbol -> 候选），每次重算、不缓存——缓存会让 follower 在同一条 ADL 命令上看到不同候选、破坏确定性重放。ISOLATED 判浮盈>0 即入选（`adl_eligibility` 构造时已归一为 100）；CROSS 按 `quote_currency` 分组交 [`Self::add_cross_positions_if_user_safe`] 做账户级门 + factor + 入选。
     ///
-    /// ISOLATED 仓位直接判"浮盈 > 0"即入选（`adl_eligibility` 已由 [`SymbolPositionRecord::new`]/`initialize`/`reset` 按 margin_mode 归一为 `100`，本函数不再重复写它——对齐 Java `addProfitablePosition` 的 ISOLATED 分支同样不碰 `adlEligibility`，纯依赖构造默认值）；CROSS 仓位先按 `quote_currency` 分组，交给 [`Self::add_cross_positions_if_user_safe`] 做账户级门 + factor + 入选（该函数会写回 `adl_eligibility`）。
-    ///
-    /// # Rust 所有权改造：clone 返回值 + 调用方写回，取代 Java 的活引用列表
-    /// Java `IntObjectHashMap<MutableList<SymbolPositionRecord>>` 存的是**活对象引用**——调用方（`ADLCommandProcessor.collectInput`）后续 `pos.pendingADLSize += canTake` 直接改的就是同一份仓位记录，无需二次查找。Rust 不能安全地把"多个不同 `UserProfile` 的 `&mut SymbolPositionRecord`"塞进一个跨越整个 `ups` 借用的返回值，故本函数返回**克隆快照**（`Vec<SymbolPositionRecord>`）；调用方（`RiskEngine::adl_collect`）选中候选后须用 `up.create_positions_key(...)` 重新查活记录再写 `pending_adl_size`（见 `adl_command_processor.rs` 模块文档）。不改变可观察行为——同一条 ADL 命令的候选列表里每个元素对应**不同的 uid**（不会出现同一仓位两次、需"看到前一次选取副作用"的情形），冻结快照与活引用在此调用场景下等价，只是把"何时读取"从扫描时挪到选取时（选取在同一次 `adl_collect` 调用内、扫描后几行，中间无任何改这些字段的操作）。
+    /// 返回克隆快照而非 Java 的活引用列表（Rust 无法安全把多个 `&mut SymbolPositionRecord` 塞进跨 `ups` 借用的返回值）；调用方 `RiskEngine::adl_collect` 选中后重查活记录写 `pending_adl_size`。等价：候选各属不同 uid，无"看前次副作用"情形。
     pub fn compute_profitable_positions_by_symbol(
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
@@ -201,7 +197,7 @@ impl LiquidationService {
     ) -> BTreeMap<i32, Vec<SymbolPositionRecord>> {
         let mut result: BTreeMap<i32, Vec<SymbolPositionRecord>> = BTreeMap::new();
 
-        // uid 升序遍历：BTreeMap 天然确定序，无需额外排序（规避 Java `forEachValue` 在 `IntObjectHashMap` 上迭代序不确定的问题——本移植全程 BTreeMap）。
+        // uid 升序遍历：BTreeMap 天然确定序。
         let uids: Vec<i64> = ups.users.keys().copied().collect();
         for uid in uids {
             let profile = match ups.users.get_mut(&uid) {
@@ -247,11 +243,9 @@ impl LiquidationService {
         result
     }
 
-    /// 对应 Java `addCrossPositionsIfUserSafe`（`:293-312`）：CROSS 用户单 currency 的 ADL 候选构造——聚合 + 用户级 gating + factor + 入选一次性完成。
+    /// 对应 Java `addCrossPositionsIfUserSafe`：CROSS 用户单 currency 的 ADL 候选构造——聚合 + 账户级 gating + factor + 入选一次完成。
     ///
-    /// Gating（账户须足够安全且净盈利才有资格被 ADL 吃）：`totalProfit > 0` 且 `equity >= 1.2 × totalMaintenance`（离强平线还有 20%+ 余量）。factor 语义：账户离强平线越远 factor 越大，`clamp` 到 `[0, 100]`，写回每条入选仓位的 `adl_eligibility`。
-    ///
-    /// `total_profit`/`total_maintenance`/`equity` 用普通 `+`/`-`（不用 `*_exact`）——逐字对齐 Java 的 `totalProfit +=`/`totalMaintenance +=`（原版这几处确实不是 `Math.addExact`，只有 `warningThreshold`/`factor` 两处乘法用了 `Math.multiplyExact`，见下）；同一模式已见于 `UserProfile::cross_margin_base_allocation` 的 `total_upnl`/`total_mm` 累加，本函数保持同套算术纪律。
+    /// Gating（账户须足够安全且净盈利）：`totalProfit > 0` 且 `equity >= 1.2 × totalMaintenance`。factor = 账户离强平线的余量，`clamp` 到 `[0, 100]`，写回每条入选仓位的 `adl_eligibility`。
     fn add_cross_positions_if_user_safe(
         profile: &mut UserProfile,
         currency: i32,
@@ -288,11 +282,11 @@ impl LiquidationService {
         }
 
         if total_maintenance <= 0 || total_profit <= 0 {
-            return; // 用户级 gating 不过：本 currency 组下全部 CROSS 仓位维持默认不入选（adl_eligibility=0）
+            return; // gating 不过：本组 CROSS 仓维持默认不入选（adl_eligibility=0）
         }
 
         let equity = profile.account(currency) - profile.locked(currency) + total_profit;
-        let warning_threshold = mul_exact(total_maintenance, 6) / 5; // ×1.2，逐字对齐 Java 的乘除顺序
+        let warning_threshold = mul_exact(total_maintenance, 6) / 5; // ×1.2
         if equity < warning_threshold {
             return;
         }
@@ -315,7 +309,7 @@ impl LiquidationService {
     }
 }
 
-/// 对应 Java `saturatingMultiply(long, long)`（`LiquidationService.java:217-222`）：饱和乘法——溢出时按符号钳到 `i64::MAX`/`i64::MIN` 而非 wrap。WHY：ADL 排序键若用普通乘法，溢出截断会翻转符号导致排序反转；饱和后仍单调、不改排序语义。用 `i128` 中间精度检测溢出，检测到后按 Java `((a ^ b) < 0) ? Long.MIN_VALUE : Long.MAX_VALUE` 符号规则钳位（异或符号位判两数异号——异号乘积应为负钳到 `MIN`，同号钳到 `MAX`）。
+/// 对应 Java `saturatingMultiply`：饱和乘法——溢出按符号钳到 `i64::MAX`/`i64::MIN` 而非 wrap。ADL 排序键用普通乘法时溢出截断会翻转符号导致排序反转；饱和后仍单调。异号乘积钳到 `MIN`，同号钳到 `MAX`。
 fn saturating_multiply(a: i64, b: i64) -> i64 {
     match i64::try_from(a as i128 * b as i128) {
         Ok(v) => v,

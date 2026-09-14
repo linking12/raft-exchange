@@ -1,4 +1,4 @@
-//! 对应 Java `LastPriceCacheRecord`：每 symbol 最新价快照，进 raft snapshot、参与 state hash；期货由外部喂价，现货由 [`apply_trade_price`] 维护。Java `markPrice`/`markPriceTs` 本移植改名 `last_price`/`last_price_ts`。
+//! 对应 Java `LastPriceCacheRecord`：每 symbol 最新价快照，进 raft snapshot、参与 state hash；期货外部喂价，现货由 `apply_trade_price` 维护。Java `markPrice`/`markPriceTs` 改名 `last_price`/`last_price_ts`。
 
 /// 对应 Java `LastPriceCacheRecord.WINDOW_MS`：15 秒滑动混合窗口。
 pub const WINDOW_MS: i64 = 15_000;

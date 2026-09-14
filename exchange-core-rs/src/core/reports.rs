@@ -433,6 +433,8 @@ impl ExchangeCore {
         components.insert("user_profiles".to_string(), users_h);
         // 对应 Java StateHashReport 的 MATCHING_ORDER_BOOKS + RISK_LAST_PRICE_CACHE 子模块哈希：撮合簿与价格缓存
         // 也须折入，否则两节点仅在这两块子状态分歧时算出相同 hash，raft 跨节点分叉探测漏检。
+        // mark_price_ts 是复制态（随现货成交/MARKPRICE_ADJUSTMENT 确定性更新），须折入否则跨节点分歧漏检。
+        components.insert("risk_mark_price_ts".to_string(), hash_bucket(&self.risk.mark_price_ts));
         components.insert("order_books".to_string(), self.matching.order_books_state_hash());
         components.insert("risk_last_price_cache".to_string(), hash_bucket(&self.risk.last_price_cache));
         StateHashReport { components }
@@ -690,6 +692,53 @@ mod tests {
         assert!(!transfers.is_empty(), "现货成交应发 TRANSFER 事件: {:?}", buy.fund_events);
         assert!(transfers.iter().any(|e| e.currency == QUOTE), "应有 quote 腿");
         assert!(transfers.iter().any(|e| e.currency == BASE), "应有 base 腿");
+    }
+
+    #[test]
+    fn spot_trade_writes_back_mark_price() {
+        const BUYER: i64 = 1;
+        const SELLER: i64 = 2;
+        let mut core = seeded();
+        for (uid, cur, amt) in [(BUYER, QUOTE, 1_000_000i64), (SELLER, BASE, 1000)] {
+            core.process_command(&mut admin_cmd(OrderCommandType::AddUser, uid));
+            core.process_command(&mut OrderCommand {
+                command: OrderCommandType::BalanceAdjustment,
+                uid,
+                symbol: cur,
+                price: amt,
+                order_id: uid,
+                ..Default::default()
+            });
+        }
+        // 现货本无 markPrice；成交价应回写进 last_price_cache（供 loan 抵押估值）。首次成交 → EMA 直接取成交价。
+        core.process_command(&mut OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 10,
+            symbol: SYMBOL,
+            price: 50,
+            size: 100,
+            action: Some(OrderAction::Ask),
+            order_type: Some(OrderType::Gtc),
+            uid: SELLER,
+            timestamp: 10_000,
+            ..Default::default()
+        });
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).copied(), None, "挂单未成交不应回写");
+        core.process_command(&mut OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 11,
+            symbol: SYMBOL,
+            price: 50,
+            size: 100,
+            reserve_bid_price: 50,
+            action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: BUYER,
+            timestamp: 10_000,
+            ..Default::default()
+        });
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).copied(), Some(50), "现货成交价应回写 markPrice");
+        assert_eq!(core.risk.mark_price_ts.get(&SYMBOL).copied(), Some(10_000));
     }
 
     #[test]

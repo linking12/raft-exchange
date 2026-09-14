@@ -42,8 +42,7 @@ impl PositionDirection {
         }
     }
 
-    /// 对应 Java `PositionDirection.isOppositeToAction(OrderAction)`：
-    /// `LONG` 与 `ASK` 相对，`SHORT` 与 `BID` 相对（`EMPTY` 恒不相对）。
+    /// 对应 Java `isOppositeToAction`：`LONG` 与 `ASK` 相对，`SHORT` 与 `BID` 相对（`EMPTY` 恒不相对）。
     pub fn is_opposite_to_action(self, action: OrderAction) -> bool {
         (self == PositionDirection::Long && action == OrderAction::Ask)
             || (self == PositionDirection::Short && action == OrderAction::Bid)

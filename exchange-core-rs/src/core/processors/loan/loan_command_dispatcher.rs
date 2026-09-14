@@ -1,4 +1,4 @@
-//! 对应 Java `LoanCommandDispatcher`：借贷命令 dispatch 表 + 公共 preamble（参考文档 §0/§2.1-2.4）；零大小类型，无 `engine` 字段，逐次显式传参。
+//! Java `LoanCommandDispatcher`：借贷命令 dispatch 表 + 公共 preamble。零大小类型，逐次显式传参。
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -17,7 +17,7 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-/// 对应 Java `Math.multiplyExact`：局部私有重复一份（风格对齐仓内同名 helper）。
+/// 对应 Java `Math.multiplyExact`。
 fn mul_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
@@ -27,11 +27,11 @@ fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 对应 Java `LoanCommandDispatcher`（范围子集）。零大小类型，见模块文档。
+/// 零大小类型。
 pub struct LoanCommandDispatcher;
 
 impl LoanCommandDispatcher {
-    /// 对应 Java `dispatch(OrderCommand cmd)`（`:51-121`）：按 `cmd.command` 路由；分片自过滤单 shard 下恒真，未搬迁（同既有 ruling）。
+    /// 按 cmd.command 路由；分片自过滤单 shard 下恒真，未搬迁。
     pub fn dispatch(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -64,7 +64,7 @@ impl LoanCommandDispatcher {
             // 不可达：is_loan() 门守覆盖的 14 码上面已全部列举。
             _ => unreachable!("non-loan command dispatched to LoanCommandDispatcher: {:?}", cmd.command),
         };
-        // loan 变更后在 dispatch 出口按 uid 幂等 reconcile 强平扫描器索引（end-state 等价 Java 逐点增量维护，见 loan_liquidation_engine.rs）；pool/IF 运营命令跳过。
+        // loan 变更后按 uid 幂等 reconcile 强平扫描器索引（end-state 等价逐点增量维护）；pool/IF 运营命令跳过。
         if matches!(
             cmd.command,
             OrderCommandType::LoanCreate
@@ -83,7 +83,7 @@ impl LoanCommandDispatcher {
         rc
     }
 
-    /// 按 uid reconcile 借贷强平扫描器的 isolated/cross 两个 targeted 索引到当前敞口精确态（§6.7）。
+    /// 按 uid reconcile 强平扫描器 isolated/cross 两个 targeted 索引到当前敞口精确态。
     fn reconcile_loan_indices(engine: &mut RiskEngine, ups: &UserProfileService, uid: i64) {
         let up = match ups.get(uid) {
             Some(u) => u,
@@ -108,7 +108,7 @@ impl LoanCommandDispatcher {
         lle.sync_cross_exposure(up);
     }
 
-    /// 公共 preamble（参考文档 §2 顶部）：缺户 → `AuthInvalidUser`；冻结户 → `LoanUserSuspended`；`tryClaim` 幂等（claim-and-keep，对齐 `BALANCE_ADJUSTMENT`）。
+    /// 公共 preamble：缺户 → AuthInvalidUser；冻结户 → LoanUserSuspended；try_claim 幂等（claim-and-keep）。
     fn preamble<'a>(
         cmd: &OrderCommand,
         ups: &'a mut UserProfileService,
@@ -123,7 +123,7 @@ impl LoanCommandDispatcher {
         Ok(up)
     }
 
-    /// 对应 Java `evalCollateralInLoanCurrency`（`:1009-1015`）：转调 [`LoanService::collateral_value_in_quote_currency`]。
+    /// 转调 LoanService::collateral_value_in_quote_currency。
     fn eval_collateral_in_loan_currency(
         ssp: &SymbolSpecificationProvider,
         amount: i64,
@@ -135,8 +135,7 @@ impl LoanCommandDispatcher {
         LoanService::collateral_value_in_quote_currency(amount, spec, mark_price, base_spec, quote_spec)
     }
 
-    /// 某币种在某用户上的 (free, locked, currency_scale_k)：free = accounts − calculateLocked，供 loan 事件填余额快照
-    /// （对应 Java `sendLoan*Event` 用 `engine.calculateLocked`）。缺 currency spec 返回全 0。
+    /// 某币种在某用户上的 (free, locked, currency_scale_k)：free = accounts − calculate_locked，供 loan 事件填余额快照。缺 currency spec 返回全 0。
     fn currency_free_locked(ssp: &SymbolSpecificationProvider, up: &UserProfile, currency: i32) -> (i64, i64, i64) {
         match ssp.get_currency(currency) {
             Some(cspec) => {
@@ -241,7 +240,7 @@ impl LoanCommandDispatcher {
         });
     }
 
-    /// LIF 接管后的 cross LOAN_LIQUIDATED：债务已转 LIF，principal/interest 报 0（对齐 Java takeover snap=0）；带 loan-currency 余额快照。
+    /// LIF 接管后的 cross LOAN_LIQUIDATED：债务已转 LIF，principal/interest 报 0；带 loan-currency 余额快照。
     fn push_cross_loan_liquidated_zeroed(
         cmd: &mut OrderCommand,
         ssp: &SymbolSpecificationProvider,
@@ -264,9 +263,9 @@ impl LoanCommandDispatcher {
         });
     }
 
-    // LOAN_CREATE —— 参考文档 §2.1，Java handleLoanCreate（:130-209）
+    // LOAN_CREATE
 
-    /// 开仓 Isolated 借贷（参考文档 §2.1，逐字对齐 Java `:141-176`）：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。`LOAN_BORROW` 事件不移植（无事件总线）。
+    /// 开仓 Isolated 借贷：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。
     fn handle_loan_create(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -351,7 +350,7 @@ impl LoanCommandDispatcher {
         );
         loan.rate_mode = rate_mode;
         if rate_mode == LoanRateMode::Floating {
-            // 计息游标锚定在当前累加器（Java `floatingRate.initOpenSnapshot`）。
+            // 计息游标锚定在当前累加器。
             engine.loan_service.floating_rate.init_open_snapshot(&mut loan, cmd.timestamp);
         }
         loan.collateral_amount = collateral_amount;
@@ -366,9 +365,9 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // LOAN_REPAY —— 参考文档 §2.2，Java handleLoanRepay（:234-271）+ settleRepay（:215-232）
+    // LOAN_REPAY
 
-    /// Isolated REPAY 共用核心：accrue→算实抵债额→查余额→抵债（利息优先），对应 Java 私有 `settleRepay`（`:215-232`），不释放抵押。
+    /// Isolated REPAY 共用核心：accrue→算实抵债额→查余额→抵债（利息优先），不释放抵押。
     fn settle_repay_isolated(
         engine: &mut RiskEngine,
         up: &mut UserProfile,
@@ -405,7 +404,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 偿还 Isolated 借贷（本金+利息）；成功后若 `loan.is_empty()` 从 map 移除；事件缺口同 [`Self::handle_loan_create`]。
+    /// 偿还 Isolated 借贷（本金+利息）；成功后 loan.is_empty() 则从 map 移除。
     fn handle_loan_repay(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -442,9 +441,9 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // LOAN_ADD_COLLATERAL —— 参考文档 §2.3，Java handleLoanAddCollateral（:274-310）
+    // LOAN_ADD_COLLATERAL
 
-    /// 补抵押降 LTV，对应 Java handleLoanAddCollateral（:274-310）：校验存在/归属/amount>0/自由余额充足后 accrue_to 再加抵押；事件缺口同上不发送。
+    /// 补抵押降 LTV：校验存在/归属/amount>0/自由余额充足后 accrue_to 再加抵押。
     fn handle_loan_add_collateral(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -488,9 +487,9 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // LOAN_RELEASE_COLLATERAL —— 参考文档 §2.4，Java handleLoanReleaseCollateral（:313-378）
+    // LOAN_RELEASE_COLLATERAL
 
-    /// 减抵押，对应 Java handleLoanReleaseCollateral（:313-378）：允许释放到刚好高于清算线（严格 <），accrue 后按 pending-interest-inclusive 的 realDebt 校验 LTV，全零死壳从 map 移除让 loanId 复用；事件缺口同上不发送。
+    /// 减抵押：允许释放到刚好高于清算线（严格 <），accrue 后按 pending-interest-inclusive 的 realDebt 校验 LTV，全零死壳从 map 移除。
     fn handle_loan_release_collateral(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -563,9 +562,9 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // Isolated 强平：R1 挂 IOC → R2 结算，接不住转 LIF 接管，参考文档 §2.5，Java LoanCommandDispatcher.java:388-525,921-933
+    // Isolated 强平：R1 挂 IOC → R2 结算，接不住转 LIF 接管
 
-    /// R1：校验 + pre-move 抵押到 exchange_locked 转 spot ASK IOC，对应 Java handleLoanForceLiquidate（:388-417）；不走 [`Self::preamble`]（无视冻结、无 tryClaim），幂等靠 collateral_amount compare-and-consume。
+    /// R1：校验 + pre-move 抵押到 exchange_locked 转 spot ASK IOC；不走 preamble（无视冻结、无 try_claim），幂等靠 collateral_amount compare-and-consume。
     fn handle_loan_force_liquidate(
         _engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -627,7 +626,7 @@ impl LoanCommandDispatcher {
         let loan_id = cmd.reserve_bid_price;
         let (loan_currency, collateral_currency) = match taker_up.isolated_loans.get(&loan_id) {
             Some(l) => (l.loan_currency, l.collateral_currency),
-            // Java: log.error+return，理论不可达（R1 compare-and-consume 幂等设计下不会发生），无日志基础设施静默 no-op。
+            // 理论不可达（R1 compare-and-consume 幂等设计），无日志静默 no-op。
             None => return,
         };
         let loan_currency_spec = ssp
@@ -684,7 +683,7 @@ impl LoanCommandDispatcher {
                 collateral_currency,
                 collateral,
             );
-            // 接管后债务/抵押已转 LIF，LOAN_LIQUIDATED 报 0（对齐 Java takeover 分支 snapPrincipal/Interest/Collateral=0）。
+            // 接管后债务/抵押已转 LIF，LOAN_LIQUIDATED 报 0。
             let (free, locked, cur_scale) = Self::currency_free_locked(ssp, taker_up, loan_currency);
             let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, taker_up, collateral_currency);
             cmd.fund_events.push(FundEvent {
@@ -712,7 +711,7 @@ impl LoanCommandDispatcher {
         }
     }
 
-    /// LIF 承接不良 Isolated 贷款，对应 Java 私有 takeOverByInsuranceFund（:921-933）：按债务全额代偿、取走全部抵押；LIF 允许为负（垫资非损失），抵押从 accounts 真实划转，是整个借贷子系统唯一的物理资金转移（§6.3/§3.4）。
+    /// LIF 承接不良 Isolated 贷款：按债务全额代偿、取走全部抵押；LIF 允许为负（垫资非损失），抵押从 accounts 真实划转——借贷子系统唯一的物理资金转移。
     fn take_over_by_insurance_fund(
         engine: &mut RiskEngine,
         up: &mut UserProfile,
@@ -733,9 +732,9 @@ impl LoanCommandDispatcher {
         }
     }
 
-    // Cross 用户命令：加减抵押/借款/还款，参考文档 §2.6-2.9，Java LoanCommandDispatcher.java:532-705
+    // Cross 用户命令：加减抵押/借款/还款
 
-    /// Cross 账户级追加抵押（不校验 LTV，越多越安全），对应 Java handleLoanCrossAddCollateral（:532-556）：币种白名单权重>0、自由余额充足后 cross_loan_collateral.add；事件缺口同 Isolated 各 handler。
+    /// Cross 账户级追加抵押（不校验 LTV，越多越安全）：币种白名单权重>0、自由余额充足后 cross_loan_collateral.add。
     fn handle_loan_cross_add_collateral(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -773,7 +772,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// Cross 账户级提取抵押，对应 Java handleLoanCrossWithdrawCollateral（:558-587）：subtract-then-check——先扣后重算加权 LTV（fail-closed，缺价拒绝，§3.2），超 crossLiquidationLtvBps 则 revert 加回；事件缺口同上。
+    /// Cross 账户级提取抵押：subtract-then-check——先扣后重算加权 LTV（fail-closed，缺价拒绝），超 cross_liquidation_ltv_bps 则 revert 加回。
     fn handle_loan_cross_withdraw_collateral(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -812,7 +811,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// Cross 借款，对应 Java handleLoanCrossBorrow（:589-635）：校验 loanId/principal/spec/池容量后恒 FLOATING 开仓，先插入 cross_loans 再核加权 LTV（fail-closed），超 initialLtvBps 则 remove revert（池子分文未动，无需还池），否则 disburse_loan；事件缺口同上。
+    /// Cross 借款：校验后恒 FLOATING 开仓，先插入 cross_loans 再核加权 LTV（fail-closed），超 initial_ltv_bps 则 remove revert（池子未动），否则 disburse_loan。
     fn handle_loan_cross_borrow(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -863,7 +862,7 @@ impl LoanCommandDispatcher {
         let new_ltv =
             engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
         if new_ltv > spec.loan_config.initial_ltv_bps as i64 {
-            up.cross_loans.remove(&loan_id); // 池子分文未动，见文档"还池"说明；无对象池可还
+            up.cross_loans.remove(&loan_id); // 池子分文未动，无需还池
             return CommandResultCode::LoanLtvTooHighAfterBorrow;
         }
 
@@ -875,7 +874,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// Cross REPAY 共用核心，对应 Java 共享私有 settleRepay（:215-232）：与 [`Self::settle_repay_isolated`] 逐字同构，改在 up.cross_loans 上操作，因借用检查器需按类型各写一份薄包装，逻辑零分叉，从不释放抵押（Cross 无 per-loan 抵押字段）。
+    /// Cross REPAY 共用核心：与 settle_repay_isolated 同构，改在 up.cross_loans 上操作（借用检查器需按类型各写一份薄包装）；从不释放抵押（Cross 无 per-loan 抵押字段）。
     fn settle_repay_cross(
         engine: &mut RiskEngine,
         up: &mut UserProfile,
@@ -909,7 +908,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 偿还 Cross 借贷（本金+利息），对应 Java handleLoanCrossRepay（:637-664）：永不释放抵押（账户级共享池），is_empty 后从 cross_loans 移除让 loanId 可复用；事件缺口同上。
+    /// 偿还 Cross 借贷（本金+利息）：永不释放抵押（账户级共享池），is_empty 后从 cross_loans 移除。
     fn handle_loan_cross_repay(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -947,9 +946,9 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // Cross 强平：R1 挂 IOC → R2 结算，接不住由 LIF 按债务占比接管，参考文档 §2.10，Java LoanCommandDispatcher.java:715-902
+    // Cross 强平：R1 挂 IOC → R2 结算，接不住由 LIF 按债务占比接管
 
-    /// R1：校验 + pre-move 卖出币抵押到 exchange_locked 转 spot ASK IOC，对应 Java handleLoanCrossForceLiquidate（:715-747）：不校验卖出币 base（可为账户抵押池任意合格币种，不像 Isolated 一对一绑定）；同 Isolated 不走 preamble、幂等靠 compare-and-consume（见 [`Self::handle_loan_force_liquidate`]）。
+    /// R1：校验 + pre-move 卖出币抵押到 exchange_locked 转 spot ASK IOC；卖出币 base 可为抵押池任意合格币种（不像 Isolated 一对一绑定）；同 Isolated 不走 preamble、幂等靠 compare-and-consume。
     fn handle_loan_cross_force_liquidate(
         _engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -1009,7 +1008,7 @@ impl LoanCommandDispatcher {
         let selling_currency = spec.base_currency;
         let loan_currency = match taker_up.cross_loans.get(&target_loan_id) {
             Some(l) => l.loan_currency,
-            // Java: log.warn(...) + return —— target loan 在 R2 前已不在（理论不可达）。
+            // target loan 在 R2 前已不在（理论不可达）。
             None => return,
         };
         let loan_currency_spec = ssp
@@ -1071,7 +1070,7 @@ impl LoanCommandDispatcher {
                 }
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
             }
-            // else：喂价缺失无法估值 → fail-closed，保留 loan 原样等下一轮（Java 打 warn log）。
+            // else：喂价缺失无法估值 → fail-closed，保留 loan 原样等下一轮。
         } else {
             if traded_size > 0 {
                 if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
@@ -1090,18 +1089,16 @@ impl LoanCommandDispatcher {
         if all_collateral_exhausted {
             Self::take_over_remaining_cross_loans(engine, cmd, taker_up, cmd.timestamp, target_loan_id, ssp);
         }
-        // Java 在此调用 syncCrossExposure 维护 scanner 的 cross 索引（cross_loan_currency_to_users）。本仓 R2 postProcess
-        // 直接从 risk_engine 调入、绕过 dispatch，故 reconcile_loan_indices（仅 R1/用户命令跑）在此不触发——刻意跳过。
-        // 该索引是 leader 本地、非复制、不进 state hash：清算平掉一笔 cross loan 后残留的 uid 至多让下次扫描多 check 一次，
-        // 而 check_cross 从实际 loan 状态现算，命中即 no-op；只会缩集、绝不漏清算也不凭空造清算，故不影响账本正确性与跨节点一致。
+        // Java 在此调 syncCrossExposure 维护 scanner cross 索引；本仓 R2 postProcess 绕过 dispatch，reconcile_loan_indices 不在此触发——刻意跳过。
+        // 该索引 leader 本地、非复制、不进 state hash：残留 uid 至多让下次多 check 一次（check_cross 现算命中即 no-op），只缩集不漏不造，不影响正确性与一致性。
     }
 
-    /// LIF 承接后收尾，对应 Java 私有 closeAndRecycleCrossLoan（:905-910）：无对象池，直接 remove 即等价于清零+摘出+回收；调用后 loan_id 已移除，不可再读。
+    /// LIF 承接后收尾：无对象池，直接 remove 即等价清零+摘出+回收；调用后 loan_id 不可再读。
     fn close_and_recycle_cross_loan(up: &mut UserProfile, loan_id: i64) {
         up.cross_loans.remove(&loan_id);
     }
 
-    /// 抵押结构性耗尽时把账户其余未偿 Cross 债务一并交给 LIF 承接，对应 Java 私有 takeOverRemainingCrossLoans（:873-902）：按 loanId 升序遍历（BTreeMap 天然升序，对齐 Java 显式 sort，必须确定性），跳过 target_loan_id 及 fail-closed 的笔；事件缺口同其余各处说明。
+    /// 抵押结构性耗尽时把账户其余未偿 Cross 债务一并交 LIF 承接：按 loanId 升序遍历（BTreeMap 天然升序，确定性硬要求），跳过 target_loan_id 及 fail-closed 的笔。
     #[allow(clippy::too_many_arguments)]
     fn take_over_remaining_cross_loans(
         engine: &mut RiskEngine,
@@ -1111,7 +1108,7 @@ impl LoanCommandDispatcher {
         target_loan_id: i64,
         ssp: &SymbolSpecificationProvider,
     ) {
-        // 先快照：循环内会 remove。BTreeMap 迭代天然按 loanId 升序，对齐 Java 显式 sort 后的效果。
+        // 先快照：循环内会 remove。BTreeMap 迭代天然按 loanId 升序（确定性）。
         let loan_ids: Vec<i64> = up.cross_loans.keys().copied().collect();
         for loan_id in loan_ids {
             if loan_id == target_loan_id {
@@ -1126,7 +1123,7 @@ impl LoanCommandDispatcher {
             }
             let taken_over = engine.loan_service.take_over_cross_loan(up, loan_id, now, ssp, &engine.last_price_cache);
             if !taken_over {
-                // fail-closed：Java 打 warn log，跳过继续下一笔。
+                // fail-closed：跳过继续下一笔。
                 continue;
             }
             let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid));
@@ -1137,9 +1134,9 @@ impl LoanCommandDispatcher {
         }
     }
 
-    // 运营命令：借贷池/LIF 充提，参考文档 §2.11，Java handlePoolDeposit/handlePoolWithdraw/handleLoanIfDeposit/handleLoanIfWithdraw（LoanCommandDispatcher.java:940-997）；cmd.uid=shardId（非真实 uid，单 shard 恒真未搬迁）、symbol=currency、size=amount，不复用 preamble、无幂等去重（loan.md §5.1：运营侧不得重放，调用方自保证）。
+    // 运营命令：借贷池/LIF 充提。cmd.uid=shardId、symbol=currency、size=amount，不复用 preamble、无幂等去重（运营侧不得重放，调用方自保证）。
 
-    /// 对应 Java `handlePoolDeposit`（`:940-951`）：运营方注入池子流动性。
+    /// 运营方注入池子流动性。
     fn handle_pool_deposit(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
         if cmd.size <= 0 {
             return CommandResultCode::LoanInvalidAmount;
@@ -1149,7 +1146,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 对应 Java handlePoolWithdraw（:953-966）：运营方从池子提取流动性，只能提未借出的 loanPoolAvailable 部分，不足即拒。
+    /// 运营方从池子提取流动性，只能提未借出的 loan_pool_available 部分，不足即拒。
     fn handle_pool_withdraw(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
         if cmd.size <= 0 {
             return CommandResultCode::LoanInvalidAmount;
@@ -1162,7 +1159,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 对应 Java `handleLoanIfDeposit`（`:968-976`）：运营方给 LIF 注资（启动资金/接管后补仓）。
+    /// 运营方给 LIF 注资（启动资金/接管后补仓）。
     fn handle_loan_if_deposit(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
         if cmd.size <= 0 {
             return CommandResultCode::LoanInvalidAmount;
@@ -1172,7 +1169,7 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 对应 Java handleLoanIfWithdraw（:978-997）：运营方从 LIF 提取（场外变现后再 deposit 回来），余额不足即拒——LIF 为负是接管被动结果非运营透支额度，本命令绝不能把它推得更负。
+    /// 运营方从 LIF 提取，余额不足即拒——LIF 为负是接管被动结果非运营透支，本命令绝不能把它推得更负。
     fn handle_loan_if_withdraw(engine: &mut RiskEngine, cmd: &OrderCommand) -> CommandResultCode {
         if cmd.size <= 0 {
             return CommandResultCode::LoanInvalidAmount;

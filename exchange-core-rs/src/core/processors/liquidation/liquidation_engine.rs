@@ -1,6 +1,5 @@
-//! 对应 Java `LiquidationEngine`（+父类 `LiquidationScheduledService`）：期货强平引擎，事件驱动、on-lane 检测
-//! （命令 apply 内跑，只读复制态），FORCE→IF→ADL 状态机，参考文档 §1、§7。移植偏差：无事件总线/预警 no-op
-//! （Ruling P6-B）；submit→pending_commands 队列（无 disruptor）；provider 传参不持有（Ruling P3-B）；is_running 替代 ScheduledExecutorService（Ruling P6-F）。
+//! 对应 Java `LiquidationEngine`：期货强平引擎，事件驱动、on-lane 检测（命令 apply 内跑、只读复制态），FORCE→IF→ADL 状态机。
+//! 移植偏差：预警 no-op；submit→pending_commands 队列；provider 传参不持有；is_running 为 leader 门。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -43,11 +42,11 @@ enum IsolatedCheck {
 pub struct LiquidationEngine {
     /// 对应 Java `symbolToUsers`：symbol → 持有者 uid 集合，非复制、不进 state_hash，`BTreeSet` 保确定序。
     pub symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
-    /// 对应 Java 父类 `LiquidationScheduledService.isRunning()`：leader 门，raft leadership 切换时 toggle（P6-F）。
+    /// leader 门，raft leadership 切换时 toggle。
     pub is_running: bool,
-    /// 提交队列（替代 Java disruptor `submit`）：FORCE/IF/ADL 命令由 driver 排空重喂管线。
+    /// 提交队列：FORCE/IF/ADL 命令由 driver 排空重喂管线。
     pub pending_commands: Vec<OrderCommand>,
-    /// 对应 Java `LiquidationEngine.loanLiquidationEngine`：现货借贷强平扫描器委托对象，产出命令收拢进 pending_commands。
+    /// 现货借贷强平扫描器委托对象，产出命令收拢进 pending_commands。
     pub loan_liquidation_engine: LoanLiquidationEngine,
 }
 
@@ -61,12 +60,12 @@ impl LiquidationEngine {
         crate::core::processors::liquidation::scheduler::covered_by_scan_slice(cmd, uid)
     }
 
-    /// 对应 Java `onPositionOpened`（`:151-153`）：开仓 apply 登记 uid 进 symbol→持有者索引。
+    /// 对应 Java `onPositionOpened`：开仓 apply 登记 uid 进 symbol→持有者索引。
     pub fn on_position_opened(&mut self, uid: i64, symbol: i32) {
         self.symbol_to_users.entry(symbol).or_default().insert(uid);
     }
 
-    /// 对应 Java `onPositionClosed`（`:155-168`）：平仓 apply 摘除 uid，HEDGE 安全（同 symbol 仍有其它方向仓位则不删）。
+    /// 对应 Java `onPositionClosed`：平仓 apply 摘除 uid，HEDGE 安全（同 symbol 仍有其它方向仓位则不删）。
     pub fn on_position_closed(&mut self, profile: &UserProfile, symbol: i32, closed_key: i32) {
         let holds_other = profile.positions.iter().any(|(&k, p)| k != closed_key && p.symbol == symbol);
         if holds_other {
@@ -80,7 +79,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `checkPositions(cmd)`（`:130-148`）：强平检测入口（leader-only）。targeted（`symbol>=0`）查索引；`LIQUIDATION_SCAN`（`symbol<0`）全量整扫+切片过滤兜底。
+    /// 对应 Java `checkPositions`：强平检测入口（leader-only）。targeted（`symbol>=0`）查索引；`LIQUIDATION_SCAN`（`symbol<0`）全量整扫+切片过滤。
     #[allow(clippy::too_many_arguments)]
     pub fn check_positions(
         &mut self,
@@ -107,7 +106,7 @@ impl LiquidationEngine {
             self.check_user(*uid, cmd.timestamp, ups, ssp, last_price_cache, fund_events);
         }
 
-        // lazy-prune：targeted 检测时顺带清理已无该 symbol 仓位的持有者（等效 Java eager 摘除，索引精度不影响正确性）。
+        // lazy-prune：targeted 检测时顺带清理已无该 symbol 仓位的持有者（索引精度不影响正确性）。
         if targeted {
             if let Some(holders) = self.symbol_to_users.get_mut(&cmd.symbol) {
                 holders.retain(|uid| {
@@ -118,12 +117,12 @@ impl LiquidationEngine {
                 }
             }
         }
-        // 尾部委托借贷扫描器（对应 Java `checkPositions:147` loanLiquidationEngine.checkLoans）。
+        // 尾部委托借贷扫描器（对应 Java loanLiquidationEngine.checkLoans）。
         self.loan_liquidation_engine.check_loans(cmd, ups, ssp, last_price_cache, loan_service, fund_events);
         self.pending_commands.append(&mut self.loan_liquidation_engine.pending_commands);
     }
 
-    /// 对应 Java `checkUser`（`:171-197`）：逐仓分类，ISOLATED 立即判定、CROSS 交给 `check_cross_decisions`；拆两阶段（只读算决策/`&mut` 应用）应对 Rust 借用规则，行为与 Java 一步到位等价。
+    /// 对应 Java `checkUser`：逐仓分类，ISOLATED 立即判定、CROSS 交给 `check_cross_decisions`；拆两阶段（只读算决策 / `&mut` 应用）应对 Rust 借用规则。
     #[allow(clippy::too_many_arguments)]
     fn check_user(
         &mut self,
@@ -222,7 +221,7 @@ impl LiquidationEngine {
         IsolatedCheck::Liquidate(LiquidationDecision { position_key, bankruptcy_price, size: size_to_liquidate })
     }
 
-    /// 对应 Java `checkCross`（`:218-264`）+ `forceCrossLiquidation`（`:266-286`）——纯判定版：逐 quote 币种算账户级 equity/风险度，`equity < MM` 时按风险度升序逐仓强平至覆盖 deficit；`MM<=equity<1.2×MM` 仅预警（P6-B no-op）。
+    /// 对应 Java `checkCross` + `forceCrossLiquidation`（纯判定版）：逐 quote 币种算账户级 equity/风险度，`equity < MM` 时按风险度升序逐仓强平至覆盖 deficit；`MM<=equity<1.2×MM` 仅预警（no-op）。
     fn check_cross_decisions(
         profile: &UserProfile,
         cross_by_currency: &BTreeMap<i32, Vec<i32>>,
@@ -278,7 +277,7 @@ impl LiquidationEngine {
                 total_profit += profit;
                 total_maintenance += maintenance;
                 if maintenance != 0 {
-                    // 缩放后归零不能做除数，仅不参与风险排序（逐字对齐 Java :246）。
+                    // 缩放后归零不能做除数，仅不参与风险排序。
                     let risk = mul_exact_local(profit - maintenance, 100) / maintenance;
                     risk_pairs.push((risk, key));
                 }
@@ -290,9 +289,9 @@ impl LiquidationEngine {
                 continue;
             }
             if equity >= total_maintenance {
-                continue; // MM <= equity < 1.2×MM：仅预警（P6-B no-op）
+                continue; // MM <= equity < 1.2×MM：仅预警（no-op）
             }
-            // 风险度升序（最危险优先），稳定排序对齐 Java Comparator。
+            // 风险度升序（最危险优先），稳定排序。
             risk_pairs.sort_by_key(|p| p.0);
             Self::force_cross_decisions(
                 profile,
@@ -306,7 +305,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `forceCrossLiquidation`（`:266-286`）——纯判定版：风险度升序逐仓强平直至覆盖 deficit；marginReleased 无条件累加（逐字对齐 Java）。
+    /// 对应 Java `forceCrossLiquidation`（纯判定版）：风险度升序逐仓强平直至覆盖 deficit。
     #[allow(clippy::too_many_arguments)]
     fn force_cross_decisions(
         profile: &UserProfile,
@@ -350,7 +349,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// [`calculate_size_to_liquidate`] 标量提取（对齐 Java）：E 不含 extra_margin（见 `check_isolated_decision` 注）。
+    /// [`calculate_size_to_liquidate`] 标量提取：E 不含 extra_margin。
     fn size_to_liquidate_for(position: &SymbolPositionRecord, maintenance_margin: i64, mark_price: i64) -> i64 {
         let equity = position.open_init_margin_sum + position.estimate_unrealized_profit(mark_price);
         calculate_size_to_liquidate(
@@ -385,7 +384,7 @@ impl LiquidationEngine {
         )
     }
 
-    /// 对应 Java `startLiquidationFlow`（`:288-299`）：幂等提交 FORCE（已有 flow 则跳过），预警通知不移植（Ruling P6-B）。
+    /// 对应 Java `startLiquidationFlow`：幂等提交 FORCE（已有 flow 则跳过），预警通知不移植。
     fn start_liquidation_flow(&mut self, profile: &mut UserProfile, d: LiquidationDecision, ts: i64) {
         let uid = profile.uid;
         let position = match profile.positions.get_mut(&d.position_key) {
@@ -402,7 +401,7 @@ impl LiquidationEngine {
         self.pending_commands.push(force_cmd);
     }
 
-    /// 对应 Java `advanceLiquidation(cmd, pos)`（`:310-345`）：强平命令 apply 后推进 FORCE→IF→ADL 状态机（leader-only），flow=None 时 FORCE 命令触发换届残余仓恢复，否则校验 state 合法性防重复/错序。
+    /// 对应 Java `advanceLiquidation`：强平命令 apply 后推进 FORCE→IF→ADL 状态机（leader-only）。flow=None 时 FORCE 触发换届残余仓恢复，否则校验 state 合法性防重复/错序。
     pub fn advance_liquidation(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         if !self.is_running {
             return;
@@ -410,9 +409,9 @@ impl LiquidationEngine {
         match pos.liquidation_flow {
             None => {
                 if cmd.command != OrderCommandType::ForceLiquidation {
-                    return; // 非法：无进行中流程却来非 FORCE——skip（对齐 Java log.warn）
+                    return; // 非法：无进行中流程却来非 FORCE——skip
                 }
-                // 换届后残余仓恢复：新建流程（对齐 Java :324）。
+                // 换届后残余仓恢复：新建流程。
                 pos.liquidation_flow = Some(LiquidationFlow::new(cmd.price, cmd.size, cmd.order_id));
             }
             Some(flow) => {
@@ -423,8 +422,7 @@ impl LiquidationEngine {
                     _ => None,
                 };
                 if Some(flow.state) != expected {
-                    // 重复/错序推进——skip（对齐 Java log.warn + return）。
-                    return;
+                    return; // 重复/错序推进——skip
                 }
             }
         }
@@ -436,7 +434,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `onForceApplied`（`:347-361`）：非 REJECT→闭环；REJECT（剩余量）→转 `WaitIfExecution`、入队 IF。
+    /// 对应 Java `onForceApplied`：非 REJECT→闭环；REJECT（剩余量）→转 `WaitIfExecution`、入队 IF。
     fn on_force_applied(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         let rejected = matches!(&cmd.matcher_event, Some(ev) if ev.event_type == MatcherEventType::Reject);
         if !rejected {
@@ -455,7 +453,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `onIfTakeoverApplied`（`:363-374`）：IF 单 apply 回调。非 REJECT（接管成功）→ 闭环；REJECT（IF 池不足、仅部分接管）→ 转 `WaitAdlExecution`、入队 ADL 命令。
+    /// 对应 Java `onIfTakeoverApplied`：非 REJECT（接管成功）→闭环；REJECT（IF 池不足、仅部分接管）→转 `WaitAdlExecution`、入队 ADL。
     fn on_if_takeover_applied(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         let rejected = matches!(&cmd.matcher_event, Some(ev) if ev.event_type == MatcherEventType::Reject);
         if !rejected {
@@ -471,7 +469,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `buildForceCmd`（`:376-380`）：IOC → `FORCE_LIQUIDATION`，action 与持仓方向相反。
+    /// 对应 Java `buildForceCmd`：IOC → `FORCE_LIQUIDATION`，action 与持仓方向相反。
     fn build_force_cmd(uid: i64, symbol: i32, direction: PositionDirection, order_id: i64, price: i64, size: i64, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::ForceLiquidation,
@@ -487,7 +485,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `buildIFCmd`（`:382-386`）：→ `IF_TAKEOVER`，orderId 由根强平 orderId 派生（`'I'`），action 为接管方向（perspective-flip，§1.4）。
+    /// 对应 Java `buildIFCmd`：→ `IF_TAKEOVER`，orderId 派生（`'I'`），action 为接管方向（perspective-flip）。
     fn build_if_cmd(uid: i64, symbol: i32, direction: PositionDirection, flow: &LiquidationFlow, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::IfTakeover,
@@ -502,7 +500,7 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `buildADLCmd`（`:388-393`）：→ `AUTO_DELEVERAGING`，orderId 由根强平 orderId 派生（`'A'`），action 同 IF 接管方向。
+    /// 对应 Java `buildADLCmd`：→ `AUTO_DELEVERAGING`，orderId 派生（`'A'`），action 同 IF 接管方向。
     fn build_adl_cmd(uid: i64, symbol: i32, direction: PositionDirection, flow: &LiquidationFlow, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::AutoDeleveraging,
@@ -518,7 +516,7 @@ impl LiquidationEngine {
     }
 }
 
-/// 对应 Java `Math.multiplyExact`：`i128` 中间精度、溢出 panic（本文件本地重复一份，同 `liquidation_service.rs` 风格）。
+/// 对应 Java `Math.multiplyExact`：溢出 panic。
 fn mul_exact_local(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }

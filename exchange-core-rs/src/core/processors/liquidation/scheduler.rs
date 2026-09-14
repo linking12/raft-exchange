@@ -1,8 +1,8 @@
-//! 对应 Java `LiquidationScheduledService`+`coveredByScanSlice`（§7/§11.4）：定时 harness，Ruling P6-F 简化为手动 tick，命令入 pending_commands 队列。
+//! 对应 Java `LiquidationScheduledService`+`coveredByScanSlice`：定时 harness，简化为手动 tick，命令入 pending_commands 队列。
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 
-/// 对应 Java `LiquidationScheduledService.coveredByScanSlice(cmd, uid)`（`:129-134`）：非 SCAN 或 size<=0 恒 true，否则 `floorMod(uid, sliceCount)==scanSlice`（`rem_euclid` 对齐 Java `Math.floorMod`）。
+/// 对应 Java `coveredByScanSlice`：非 SCAN 或 size<=0 恒 true，否则 `floorMod(uid, sliceCount)==scanSlice`。
 pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
         return true;
@@ -10,20 +10,20 @@ pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     uid.rem_euclid(cmd.size) == cmd.uid
 }
 
-/// 对应 Java `LiquidationScheduledService`（定时器 harness 部分）：shard-0-only 强平扫描 tick，非复制，切片经 `LIQUIDATION_SCAN` 命令字段 raft 复制（§7.2/§11.4）。
+/// shard-0-only 强平扫描 tick（非复制）；切片经 `LIQUIDATION_SCAN` 命令字段 raft 复制。
 #[derive(Debug)]
 pub struct LiquidationScheduler {
     /// 本地递增 tick 计数（非复制）；切片号 = `scan_tick mod scan_slice_count`。
     pub scan_tick: i64,
     /// 扫描切片总数（round-robin，每 tick 扫一片）。
     pub scan_slice_count: i64,
-    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`（§4.2）。
+    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`。
     pub reprice_every_n_ticks: i64,
-    /// shard id：只有 shard 0 跑调度器（§7.2）。
+    /// shard id：只有 shard 0 跑调度器。
     pub shard_id: i32,
     /// leader 门：`false` 时 `run_one_iteration` no-op。
     pub is_running: bool,
-    /// 提交队列（替代 Java disruptor `submit`）。
+    /// 提交队列。
     pub pending_commands: Vec<OrderCommand>,
 }
 
@@ -41,7 +41,7 @@ impl LiquidationScheduler {
         }
     }
 
-    /// 对应 Java `runOneIteration`（`:57-67`）：shard-0-only 一次 tick——提交本片 `LIQUIDATION_SCAN`，每 N tick 额外提交 `REPRICE_LOAN_RATES`，`scan_tick++`；follower 或非 shard 0 no-op。
+    /// 对应 Java `runOneIteration`：shard-0-only 一次 tick——提交本片 `LIQUIDATION_SCAN`，每 N tick 额外提交 `REPRICE_LOAN_RATES`，`scan_tick++`；follower 或非 shard 0 no-op。
     pub fn run_one_iteration(&mut self, timestamp: i64) {
         if !self.is_running || self.shard_id != 0 {
             return;

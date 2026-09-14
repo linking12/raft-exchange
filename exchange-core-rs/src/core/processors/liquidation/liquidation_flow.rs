@@ -1,4 +1,4 @@
-//! 对应 Java `LiquidationFlow`（+ `LiquidationState`）：单仓强平流程的 leader-local 内存状态机（FORCE→IF→ADL），不序列化、不进 state_hash（Ruling P6-E），换届后靠 R1 `normalize_cmd_position_size` 保正确性（§1.5）。
+//! 对应 Java `LiquidationFlow`（+ `LiquidationState`）：单仓强平流程的 leader-local 内存状态机（FORCE→IF→ADL），不序列化、不进 state_hash，换届后靠 R1 `normalize_cmd_position_size` 保正确性。
 
 /// 对应 Java `LiquidationFlow`：字段逐一对应，构造即进入 [`LiquidationState::Liquidating`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,9 +22,9 @@ impl LiquidationFlow {
 pub enum LiquidationState {
     /// FORCE_LIQUIDATION 已提交、等待其 apply（对应 Java `LIQUIDATING`）。
     Liquidating,
-    /// FORCE 部分/零成交（REJECT）→ IF_TAKEOVER 已提交、等待其 apply（对应 `WAIT_IF_EXECUTION`）。
+    /// FORCE 部分/零成交（REJECT）→ IF_TAKEOVER 已提交、等待其 apply。
     WaitIfExecution,
-    /// IF 接管不足（REJECT）→ AUTO_DELEVERAGING 已提交、等待其 apply（对应 `WAIT_ADL_EXECUTION`）。
+    /// IF 接管不足（REJECT）→ AUTO_DELEVERAGING 已提交、等待其 apply。
     WaitAdlExecution,
 }
 

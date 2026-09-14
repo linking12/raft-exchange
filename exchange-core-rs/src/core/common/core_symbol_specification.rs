@@ -5,12 +5,12 @@ use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{ceil_mul_div, trunc_mul_div};
 
-/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。本地重复一份保依赖边界（同 `symbol_position_record.rs`）。
+/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。
 fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。Ruling P4-B：`#[derive(Default)]` 零值兜底 = 未配置期货保证金（100%初始/维持保证金率、不限杠杆）。
+/// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。`#[derive(Default)]` 零值兜底 = 未配置期货保证金（100%初始/维持保证金率、不限杠杆）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoreSymbolSpecification {
     pub symbol_id: i32,
@@ -44,9 +44,8 @@ pub struct CoreSymbolSpecification {
 }
 
 impl CoreSymbolSpecification {
-    /// 对应 Java `CoreSymbolSpecification.stateHash()`：折入 symbol config 全部业务字段供 raft 跨节点分叉探测
-    /// （14 字段，逐字对齐 Java——刻意排除 `init_margin`/`init_margin_scale_k`，Java `stateHash` 亦不含）。
-    /// `maintenance_margin`/`max_leverage` 是分层 `BTreeMap`（天然升序，确定性）。
+    /// 对应 Java `stateHash()`：折入 symbol config 业务字段供 raft 跨节点分叉探测；**刻意排除**
+    /// `init_margin`/`init_margin_scale_k`（Java `stateHash` 亦不含）。`BTreeMap` 天然升序保证确定性。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.symbol_id as i64);
@@ -77,7 +76,7 @@ impl CoreSymbolSpecification {
         self.fee_scale_k == 0
     }
 
-    /// 对应 Java `calculateInitMargin(long, long)`（`:135-141`）：未配置时 `notional/leverage`，否则 `ceil(notional×init_margin/(scaleK×leverage))`。
+    /// 对应 Java `calculateInitMargin`：未配置时 `notional/leverage`，否则 `ceil(notional×init_margin/(scaleK×leverage))`。
     pub fn calculate_init_margin(&self, notional: i64, leverage: i64) -> i64 {
         if self.init_margin_scale_k == 0 || self.init_margin == 0 {
             return notional / leverage;
@@ -89,7 +88,7 @@ impl CoreSymbolSpecification {
         ceil_mul_div(notional, self.init_margin, denom)
     }
 
-    /// 对应 Java `calculateMaintenanceMargin(long)`（`:150-174`）：按 (floor, MMR) 分档逐段累加；表空/scaleK==0 时返回 notional。
+    /// 对应 Java `calculateMaintenanceMargin`：按 (floor, MMR) 分档逐段累加；表空/scaleK==0 时返回 notional。
     pub fn calculate_maintenance_margin(&self, notional: i64) -> i64 {
         if self.maintenance_margin_scale_k == 0 || self.maintenance_margin.is_empty() {
             return notional;
@@ -114,7 +113,7 @@ impl CoreSymbolSpecification {
         add_exact(mm, trunc_mul_div(notional - prev_floor, prev_rate, self.maintenance_margin_scale_k))
     }
 
-    /// 对应 Java `isValidLeverage(long, int)`（`:118-130`）：负杠杆非法；空表不限上限；否则按 floor 分档查表。
+    /// 对应 Java `isValidLeverage`：负杠杆非法；空表不限上限；否则按 floor 分档查表。
     pub fn is_valid_leverage(&self, notional: i64, leverage: i32) -> bool {
         if leverage < 0 {
             return false;
