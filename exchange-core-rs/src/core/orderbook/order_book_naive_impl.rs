@@ -733,6 +733,19 @@ impl IOrderBook for OrderBookNaiveImpl {
         // 折叠 i64 -> i32（对应 Java `Long.hashCode`: high ^ low 32 位）。
         ((h >> 32) as i32) ^ (h as i32)
     }
+
+    fn find_user_orders(&self, uid: i64) -> Vec<Order> {
+        let mut out: Vec<Order> = self
+            .ask_buckets
+            .values()
+            .chain(self.bid_buckets.values())
+            .flat_map(|b| b.iter_orders())
+            .filter(|o| o.uid == uid)
+            .cloned()
+            .collect();
+        out.sort_by_key(|o| o.order_id);
+        out
+    }
 }
 
 #[cfg(test)]

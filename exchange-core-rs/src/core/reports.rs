@@ -4,6 +4,7 @@ use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
+use crate::core::common::order::Order;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::common::user_status::UserStatus;
 use crate::core::exchange_core::ExchangeCore;
@@ -95,6 +96,8 @@ pub struct SingleUserReport {
     /// (loan_id, symbol_id, loan_currency, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts)。
     pub cross_loans: Vec<(i64, i32, i32, i64, i64, i32, i64)>,
     pub cross_loan_collateral: BTreeMap<i32, i64>,
+    /// 该用户在各簿的挂单快照 `(symbol, Order)`，对应 Java `SingleUserReportResult.orders`（按需扫簿，symbol/order_id 升序）。
+    pub orders: Vec<(i32, Order)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -263,6 +266,7 @@ impl ExchangeCore {
                 isolated_loans: Vec::new(),
                 cross_loans: Vec::new(),
                 cross_loan_collateral: BTreeMap::new(),
+                orders: Vec::new(),
             };
         };
         let positions = up
@@ -329,6 +333,7 @@ impl ExchangeCore {
             isolated_loans,
             cross_loans,
             cross_loan_collateral: up.cross_loan_collateral.clone(),
+            orders: self.matching.user_orders(uid),
         }
     }
 
@@ -685,6 +690,44 @@ mod tests {
         assert!(!transfers.is_empty(), "现货成交应发 TRANSFER 事件: {:?}", buy.fund_events);
         assert!(transfers.iter().any(|e| e.currency == QUOTE), "应有 quote 腿");
         assert!(transfers.iter().any(|e| e.currency == BASE), "应有 base 腿");
+    }
+
+    #[test]
+    fn single_user_report_includes_resting_orders() {
+        const SELLER: i64 = 7;
+        let mut core = seeded();
+        core.process_command(&mut admin_cmd(OrderCommandType::AddUser, SELLER));
+        core.process_command(&mut OrderCommand {
+            command: OrderCommandType::BalanceAdjustment,
+            uid: SELLER,
+            symbol: BASE,
+            price: 1000,
+            order_id: SELLER,
+            ..Default::default()
+        });
+        // 挂两个不成交的 GTC ASK（无对手价），应静止在簿上。
+        for (oid, price) in [(101i64, 55i64), (102, 60)] {
+            core.process_command(&mut OrderCommand {
+                command: OrderCommandType::PlaceOrder,
+                order_id: oid,
+                symbol: SYMBOL,
+                price,
+                size: 10,
+                action: Some(OrderAction::Ask),
+                order_type: Some(OrderType::Gtc),
+                uid: SELLER,
+                ..Default::default()
+            });
+        }
+        let r = core.query_single_user(SELLER);
+        assert_eq!(r.orders.len(), 2, "报表应含 2 个挂单: {:?}", r.orders);
+        // 按 (symbol, order_id) 升序。
+        assert_eq!(r.orders[0].1.order_id, 101);
+        assert_eq!(r.orders[0].0, SYMBOL);
+        assert_eq!(r.orders[1].1.order_id, 102);
+        assert!(r.orders.iter().all(|(_, o)| o.uid == SELLER));
+        // 别的用户查不到 SELLER 的单。
+        assert!(core.query_single_user(999).orders.is_empty());
     }
 
     #[test]
