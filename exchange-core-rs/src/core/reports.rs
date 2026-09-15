@@ -93,10 +93,8 @@ pub struct SingleUserReport {
     /// 账户级 Cross 加权 LTV（bps），对应 Java `SingleUserReportResult.crossAccountLtvBps`。
     pub cross_account_ltv_bps: i64,
     /// (loan_id, symbol_id, loan_currency, collateral_currency, collateral_amount, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts, display_interest, ltv_bps, mark_price)。
-    /// 末三项对应 Java SingleUserReportResult.IsolatedLoan 的 displayInterest/ltvBps/markPrice（按 now_ms 实时估）。
     pub isolated_loans: Vec<(i64, i32, i32, i32, i64, i64, i64, i32, i64, i64, i64, i64)>,
     /// (loan_id, symbol_id, loan_currency, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts, display_interest)。
-    /// 末项对应 Java CrossLoan.displayInterest（按 now_ms 实时估）。
     pub cross_loans: Vec<(i64, i32, i32, i64, i64, i32, i64, i64)>,
     pub cross_loan_collateral: BTreeMap<i32, i64>,
     /// 该用户在各簿的挂单快照 `(symbol, Order)`，对应 Java `SingleUserReportResult.orders`（按需扫簿，symbol/order_id 升序）。
@@ -256,8 +254,6 @@ impl ExchangeCore {
         (liq, mr, mmsk)
     }
 
-    /// `now_ms`：报表估值时点（墙钟），用于 display_interest / 实时 LTV（对齐 Java SingleUserReportQuery 的
-    /// `System.currentTimeMillis()`）；报表非复制，允许非确定性时点。
     pub fn query_single_user(&self, uid: i64, now_ms: i64) -> SingleUserReport {
         let Some(up) = self.ups.get(uid) else {
             return SingleUserReport {
@@ -307,14 +303,13 @@ impl ExchangeCore {
             .isolated_loans
             .values()
             .map(|l| {
-                // display_interest / ltv_bps / mark_price 按 now_ms 实时估（对齐 Java SingleUserReportQuery）。
                 let display_interest = self.risk.loan_service.calculate_display_interest(l, now_ms);
                 let mark_price = self.risk.last_price_cache.get(&l.symbol_id).copied().unwrap_or(0);
                 let mut ltv_bps = 0i64;
                 if mark_price > 0 {
                     if let Some(spec) = self.ssp.get_symbol(l.symbol_id) {
-                        let base_spec = self.ssp.get_currency(spec.base_currency);
-                        let quote_spec = self.ssp.get_currency(spec.quote_currency);
+                        let base_spec = self.ssp.get_currency(l.collateral_currency);
+                        let quote_spec = self.ssp.get_currency(l.loan_currency);
                         let collateral_value = LoanService::collateral_value_in_quote_currency(
                             l.collateral_amount, spec, mark_price, base_spec, quote_spec,
                         );
@@ -338,7 +333,7 @@ impl ExchangeCore {
                  l.accumulated_interest, l.rate_bps, l.opened_at_ts, display_interest)
             })
             .collect();
-        // 账户级 Cross 加权 LTV（fail-open：报表口径不误判，缺价按 0），按 now_ms 实时估（对齐 Java）。
+        // 账户级 Cross 加权 LTV（fail-open：缺价按 0）。
         let cross_account_ltv_bps = self.risk.loan_service.calculate_cross_account_ltv_bps(
             up,
             now_ms,

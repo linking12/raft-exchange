@@ -266,7 +266,6 @@ impl LoanCommandDispatcher {
             free,
             locked,
             loan_mode: 1,
-            // 债务已被 LIF 接管归零；仍带上接管前累计已付利息供对账（对齐 Java LOAN_LIQUIDATED 的 cumInterestPaid）。
             loan_interest_paid_total: cum_interest_paid,
             ..Default::default()
         });
@@ -708,7 +707,6 @@ impl LoanCommandDispatcher {
                 loan_collateral_currency_scale_k: coll_scale,
                 loan_collateral_free: coll_free,
                 loan_collateral_locked: coll_locked,
-                // 接管前累计已付利息供对账（对齐 Java LOAN_LIQUIDATED 的 cumInterestPaid）。
                 loan_interest_paid_total: cum_interest_paid,
                 ..Default::default()
             });
@@ -1082,13 +1080,10 @@ impl LoanCommandDispatcher {
                 }
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
             } else if traded_size > 0 {
-                // fail-closed（喂价缺失无法估值）但本轮有成交：仍发 LOAN_LIQUIDATED 反映部分清偿
-                // （loan 保留等下一轮，对齐 Java tradedSize>0 仍发事件）。
                 if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
                     Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts, false);
                 }
             }
-            // else：fail-closed 且本轮无成交，保留 loan 原样等下一轮。
         } else {
             if traded_size > 0 {
                 if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
