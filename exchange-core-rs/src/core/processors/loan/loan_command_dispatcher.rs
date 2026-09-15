@@ -195,9 +195,15 @@ impl LoanCommandDispatcher {
         loan: &CrossLoanRecord,
         event_type: FundEventType,
         timestamp: i64,
+        fail_closed: bool,
     ) {
-        let ltv_bps =
-            engine.loan_service.calculate_cross_account_ltv_bps(up, timestamp, ssp, &engine.last_price_cache, true);
+        let ltv_bps = engine.loan_service.calculate_cross_account_ltv_bps(
+            up,
+            timestamp,
+            ssp,
+            &engine.last_price_cache,
+            fail_closed,
+        );
         let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
         cmd.fund_events.push(FundEvent {
             event_type,
@@ -766,7 +772,8 @@ impl LoanCommandDispatcher {
         up.add_to_cross_loan_collateral(currency, amount);
 
         let uid = cmd.uid;
-        let ltv = engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
+        // ADD_COLLATERAL 事件的 LTV 快照走 best-effort（缺价返回 0），对齐 Java handleLoanCrossAddCollateral。
+        let ltv = engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, false);
         let pledged = up.cross_loan_collateral.get(&currency).copied().unwrap_or(0);
         Self::push_cross_collateral_change_event(cmd, ssp, up, uid, currency, pledged, ltv);
         CommandResultCode::Success
@@ -870,7 +877,7 @@ impl LoanCommandDispatcher {
 
         let ts = cmd.timestamp;
         let loan_ref = up.cross_loans.get(&loan_id).expect("just inserted");
-        Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanBorrow, ts);
+        Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanBorrow, ts, true);
         CommandResultCode::Success
     }
 
@@ -936,7 +943,7 @@ impl LoanCommandDispatcher {
 
         let ts = cmd.timestamp;
         if let Some(loan_ref) = up.cross_loans.get(&loan_id) {
-            Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanRepay, ts);
+            Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanRepay, ts, false);
         }
 
         let is_empty = up.cross_loans.get(&loan_id).map(|l| l.is_empty()).unwrap_or(true);
@@ -1074,7 +1081,7 @@ impl LoanCommandDispatcher {
         } else {
             if traded_size > 0 {
                 if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
-                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts);
+                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts, false);
                 }
             }
             let is_empty = {
