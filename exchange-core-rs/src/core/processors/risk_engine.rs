@@ -2136,7 +2136,37 @@ impl RiskEngine {
                     let action = if pos.direction == PositionDirection::Long { OrderAction::Ask } else { OrderAction::Bid };
                     (action, pos.open_volume)
                 };
-                Self::adl_close_and_settle(up, key, close_action, size, price, &spec, &currency_spec, &mut cmd.fund_events, &self.last_price_cache, ssp, FundEventType::PnlSettlement, order_id);
+                // 交割结算：关满仓后无条件退保证金+结算盈亏+移除仓位（对齐 Java settlePnl，
+                // 不复用 ADL 的 is_empty 门——交割即便仓位还挂着单也要清算并移除）。
+                up.positions.get_mut(&key).unwrap().close_current_position_futures(close_action, size, price);
+                let currency = up.positions.get(&key).unwrap().currency;
+
+                let extra_margin = up.positions.get(&key).unwrap().extra_margin;
+                if extra_margin > 0 {
+                    let refund = arithmetic::size_price_to_currency_scale(
+                        extra_margin,
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        currency_spec.currency_scale_k,
+                    );
+                    up.add_to_account(currency, refund);
+                    up.positions.get_mut(&key).unwrap().extra_margin = 0;
+                    Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::MarginRefund, order_id, up.positions.get(&key).unwrap(), &spec, up, ssp);
+                }
+
+                let profit = up.positions.get(&key).unwrap().profit;
+                if profit != 0 {
+                    let profit_scaled = arithmetic::size_price_to_currency_scale(
+                        profit,
+                        spec.base_scale_k,
+                        spec.quote_scale_k,
+                        currency_spec.currency_scale_k,
+                    );
+                    up.add_to_account(currency, profit_scaled);
+                }
+                // 单条 PnlSettlement（Java 无条件发一条；先发再移除，令快照能读到仓位）。
+                Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&key).unwrap(), &spec, up, ssp);
+                up.positions.remove(&key);
             }
         }
         CommandResultCode::Success

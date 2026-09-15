@@ -166,14 +166,16 @@ impl LoanLiquidationEngine {
                 timestamp: ts,
                 ..Default::default()
             });
-        } else if ltv_scaled >= mul_exact_local(collateral_value, spec.loan_config.margin_call_ltv_bps as i64) {
+        } else if spec.loan_config.margin_call_ltv_bps > 0
+            && ltv_scaled >= mul_exact_local(collateral_value, spec.loan_config.margin_call_ltv_bps as i64)
+        {
             fund_events.push(FundEvent {
                 event_type: FundEventType::LoanMarginCall,
                 order_id: loan.loan_id,
                 uid: loan.uid,
                 currency: loan.loan_currency,
                 loan_mode: 0,
-                loan_ltv_bps: ltv_scaled / collateral_value,
+                loan_ltv_bps: if collateral_value == 0 { 0 } else { ltv_scaled / collateral_value },
                 loan_threshold_bps: spec.loan_config.margin_call_ltv_bps as i64,
                 loan_collateral_currency: loan.collateral_currency,
                 loan_collateral_pledged: loan.collateral_amount,
