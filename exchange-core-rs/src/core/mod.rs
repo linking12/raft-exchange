@@ -22,3 +22,5 @@ mod loan_e2e_tests;
 mod liquidation_e2e_tests;
 #[cfg(test)]
 mod spot_e2e_java_parity_tests;
+#[cfg(test)]
+mod it_exchange_core_integration_tests;
