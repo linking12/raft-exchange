@@ -185,8 +185,6 @@ impl RiskEngine {
         if cmd.command == OrderCommandType::PlaceOrder {
             let rc = self.place_order_risk_check(cmd, ups, ssp);
             cmd.result_code = Some(rc);
-            // 锁定事件发在"订单被接受进撮合"路径（对齐 Java placeOrder 在 VALID_FOR_MATCHING_ENGINE 分支发
-            // sendLockEvent/sendLockPendingEvent）；SUCCESS 是 reduce-only no-op，不发。
             if rc == CommandResultCode::ValidForMatchingEngine {
                 if let Some(spec) = ssp.get_symbol(cmd.symbol) {
                     let (oid, uid) = (cmd.order_id, cmd.uid);
@@ -841,13 +839,9 @@ impl RiskEngine {
                     if let Some(taker) = ups.get_mut(liq_fee_uid) {
                         taker.add_to_account(spec.quote_currency, -quote_fee);
                         self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
-                        // 对齐 Java collectLiquidationFee：free = accounts − calculateLocked，locked = 实际锁定余额
-                        // （原实现误把 free 填成裸余额、locked 填成刚收的费）。补 currency_scale_k。
-                        let quote_locked = Self::calculate_locked(taker, liq_fee_currency, ssp, &quote_currency_spec);
-                        let quote_free = taker.account(liq_fee_currency) - quote_locked;
-                        let mut ev = FundEvent::spot(FundEventType::LiquidationFee, liq_fee_order_id, liq_fee_uid, liq_fee_currency, quote_free, quote_locked);
-                        ev.symbol = liq_fee_symbol;
-                        ev.currency_scale_k = quote_currency_spec.currency_scale_k;
+                        let ev = Self::spot_snapshot_event(
+                            FundEventType::LiquidationFee, liq_fee_order_id, taker, liq_fee_currency, ssp, &quote_currency_spec, liq_fee_symbol,
+                        );
                         cmd.fund_events.push(ev);
                     }
                 }
@@ -1549,7 +1543,6 @@ impl RiskEngine {
         is_liquidation: bool,
         cmd_order_id: i64,
     ) {
-        // 事件归属：taker 用命令自身 order_id，maker 用其挂单 order_id（对齐 Java sendXxxEvent 的 orderId 参数）。
         let event_order_id = if is_taker { cmd_order_id } else { mte.maker_order_id };
         if !up.positions.contains_key(&position_key) {
             if required {
@@ -1770,7 +1763,6 @@ impl RiskEngine {
         Self::harvest_into(&mut self.fees, &mut self.adjustments, &mut harvested);
         Self::harvest_into(&mut self.loan_service.interest_revenue, &mut self.adjustments, &mut harvested);
         for (c, amount) in harvested {
-            // 补 currency_scale_k（对齐 Java sendResetFeeEvent 的 buildSpotEvent）。
             let cur_scale = ssp.get_currency(c).map(|s| s.currency_scale_k).unwrap_or(0);
             let mut ev = FundEvent::spot(FundEventType::ResetFee, SYSTEM_TRIGGERED_ORDER_ID, 0, c, amount, 0);
             ev.currency_scale_k = cur_scale;
@@ -2316,14 +2308,9 @@ impl RiskEngine {
                 if let Some(pos) = up.positions.values().find(|p| p.symbol == symbol && p.open_volume != 0 && p.direction == dir) {
                     Self::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::FundingfeeSettlement, order_id, pos, &spec, up, ssp);
                 } else {
-                    // 仓位在结算中已关（或 HEDGE 对侧腿）：仍须发事件供对账（对齐 Java
-                    // sendFundingFeeEventForClosedPosition 的 base futures event——只带 uid/symbol/currency/free/locked）。
-                    let qc = spec.quote_currency;
-                    let locked = Self::calculate_locked(up, qc, ssp, &currency_spec);
-                    let free = up.account(qc) - locked;
-                    let mut ev = FundEvent::spot(FundEventType::FundingfeeSettlement, order_id, uid, qc, free, locked);
-                    ev.symbol = symbol;
-                    ev.currency_scale_k = currency_spec.currency_scale_k;
+                    let ev = Self::spot_snapshot_event(
+                        FundEventType::FundingfeeSettlement, order_id, up, spec.quote_currency, ssp, &currency_spec, symbol,
+                    );
                     cmd.fund_events.push(ev);
                 }
             }
@@ -2398,9 +2385,7 @@ impl RiskEngine {
                 }
             }
         } else {
-            // IF 池不足全拒：合成 REJECT matcher_event，供随后的 advance_liquidation 升级到 ADL
-            // （对齐 Java IFCommandProcessor.buildMatcherEvents 的 buildRejectEvent；P6-A 把接受信号迁到
-            // if_takeover_size 载体，但拒绝信号仍须经 matcher_event 让 on_if_takeover_applied 读到）。
+            // IF 全拒：合成 REJECT 供 advance_liquidation 升级 ADL（P6-A 下接受走 if_takeover_size 载体、拒绝仍经 matcher_event）。
             cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
                 event_type: MatcherEventType::Reject,
                 ..Default::default()
@@ -2815,8 +2800,6 @@ mod tests {
 
     #[test]
     fn accepted_spot_place_order_emits_locked_fund_event() {
-        // 回归（2026-09-15 复审 #2）：被接受的下单返回 ValidForMatchingEngine，须发 Locked 资金事件。
-        // 门控曾误写 `== Success`（那是 reduce-only no-op 的码），导致真实订单从不发 Locked/LockPending。
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
         let mut engine = RiskEngine::new();
         let mut cmd = bid_cmd(1000, 50, 50, OrderType::Gtc);
@@ -6535,9 +6518,6 @@ mod tests {
 
         #[test]
         fn undersize_reject_escalates_flow_to_adl() {
-            // 回归（2026-09-15 复审 #3）：IF 池不足全拒时必须升级 FORCE→IF→ADL。on_if_takeover_applied
-            // 读 matcher_event 判 REJECT，而 P6-A 把"接受"信号迁到 if_takeover_size 载体——"拒绝"信号须由
-            // if_takeover_apply 合成 REJECT matcher_event，否则 ADL 后备静默失效（对齐 Java buildRejectEvent）。
             use crate::core::common::matcher_event_type::MatcherEventType;
             use crate::core::processors::liquidation::liquidation_flow::{LiquidationFlow, LiquidationState};
 
@@ -6545,7 +6525,6 @@ mod tests {
             engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 500); // 严重不足 → 全拒
             engine.liquidation_engine.is_running = true; // leader 门
 
-            // taker 仓处于 WaitIfExecution（FORCE 已拒、IF 命令在途）。
             {
                 let mut flow = LiquidationFlow::new(100, 100, 1);
                 flow.state = LiquidationState::WaitIfExecution;
