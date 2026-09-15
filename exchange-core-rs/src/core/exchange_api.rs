@@ -97,11 +97,36 @@ pub struct MarginAdjustmentRequest {
 #[derive(Default)]
 pub struct ExchangeApi {
     core: ExchangeCore,
+    /// 最近一条提交后处理完的命令（含 matcher_event / fund_events），供测试断言事件输出。
+    last_cmd: Option<OrderCommand>,
 }
 
 impl ExchangeApi {
     pub fn new() -> Self {
-        ExchangeApi { core: ExchangeCore::new() }
+        ExchangeApi { core: ExchangeCore::new(), last_cmd: None }
+    }
+
+    /// 提交并处理一条命令，缓存处理后的 cmd 供事件断言，返回 result_code。
+    fn run(&mut self, mut cmd: OrderCommand) -> CommandResultCode {
+        self.core.process_command(&mut cmd);
+        let rc = cmd.result_code.expect("process_command always sets result_code");
+        self.last_cmd = Some(cmd);
+        rc
+    }
+
+    /// 最近一条命令处理后的完整 cmd（matcher_event / fund_events 已就位）。
+    pub fn last_cmd(&self) -> &OrderCommand {
+        self.last_cmd.as_ref().expect("no command submitted yet")
+    }
+
+    /// 最近一条命令的撮合事件链头（对应 Java `cmd.matcherEvent`；无成交/无事件为 None）。
+    pub fn last_matcher_event(&self) -> Option<&crate::core::common::matcher_trade_event::MatcherTradeEvent> {
+        self.last_cmd().matcher_event.as_deref()
+    }
+
+    /// 最近一条命令产生的资金事件（对应 Java 的 fund event 流）。
+    pub fn last_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
+        &self.last_cmd().fund_events
     }
 
     /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。**必须先于引用它的 symbol 调用**（见模块级文档）。
@@ -124,9 +149,8 @@ impl ExchangeApi {
     }
 
     pub fn add_user(&mut self, uid: i64) -> CommandResultCode {
-        let mut cmd = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        let cmd = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
+        self.run(cmd)
     }
 
     /// `currency` 走 `cmd.symbol`、`amount` 走 `cmd.price`、`txid` 走 `cmd.order_id`（对应 Java `BALANCE_ADJUSTMENT` 命令字段复用，见 `RiskEngine::balance_adjustment` 文档）。
@@ -137,7 +161,7 @@ impl ExchangeApi {
         amount: i64,
         txid: i64,
     ) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::BalanceAdjustment,
             uid,
             symbol: currency,
@@ -145,12 +169,11 @@ impl ExchangeApi {
             order_id: txid,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     pub fn place_order(&mut self, req: PlaceOrderRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: req.order_id,
             uid: req.uid,
@@ -162,24 +185,22 @@ impl ExchangeApi {
             order_type: Some(req.order_type),
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     pub fn cancel_order(&mut self, req: CancelOrderRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::CancelOrder,
             order_id: req.order_id,
             uid: req.uid,
             symbol: req.symbol,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     pub fn move_order(&mut self, req: MoveOrderRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::MoveOrder,
             order_id: req.order_id,
             uid: req.uid,
@@ -187,12 +208,11 @@ impl ExchangeApi {
             price: req.new_price,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     pub fn reduce_order(&mut self, req: ReduceOrderRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::ReduceOrder,
             order_id: req.order_id,
             uid: req.uid,
@@ -200,8 +220,7 @@ impl ExchangeApi {
             size: req.reduce_size,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     pub fn request_l2(&mut self, symbol: i32, depth: i32) -> L2MarketData {
@@ -229,19 +248,18 @@ impl ExchangeApi {
 
     /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]`（对应 Java `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::MarkpriceAdjustment,
             symbol,
             price,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     /// 期货下单：`PLACE_ORDER` + `leverage`/`margin_mode`/reduce-only 三个期货专属字段（见 [`PlaceFuturesOrderRequest`] 文档）。
     pub fn place_futures_order(&mut self, req: PlaceFuturesOrderRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: req.order_id,
             uid: req.uid,
@@ -255,13 +273,12 @@ impl ExchangeApi {
             order_flags: if req.reduce_only { FLAG_REDUCE_ONLY } else { 0 },
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     /// `CLOSE_POSITION`：纯减仓期货命令（见 [`ClosePositionRequest`] 文档）。
     pub fn close_position(&mut self, req: ClosePositionRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::ClosePosition,
             order_id: req.order_id,
             uid: req.uid,
@@ -272,13 +289,12 @@ impl ExchangeApi {
             order_type: Some(req.order_type),
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     /// `MARGIN_ADJUSTMENT`：追加保证金（`Isolated`）/ 等价充值（`Cross`），见 [`MarginAdjustmentRequest`] 文档。
     pub fn margin_adjustment(&mut self, req: MarginAdjustmentRequest) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::MarginAdjustment,
             uid: req.uid,
             symbol: req.symbol,
@@ -288,21 +304,19 @@ impl ExchangeApi {
             order_id: req.order_id,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     /// `LEVERAGE_ADJUSTMENT`：调整某 symbol 下用户全部仓位的杠杆（见 [`RiskEngine::leverage_adjustment`] 文档）。
     pub fn leverage_adjustment(&mut self, uid: i64, symbol: i32, leverage: i32) -> CommandResultCode {
-        let mut cmd = OrderCommand {
+        let cmd = OrderCommand {
             command: OrderCommandType::LeverageAdjustment,
             uid,
             symbol,
             leverage,
             ..Default::default()
         };
-        self.core.process_command(&mut cmd);
-        cmd.result_code.expect("process_command always sets result_code")
+        self.run(cmd)
     }
 
     // ------------------------------------------------------------------
