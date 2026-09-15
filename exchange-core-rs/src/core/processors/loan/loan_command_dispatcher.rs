@@ -254,6 +254,7 @@ impl LoanCommandDispatcher {
         loan_id: i64,
         loan_currency: i32,
         uid: i64,
+        cum_interest_paid: i64,
     ) {
         let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan_currency);
         cmd.fund_events.push(FundEvent {
@@ -265,6 +266,8 @@ impl LoanCommandDispatcher {
             free,
             locked,
             loan_mode: 1,
+            // 债务已被 LIF 接管归零；仍带上接管前累计已付利息供对账（对齐 Java LOAN_LIQUIDATED 的 cumInterestPaid）。
+            loan_interest_paid_total: cum_interest_paid,
             ..Default::default()
         });
     }
@@ -673,8 +676,8 @@ impl LoanCommandDispatcher {
         let remain_debt = add_exact(loan.outstanding_principal, loan.accumulated_interest);
         // 用"是否还有可卖整张"而非 collateralAmount==0 判定，否则 sub-lot 尘埃会被当成还有救。
         let sellable_lots = LoanService::collateral_amount_to_lots(loan.collateral_amount, spec, base_spec);
-        let (principal, interest, collateral) =
-            (loan.outstanding_principal, loan.accumulated_interest, loan.collateral_amount);
+        let (principal, interest, collateral, cum_interest_paid) =
+            (loan.outstanding_principal, loan.accumulated_interest, loan.collateral_amount, loan.cum_interest_paid);
 
         // ④ 终态判定：债清关 loan / 接不住转 LIF / 其余保留等下轮。
         let lif_takeover = remain_debt > 0 && (traded_size == 0 || sellable_lots == 0);
@@ -705,6 +708,8 @@ impl LoanCommandDispatcher {
                 loan_collateral_currency_scale_k: coll_scale,
                 loan_collateral_free: coll_free,
                 loan_collateral_locked: coll_locked,
+                // 接管前累计已付利息供对账（对齐 Java LOAN_LIQUIDATED 的 cumInterestPaid）。
+                loan_interest_paid_total: cum_interest_paid,
                 ..Default::default()
             });
         } else if traded_size > 0 {
@@ -1071,13 +1076,19 @@ impl LoanCommandDispatcher {
             let taken_over =
                 engine.loan_service.take_over_cross_loan(taker_up, target_loan_id, cmd.timestamp, ssp, &engine.last_price_cache);
             if taken_over {
-                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid));
-                if let Some((lid, lcur, luid)) = liq {
-                    Self::push_cross_loan_liquidated_zeroed(cmd, ssp, taker_up, lid, lcur, luid);
+                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
+                if let Some((lid, lcur, luid, cip)) = liq {
+                    Self::push_cross_loan_liquidated_zeroed(cmd, ssp, taker_up, lid, lcur, luid, cip);
                 }
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
+            } else if traded_size > 0 {
+                // fail-closed（喂价缺失无法估值）但本轮有成交：仍发 LOAN_LIQUIDATED 反映部分清偿
+                // （loan 保留等下一轮，对齐 Java tradedSize>0 仍发事件）。
+                if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
+                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts, false);
+                }
             }
-            // else：喂价缺失无法估值 → fail-closed，保留 loan 原样等下一轮。
+            // else：fail-closed 且本轮无成交，保留 loan 原样等下一轮。
         } else {
             if traded_size > 0 {
                 if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
@@ -1133,9 +1144,9 @@ impl LoanCommandDispatcher {
                 // fail-closed：跳过继续下一笔。
                 continue;
             }
-            let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid));
-            if let Some((lid, lcur, luid)) = liq {
-                Self::push_cross_loan_liquidated_zeroed(cmd, ssp, up, lid, lcur, luid);
+            let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
+            if let Some((lid, lcur, luid, cip)) = liq {
+                Self::push_cross_loan_liquidated_zeroed(cmd, ssp, up, lid, lcur, luid, cip);
             }
             Self::close_and_recycle_cross_loan(up, loan_id);
         }

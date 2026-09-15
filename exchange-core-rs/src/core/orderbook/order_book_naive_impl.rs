@@ -533,7 +533,9 @@ impl IOrderBook for OrderBookNaiveImpl {
             active_order_completed: true,
             price: order.price,
             size: remaining,
-            // 对应 Java sendReduceEvent: bidderHoldPrice = order.reserveBidPrice。REDUCE 无 maker，其余字段取默认。
+            // 对应 Java sendReduceEvent：filled/filledNotional 取自订单累计成交，bidderHoldPrice = reserveBidPrice。REDUCE 无 maker。
+            filled: order.filled,
+            filled_notional: order.filled_notional,
             bidder_hold_price: order.reserve_bid_price,
             ..Default::default()
         }));
@@ -588,7 +590,9 @@ impl IOrderBook for OrderBookNaiveImpl {
             active_order_completed: can_remove,
             price: order.price,
             size: reduce_by,
-            // 同 cancel_order：对应 Java `sendReduceEvent` 的 bidderHoldPrice 语义。REDUCE 无 maker，其余字段取默认。
+            // 同 cancel_order：对应 Java `sendReduceEvent`——filled/filledNotional 取订单累计成交（reduce 只减 size 不动 filled），bidderHoldPrice = reserveBidPrice。REDUCE 无 maker。
+            filled: order.filled,
+            filled_notional: order.filled_notional,
             bidder_hold_price: order.reserve_bid_price,
             ..Default::default()
         }));

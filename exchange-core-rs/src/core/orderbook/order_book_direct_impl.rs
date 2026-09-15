@@ -1123,9 +1123,9 @@ impl IOrderBook for OrderBookDirectImpl {
         }
 
         // order slab 槽此时仍存活（remove_order 只摘链摘桶，不动 order 自身字段）——读完事件需要的字段后再释放槽位。
-        let (action, size, filled, price, reserve_bid_price) = {
+        let (action, size, filled, filled_notional, price, reserve_bid_price) = {
             let o = self.order(order_idx);
-            (o.action, o.size, o.filled, o.price, o.reserve_bid_price)
+            (o.action, o.size, o.filled, o.filled_notional, o.price, o.reserve_bid_price)
         };
 
         cmd.action = Some(action);
@@ -1134,7 +1134,9 @@ impl IOrderBook for OrderBookDirectImpl {
             active_order_completed: true,
             price,
             size: size - filled,
-            // REDUCE 无 maker，其余字段取默认（同 attach_reject_event）。
+            // 对应 Java sendReduceEvent：filled/filledNotional 取自订单累计成交，供执行回报判 New/Partial/Canceled + cumulative。REDUCE 无 maker。
+            filled,
+            filled_notional,
             bidder_hold_price: reserve_bid_price,
             ..Default::default()
         }));
@@ -1182,9 +1184,9 @@ impl IOrderBook for OrderBookDirectImpl {
             self.bucket_mut(parent).volume -= reduce_by;
         }
 
-        let (action, price, reserve_bid_price) = {
+        let (action, price, reserve_bid_price, filled, filled_notional) = {
             let o = self.order(order_idx);
-            (o.action, o.price, o.reserve_bid_price)
+            (o.action, o.price, o.reserve_bid_price, o.filled, o.filled_notional)
         };
 
         cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
@@ -1192,7 +1194,9 @@ impl IOrderBook for OrderBookDirectImpl {
             active_order_completed: can_remove,
             price,
             size: reduce_by,
-            // REDUCE 无 maker，其余字段取默认。
+            // 对应 Java sendReduceEvent：filled/filledNotional 取自订单累计成交（reduce 只减 size 不动 filled）。REDUCE 无 maker。
+            filled,
+            filled_notional,
             bidder_hold_price: reserve_bid_price,
             ..Default::default()
         }));
@@ -2714,6 +2718,29 @@ mod tests {
         assert!(direct.fill_l2(10).bid_prices.is_empty(), "order3 也被吃满");
         assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
         direct.validate_internal_state();
+    }
+
+    #[test]
+    fn cancel_and_reduce_report_prior_partial_fill_in_reduce_event() {
+        // 回归（2026-09-15 复审 #1）：cancel/reduce 一个已部分成交的挂单，REDUCE 事件须带
+        // filled/filled_notional（对应 Java sendReduceEvent）。否则 trade_events_handler 把执行回报
+        // 错报成 OrderStatus::New + cumulative=0。direct 与 naive 都须一致。
+        fn check(book: &mut dyn IOrderBook, reduce: bool) {
+            book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 10));
+            book.new_order(&mut gtc_cmd(2, OrderAction::Bid, 100, 4)); // 吃掉 order1 的 4/10
+            let mut c = if reduce { reduce_cmd(1, 1, 6) } else { cancel_cmd(1, 1) };
+            let rc = if reduce { book.reduce_order(&mut c) } else { book.cancel_order(&mut c) };
+            assert_eq!(rc, CommandResultCode::Success);
+            let ev = c.matcher_event.as_ref().expect("应有 REDUCE 事件");
+            assert_eq!(ev.event_type, MatcherEventType::Reduce);
+            assert_eq!(ev.size, 6, "REDUCE size = 剩余量");
+            assert_eq!(ev.filled, 4, "累计成交量须随 REDUCE 事件上报");
+            assert_eq!(ev.filled_notional, 400, "累计成交额 = 4*100");
+        }
+        check(&mut OrderBookDirectImpl::new(), false);
+        check(&mut OrderBookNaiveImpl::new(), false);
+        check(&mut OrderBookDirectImpl::new(), true);
+        check(&mut OrderBookNaiveImpl::new(), true);
     }
 
     #[test]
