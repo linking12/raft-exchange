@@ -1,0 +1,13 @@
+# FOK_BUDGET(Direct/Naive 已实现):BID 用总预算买。price 字段=预算=size*限价。
+# ① 预算够(2*10000=20000)全成;② 预算不足(仅够 1 手)→ 全或无 → kill。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=100 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=1000000000 txid=1
+BAL uid=2 cur=1 amount=1000000 txid=2
+PLACE oid=1 uid=2 sym=100 price=10000 size=2 action=ASK type=GTC
+PLACE oid=2 uid=1 sym=100 price=20000 size=2 action=BID type=FOK_BUDGET reserve=20000
+PLACE oid=3 uid=2 sym=100 price=10000 size=2 action=ASK type=GTC
+PLACE oid=4 uid=1 sym=100 price=10000 size=2 action=BID type=FOK_BUDGET reserve=10000
