@@ -777,6 +777,42 @@ mod tests {
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 91);
     }
 
+    fn short_position(open_volume: i64, open_init_margin_sum: i64, open_price_sum: i64, extra_margin: i64) -> SymbolPositionRecord {
+        let mut p = long_position(open_volume, open_init_margin_sum, open_price_sum, extra_margin);
+        p.direction = PositionDirection::Short; // sign = -1
+        p
+    }
+
+    #[test]
+    fn calculate_bankruptcy_price_isolated_short_fixed_fee() {
+        // SHORT sign=-1：margin_base = 100+20 = 120；total_fee = 2+3 = 5；fixed。
+        // max_loss = 120 - 5*10 = 70；numer = 1000 - (-1)*70 = 1070；ceil_divide(1070,10) = 107。
+        // （空头破产价 107 > 成本均价 100：空头价涨才亏，破产价在上方，方向正确。）
+        let pos = short_position(10, 100, 1000, 20);
+        let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 3, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 107);
+    }
+
+    #[test]
+    fn calculate_bankruptcy_price_isolated_short_proportional_fee() {
+        // SHORT sign=-1：margin_base = 100；total_fee = 200；fee_scale_k = 1_000_000。
+        // numer = 1000 - (-1)*100 = 1100；denom = 10*(1_000_000 - (-1)*200) = 10_002_000；
+        // ceil_mul_div(1100, 1_000_000, 10_002_000) = ceil(1_100_000_000/10_002_000) = ceil(109.978) = 110。
+        let pos = short_position(10, 100, 1000, 0);
+        let spec = CoreSymbolSpecification { taker_fee: 100, liquidation_fee: 100, fee_scale_k: 1_000_000, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 110);
+    }
+
+    #[test]
+    fn calculate_bankruptcy_price_cross_uses_margin_base_fn() {
+        // CROSS Long：margin_base 取 margin_base_fn(=150) 而非 open_init_margin_sum+extra_margin；
+        // total_fee=5；fixed；max_loss = 150 - 5*10 = 100；numer = 1000 - 1*100 = 900；ceil_divide(900,10) = 90。
+        let mut pos = long_position(10, 100, 1000, 0);
+        pos.margin_mode = MarginMode::Cross;
+        let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 3, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 150), 90);
+    }
+
     #[test]
     fn default_is_all_zero_empty() {
         let r = SymbolPositionRecord::default();

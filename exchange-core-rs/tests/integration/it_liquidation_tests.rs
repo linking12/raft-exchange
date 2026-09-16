@@ -180,8 +180,18 @@ mod tests {
         assert_eq!(api.set_mark_price_at(BTC_SYM, liq_price, 2_000), CommandResultCode::Success);
 
         assert!(api.user_position(trader, BTC_SYM).is_none(), "交易者应被全平");
-        // lp 的接单流动性被强平卖单消耗。
-        assert!(api.user_position(lp, BTC_SYM).unwrap().pending_buy_size < liquidity, "lp 流动性应被消耗");
+        // 金额精确锚点（不止守恒）：
+        //   trader = 3000 − 100(开仓 maker 费 10×10) − 1000(逐仓保证金 notional×initMargin/scaleK=100000/100 全损) = 1900。
+        assert_eq!(api.user_account(trader, USD), 1_900, "被强平方亏掉逐仓保证金+已付费，保留 1900");
+        //   fees = 开仓(trader maker 100 + lp taker 200) + 强平成交(被平方 taker 200 + lp maker 100) = 600。
+        assert_eq!(api.fees(USD), 600, "开仓+强平两笔成交的 maker/taker 费全入池");
+        //   未配 liquidation_fee → IF 无进项。
+        let if_available: i64 = api.insurance_fund().futures.values().map(|e| e.available).sum();
+        assert_eq!(if_available, 0, "无 liquidation_fee → IF available 不增");
+        //   lp 对手方净结算金额（cross 平空 + 收付费）——回归锚点。
+        assert_eq!(api.user_account(lp, USD), 99_700, "LP 对手方净结算");
+        // lp 的接单流动性被强平卖单消耗 10（25→15）。
+        assert_eq!(api.user_position(lp, BTC_SYM).unwrap().pending_buy_size, liquidity - position_size, "lp 流动性被消耗 10");
         assert_conserved(&api);
     }
 
