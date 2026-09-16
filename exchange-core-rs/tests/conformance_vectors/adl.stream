@@ -1,0 +1,19 @@
+# ADL:loser 巨亏强平,无书面流动性、无 IF → 减 winner 盈利空仓(10→5)。状态对拍。镜像 Java testADL。
+# Java 用默认杠杆(1% base initMargin 率);此处 leverage=1 等价。SCAN 需多轮触发 FORCE→IF→ADL 级联。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10001 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=2 maker=0 feeScale=1000 initMargin=1 initMarginScaleK=100
+MARK sym=10001 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=5000 txid=1
+BAL uid=2 cur=2 amount=50000 txid=2
+BAL uid=3 cur=2 amount=4000000 txid=3
+PLACE_FUT oid=1 uid=1 sym=10001 price=1000 size=5 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=3 sym=10001 price=1000 size=5 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=2 sym=10001 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=4 uid=3 sym=10001 price=1000 size=10 action=BID margin=CROSS leverage=1
+ENABLE_LIQ
+MARK_AT sym=10001 price=600 ts=2000
+SCAN

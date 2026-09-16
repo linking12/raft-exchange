@@ -114,33 +114,76 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 | **溢出** | `long` + 少量 `Math.*Exact` | `i64` 定点 + `i128` 中间量 + `*_exact` / `saturating_*` 显式处理 |
 | **上游集成** | 内嵌 Disruptor | 纯引擎库,由 `raft-exchange-server` 作为 Raft 状态机驱动;不含 JNI/sidecar |
 
-> 行为对等性由 `tests/integration/`(逐条翻译自 Java `exchange.core2.tests.integration` 的 IT)保证:对拍 API 结果码 + matcher/fund event + 费用 + 仓位 + 全局守恒。刻意的差异(单分片、targeted 扫描等)在上表列明,不属于逻辑分歧。
+---
+
+## Java↔Rust 一致性保障
+
+两套独立实现同一撮合引擎,核心问题有二:**(a) 证明行为等价**(现在)、**(b) 防止漂移**(任一侧演进后仍等价)。本仓用**三层递进防线** + 一份**归一化规格**来同时解决,而不是单靠"人肉翻译断言"。
+
+### 三层防线
+
+**① IT 翻译对拍(点覆盖,Java 黄金值)**
+`tests/integration/it_*.rs` 逐条翻译自 Java `exchange.core2.tests.integration`。喂同样的命令序列,断言 **API 结果码 + matcher/fund event 逐字段 + 费用 + 仓位 + 全局守恒**。凡 Java 自身断言过黄金值的路径(现货/期货/费用/资金费/交割/cross 预警的 `liquidation_price`/`margin_ratio` 等),都是真·逐值对拍 Java。
+- *强*:行为等价的直接证据。*弱*:只覆盖翻译到的场景;且**受限于 Java 的断言强度**——Java 宽松处(如 ITLiquidation/ITExchangeCoreADL 不断言 fund event、只验 state)无黄金可对。
+
+**② 守恒 proptest(不变量,随机流)**
+`tests/e2e/`(现货/期货/loan/清算)对随机合式命令流**逐步**断言全局守恒(`Σ账户 + 调整 + 费用 + Σ仓位(estimate_pnl+extra_margin) == 0`)、账户非负等不变量。
+- *强*:覆盖输入空间、抓金额/守恒破坏。*弱*:守恒抓不住"守恒集内的归属互换"(所以 ① 里专门补了逐用户 maker/taker 断言)。
+
+**③ 黄金向量对拍(差分,Java 当 oracle)** —— 根治 ①② 的 oracle 受限 + 漂移
+`tests/conformance.rs` + Java `exchange-core/…/ConformanceExporter.java`。一份**与实现无关的命令流** `.stream`(`tests/conformance_vectors/`),两侧各有解释器喂各自引擎:Java 侧跑 `exchange-core` **直接把实际输出当黄金**写成 `.golden`(不依赖 Java 单测断不断言),Rust 侧 replay **同一** `.stream`、产**同一格式**输出、逐行断言 == `.golden`。
+- 对拍:每命令 `result_code` + 最终状态摘要(账户/仓位/费用池)+ **结算类 fund event 多重集**(funding/pnl/liquidation/adl/fee)。
+- *关键收益*:清算/ADL 的最终状态与结算事件——Java 单测本身不断言、① 对不了的——现在由 **Java 引擎实际输出**当 oracle,Rust 必须逐字节一致;且两侧都可入 CI,任一侧行为漂移即报错。
+- 5 个向量全绿:`spot_full_cycle`、`perp_funding`、`delivery_settle`、`liquidation_isolated`、`adl`(loser 强平 + winner ADL 减仓 + 重定价逐值对拍)。
+
+### 归一化规格(= 刻意差异清单)
+
+差分对拍前需先声明"哪些刻意不同、归一化后排除,其余必须逐字节相等"。清单内是设计取舍,不是逻辑分歧:
+
+- **单分片塌缩**:Rust 单 RiskEngine = Java 所有 uid 分片的并集;最终状态经报表聚合后分片无关,可比。
+- **强平触发时机**:Rust 于 markprice 更新即 targeted 扫描,Java 靠 `LIQUIDATION_SCAN`。→ 事件用**全流多重集**比对(非逐命令归属),规避触发点差异。
+- **`MARGIN_ALERT`/`LIQUIDATION_ALERT`**:Rust 刻意外置(不发事件,水位告警走外部拉报表)→ 两侧都排除。
+- **仓位生命周期事件**(`OPEN_POSITION`/`CLOSE_POSITION`):Java 开仓只对 maker 发、Rust maker+taker 都发(钱一致、事件数不同)→ 与状态里的 `POS` 冗余,排除。
+- **记账/锁事件**(`balance_adjustment` 的 fund event 等):Java 发、Rust 不发 → 排除。
+- **撮合明细**:Java 是 `SpotExecutionReport`/`FuturesExecutionReport` 高层报告,Rust 是 raw `MatcherTradeEvent`,抽象不同 → 不进 ③(撮合正确性由 ① 逐值对拍)。
+- **`state_hash`**:Rust 逐字段折叠是超集,不与 Java hash 直接互比;跨实现比对用 ③ 的语义状态摘要,不用 hash。
+
+### 这套设计发现过的真 bug
+
+差分/翻译对拍不是形式主义,已抓出真引擎缺陷,例如:`process_order` 对 `SETTLE_FUNDINGFEES`/`LIQUIDATION_SCAN` 等把 R1 的 `Success` 覆盖成 `MatchingUnsupportedCommand`/`MatchingInvalidOrderBookId`(Java ME 对这些是 no-op、保留结果码);IF→ADL 级联升级早死;等等。
+
+### 一致性对拍工作流
+
+```bash
+# 1) Java 当 oracle 生成/更新黄金向量(在 exchange-core 模块)
+mvn -q -Dtest=ConformanceExporter -DfailIfNoTests=false test
+# 2) Rust replay 同一批 .stream,逐行断言 == .golden
+cargo test --test conformance
+```
+加一个场景 = 写一个 `.stream`(现货/期货/清算/ADL 皆可)→ Java 导出 golden → Rust 对拍。引擎行为若有意变更,须同步更新两侧并**评审 golden diff**。
 
 ---
 
 ## 构建 / 测试 / 基准
 
 ```bash
-# 构建
 cargo build --release
 
-# 单元测试(lib 内 #[cfg(test)],含现货/期货/loan/清算的守恒 proptest)
-cargo test --lib
+cargo test --lib                 # lib 内单元测试(与生产代码同文件的 #[cfg(test)])
+cargo test --test e2e            # 引擎级 e2e + 守恒 proptest(防线②)
+cargo test --test integration    # Java IT 对拍(防线①,仅公开 API)
+cargo test --test conformance    # 黄金向量对拍(防线③,先跑上面 mvn 生成 golden)
+cargo test --test orderbook_diff # Direct vs Naive 订单簿差分
+cargo test                       # 全部
 
-# 集成测试(tests/integration/,Java IT 对拍,仅走公开 API)
-cargo test --test integration
-
-# 全部
-cargo test
-
-# 纯引擎吞吐基准(绕开 Raft,直接灌 process_command)
-cargo bench --bench engine_throughput
+cargo bench --bench engine_throughput  # 纯引擎吞吐基准(绕开 Raft,直接灌 process_command)
 ```
+
+测试布局:`src/` 只留与生产代码同文件的单元测试;独立测试都在 `tests/`(`e2e/`、`integration/`、`conformance.rs` + `conformance_vectors/`、`orderbook_diff.rs`),只用公开 API。
 
 ---
 
 ## 说明
 
-- `src/core/*_e2e_tests.rs` 是 lib 内的引擎级 e2e + 守恒 proptest;`tests/integration/it_*.rs` 是独立集成 crate,只用公开 API 逐条对拍 Java IT。
-- 快照:`ExchangeCore::to_snapshot_bytes` / `from_snapshot_bytes`(bincode),供 Raft install-snapshot。
-- `state_hash`(逐字段折叠复制态)用于多节点/快照往返一致性校验;它是 Rust 内部超集,不与 Java 的 hash 直接互比。
+- 快照:`ExchangeCore::to_snapshot_bytes` / `from_snapshot_bytes`(bincode),供 Raft install-snapshot;测试观测缓冲(`last_cascade_events` 等)`#[serde(skip)]` 不进快照。
+- `state_hash`(逐字段折叠复制态)用于多节点/快照往返一致性校验;它是 Rust 内部超集,不与 Java 的 hash 直接互比(跨实现比对见"一致性保障"③)。

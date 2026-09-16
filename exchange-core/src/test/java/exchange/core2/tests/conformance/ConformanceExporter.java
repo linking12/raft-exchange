@@ -190,10 +190,12 @@ public class ConformanceExporter {
                                 .marginMode("CROSS".equals(kv.get("margin")) ? MarginMode.CROSS : MarginMode.ISOLATED).build()).join();
                         break;
                     case "SCAN":
-                        // 强平/ADL 走异步引擎;循环 triggerLiquidation + groupingControl 排空,直到状态稳定(或封顶)。
+                        // 强平/ADL 走异步引擎、FORCE→IF→ADL 级联需多轮 scan(对齐 Java testADL 的
+                        // waitForCondition 循环 triggerLiquidation)。循环 triggerLiquidation 直到状态**连续 6 轮稳定**或封顶。
                         {
-                            String prev = "";
-                            for (int iter = 0; iter < 40; iter++) {
+                            String prev = null;
+                            int stable = 0;
+                            for (int iter = 0; iter < 120 && stable < 6; iter++) {
                                 c.triggerLiquidation();
                                 api.groupingControl(0, 1);
                                 try { Thread.sleep(25L); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
@@ -208,7 +210,7 @@ public class ConformanceExporter {
                                     }
                                 }
                                 String cur = snap.toString();
-                                if (cur.equals(prev) && iter >= 2) break; // 连续两轮不变 = 已 settle
+                                stable = cur.equals(prev) ? stable + 1 : 0;
                                 prev = cur;
                             }
                         }
