@@ -74,7 +74,7 @@ mod tests {
         api.add_currency(BASE_CUR, CURRENCY_SCALE_K);
         api.add_currency(USD, CURRENCY_SCALE_K);
         assert_eq!(api.add_futures_symbol(spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM, PRICE), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, PRICE, 0), CommandResultCode::Success);
         assert_eq!(api.add_user(UID_1), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(UID_1, USD, MAKER_DEPOSIT, 1), CommandResultCode::Success);
         assert_eq!(api.add_user(UID_2), CommandResultCode::Success);
@@ -270,7 +270,7 @@ mod tests {
         api.add_currency(BASE_CUR, CURRENCY_SCALE_K);
         api.add_currency(USD, CURRENCY_SCALE_K);
         assert_eq!(api.add_futures_symbol(spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM, PRICE), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, PRICE, 0), CommandResultCode::Success);
         assert_eq!(api.add_user(UID_2), CommandResultCode::Success);
 
         let usdt = 100i64;

@@ -115,8 +115,8 @@ mod tests {
         }
 
         // Java initMarkPrice(testSymbol, 1000)：两个 symbol 都喂上 mark 价（期货下单前必须有 mark 价）。
-        assert_eq!(api.set_mark_price(SYMBOL_EXCHANGE_FEE, 1000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_EXCHANGE_FEE, 1000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, 1000, 0), CommandResultCode::Success);
         api
     }
 

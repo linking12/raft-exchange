@@ -299,20 +299,20 @@ impl ExchangeApi {
         self.run(OrderCommand { command: OrderCommandType::PositionModeAdjustment, uid, action: Some(action), ..Default::default() })
     }
 
-    /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]`（对应 Java `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
-    pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
-        let cmd = OrderCommand {
+    /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]` 并推进该 symbol 的喂价时间戳
+    /// （对应 Java `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
+    ///
+    /// `timestamp` 是必填、不设默认：它决定定向强平扫描的 tick、资金费累积 elapsed、现货 `applyTradePrice`
+    /// EMA 的起算时刻——不关心时间的场景显式传 `0`，清算/资金费场景传真实时间。刻意不提供无时间戳的重载，
+    /// 避免"该用哪个"的歧义与静默 `ts=0` 不推进时间的隐患。
+    pub fn set_mark_price(&mut self, symbol: i32, price: i64, timestamp: i64) -> CommandResultCode {
+        self.run(OrderCommand {
             command: OrderCommandType::MarkpriceAdjustment,
             symbol,
             price,
+            timestamp,
             ..Default::default()
-        };
-        self.run(cmd)
-    }
-
-    /// `MARKPRICE_ADJUSTMENT` 带显式时间戳（清算类场景需要时间推进 + 触发定向扫描）。
-    pub fn set_mark_price_at(&mut self, symbol: i32, price: i64, timestamp: i64) -> CommandResultCode {
-        self.run(OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, timestamp, ..Default::default() })
+        })
     }
 
     /// `SUSPEND_USER` / `RESUME_USER`。
@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(api.balance_adjustment(LONG_USER, QUOTE, 10_000, 1), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(SHORT_USER, QUOTE, 10_000, 2), CommandResultCode::Success);
 
-        assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
 
         // SHORT_USER 先挂 ASK @100 size 10（maker，开空，等待对手盘）。
         let ask_rc = api.place_futures_order(PlaceFuturesOrderRequest {
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(conserved(&api), 0, "开仓后 quote 守恒");
 
         // ---- 平仓：mark 价推高到 150，双方互相平仓（多头 ASK 平多、空头 BID 平空）----
-        assert_eq!(api.set_mark_price(FUT_SYMBOL, 150), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(FUT_SYMBOL, 150, 0), CommandResultCode::Success);
 
         // SHORT_USER 先挂平仓 BID @150（maker，反向平空）。
         let close_short_rc = api.close_position(ClosePositionRequest {

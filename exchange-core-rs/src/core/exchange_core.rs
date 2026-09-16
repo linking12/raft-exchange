@@ -44,22 +44,54 @@ impl ExchangeCore {
     // 核心行为:命令管线 / RESET / 强平级联 / 快照
     // ==========================================================================================
 
-    /// 确定性顺序管线：R1(`pre_process_command`)→ME(`process_order`)→R2(`handler_risk_release`)；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路。
+    /// 确定性顺序管线 —— 把 Java Disruptor 的多段并行流水塌缩成**单线程一次同步调用**。
+    ///
+    /// 每条命令严格依次流过三段(所有命令走统一入口,非交易命令靠 ME/R2 的 no-op 守卫短路):
+    ///
+    /// ```text
+    ///   R1  pre_process_command    校验 / 冻结 / 仓位预处理 / 两步命令 collect / 强平扫描判定
+    ///   ME  process_order          撮合(下单/撤单/改单/减量/强平吃单);非交易命令 no-op(保留 R1 结果码)
+    ///   R2  handler_risk_release    成交结算 / 释放 / PnL / 费用入池 / 两步命令 apply / 事件产出
+    /// ```
+    ///
+    /// R2 之后 `run_liquidation_cascade` 把 R1/扫描生成的次级强平命令(FORCE→IF→ADL / loan 强平)
+    /// 逐条**回流过同一三段**,闭合在同一次 `process_command` 内。整条链确定、可复制。
+    ///
+    /// 例外:`RESET` 不过三段(直接清空全引擎态);纯查询(`ORDER_BOOK_REQUEST`)在 ME 内取数即返回。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
-        self.last_cascade_events.clear(); // 每条命令重置级联事件观测缓冲
+        // 每条命令重置级联事件观测缓冲(仅测试可观测、非复制态)。
+        self.last_cascade_events.clear();
         self.last_cascade_matcher_events.clear();
+
+        log::trace!(
+            "process_command 进入: cmd={:?} uid={} symbol={} order_id={}",
+            cmd.command, cmd.uid, cmd.symbol, cmd.order_id
+        );
+
+        // 例外:RESET 不过 R1→ME→R2,直接清空全引擎业务态并回 SUCCESS(对齐 Java RiskEngine `case RESET`)。
         if cmd.command == crate::core::common::cmd::order_command_type::OrderCommandType::Reset {
-            // 对应 Java RiskEngine `case RESET`：清空全引擎业务态并回 SUCCESS，不过 R1→ME→R2。
             self.reset();
             cmd.result_code = Some(crate::core::common::cmd::command_result_code::CommandResultCode::Success);
+            log::debug!("process_command: RESET 已清空全引擎业务态");
             return;
         }
-        self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp); // R1
-        self.matching.process_order(cmd); // ME
-        // R2 只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游读取（链存活到结果处理器）。
-        self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
-        // 现货成交动态更新 markPrice（对齐 Java handlerRiskRelease 尾部 applyTradePrice）：供 loan 现货抵押估值。
+
+        // ---- R1 风控预处理:校验/冻结/仓位预处理/两步命令 collect/强平扫描判定 ----
+        self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
+        // ---- ME 撮合:下单/撤单/改单/减量/强平吃单;非交易命令在此 no-op(保留 R1 结果码) ----
+        self.matching.process_order(cmd);
+        // ---- R2 风控后置:成交结算/释放/PnL/费用入池/两步命令 apply/事件产出 ----
+        //      只读遍历事件链、不消费,`matcher_event` 留在 cmd 上供下游结果处理器读取(链存活到结果处理器)。
+        self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
+        // R2 尾:现货成交动态回写 markPrice(对齐 Java handlerRiskRelease 尾部 applyTradePrice),供 loan 现货抵押估值。
         self.risk.apply_spot_trade_price_from(cmd, &self.ssp);
+
+        log::trace!(
+            "process_command: R1→ME→R2 完成 cmd={:?} result={:?}",
+            cmd.command, cmd.result_code
+        );
+
+        // ---- 排空强平级联:R1/扫描生成的次级命令逐条回流过同一三段直至收敛 ----
         self.run_liquidation_cascade();
     }
 
@@ -76,8 +108,21 @@ impl ExchangeCore {
     /// 驱动强平级联：把强平引擎生成的次级命令(FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING/loan 强平)
     /// 逐条回流过 R1→ME→R2;过程中新生成的命令继续入队,FIFO 保序直至排空(FORCE→IF→ADL 级联,链深≤3/仓位必然收敛)。
     fn run_liquidation_cascade(&mut self) {
+        // 绝大多数命令不触发强平,队列为空时整段 no-op;仅在真有次级命令时打点(避免热路径噪声)。
+        if !self.risk.liquidation_engine.pending_commands.is_empty() {
+            log::debug!(
+                "run_liquidation_cascade 开始: 待排空次级命令 {} 条",
+                self.risk.liquidation_engine.pending_commands.len()
+            );
+        }
+        let mut cascade_steps = 0usize;
         while !self.risk.liquidation_engine.pending_commands.is_empty() {
             let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
+            cascade_steps += 1;
+            log::trace!(
+                "  级联步 {}: 回流次级命令 cmd={:?} uid={} symbol={} size={}",
+                cascade_steps, generated.command, generated.uid, generated.symbol, generated.size
+            );
             self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
             self.matching.process_order(&mut generated);
             self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
@@ -92,6 +137,9 @@ impl ExchangeCore {
                 self.last_cascade_matcher_events.push(flat);
                 node = ev.next.as_deref();
             }
+        }
+        if cascade_steps > 0 {
+            log::debug!("run_liquidation_cascade 完成: 共排空 {} 条次级命令", cascade_steps);
         }
     }
 

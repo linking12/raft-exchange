@@ -957,4 +957,186 @@ mod tests {
         let weights = BTreeMap::from([(42i64, 7i64)]);
         assert_eq!(distribute_remainder_by_one(999, &weights), BTreeMap::from([(42, 999)]));
     }
+
+    // ==================================================================================
+    // Java 黄金值对拍 —— 逐条钉住 Java 单测的 assertEquals 常量，防翻译期取整/缩放漂移。
+    // 三个来源：CoreArithmeticUtilsScaleTest / OpenCloseFeeFormulaTest / SizeToLiquidateTest。
+    // 若某条算出与 Java 不同 → 候选翻译 bug，绝不改期望值迁就。
+    // 测试名刻意保留 Java 方法名（camelCase），故本子模块放开 non_snake_case。
+    // ==================================================================================
+    #[allow(non_snake_case)]
+    mod java_parity {
+    use super::super::*;
+
+    // ---- CoreArithmeticUtilsScaleTest（BTC/USD spec: baseScaleK=100000, quoteScaleK=10）----
+
+    #[test]
+    fn java_scale_sizePriceToCurrencyScale_convertToQuoteCurrency() {
+        // Java: sizePriceToCurrencyScale_ConvertToQuoteCurrency（USD digit=2 → ccyK=100）
+        assert_eq!(size_price_to_currency_scale(1, 100_000, 10, 100), 0); // 0.0001 USD 截断为 0
+        assert_eq!(size_price_to_currency_scale(1_000_000, 100_000, 10, 100), 100); // = 1 USD
+    }
+
+    #[test]
+    fn java_scale_symbolToCurrencyScale_baseToBaseCurrency() {
+        // Java: symbolToCurrencyScale_BaseToBaseCurrency（BTC digit=8 → ccyK=10^8；scale_k=baseScaleK=100000）
+        assert_eq!(symbol_to_currency_scale(1, 100_000, 100_000_000), 1_000);
+        assert_eq!(symbol_to_currency_scale(2, 100_000, 100_000_000), 2_000);
+    }
+
+    #[test]
+    fn java_scale_symbolToCurrencyScale_quoteToQuoteCurrency() {
+        // Java: symbolToCurrencyScale_QuoteToQuoteCurrency（USD digit=2 → ccyK=100；scale_k=quoteScaleK=10）
+        assert_eq!(symbol_to_currency_scale(1, 10, 100), 10);
+        assert_eq!(symbol_to_currency_scale(2, 10, 100), 20);
+    }
+
+    #[test]
+    fn java_scale_currencyToSymbolScale_baseCurrencyToBase() {
+        // Java: currencyToSymbolScale_BaseCurrencyToBase。Rust 无同名函数，它就是 symbol_to_currency_scale 的反向：
+        // convert_scale(amount, currency_scale_k, scale_k)（命名差异，非行为差异）。
+        assert_eq!(convert_scale(1_000, 100_000_000, 100_000), 1);
+        assert_eq!(convert_scale(1_500, 100_000_000, 100_000), 1); // 1.5 手截断为 1
+    }
+
+    #[test]
+    fn java_scale_currencyToSymbolScale_quoteCurrencyToQuote() {
+        // Java: currencyToSymbolScale_QuoteCurrencyToQuote
+        assert_eq!(convert_scale(10, 100, 10), 1);
+        assert_eq!(convert_scale(15, 100, 10), 1); // 1.5 步长截断为 1
+    }
+
+    #[test]
+    fn java_scale_methods_withZeroInput() {
+        // Java: scaleMethods_WithZeroInput
+        assert_eq!(size_price_to_currency_scale(0, 100_000, 10, 100), 0);
+        assert_eq!(symbol_to_currency_scale(0, 100_000, 100_000_000), 0);
+        assert_eq!(symbol_to_currency_scale(0, 10, 100), 0);
+        assert_eq!(convert_scale(0, 100_000_000, 100_000), 0);
+        assert_eq!(convert_scale(0, 100, 10), 0);
+    }
+
+    #[test]
+    fn java_scale_methods_withZeroDigitCurrency() {
+        // Java: scaleMethods_WithZeroDigitCurrency（digit=0 → ccyK=1）
+        assert_eq!(size_price_to_currency_scale(1, 100_000, 10, 1), 0); // (1*1)/1e6 = 0
+        assert_eq!(symbol_to_currency_scale(1, 100_000, 1), 0); // (1*1)/1e5 = 0
+        assert_eq!(convert_scale(1, 1, 100_000), 100_000); // currencyToSymbol: (1*1e5)/1 = 1e5
+    }
+
+    // ---- OpenCloseFeeFormulaTest ----
+
+    #[test]
+    fn java_fee_fixed_priceIndependent() {
+        // Java FixedFee.takerFee_priceIndependent / makerFee_priceIndependent（feeScaleK=0, taker=20, maker=10）
+        assert_eq!(calculate_taker_fee(10, 50_000, 20, 0), 200);
+        assert_eq!(calculate_taker_fee(10, 1, 20, 0), 200);
+        assert_eq!(calculate_taker_fee(10, i64::MAX / 2, 20, 0), 200); // 与 price 无关
+        assert_eq!(calculate_maker_fee(10, 50_000, 10, 0), 100);
+        assert_eq!(calculate_maker_fee(10, 1, 10, 0), 100);
+    }
+
+    #[test]
+    fn java_fee_fixed_zeroSize() {
+        // Java FixedFee.zeroSize_zeroFee
+        assert_eq!(calculate_taker_fee(0, 50_000, 20, 0), 0);
+        assert_eq!(calculate_maker_fee(0, 50_000, 10, 0), 0);
+    }
+
+    #[test]
+    fn java_fee_dynamic_formula() {
+        // Java DynamicFee.takerFee_dynamicFormula / makerFee_dynamicFormula（feeScaleK=100, taker=2, maker=1）
+        assert_eq!(calculate_taker_fee(10, 50_000, 2, 100), 10_000);
+        assert_eq!(calculate_maker_fee(10, 50_000, 1, 100), 5_000);
+    }
+
+    #[test]
+    fn java_fee_dynamic_ceilingRounding() {
+        // Java DynamicFee.dynamicFormula_ceilingRounding：1*1*2/100 = 0.02 → ceil = 1（不让微单白嫖）
+        assert_eq!(calculate_taker_fee(1, 1, 2, 100), 1);
+    }
+
+    #[test]
+    fn java_fee_dynamic_zeroSize() {
+        // Java DynamicFee.zeroSize_zeroFee_dynamic
+        assert_eq!(calculate_taker_fee(0, 50_000, 2, 100), 0);
+        assert_eq!(calculate_maker_fee(0, 50_000, 1, 100), 0);
+    }
+
+    #[test]
+    fn java_fee_currencyScale_identityPassthrough() {
+        // Java CurrencyScale.identityScale / integration_calcThenScale（baseScaleK=quoteScaleK=1, USD digit=0 → ccyK=1）
+        let fee = calculate_taker_fee(10, 50_000, 20, 0); // 200
+        assert_eq!(size_price_to_currency_scale(fee, 1, 1, 1), 200);
+        let fee2 = calculate_taker_fee(3, 25_000, 20, 0); // 60
+        assert_eq!(size_price_to_currency_scale(fee2, 1, 1, 1), 3 * 20);
+    }
+
+    // ---- SizeToLiquidateTest ----
+    //
+    // Java `calculateSizeToLiquidate(position, spec, priceRecord)` 是高层重载，先从 position/spec/price 推出标量再调本函数。
+    // Rust 侧本函数是标量版；此 helper 逐行复刻 Java 高层重载的推导：
+    //   sign = LONG?+1:-1；pnl = sign*(mark*vol - openPriceSum)；equity = openInitMarginSum + pnl；
+    //   MM = trunc(mark*vol * mmRate / mmScaleK)。
+    fn size_to_liquidate_from_position(
+        long: bool,
+        open_volume: i64,
+        open_price_sum: i64,
+        open_init_margin_sum: i64,
+        mm_rate: i64,
+        mm_scale_k: i64,
+        mark_price: i64,
+    ) -> i64 {
+        let sign = if long { 1 } else { -1 };
+        let notional = mark_price * open_volume;
+        let pnl = sign * (mark_price * open_volume - open_price_sum);
+        let equity = open_init_margin_sum + pnl;
+        let mm = (notional as i128 * mm_rate as i128 / mm_scale_k as i128) as i64; // trunc
+        calculate_size_to_liquidate(
+            equity,
+            mm,
+            open_init_margin_sum,
+            open_volume,
+            open_price_sum,
+            mark_price,
+            sign,
+        )
+    }
+
+    #[test]
+    fn java_sizeToLiquidate_longPosition() {
+        // Java testCalculateSizeToLiquidate_LongPosition：mmRate 100/1000=10%，mark=90 → 全平 10
+        assert_eq!(size_to_liquidate_from_position(true, 10, 1_000, 100, 100, 1_000, 90), 10);
+    }
+
+    #[test]
+    fn java_sizeToLiquidate_shortPosition() {
+        // Java testCalculateSizeToLiquidate_ShortPosition：mmRate 10%，mark=110 → 全平 5
+        assert_eq!(size_to_liquidate_from_position(false, 5, 500, 50, 100, 1_000, 110), 5);
+    }
+
+    #[test]
+    fn java_sizeToLiquidate_case1_long() {
+        // Java testCalculateSizeToLiquidate1：num=102500 den=1025 → 100
+        assert_eq!(size_to_liquidate_from_position(true, 100, 10_000, 2_000, 50, 1_000, 95), 100);
+    }
+
+    #[test]
+    fn java_sizeToLiquidate_case2_long() {
+        // Java testCalculateSizeToLiquidate2：num=563200 den=2816 → 200
+        assert_eq!(size_to_liquidate_from_position(true, 200, 20_000, 4_000, 40, 1_000, 98), 200);
+    }
+
+    #[test]
+    fn java_sizeToLiquidate_case3_short() {
+        // Java testCalculateSizeToLiquidate3：MM=787(trunc) num=219450 den=1463 → 150
+        assert_eq!(size_to_liquidate_from_position(false, 150, 15_000, 3_000, 50, 1_000, 105), 150);
+    }
+
+    #[test]
+    fn java_sizeToLiquidate_case4_short() {
+        // Java testCalculateSizeToLiquidate4：num=1344600 den=4482 → 300
+        assert_eq!(size_to_liquidate_from_position(false, 300, 30_000, 6_000, 30, 1_000, 102), 300);
+    }
+    } // mod java_parity
 }

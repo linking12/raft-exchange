@@ -195,7 +195,7 @@ mod tests {
         api.add_currency(BASE_CURRENCY_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(init_future_symbol(SYMBOL_ID)), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit1, 1);
 
         // CROSS：symbol 传 currency id（quoteId），直接加到 balance 上。
@@ -228,7 +228,7 @@ mod tests {
         api.add_currency(BASE_CURRENCY_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(init_future_symbol(SYMBOL_ID)), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit1, 1);
 
         // ISOLATED margin cmd（symbol=symbol id）；仓位不存在 -> 拒绝。
@@ -285,7 +285,7 @@ mod tests {
         api.add_currency(BASE_CURRENCY_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(init_future_symbol(SYMBOL_ID)), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
 
@@ -341,8 +341,8 @@ mod tests {
         assert_eq!(api.add_futures_symbol(btc_symbol()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(eth_symbol()), CommandResultCode::Success);
         // 两个 symbol mark 都设 10000（先于开仓，故不触发对已开仓的强平扫描）。
-        assert_eq!(api.set_mark_price(BTC_SYM, 10_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
         seed_user(&mut api, UID_3, MAX_VALUE, 3);
@@ -446,7 +446,7 @@ mod tests {
         api.add_currency(XBT, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(btc_symbol()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(BTC_SYM, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
 
@@ -459,7 +459,7 @@ mod tests {
 
         // 落价 9950：进入预警区间（MM ≤ equity < 1.2×MM）→ 不强平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_950, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_950, 2_000), CommandResultCode::Success);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee, "预警不改账户");
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1, "预警不平仓");
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().extra_margin, 0);
@@ -490,7 +490,7 @@ mod tests {
         }
 
         // 再次扫描（同价）→ 补了保证金后仍不强平，状态不变。
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_950, 2_001), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_950, 2_001), CommandResultCode::Success);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee - extra);
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1);
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().extra_margin, extra);
@@ -507,7 +507,7 @@ mod tests {
         api.add_currency(XBT, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(btc_symbol()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(BTC_SYM, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
 
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(place(&mut api, 1006, UID_2, BTC_SYM, 10_000, 1, OrderAction::Ask, MarginMode::Isolated), CommandResultCode::Success);
 
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_950, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_950, 2_000), CommandResultCode::Success);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee);
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1);
         {
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().extra_margin, extra);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee - extra);
 
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_950, 2_001), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_950, 2_001), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1, "补 7 仍不足，不强平");
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().extra_margin, extra);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee - extra);
@@ -556,8 +556,8 @@ mod tests {
         api.add_currency(ETH_CUR, 1);
         assert_eq!(api.add_futures_symbol(btc_symbol()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(eth_symbol()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(BTC_SYM, 10_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
         seed_user(&mut api, UID_3, MAX_VALUE, 3);
@@ -579,8 +579,8 @@ mod tests {
 
         // 落价：BTC→9000（LONG 亏 1000）、ETH→23660（SHORT 亏 8660）→ equity 进预警区间，不强平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_000, 2_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price_at(ETH_SYM, 23_660, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 23_660, 2_000), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "预警不强平");
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840);
@@ -599,7 +599,7 @@ mod tests {
             CommandResultCode::Success
         );
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_860);
-        assert_eq!(api.set_mark_price_at(ETH_SYM, 23_660, 2_001), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 23_660, 2_001), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_860);
@@ -617,8 +617,8 @@ mod tests {
         api.add_currency(ETH_CUR, 1);
         assert_eq!(api.add_futures_symbol(btc_symbol()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(eth_symbol()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(BTC_SYM, 10_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
         seed_user(&mut api, UID_3, MAX_VALUE, 3);
@@ -633,8 +633,8 @@ mod tests {
         assert_eq!(place(&mut api, 1010, UID_3, ETH_SYM, 15_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_000, 2_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price_at(ETH_SYM, 23_660, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 23_660, 2_000), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(pos_view(&api, UID_1, ETH_SYM).unrealized_pnl, -8_660);
@@ -652,7 +652,7 @@ mod tests {
             CommandResultCode::Success
         );
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_852);
-        assert_eq!(api.set_mark_price_at(ETH_SYM, 23_660, 2_001), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 23_660, 2_001), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_852);
@@ -673,8 +673,8 @@ mod tests {
         api.add_currency(ETH_CUR, 1);
         assert_eq!(api.add_futures_symbol(btc_symbol()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(eth_symbol()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(BTC_SYM, 10_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 10_000, 0), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
         seed_user(&mut api, UID_2, MAX_VALUE, 2);
         seed_user(&mut api, UID_3, MAX_VALUE, 3);
@@ -711,8 +711,8 @@ mod tests {
 
         // 落价：BTC→9000（LONG 亏 1000 > 100+900）、ETH→18000（SHORT 亏 3000 > 150+2900）→ 两腿均被清算。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(BTC_SYM, 9_000, 2_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price_at(ETH_SYM, 18_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 9_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 18_000, 2_000), CommandResultCode::Success);
         assert!(api.user_position(UID_1, BTC_SYM).is_none(), "BTC 逐仓腿应被全平");
         assert!(api.user_position(UID_1, ETH_SYM).is_none(), "ETH 逐仓腿应被全平");
         assert!(api.total_balance().is_global_zero());

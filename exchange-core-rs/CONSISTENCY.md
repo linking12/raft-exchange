@@ -13,6 +13,7 @@
 
 - [1. 总览](#1-总览)
 - [2. 防线①:IT 翻译对拍](#2-防线it-翻译对拍)
+- [2b. 防线①b:组件/单元测试黄金值对拍](#2b-防线b组件单元测试黄金值对拍)
 - [3. 防线②:守恒 proptest](#3-防线守恒-proptest)
 - [4. 防线③:黄金向量对拍(Java 当 oracle)](#4-防线黄金向量对拍java-当-oracle)
 - [5. 防线③b:差分模糊](#5-防线b差分模糊)
@@ -29,13 +30,15 @@
 
 | 层 | 手段 | 主要抓什么 | Oracle | 主要盲区 |
 |----|------|-----------|--------|---------|
-| ① IT 翻译 | 逐条翻译 Java IT,断言结果码/事件/费用/仓位/守恒 | 已知场景的逐值行为 | Java 单测的黄金值 | 只覆盖翻译到的场景;受限于 Java 断言强度;静态、会漂移 |
+| ① IT 翻译 | 逐条翻译 Java IT,断言结果码/事件/费用/仓位/守恒 | 已知**端到端**场景的逐值行为 | Java 单测的黄金值 | 只覆盖翻译到的场景;端到端可能碰不到组件级边界;静态、会漂移 |
+| ①b 组件/单元对拍 | 把 Java 数学敏感单测的 `assertEquals` 黄金值逐条钉进 Rust `#[cfg(test)]` | 组件级取整/缩放/边界/公式(IT 端到端漏的) | Java 单测的黄金值 | 只覆盖翻译到的单测;静态、会漂移(纯 Rust 侧) |
 | ② 守恒 proptest | 随机命令流每步断言全局守恒等不变量 | 输入空间里的金额/守恒破坏 | 不变量(无需 oracle) | 抓不住"守恒集内的归属互换" |
 | ③ 黄金向量对拍 | 同一命令流两侧各跑,Java 实际输出当黄金,Rust replay 断言 | 任意场景(含 Java 单测不断言的)的逐值行为 + 抗漂移 | Java **引擎实际输出** | 需归一化刻意差异;异步事件需 settle |
 | ③b 差分模糊 | 确定性 PRNG 批量生成随机流,喂 ③ 的流程 | 输入空间的边角、未覆盖组合 | 同 ③ | 同 ③ |
 
-三层的关键递进:
-- ① 强在"直接对拍 Java 数字",但**只能对拍 Java 断言过的东西**——Java 宽松处(清算/ADL 只验 state、不断言 fund event)① 无能为力。
+关键递进:
+- ① 强在"直接对拍 Java 数字",但**只能对拍 Java 断言过的东西**、且**只走端到端**——Java 宽松处(清算/ADL 只验 state)① 无能为力,而端到端流程可能永远碰不到某个取整/缩放/边界(翻译错了 IT 未必红)。
+- ①b 补 ① 的"端到端盲区":直接把 Java **组件级单测**的黄金常量钉进 Rust——`sizePriceToCurrencyScale` 截断、`calculateSizeToLiquidate`、`calculateLocked`、cross-margin scale、开平费公式、破产价、清算价迭代解、利率曲线、`checkCross` 除零守卫等。翻译里任一取整方向/缩放/边界错,对应单测立即红。
 - ② 用不变量绕开 oracle 覆盖输入空间,但守恒是**必要非充分**(金额总额对、归属可错)。
 - ③ 用 **Java 引擎的实际输出**当 oracle,补上 ① 的 oracle 盲区(清算/ADL 的最终状态现在能逐值对拍)、并让两侧入 CI 抗漂移。
 - ③b 在 ③ 之上用随机流把输入空间压满。
@@ -59,6 +62,33 @@
 1. **受限于 Java 断言强度**:`ITLiquidationIntegration` / `ITExchangeCoreADL` 本身**零 fund event 断言**、只验 state,故清算/ADL 的金额/事件 ① 对不了(靠 ③ 补)。
 2. **静态点覆盖**:只覆盖翻译到的场景。
 3. **会漂移**:纯 Rust 侧测试,Java 变更不会触发它红。
+
+---
+
+## 2b. 防线①b:组件/单元测试黄金值对拍
+
+**位置**:各生产文件内 `#[cfg(test)] mod java_parity`(或 `parity_*` 测试),与被测函数同文件。
+
+**动机**:① 只走**端到端**公开 API。Java 的 `tests/unit` + `core/**` 有一批**组件级**单测,拿 `assertEquals` 精确钉住取整方向、缩放截断、边界、公式常量——这些点端到端流程未必触达(翻译错了 IT 未必红,但对应单测必红)。Rust 的 856+ lib 单测是**独立**写的,与这些 Java 单测的覆盖是否重合此前无人验证,是最大的"翻译 bug 藏身处"。
+
+**做法**:把 Java 数学敏感单测的黄金常量**逐条**钉进 Rust 同名/对应函数的 parity 测试。规则:**钉 Java 精确值;若 Rust 算出不同值即候选翻译 bug,绝不改期望值迁就**。
+
+**已对拍**(8 个 Java 单测 → 65 个 Rust parity 测试,**全绿、零分歧**):
+
+| Java 单测 | Rust 落点 | 钉住的黄金值(样例) |
+|-----------|-----------|----------------------|
+| `CoreArithmeticUtilsScaleTest` | `core_arithmetic_utils.rs` | `sizePriceToCurrencyScale(1)=0`(0.0001 USD 截断)、`symbolToCurrencyScale=1000/2000/10/20`、零 digit `=100000` |
+| `OpenCloseFeeFormulaTest` | `core_arithmetic_utils.rs` | fixed `taker=200/maker=100`(与 price 无关)、dynamic `ceil`=10000/5000、`ceil(0.02)=1` |
+| `SizeToLiquidateTest` | `core_arithmetic_utils.rs` | 10 / 5 / 100 / 200 / 150 / 300(long/short 全清算档) |
+| `RiskEngineCalculateLockedTest` | `risk_engine.rs` | ①期货 margin+②spot+③isolated 抵押+④cross 抵押 混合 `USDT=1700` / `BTC=5` |
+| `RiskEngineCrossMarginScaleTest` | `risk_engine.rs` | 另持 `scale=10^4` cross 仓时小单 `VALID_FOR_MATCHING_ENGINE`(保证金不被放大 10000×) |
+| `LoanRateCurveTest` | `floating_rate_model.rs` / `fixed_rate_model.rs` / `loan_service.rs` | 曲线 `200/400/600/3600/6600`、利用率 `3000/10000`、溢出 fallback `5000`、accumulator 累积 |
+| `SymbolPositionRecordTest` | `symbol_position_record.rs` | 清算价迭代解 `48369/55555/50926/47282/-1/48913`、破产价 `96/104/95/105`、`pendingHoldBudget` |
+| `LiquidationCheckCrossScaleTest` | `liquidation_engine.rs` | 缩放后 MM 归零不触发除零、健康账户不误强平 |
+
+**成效**:数学敏感层的翻译**零分歧**——`i128` 中间量、`ceil`/`trunc` 方向、scale 换算、迭代法清算价、SHORT 分母 sign 等易错点,均与 Java 逐值一致。
+
+**弱 / 盲区**:同 ①——只覆盖已翻的单测(Java `tests/unit` 里非数学的行为类单测、`core/**` orderbook/event 组件测试尚未逐条对拍),且纯 Rust 侧、会漂移。
 
 ---
 
@@ -112,7 +142,7 @@ golden 由 Java 在**生成之后、断言之前**产出。若把生成器并进
 ### 4.5 同步 vs 异步(事件层的边界)
 
 - **fund event 多重集**用**全流累加、排序后比对**(不比逐命令归属)——因为强平触发时机是刻意差异(Rust markprice 定向扫 vs Java `LIQUIDATION_SCAN`),但"发了哪些结算事件"多重集可比。
-- **同步路径**(funding / delivery,命令 `.join()` 后事件已到):结算事件逐条对拍。例 funding:`FUNDINGFEE_SETTLEMENT` 两条 free=`19750`/`19650` 精确命中 Java `ITPerpetualContractIntegration` 黄金值;delivery:`PNL_SETTLEMENT` free=`24900`/`14800`。
+- **同步路径**(funding / delivery / loan / cross / hedge,命令 `.join()` 后事件已到):结算事件逐条对拍。例 funding:`FUNDINGFEE_SETTLEMENT` 两条 free=`19750`/`19650` 精确命中 Java `ITPerpetualContractIntegration` 黄金值;delivery:`PNL_SETTLEMENT` free=`24900`/`14800`;loan:`LOAN_BORROW`/`LOAN_REPAY`(`loan_isolated_cycle`);cross:单账户两 CROSS 仓账户级聚合(`cross_margin_shared`);hedge:同 symbol LONG/SHORT 双腿并存(`hedge_dual_leg`)。
 - **异步路径**(清算/ADL:Java 强平走独立线程、fund event 在不同 scan 周期触发、捕获不确定):向量用 `#!events=off` **只对拍确定性的 STATE**,不对拍其事件流。exporter 的 `SCAN` 会循环 `triggerLiquidation`+`groupingControl` 直到状态**连续 6 轮稳定**(对齐 Java `testADL` 的 `waitForCondition`)。
 
 ### 4.6 确定性
@@ -150,6 +180,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **`state_hash`** | Java 自己的 hash | 逐字段折叠、是超集 | 不互比;跨实现用 ③ 的语义状态摘要 |
 | **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
 | **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |
+| **借贷池分片本地性** | `loanPoolAvailable` 每 risk 分片各一份;`POOL_DEPOSIT` 只在 `cmd.uid==shardId` 的片记账,贷款只见**本片**流动性(exporter DEFAULT=2 risk 片) | 单片塌缩,全局共池 | 向量令借款人 uid 与注资 shard 同片(偶数 uid→shard 0),两侧口径一致(见 §7.3) |
 
 **结算类事件白名单**(进 `EVENTS` 多重集的):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`。两侧白名单必须同步维护。
 
@@ -176,6 +207,14 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 
 > **教训**:定 Java 侧"bug"前,必用**不含任何 report / `validateUserState` 的裸命令序列**复现——中间任何 report query 会 flush R2、掩盖批处理时序 hazard;Java 未实现的 order type 会走 default reject。
 
+### 7.3 loan/HEDGE/cross-margin 向量扩面时,③ 抓到借贷池分片本地性(非 bug,单片塌缩的直接体现)
+
+新增 `loan_isolated_cycle` 向量时,Java 报 `LOAN_POOL_INSUFFICIENT`、Rust 却建贷成功——③ 直接抓到分歧。根因**不是** `verify_pool_capacity` 逻辑差(两侧逐字节一致、默认利用率上限同为 9000bps),而是 Java `handlePoolDeposit` 有 `if (cmd.uid != shardId) return SUCCESS` 守卫:**借贷池是每 risk 分片各一份**,注资只落在目标分片。exporter 跑的 `PerformanceConfiguration.DEFAULT` 有 2 个 risk 分片,`POOL_DEPOSIT`(shard 0)与借款人 `uid=1`(`1&1`=shard 1)不同片 → 贷款看不到那笔流动性。Rust 单片塌缩天然共池。
+
+- **定性**:属"单分片塌缩"刻意差异(§6)的直接后果,非翻译 bug。
+- **解决**:向量令借款人落在注资同片(`uid & (riskEngines-1) == 0`,即偶数 uid=2 → shard 0),使场景在 Java 分片模型与 Rust 塌缩模型下**都自洽**,真正跑通 LOAN_BORROW/LOAN_REPAY 的钱账。
+- **教训**:凡涉及**按币种/全局键**(非按 uid)的分片本地状态(借贷池、后续 LIF 池等),向量必须让相关 uid 与注资 shard 同片,否则撞上塌缩差异。
+
 ---
 
 ## 8. 命令流 DSL 参考
@@ -185,7 +224,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | VERB | 字段 | 语义 | 发 R 行? |
 |------|------|------|:--:|
 | `CUR` | `id digit` | 注册货币,`scale_k = 10^digit` | 否(setup) |
-| `SYM_SPOT` | `id base quote baseScale quoteScale taker maker` | 现货对 | 否(setup) |
+| `SYM_SPOT` | `id base quote baseScale quoteScale taker maker` +可选 `initialLtv liqLtv marginCallLtv maxAmount maxTermDays` | 现货对(带 `initialLtv` 时启用借贷) | 否(setup) |
 | `SYM_FUT` | `id kind(PERP/DELIVERY) base quote baseScale quoteScale taker maker feeScale initMargin initMarginScaleK` | 期货 symbol(MM/杠杆档表两侧固定) | 否(setup) |
 | `MARK` | `sym price` | 设标记价(不触发扫描) | 否(setup) |
 | `MARK_AT` | `sym price ts` | 带时间戳标记价(Rust 触发定向扫) | 否(trigger) |
@@ -198,6 +237,10 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | `IF_DEPOSIT` | `sym amount txid` | 保险基金充值 | 否(setup) |
 | `SETTLE_PNL` | `sym price txid` | 交割结算 | 是 |
 | `SETTLE_FUNDING` | `sym action rate rateScaleK txid` | 资金费结算 | 是 |
+| `POS_MODE` | `uid hedge(0/1)` | 切换单向/双向持仓(HEDGE 向量用) | 是 |
+| `POOL_DEPOSIT` | `cur amount txid` | 借贷池注资(分片本地,见 §7.3) | 是 |
+| `LOAN_CREATE` | `uid sym loanId collateral principal rateMode ts txid` | isolated 开贷(锁抵押、放本金) | 是 |
+| `LOAN_REPAY` | `uid loanId repay ts txid` | isolated 还款(还本息、赎抵押) | 是 |
 
 ---
 
@@ -246,6 +289,8 @@ cargo test --test conformance
 - **清算/ADL 的 fund event 层**:目前只对拍 STATE(Java 异步捕获不稳);要事件级需 Java 侧确定性捕获机制。
 - **Java 侧两个问题**(§7.2)属参考引擎的架构特性/功能缺口,是否在 Java 侧修(深修批处理时序 / 补普通 FOK)是独立决策,当前 Rust 已正确、conformance 已规避。
 - **差分模糊扩面**:目前随机现货 GTC+IOC;可扩期货/清算随机流(需处理异步 settle 的确定性)。
+- **①b 组件对拍扩面**:已覆盖 8 个数学敏感 Java 单测;Java `tests/unit` 里非数学的行为类单测、`core/**` 的 orderbook/event 组件测试(`OrderBookBaseTest`/`OrdersBucketNaiveTest`/`SimpleEventsProcessorTest` 等)尚未逐条对拍。
+- **③ 向量扩面**:已覆盖现货/期货/交割/清算/ADL/funding/**loan/cross/hedge**;可继续加 cross-loan、loan 强平、IF/LIF 注资等 loan 子场景。
 
 ---
 

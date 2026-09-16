@@ -1,0 +1,22 @@
+# CROSS 保证金:单账户在两个 symbol 上同时持 CROSS 仓,保证金/PnL 走账户级聚合(区别于 ISOLATED 逐仓)。
+# uid=1 用同一笔 USDT 余额在 A、B 两个永续上各开一手 CROSS 多头;对手方 uid=2/3 各接一腿。
+# 之后 A 标记价上行(uid1 A 仓浮盈),再结算 A 的 PnL。核对两侧对 cross 账户余额/仓位/PnL 的口径一致。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=6001 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+SYM_FUT id=6002 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=6001 price=1000
+MARK sym=6002 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+# uid=2 挂 A 卖、uid=3 挂 B 卖(maker);uid=1 分别吃两腿,得到两笔 CROSS 多头
+PLACE_FUT oid=1 uid=2 sym=6001 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=6001 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=3 sym=6002 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=1 sym=6002 price=1000 size=10 action=BID margin=CROSS leverage=1
+# 两笔 CROSS 仓由同一 USDT 账户余额聚合承担保证金(R1 account-wide free margin);
+# 核对两侧对 cross 账户终态(余额未被逐仓重复扣、两仓并存)的口径一致。

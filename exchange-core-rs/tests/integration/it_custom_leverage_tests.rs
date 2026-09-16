@@ -128,7 +128,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 10_000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 50_000, 20);
 
@@ -162,7 +162,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 10_000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 50_000, 20);
 
@@ -189,7 +189,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, deposit, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 12_000, 20);
 
@@ -229,7 +229,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 3_500, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 100_000, 20);
 
@@ -272,7 +272,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 10_000, 20);
 
@@ -318,7 +318,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 100_000, 10);
 
         // leverage 100 超出最大 → RISK_INVALID_LEVERAGE。
@@ -350,7 +350,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 10_000, 20);
 
@@ -383,7 +383,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 10_000, 20);
 
@@ -420,7 +420,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 10_000, 20);
 
@@ -452,7 +452,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, charge, 10);
 
         assert_eq!(
@@ -488,7 +488,7 @@ mod tests {
         api.add_currency(21, 1); // 现货 base currency
         assert_eq!(api.add_futures_symbol(fut.clone()), CommandResultCode::Success);
         assert_eq!(api.add_symbol(spot.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(fut.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(fut.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 2_000, 10);
 
         // 50x 开 50 手：initMargin=50000/50=1000 + taker fee 50*1000*2/100=1000 = 2000（恰好用满）。
@@ -545,7 +545,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 1_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 100_000, 20);
 
@@ -568,7 +568,7 @@ mod tests {
 
         // 落价 980 触发定向强平：equity 归零 → 全平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(spec.symbol_id, 980, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 980, 2_000), CommandResultCode::Success);
         assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "50x 多头应被全平");
         assert!(api.total_balance().is_global_zero());
     }
@@ -582,7 +582,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 2_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 100_000, 20);
 
@@ -611,7 +611,7 @@ mod tests {
 
         // 落价 980 触发定向强平：只平 1 手恢复维持保证金。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(spec.symbol_id, 980, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 980, 2_000), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 49, "维持保证金强平只平 1 手");
         assert_eq!(api.user_position(UID_2, spec.symbol_id).unwrap().open_volume, 49, "对手 SHORT 相应减 1");
         assert!(api.total_balance().is_global_zero());
@@ -625,7 +625,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 2_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 100_000, 20);
 
@@ -641,7 +641,7 @@ mod tests {
 
         // 落价 981 仅触发预警：equity 仍 >= 维持保证金 → 不强平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(spec.symbol_id, 981, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 981, 2_000), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 50, "981 未达强平阈值，仓位不变");
         assert!(api.total_balance().is_global_zero());
     }
@@ -654,7 +654,7 @@ mod tests {
         api.add_currency(BNB_ID, 1);
         api.add_currency(USDT_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 50_020, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, MAX_VALUE, 20);
 
@@ -687,7 +687,7 @@ mod tests {
 
         // 落价 25 触发定向强平（按最新 50x）→ 全平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(spec.symbol_id, 25, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 25, 2_000), CommandResultCode::Success);
         assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "按最新 50x 应在 25 触发全平");
         assert!(api.total_balance().is_global_zero());
     }

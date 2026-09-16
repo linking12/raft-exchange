@@ -150,7 +150,7 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert_eq!(api.balance_adjustment(SHORT_USER, QUOTE, 100_000, 2), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     // SHORT_USER 先挂 ASK@100 size6（maker，开空）。
@@ -185,7 +185,7 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert_eq!(short_pos.open_volume, 6);
 
     // mark 价推高到 150，双方互相平仓。
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 150), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 150, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
@@ -229,7 +229,7 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_eq!(api.add_user(COUNTER), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(TRADER, QUOTE, 100_000, 1), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(COUNTER, QUOTE, 100_000, 2), CommandResultCode::Success);
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     // 开仓：COUNTER ASK@100 size5（maker，开空），TRADER BID@100 size5（taker，开多）。
@@ -278,7 +278,7 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_eq!(trader_pos.open_volume, 10, "5+5=10，同向加仓累加");
     assert_eq!(trader_pos.open_price_sum, 1_050, "500(5*100)+550(5*110)");
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 130), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 130, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
@@ -305,7 +305,7 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_eq!(trader_pos.open_volume, 6, "10-4=6");
     assert_eq!(trader_pos.profit, 0, "部分平不实现盈亏（递延进剩余成本基）");
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 140), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 140, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     // 完全平仓剩余 6：mirror pair 收尾。
@@ -349,7 +349,7 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_eq!(api.add_user(COUNTER), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(FLIPPER, QUOTE, 100_000, 1), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(COUNTER, QUOTE, 100_000, 2), CommandResultCode::Success);
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     // 开仓：COUNTER ASK@100 size10（maker，开空），FLIPPER BID@100 size10（taker，开多）。
@@ -373,7 +373,7 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 120), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 120, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     // 翻仓：COUNTER 先挂 BID@120 size15（maker，超过其现有 Short10，平满 10 再反手开多 5）；FLIPPER 吃单 ASK@120 size15（taker，非 reduce-only，超过其现有 Long10，平满 10 再反手开空 5）。
@@ -408,7 +408,7 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_eq!(counter_pos.profit, -200, "对侧对称亏损，同样递延未支付");
 
     // 最终收尾：mark 再变动，双方对敲平掉翻仓后的剩余 5，profit 一次性结清支付。
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 90), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 90, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     assert_eq!(
@@ -450,7 +450,7 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
     assert_eq!(api.add_user(COUNTER), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(MARGIN_USER, QUOTE, 100_000, 1), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(COUNTER, QUOTE, 100_000, 2), CommandResultCode::Success);
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     assert_eq!(
@@ -495,7 +495,7 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
     let pos = api.user_position(MARGIN_USER, FUT_SYMBOL).expect("追加保证金前必须已有仓位");
     assert_eq!(pos.extra_margin, 500, "500 转入仓内 extra_margin（scale_k=1 恒等换算）");
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success); // 价格不变，聚焦保证金退款
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success); // 价格不变，聚焦保证金退款
     assert_futures_invariants(&api);
 
     // 平仓：mirror pair 全平，extra_margin 应整额退回 accounts。
@@ -543,7 +543,7 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
         assert_eq!(api.add_user(uid), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(uid, QUOTE, 10_000_000, uid), CommandResultCode::Success);
     }
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 1_000), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 1_000, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     // MAKER 挂 ASK@1000 size20（resting，尚无对手盘，纯 pending，不动 accounts）。
@@ -638,7 +638,7 @@ fn scenario_f_cross_margin_mode_open_and_close_conserves() {
     assert_eq!(api.add_user(COUNTER), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(CROSS_USER, QUOTE, 100_000, 1), CommandResultCode::Success);
     assert_eq!(api.balance_adjustment(COUNTER, QUOTE, 100_000, 2), CommandResultCode::Success);
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     assert_eq!(
@@ -665,7 +665,7 @@ fn scenario_f_cross_margin_mode_open_and_close_conserves() {
     assert_eq!(pos.margin_mode, MarginMode::Cross);
     assert_eq!(pos.direction, PositionDirection::Long);
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 130), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 130, 0), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
     assert_eq!(
@@ -706,7 +706,7 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
         assert_eq!(api.add_user(uid), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(uid, QUOTE, 10_000, uid), CommandResultCode::Success);
     }
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
 
     // B 开空 10，A 开多 10 @100（互为对手方）。
     assert_eq!(
@@ -728,7 +728,7 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
     assert_eq!(naive_conservation(&api, QUOTE), 0, "开仓阶段两边都在 naive 公式范围内");
     assert_futures_conservation(&api);
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 120), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 120, 0), CommandResultCode::Success);
 
     // C 开一笔全新的多头 @120（resting maker），A 拿自己已有的多头 10 去平（taker，对手方是
     // 从未跟 A 打过交道的 C，不是 B）。
@@ -821,7 +821,7 @@ proptest! {
             assert_futures_invariants(&api);
         }
 
-        prop_assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
+        prop_assert_eq!(api.set_mark_price(FUT_SYMBOL, 100, 0), CommandResultCode::Success);
         assert_futures_invariants(&api);
 
         // 命令级 order_id 全局单调递增（同时充当 order book id 与 MARGIN_ADJUSTMENT 的幂等 txid 命名空间），从 1000 起跳，确保不与上面播种阶段用过的 1..=n_users 冲突。
@@ -881,7 +881,7 @@ proptest! {
                     });
                 }
                 FutGenCmd::SetMarkPrice { price } => {
-                    let _ = api.set_mark_price(FUT_SYMBOL, *price);
+                    let _ = api.set_mark_price(FUT_SYMBOL, *price, 0);
                 }
             }
             assert_futures_invariants(&api);

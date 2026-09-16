@@ -200,3 +200,26 @@ mod tests {
         assert_eq!(loan.last_accrue_ts(), 1_000, "cursor advances: no principal means interest can never accrue anyway");
     }
 }
+
+/// Java 黄金值对拍：镜像 `LoanRateCurveTest.fixedModel_openRate_appliesAdjustWithFloor`。
+/// 期望值即 Java `assertEquals` 字面量；不同则为翻译 bug，不得改期望。
+#[cfg(test)]
+mod java_parity {
+    use super::*;
+
+    #[test]
+    fn fixed_open_rate_applies_adjust_with_floor() {
+        // Java 用 LoanService，其 floating current_rate_bps[2]=500；此处直接构造等价 floating。
+        let mut floating = FloatingRateModel::default();
+        floating.current_rate_bps.insert(2, 500);
+
+        let zero = FixedRateModel { locked_rate_adjust_bps: 0 };
+        assert_eq!(zero.open_rate_bps(&floating, 2), 500, "adjust=0 → 同 Floating");
+
+        let plus = FixedRateModel { locked_rate_adjust_bps: 50 };
+        assert_eq!(plus.open_rate_bps(&floating, 2), 550, "Fixed = Floating + adjust");
+
+        let minus = FixedRateModel { locked_rate_adjust_bps: -600 };
+        assert_eq!(minus.open_rate_bps(&floating, 2), 0, "减穿则封底 0");
+    }
+}

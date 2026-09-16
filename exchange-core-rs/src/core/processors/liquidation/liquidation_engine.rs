@@ -754,6 +754,66 @@ mod tests {
         assert!(ups.get(2).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none(), "uid=2 不在切片内，未触碰");
     }
 
+    // ---------------- CROSS scale 边界（Java LiquidationCheckCrossScaleTest 对拍） ----------------
+
+    /// Java 对拍：`LiquidationCheckCrossScaleTest#checkCross_scaledMaintenanceTruncatesToZero_noDivideByZero`。
+    /// 原始 MM 非零(=5000)、down-scale 到 quote 记账单位后整数除法截断为 0 的 CROSS 期货持有者收到定向价格触发时：
+    /// ① `check_positions` 不得因除零 panic；② 缩放后 MM=0 的健康账户（阈值=0、equity=0≥0 走早退分支）不得被误强平。
+    #[test]
+    fn check_cross_scaled_maintenance_truncates_to_zero_no_panic_no_force() {
+        const SYMBOL: i32 = 5001;
+        const BASE_CCY: i32 = 10;
+        const QUOTE_CCY: i32 = 20;
+        const U: i64 = 42;
+
+        // baseScaleK×quoteScaleK = 100×100 = 1e4；quote digit=0 → currency_scale_k=1 → down-scale 除以 1e4。
+        // raw MM = trunc_mul_div(notional=1e6, rate=5, scaleK=1000)=5000；缩放后 5000/1e4 = 0（截断归零）。
+        let mut mm = BTreeMap::new();
+        mm.insert(10_000_000i64, 5i64);
+        let spec = CoreSymbolSpecification {
+            symbol_id: SYMBOL,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: BASE_CCY,
+            quote_currency: QUOTE_CCY,
+            base_scale_k: 100,
+            quote_scale_k: 100,
+            init_margin: 1,
+            init_margin_scale_k: 1,
+            maintenance_margin: mm,
+            maintenance_margin_scale_k: 1000,
+            ..Default::default()
+        };
+
+        let mut engine = LiquidationEngine::new();
+        engine.is_running = true;
+        let mut ssp = SymbolSpecificationProvider::new();
+        ssp.add_currency(CoreCurrencySpecification { currency: BASE_CCY, currency_scale_k: 1, ..Default::default() });
+        ssp.add_currency(CoreCurrencySpecification { currency: QUOTE_CCY, currency_scale_k: 1, ..Default::default() });
+        ssp.add_symbol(spec);
+
+        let mut ups = UserProfileService::new();
+        ups.add_empty_user_profile(U);
+        let pos = SymbolPositionRecord {
+            direction: PositionDirection::Long,
+            open_volume: 1,
+            open_price_sum: 1_000_000,
+            open_init_margin_sum: 1,
+            ..SymbolPositionRecord::new(U, SYMBOL, QUOTE_CCY, MarginMode::Cross, 1)
+        };
+        ups.get_mut(U).unwrap().positions.insert(SYMBOL, pos);
+        engine.on_position_opened(U, SYMBOL);
+
+        let mut lpc = BTreeMap::new();
+        lpc.insert(SYMBOL, 1_000_000i64);
+        let cmd = markprice_cmd(SYMBOL, 1_000);
+
+        // ① 不 panic（Rust assertDoesNotThrow 等价：调用不 panic 即通过）。
+        engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
+        // ② 未误强平（Java submitCount==0 → Rust pending_commands 为空、flow 未置）。
+        assert!(engine.pending_commands.is_empty(), "缩放后归零的健康 CROSS 账户不得被误强平（且无除零 panic）");
+        assert!(ups.get(U).unwrap().positions[&SYMBOL].liquidation_flow.is_none());
+    }
+
     // ---------------- 状态机 advance_liquidation ----------------
 
     /// 造一个带进行中 flow（Liquidating）的 LONG 仓，返回 (engine, pos)。

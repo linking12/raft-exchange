@@ -95,7 +95,7 @@ mod tests {
             CommandResultCode::RiskMarkpriceNotAvailable
         );
         // 设置 mark price 后重下同一 orderId → 成功。
-        assert_eq!(api.set_mark_price(spec.symbol_id, 650), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 650, 0), CommandResultCode::Success);
         assert_eq!(
             place_fut(&mut api, 101, UID_1, spec.symbol_id, 1000, 1, OrderAction::Bid, OrderType::Gtc, 0),
             CommandResultCode::Success
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, USDT_ID, 500_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 500_000, 20);
-        assert_eq!(api.set_mark_price(spec.symbol_id, 1000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 1000, 0), CommandResultCode::Success);
 
         // 开 10w（100 手 @1000），75x。
         assert_eq!(
@@ -223,7 +223,7 @@ mod tests {
         create_user_with_money(&mut api, UID_1, USDT_ID, 10_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 4_000_000, 20);
 
-        assert_eq!(api.set_mark_price(spec.symbol_id, price), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, price, 0), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 101, UID_1, spec.symbol_id, price, size, OrderAction::Bid, OrderType::Gtc, 0), CommandResultCode::Success);
 
         // 未成交：按挂单价估值，名义 680*10；无已开仓 → unrealized/liq/mr 全 0。
@@ -274,7 +274,7 @@ mod tests {
         create_user_with_money(&mut api, UID_2, USDT_ID, 50_000, 20);
 
         // markPrice 650，UID_1 挂 10@680 lev10。
-        assert_eq!(api.set_mark_price(spec.symbol_id, 650), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 650, 0), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 10001, UID_1, spec.symbol_id, 680, 10, OrderAction::Bid, OrderType::Gtc, 10), CommandResultCode::Success);
         {
             let pos = api.user_position(UID_1, spec.symbol_id).unwrap();
@@ -292,7 +292,7 @@ mod tests {
         }
 
         // markPrice 更新到 670，UID_2 ASK 9@680 → 成交 9；openInitMarginSum = 65 + 670*9/10 = 668。
-        assert_eq!(api.set_mark_price(spec.symbol_id, 670), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 670, 0), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 10003, UID_2, spec.symbol_id, 680, 9, OrderAction::Ask, OrderType::Gtc, 0), CommandResultCode::Success);
         {
             let pos = api.user_position(UID_1, spec.symbol_id).unwrap();
@@ -312,13 +312,13 @@ mod tests {
         }
 
         // markPrice 617 仓位不变（未触发）。
-        assert_eq!(api.set_mark_price(spec.symbol_id, 617), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 617, 0), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 9);
 
         // markPrice 616 触发强平：先挂 UID_2 BID 10@616 承接 FORCE 卖单，再开引擎 + 落价触发定向扫描清仓。
         assert_eq!(place_fut(&mut api, 10006, UID_2, spec.symbol_id, 616, 10, OrderAction::Bid, OrderType::Gtc, 0), CommandResultCode::Success);
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(spec.symbol_id, 616, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 616, 2_000), CommandResultCode::Success);
         assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "mark=616 应触发逐仓全平");
         assert!(api.total_balance().is_global_zero());
     }
@@ -335,7 +335,7 @@ mod tests {
         create_user_with_money(&mut api, UID_1, USDT_ID, 500_000, 10);
         create_user_with_money(&mut api, UID_2, USDT_ID, 500_000, 20);
 
-        assert_eq!(api.set_mark_price(spec.symbol_id, 650), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 650, 0), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 10001, UID_1, spec.symbol_id, 680, 1000, OrderAction::Bid, OrderType::Gtc, 10), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 10002, UID_2, spec.symbol_id, 680, 1000, OrderAction::Ask, OrderType::Gtc, 10), CommandResultCode::Success);
 
@@ -348,7 +348,7 @@ mod tests {
         }
 
         // markPrice 622：分档累加 MM → LP=620，marginRatioScaleK=817（Java 断 0.817*scaleK）。
-        assert_eq!(api.set_mark_price(spec.symbol_id, 622), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 622, 0), CommandResultCode::Success);
         {
             let p = pos_view(&api, UID_1, spec.symbol_id);
             assert_eq!(p.open_volume, 1000);
@@ -359,7 +359,7 @@ mod tests {
         // markPrice 620 触发强平：UID_2 BID 1000@620 承接，开引擎 + 落价清仓。
         assert_eq!(place_fut(&mut api, 10003, UID_2, spec.symbol_id, 620, 1000, OrderAction::Bid, OrderType::Gtc, 10), CommandResultCode::Success);
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(spec.symbol_id, 620, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(spec.symbol_id, 620, 2_000), CommandResultCode::Success);
         assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "mark=620(LP) 应触发全平");
         assert!(api.total_balance().is_global_zero());
     }
@@ -392,7 +392,7 @@ mod tests {
         api.add_currency(1, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(spec.clone()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 10_000, 0), CommandResultCode::Success);
         create_user_with_money(&mut api, UID_1, QUOTE_ID, 1_000, 10);
         create_user_with_money(&mut api, UID_2, QUOTE_ID, 4_000_000, 20);
 
@@ -427,7 +427,7 @@ mod tests {
             CommandResultCode::Success
         );
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price_at(SYMBOL_ID, 9_054, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 9_054, 2_000), CommandResultCode::Success);
         assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "mark=9054 应触发全仓全平");
         assert!(api.total_balance().is_global_zero());
     }

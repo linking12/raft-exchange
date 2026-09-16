@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT), charge);
 
         let mark_price = 750 * 100_000; // 750 * quoteScaleK = 75_000_000
-        assert_eq!(api.set_mark_price(SYM_FUT, mark_price), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, mark_price, 0), CommandResultCode::Success);
 
         let size = (0.1 * 1_000.0) as i64; // 100
         let price = (753.4 * 100_000.0) as i64; // 75_340_000
@@ -233,7 +233,7 @@ mod tests {
         api.add_currency(BNB, BNB_SCALE);
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 750 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 750 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -267,7 +267,7 @@ mod tests {
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -297,7 +297,7 @@ mod tests {
         api.add_currency(BNB, BNB_SCALE);
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -331,7 +331,7 @@ mod tests {
         api.add_currency(BNB, BNB_SCALE);
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -361,7 +361,7 @@ mod tests {
         api.add_currency(BNB, BNB_SCALE);
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 100 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -419,7 +419,7 @@ mod tests {
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -445,7 +445,7 @@ mod tests {
         api.add_currency(BNB, BNB_SCALE);
         assert_eq!(api.add_futures_symbol(btc_usdt_fut()), CommandResultCode::Success);
         assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_BTC_FUT, 10_000 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_BTC_FUT, 10_000 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -764,7 +764,7 @@ mod tests {
         api.add_currency(USDT, USDT_SCALE);
         assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
         assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, 500 * 100_000, 0), CommandResultCode::Success);
 
         let usdt_deposit = 1_000 * USDT_SCALE;
         create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
 
         let mark_price = 500 * 100_000; // 50_000_000
-        assert_eq!(api.set_mark_price(SYM_FUT, mark_price), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM_FUT, mark_price, 0), CommandResultCode::Success);
 
         // UID_1 仅 300 USDT + leverage 10：openPriceSum(500 USDT) > balance(300 USDT)，强平价才为正。
         let uid1_deposit = 300 * USDT_SCALE;

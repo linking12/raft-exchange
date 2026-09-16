@@ -72,7 +72,7 @@ mod tests {
         api.add_currency(BASE, 1);
         api.add_currency(USD, 1);
         assert_eq!(api.add_futures_symbol(futures_spec(SYMBOL)), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL, mark), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL, mark, 0), CommandResultCode::Success);
         api
     }
 
@@ -302,8 +302,8 @@ mod tests {
         api.add_currency(USD, 1);
         assert_eq!(api.add_futures_symbol(futures_spec(symbol_a)), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(futures_spec(symbol_b)), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(symbol_a, mark), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(symbol_b, mark), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(symbol_a, mark, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(symbol_b, mark, 0), CommandResultCode::Success);
         api
     }
 
@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(api.user_account(TRADER, USD), 10, "扣 fee 100 后 accounts=10");
 
         // 拉高 mark(A) 到 2000 → A.PnL = +5000。
-        assert_eq!(api.set_mark_price(symbol_a, 2000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(symbol_a, 2000, 0), CommandResultCode::Success);
 
         // B CROSS LONG 5@1000：ISOLATED A 的浮盈不该抵扣到 cross → NSF。
         assert_eq!(
@@ -369,7 +369,7 @@ mod tests {
             CommandResultCode::Success
         );
 
-        assert_eq!(api.set_mark_price(symbol_a, 2000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(symbol_a, 2000, 0), CommandResultCode::Success);
 
         assert_eq!(
             place(&mut api, 80003, LP, symbol_b, MARK_PRICE, OPEN_SIZE, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, LEVERAGE),

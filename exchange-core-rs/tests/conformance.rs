@@ -28,6 +28,7 @@ use exchange_core_rs::core::common::fund_event::{FundEvent, FundEventType};
 use exchange_core_rs::core::common::margin_mode::MarginMode;
 use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
+use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest, PlaceOrderRequest};
 
@@ -161,6 +162,15 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 None
             }
             "SYM_SPOT" => {
+                // 可选 loan 配置(带 initialLtv 时启用现货借贷);5 字段与 Java SymbolLoanSpecification 逐一对齐,
+                // 未给的字段两侧默认 0(0=未启用/无上限/无期限),故向量显式给全避免默认漂移。
+                let loan_config = SymbolLoanSpecification {
+                    initial_ltv_bps: opt_i64(&kv, "initialLtv", 0) as i32,
+                    liquidation_ltv_bps: opt_i64(&kv, "liqLtv", 0) as i32,
+                    margin_call_ltv_bps: opt_i64(&kv, "marginCallLtv", 0) as i32,
+                    max_amount: opt_i64(&kv, "maxAmount", 0),
+                    max_term_days: opt_i64(&kv, "maxTermDays", 0) as i32,
+                };
                 assert_eq!(api.add_symbol(CoreSymbolSpecification {
                     symbol_id: i32_of(&kv, "id"),
                     symbol_type: SymbolType::CurrencyExchangePair,
@@ -170,6 +180,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                     quote_scale_k: i64_of(&kv, "quoteScale"),
                     taker_fee: i64_of(&kv, "taker"),
                     maker_fee: i64_of(&kv, "maker"),
+                    loan_config,
                     ..Default::default()
                 }), CommandResultCode::Success);
                 None
@@ -200,10 +211,10 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 None
             }
             "MARK" => {
-                assert_eq!(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price")), CommandResultCode::Success);
+                assert_eq!(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price"), 0), CommandResultCode::Success);
                 None
             }
-            "MARK_AT" => Some(api.set_mark_price_at(i32_of(&kv, "sym"), i64_of(&kv, "price"), i64_of(&kv, "ts"))),
+            "MARK_AT" => Some(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price"), i64_of(&kv, "ts"))),
             "ENABLE_LIQ" => {
                 api.enable_liquidation();
                 None
@@ -263,6 +274,39 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
+            // HEDGE:切换持仓模式(hedge=1 双向 / 0 单向),对应 Java ApiAdjustPositionMode。
+            "POS_MODE" => Some(api.adjust_position_mode(i64_of(&kv, "uid"), i64_of(&kv, "hedge") != 0)),
+            // loan 池注资:cmd.symbol=loan 币种、cmd.size=金额,对应 Java ApiPoolDeposit(currency/amount)。
+            "POOL_DEPOSIT" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::PoolDeposit,
+                symbol: i32_of(&kv, "cur"),
+                size: i64_of(&kv, "amount"),
+                order_id: opt_i64(&kv, "txid", 0),
+                ..Default::default()
+            })),
+            // isolated loan 开仓:reserveBidPrice=loanId / size=collateral / price=principal / userCookie=rateMode。
+            "LOAN_CREATE" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanCreate,
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+                reserve_bid_price: i64_of(&kv, "loanId"),
+                size: i64_of(&kv, "collateral"),
+                price: i64_of(&kv, "principal"),
+                user_cookie: opt_i64(&kv, "rateMode", 0) as i32,
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
+            // isolated loan 还款:reserveBidPrice=loanId / price=repayAmount。
+            "LOAN_REPAY" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanRepay,
+                uid: i64_of(&kv, "uid"),
+                reserve_bid_price: i64_of(&kv, "loanId"),
+                price: i64_of(&kv, "repay"),
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
             other => panic!("未支持的命令 verb: {other}"),
         };
         if let Some(rc) = rc {
@@ -295,9 +339,16 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
         syms.sort_unstable();
         syms.dedup();
         for s in syms {
-            for r in p.positions.values().filter(|r| r.symbol == s && r.open_volume != 0) {
-                let dir = format!("{:?}", r.direction).to_uppercase();
-                out.push(format!("POS {uid} {s} {dir} {} {}", r.open_volume, r.open_price_sum));
+            // HEDGE 同 symbol 可有 LONG/SHORT 两腿:按方向名排序,两侧口径一致(单腿向量下为 no-op)。
+            let mut legs: Vec<(String, i64, i64)> = p
+                .positions
+                .values()
+                .filter(|r| r.symbol == s && r.open_volume != 0)
+                .map(|r| (format!("{:?}", r.direction).to_uppercase(), r.open_volume, r.open_price_sum))
+                .collect();
+            legs.sort();
+            for (dir, vol, sum) in legs {
+                out.push(format!("POS {uid} {s} {dir} {vol} {sum}"));
             }
         }
     }
