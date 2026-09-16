@@ -23,6 +23,7 @@ mod it_place_margin_order_nsf_tests;
 mod it_price_scale_tests;
 mod it_reset_fee_tests;
 mod it_spot_futures_mixed_tests;
+mod it_spot_markprice_from_trade_tests;
 mod it_spot_trading_fee_tests;
 mod it_liquidation_tests;
 mod it_adl_tests;

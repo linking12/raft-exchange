@@ -11,7 +11,6 @@ use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::margin_mode::MarginMode;
-use crate::core::common::isolated_loan_record::LoanRateMode;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::processors::risk_engine::RiskEngine;
 
@@ -92,19 +91,6 @@ pub struct MarginAdjustmentRequest {
     pub amount: i64,
     pub margin_mode: MarginMode,
     pub order_id: i64,
-}
-
-/// `LOAN_CREATE`（isolated 开贷）入参。字段映射见 [`ExchangeApi::loan_create`]。
-pub struct LoanCreateRequest {
-    pub uid: i64,
-    pub symbol: i32,
-    pub loan_id: i64,
-    pub collateral: i64,
-    pub principal: i64,
-    pub rate_mode: LoanRateMode,
-    pub txid: i64,
-    /// 开贷时刻：利息按 elapsed 计息的起算点，必填。
-    pub timestamp: i64,
 }
 
 /// 对应 Java `ExchangeApi`：构造命令、提交 [`ExchangeCore::process_command`]、取回结果；本期单线程直调（Java 版经 Disruptor 异步提交+Future，此处退化为同步直调）。
@@ -340,65 +326,10 @@ impl ExchangeApi {
 
     /// `LOAN_CREATE`（isolated 开贷）。字段映射：`loan_id→reserve_bid_price`、`collateral→size`、
     /// `principal→price`、`rate_mode→user_cookie`、`txid→order_id`。`timestamp` 必填（利息按 elapsed 计息的起算点）。
-    pub fn loan_create(&mut self, req: LoanCreateRequest) -> CommandResultCode {
-        self.run(OrderCommand {
-            command: OrderCommandType::LoanCreate,
-            uid: req.uid,
-            symbol: req.symbol,
-            reserve_bid_price: req.loan_id,
-            size: req.collateral,
-            price: req.principal,
-            user_cookie: req.rate_mode.code() as i32,
-            order_id: req.txid,
-            timestamp: req.timestamp,
-            ..Default::default()
-        })
-    }
-
-    /// `LOAN_REPAY`（isolated 还款）。`loan_id→reserve_bid_price`、`repay→price`、`txid→order_id`。
-    /// `timestamp` 必填：还款按 elapsed 结息，ts 决定利息，不设默认。
-    pub fn loan_repay(&mut self, uid: i64, loan_id: i64, repay: i64, txid: i64, timestamp: i64) -> CommandResultCode {
-        self.run(OrderCommand {
-            command: OrderCommandType::LoanRepay,
-            uid,
-            reserve_bid_price: loan_id,
-            price: repay,
-            order_id: txid,
-            timestamp,
-            ..Default::default()
-        })
-    }
-
-    /// `REPRICE_LOAN_RATES`（浮动利率重定价）。`timestamp` 必填：利率累积器按 ts 推进（advance_accumulator），
-    /// ts 决定这段区间按旧利率结算多少，不设默认。
-    pub fn reprice_loan_rates(&mut self, txid: i64, timestamp: i64) -> CommandResultCode {
-        self.run(OrderCommand {
-            command: OrderCommandType::RepriceLoanRates,
-            order_id: txid,
-            timestamp,
-            ..Default::default()
-        })
-    }
-
-    /// `LIQUIDATION_SCAN`（清算扫描）。`slice→uid`、`slice_count→size`、`symbol=-1`（广播）。
-    /// `timestamp` 必填：它就是扫描 tick（slice 轮转 + 盖到生成的 FORCE/IF/ADL 命令上），不设默认。
-    pub fn liquidation_scan(&mut self, slice: i64, slice_count: i64, timestamp: i64) -> CommandResultCode {
-        self.run(OrderCommand {
-            command: OrderCommandType::LiquidationScan,
-            symbol: -1,
-            uid: slice,
-            size: slice_count,
-            timestamp,
-            ..Default::default()
-        })
-    }
-
     /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。对应 Java `ExchangeApi::submitCommand(ApiCommand)`
     /// 的统一入口（Java 在其中 `instanceof` 分派翻成 `OrderCommand`；此处无 DTO 层，直接喂原始 `OrderCommand`）。
-    /// 用于本门面未提供专属封装的命令（loan 抵押增减/cross 全套 / internal_transfer / settle_pnl /
-    /// settle_fundingfees / if_deposit/withdraw / reset_fee 等）；时间敏感命令请优先用带 `timestamp` 的专属方法
-    /// （[`Self::loan_create`] / [`Self::loan_repay`] / [`Self::reprice_loan_rates`] / [`Self::liquidation_scan`] /
-    /// [`Self::set_mark_price`]），走 `submit` 时务必显式设 `cmd.timestamp`。
+    /// 用于本门面未提供专属封装的命令（loan 全套 / internal_transfer / settle_pnl / settle_fundingfees /
+    /// liquidation_scan / if_deposit/withdraw / reset_fee 等）。`cmd.timestamp` 由调用方（生产=Raft apply 层）设。
     pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
         self.run(cmd)
     }
