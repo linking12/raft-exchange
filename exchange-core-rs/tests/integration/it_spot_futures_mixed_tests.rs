@@ -12,31 +12,40 @@
 //! 现货 currency scale_k=1（Java digit=0），故 size_price_to_currency_scale 为恒等换算，
 //! 冻结/费率黄金值与 Java 逐位一致。
 //!
+//! 直接提交（directly-submitted）的 SETTLE_FUNDINGFEES / SETTLE_PNL 命令其余额效果可直接断言，故已补齐：
+//!   - testSpotLockUnchangedAfterFundingFeeSettlement —— `submit(SETTLE_FUNDINGFEES{symbol,action,price=rate,size=rateScaleK})`，
+//!                                                   资金费零和落进逐用户 position.profit，accounts / exchangeLocked 不变。
+//!   - testSpotLockSurvivesDelivery              —— `submit(SETTLE_PNL{symbol=delivery,price=settlePrice})`，
+//!                                                   整仓交割结算 PnL 进 accounts、移除仓位，exchangeLocked 不受影响。
+//!
 //! 不可复刻而 **SKIP** 的 @Test（harness 缺相应基础设施）：
-//!   - testSpotLockSurvivesLiquidation           —— 依赖强平触发（triggerLiquidation + updateCurrentPriceTo
-//!                                                   挂对敲单推进 R2），set_mark_price 只设价、无等价物。
-//!   - testSpotLockUnchangedAfterFundingFeeSettlement —— 依赖 SETTLE_FUNDINGFEES 命令，harness 未暴露。
-//!   - testSpotLockSurvivesDelivery              —— 依赖 SETTLE_PNL（交割结算）命令，harness 未暴露。
+//!   - testSpotLockSurvivesLiquidation           —— 依赖强平在 mark 984（1.6% 微跌，靠 spotLock 压低 cross available 才触发）
+//!                                                   的**精确触发点**；单分片 harness 的 FORCE→IF→ADL 自动排空级联能否在该临界价
+//!                                                   触发无法在不 build 的前提下核验，且其真正断言的逐笔强平 fund event 走内部
+//!                                                   排空命令、last_fund_events() 不捕获。spotLock 在期货事件后不变的核心不变量
+//!                                                   已由上面 funding / delivery 两条覆盖。
 //!   - testFundEventBidLockUnlock / testFundEventSpotFillTransfers /
 //!     testFundEventSpotFillTransfersBidTaker / testFundEventDepositWithdrawReflectLock
-//!                                                —— 依赖跨命令累计 fund event 捕获 + balance snapshot(free/locked)；
-//!                                                   harness 只暴露 last_fund_events()（最近一条命令），且
-//!                                                   BALANCE_ADJUSTMENT 在 Rust 引擎不产 fund event（无 DEPOSIT 事件），
-//!                                                   无法复刻 DEPOSIT+LOCKED+UNLOCKED 累计序列。needs harness extension。
+//!                                                —— 依赖**跨命令累计** fund event 序列（DEPOSIT→LOCKED→UNLOCKED→TRANSFER）+
+//!                                                   balance snapshot(free/locked)；harness 的 last_fund_events() 只保留最近一条
+//!                                                   命令的事件、每条命令覆盖上一条，无法累计整条序列。needs harness extension。
 //!
-//! 已翻译（9 条）：现货冻结的加/减/撤/成交/部分成交/拒单不污染/币种独立/提现边界（含期货保证金联合约束）。
+//! 已翻译（11 条）：现货冻结的加/减/撤/成交/部分成交/拒单不污染/币种独立/提现边界（含期货保证金联合约束）
+//! + 资金费结算 / 交割结算后 exchangeLocked 不变。
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+    use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{
         CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest, PlaceOrderRequest,
     };
 
@@ -47,6 +56,7 @@ mod tests {
     const SPOT_TAKER_FEE: i64 = 2;
 
     const PERP_SYMBOL: i32 = 10000; // test 9 专用期货 symbol（initFutureSymbols().get(0)）
+    const DELIVERY_SYMBOL: i32 = 10010; // Java `XBT_USD_DELIVERY`（交割合约）
 
     const UID_1: i64 = 1001;
     const UID_2: i64 = 1002;
@@ -86,6 +96,81 @@ mod tests {
             init_margin_scale_k: 100,
             ..Default::default()
         }
+    }
+
+    /// 精确复刻 Java `XBT_USD_DELIVERY`（XBT/USD 交割合约，makerFee=5 / takerFee=10 固定费）。
+    fn delivery_spec() -> CoreSymbolSpecification {
+        CoreSymbolSpecification {
+            symbol_id: DELIVERY_SYMBOL,
+            symbol_type: SymbolType::FuturesContractDelivery,
+            base_currency: BASE_ID,
+            quote_currency: QUOTE_ID,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            maker_fee: 5,
+            taker_fee: 10,
+            fee_scale_k: 0,
+            maintenance_margin: BTreeMap::from([(1_000, 5), (100_000, 10)]),
+            maintenance_margin_scale_k: 1_000,
+            max_leverage: BTreeMap::from([(2_000, 5), (100_000, 10)]),
+            init_margin: 1,
+            init_margin_scale_k: 100,
+            ..Default::default()
+        }
+    }
+
+    /// CROSS 期货开仓（leverage=1，reduce_only=false），对应 Java `createBid/AskWithOrderId(... MarginMode.CROSS)`。
+    fn cross_futures(
+        order_id: i64,
+        uid: i64,
+        symbol: i32,
+        price: i64,
+        size: i64,
+        action: OrderAction,
+    ) -> PlaceFuturesOrderRequest {
+        PlaceFuturesOrderRequest {
+            order_id,
+            uid,
+            symbol,
+            price,
+            size,
+            action,
+            order_type: OrderType::Gtc,
+            leverage: 1,
+            margin_mode: MarginMode::Cross,
+            reduce_only: false,
+        }
+    }
+
+    /// SETTLE_FUNDINGFEES：`price=fundingRate`、`size=rateScaleK`，`action` 决定 payer 侧（同向者付）。直接提交。
+    fn settle_funding_fees(
+        api: &mut ExchangeApi,
+        symbol: i32,
+        action: OrderAction,
+        rate: i64,
+        rate_scale_k: i64,
+        txid: i64,
+    ) -> CommandResultCode {
+        api.submit(OrderCommand {
+            command: OrderCommandType::SettleFundingfees,
+            symbol,
+            action: Some(action),
+            price: rate,
+            size: rate_scale_k,
+            order_id: txid,
+            ..Default::default()
+        })
+    }
+
+    /// SETTLE_PNL：交割整仓结算，`price=settlePrice`。直接提交。
+    fn settle_pnl(api: &mut ExchangeApi, symbol: i32, settle_price: i64, txid: i64) -> CommandResultCode {
+        api.submit(OrderCommand {
+            command: OrderCommandType::SettlePnl,
+            symbol,
+            price: settle_price,
+            order_id: txid,
+            ..Default::default()
+        })
     }
 
     /// 建 currencies + 现货 symbol（不建期货 symbol —— 纯现货用例）。
@@ -413,6 +498,119 @@ mod tests {
         assert_eq!(api.user_locked(UID_1, BASE_ID), 0, "取消 ASK 后 BASE lock=0");
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "QUOTE accounts 不变");
         assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts 不变");
+        assert_conserved(&api);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Test 2（backfill）：资金费率结算 + 现货挂单 → exchangeLocked 不受影响。
+    //   翻译自 Java testSpotLockUnchangedAfterFundingFeeSettlement。SETTLE_FUNDINGFEES 直接提交，
+    //   零和落进逐用户 position.profit，不动 accounts / exchangeLocked。
+    //
+    //   UID_1 deposit=20000，CROSS LONG 10@1000（maker, makerFee=100）→ accounts=19900
+    //   UID_2 deposit=20000，CROSS SHORT 10@1000（taker, takerFee=200）→ accounts=19800
+    //   现货 BID 5@1000 → exchangeLocked = 5×(1000+2) = 5010
+    //   资金费 rate=1/rateScaleK=100，action=BID → LONG 付、SHORT 收：
+    //     fee = trunc(openVolume(10) × mark(1000) × 1 / 100) = 100
+    //     UID_1 profit=-100，UID_2 profit=+100；两者 accounts 与 UID_1 exchangeLocked 全不变。
+    // ─────────────────────────────────────────────────────────────
+    #[test]
+    fn spot_lock_unchanged_after_funding_fee_settlement() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(BASE_ID, 1);
+        api.add_currency(QUOTE_ID, 1);
+        assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success);
+        assert_eq!(api.add_symbol(spot_spec()), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYMBOL, 1_000), CommandResultCode::Success);
+
+        fund(&mut api, UID_1, QUOTE_ID, 20_000, 1);
+        fund(&mut api, UID_2, QUOTE_ID, 20_000, 2);
+
+        // 开 CROSS LONG 10@1000：UID_1 maker BID（先挂，静止），UID_2 taker ASK 撮合。
+        assert_eq!(
+            api.place_futures_order(cross_futures(20001, UID_1, PERP_SYMBOL, 1_000, 10, OrderAction::Bid)),
+            CommandResultCode::Success
+        );
+        assert_eq!(
+            api.place_futures_order(cross_futures(20002, UID_2, PERP_SYMBOL, 1_000, 10, OrderAction::Ask)),
+            CommandResultCode::Success
+        );
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 19_900, "UID_1 = 20000 - makerFee(100)");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), 19_800, "UID_2 = 20000 - takerFee(200)");
+
+        // 现货 BID 5@1000 → 冻结 5010。
+        let spot_lock = 5 * (1_000 + SPOT_TAKER_FEE); // 5010
+        assert_eq!(api.place_order(spot_bid(20003, UID_1, 1_000, 1_000, 5)), CommandResultCode::Success);
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "下现货单后 exchangeLocked=5010");
+
+        // 资金费结算：action=BID（做多付、做空收），rate=1%（1/100）。
+        let expected_fee = 10 * 1_000 / 100; // = 100
+        assert_eq!(
+            settle_funding_fees(&mut api, PERP_SYMBOL, OrderAction::Bid, 1, 100, 20004),
+            CommandResultCode::Success
+        );
+
+        // accounts 与 exchangeLocked 不变，资金费只落进 position.profit。
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 19_900, "accounts 不变（funding 落进 position.profit）");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "exchangeLocked 不受资金费影响");
+        assert_eq!(api.user_position(UID_1, PERP_SYMBOL).unwrap().profit, -expected_fee, "多头 profit=-fee");
+
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), 19_800, "UID_2 accounts 不变");
+        assert_eq!(api.user_locked(UID_2, QUOTE_ID), 0, "UID_2 无现货挂单");
+        assert_eq!(api.user_position(UID_2, PERP_SYMBOL).unwrap().profit, expected_fee, "空头 profit=+fee");
+        assert_conserved(&api);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Test 3（backfill）：交割结算 + 现货挂单 → exchangeLocked 不受影响。
+    //   翻译自 Java testSpotLockSurvivesDelivery。SETTLE_PNL 直接提交，整仓平掉交割 symbol、PnL 进 accounts。
+    //
+    //   XBT_USD_DELIVERY（makerFee=5 / takerFee=10）：
+    //     UID_1 BID 10@1000（maker, fee=50）  → accounts=9950
+    //     UID_2 ASK 10@1000（taker, fee=100） → accounts=9900
+    //   现货 BID 3@500 → exchangeLocked = 3×(500+2) = 1506
+    //   交割价 1500：LONG pnl=(1500-1000)×10=+5000 → 14950；SHORT pnl=-5000 → 4900。仓位移除。
+    //   现货 exchangeLocked 全程不变。
+    // ─────────────────────────────────────────────────────────────
+    #[test]
+    fn spot_lock_survives_delivery() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(BASE_ID, 1);
+        api.add_currency(QUOTE_ID, 1);
+        assert_eq!(api.add_futures_symbol(delivery_spec()), CommandResultCode::Success);
+        assert_eq!(api.add_symbol(spot_spec()), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(DELIVERY_SYMBOL, 1_000), CommandResultCode::Success);
+
+        fund(&mut api, UID_1, QUOTE_ID, 10_000, 1);
+        fund(&mut api, UID_2, QUOTE_ID, 10_000, 2);
+
+        // 开仓：UID_1 maker BID（LONG），UID_2 taker ASK（SHORT）。
+        assert_eq!(
+            api.place_futures_order(cross_futures(30001, UID_1, DELIVERY_SYMBOL, 1_000, 10, OrderAction::Bid)),
+            CommandResultCode::Success
+        );
+        assert_eq!(
+            api.place_futures_order(cross_futures(30002, UID_2, DELIVERY_SYMBOL, 1_000, 10, OrderAction::Ask)),
+            CommandResultCode::Success
+        );
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_950, "UID_1 = 10000 - makerFee(50)");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), 9_900, "UID_2 = 10000 - takerFee(100)");
+
+        // 现货 BID 3@500 → 冻结 1506。
+        let spot_lock = 3 * (500 + SPOT_TAKER_FEE); // 1506
+        assert_eq!(api.place_order(spot_bid(30003, UID_1, 500, 500, 3)), CommandResultCode::Success);
+        assert!(api.user_position(UID_1, DELIVERY_SYMBOL).is_some(), "交割仓位在");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "下现货单后 exchangeLocked=1506");
+
+        // 交割结算 @1500：LONG +5000、SHORT -5000，仓位移除。
+        assert_eq!(settle_pnl(&mut api, DELIVERY_SYMBOL, 1_500, 30004), CommandResultCode::Success);
+
+        assert!(api.user_position(UID_1, DELIVERY_SYMBOL).is_none(), "交割后 UID_1 仓位清空");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 14_950, "UID_1 = 9950 + pnl(5000)");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "现货 exchangeLocked 不受交割影响");
+
+        assert!(api.user_position(UID_2, DELIVERY_SYMBOL).is_none(), "交割后 UID_2 仓位清空");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), 4_900, "UID_2 = 9900 - pnl(5000)");
+        assert_eq!(api.user_locked(UID_2, QUOTE_ID), 0, "UID_2 无现货挂单");
         assert_conserved(&api);
     }
 }

@@ -20,15 +20,15 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::position_direction::PositionDirection;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
-    use crate::core::utils::core_arithmetic_utils::{
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest};
+    use exchange_core_rs::core::utils::core_arithmetic_utils::{
         calculate_maker_fee, calculate_taker_fee, size_price_to_currency_scale,
     };
 
@@ -260,5 +260,59 @@ mod tests {
     #[test]
     fn ask_gtc_maker_partial_bid_fok_budget_taker() {
         run_scenario(OrderAction::Ask, 500, OrderType::FokBudget, 1);
+    }
+
+    // 对拍 shouldRequireTakerFees_GtcCancel1：期货 BID GTC 未成交也要预留 taker 费 + 初始保证金；
+    // NSF 阶梯（仅 fee-1 → NSF；到 fee 仍差 margin → NSF；补 margin → SUCCESS）+ 撤单全额释放。
+    #[test]
+    fn should_require_taker_fees_gtc_cancel1() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(BASE_CUR, CURRENCY_SCALE_K);
+        api.add_currency(USD, CURRENCY_SCALE_K);
+        assert_eq!(api.add_futures_symbol(spec()), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, PRICE), CommandResultCode::Success);
+        assert_eq!(api.add_user(UID_2), CommandResultCode::Success);
+
+        let usdt = 100i64;
+        let size = 1i64;
+        let fee = taker_fee(size); // ceil(1*10000*2/100) = 200
+        let init_margin = PRICE * size / 100; // notional × initMargin(1) / initMarginScaleK(100) = 100
+
+        let bid = |oid: i64| PlaceFuturesOrderRequest {
+            order_id: oid, uid: UID_2, symbol: SYM, price: PRICE, size,
+            action: OrderAction::Bid, order_type: OrderType::Gtc, leverage: 1,
+            margin_mode: MarginMode::Isolated, reduce_only: false,
+        };
+
+        // 仅 100 < fee+margin(300) → NSF。
+        assert_eq!(api.balance_adjustment(UID_2, USD, usdt, 1), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(bid(203)), CommandResultCode::RiskNsf);
+        // 置为 fee-1（199）→ NSF。
+        assert_eq!(api.balance_adjustment(UID_2, USD, -usdt, 2), CommandResultCode::Success);
+        assert_eq!(api.balance_adjustment(UID_2, USD, fee - 1, 3), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(bid(203)), CommandResultCode::RiskNsf);
+        // +1 → fee(200)，仍差初始保证金 → NSF。
+        assert_eq!(api.balance_adjustment(UID_2, USD, 1, 4), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(bid(203)), CommandResultCode::RiskNsf);
+        // +initMargin(100) → fee+margin(300) → SUCCESS。
+        assert_eq!(api.balance_adjustment(UID_2, USD, init_margin, 5), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(bid(203)), CommandResultCode::Success);
+
+        // 撤单全额释放，account = fee + initMargin。
+        assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 203, uid: UID_2, symbol: SYM }), CommandResultCode::Success);
+        assert_eq!(api.user_account(UID_2, USD), fee + init_margin, "撤后 = fee + initMargin");
+        assert_eq!(api.fees(USD), 0);
+        assert!(api.total_balance().is_global_zero());
+    }
+    // Java ITFeesDynamic* 用独立内联公式 calculateFee = price*size*step*sideFee/scale（step=quoteScaleK,
+    // scale=feeScaleK, 整除）——把生产函数派生的费用 oracle 钉死到该独立公式，证明"金额对"不依赖被测库自身函数。
+    #[test]
+    fn fee_oracle_matches_java_independent_formula() {
+        for filled in [1i64, 30, 100] {
+            let java_maker = PRICE * filled * QUOTE_SCALE_K * MAKER_FEE / FEE_SCALE_K;
+            let java_taker = PRICE * filled * QUOTE_SCALE_K * TAKER_FEE / FEE_SCALE_K;
+            assert_eq!(maker_fee(filled), java_maker, "maker@{filled} = Java price*size*step*makerFee/scale");
+            assert_eq!(taker_fee(filled), java_taker, "taker@{filled} = Java price*size*step*takerFee/scale");
+        }
     }
 }

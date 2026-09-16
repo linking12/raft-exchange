@@ -14,18 +14,24 @@
 //! `leverage=1`——与该 base 率等价（notional*initMargin/(initMarginScaleK*1)=notional*1%），验金对齐 Java 黄金
 //! 值（如 `testCrossMarginWithdraw` 的 570 = 仓位保证金 250 + taker 费预留 320）。
 //!
-//! **未翻译的 @Test（及原因）**——harness 缺相应基础设施，按简报 SKIP 规则跳过（共 7 个）：
-//!   - 强平类 4 个（`testCrossMarginLiquidation`/`2`/`3`/`testCrossMarginLiquidationWarning`）：依赖
-//!     `LiquidationEngine::stop` + `triggerLiquidation`（主动驱动 FORCE→IF→ADL）+ `updateCurrentPriceTo` 推进 R2 +
-//!     report 层 unrealizedProfit/liquidationPrice/marginRatioScaleK 字段 + LIQUIDATION_ALERT/ADL_ORIGIN_CLOSE
-//!     累计 fund event 断言。`ExchangeApi` 无强平引擎控制入口，且 `set_mark_price` 只做 targeted 扫描，无法复刻。
+//! 强平类：`testCrossMarginLiquidation`（基础全仓强平）+ `testCrossMarginLiquidationWarning`（预警不强平）已
+//! backfill——harness 现支持 `enable_liquidation()` + `set_mark_price_at(sym, adverse, ts)` 触发定向扫描
+//! （FORCE→IF→ADL 同调自动排空）。强平 fund event 走内部排空命令、`last_fund_events()` 不捕获，故断言最终
+//! **状态**（仓位减仓/移除 + 账户 + 全局守恒 `total_balance().is_global_zero()`）+ 强平前 report 派生
+//! （unrealized_pnl）。MARGIN_ALERT/LIQUIDATION_ALERT 在 Rust 外置 no-op，不断言告警事件。
+//!
+//! **未翻译的 @Test（及原因）**——按简报 SKIP 规则跳过（共 5 个）：
+//!   - 强平类 2 个（`testCrossMarginLiquidation2` / `testCrossMarginLiquidation3`）：依赖 `updateCurrentPriceTo`
+//!     推进 R2 后的**精确剩余仓位/账户黄金值**（Liquidation2）与 6 用户混合 isolated/cross 的 ADL 级联 + stuck-check
+//!     多轮 `triggerLiquidation` + LIQUIDATION_ALERT/ADL_ORIGIN_CLOSE 累计 fund event 断言（Liquidation3）——
+//!     多 symbol/多用户涌现性级联，单分片 targeted 扫描 + 强平事件不捕获无法逐值复刻。
 //!   - 现货交叉类 2 个（`testPlaceExchange`/`testPlaceExchange2`）：断言 `available(profile,cur) =
 //!     accounts − exchangeLocked`（report 派生字段），验证「下现货单时 NSF 校验要合计该币种所有 CROSS 期货持仓保证金」；
 //!     harness 未暴露 exchangeLocked 报表派生量，跳过。
 //!   - `testGlobalBalance`：依赖 `initFeeSymbols/initFeeUsers`（SYMBOL_MARGIN=5991 的 USD/JPY 期货基类配置）+
 //!     `totalBalanceReport().isGlobalBalancesAllZero()` 报表 + IOC `reservePrice`，非本 harness 期货路径的干净子集，跳过。
 //!
-//! 其余 12 个已翻译（事件断言类 `testOpenPosition4Bid/Ask`、`testOpenMultiplePosition4Bid/Ask`、
+//! 其余 14 个已翻译（事件断言类 `testOpenPosition4Bid/Ask`、`testOpenMultiplePosition4Bid/Ask`、
 //! `testClosePosition`、`testPartialClosePosition` 只保留 accounts/仓位态断言——harness 无逐笔
 //! FuturesExecutionReport / 累计 FundEvent，事件字段断言无法复刻，同 `it_future_basic_tests.rs` 的降级策略）。
 
@@ -33,14 +39,14 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::position_direction::PositionDirection;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest};
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest};
 
     // ==========================================================================================
     // 常量：逐字对齐 Java TestConstants / initFutureSymbol(s)。
@@ -550,5 +556,81 @@ mod tests {
         assert_eq!(api.user_position(UID_2, SYMBOL_ID).unwrap().open_volume, 9);
         assert_eq!(api.user_position(UID_2, SYMBOL_ID).unwrap().direction, PositionDirection::Short);
         assert_conserved(&api);
+    }
+
+    // ==========================================================================================
+    // 13. testCrossMarginLiquidation —— 全仓双 symbol（BTC LONG + ETH SHORT）两价暴跌 → 强平（至少一腿）。
+    //     精确剩余数是多 symbol 涌现性级联（见文件头 Liquidation2/3 SKIP）；断核心行为 + 全局守恒。
+    // ==========================================================================================
+
+    #[test]
+    fn cross_margin_liquidation_reduces_positions() {
+        let mut api = setup_two();
+        seed_user(&mut api, UID_1, 10_000, 1);
+        seed_user(&mut api, UID_2, MAX_VALUE, 2);
+        seed_user(&mut api, UID_3, MAX_VALUE, 3);
+
+        // UID_1 全仓：BTC BID(LONG)@10000 + ETH ASK(SHORT)@15000；UID_2 对吃。
+        assert_eq!(place(&mut api, 1005, UID_1, BTC_SYM, 10_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 1007, UID_1, ETH_SYM, 15_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 1006, UID_2, BTC_SYM, 10_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 1008, UID_2, ETH_SYM, 15_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
+        let initial = api.user_position(UID_1, BTC_SYM).unwrap().open_volume
+            + api.user_position(UID_1, ETH_SYM).unwrap().open_volume;
+        assert_eq!(initial, 2);
+
+        // UID_3 仅在 BTC 上挂 BID@10000 承接 BTC 强平卖单（ETH 无 UID_3 流动性，走 IF/ADL）。
+        assert_eq!(place(&mut api, 1009, UID_3, BTC_SYM, 10_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
+
+        // 两价均暴跌（BTC→2000 LONG 巨亏、ETH→35000 SHORT 巨亏）→ 全仓强平。
+        api.enable_liquidation();
+        assert_eq!(api.set_mark_price_at(BTC_SYM, 2_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price_at(ETH_SYM, 35_000, 2_000), CommandResultCode::Success);
+
+        let remaining = api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume).unwrap_or(0)
+            + api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume).unwrap_or(0);
+        assert!(remaining < initial, "全仓强平后总仓位应减少（至少一腿被强平）");
+        assert!(api.total_balance().is_global_zero());
+    }
+
+    // ==========================================================================================
+    // 14. testCrossMarginLiquidationWarning —— 全仓双 symbol 价格波动进预警区间（MM ≤ equity < 1.2×MM）→
+    //     不强平，仓位/账户不变。MARGIN_ALERT 外置 no-op 不断言，改断状态 + 强平前 report 派生 upnl。
+    // ==========================================================================================
+
+    #[test]
+    fn cross_margin_liquidation_warning_no_liquidation() {
+        let deposit = 10_000i64;
+        let mut api = setup_two();
+        seed_user(&mut api, UID_1, deposit, 1);
+        seed_user(&mut api, UID_2, MAX_VALUE, 2);
+
+        // UID_1 全仓：BTC LONG@10000 + ETH SHORT@15000；UID_2 对吃。
+        assert_eq!(place(&mut api, 1005, UID_1, BTC_SYM, 10_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 1007, UID_1, ETH_SYM, 15_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 1006, UID_2, BTC_SYM, 10_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 1008, UID_2, ETH_SYM, 15_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
+        // account = 10000 - 10(BTC maker 固定) - 150(ETH maker 15000*1/100) = 9840。
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840);
+        assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1);
+        assert_eq!(api.user_position(UID_1, ETH_SYM).unwrap().open_volume, 1);
+        assert!(api.total_balance().is_global_zero());
+
+        // 价格波动到预警区间：BTC→5300、ETH→20000 → 不强平。
+        api.enable_liquidation();
+        assert_eq!(api.set_mark_price_at(BTC_SYM, 5_300, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price_at(ETH_SYM, 20_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840, "预警不改账户");
+        assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "预警不强平");
+        assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
+        // ETH SHORT@15000 mark 20000 → upnl = -5000。
+        let eth = api.single_user(UID_1, 0).positions.into_iter().find(|p| p.symbol == ETH_SYM).unwrap();
+        assert_eq!(eth.unrealized_pnl, -5_000);
+        // Java 黄金值：BTC LONG 腿 upnl/强平价/保证金率（跨币种 cross，ITFutureCross:833-840 MARGIN_ALERT）。
+        let btc = api.single_user(UID_1, 0).positions.into_iter().find(|p| p.symbol == BTC_SYM).unwrap();
+        assert_eq!(btc.unrealized_pnl, -4_700, "btc LONG upnl");
+        assert_eq!(btc.liquidation_price, 5_286, "btc LONG LP");
+        assert_eq!(btc.margin_ratio_scale_k, 185, "btc LONG margin ratio");
+        assert!(api.total_balance().is_global_zero());
     }
 }

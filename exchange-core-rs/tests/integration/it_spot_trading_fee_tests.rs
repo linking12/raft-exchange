@@ -13,12 +13,12 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{ExchangeApi, PlaceOrderRequest};
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceOrderRequest};
 
     // TestConstants.CURRENECY_XBT / CURRENECY_LTC
     const BASE: i32 = 3762; // XBT satoshi
@@ -108,6 +108,14 @@ mod tests {
 
         assert_eq!(api.fees(QUOTE), fee_pool_for(size), "GTC maker+taker 入池费 = 100×300000");
         assert_eq!(api.fees(BASE), 0);
+        // 逐用户 maker/taker 归属：maker(BID 买方)承担 maker 费、taker(ASK 卖方)承担 taker 费。
+        // 若引擎把两者互换，费池总额与守恒都不变、却在此失败——这是 Java `SpotExecutionReport.commission`
+        // 区分 maker/taker 佣金的可观测等价。notional = sizePriceToCurrencyScale(size*price) = size*price*1e4。
+        let notional = size * price * FEE_SCALE_FACTOR;
+        let maker_fee = size * MAKER_FEE * FEE_SCALE_FACTOR;
+        let taker_fee = size * TAKER_FEE * FEE_SCALE_FACTOR;
+        assert_eq!(BIG_MONEY - api.user_account(UID_1, QUOTE), notional + maker_fee, "maker(BID) 花费=名义+maker费");
+        assert_eq!(api.user_account(UID_2, QUOTE), notional - taker_fee, "taker(ASK) 收入=名义-taker费");
         assert_eq!(conserved(&api, BASE), 0);
         assert_eq!(conserved(&api, QUOTE), 0);
     }

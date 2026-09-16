@@ -129,6 +129,54 @@ impl ExchangeApi {
         &self.last_cmd().fund_events
     }
 
+    /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。用于本门面未提供专属封装的命令
+    /// （loan 全套 / internal_transfer / settle_pnl / settle_fundingfees / position_mode / liquidation_scan / if_deposit/withdraw / reset_fee 等）。
+    pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
+        self.run(cmd)
+    }
+
+    /// `MARKPRICE_ADJUSTMENT` 带显式时间戳（清算类场景需要时间推进 + 触发定向扫描）。
+    pub fn set_mark_price_at(&mut self, symbol: i32, price: i64, timestamp: i64) -> CommandResultCode {
+        self.run(OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, timestamp, ..Default::default() })
+    }
+
+    /// 开启清算引擎 leader 门（`is_running`），使 MARKPRICE_ADJUSTMENT / LIQUIDATION_SCAN 触发定向扫描
+    /// （对应 Java `ExchangeTestContainer.enableLiquidationEngines()`；生产由 raft leader 选举置位）。
+    pub fn enable_liquidation(&mut self) {
+        self.core.risk.liquidation_engine.is_running = true;
+    }
+
+    /// `POSITION_MODE_ADJUSTMENT`：`hedge=true`→HEDGE(action=Bid),`false`→ONEWAY(action=Ask)
+    /// （`PositionMode::of_code(action.code())`）。HEDGE 仓位读取:遍历 `ups().get(uid).positions.values()` 按 direction 过滤(±symbol 双腿)。
+    pub fn adjust_position_mode(&mut self, uid: i64, hedge: bool) -> CommandResultCode {
+        let action = if hedge { OrderAction::Bid } else { OrderAction::Ask };
+        self.run(OrderCommand { command: OrderCommandType::PositionModeAdjustment, uid, action: Some(action), ..Default::default() })
+    }
+
+    /// `SUSPEND_USER` / `RESUME_USER`。
+    pub fn suspend_user(&mut self, uid: i64) -> CommandResultCode {
+        self.run(OrderCommand { command: OrderCommandType::SuspendUser, uid, ..Default::default() })
+    }
+    pub fn resume_user(&mut self, uid: i64) -> CommandResultCode {
+        self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
+    }
+
+    /// 全局余额守恒报表（对应 Java `TotalCurrencyBalanceReportResult` / `isGlobalBalancesAllZero`）。
+    pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
+        self.core.query_total_balance()
+    }
+
+    /// 单用户报表（含 positions 的 unrealized_pnl / liquidation_price / margin_ratio_scale_k 等派生字段）。
+    /// `now_ms` 用于 loan display interest / 实时 LTV。
+    pub fn single_user(&self, uid: i64, now_ms: i64) -> crate::core::reports::SingleUserReport {
+        self.core.query_single_user(uid, now_ms)
+    }
+
+    /// 保险基金报表（futures IF available/reserved + loan LIF）。
+    pub fn insurance_fund(&self) -> crate::core::reports::InsuranceFundReport {
+        self.core.query_insurance_fund()
+    }
+
     /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。**必须先于引用它的 symbol 调用**（见模块级文档）。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });

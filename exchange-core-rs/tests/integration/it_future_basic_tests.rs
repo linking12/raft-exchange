@@ -17,14 +17,14 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::position_direction::PositionDirection;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{
         CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest,
     };
 
@@ -568,13 +568,157 @@ mod tests {
     }
 
     // ==========================================================================================
-    // SKIP —— testForceClosePosition：不可复刻。
-    //   1) 断言 report 层字段 position.unrealizedProfit / marginRatioScaleK —— harness 只暴露仓位记录，
-    //      report 聚合（含 total_margin 权益计算）不建模。
-    //   2) Java `updateCurrentPriceTo` 除设 mark 价外还挂 CROSS 对敲单并推进 R2；本 harness 无等价物。
-    //   3) 关键：`set_mark_price` 在 Rust 引擎会触发 targeted 强平扫描（RiskEngine::markprice_adjustment ->
-    //      liquidation_engine.check_positions），mark 从 10000 暴跌到 500 会使该 LONG 仓被强平，仓位态不再确定。
-    //   仓位原语级的 estimate_unrealized_profit / estimate_margin_ratio_scale_k 已在
-    //   symbol_position_record.rs 单测覆盖，此处不重复。
+    // testForceClosePosition —— 强平（事件驱动）：enable_liquidation() + set_mark_price_at 使 mark 暴跌，
+    // 触发 targeted 强平扫描 → FORCE 命令由 process_command 排空重喂成交 → 仓位被平掉。
+    //
+    // 与 Java 差异（刻意）：Java testForceClosePosition 在 mark=500 断言仓位「仍存在」且 report 字段
+    // unrealizedProfit=-95000 / marginRatioScaleK=-1000（其容器 updateCurrentPriceTo 不在该配置下真正
+    // 触发强平）。Rust 引擎 markprice_adjustment 在 leader 门开启时会立即 targeted 扫描并强平水下仓，
+    // 故此处断言「仓位被强平移除」这一 Rust 实际终态（对应 task 说明：drained 命令的资金事件不捕获 → 断言 STATE）。
+    // 用自带简单 spec（MM 5%、恒等缩放、liquidation_fee 2%）+ 破产价对手盘，确保 FORCE 全额吸收、终态确定。
+    #[test]
+    fn force_close_position_liquidates_underwater_long() {
+        const FC_BASE: i32 = 1;
+        const FC_QUOTE: i32 = 2;
+        const FC_FUT: i32 = 400;
+        const BORROWER: i64 = 10;
+        const M1: i64 = 20; // 开仓对手（maker SHORT）
+        const M2: i64 = 30; // 强平吸单方（破产价 BID）
+
+        let fc_spec = || {
+            let mut mm = BTreeMap::new();
+            mm.insert(i64::MAX, 500i64); // MM 5%（scaleK 10000）
+            CoreSymbolSpecification {
+                symbol_id: FC_FUT,
+                symbol_type: SymbolType::FuturesContractPerpetual,
+                base_currency: FC_BASE,
+                quote_currency: FC_QUOTE,
+                base_scale_k: 1,
+                quote_scale_k: 1,
+                taker_fee: 0,
+                maker_fee: 0,
+                fee_scale_k: 10_000,
+                maintenance_margin: mm,
+                maintenance_margin_scale_k: 10_000,
+                liquidation_fee: 200, // 2%
+                ..Default::default()
+            }
+        };
+
+        let mut api = ExchangeApi::new();
+        api.add_currency(FC_BASE, 1);
+        api.add_currency(FC_QUOTE, 1);
+        assert_eq!(api.add_futures_symbol(fc_spec()), CommandResultCode::Success);
+        api.enable_liquidation(); // leader 门：markprice 更新触发 targeted 扫描
+
+        for uid in [BORROWER, M1, M2] {
+            assert_eq!(api.add_user(uid), CommandResultCode::Success);
+            assert_eq!(api.balance_adjustment(uid, FC_QUOTE, 10_000_000, 1), CommandResultCode::Success);
+        }
+
+        let order = |order_id: i64, uid: i64, price: i64, size: i64, action: OrderAction| PlaceFuturesOrderRequest {
+            order_id,
+            uid,
+            symbol: FC_FUT,
+            price,
+            size,
+            action,
+            order_type: OrderType::Gtc,
+            leverage: 10,
+            margin_mode: MarginMode::Isolated,
+            reduce_only: false,
+        };
+
+        assert_eq!(api.set_mark_price_at(FC_FUT, 100, 1_000), CommandResultCode::Success);
+        // 借款人 LONG 10@100 leverage 10（margin 100）：M1 挂 ASK@100 开 SHORT，借款人 BID@100 吃单。
+        assert_eq!(api.place_futures_order(order(1, M1, 100, 10, OrderAction::Ask)), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(order(2, BORROWER, 100, 10, OrderAction::Bid)), CommandResultCode::Success);
+        {
+            let pos = api.user_position(BORROWER, FC_FUT).expect("借款人 LONG 已开");
+            assert_eq!(pos.direction, PositionDirection::Long);
+            assert_eq!(pos.open_volume, 10);
+        }
+
+        // 破产价 = ceil_mul_div(900,10000,10*9800)=92：M2 挂 BID@92 size10 恰好吸收 FORCE ASK@92。
+        assert_eq!(api.place_futures_order(order(3, M2, 92, 10, OrderAction::Bid)), CommandResultCode::Success);
+
+        // mark 跌到 94：借款人 LONG（avg100/lev10/margin100）equity=100-60=40 < MM(47) → 触发强平。
+        assert_eq!(api.set_mark_price_at(FC_FUT, 94, 2_000), CommandResultCode::Success);
+
+        // FORCE 已由 markprice 钩子生成并被 drain_liquidation_commands 排空重喂、成交平仓。
+        assert!(
+            api.risk().liquidation_engine.pending_commands.is_empty(),
+            "强平队列必须被排空（FORCE 已处理）"
+        );
+        assert!(
+            api.user_position(BORROWER, FC_FUT).is_none(),
+            "借款人水下 LONG 被 FORCE 全平，仓位移除"
+        );
+        let if_available: i64 = api.insurance_fund().futures.values().map(|e| e.available).sum();
+        assert!(if_available > 0, "清算费必须计入保险基金 available");
+    }
+
     // ==========================================================================================
+    // testAdjustment —— SYMBOL_MARGIN（base USD/quote JPY）簿：4 个 ASK maker + 一笔 BID IOC size20 部分扫单，
+    // 断言全局守恒（isGlobalBalancesAllZero）。Java 归属 ITFutureBasic，但用 ITFutureBase 的 SYMBOL_MARGIN spec，
+    // 故内联该 spec；只断言守恒（Java 亦只断言守恒），事件计数不可复刻（无累计 handler）。
+    #[test]
+    fn adjustment_partial_sweep_conserves_globally() {
+        const USD: i32 = 840; // base
+        const JPY: i32 = 392; // quote（计费币）
+        const A_MARK: i64 = 10_000;
+        let (u1, u2, u3, u4) = (1_440_001i64, 1_440_002i64, 1_440_003i64, 1_440_004i64);
+
+        let a_spec = || CoreSymbolSpecification {
+            symbol_id: SYMBOL_MARGIN,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: USD,
+            quote_currency: JPY,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            maker_fee: 2,
+            taker_fee: 3,
+            fee_scale_k: 0,
+            maintenance_margin: BTreeMap::from([(1_000, 5), (100_000, 10)]),
+            maintenance_margin_scale_k: 0,
+            max_leverage: BTreeMap::from([(2_000, 5), (100_000, 10)]),
+            init_margin: 1,
+            init_margin_scale_k: 21,
+            ..Default::default()
+        };
+
+        let mut api = ExchangeApi::new();
+        api.add_currency(USD, 1);
+        api.add_currency(JPY, 1);
+        assert_eq!(api.add_futures_symbol(a_spec()), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, A_MARK), CommandResultCode::Success);
+        for uid in [u1, u2, u3, u4] {
+            assert_eq!(api.add_user(uid), CommandResultCode::Success);
+            assert_eq!(api.balance_adjustment(uid, JPY, 10_000_000, 1), CommandResultCode::Success);
+        }
+
+        let ord = |order_id: i64, uid: i64, price: i64, size: i64, action: OrderAction, ot: OrderType| PlaceFuturesOrderRequest {
+            order_id,
+            uid,
+            symbol: SYMBOL_MARGIN,
+            price,
+            size,
+            action,
+            order_type: ot,
+            leverage: 0, // builderPlace 未设 → 引擎归一为 1
+            margin_mode: MarginMode::Isolated,
+            reduce_only: false,
+        };
+
+        // makers（ASK）：u1 7@160000、u2 10@159900、u3 3@160000、u3 20@160500。
+        assert_eq!(api.place_futures_order(ord(101, u1, 160_000, 7, OrderAction::Ask, OrderType::Gtc)), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(ord(202, u2, 159_900, 10, OrderAction::Ask, OrderType::Gtc)), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(ord(303, u3, 160_000, 3, OrderAction::Ask, OrderType::Gtc)), CommandResultCode::Success);
+        assert_eq!(api.place_futures_order(ord(304, u3, 160_500, 20, OrderAction::Ask, OrderType::Gtc)), CommandResultCode::Success);
+
+        // taker BID IOC @160500 size20：只吃 159900(10)+160000(10)=20，160500(20) maker 残留，无守恒破坏。
+        assert_eq!(api.place_futures_order(ord(405, u4, 160_500, 20, OrderAction::Bid, OrderType::Ioc)), CommandResultCode::Success);
+
+        assert!(api.total_balance().is_global_zero(), "部分扫单后全局守恒");
+    }
 }
