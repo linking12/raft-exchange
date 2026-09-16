@@ -637,4 +637,44 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).unwrap().leverage, 20);
         assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().leverage, 20);
     }
+
+    // 测试12（补）: 双向持仓被强平——HEDGE 用户高杠杆双腿，暴跌只清 LONG 腿、SHORT 盈利腿保留。
+    //   补上 Java testLiquidationLoop 系列（分步时序不可复刻，见文件头跳过说明）的核心语义：
+    //   逐仓 HEDGE 下强平是 per-leg 的，一条腿爆仓不影响同 symbol 另一条腿。
+    #[test]
+    fn test_hedge_one_leg_liquidated_other_preserved() {
+        let mut api = setup();
+        assert_eq!(api.adjust_position_mode(UID_1, true), CommandResultCode::Success); // HEDGE
+
+        let entry = 750 * QUOTE_SCALE_K; // 75_000_000
+        // UID_1 LONG 100 @750 leverage 50（薄保证金→易爆）；对手 UID_2 leverage 1（厚，不爆）。
+        assert_eq!(place_on(&mut api, 1, UID_1, SYMBOL_ID, entry, 100, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 50), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 2, UID_2, SYMBOL_ID, entry, 100, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 1), CommandResultCode::Success);
+        // UID_1 SHORT 50 @750 leverage 50；对手 UID_3 leverage 1。
+        assert_eq!(place_on(&mut api, 3, UID_1, SYMBOL_ID, entry, 50, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 50), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 4, UID_3, SYMBOL_ID, entry, 50, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 1), CommandResultCode::Success);
+
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 100);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 50);
+        assert_eq!(sym_position_count(&api, UID_1, SYMBOL_ID), 2, "开仓后双腿并存");
+
+        // IF 充值以承接被强平的 LONG 腿。
+        assert_eq!(
+            api.submit(OrderCommand { command: OrderCommandType::IfDeposit, symbol: SYMBOL_ID, price: 5_000 * 1_000_000, order_id: 900, ..Default::default() }),
+            CommandResultCode::Success
+        );
+
+        api.enable_liquidation();
+        // 暴跌 750→700：LONG（lev50，~2% 保证金）爆仓；SHORT 盈利、对手 lev1 不爆。
+        assert_eq!(api.set_mark_price_at(SYMBOL_ID, 700 * QUOTE_SCALE_K, 2_000), CommandResultCode::Success);
+
+        // 核心语义：per-leg 强平——LONG 腿被清、SHORT 盈利腿原样保留，双腿互不牵连。
+        assert!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).is_none(), "LONG 腿应被强平清仓");
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 50, "SHORT 盈利腿保留");
+        assert_eq!(sym_position_count(&api, UID_1, SYMBOL_ID), 1, "只剩 SHORT 一条腿");
+        // 对手方（低杠杆）不被误伤。
+        assert_eq!(leg_dir(&api, UID_2, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 100, "UID_2 对手 SHORT 存活");
+        assert_eq!(leg_dir(&api, UID_3, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 50, "UID_3 对手 LONG 存活");
+        assert!(api.total_balance().is_global_zero(), "全局守恒");
+    }
 }

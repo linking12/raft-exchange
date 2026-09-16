@@ -139,6 +139,13 @@ mod tests {
         // 4. LOSER 清仓；WINNER 被 ADL 减到 5。
         assert!(api.user_position(loser, SYM).is_none(), "LOSER 应被清仓");
         assert_eq!(api.user_position(winner, SYM).unwrap().open_volume, 5, "WINNER 被 ADL 减仓 10→5");
+        // 金额精确锚点：ADL 只减仓、不动 winner 账户；winner 剩余仓 profit=0（被减部分按破产价实现，无浮盈残留）。
+        assert_eq!(api.user_account(winner, QUOTE_ID), 50_000, "ADL 不动 winner 账户余额");
+        assert_eq!(api.user_position(winner, SYM).unwrap().profit, 0, "winner 剩余仓无浮盈残留");
+        assert_eq!(api.user_account(loser, QUOTE_ID), 4_960, "loser 亏逐仓保证金（破产价结算残留）");
+        assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_970, "maker 对手方净结算");
+        assert_eq!(api.fees(QUOTE_ID), 30, "开仓+减仓成交 taker 费入池");
+        assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 0, "无 liquidation_fee → IF 不增");
         assert_conserved(&api);
     }
 
@@ -175,6 +182,13 @@ mod tests {
             5,
             "IF 接管 LONG 5"
         );
+        // 金额精确锚点：IF 接管而非 ADL —— loser 亏同额 40；IF 用存入的 5000 承接 LONG 5（available 余 40）；
+        // 无减仓成交，fees 只有开仓两笔（=10，少于 ADL 的 30）。
+        assert_eq!(api.user_account(loser, QUOTE_ID), 4_960, "loser 亏逐仓保证金");
+        assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_990, "maker 对手方净结算（无 ADL 减仓）");
+        assert_eq!(api.fees(QUOTE_ID), 10, "仅开仓成交费（无减仓）");
+        assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 40, "IF 承接持仓后 available 余额");
+        assert_eq!(api.insurance_fund().futures.values().map(|e| e.reserved).sum::<i64>(), 0, "IF reserved 无泄漏");
         assert_conserved(&api);
     }
 
