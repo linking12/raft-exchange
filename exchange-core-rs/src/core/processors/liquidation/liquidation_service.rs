@@ -62,30 +62,18 @@ pub struct LiquidationService {
 }
 
 impl LiquidationService {
+    // ===== 构造 / 配置 =====
     pub fn new() -> Self {
         LiquidationService::default()
     }
 
-    /// 对应 Java `generateLiquidationOrderId`：根 orderId，位布局 `symbol<<32|uidHash<<12|sideBit<<11|tsPart`；tsPart 用 `cmd.timestamp` 而非 wall-clock 保确定性。
-    pub fn generate_liquidation_order_id(uid: i64, symbol: i32, direction: PositionDirection, timestamp: i64) -> i64 {
-        let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & 0xFFFFF; // 20 bit
-        let side_bit: i64 = if direction == PositionDirection::Short { 1 } else { 0 };
-        let ts_part = (timestamp / 1000) & 0x7FF; // 11 bit
-        ((symbol as i64) << 32) | (uid_hash << 12) | (side_bit << 11) | ts_part
+    /// 对应 Java `reset`：清空全部 IF 状态（测试/重建用）。
+    pub fn reset(&mut self) {
+        self.notionals.clear();
+        self.positions.clear();
     }
 
-    /// 对应 Java `generateIFOrderId`：IF 命令 orderId 由根强平 orderId 派生，高位打 `'I'`（`0x49`）标签。
-    pub fn generate_if_order_id(liquidation_order_id: i64) -> i64 {
-        let if_order_tag: i64 = 0x49; // 'I'
-        (if_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
-    }
-
-    /// 对应 Java `generateADLOrderId`：ADL 命令 orderId 由根强平 orderId 派生，高位打 `'A'`（`0x41`）标签。
-    pub fn generate_adl_order_id(liquidation_order_id: i64) -> i64 {
-        let adl_order_tag: i64 = 0x41; // 'A'
-        (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
-    }
-
+    // ===== 核心行为 =====
     /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池。
     pub fn credit_liquidation_fee(&mut self, symbol: i32, notional_fee: i64) {
         let n = self.notionals.entry(symbol).or_default();
@@ -147,46 +135,6 @@ impl LiquidationService {
         pos.open_price_sum += spend;
     }
 
-    /// 对应 Java `reset`：清空全部 IF 状态（测试/重建用）。
-    pub fn reset(&mut self) {
-        self.notionals.clear();
-        self.positions.clear();
-    }
-
-    /// 对应 Java `stateHash`：`notionals`/`positions` 都进复制态 hash（h=h*31+field 滚动折叠 + 高低 32 位异或收窄）。
-    pub fn state_hash(&self) -> i32 {
-        let mut h: i64 = 17;
-        for (&symbol, n) in &self.notionals {
-            h = h.wrapping_mul(31).wrapping_add(symbol as i64);
-            h = n.fold_hash(h);
-        }
-        for (&key, p) in &self.positions {
-            h = h.wrapping_mul(31).wrapping_add(key);
-            h = p.fold_hash(h);
-        }
-        ((h >> 32) as i32) ^ (h as i32)
-    }
-
-    // ================================================================
-    // ADL 候选构造 + 排序键
-    // ================================================================
-
-    /// 对应 Java `unrealizedPnl`：按破产价估算浮动盈亏（ADL 排序/筛选用）。全程饱和乘法——溢出钳到 i64::MIN/MAX 防符号翻转。
-    pub fn unrealized_pnl(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
-        let sign = pos.direction.multiplier() as i64;
-        let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
-        saturating_multiply(sign, notional - pos.open_price_sum)
-    }
-
-    /// 对应 Java `riskScore`：ADL 排序键 = 浮盈 × 实际杠杆 × 资格因子，越大越优先摊派。全程饱和乘法——溢出翻转符号会反转排序，是 load-bearing 正确性。`actual_leverage` 用普通整除（正常持仓 `open_init_margin_sum>0`，除零不可达）。
-    pub fn risk_score(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
-        let sign = pos.direction.multiplier() as i64;
-        let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
-        let unrealized_pnl = saturating_multiply(sign, notional - pos.open_price_sum);
-        let actual_leverage = pos.open_price_sum / pos.open_init_margin_sum;
-        saturating_multiply(saturating_multiply(actual_leverage, unrealized_pnl), pos.adl_eligibility)
-    }
-
     /// 对应 Java `computeProfitablePositionsBySymbol`：按需从复制态现算全部可被 ADL 摊派的仓位（symbol -> 候选），每次重算、不缓存——缓存会让 follower 在同一条 ADL 命令上看到不同候选、破坏确定性重放。ISOLATED 判浮盈>0 即入选（`adl_eligibility` 构造时已归一为 100）；CROSS 按 `quote_currency` 分组交 [`Self::add_cross_positions_if_user_safe`] 做账户级门 + factor + 入选。
     ///
     /// 返回克隆快照而非 Java 的活引用列表（Rust 无法安全把多个 `&mut SymbolPositionRecord` 塞进跨 `ups` 借用的返回值）；调用方 `RiskEngine::adl_collect` 选中后重查活记录写 `pending_adl_size`。等价：候选各属不同 uid，无"看前次副作用"情形。
@@ -243,6 +191,62 @@ impl LiquidationService {
         result
     }
 
+    // ===== 查询 / 访问器 =====
+    /// 对应 Java `generateLiquidationOrderId`：根 orderId，位布局 `symbol<<32|uidHash<<12|sideBit<<11|tsPart`；tsPart 用 `cmd.timestamp` 而非 wall-clock 保确定性。
+    pub fn generate_liquidation_order_id(uid: i64, symbol: i32, direction: PositionDirection, timestamp: i64) -> i64 {
+        let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & 0xFFFFF; // 20 bit
+        let side_bit: i64 = if direction == PositionDirection::Short { 1 } else { 0 };
+        let ts_part = (timestamp / 1000) & 0x7FF; // 11 bit
+        ((symbol as i64) << 32) | (uid_hash << 12) | (side_bit << 11) | ts_part
+    }
+
+    /// 对应 Java `generateIFOrderId`：IF 命令 orderId 由根强平 orderId 派生，高位打 `'I'`（`0x49`）标签。
+    pub fn generate_if_order_id(liquidation_order_id: i64) -> i64 {
+        let if_order_tag: i64 = 0x49; // 'I'
+        (if_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
+    }
+
+    /// 对应 Java `generateADLOrderId`：ADL 命令 orderId 由根强平 orderId 派生，高位打 `'A'`（`0x41`）标签。
+    pub fn generate_adl_order_id(liquidation_order_id: i64) -> i64 {
+        let adl_order_tag: i64 = 0x41; // 'A'
+        (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
+    }
+
+    /// 对应 Java `stateHash`：`notionals`/`positions` 都进复制态 hash（h=h*31+field 滚动折叠 + 高低 32 位异或收窄）。
+    pub fn state_hash(&self) -> i32 {
+        let mut h: i64 = 17;
+        for (&symbol, n) in &self.notionals {
+            h = h.wrapping_mul(31).wrapping_add(symbol as i64);
+            h = n.fold_hash(h);
+        }
+        for (&key, p) in &self.positions {
+            h = h.wrapping_mul(31).wrapping_add(key);
+            h = p.fold_hash(h);
+        }
+        ((h >> 32) as i32) ^ (h as i32)
+    }
+
+    // ================================================================
+    // ADL 候选构造 + 排序键
+    // ================================================================
+
+    /// 对应 Java `unrealizedPnl`：按破产价估算浮动盈亏（ADL 排序/筛选用）。全程饱和乘法——溢出钳到 i64::MIN/MAX 防符号翻转。
+    pub fn unrealized_pnl(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
+        let sign = pos.direction.multiplier() as i64;
+        let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
+        saturating_multiply(sign, notional - pos.open_price_sum)
+    }
+
+    /// 对应 Java `riskScore`：ADL 排序键 = 浮盈 × 实际杠杆 × 资格因子，越大越优先摊派。全程饱和乘法——溢出翻转符号会反转排序，是 load-bearing 正确性。`actual_leverage` 用普通整除（正常持仓 `open_init_margin_sum>0`，除零不可达）。
+    pub fn risk_score(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
+        let sign = pos.direction.multiplier() as i64;
+        let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
+        let unrealized_pnl = saturating_multiply(sign, notional - pos.open_price_sum);
+        let actual_leverage = pos.open_price_sum / pos.open_init_margin_sum;
+        saturating_multiply(saturating_multiply(actual_leverage, unrealized_pnl), pos.adl_eligibility)
+    }
+
+    // ===== 内部 helper =====
     /// 对应 Java `addCrossPositionsIfUserSafe`：CROSS 用户单 currency 的 ADL 候选构造——聚合 + 账户级 gating + factor + 入选一次完成。
     ///
     /// Gating（账户须足够安全且净盈利）：`totalProfit > 0` 且 `equity >= 1.2 × totalMaintenance`。factor = 账户离强平线的余量，`clamp` 到 `[0, 100]`，写回每条入选仓位的 `adl_eligibility`。

@@ -23,10 +23,20 @@ pub struct SimpleEventsProcessor<T: TradeEventsHandler, F: FundEventsHandler> {
 }
 
 impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
+    // ===== 构造 =====
     pub fn new(trade: T, fund: F) -> Self {
         SimpleEventsProcessor { trade, fund }
     }
 
+    // ===== 核心行为 =====
+    /// 对应 Java `SimpleEventsProcessor.accept`（正 seq 分支）。
+    pub fn process(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
+        self.send_execution_report(core, cmd, seq);
+        self.send_fund_events(cmd, seq);
+        self.send_market_data(core, cmd);
+    }
+
+    // ===== 访问器 =====
     pub fn trade_handler(&self) -> &T {
         &self.trade
     }
@@ -39,13 +49,7 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         (self.trade, self.fund)
     }
 
-    /// 对应 Java `SimpleEventsProcessor.accept`（正 seq 分支）。
-    pub fn process(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
-        self.send_execution_report(core, cmd, seq);
-        self.send_fund_events(cmd, seq);
-        self.send_market_data(core, cmd);
-    }
-
+    // ===== 内部 helper =====
     fn send_execution_report(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
         if !is_reportable_command(cmd.command) {
             return;

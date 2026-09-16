@@ -45,25 +45,7 @@ pub struct FloatingRateModel {
 }
 
 impl FloatingRateModel {
-    /// 对排序后 (key,value) 对逐个折叠，仅保证同状态同 hash。
-    pub fn state_hash(&self) -> i32 {
-        let mut h: i64 = 17;
-        h = h.wrapping_mul(31).wrapping_add(self.base_bps as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.kink_util_bps as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.slope1_bps as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.slope2_bps as i64);
-        for (&cur, &rate) in &self.current_rate_bps {
-            h = h.wrapping_mul(31).wrapping_add(cur as i64);
-            h = h.wrapping_mul(31).wrapping_add(rate);
-        }
-        for (&cur, &acc) in &self.acc_rate_bps_ms {
-            h = h.wrapping_mul(31).wrapping_add(cur as i64);
-            h = h.wrapping_mul(31).wrapping_add(acc);
-        }
-        h = h.wrapping_mul(31).wrapping_add(self.last_reprice_ts);
-        ((h >> 32) as i32) ^ (h as i32)
-    }
-
+    // ===== 核心行为 =====
     /// 利用率（bps）= borrowed / (borrowed + available)；空池返 0。
     pub fn utilization_bps(borrowed: i64, available: i64) -> i64 {
         let total = add_exact(borrowed, available);
@@ -84,14 +66,6 @@ impl FloatingRateModel {
         }
     }
 
-    /// 某币种当前利率，未 reprice 过时回退 base_bps。
-    pub fn current_rate_bps_or_base(&self, currency: i32) -> i32 {
-        match self.current_rate_bps.get(&currency) {
-            Some(&v) => v as i32,
-            None => self.base_bps,
-        }
-    }
-
     /// reprice 前半步：旧利率结算 [last_reprice_ts, tick_ts) 区间入累加器，必须先于 reprice_currency 调用。
     pub fn advance_accumulator(&mut self, currency: i32, tick_ts: i64) {
         if self.last_reprice_ts > 0 && tick_ts > self.last_reprice_ts {
@@ -108,41 +82,10 @@ impl FloatingRateModel {
         self.current_rate_bps.insert(currency, rate);
     }
 
-    /// 开仓利率 = 当前生效利率（未 reprice 过则回退 base）。
-    pub fn open_rate_bps(&self, loan_currency: i32) -> i32 {
-        self.current_rate_bps_or_base(loan_currency)
-    }
-
-    /// 累加器实时值：用当前生效利率把上次 reprice 之后的区间外推到 now，冷启动不外推。
-    pub fn live_acc_rate_bps_ms(&self, currency: i32, now: i64) -> i64 {
-        let acc = *self.acc_rate_bps_ms.get(&currency).unwrap_or(&0);
-        let elapsed = now - self.last_reprice_ts;
-        if self.last_reprice_ts <= 0 || elapsed <= 0 {
-            return acc;
-        }
-        add_exact(acc, mul_exact(self.current_rate_bps_or_base(currency) as i64, elapsed))
-    }
-
     /// 开仓：acc_snapshot 定在当前 liveAcc，此后只计从此刻起新增的利息。
     pub fn init_open_snapshot<L: LoanRecord>(&self, loan: &mut L, now: i64) {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         loan.set_acc_snapshot(live);
-    }
-
-    /// pending = (liveAcc − accSnapshot) 换算成本金对应的利息；deltaAcc<=0 或无本金则免息。
-    fn pending_from_live<L: LoanRecord>(loan: &L, live_acc: i64) -> i64 {
-        let delta_acc = sub_exact(live_acc, loan.acc_snapshot());
-        if delta_acc <= 0 || loan.outstanding_principal() <= 0 {
-            0
-        } else {
-            trunc_mul_div(delta_acc, loan.outstanding_principal(), YEAR_MS * BPS_SCALE)
-        }
-    }
-
-    /// 读路径：截至 now 的 pending 利息（不含 accumulated_interest），不改 loan。
-    pub fn pending_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
-        let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
-        Self::pending_from_live(loan, live)
     }
 
     /// 写路径：按累加器差值补计利息到 now，推进 acc_snapshot；truncated-but-chargeable（F1）截断得 0 时保留 acc_snapshot 避免吞息。
@@ -161,6 +104,55 @@ impl FloatingRateModel {
         delta
     }
 
+    // ===== 查询 / 访问器 =====
+    /// 对排序后 (key,value) 对逐个折叠，仅保证同状态同 hash。
+    pub fn state_hash(&self) -> i32 {
+        let mut h: i64 = 17;
+        h = h.wrapping_mul(31).wrapping_add(self.base_bps as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.kink_util_bps as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.slope1_bps as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.slope2_bps as i64);
+        for (&cur, &rate) in &self.current_rate_bps {
+            h = h.wrapping_mul(31).wrapping_add(cur as i64);
+            h = h.wrapping_mul(31).wrapping_add(rate);
+        }
+        for (&cur, &acc) in &self.acc_rate_bps_ms {
+            h = h.wrapping_mul(31).wrapping_add(cur as i64);
+            h = h.wrapping_mul(31).wrapping_add(acc);
+        }
+        h = h.wrapping_mul(31).wrapping_add(self.last_reprice_ts);
+        ((h >> 32) as i32) ^ (h as i32)
+    }
+
+    /// 某币种当前利率，未 reprice 过时回退 base_bps。
+    pub fn current_rate_bps_or_base(&self, currency: i32) -> i32 {
+        match self.current_rate_bps.get(&currency) {
+            Some(&v) => v as i32,
+            None => self.base_bps,
+        }
+    }
+
+    /// 开仓利率 = 当前生效利率（未 reprice 过则回退 base）。
+    pub fn open_rate_bps(&self, loan_currency: i32) -> i32 {
+        self.current_rate_bps_or_base(loan_currency)
+    }
+
+    /// 累加器实时值：用当前生效利率把上次 reprice 之后的区间外推到 now，冷启动不外推。
+    pub fn live_acc_rate_bps_ms(&self, currency: i32, now: i64) -> i64 {
+        let acc = *self.acc_rate_bps_ms.get(&currency).unwrap_or(&0);
+        let elapsed = now - self.last_reprice_ts;
+        if self.last_reprice_ts <= 0 || elapsed <= 0 {
+            return acc;
+        }
+        add_exact(acc, mul_exact(self.current_rate_bps_or_base(currency) as i64, elapsed))
+    }
+
+    /// 读路径：截至 now 的 pending 利息（不含 accumulated_interest），不改 loan。
+    pub fn pending_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
+        let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
+        Self::pending_from_live(loan, live)
+    }
+
     /// 读路径：accumulated_interest + 到 now 的 pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
@@ -170,6 +162,17 @@ impl FloatingRateModel {
     /// 字段本是 pub，此 setter 供处理器按 Java 调用习惯使用。
     pub fn set_last_reprice_ts(&mut self, ts: i64) {
         self.last_reprice_ts = ts;
+    }
+
+    // ===== 内部 helper =====
+    /// pending = (liveAcc − accSnapshot) 换算成本金对应的利息；deltaAcc<=0 或无本金则免息。
+    fn pending_from_live<L: LoanRecord>(loan: &L, live_acc: i64) -> i64 {
+        let delta_acc = sub_exact(live_acc, loan.acc_snapshot());
+        if delta_acc <= 0 || loan.outstanding_principal() <= 0 {
+            0
+        } else {
+            trunc_mul_div(delta_acc, loan.outstanding_principal(), YEAR_MS * BPS_SCALE)
+        }
     }
 }
 

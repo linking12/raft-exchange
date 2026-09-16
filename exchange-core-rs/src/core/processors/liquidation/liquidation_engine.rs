@@ -51,15 +51,12 @@ pub struct LiquidationEngine {
 }
 
 impl LiquidationEngine {
+    // ===== 构造 / 配置 =====
     pub fn new() -> Self {
         LiquidationEngine::default()
     }
 
-    /// 期货 + 借贷扫描器共用的切片过滤，委托 [`scheduler::covered_by_scan_slice`]。
-    pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
-        crate::core::processors::liquidation::scheduler::covered_by_scan_slice(cmd, uid)
-    }
-
+    // ===== 核心行为 =====
     /// 对应 Java `onPositionOpened`：开仓 apply 登记 uid 进 symbol→持有者索引。
     pub fn on_position_opened(&mut self, uid: i64, symbol: i32) {
         self.symbol_to_users.entry(symbol).or_default().insert(uid);
@@ -181,20 +178,6 @@ impl LiquidationEngine {
                 fund_events.push(Self::notification_event(FundEventType::LiquidationAlert, uid, pos));
             }
             self.start_liquidation_flow(profile, d, ts);
-        }
-    }
-
-    fn notification_event(event_type: FundEventType, uid: i64, position: &SymbolPositionRecord) -> FundEvent {
-        FundEvent {
-            event_type,
-            uid,
-            symbol: position.symbol,
-            currency: position.currency,
-            direction: position.direction,
-            open_volume: position.open_volume,
-            open_price_sum: position.open_price_sum,
-            margin_mode: position.margin_mode,
-            ..Default::default()
         }
     }
 
@@ -341,49 +324,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// position → `alloc` map 键（ONEWAY=symbol / HEDGE=±symbol，与 `cross_margin_base_allocation` 产出键一致）。
-    fn pos_key(p: &SymbolPositionRecord) -> i32 {
-        match p.direction {
-            PositionDirection::Short => -p.symbol,
-            _ => p.symbol,
-        }
-    }
-
-    /// [`calculate_size_to_liquidate`] 标量提取：E 不含 extra_margin。
-    fn size_to_liquidate_for(position: &SymbolPositionRecord, maintenance_margin: i64, mark_price: i64) -> i64 {
-        let equity = position.open_init_margin_sum + position.estimate_unrealized_profit(mark_price);
-        calculate_size_to_liquidate(
-            equity,
-            maintenance_margin,
-            position.open_init_margin_sum,
-            position.open_volume,
-            position.open_price_sum,
-            mark_price,
-            position.direction.multiplier() as i64,
-        )
-    }
-
-    /// [`calculate_deficit_after_liquidate`] 标量提取：两次查 spec 分档 MM（notionalNow/notionalAfter）。
-    fn deficit_after_for(
-        position: &SymbolPositionRecord,
-        spec: &CoreSymbolSpecification,
-        size: i64,
-        mark_price: i64,
-    ) -> i64 {
-        let notional_now = mul_exact_local(position.open_volume, mark_price);
-        let notional_after = mul_exact_local(position.open_volume - size, mark_price);
-        calculate_deficit_after_liquidate(
-            size,
-            position.direction.multiplier() as i64,
-            position.open_init_margin_sum,
-            position.open_volume,
-            position.open_price_sum,
-            mark_price,
-            spec.calculate_maintenance_margin(notional_now),
-            spec.calculate_maintenance_margin(notional_after),
-        )
-    }
-
     /// 对应 Java `startLiquidationFlow`：幂等提交 FORCE（已有 flow 则跳过），预警通知不移植。
     fn start_liquidation_flow(&mut self, profile: &mut UserProfile, d: LiquidationDecision, ts: i64) {
         let uid = profile.uid;
@@ -467,6 +407,70 @@ impl LiquidationEngine {
             let adl_cmd = Self::build_adl_cmd(pos.uid, pos.symbol, pos.direction, &flow, cmd.timestamp);
             self.pending_commands.push(adl_cmd);
         }
+    }
+
+    // ===== 查询 / 访问器 =====
+    /// 期货 + 借贷扫描器共用的切片过滤，委托 [`scheduler::covered_by_scan_slice`]。
+    pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
+        crate::core::processors::liquidation::scheduler::covered_by_scan_slice(cmd, uid)
+    }
+
+    // ===== 内部 helper =====
+    fn notification_event(event_type: FundEventType, uid: i64, position: &SymbolPositionRecord) -> FundEvent {
+        FundEvent {
+            event_type,
+            uid,
+            symbol: position.symbol,
+            currency: position.currency,
+            direction: position.direction,
+            open_volume: position.open_volume,
+            open_price_sum: position.open_price_sum,
+            margin_mode: position.margin_mode,
+            ..Default::default()
+        }
+    }
+
+    /// position → `alloc` map 键（ONEWAY=symbol / HEDGE=±symbol，与 `cross_margin_base_allocation` 产出键一致）。
+    fn pos_key(p: &SymbolPositionRecord) -> i32 {
+        match p.direction {
+            PositionDirection::Short => -p.symbol,
+            _ => p.symbol,
+        }
+    }
+
+    /// [`calculate_size_to_liquidate`] 标量提取：E 不含 extra_margin。
+    fn size_to_liquidate_for(position: &SymbolPositionRecord, maintenance_margin: i64, mark_price: i64) -> i64 {
+        let equity = position.open_init_margin_sum + position.estimate_unrealized_profit(mark_price);
+        calculate_size_to_liquidate(
+            equity,
+            maintenance_margin,
+            position.open_init_margin_sum,
+            position.open_volume,
+            position.open_price_sum,
+            mark_price,
+            position.direction.multiplier() as i64,
+        )
+    }
+
+    /// [`calculate_deficit_after_liquidate`] 标量提取：两次查 spec 分档 MM（notionalNow/notionalAfter）。
+    fn deficit_after_for(
+        position: &SymbolPositionRecord,
+        spec: &CoreSymbolSpecification,
+        size: i64,
+        mark_price: i64,
+    ) -> i64 {
+        let notional_now = mul_exact_local(position.open_volume, mark_price);
+        let notional_after = mul_exact_local(position.open_volume - size, mark_price);
+        calculate_deficit_after_liquidate(
+            size,
+            position.direction.multiplier() as i64,
+            position.open_init_margin_sum,
+            position.open_volume,
+            position.open_price_sum,
+            mark_price,
+            spec.calculate_maintenance_margin(notional_now),
+            spec.calculate_maintenance_margin(notional_after),
+        )
     }
 
     /// 对应 Java `buildForceCmd`：IOC → `FORCE_LIQUIDATION`，action 与持仓方向相反。

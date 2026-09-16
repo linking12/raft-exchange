@@ -44,6 +44,8 @@ pub struct CoreSymbolSpecification {
 }
 
 impl CoreSymbolSpecification {
+    // ===== 查询/访问器 =====
+
     /// 对应 Java `stateHash()`：折入 symbol config 业务字段供 raft 跨节点分叉探测；**刻意排除**
     /// `init_margin`/`init_margin_scale_k`（Java `stateHash` 亦不含）。`BTreeMap` 天然升序保证确定性。
     pub fn state_hash(&self) -> i32 {
@@ -126,6 +128,8 @@ impl CoreSymbolSpecification {
             None => true,
         }
     }
+
+    // ===== 内部 helper =====
 
     /// 对应 Java `getFloorValueInSortedMap`：`headMap(key)`（严格小于 key）非空取最大 key 的值，为空则退化取最小 floor 的值（逐字对齐 Java 非直觉边界行为）。
     fn floor_value(map: &BTreeMap<i64, i64>, key: i64) -> Option<i64> {

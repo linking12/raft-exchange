@@ -45,6 +45,8 @@ pub struct UserProfile {
 }
 
 impl UserProfile {
+    // ===== 构造/配置 =====
+
     pub fn new(uid: i64, user_status: UserStatus) -> Self {
         UserProfile {
             uid,
@@ -59,6 +61,49 @@ impl UserProfile {
             cross_loans: BTreeMap::new(),
         }
     }
+
+    // ===== 核心行为 =====
+
+    /// 对应 Java `processPositionRecord(int symbol, Consumer<SymbolPositionRecord> consumer)`：
+    /// 对指定 symbol 下所有仓位记录（`ONEWAY` 0/1 条，`HEDGE` 0/1/2 条）依次调用 `consumer`。
+    pub fn process_position_record<F>(&mut self, symbol: i32, mut consumer: F)
+    where
+        F: FnMut(&mut SymbolPositionRecord),
+    {
+        if let Some(long_record) = self.positions.get_mut(&symbol) {
+            consumer(long_record);
+        }
+        if self.position_mode == PositionMode::Hedge {
+            if let Some(short_record) = self.positions.get_mut(&-symbol) {
+                consumer(short_record);
+            }
+        }
+    }
+
+    /// 对应 Java `TimeWindowDedupSet.tryClaim(id, nowMs)`：首次见到该 `tx_id`（且未超窗）→ 记录返回 `true`；
+    /// 窗口内已见过 → `false`。`now_ms` 须为确定性命令时间（`cmd.timestamp`，随 raft 复制）。
+    pub fn try_claim_tx(&mut self, tx_id: i64, now_ms: i64) -> bool {
+        self.processed_tx_ids.try_claim(tx_id, now_ms)
+    }
+
+    /// 对应 Java `accounts.addToValue(currency, delta)`：缺省 0 起累加，`delta` 可为负。
+    pub fn add_to_account(&mut self, currency: i32, delta: i64) {
+        *self.accounts.entry(currency).or_insert(0) += delta;
+    }
+
+    /// 对应 Java `exchangeLocked.addToValue(currency, delta)`。
+    pub fn add_to_locked(&mut self, currency: i32, delta: i64) {
+        *self.exchange_locked.entry(currency).or_insert(0) += delta;
+    }
+
+    /// 对应 Java `crossLoanCollateral.addToValue(currency, delta)`：账户级 Cross 抵押池
+    /// 缺省 0 起累加，`delta` 可为负（`LOAN_CROSS_WITHDRAW_COLLATERAL` 的 subtract-then-check 与其失败
+    /// 回滚都走这一入口）。
+    pub fn add_to_cross_loan_collateral(&mut self, currency: i32, delta: i64) {
+        *self.cross_loan_collateral.entry(currency).or_insert(0) += delta;
+    }
+
+    // ===== 查询/访问器 =====
 
     /// 对应 Java `createPositionsKey`：`ONEWAY` 恒返回 `symbol`；`HEDGE` 下 `BID -> +symbol`（多头腿）、
     /// `ASK -> -symbol`（空头腿），`CLOSE_POSITION`/`FORCE_LIQUIDATION` 再整体翻符号指向被平的那条腿。
@@ -105,22 +150,6 @@ impl UserProfile {
             }
         }
         count
-    }
-
-    /// 对应 Java `processPositionRecord(int symbol, Consumer<SymbolPositionRecord> consumer)`：
-    /// 对指定 symbol 下所有仓位记录（`ONEWAY` 0/1 条，`HEDGE` 0/1/2 条）依次调用 `consumer`。
-    pub fn process_position_record<F>(&mut self, symbol: i32, mut consumer: F)
-    where
-        F: FnMut(&mut SymbolPositionRecord),
-    {
-        if let Some(long_record) = self.positions.get_mut(&symbol) {
-            consumer(long_record);
-        }
-        if self.position_mode == PositionMode::Hedge {
-            if let Some(short_record) = self.positions.get_mut(&-symbol) {
-                consumer(short_record);
-            }
-        }
     }
 
     /// 对应 Java `calculateCrossAvailable`：cross 可支配余额（currency scale）=
@@ -258,12 +287,6 @@ impl UserProfile {
         margin_base_by_pos
     }
 
-    /// 对应 Java `TimeWindowDedupSet.tryClaim(id, nowMs)`：首次见到该 `tx_id`（且未超窗）→ 记录返回 `true`；
-    /// 窗口内已见过 → `false`。`now_ms` 须为确定性命令时间（`cmd.timestamp`，随 raft 复制）。
-    pub fn try_claim_tx(&mut self, tx_id: i64, now_ms: i64) -> bool {
-        self.processed_tx_ids.try_claim(tx_id, now_ms)
-    }
-
     /// 对应 Java `accounts.get(currency)`：Eclipse Collections 原始类型 map 缺省值语义，缺省 0。
     pub fn account(&self, currency: i32) -> i64 {
         *self.accounts.get(&currency).unwrap_or(&0)
@@ -272,23 +295,6 @@ impl UserProfile {
     /// 对应 Java `exchangeLocked.get(currency)`：缺省 0。
     pub fn locked(&self, currency: i32) -> i64 {
         *self.exchange_locked.get(&currency).unwrap_or(&0)
-    }
-
-    /// 对应 Java `accounts.addToValue(currency, delta)`：缺省 0 起累加，`delta` 可为负。
-    pub fn add_to_account(&mut self, currency: i32, delta: i64) {
-        *self.accounts.entry(currency).or_insert(0) += delta;
-    }
-
-    /// 对应 Java `exchangeLocked.addToValue(currency, delta)`。
-    pub fn add_to_locked(&mut self, currency: i32, delta: i64) {
-        *self.exchange_locked.entry(currency).or_insert(0) += delta;
-    }
-
-    /// 对应 Java `crossLoanCollateral.addToValue(currency, delta)`：账户级 Cross 抵押池
-    /// 缺省 0 起累加，`delta` 可为负（`LOAN_CROSS_WITHDRAW_COLLATERAL` 的 subtract-then-check 与其失败
-    /// 回滚都走这一入口）。
-    pub fn add_to_cross_loan_collateral(&mut self, currency: i32, delta: i64) {
-        *self.cross_loan_collateral.entry(currency).or_insert(0) += delta;
     }
 
     /// 对应 Java `crossLoanCollateral.get(currency)`：缺省 0。

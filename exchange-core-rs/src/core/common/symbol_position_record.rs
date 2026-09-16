@@ -68,6 +68,8 @@ pub struct SymbolPositionRecord {
 }
 
 impl SymbolPositionRecord {
+    // ===== 构造/配置 =====
+
     /// 便捷构造器：给定 identity 字段，其余取默认零值；`leverage` 经 [`Self::update_leverage`] 归一，
     /// `adl_eligibility` 按 `margin_mode` 归一。
     pub fn new(uid: i64, symbol: i32, currency: i32, margin_mode: MarginMode, leverage: i32) -> Self {
@@ -111,19 +113,11 @@ impl SymbolPositionRecord {
         self.liquidation_flow = None;
     }
 
+    // ===== 核心行为 =====
+
     /// 对应 Java `updateLeverage(int leverage)`：`0` 归一为 `1`（用户未选 = 默认 1 倍）。
     pub fn update_leverage(&mut self, leverage: i32) {
         self.leverage = if leverage == 0 { 1 } else { leverage };
-    }
-
-    /// 对应 Java `isSameLeverage(int leverage)`：按同一 `0 -> 1` 归一规则比较。
-    pub fn is_same_leverage(&self, leverage: i32) -> bool {
-        self.leverage == if leverage == 0 { 1 } else { leverage }
-    }
-
-    /// 对应 Java `isEmpty()`：无挂单、无持仓——拆记录（从 map 移除）的触发条件。
-    pub fn is_empty(&self) -> bool {
-        self.open_volume == 0 && self.pending_sell_size == 0 && self.pending_buy_size == 0
     }
 
     /// 对应 Java `reset()`：池复用清零，保留 identity 字段（uid/symbol/currency）不动，只清业务状态。
@@ -147,51 +141,6 @@ impl SymbolPositionRecord {
         // 池化复用清理纯内存强平流程状态。
         self.liquidation_flow = None;
     }
-
-    /// 对应 Java `stateHash()`：字段滚动折叠 hash，**不含 `uid`**（逐字对齐 Java，非遗漏）；只保证同状态可辨，不保证数值与 Java 相等。
-    pub fn state_hash(&self) -> i32 {
-        let mut h: i64 = 17;
-        h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.currency as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.direction.multiplier() as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.open_volume);
-        h = h.wrapping_mul(31).wrapping_add(self.open_init_margin_sum);
-        h = h.wrapping_mul(31).wrapping_add(self.open_price_sum);
-        h = h.wrapping_mul(31).wrapping_add(self.profit);
-        h = h.wrapping_mul(31).wrapping_add(self.pending_sell_size);
-        h = h.wrapping_mul(31).wrapping_add(self.pending_buy_size);
-        h = h.wrapping_mul(31).wrapping_add(self.pending_sell_avg_price);
-        h = h.wrapping_mul(31).wrapping_add(self.pending_buy_avg_price);
-        h = h.wrapping_mul(31).wrapping_add(self.leverage as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.margin_mode.code() as i64);
-        h = h.wrapping_mul(31).wrapping_add(self.extra_margin);
-        ((h >> 32) as i32) ^ (h as i32)
-    }
-
-    /// 对应 Java `calculateBankruptcyPrice`：破产价（权益归零的清算限价）；`margin_base_fn` 对应 `crossMarginBaseFn`。
-    pub fn calculate_bankruptcy_price(
-        &self,
-        spec: &CoreSymbolSpecification,
-        margin_base_fn: impl Fn(&SymbolPositionRecord) -> i64,
-    ) -> i64 {
-        let margin_base = match self.margin_mode {
-            MarginMode::Isolated => add_exact(self.open_init_margin_sum, self.extra_margin),
-            MarginMode::Cross => margin_base_fn(self),
-        };
-        let sign = self.direction.multiplier() as i64;
-        let total_fee = add_exact(spec.taker_fee, spec.liquidation_fee);
-        if spec.is_fixed_fee() {
-            let max_loss = sub_exact(margin_base, mul_exact(total_fee, self.open_volume));
-            let numer = sub_exact(self.open_price_sum, mul_exact(sign, max_loss));
-            ceil_divide(numer, self.open_volume)
-        } else {
-            let numer = sub_exact(self.open_price_sum, mul_exact(sign, margin_base));
-            let denom = mul_exact(self.open_volume, sub_exact(spec.fee_scale_k, mul_exact(sign, total_fee)));
-            ceil_mul_div(numer, spec.fee_scale_k, denom)
-        }
-    }
-
-    // pending 挂单占用 / 释放
 
     /// 对应 Java `pendingHold`：R1 发单前调，累加挂单量并重算该侧加权均价（ceil，保守估计）。
     pub fn pending_hold(&mut self, order_action: OrderAction, size: i64, price: i64) {
@@ -239,16 +188,6 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `calculateAvgPrice`：合计加权均价，ceil 取整；合计量 ≤0 返回 0。
-    fn calculate_avg_price(current_avg: i64, current_size: i64, new_price: i64, new_size: i64) -> i64 {
-        let total_size = add_exact(current_size, new_size);
-        if total_size <= 0 {
-            return 0;
-        }
-        let total_notional = add_exact(mul_exact(current_avg, current_size), mul_exact(new_price, new_size));
-        ceil_divide(total_notional, total_size)
-    }
-
     /// 对应 Java `pendingRelease`：R2 成交/拒/减确认时调，返回实际释放量 `min(pending, size)`；侧归零时重置 avg。
     pub fn pending_release(&mut self, order_action: OrderAction, size: i64) -> i64 {
         match order_action {
@@ -271,7 +210,111 @@ impl SymbolPositionRecord {
         }
     }
 
-    // 盈亏 / 保证金
+    /// 对应 Java `closeCurrentPositionFutures`：唯一平/翻仓原语，用一笔反向成交平当前持仓，返回平完后还需
+    /// 新开的手数（翻仓超出部分，由 [`Self::open_position_margin`] 接手）。三分支：无仓/同向 → 原样返回
+    /// `trade_size`；部分平 → **不结算盈亏**，按比例释放保证金、`open_price_sum` 按成交价扣减（被平部分盈亏
+    /// 递延进剩余成本基，总盈亏守恒），返回 0；全平/翻仓 → 结算整仓已实现盈亏进 `profit`、清零仓位，返回
+    /// `trade_size − open_volume`。
+    pub fn close_current_position_futures(&mut self, action: OrderAction, trade_size: i64, trade_price: i64) -> i64 {
+        if self.open_volume == 0 || self.direction == PositionDirection::of_action(action) {
+            return trade_size; // 无反向仓可平，整笔用于开仓
+        }
+
+        if self.open_volume > trade_size {
+            // 部分平仓：此处不结算盈亏，而是把被平部分的盈亏递延进剩余仓位的成本基。
+            let margin_release = trunc_mul_div(self.open_init_margin_sum, trade_size, self.open_volume);
+            self.open_init_margin_sum = sub_exact(self.open_init_margin_sum, margin_release);
+            self.open_volume -= trade_size; // open_volume > trade_size 已保证不变负、不溢出
+            self.open_price_sum = sub_exact(self.open_price_sum, mul_exact(trade_size, trade_price));
+            return 0;
+        }
+
+        // 全平（tradeSize ≥ openVolume）：结算整仓已实现盈亏 = 有向(平仓名义 − 成本基)，清零仓位。
+        let close_notional = mul_exact(self.open_volume, trade_price);
+        let pnl_raw = sub_exact(close_notional, self.open_price_sum);
+        let pnl_signed = mul_exact(pnl_raw, self.direction.multiplier() as i64);
+        self.profit = add_exact(self.profit, pnl_signed);
+        self.open_init_margin_sum = 0;
+        self.open_price_sum = 0;
+        let size_to_open = sub_exact(trade_size, self.open_volume); // 超出部分反手开新仓
+        self.open_volume = 0;
+
+        size_to_open
+    }
+
+    /// 对应 Java `openPositionMargin`：成交开新敞口，按 `size_to_open` 累加持仓。初始保证金按【标记价】名义计
+    /// （更保守、与强平口径一致），成本基 `open_price_sum` 按【成交价】记（用于后续平仓算盈亏）。
+    pub fn open_position_margin(
+        &mut self,
+        action: OrderAction,
+        size_to_open: i64,
+        trade_price: i64,
+        spec: &CoreSymbolSpecification,
+        mark_price: i64,
+    ) {
+        let open_notional = mul_exact(mark_price, size_to_open);
+        let init_margin_delta = spec.calculate_init_margin(open_notional, self.leverage as i64);
+        let price_notional = mul_exact(trade_price, size_to_open);
+        self.open_volume = add_exact(self.open_volume, size_to_open);
+        self.open_init_margin_sum = add_exact(self.open_init_margin_sum, init_margin_delta);
+        self.open_price_sum = add_exact(self.open_price_sum, price_notional);
+        self.direction = PositionDirection::of_action(action);
+    }
+
+    // ===== 查询/访问器 =====
+
+    /// 对应 Java `isSameLeverage(int leverage)`：按同一 `0 -> 1` 归一规则比较。
+    pub fn is_same_leverage(&self, leverage: i32) -> bool {
+        self.leverage == if leverage == 0 { 1 } else { leverage }
+    }
+
+    /// 对应 Java `isEmpty()`：无挂单、无持仓——拆记录（从 map 移除）的触发条件。
+    pub fn is_empty(&self) -> bool {
+        self.open_volume == 0 && self.pending_sell_size == 0 && self.pending_buy_size == 0
+    }
+
+    /// 对应 Java `stateHash()`：字段滚动折叠 hash，**不含 `uid`**（逐字对齐 Java，非遗漏）；只保证同状态可辨，不保证数值与 Java 相等。
+    pub fn state_hash(&self) -> i32 {
+        let mut h: i64 = 17;
+        h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.currency as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.direction.multiplier() as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.open_volume);
+        h = h.wrapping_mul(31).wrapping_add(self.open_init_margin_sum);
+        h = h.wrapping_mul(31).wrapping_add(self.open_price_sum);
+        h = h.wrapping_mul(31).wrapping_add(self.profit);
+        h = h.wrapping_mul(31).wrapping_add(self.pending_sell_size);
+        h = h.wrapping_mul(31).wrapping_add(self.pending_buy_size);
+        h = h.wrapping_mul(31).wrapping_add(self.pending_sell_avg_price);
+        h = h.wrapping_mul(31).wrapping_add(self.pending_buy_avg_price);
+        h = h.wrapping_mul(31).wrapping_add(self.leverage as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.margin_mode.code() as i64);
+        h = h.wrapping_mul(31).wrapping_add(self.extra_margin);
+        ((h >> 32) as i32) ^ (h as i32)
+    }
+
+    /// 对应 Java `calculateBankruptcyPrice`：破产价（权益归零的清算限价）；`margin_base_fn` 对应 `crossMarginBaseFn`。
+    pub fn calculate_bankruptcy_price(
+        &self,
+        spec: &CoreSymbolSpecification,
+        margin_base_fn: impl Fn(&SymbolPositionRecord) -> i64,
+    ) -> i64 {
+        let margin_base = match self.margin_mode {
+            MarginMode::Isolated => add_exact(self.open_init_margin_sum, self.extra_margin),
+            MarginMode::Cross => margin_base_fn(self),
+        };
+        let sign = self.direction.multiplier() as i64;
+        let total_fee = add_exact(spec.taker_fee, spec.liquidation_fee);
+        if spec.is_fixed_fee() {
+            let max_loss = sub_exact(margin_base, mul_exact(total_fee, self.open_volume));
+            let numer = sub_exact(self.open_price_sum, mul_exact(sign, max_loss));
+            ceil_divide(numer, self.open_volume)
+        } else {
+            let numer = sub_exact(self.open_price_sum, mul_exact(sign, margin_base));
+            let denom = mul_exact(self.open_volume, sub_exact(spec.fee_scale_k, mul_exact(sign, total_fee)));
+            ceil_mul_div(numer, spec.fee_scale_k, denom)
+        }
+    }
 
     /// 对应 Java `estimatePnl`：`profit`（已实现）+ 未实现盈亏（`mark_price` 估价）。
     pub fn estimate_pnl(&self, mark_price: i64) -> i64 {
@@ -537,57 +580,16 @@ impl SymbolPositionRecord {
         fee_pending_buy.max(fee_pending_sell)
     }
 
-    // 成交开 / 平仓
+    // ===== 内部 helper =====
 
-    /// 对应 Java `closeCurrentPositionFutures`：唯一平/翻仓原语，用一笔反向成交平当前持仓，返回平完后还需
-    /// 新开的手数（翻仓超出部分，由 [`Self::open_position_margin`] 接手）。三分支：无仓/同向 → 原样返回
-    /// `trade_size`；部分平 → **不结算盈亏**，按比例释放保证金、`open_price_sum` 按成交价扣减（被平部分盈亏
-    /// 递延进剩余成本基，总盈亏守恒），返回 0；全平/翻仓 → 结算整仓已实现盈亏进 `profit`、清零仓位，返回
-    /// `trade_size − open_volume`。
-    pub fn close_current_position_futures(&mut self, action: OrderAction, trade_size: i64, trade_price: i64) -> i64 {
-        if self.open_volume == 0 || self.direction == PositionDirection::of_action(action) {
-            return trade_size; // 无反向仓可平，整笔用于开仓
-        }
-
-        if self.open_volume > trade_size {
-            // 部分平仓：此处不结算盈亏，而是把被平部分的盈亏递延进剩余仓位的成本基。
-            let margin_release = trunc_mul_div(self.open_init_margin_sum, trade_size, self.open_volume);
-            self.open_init_margin_sum = sub_exact(self.open_init_margin_sum, margin_release);
-            self.open_volume -= trade_size; // open_volume > trade_size 已保证不变负、不溢出
-            self.open_price_sum = sub_exact(self.open_price_sum, mul_exact(trade_size, trade_price));
+    /// 对应 Java `calculateAvgPrice`：合计加权均价，ceil 取整；合计量 ≤0 返回 0。
+    fn calculate_avg_price(current_avg: i64, current_size: i64, new_price: i64, new_size: i64) -> i64 {
+        let total_size = add_exact(current_size, new_size);
+        if total_size <= 0 {
             return 0;
         }
-
-        // 全平（tradeSize ≥ openVolume）：结算整仓已实现盈亏 = 有向(平仓名义 − 成本基)，清零仓位。
-        let close_notional = mul_exact(self.open_volume, trade_price);
-        let pnl_raw = sub_exact(close_notional, self.open_price_sum);
-        let pnl_signed = mul_exact(pnl_raw, self.direction.multiplier() as i64);
-        self.profit = add_exact(self.profit, pnl_signed);
-        self.open_init_margin_sum = 0;
-        self.open_price_sum = 0;
-        let size_to_open = sub_exact(trade_size, self.open_volume); // 超出部分反手开新仓
-        self.open_volume = 0;
-
-        size_to_open
-    }
-
-    /// 对应 Java `openPositionMargin`：成交开新敞口，按 `size_to_open` 累加持仓。初始保证金按【标记价】名义计
-    /// （更保守、与强平口径一致），成本基 `open_price_sum` 按【成交价】记（用于后续平仓算盈亏）。
-    pub fn open_position_margin(
-        &mut self,
-        action: OrderAction,
-        size_to_open: i64,
-        trade_price: i64,
-        spec: &CoreSymbolSpecification,
-        mark_price: i64,
-    ) {
-        let open_notional = mul_exact(mark_price, size_to_open);
-        let init_margin_delta = spec.calculate_init_margin(open_notional, self.leverage as i64);
-        let price_notional = mul_exact(trade_price, size_to_open);
-        self.open_volume = add_exact(self.open_volume, size_to_open);
-        self.open_init_margin_sum = add_exact(self.open_init_margin_sum, init_margin_delta);
-        self.open_price_sum = add_exact(self.open_price_sum, price_notional);
-        self.direction = PositionDirection::of_action(action);
+        let total_notional = add_exact(mul_exact(current_avg, current_size), mul_exact(new_price, new_size));
+        ceil_divide(total_notional, total_size)
     }
 }
 

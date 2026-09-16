@@ -17,41 +17,13 @@ pub struct MatchingEngineRouter {
 }
 
 impl MatchingEngineRouter {
+    // ===== 构造/配置 =====
+
     pub fn new() -> Self {
         MatchingEngineRouter { books: BTreeMap::new() }
     }
 
-    /// 按 uid 反查全部簿的挂单，返回 `(symbol, Order)`（按 symbol、再 order_id 升序，确定性）。报表冷路径用，按需扫簿。
-    pub fn user_orders(&self, uid: i64) -> Vec<(i32, Order)> {
-        let mut out = Vec::new();
-        for (&sym, book) in &self.books {
-            for o in book.find_user_orders(uid) {
-                out.push((sym, o));
-            }
-        }
-        out
-    }
-
-    /// 撮合簿子状态哈希（对应 Java StateHashReport `MATCHING_ORDER_BOOKS`）：按 symbol 升序折入各簿 `state_hash`。
-    pub fn order_books_state_hash(&self) -> i64 {
-        let mut h: i64 = 17;
-        for (&sym, book) in &self.books {
-            h = h.wrapping_mul(31).wrapping_add(sym as i64);
-            h = h.wrapping_mul(31).wrapping_add(book.state_hash() as i64);
-        }
-        h
-    }
-
-    /// 对应 Java `MatchingEngineRouter.reset()`：清空全部撮合簿（RESET 命令用）。
-    pub fn reset(&mut self) {
-        self.books.clear();
-    }
-
-    /// 对应 Java `MatchingEngineRouter.addSymbol`（现货子集，重复 add 幂等忽略）。
-    pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
-        // 幂等：已存在则保留原簿；用 with_symbol_spec 注入真实 spec 供 move_order 现货 BID 风控用。
-        self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookDirectImpl::with_symbol_spec(spec.clone()));
-    }
+    // ===== 核心行为 =====
 
     /// 对应 Java `MatchingEngineRouter.processMatchingCommand` + `IOrderBook.processCommand`；非交易命令与借贷生命周期命令（两强平码除外）原样短路保留 R1 结果。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
@@ -111,6 +83,40 @@ impl MatchingEngineRouter {
 
         cmd.result_code = Some(rc);
         rc
+    }
+
+    /// 对应 Java `MatchingEngineRouter.addSymbol`（现货子集，重复 add 幂等忽略）。
+    pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
+        // 幂等：已存在则保留原簿；用 with_symbol_spec 注入真实 spec 供 move_order 现货 BID 风控用。
+        self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookDirectImpl::with_symbol_spec(spec.clone()));
+    }
+
+    /// 对应 Java `MatchingEngineRouter.reset()`：清空全部撮合簿（RESET 命令用）。
+    pub fn reset(&mut self) {
+        self.books.clear();
+    }
+
+    // ===== 查询/访问器 =====
+
+    /// 按 uid 反查全部簿的挂单，返回 `(symbol, Order)`（按 symbol、再 order_id 升序，确定性）。报表冷路径用，按需扫簿。
+    pub fn user_orders(&self, uid: i64) -> Vec<(i32, Order)> {
+        let mut out = Vec::new();
+        for (&sym, book) in &self.books {
+            for o in book.find_user_orders(uid) {
+                out.push((sym, o));
+            }
+        }
+        out
+    }
+
+    /// 撮合簿子状态哈希（对应 Java StateHashReport `MATCHING_ORDER_BOOKS`）：按 symbol 升序折入各簿 `state_hash`。
+    pub fn order_books_state_hash(&self) -> i64 {
+        let mut h: i64 = 17;
+        for (&sym, book) in &self.books {
+            h = h.wrapping_mul(31).wrapping_add(sym as i64);
+            h = h.wrapping_mul(31).wrapping_add(book.state_hash() as i64);
+        }
+        h
     }
 }
 

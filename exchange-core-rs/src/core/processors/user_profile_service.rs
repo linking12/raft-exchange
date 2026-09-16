@@ -11,9 +11,13 @@ pub struct UserProfileService {
 }
 
 impl UserProfileService {
+    // ===== 构造/配置 =====
+
     pub fn new() -> Self {
         Self::default()
     }
+
+    // ===== 核心行为 =====
 
     /// 对应 Java `UserProfileService.addEmptyUserProfile`：新建 ACTIVE profile，重复 uid → UserMgmtUserAlreadyExists。
     pub fn add_empty_user_profile(&mut self, uid: i64) -> CommandResultCode {
@@ -22,14 +26,6 @@ impl UserProfileService {
         }
         self.users.insert(uid, UserProfile::new(uid, UserStatus::Active));
         CommandResultCode::Success
-    }
-
-    pub fn get(&self, uid: i64) -> Option<&UserProfile> {
-        self.users.get(&uid)
-    }
-
-    pub fn get_mut(&mut self, uid: i64) -> Option<&mut UserProfile> {
-        self.users.get_mut(&uid)
     }
 
     pub fn suspend_user_profile(&mut self, uid: i64) -> CommandResultCode {
@@ -71,6 +67,16 @@ impl UserProfileService {
         self.users
             .entry(uid)
             .or_insert_with(|| UserProfile::new(uid, UserStatus::Suspended))
+    }
+
+    // ===== 查询/访问器 =====
+
+    pub fn get(&self, uid: i64) -> Option<&UserProfile> {
+        self.users.get(&uid)
+    }
+
+    pub fn get_mut(&mut self, uid: i64) -> Option<&mut UserProfile> {
+        self.users.get_mut(&uid)
     }
 }
 

@@ -17,16 +17,12 @@ pub struct FixedRateModel {
 }
 
 impl FixedRateModel {
+    // ===== 构造 / 配置 =====
     pub fn reset(&mut self) {
         self.locked_rate_adjust_bps = 0;
     }
 
-    pub fn state_hash(&self) -> i32 {
-        let mut h: i64 = 17;
-        h = h.wrapping_mul(31).wrapping_add(self.locked_rate_adjust_bps as i64);
-        ((h >> 32) as i32) ^ (h as i32)
-    }
-
+    // ===== 核心行为 =====
     /// floating 当前利率 + spread，下限 0，固化进 loan.rate_bps。
     pub fn open_rate_bps(&self, floating: &FloatingRateModel, loan_currency: i32) -> i32 {
         let adjusted =
@@ -49,6 +45,13 @@ impl FixedRateModel {
         delta
     }
 
+    // ===== 查询 / 访问器 =====
+    pub fn state_hash(&self) -> i32 {
+        let mut h: i64 = 17;
+        h = h.wrapping_mul(31).wrapping_add(self.locked_rate_adjust_bps as i64);
+        ((h >> 32) as i32) ^ (h as i32)
+    }
+
     /// accumulated_interest + pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let pending =
@@ -56,6 +59,7 @@ impl FixedRateModel {
         add_exact(loan.accumulated_interest(), pending)
     }
 
+    // ===== 内部 helper =====
     /// 分两步 trunc_mul_div（先 /YEAR_MS 再 /BPS_SCALE），不可合并为一次连乘。
     fn accrue_delta(outstanding_principal: i64, rate_bps: i32, last_accrue_ts: i64, now: i64) -> i64 {
         if outstanding_principal <= 0 || rate_bps <= 0 {

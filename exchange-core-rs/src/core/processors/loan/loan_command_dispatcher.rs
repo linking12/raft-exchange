@@ -31,6 +31,7 @@ fn add_exact(a: i64, b: i64) -> i64 {
 pub struct LoanCommandDispatcher;
 
 impl LoanCommandDispatcher {
+    // ===== 核心行为 =====
     /// 按 cmd.command 路由；分片自过滤单 shard 下恒真，未搬迁。
     pub fn dispatch(
         engine: &mut RiskEngine,
@@ -81,194 +82,6 @@ impl LoanCommandDispatcher {
             Self::reconcile_loan_indices(engine, ups, cmd.uid);
         }
         rc
-    }
-
-    /// 按 uid reconcile 强平扫描器 isolated/cross 两个 targeted 索引到当前敞口精确态。
-    fn reconcile_loan_indices(engine: &mut RiskEngine, ups: &UserProfileService, uid: i64) {
-        let up = match ups.get(uid) {
-            Some(u) => u,
-            None => return,
-        };
-        let lle = &mut engine.liquidation_engine.loan_liquidation_engine;
-        for loan in up.isolated_loans.values() {
-            if !loan.is_empty() {
-                lle.on_isolated_loan_opened(uid, loan.symbol_id);
-            }
-        }
-        // 摘除已无活 loan 的 isolated symbol（先收集再改，避免迭代中改容器）。
-        let indexed: Vec<i32> = lle
-            .isolated_loan_symbol_to_users
-            .iter()
-            .filter(|(_, users)| users.contains(&uid))
-            .map(|(&s, _)| s)
-            .collect();
-        for sym in indexed {
-            lle.on_isolated_loan_closed(up, sym);
-        }
-        lle.sync_cross_exposure(up);
-    }
-
-    /// 公共 preamble：缺户 → AuthInvalidUser；冻结户 → LoanUserSuspended；try_claim 幂等（claim-and-keep）。
-    fn preamble<'a>(
-        cmd: &OrderCommand,
-        ups: &'a mut UserProfileService,
-    ) -> Result<&'a mut UserProfile, CommandResultCode> {
-        let up = ups.get_mut(cmd.uid).ok_or(CommandResultCode::AuthInvalidUser)?;
-        if up.user_status == UserStatus::Suspended {
-            return Err(CommandResultCode::LoanUserSuspended);
-        }
-        if !up.try_claim_tx(cmd.order_id, cmd.timestamp) {
-            return Err(CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame);
-        }
-        Ok(up)
-    }
-
-    /// 转调 LoanService::collateral_value_in_quote_currency。
-    fn eval_collateral_in_loan_currency(
-        ssp: &SymbolSpecificationProvider,
-        amount: i64,
-        spec: &CoreSymbolSpecification,
-        mark_price: i64,
-    ) -> i64 {
-        let base_spec = ssp.get_currency(spec.base_currency);
-        let quote_spec = ssp.get_currency(spec.quote_currency);
-        LoanService::collateral_value_in_quote_currency(amount, spec, mark_price, base_spec, quote_spec)
-    }
-
-    /// 某币种在某用户上的 (free, locked, currency_scale_k)：free = accounts − calculate_locked，供 loan 事件填余额快照。缺 currency spec 返回全 0。
-    fn currency_free_locked(ssp: &SymbolSpecificationProvider, up: &UserProfile, currency: i32) -> (i64, i64, i64) {
-        match ssp.get_currency(currency) {
-            Some(cspec) => {
-                let locked = RiskEngine::calculate_locked(up, currency, ssp, cspec);
-                (up.account(currency) - locked, locked, cspec.currency_scale_k)
-            }
-            None => (0, 0, 0),
-        }
-    }
-
-    fn push_isolated_loan_event(
-        cmd: &mut OrderCommand,
-        engine: &RiskEngine,
-        ssp: &SymbolSpecificationProvider,
-        up: &UserProfile,
-        loan: &IsolatedLoanRecord,
-        event_type: FundEventType,
-    ) {
-        let ltv_bps = match ssp.get_symbol(loan.symbol_id) {
-            Some(spec) => {
-                let mark = engine.mark_price(loan.symbol_id).unwrap_or(0);
-                let coll = Self::eval_collateral_in_loan_currency(ssp, loan.collateral_amount, spec, mark);
-                let debt = add_exact(loan.outstanding_principal, loan.accumulated_interest);
-                if coll > 0 { mul_exact(debt, BPS_SCALE) / coll } else { 0 }
-            }
-            None => 0,
-        };
-        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
-        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, loan.collateral_currency);
-        cmd.fund_events.push(FundEvent {
-            event_type,
-            order_id: loan.loan_id,
-            uid: loan.uid,
-            currency: loan.loan_currency,
-            currency_scale_k: cur_scale,
-            free,
-            locked,
-            loan_mode: 0,
-            loan_debt_principal: loan.outstanding_principal,
-            loan_debt_interest: loan.accumulated_interest,
-            loan_interest_paid_total: loan.cum_interest_paid,
-            loan_ltv_bps: ltv_bps,
-            loan_collateral_currency: loan.collateral_currency,
-            loan_collateral_currency_scale_k: coll_scale,
-            loan_collateral_pledged: loan.collateral_amount,
-            loan_collateral_free: coll_free,
-            loan_collateral_locked: coll_locked,
-            ..Default::default()
-        });
-    }
-
-    fn push_cross_loan_event(
-        cmd: &mut OrderCommand,
-        engine: &RiskEngine,
-        ssp: &SymbolSpecificationProvider,
-        up: &UserProfile,
-        loan: &CrossLoanRecord,
-        event_type: FundEventType,
-        timestamp: i64,
-        fail_closed: bool,
-    ) {
-        let ltv_bps = engine.loan_service.calculate_cross_account_ltv_bps(
-            up,
-            timestamp,
-            ssp,
-            &engine.last_price_cache,
-            fail_closed,
-        );
-        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
-        cmd.fund_events.push(FundEvent {
-            event_type,
-            order_id: loan.loan_id,
-            uid: loan.uid,
-            currency: loan.loan_currency,
-            currency_scale_k: cur_scale,
-            free,
-            locked,
-            loan_mode: 1,
-            loan_debt_principal: loan.outstanding_principal,
-            loan_debt_interest: loan.accumulated_interest,
-            loan_interest_paid_total: loan.cum_interest_paid,
-            loan_ltv_bps: ltv_bps,
-            ..Default::default()
-        });
-    }
-
-    fn push_cross_collateral_change_event(
-        cmd: &mut OrderCommand,
-        ssp: &SymbolSpecificationProvider,
-        up: &UserProfile,
-        uid: i64,
-        currency: i32,
-        pledged: i64,
-        ltv_bps: i64,
-    ) {
-        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, currency);
-        cmd.fund_events.push(FundEvent {
-            event_type: FundEventType::LoanCollateralChange,
-            uid,
-            loan_mode: 1,
-            loan_ltv_bps: ltv_bps,
-            loan_collateral_currency: currency,
-            loan_collateral_currency_scale_k: coll_scale,
-            loan_collateral_pledged: pledged,
-            loan_collateral_free: coll_free,
-            loan_collateral_locked: coll_locked,
-            ..Default::default()
-        });
-    }
-
-    /// LIF 接管后的 cross LOAN_LIQUIDATED：债务已转 LIF，principal/interest 报 0；带 loan-currency 余额快照。
-    fn push_cross_loan_liquidated_zeroed(
-        cmd: &mut OrderCommand,
-        ssp: &SymbolSpecificationProvider,
-        up: &UserProfile,
-        loan_id: i64,
-        loan_currency: i32,
-        uid: i64,
-        cum_interest_paid: i64,
-    ) {
-        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan_currency);
-        cmd.fund_events.push(FundEvent {
-            event_type: FundEventType::LoanLiquidated,
-            order_id: loan_id,
-            uid,
-            currency: loan_currency,
-            currency_scale_k: cur_scale,
-            free,
-            locked,
-            loan_mode: 1,
-            loan_interest_paid_total: cum_interest_paid,
-            ..Default::default()
-        });
     }
 
     // LOAN_CREATE
@@ -370,45 +183,6 @@ impl LoanCommandDispatcher {
         let loan_ref = up.isolated_loans.get(&loan_id).expect("just inserted");
         Self::push_isolated_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanBorrow);
 
-        CommandResultCode::Success
-    }
-
-    // LOAN_REPAY
-
-    /// Isolated REPAY 共用核心：accrue→算实抵债额→查余额→抵债（利息优先），不释放抵押。
-    fn settle_repay_isolated(
-        engine: &mut RiskEngine,
-        up: &mut UserProfile,
-        loan_id: i64,
-        cmd: &OrderCommand,
-        ssp: &SymbolSpecificationProvider,
-    ) -> CommandResultCode {
-        let requested_repay = cmd.price;
-        if requested_repay < 0 {
-            return CommandResultCode::LoanInvalidAmount;
-        }
-
-        // 阶段一：accrue（短暂持有 `&mut loan`，读出 loan_currency/payoff 后立即释放该借用）。
-        let (loan_currency, payoff) = {
-            let loan = up.isolated_loans.get_mut(&loan_id).expect("loan existence checked by caller");
-            engine.loan_service.accrue_to(loan, cmd.timestamp);
-            (loan.loan_currency, add_exact(loan.outstanding_principal, loan.accumulated_interest))
-        };
-        let actual_repay =
-            if requested_repay == 0 || requested_repay >= payoff { payoff } else { requested_repay };
-
-        // 阶段二：free-balance 校验需 &UserProfile 整体，此刻上面 &mut loan 借用已结束，二者不重叠。
-        let loan_currency_spec = ssp
-            .get_currency(loan_currency)
-            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
-        let free = up.account(loan_currency) - RiskEngine::calculate_locked(up, loan_currency, ssp, loan_currency_spec);
-        if free < actual_repay {
-            return CommandResultCode::LoanAccountInsufficient;
-        }
-
-        // 阶段三：抵债——loan 与 &mut up.accounts 是不重叠的直接字段借用，可同时活。
-        let loan = up.isolated_loans.get_mut(&loan_id).expect("loan existence checked by caller");
-        engine.loan_service.apply_debt_payment(loan, &mut up.accounts, actual_repay);
         CommandResultCode::Success
     }
 
@@ -720,27 +494,6 @@ impl LoanCommandDispatcher {
         }
     }
 
-    /// LIF 承接不良 Isolated 贷款：按债务全额代偿、取走全部抵押；LIF 允许为负（垫资非损失），抵押从 accounts 真实划转——借贷子系统唯一的物理资金转移。
-    fn take_over_by_insurance_fund(
-        engine: &mut RiskEngine,
-        up: &mut UserProfile,
-        principal: i64,
-        interest: i64,
-        loan_currency: i32,
-        collateral_currency: i32,
-        collateral: i64,
-    ) {
-        let debt = add_exact(principal, interest);
-        engine.loan_service.add_to_loan_insurance_fund(loan_currency, -debt);
-        engine.loan_service.add_to_loan_pool_available(loan_currency, principal);
-        engine.loan_service.add_to_loan_pool_borrowed(loan_currency, -principal);
-        engine.loan_service.add_to_interest_revenue(loan_currency, interest);
-        if collateral > 0 {
-            up.add_to_account(collateral_currency, -collateral);
-            engine.loan_service.add_to_loan_insurance_fund(collateral_currency, collateral);
-        }
-    }
-
     // Cross 用户命令：加减抵押/借款/还款
 
     /// Cross 账户级追加抵押（不校验 LTV，越多越安全）：币种白名单权重>0、自由余额充足后 cross_loan_collateral.add。
@@ -881,40 +634,6 @@ impl LoanCommandDispatcher {
         let ts = cmd.timestamp;
         let loan_ref = up.cross_loans.get(&loan_id).expect("just inserted");
         Self::push_cross_loan_event(cmd, engine, ssp, up, loan_ref, FundEventType::LoanBorrow, ts, true);
-        CommandResultCode::Success
-    }
-
-    /// Cross REPAY 共用核心：与 settle_repay_isolated 同构，改在 up.cross_loans 上操作（借用检查器需按类型各写一份薄包装）；从不释放抵押（Cross 无 per-loan 抵押字段）。
-    fn settle_repay_cross(
-        engine: &mut RiskEngine,
-        up: &mut UserProfile,
-        loan_id: i64,
-        cmd: &OrderCommand,
-        ssp: &SymbolSpecificationProvider,
-    ) -> CommandResultCode {
-        let requested_repay = cmd.price;
-        if requested_repay < 0 {
-            return CommandResultCode::LoanInvalidAmount;
-        }
-
-        let (loan_currency, payoff) = {
-            let loan = up.cross_loans.get_mut(&loan_id).expect("loan existence checked by caller");
-            engine.loan_service.accrue_to(loan, cmd.timestamp);
-            (loan.loan_currency, add_exact(loan.outstanding_principal, loan.accumulated_interest))
-        };
-        let actual_repay =
-            if requested_repay == 0 || requested_repay >= payoff { payoff } else { requested_repay };
-
-        let loan_currency_spec = ssp
-            .get_currency(loan_currency)
-            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
-        let free = up.account(loan_currency) - RiskEngine::calculate_locked(up, loan_currency, ssp, loan_currency_spec);
-        if free < actual_repay {
-            return CommandResultCode::LoanAccountInsufficient;
-        }
-
-        let loan = up.cross_loans.get_mut(&loan_id).expect("loan existence checked by caller");
-        engine.loan_service.apply_debt_payment(loan, &mut up.accounts, actual_repay);
         CommandResultCode::Success
     }
 
@@ -1106,47 +825,6 @@ impl LoanCommandDispatcher {
         // 该索引 leader 本地、非复制、不进 state hash：残留 uid 至多让下次多 check 一次（check_cross 现算命中即 no-op），只缩集不漏不造，不影响正确性与一致性。
     }
 
-    /// LIF 承接后收尾：无对象池，直接 remove 即等价清零+摘出+回收；调用后 loan_id 不可再读。
-    fn close_and_recycle_cross_loan(up: &mut UserProfile, loan_id: i64) {
-        up.cross_loans.remove(&loan_id);
-    }
-
-    /// 抵押结构性耗尽时把账户其余未偿 Cross 债务一并交 LIF 承接：按 loanId 升序遍历（BTreeMap 天然升序，确定性硬要求），跳过 target_loan_id 及 fail-closed 的笔。
-    #[allow(clippy::too_many_arguments)]
-    fn take_over_remaining_cross_loans(
-        engine: &mut RiskEngine,
-        cmd: &mut OrderCommand,
-        up: &mut UserProfile,
-        now: i64,
-        target_loan_id: i64,
-        ssp: &SymbolSpecificationProvider,
-    ) {
-        // 先快照：循环内会 remove。BTreeMap 迭代天然按 loanId 升序（确定性）。
-        let loan_ids: Vec<i64> = up.cross_loans.keys().copied().collect();
-        for loan_id in loan_ids {
-            if loan_id == target_loan_id {
-                continue;
-            }
-            let should_skip = match up.cross_loans.get(&loan_id) {
-                Some(l) => l.outstanding_principal == 0 && l.accumulated_interest == 0,
-                None => true,
-            };
-            if should_skip {
-                continue;
-            }
-            let taken_over = engine.loan_service.take_over_cross_loan(up, loan_id, now, ssp, &engine.last_price_cache);
-            if !taken_over {
-                // fail-closed：跳过继续下一笔。
-                continue;
-            }
-            let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
-            if let Some((lid, lcur, luid, cip)) = liq {
-                Self::push_cross_loan_liquidated_zeroed(cmd, ssp, up, lid, lcur, luid, cip);
-            }
-            Self::close_and_recycle_cross_loan(up, loan_id);
-        }
-    }
-
     // 运营命令：借贷池/LIF 充提。cmd.uid=shardId、symbol=currency、size=amount，不复用 preamble、无幂等去重（运营侧不得重放，调用方自保证）。
 
     /// 运营方注入池子流动性。
@@ -1193,6 +871,330 @@ impl LoanCommandDispatcher {
         engine.loan_service.add_to_loan_insurance_fund(cmd.symbol, -cmd.size);
         *engine.adjustments.entry(cmd.symbol).or_insert(0) += cmd.size;
         CommandResultCode::Success
+    }
+
+    // ===== 内部 helper =====
+    /// 按 uid reconcile 强平扫描器 isolated/cross 两个 targeted 索引到当前敞口精确态。
+    fn reconcile_loan_indices(engine: &mut RiskEngine, ups: &UserProfileService, uid: i64) {
+        let up = match ups.get(uid) {
+            Some(u) => u,
+            None => return,
+        };
+        let lle = &mut engine.liquidation_engine.loan_liquidation_engine;
+        for loan in up.isolated_loans.values() {
+            if !loan.is_empty() {
+                lle.on_isolated_loan_opened(uid, loan.symbol_id);
+            }
+        }
+        // 摘除已无活 loan 的 isolated symbol（先收集再改，避免迭代中改容器）。
+        let indexed: Vec<i32> = lle
+            .isolated_loan_symbol_to_users
+            .iter()
+            .filter(|(_, users)| users.contains(&uid))
+            .map(|(&s, _)| s)
+            .collect();
+        for sym in indexed {
+            lle.on_isolated_loan_closed(up, sym);
+        }
+        lle.sync_cross_exposure(up);
+    }
+
+    /// 公共 preamble：缺户 → AuthInvalidUser；冻结户 → LoanUserSuspended；try_claim 幂等（claim-and-keep）。
+    fn preamble<'a>(
+        cmd: &OrderCommand,
+        ups: &'a mut UserProfileService,
+    ) -> Result<&'a mut UserProfile, CommandResultCode> {
+        let up = ups.get_mut(cmd.uid).ok_or(CommandResultCode::AuthInvalidUser)?;
+        if up.user_status == UserStatus::Suspended {
+            return Err(CommandResultCode::LoanUserSuspended);
+        }
+        if !up.try_claim_tx(cmd.order_id, cmd.timestamp) {
+            return Err(CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame);
+        }
+        Ok(up)
+    }
+
+    /// 转调 LoanService::collateral_value_in_quote_currency。
+    fn eval_collateral_in_loan_currency(
+        ssp: &SymbolSpecificationProvider,
+        amount: i64,
+        spec: &CoreSymbolSpecification,
+        mark_price: i64,
+    ) -> i64 {
+        let base_spec = ssp.get_currency(spec.base_currency);
+        let quote_spec = ssp.get_currency(spec.quote_currency);
+        LoanService::collateral_value_in_quote_currency(amount, spec, mark_price, base_spec, quote_spec)
+    }
+
+    /// 某币种在某用户上的 (free, locked, currency_scale_k)：free = accounts − calculate_locked，供 loan 事件填余额快照。缺 currency spec 返回全 0。
+    fn currency_free_locked(ssp: &SymbolSpecificationProvider, up: &UserProfile, currency: i32) -> (i64, i64, i64) {
+        match ssp.get_currency(currency) {
+            Some(cspec) => {
+                let locked = RiskEngine::calculate_locked(up, currency, ssp, cspec);
+                (up.account(currency) - locked, locked, cspec.currency_scale_k)
+            }
+            None => (0, 0, 0),
+        }
+    }
+
+    fn push_isolated_loan_event(
+        cmd: &mut OrderCommand,
+        engine: &RiskEngine,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        loan: &IsolatedLoanRecord,
+        event_type: FundEventType,
+    ) {
+        let ltv_bps = match ssp.get_symbol(loan.symbol_id) {
+            Some(spec) => {
+                let mark = engine.mark_price(loan.symbol_id).unwrap_or(0);
+                let coll = Self::eval_collateral_in_loan_currency(ssp, loan.collateral_amount, spec, mark);
+                let debt = add_exact(loan.outstanding_principal, loan.accumulated_interest);
+                if coll > 0 { mul_exact(debt, BPS_SCALE) / coll } else { 0 }
+            }
+            None => 0,
+        };
+        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
+        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, loan.collateral_currency);
+        cmd.fund_events.push(FundEvent {
+            event_type,
+            order_id: loan.loan_id,
+            uid: loan.uid,
+            currency: loan.loan_currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
+            loan_mode: 0,
+            loan_debt_principal: loan.outstanding_principal,
+            loan_debt_interest: loan.accumulated_interest,
+            loan_interest_paid_total: loan.cum_interest_paid,
+            loan_ltv_bps: ltv_bps,
+            loan_collateral_currency: loan.collateral_currency,
+            loan_collateral_currency_scale_k: coll_scale,
+            loan_collateral_pledged: loan.collateral_amount,
+            loan_collateral_free: coll_free,
+            loan_collateral_locked: coll_locked,
+            ..Default::default()
+        });
+    }
+
+    fn push_cross_loan_event(
+        cmd: &mut OrderCommand,
+        engine: &RiskEngine,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        loan: &CrossLoanRecord,
+        event_type: FundEventType,
+        timestamp: i64,
+        fail_closed: bool,
+    ) {
+        let ltv_bps = engine.loan_service.calculate_cross_account_ltv_bps(
+            up,
+            timestamp,
+            ssp,
+            &engine.last_price_cache,
+            fail_closed,
+        );
+        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan.loan_currency);
+        cmd.fund_events.push(FundEvent {
+            event_type,
+            order_id: loan.loan_id,
+            uid: loan.uid,
+            currency: loan.loan_currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
+            loan_mode: 1,
+            loan_debt_principal: loan.outstanding_principal,
+            loan_debt_interest: loan.accumulated_interest,
+            loan_interest_paid_total: loan.cum_interest_paid,
+            loan_ltv_bps: ltv_bps,
+            ..Default::default()
+        });
+    }
+
+    fn push_cross_collateral_change_event(
+        cmd: &mut OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        uid: i64,
+        currency: i32,
+        pledged: i64,
+        ltv_bps: i64,
+    ) {
+        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, currency);
+        cmd.fund_events.push(FundEvent {
+            event_type: FundEventType::LoanCollateralChange,
+            uid,
+            loan_mode: 1,
+            loan_ltv_bps: ltv_bps,
+            loan_collateral_currency: currency,
+            loan_collateral_currency_scale_k: coll_scale,
+            loan_collateral_pledged: pledged,
+            loan_collateral_free: coll_free,
+            loan_collateral_locked: coll_locked,
+            ..Default::default()
+        });
+    }
+
+    /// LIF 接管后的 cross LOAN_LIQUIDATED：债务已转 LIF，principal/interest 报 0；带 loan-currency 余额快照。
+    fn push_cross_loan_liquidated_zeroed(
+        cmd: &mut OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+        up: &UserProfile,
+        loan_id: i64,
+        loan_currency: i32,
+        uid: i64,
+        cum_interest_paid: i64,
+    ) {
+        let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan_currency);
+        cmd.fund_events.push(FundEvent {
+            event_type: FundEventType::LoanLiquidated,
+            order_id: loan_id,
+            uid,
+            currency: loan_currency,
+            currency_scale_k: cur_scale,
+            free,
+            locked,
+            loan_mode: 1,
+            loan_interest_paid_total: cum_interest_paid,
+            ..Default::default()
+        });
+    }
+
+    // LOAN_REPAY
+
+    /// Isolated REPAY 共用核心：accrue→算实抵债额→查余额→抵债（利息优先），不释放抵押。
+    fn settle_repay_isolated(
+        engine: &mut RiskEngine,
+        up: &mut UserProfile,
+        loan_id: i64,
+        cmd: &OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let requested_repay = cmd.price;
+        if requested_repay < 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+
+        // 阶段一：accrue（短暂持有 `&mut loan`，读出 loan_currency/payoff 后立即释放该借用）。
+        let (loan_currency, payoff) = {
+            let loan = up.isolated_loans.get_mut(&loan_id).expect("loan existence checked by caller");
+            engine.loan_service.accrue_to(loan, cmd.timestamp);
+            (loan.loan_currency, add_exact(loan.outstanding_principal, loan.accumulated_interest))
+        };
+        let actual_repay =
+            if requested_repay == 0 || requested_repay >= payoff { payoff } else { requested_repay };
+
+        // 阶段二：free-balance 校验需 &UserProfile 整体，此刻上面 &mut loan 借用已结束，二者不重叠。
+        let loan_currency_spec = ssp
+            .get_currency(loan_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
+        let free = up.account(loan_currency) - RiskEngine::calculate_locked(up, loan_currency, ssp, loan_currency_spec);
+        if free < actual_repay {
+            return CommandResultCode::LoanAccountInsufficient;
+        }
+
+        // 阶段三：抵债——loan 与 &mut up.accounts 是不重叠的直接字段借用，可同时活。
+        let loan = up.isolated_loans.get_mut(&loan_id).expect("loan existence checked by caller");
+        engine.loan_service.apply_debt_payment(loan, &mut up.accounts, actual_repay);
+        CommandResultCode::Success
+    }
+
+    /// LIF 承接不良 Isolated 贷款：按债务全额代偿、取走全部抵押；LIF 允许为负（垫资非损失），抵押从 accounts 真实划转——借贷子系统唯一的物理资金转移。
+    fn take_over_by_insurance_fund(
+        engine: &mut RiskEngine,
+        up: &mut UserProfile,
+        principal: i64,
+        interest: i64,
+        loan_currency: i32,
+        collateral_currency: i32,
+        collateral: i64,
+    ) {
+        let debt = add_exact(principal, interest);
+        engine.loan_service.add_to_loan_insurance_fund(loan_currency, -debt);
+        engine.loan_service.add_to_loan_pool_available(loan_currency, principal);
+        engine.loan_service.add_to_loan_pool_borrowed(loan_currency, -principal);
+        engine.loan_service.add_to_interest_revenue(loan_currency, interest);
+        if collateral > 0 {
+            up.add_to_account(collateral_currency, -collateral);
+            engine.loan_service.add_to_loan_insurance_fund(collateral_currency, collateral);
+        }
+    }
+
+    /// Cross REPAY 共用核心：与 settle_repay_isolated 同构，改在 up.cross_loans 上操作（借用检查器需按类型各写一份薄包装）；从不释放抵押（Cross 无 per-loan 抵押字段）。
+    fn settle_repay_cross(
+        engine: &mut RiskEngine,
+        up: &mut UserProfile,
+        loan_id: i64,
+        cmd: &OrderCommand,
+        ssp: &SymbolSpecificationProvider,
+    ) -> CommandResultCode {
+        let requested_repay = cmd.price;
+        if requested_repay < 0 {
+            return CommandResultCode::LoanInvalidAmount;
+        }
+
+        let (loan_currency, payoff) = {
+            let loan = up.cross_loans.get_mut(&loan_id).expect("loan existence checked by caller");
+            engine.loan_service.accrue_to(loan, cmd.timestamp);
+            (loan.loan_currency, add_exact(loan.outstanding_principal, loan.accumulated_interest))
+        };
+        let actual_repay =
+            if requested_repay == 0 || requested_repay >= payoff { payoff } else { requested_repay };
+
+        let loan_currency_spec = ssp
+            .get_currency(loan_currency)
+            .unwrap_or_else(|| panic!("currency spec missing for currency {loan_currency}"));
+        let free = up.account(loan_currency) - RiskEngine::calculate_locked(up, loan_currency, ssp, loan_currency_spec);
+        if free < actual_repay {
+            return CommandResultCode::LoanAccountInsufficient;
+        }
+
+        let loan = up.cross_loans.get_mut(&loan_id).expect("loan existence checked by caller");
+        engine.loan_service.apply_debt_payment(loan, &mut up.accounts, actual_repay);
+        CommandResultCode::Success
+    }
+
+    /// LIF 承接后收尾：无对象池，直接 remove 即等价清零+摘出+回收；调用后 loan_id 不可再读。
+    fn close_and_recycle_cross_loan(up: &mut UserProfile, loan_id: i64) {
+        up.cross_loans.remove(&loan_id);
+    }
+
+    /// 抵押结构性耗尽时把账户其余未偿 Cross 债务一并交 LIF 承接：按 loanId 升序遍历（BTreeMap 天然升序，确定性硬要求），跳过 target_loan_id 及 fail-closed 的笔。
+    #[allow(clippy::too_many_arguments)]
+    fn take_over_remaining_cross_loans(
+        engine: &mut RiskEngine,
+        cmd: &mut OrderCommand,
+        up: &mut UserProfile,
+        now: i64,
+        target_loan_id: i64,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        // 先快照：循环内会 remove。BTreeMap 迭代天然按 loanId 升序（确定性）。
+        let loan_ids: Vec<i64> = up.cross_loans.keys().copied().collect();
+        for loan_id in loan_ids {
+            if loan_id == target_loan_id {
+                continue;
+            }
+            let should_skip = match up.cross_loans.get(&loan_id) {
+                Some(l) => l.outstanding_principal == 0 && l.accumulated_interest == 0,
+                None => true,
+            };
+            if should_skip {
+                continue;
+            }
+            let taken_over = engine.loan_service.take_over_cross_loan(up, loan_id, now, ssp, &engine.last_price_cache);
+            if !taken_over {
+                // fail-closed：跳过继续下一笔。
+                continue;
+            }
+            let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
+            if let Some((lid, lcur, luid, cip)) = liq {
+                Self::push_cross_loan_liquidated_zeroed(cmd, ssp, up, lid, lcur, luid, cip);
+            }
+            Self::close_and_recycle_cross_loan(up, loan_id);
+        }
     }
 }
 

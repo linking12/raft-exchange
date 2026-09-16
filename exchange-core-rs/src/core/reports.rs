@@ -158,13 +158,7 @@ impl StateHashReport {
 }
 
 impl ExchangeCore {
-    fn size_price_to_currency(&self, amount: i64, symbol: i32) -> Option<(i32, i64)> {
-        let spec = self.ssp.get_symbol(symbol)?;
-        let cspec = self.ssp.get_currency(spec.quote_currency)?;
-        let v = size_price_to_currency_scale(amount, spec.base_scale_k, spec.quote_scale_k, cspec.currency_scale_k);
-        Some((spec.quote_currency, v))
-    }
-
+    // ===== 核心行为 =====
     pub fn query_total_balance(&self) -> TotalCurrencyBalanceReport {
         let mut r = TotalCurrencyBalanceReport::default();
         let mut pnl_by_symbol: BTreeMap<i32, i64> = BTreeMap::new();
@@ -246,12 +240,6 @@ impl ExchangeCore {
         }
 
         r
-    }
-
-    fn position_estimates(&self, up: &UserProfile, pos: &SymbolPositionRecord) -> (i64, i64, i64) {
-        let Some(spec) = self.ssp.get_symbol(pos.symbol) else { return (0, 0, 0) };
-        let (_upnl, liq, mr, mmsk) = RiskEngine::futures_estimates(&self.risk.last_price_cache, up, pos, spec, &self.ssp);
-        (liq, mr, mmsk)
     }
 
     pub fn query_single_user(&self, uid: i64, now_ms: i64) -> SingleUserReport {
@@ -457,6 +445,20 @@ impl ExchangeCore {
         components.insert("order_books".to_string(), self.matching.order_books_state_hash());
         components.insert("risk_last_price_cache".to_string(), hash_bucket(&self.risk.last_price_cache));
         StateHashReport { components }
+    }
+
+    // ===== 内部 helper =====
+    fn size_price_to_currency(&self, amount: i64, symbol: i32) -> Option<(i32, i64)> {
+        let spec = self.ssp.get_symbol(symbol)?;
+        let cspec = self.ssp.get_currency(spec.quote_currency)?;
+        let v = size_price_to_currency_scale(amount, spec.base_scale_k, spec.quote_scale_k, cspec.currency_scale_k);
+        Some((spec.quote_currency, v))
+    }
+
+    fn position_estimates(&self, up: &UserProfile, pos: &SymbolPositionRecord) -> (i64, i64, i64) {
+        let Some(spec) = self.ssp.get_symbol(pos.symbol) else { return (0, 0, 0) };
+        let (_upnl, liq, mr, mmsk) = RiskEngine::futures_estimates(&self.risk.last_price_cache, up, pos, spec, &self.ssp);
+        (liq, mr, mmsk)
     }
 }
 
