@@ -114,88 +114,9 @@ impl ExchangeApi {
         rc
     }
 
-    /// 最近一条命令处理后的完整 cmd（matcher_event / fund_events 已就位）。
-    pub fn last_cmd(&self) -> &OrderCommand {
-        self.last_cmd.as_ref().expect("no command submitted yet")
-    }
-
-    /// 最近一条命令的撮合事件链头（对应 Java `cmd.matcherEvent`；无成交/无事件为 None）。
-    pub fn last_matcher_event(&self) -> Option<&crate::core::common::matcher_trade_event::MatcherTradeEvent> {
-        self.last_cmd().matcher_event.as_deref()
-    }
-
-    /// 最近一条命令产生的资金事件（对应 Java 的 fund event 流）。**只含本条命令自身**;
-    /// 清算/ADL/loan 强平走内部排空的次级命令,其事件见 [`cascade_fund_events`](Self::cascade_fund_events)。
-    pub fn last_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
-        &self.last_cmd().fund_events
-    }
-
-    /// 最近一条命令触发的**级联次级命令**(FORCE/IF/ADL/loan 强平,经 `run_liquidation_cascade` 排空)产生的
-    /// 资金事件,按排空顺序累加。对拍 Java 里这些事件(LIQUIDATION_CLOSE/LIQUIDATION_FEE/IF_POSITION_CLOSE/
-    /// ADL_ORIGIN_CLOSE/ADL_POSITION_CLOSE 等)用此;funding 结算(SETTLE_FUNDINGFEES 直接提交)则用 last_fund_events。
-    pub fn cascade_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
-        &self.core.last_cascade_events
-    }
-
-    /// 最近一条命令触发的级联次级命令产生的**撮合事件**(展平链;强平 FORCE 成交等)。
-    pub fn cascade_matcher_events(&self) -> &[crate::core::common::matcher_trade_event::MatcherTradeEvent] {
-        &self.core.last_cascade_matcher_events
-    }
-
-    /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。用于本门面未提供专属封装的命令
-    /// （loan 全套 / internal_transfer / settle_pnl / settle_fundingfees / position_mode / liquidation_scan / if_deposit/withdraw / reset_fee 等）。
-    pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
-        self.run(cmd)
-    }
-
-    /// `MARKPRICE_ADJUSTMENT` 带显式时间戳（清算类场景需要时间推进 + 触发定向扫描）。
-    pub fn set_mark_price_at(&mut self, symbol: i32, price: i64, timestamp: i64) -> CommandResultCode {
-        self.run(OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, timestamp, ..Default::default() })
-    }
-
-    /// 开启清算引擎 leader 门（`is_running`），使 MARKPRICE_ADJUSTMENT / LIQUIDATION_SCAN 触发定向扫描
-    /// （对应 Java `ExchangeTestContainer.enableLiquidationEngines()`；生产由 raft leader 选举置位）。
-    pub fn enable_liquidation(&mut self) {
-        self.core.risk.liquidation_engine.is_running = true;
-    }
-
-    /// `POSITION_MODE_ADJUSTMENT`：`hedge=true`→HEDGE(action=Bid),`false`→ONEWAY(action=Ask)
-    /// （`PositionMode::of_code(action.code())`）。HEDGE 仓位读取:遍历 `ups().get(uid).positions.values()` 按 direction 过滤(±symbol 双腿)。
-    pub fn adjust_position_mode(&mut self, uid: i64, hedge: bool) -> CommandResultCode {
-        let action = if hedge { OrderAction::Bid } else { OrderAction::Ask };
-        self.run(OrderCommand { command: OrderCommandType::PositionModeAdjustment, uid, action: Some(action), ..Default::default() })
-    }
-
-    /// `SUSPEND_USER` / `RESUME_USER`。
-    pub fn suspend_user(&mut self, uid: i64) -> CommandResultCode {
-        self.run(OrderCommand { command: OrderCommandType::SuspendUser, uid, ..Default::default() })
-    }
-    pub fn resume_user(&mut self, uid: i64) -> CommandResultCode {
-        self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
-    }
-
-    /// 全局余额守恒报表（对应 Java `TotalCurrencyBalanceReportResult` / `isGlobalBalancesAllZero`）。
-    pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
-        self.core.query_total_balance()
-    }
-
-    /// 单用户报表（含 positions 的 unrealized_pnl / liquidation_price / margin_ratio_scale_k 等派生字段）。
-    /// `now_ms` 用于 loan display interest / 实时 LTV。
-    pub fn single_user(&self, uid: i64, now_ms: i64) -> crate::core::reports::SingleUserReport {
-        self.core.query_single_user(uid, now_ms)
-    }
-
-    /// 保险基金报表（futures IF available/reserved + loan LIF）。
-    pub fn insurance_fund(&self) -> crate::core::reports::InsuranceFundReport {
-        self.core.query_insurance_fund()
-    }
-
-    /// symbol / currency 规格报表：全部 symbol（含 `base_scale_k`/`quote_scale_k`/费率档）+ 全部 currency
-    /// （含 `currency_scale_k`）。**client 侧缩放的数据源**——引擎所有金额都是 i64 定点,client 用这里的 scale
-    /// 把 raw i64 转人类可读(见 README「报表」节)。对应 Java `SymbolsReportQuery` / currency 配置查询。
-    pub fn symbol_currency(&self) -> crate::core::reports::SymbolCurrencyReport {
-        self.core.query_symbol_currency()
-    }
+    // ==========================================================================================
+    // 配置:引擎 / 市场 / 账户初始化
+    // ==========================================================================================
 
     /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。**必须先于引用它的 symbol 调用**（见模块级文档）。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
@@ -216,10 +137,28 @@ impl ExchangeApi {
         rc
     }
 
+    /// 同 [`Self::add_symbol`]，多校验 `spec.symbol_type.is_futures_contract()`，非期货类型拒绝。
+    pub fn add_futures_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
+        if !spec.symbol_type.is_futures_contract() {
+            return CommandResultCode::UnsupportedSymbolType;
+        }
+        self.add_symbol(spec)
+    }
+
     pub fn add_user(&mut self, uid: i64) -> CommandResultCode {
         let cmd = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
         self.run(cmd)
     }
+
+    /// 开启清算引擎 leader 门（`is_running`），使 MARKPRICE_ADJUSTMENT / LIQUIDATION_SCAN 触发定向扫描
+    /// （对应 Java `ExchangeTestContainer.enableLiquidationEngines()`；生产由 raft leader 选举置位）。
+    pub fn enable_liquidation(&mut self) {
+        self.core.risk.liquidation_engine.is_running = true;
+    }
+
+    // ==========================================================================================
+    // 撮合:交易与运营命令
+    // ==========================================================================================
 
     /// `currency` 走 `cmd.symbol`、`amount` 走 `cmd.price`、`txid` 走 `cmd.order_id`（对应 Java `BALANCE_ADJUSTMENT` 命令字段复用，见 `RiskEngine::balance_adjustment` 文档）。
     pub fn balance_adjustment(
@@ -291,40 +230,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    pub fn request_l2(&mut self, symbol: i32, depth: i32) -> L2MarketData {
-        let mut cmd = OrderCommand {
-            command: OrderCommandType::OrderBookRequest,
-            symbol,
-            size: depth as i64,
-            ..Default::default()
-        };
-        self.core.process_command(&mut cmd);
-        cmd.market_data.take().unwrap_or_default()
-    }
-
-    // ------------------------------------------------------------------
-    // 期货门面：symbol 注册同 add_symbol 直接 API；mark price/下单/平仓/保证金/杠杆走 OrderCommand。
-    // ------------------------------------------------------------------
-
-    /// 同 [`Self::add_symbol`]，多校验 `spec.symbol_type.is_futures_contract()`，非期货类型拒绝。
-    pub fn add_futures_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
-        if !spec.symbol_type.is_futures_contract() {
-            return CommandResultCode::UnsupportedSymbolType;
-        }
-        self.add_symbol(spec)
-    }
-
-    /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]`（对应 Java `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
-    pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
-        let cmd = OrderCommand {
-            command: OrderCommandType::MarkpriceAdjustment,
-            symbol,
-            price,
-            ..Default::default()
-        };
-        self.run(cmd)
-    }
-
     /// 期货下单：`PLACE_ORDER` + `leverage`/`margin_mode`/reduce-only 三个期货专属字段（见 [`PlaceFuturesOrderRequest`] 文档）。
     pub fn place_futures_order(&mut self, req: PlaceFuturesOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
@@ -387,14 +292,47 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    // ------------------------------------------------------------------
-    // 只读内省（供测试/上层校验守恒态用，非 Java ExchangeApi 原有方法）。
-    // ------------------------------------------------------------------
-
-    /// 某用户在某 symbol 上的仓位记录（`ONEWAY` 下 key 恒为 `symbol`，不处理 `HEDGE` 双腿键）。
-    pub fn user_position(&self, uid: i64, symbol: i32) -> Option<&SymbolPositionRecord> {
-        self.core.ups.get(uid).and_then(|p| p.positions.get(&symbol))
+    /// `POSITION_MODE_ADJUSTMENT`：`hedge=true`→HEDGE(action=Bid),`false`→ONEWAY(action=Ask)
+    /// （`PositionMode::of_code(action.code())`）。HEDGE 仓位读取:遍历 `ups().get(uid).positions.values()` 按 direction 过滤(±symbol 双腿)。
+    pub fn adjust_position_mode(&mut self, uid: i64, hedge: bool) -> CommandResultCode {
+        let action = if hedge { OrderAction::Bid } else { OrderAction::Ask };
+        self.run(OrderCommand { command: OrderCommandType::PositionModeAdjustment, uid, action: Some(action), ..Default::default() })
     }
+
+    /// `MARKPRICE_ADJUSTMENT`：更新 `RiskEngine::last_price_cache[symbol]`（对应 Java `adjustMarkPrice`，见 [`RiskEngine::markprice_adjustment`] 文档）。
+    pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
+        let cmd = OrderCommand {
+            command: OrderCommandType::MarkpriceAdjustment,
+            symbol,
+            price,
+            ..Default::default()
+        };
+        self.run(cmd)
+    }
+
+    /// `MARKPRICE_ADJUSTMENT` 带显式时间戳（清算类场景需要时间推进 + 触发定向扫描）。
+    pub fn set_mark_price_at(&mut self, symbol: i32, price: i64, timestamp: i64) -> CommandResultCode {
+        self.run(OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, timestamp, ..Default::default() })
+    }
+
+    /// `SUSPEND_USER` / `RESUME_USER`。
+    pub fn suspend_user(&mut self, uid: i64) -> CommandResultCode {
+        self.run(OrderCommand { command: OrderCommandType::SuspendUser, uid, ..Default::default() })
+    }
+
+    pub fn resume_user(&mut self, uid: i64) -> CommandResultCode {
+        self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
+    }
+
+    /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。用于本门面未提供专属封装的命令
+    /// （loan 全套 / internal_transfer / settle_pnl / settle_fundingfees / position_mode / liquidation_scan / if_deposit/withdraw / reset_fee 等）。
+    pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
+        self.run(cmd)
+    }
+
+    // ==========================================================================================
+    // 查询:引擎状态直读 + 上条命令事件
+    // ==========================================================================================
 
     pub fn user_account(&self, uid: i64, currency: i32) -> i64 {
         self.core.ups.get(uid).map(|p| p.account(currency)).unwrap_or(0)
@@ -404,12 +342,56 @@ impl ExchangeApi {
         self.core.ups.get(uid).map(|p| p.locked(currency)).unwrap_or(0)
     }
 
+    /// 某用户在某 symbol 上的仓位记录（`ONEWAY` 下 key 恒为 `symbol`，不处理 `HEDGE` 双腿键）。
+    pub fn user_position(&self, uid: i64, symbol: i32) -> Option<&SymbolPositionRecord> {
+        self.core.ups.get(uid).and_then(|p| p.positions.get(&symbol))
+    }
+
     pub fn fees(&self, currency: i32) -> i64 {
         *self.core.risk.fees.get(&currency).unwrap_or(&0)
     }
 
     pub fn adjustments(&self, currency: i32) -> i64 {
         *self.core.risk.adjustments.get(&currency).unwrap_or(&0)
+    }
+
+    pub fn request_l2(&mut self, symbol: i32, depth: i32) -> L2MarketData {
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::OrderBookRequest,
+            symbol,
+            size: depth as i64,
+            ..Default::default()
+        };
+        self.core.process_command(&mut cmd);
+        cmd.market_data.take().unwrap_or_default()
+    }
+
+    /// 最近一条命令处理后的完整 cmd（matcher_event / fund_events 已就位）。
+    pub fn last_cmd(&self) -> &OrderCommand {
+        self.last_cmd.as_ref().expect("no command submitted yet")
+    }
+
+    /// 最近一条命令的撮合事件链头（对应 Java `cmd.matcherEvent`；无成交/无事件为 None）。
+    pub fn last_matcher_event(&self) -> Option<&crate::core::common::matcher_trade_event::MatcherTradeEvent> {
+        self.last_cmd().matcher_event.as_deref()
+    }
+
+    /// 最近一条命令产生的资金事件（对应 Java 的 fund event 流）。**只含本条命令自身**;
+    /// 清算/ADL/loan 强平走内部排空的次级命令,其事件见 [`cascade_fund_events`](Self::cascade_fund_events)。
+    pub fn last_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
+        &self.last_cmd().fund_events
+    }
+
+    /// 最近一条命令触发的**级联次级命令**(FORCE/IF/ADL/loan 强平,经 `run_liquidation_cascade` 排空)产生的
+    /// 资金事件,按排空顺序累加。对拍 Java 里这些事件(LIQUIDATION_CLOSE/LIQUIDATION_FEE/IF_POSITION_CLOSE/
+    /// ADL_ORIGIN_CLOSE/ADL_POSITION_CLOSE 等)用此;funding 结算(SETTLE_FUNDINGFEES 直接提交)则用 last_fund_events。
+    pub fn cascade_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
+        &self.core.last_cascade_events
+    }
+
+    /// 最近一条命令触发的级联次级命令产生的**撮合事件**(展平链;强平 FORCE 成交等)。
+    pub fn cascade_matcher_events(&self) -> &[crate::core::common::matcher_trade_event::MatcherTradeEvent] {
+        &self.core.last_cascade_matcher_events
     }
 
     pub fn ups(&self) -> &UserProfileService {
@@ -423,6 +405,51 @@ impl ExchangeApi {
     pub fn risk(&self) -> &RiskEngine {
         &self.core.risk
     }
+
+    // ==========================================================================================
+    // 报表:只读快照(对拍 ExchangeCore::query_*)
+    // ==========================================================================================
+
+    /// 全局余额守恒报表（对应 Java `TotalCurrencyBalanceReportResult` / `isGlobalBalancesAllZero`）。
+    pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
+        self.core.query_total_balance()
+    }
+
+    /// 单用户报表（含 positions 的 unrealized_pnl / liquidation_price / margin_ratio_scale_k 等派生字段）。
+    /// `now_ms` 用于 loan display interest / 实时 LTV。
+    pub fn single_user(&self, uid: i64, now_ms: i64) -> crate::core::reports::SingleUserReport {
+        self.core.query_single_user(uid, now_ms)
+    }
+
+    /// 保险基金报表（futures IF available/reserved + loan LIF）。
+    pub fn insurance_fund(&self) -> crate::core::reports::InsuranceFundReport {
+        self.core.query_insurance_fund()
+    }
+
+    /// symbol / currency 规格报表：全部 symbol（含 `base_scale_k`/`quote_scale_k`/费率档）+ 全部 currency
+    /// （含 `currency_scale_k`）。**client 侧缩放的数据源**——引擎所有金额都是 i64 定点,client 用这里的 scale
+    /// 把 raw i64 转人类可读(见 README「报表」节)。对应 Java `SymbolsReportQuery` / currency 配置查询。
+    pub fn symbol_currency(&self) -> crate::core::reports::SymbolCurrencyReport {
+        self.core.query_symbol_currency()
+    }
+
+    /// 全币种手续费池报表（对应 Java `FeeReportQuery`）；单币种可用 [`fees`](Self::fees)。
+    pub fn fee_report(&self) -> crate::core::reports::FeeReport {
+        self.core.query_fee_report()
+    }
+
+    /// 借贷平台报表：逐币种池水位（`pool_available`/`pool_borrowed`/`interest_revenue`/`loan_insurance_fund`）。
+    /// 池水位告警一律外部拉此报表(引擎不内置告警)。
+    pub fn loan_platform(&self) -> crate::core::reports::LoanPlatformReport {
+        self.core.query_loan_platform()
+    }
+
+    /// 复制态逐字段折叠哈希报表（对应 Java `StateHashReportQuery`）：多节点/快照往返一致性校验。
+    /// 是 Rust 内部超集,不与 Java hash 直接互比（跨实现比对见 `CONSISTENCY.md`）。
+    pub fn state_hash(&self) -> crate::core::reports::StateHashReport {
+        self.core.query_state_hash()
+    }
+
 }
 
 #[cfg(test)]
