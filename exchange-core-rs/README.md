@@ -120,6 +120,8 @@ for s in &sc.symbols {                        // 每 symbol 的 base/quote 缩�
 }
 ```
 
+另有三个报表(同为只读快照):`fee_report()`(全币种费池)、`loan_platform()`(借贷池水位:`pool_available`/`pool_borrowed`/`interest_revenue`/`loan_insurance_fund`,**池告警外部拉此报表**)、`state_hash()`(复制态一致性校验哈希)。加上前四个,`ExchangeApi` 与底层 `ExchangeCore::query_*` **一一对齐(7 个)**。
+
 **缩放约定(client 侧做)**:引擎内一切金额/价格都是 **i64 定点**,不带小数。client 拉 `symbol_currency()` 拿到 scale 后换算,例如:
 
 - 账户/费用等**币种金额** raw → 人类:`raw / currency_scale_k`(`currency_scale_k = 10^digit`)。
