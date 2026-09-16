@@ -80,10 +80,8 @@ impl ExchangeCore {
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
         // ME（非交易命令在此 no-op，保留 R1 结果码）
         self.matching.process_order(cmd);
-        // R2：只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游结果处理器读取（链存活到结果处理器）。
+        // R2：结算/释放/PnL/费用入池 + 尾部现货成交回写 markPrice；只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游读取。
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
-        // R2 尾:现货成交动态回写 markPrice(对齐 Java handlerRiskRelease 尾部 applyTradePrice),供 loan 现货抵押估值。
-        self.risk.apply_spot_trade_price_from(cmd, &self.ssp);
 
         log::trace!(
             "process_command: R1→ME→R2 完成 cmd={:?} result={:?}",
@@ -125,8 +123,6 @@ impl ExchangeCore {
             self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
             self.matching.process_order(&mut generated);
             self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
-            // loan-force 卖抵押也在现货簿成交，同样回写现货 markPrice。
-            self.risk.apply_spot_trade_price_from(&generated, &self.ssp);
             // 累加该次级命令的 fund/matcher event 到观测缓冲（供测试对拍级联事件流）。
             self.last_cascade_events.extend(generated.fund_events.iter().cloned());
             let mut node = generated.matcher_event.as_deref();

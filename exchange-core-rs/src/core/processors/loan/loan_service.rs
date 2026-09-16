@@ -1040,7 +1040,7 @@ mod tests {
         assert_eq!(LoanService::collateral_amount_to_lots(50, &spec, &base_spec), 0); // pure dust -> 0 lots
     }
 
-    /// 对应 Java `settleLiquidationProceeds`（`:159-166`）：ceil 强平费先抽进 LIF，再 accrue+applyDebtPayment 抵债，overpay 留 account。
+    /// 对应 Java `settleLiquidationProceeds`：ceil 强平费先抽进 LIF，再 accrue+applyDebtPayment 抵债，overpay 留 account。
     #[test]
     fn settle_liquidation_proceeds_skims_ceil_fee_before_debt_payment() {
         let mut s = LoanService::new();

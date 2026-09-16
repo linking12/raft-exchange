@@ -47,7 +47,7 @@ impl SymbolSpecificationProvider {
     }
 
     /// 从 `symbols` 重建现货对索引（派生态，不序列化）。快照恢复后由 `ExchangeCore::restore_non_replicated_state` 调用，
-    /// 对应 Java `rebuildSpotPairIndex`（`:87-90`，`BytesIn` 构造末尾调用）。
+    /// 对应 Java `rebuildSpotPairIndex`（`BytesIn` 构造末尾调用）。
     pub fn rebuild_spot_pair_index(&mut self) {
         self.spot_pair_index.clear();
         for spec in self.symbols.values() {
@@ -67,7 +67,7 @@ impl SymbolSpecificationProvider {
         self.currencies.get(&currency)
     }
 
-    /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`（`:77-81`）：反查 base/quote 现货对 spec，线性扫 BTreeMap。
+    /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`：反查 base/quote 现货对 spec，线性扫 BTreeMap。
     pub fn find_spot_symbol(&self, base_currency: i32, quote_currency: i32) -> Option<&CoreSymbolSpecification> {
         self.symbols.values().find(|s| {
             s.symbol_type == SymbolType::CurrencyExchangePair

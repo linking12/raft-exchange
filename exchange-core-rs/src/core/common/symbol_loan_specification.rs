@@ -16,12 +16,12 @@ pub struct SymbolLoanSpecification {
 }
 
 impl SymbolLoanSpecification {
-    /// 对应 Java `isEnabled()`（`:54-56`）：`initialLtvBps > 0` 才算启用。
+    /// 对应 Java `isEnabled()`：`initialLtvBps > 0` 才算启用。
     pub fn is_enabled(&self) -> bool {
         self.initial_ltv_bps > 0
     }
 
-    /// 对应 Java `update(...)`（`:59-66`）：唯一 mutation point；调用方已完成字段层校验。
+    /// 对应 Java `update(...)`：唯一 mutation point；调用方已完成字段层校验。
     pub fn update(
         &mut self,
         initial_ltv_bps: i32,
@@ -37,7 +37,7 @@ impl SymbolLoanSpecification {
         self.max_term_days = max_term_days;
     }
 
-    /// 对应 Java `stateHash()`（`:78-80`）：风格对齐仓内其余 model 类型的滚动折叠。
+    /// 对应 Java `stateHash()`：风格对齐仓内其余 model 类型的滚动折叠。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.initial_ltv_bps as i64);

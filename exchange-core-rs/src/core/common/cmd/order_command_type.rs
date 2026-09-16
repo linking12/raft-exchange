@@ -126,7 +126,6 @@ impl OrderCommandType {
             OrderCommandType::BinaryDataCommand => 91,
             OrderCommandType::Nop => 120,
             OrderCommandType::Reset => 124,
-            // 新码只需枚举内互异；多数数值对齐 Java 方便对照，LiquidationScan 故意改用 44 规避 64 撞码。
             OrderCommandType::InternalTransfer => 14,
             OrderCommandType::SettleFundingfees => 25,
             OrderCommandType::SystemLiquidationNotify => 31,

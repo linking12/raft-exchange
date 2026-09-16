@@ -277,7 +277,7 @@ impl FuturesExecutionReport {
         r
     }
 
-    /// 对应 Java `FuturesExecutionReport.tradeMaker`（`maker_up` 为 maker 的持仓账户）。
+    /// 对应 Java `FuturesExecutionReport.tradeMaker`（`maker_position_side` 为 maker 的持仓方向）。
     pub fn trade_maker(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, maker_position_side: PositionMode, ev: &MatcherTradeEvent, trade_index: i32) -> Self {
         let budget = is_budget(ev.matched_order_type);
         let status = if ev.maker_order_completed { OrderStatus::Filled } else { OrderStatus::PartiallyFilled };

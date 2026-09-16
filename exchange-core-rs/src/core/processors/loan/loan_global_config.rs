@@ -29,17 +29,17 @@ pub struct LoanGlobalConfig {
 }
 
 impl LoanGlobalConfig {
-    /// 对应 Java `reset()`（`:58-66`），也是默认构造值。
+    /// 对应 Java `reset()`，也是默认构造值。
     pub fn reset(&mut self) {
         *self = LoanGlobalConfig::default();
     }
 
-    /// 对应 Java `isNumeraireConfigured()`（`:68-71`）：未配则 Cross 借贷 fail-close、scanner 跳过 Cross。
+    /// 对应 Java `isNumeraireConfigured()`：未配则 Cross 借贷 fail-close、scanner 跳过 Cross。
     pub fn is_numeraire_configured(&self) -> bool {
         self.numeraire_currency != NUMERAIRE_UNSET
     }
 
-    /// 对应 Java `stateHash()`（`:84-88`）：风格对齐仓内其余 model 类型的滚动折叠。
+    /// 对应 Java `stateHash()`：风格对齐仓内其余 model 类型的滚动折叠。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.numeraire_currency as i64);
@@ -54,7 +54,7 @@ impl LoanGlobalConfig {
 }
 
 impl Default for LoanGlobalConfig {
-    /// 对应 Java `LoanGlobalConfig()` 构造器：7 个默认值逐字对应 `LoanGlobalConfig.java:28-33`。
+    /// 对应 Java `LoanGlobalConfig()` 构造器：7 个默认值逐字对应 Java。
     fn default() -> Self {
         LoanGlobalConfig {
             numeraire_currency: NUMERAIRE_UNSET,
