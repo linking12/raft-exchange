@@ -29,6 +29,7 @@ mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
     use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
+    use exchange_core_rs::core::common::fund_event::FundEventType;
     use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
     use exchange_core_rs::core::common::margin_mode::MarginMode;
     use exchange_core_rs::core::common::order_action::OrderAction;
@@ -146,6 +147,15 @@ mod tests {
         assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_970, "maker 对手方净结算");
         assert_eq!(api.fees(QUOTE_ID), 30, "开仓+减仓成交 taker 费入池");
         assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 0, "无 liquidation_fee → IF 不增");
+        // 级联事件流锚点(Java ITExchangeCoreADL 只验 state/IFPositionRecord,不断言事件;此处补事件级覆盖):
+        // ADL 特有 AdlPositionClose(winner 被减仓)+ AdlOriginClose(loser 平仓),据此与 IF 接管路径区分。
+        let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
+        assert_eq!(seq, vec![
+            (FundEventType::UnlockPending, loser),
+            (FundEventType::AdlPositionClose, winner),
+            (FundEventType::AdlOriginClose, loser),
+            (FundEventType::PnlSettlement, loser),
+        ], "ADL 级联事件流(类型+uid)");
         assert_conserved(&api);
     }
 
@@ -189,6 +199,17 @@ mod tests {
         assert_eq!(api.fees(QUOTE_ID), 10, "仅开仓成交费（无减仓）");
         assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 40, "IF 承接持仓后 available 余额");
         assert_eq!(api.insurance_fund().futures.values().map(|e| e.reserved).sum::<i64>(), 0, "IF reserved 无泄漏");
+        // 级联事件流锚点:IF 接管特有 IfPositionClose(loser 仓位转 IF),无 ADL 的 AdlPositionClose——事件级区分两级。
+        let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
+        assert_eq!(seq, vec![
+            (FundEventType::UnlockPending, loser),
+            (FundEventType::IfPositionClose, loser),
+            (FundEventType::PnlSettlement, loser),
+        ], "IF 接管级联事件流(类型+uid)");
+        assert!(
+            !seq.iter().any(|(t, _)| *t == FundEventType::AdlPositionClose),
+            "IF 路径不应出现 ADL 事件"
+        );
         assert_conserved(&api);
     }
 

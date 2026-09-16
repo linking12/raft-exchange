@@ -124,9 +124,17 @@ impl ExchangeApi {
         self.last_cmd().matcher_event.as_deref()
     }
 
-    /// 最近一条命令产生的资金事件（对应 Java 的 fund event 流）。
+    /// 最近一条命令产生的资金事件（对应 Java 的 fund event 流）。**只含本条命令自身**;
+    /// 清算/ADL/loan 强平走内部排空的次级命令,其事件见 [`cascade_fund_events`](Self::cascade_fund_events)。
     pub fn last_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
         &self.last_cmd().fund_events
+    }
+
+    /// 最近一条命令触发的**级联次级命令**(FORCE/IF/ADL/loan 强平,经 `run_liquidation_cascade` 排空)产生的
+    /// 资金事件,按排空顺序累加。对拍 Java 里这些事件(LIQUIDATION_CLOSE/LIQUIDATION_FEE/IF_POSITION_CLOSE/
+    /// ADL_ORIGIN_CLOSE/ADL_POSITION_CLOSE 等)用此;funding 结算(SETTLE_FUNDINGFEES 直接提交)则用 last_fund_events。
+    pub fn cascade_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
+        &self.core.last_cascade_events
     }
 
     /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。用于本门面未提供专属封装的命令
