@@ -179,10 +179,10 @@ public class LiquidationService implements WriteBytesMarshallable, StateHash {
         return expectedUidHash == actualUidHash;
     }
 
-    public static long generateLiquidationOrderId(SymbolPositionRecord pos) {
+    public static long generateLiquidationOrderId(SymbolPositionRecord pos, long timestamp) {
         final long uidHash = (pos.uid * 31 + 17) & 0xFFFFF; // 20 bit
         final long sideBit = (pos.direction == PositionDirection.SHORT) ? 1L : 0L;
-        final long tsPart = (System.currentTimeMillis() / 1000) & 0x7FF; // 11 bit
+        final long tsPart = (timestamp / 1000) & 0x7FF; // 11 bit：用命令层确定性时间（leader 盖章、各节点同值），严禁本地墙钟
         return ((long)pos.symbol << 32) | (uidHash << 12) | (sideBit << 11) | tsPart;
     }
 
