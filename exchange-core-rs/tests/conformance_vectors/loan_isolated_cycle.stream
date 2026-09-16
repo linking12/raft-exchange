@@ -1,0 +1,20 @@
+# 现货 isolated 借贷完整周期:池注资 → 开贷(锁 base 抵押、放 quote 本金) → 全额还款(还本、赎回抵押)。
+# 对拍 LOAN_BORROW / LOAN_REPAY 结算类事件 + 抵押锁定/赎回后的账户终态。
+# 现货 symbol 带 loan 配置(initialLtv=6000);贷款币=quote,抵押币=base。create/repay 同 ts=0 → 零利息。
+#
+# 注:借贷池在 Java 是**分片本地**状态(handlePoolDeposit 只在 cmd.uid==shardId 的片上记账),
+# ConformanceExporter 跑的 DEFAULT 配置有 2 个 risk 分片。POOL_DEPOSIT 落在 shard 0,故借款人 uid 必须
+# 也落在 shard 0(uid & (riskEngines-1) == 0,即偶数 uid)才能看到这笔流动性——这是"单分片塌缩"刻意差异的
+# 直接体现(Rust 单片天然共池)。用 uid=2 让两侧口径一致。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=500 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 initialLtv=6000 liqLtv=8000 marginCallLtv=0 maxAmount=0 maxTermDays=0
+MARK sym=500 price=1000
+USER uid=2
+BAL uid=2 cur=1 amount=1000 txid=1
+# 给 quote 借贷池注资(shard 0),供本金放出
+POOL_DEPOSIT cur=2 amount=100000 txid=9
+# 开贷:抵押 1000 base,借 1 quote 本金(极度超额抵押,LTV 稳过);loanId=9001,rateMode=0(LOCKED)
+LOAN_CREATE uid=2 sym=500 loanId=9001 collateral=1000 principal=1 rateMode=0 ts=0 txid=10
+# 全额还款:还 1 quote(ts=0 → 零利息),赎回抵押
+LOAN_REPAY uid=2 loanId=9001 repay=1 ts=0 txid=11

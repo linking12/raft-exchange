@@ -77,7 +77,7 @@ mod tests {
         api.add_currency(CURRENCY_USD, 1);
         api.add_currency(CURRENCY_JPY, 1);
         assert_eq!(api.add_futures_symbol(margin_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, MARK), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, MARK, 0), CommandResultCode::Success);
         for uid in [UID_1, UID_2, UID_3, UID_4] {
             assert_eq!(api.add_user(uid), CommandResultCode::Success);
             assert_eq!(api.balance_adjustment(uid, CURRENCY_JPY, 10_000_000, 1), CommandResultCode::Success);

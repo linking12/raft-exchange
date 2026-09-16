@@ -8,12 +8,18 @@ import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
 import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.OrderType;
+import exchange.core2.core.common.PositionMode;
+import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiAddUser;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
+import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiInsuranceFundDeposit;
+import exchange.core2.core.common.api.ApiLoanCreate;
+import exchange.core2.core.common.api.ApiLoanRepay;
 import exchange.core2.core.common.api.ApiPlaceOrder;
+import exchange.core2.core.common.api.ApiPoolDeposit;
 import exchange.core2.core.common.api.ApiSettleFundingFees;
 import exchange.core2.core.common.api.ApiSettlePNL;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -136,13 +142,19 @@ public class ConformanceExporter {
                     case "CUR":
                         c.addCurrency(CoreCurrencySpecification.builder().id(pi(kv, "id")).digit(pi(kv, "digit")).build());
                         break;
-                    case "SYM_SPOT":
+                    case "SYM_SPOT": {
+                        // 可选 loan 配置(5 字段与 Rust SymbolLoanSpecification 逐一对齐;未给字段两侧默认 0)。
+                        SymbolLoanSpecification loanCfg = new SymbolLoanSpecification(
+                                (int) pl(kv, "initialLtv", 0), (int) pl(kv, "liqLtv", 0),
+                                (int) pl(kv, "marginCallLtv", 0), pl(kv, "maxAmount", 0), (int) pl(kv, "maxTermDays", 0));
                         c.addSymbol(CoreSymbolSpecification.builder()
                                 .symbolId(pi(kv, "id")).type(SymbolType.CURRENCY_EXCHANGE_PAIR)
                                 .baseCurrency(pi(kv, "base")).quoteCurrency(pi(kv, "quote"))
                                 .baseScaleK(pl(kv, "baseScale")).quoteScaleK(pl(kv, "quoteScale"))
-                                .takerFee(pl(kv, "taker")).makerFee(pl(kv, "maker")).build());
+                                .takerFee(pl(kv, "taker")).makerFee(pl(kv, "maker"))
+                                .loanConfig(loanCfg).build());
                         break;
+                    }
                     case "SYM_FUT":
                         c.addSymbol(CoreSymbolSpecification.builder()
                                 .symbolId(pi(kv, "id"))
@@ -230,6 +242,26 @@ public class ConformanceExporter {
                                 .action("ASK".equals(kv.get("action")) ? OrderAction.ASK : OrderAction.BID)
                                 .fundingRate(pl(kv, "rate")).rateScaleK(pl(kv, "rateScaleK")).build()).join();
                         break;
+                    case "POS_MODE":
+                        rc = api.submitCommandAsync(ApiAdjustPositionMode.builder()
+                                .uid(pl(kv, "uid"))
+                                .positionMode(pl(kv, "hedge") != 0 ? PositionMode.HEDGE : PositionMode.ONEWAY).build()).join();
+                        break;
+                    case "POOL_DEPOSIT":
+                        rc = api.submitCommandAsync(ApiPoolDeposit.builder()
+                                .shardId(0).currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        break;
+                    case "LOAN_CREATE":
+                        rc = api.submitCommandAsync(ApiLoanCreate.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid")).loanId(pl(kv, "loanId"))
+                                .symbol(pi(kv, "sym")).collateralAmount(pl(kv, "collateral")).principal(pl(kv, "principal"))
+                                .rateMode((byte) pl(kv, "rateMode", 0)).build()).join();
+                        break;
+                    case "LOAN_REPAY":
+                        rc = api.submitCommandAsync(ApiLoanRepay.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid"))
+                                .loanId(pl(kv, "loanId")).repayAmount(pl(kv, "repay")).build()).join();
+                        break;
                     default:
                         throw new IllegalArgumentException("未支持 verb: " + verb);
                 }
@@ -254,14 +286,30 @@ public class ConformanceExporter {
                     accts.forEach((k, v) -> out.append("A ").append(uid).append(' ').append(k).append(' ').append(v).append('\n'));
                 }
                 if (p.getPositions() != null) {
-                    TreeMap<Integer, SingleUserReportResult.Position> byS = new TreeMap<>();
+                    // HEDGE 同 symbol 可有 LONG/SHORT 两腿,不能按 sym 折叠成一条。收集全部非空腿,
+                    // 按 (sym, direction, openVolume, openPriceSum) 排序——与 Rust state_digest 的
+                    // (syms 升序 + legs.sort()) 口径逐字一致。
+                    List<long[]> legs = new ArrayList<>();
+                    List<String> dirs = new ArrayList<>();
                     p.getPositions().forEachKeyValue((sym, plist) -> {
                         for (SingleUserReportResult.Position pos : plist) {
-                            if (pos.openVolume != 0) byS.put(sym, pos);
+                            if (pos.openVolume != 0) {
+                                dirs.add(pos.direction.name());
+                                legs.add(new long[]{sym, dirs.size() - 1, pos.openVolume, pos.openPriceSum});
+                            }
                         }
                     });
-                    byS.forEach((sym, pos) -> out.append("POS ").append(uid).append(' ').append(sym).append(' ')
-                            .append(pos.direction.name()).append(' ').append(pos.openVolume).append(' ').append(pos.openPriceSum).append('\n'));
+                    legs.sort((a, b) -> {
+                        if (a[0] != b[0]) return Long.compare(a[0], b[0]);
+                        int d = dirs.get((int) a[1]).compareTo(dirs.get((int) b[1]));
+                        if (d != 0) return d;
+                        if (a[2] != b[2]) return Long.compare(a[2], b[2]);
+                        return Long.compare(a[3], b[3]);
+                    });
+                    for (long[] leg : legs) {
+                        out.append("POS ").append(uid).append(' ').append(leg[0]).append(' ')
+                                .append(dirs.get((int) leg[1])).append(' ').append(leg[2]).append(' ').append(leg[3]).append('\n');
+                    }
                 }
             }
             TreeMap<Integer, Long> fees = new TreeMap<>();

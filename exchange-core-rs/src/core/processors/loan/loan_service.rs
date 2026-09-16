@@ -1205,3 +1205,62 @@ mod tests {
         assert_eq!(s.get_loan_insurance_fund(NUMERAIRE_CUR), -1_000); // full debt still absorbed
     }
 }
+
+/// Java 黄金值对拍：镜像 `LoanRateCurveTest` 中经由 `LoanService` 的 openRate 派发
+/// （`floatingModel_openRate_fallsBackToBaseWhenUnpriced` / `fixedModel_openRate_appliesAdjustWithFloor`）
+/// 与利率子系统序列化 round-trip（`serialization_roundTrips_rateSubsystem`，Java 用 Chronicle Bytes，
+/// 此处等价用 bincode）。期望值即 Java 字面量；不同则为翻译 bug，不得改期望。
+#[cfg(test)]
+mod java_parity {
+    use super::*;
+
+    #[test]
+    fn floating_open_rate_falls_back_to_base_then_uses_current() {
+        // LoanRateCurveTest.floatingModel_openRate_fallsBackToBaseWhenUnpriced
+        let mut svc = LoanService::new();
+        assert_eq!(svc.floating_rate.open_rate_bps(2), 200, "未 reprice → 回退曲线 base=200");
+        svc.floating_rate.current_rate_bps.insert(2, 555);
+        assert_eq!(svc.floating_rate.open_rate_bps(2), 555, "已 reprice → 用生效值");
+    }
+
+    #[test]
+    fn fixed_open_rate_applies_adjust_with_floor() {
+        // LoanRateCurveTest.fixedModel_openRate_appliesAdjustWithFloor
+        let mut svc = LoanService::new();
+        svc.floating_rate.current_rate_bps.insert(2, 500);
+        assert_eq!(svc.fixed_rate.open_rate_bps(&svc.floating_rate, 2), 500, "adjust=0 → 同 Floating");
+        svc.fixed_rate.locked_rate_adjust_bps = 50;
+        assert_eq!(svc.fixed_rate.open_rate_bps(&svc.floating_rate, 2), 550, "Fixed = Floating + adjust");
+        svc.fixed_rate.locked_rate_adjust_bps = -600;
+        assert_eq!(svc.fixed_rate.open_rate_bps(&svc.floating_rate, 2), 0, "减穿则封底 0");
+    }
+
+    #[test]
+    fn serialization_round_trips_rate_subsystem() {
+        // LoanRateCurveTest.serialization_roundTrips_rateSubsystem —— Java Chronicle Bytes → 此处 bincode。
+        let mut orig = LoanService::new();
+        orig.floating_rate.current_rate_bps.insert(2, 480);
+        orig.floating_rate.current_rate_bps.insert(5, 3600);
+        orig.floating_rate.base_bps = 150;
+        orig.floating_rate.kink_util_bps = 7500;
+        orig.floating_rate.slope1_bps = 350;
+        orig.floating_rate.slope2_bps = 5000;
+        orig.fixed_rate.locked_rate_adjust_bps = -25;
+        orig.floating_rate.last_reprice_ts = 1_700_000_000_000;
+        orig.floating_rate.acc_rate_bps_ms.insert(2, 987_654);
+
+        let bytes = bincode::serialize(&orig).expect("serialize");
+        let parsed: LoanService = bincode::deserialize(&bytes).expect("deserialize");
+
+        assert_eq!(parsed.floating_rate.current_rate_bps.get(&2), Some(&480));
+        assert_eq!(parsed.floating_rate.current_rate_bps.get(&5), Some(&3600));
+        assert_eq!(parsed.floating_rate.base_bps, 150);
+        assert_eq!(parsed.floating_rate.kink_util_bps, 7500);
+        assert_eq!(parsed.floating_rate.slope1_bps, 350);
+        assert_eq!(parsed.floating_rate.slope2_bps, 5000);
+        assert_eq!(parsed.fixed_rate.locked_rate_adjust_bps, -25);
+        assert_eq!(parsed.floating_rate.last_reprice_ts, 1_700_000_000_000);
+        assert_eq!(parsed.floating_rate.acc_rate_bps_ms.get(&2), Some(&987_654));
+        assert_eq!(orig.state_hash(), parsed.state_hash(), "序列化 round-trip 后 stateHash 一致");
+    }
+}

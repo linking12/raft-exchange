@@ -366,3 +366,166 @@ mod tests {
         assert_eq!(m.current_rate_bps_or_base(42), 200);
     }
 }
+
+/// Java 黄金值对拍：逐条镜像 `LoanRateCurveTest`（曲线/利用率/openRate/liveAcc/advance 部分）。
+/// 期望值即 Java `assertEquals` 的字面量；若 Rust 算出不同值那是翻译 bug，不得改期望。
+/// 注意 Java `curveRateBps(util, base, kink, s1, s2)` 是静态显式传参，Rust 是读 self 字段的方法，
+/// 故变参用例先构造对应参数的 FloatingRateModel。
+#[cfg(test)]
+mod java_parity {
+    use super::*;
+
+    /// 构造带指定曲线参数的模型（对应 Java 静态 curveRateBps 的显式入参）。
+    fn model_with(base: i32, kink: i32, s1: i32, s2: i32) -> FloatingRateModel {
+        let mut m = FloatingRateModel::default();
+        m.base_bps = base;
+        m.kink_util_bps = kink;
+        m.slope1_bps = s1;
+        m.slope2_bps = s2;
+        m
+    }
+
+    // ---- curve（默认参数 base=200 kink=8000 slope1=400 slope2=6000） ----
+
+    #[test]
+    fn curve_at_zero_util_is_base() {
+        // LoanRateCurveTest.curve_atZeroUtil_isBase
+        assert_eq!(FloatingRateModel::default().curve_rate_bps(0), 200);
+    }
+
+    #[test]
+    fn curve_below_kink_linear_on_slope1() {
+        // LoanRateCurveTest.curve_belowKink_linearOnSlope1: 200 + 400×4000/8000 = 400
+        assert_eq!(FloatingRateModel::default().curve_rate_bps(4000), 400);
+    }
+
+    #[test]
+    fn curve_at_kink_is_base_plus_slope1() {
+        // LoanRateCurveTest.curve_atKink_isBasePlusSlope1: 200 + 400 = 600
+        assert_eq!(FloatingRateModel::default().curve_rate_bps(8000), 600);
+    }
+
+    #[test]
+    fn curve_above_kink_steep_on_slope2() {
+        // LoanRateCurveTest.curve_aboveKink_steepOnSlope2: 600 + 6000×1000/2000 = 3600
+        assert_eq!(FloatingRateModel::default().curve_rate_bps(9000), 3600);
+    }
+
+    #[test]
+    fn curve_at_full_util_is_base_plus_both_slopes() {
+        // LoanRateCurveTest.curve_atFullUtil_isBasePlusBothSlopes: 200 + 400 + 6000 = 6600
+        assert_eq!(FloatingRateModel::default().curve_rate_bps(10000), 6600);
+    }
+
+    #[test]
+    fn curve_clamps_out_of_range_util() {
+        // LoanRateCurveTest.curve_clampsOutOfRangeUtil
+        let m = FloatingRateModel::default();
+        assert_eq!(m.curve_rate_bps(-5), 200, "负 util clamp 到 0");
+        assert_eq!(m.curve_rate_bps(20000), 6600, "超 100% clamp 到 BPS");
+    }
+
+    #[test]
+    fn curve_kink_zero_whole_range_is_slope2() {
+        // LoanRateCurveTest.curve_kinkZero_wholeRangeIsSlope2:
+        // curveRateBps(5000, 100, 0, 400, 600) = 100 + 400 + 600×5000/10000 = 800
+        assert_eq!(model_with(100, 0, 400, 600).curve_rate_bps(5000), 800);
+    }
+
+    #[test]
+    fn curve_kink_at_bps_scale_no_slope2_segment() {
+        // LoanRateCurveTest.curve_kinkAtBpsScale_noSlope2Segment
+        let m = model_with(200, 10000, 400, 6000);
+        assert_eq!(m.curve_rate_bps(10000), 600, "kink=10000 满 util → base+slope1");
+        assert_eq!(m.curve_rate_bps(20000), 600, "超范围 clamp 后仍 base+slope1");
+    }
+
+    // ---- utilization ----
+
+    #[test]
+    fn utilization_basic() {
+        // LoanRateCurveTest.utilization_basic
+        assert_eq!(FloatingRateModel::utilization_bps(0, 0), 0, "空池");
+        assert_eq!(FloatingRateModel::utilization_bps(30, 70), 3000, "30/(30+70)=30%");
+        assert_eq!(FloatingRateModel::utilization_bps(100, 0), 10000, "全借出=100%");
+    }
+
+    #[test]
+    fn utilization_overflow_scale_path_uses_trunc_mul_div_128() {
+        // LoanRateCurveTest.utilization_overflowScalePath_usesTruncMulDiv128
+        let half = i64::MAX / 2; // borrowed×10000 溢出 64-bit fast path
+        assert_eq!(FloatingRateModel::utilization_bps(half, half), 5000, "溢出 fallback 后 50%");
+    }
+
+    // ---- openRate（floating 半部；LoanService/fixed 半部见 loan_service.rs / fixed_rate_model.rs） ----
+
+    #[test]
+    fn floating_open_rate_falls_back_to_base_when_unpriced_then_uses_current() {
+        // LoanRateCurveTest.floatingModel_openRate_fallsBackToBaseWhenUnpriced
+        let mut m = FloatingRateModel::default();
+        assert_eq!(m.open_rate_bps(2), 200, "未 reprice → 回退曲线 base=200");
+        m.current_rate_bps.insert(2, 555);
+        assert_eq!(m.open_rate_bps(2), 555, "已 reprice → 用生效值");
+    }
+
+    // ---- liveAcc ----
+
+    #[test]
+    fn live_acc_cold_start_returns_acc_unchanged() {
+        // LoanRateCurveTest.liveAcc_coldStart_returnsAccUnchanged
+        let mut m = FloatingRateModel::default();
+        m.acc_rate_bps_ms.insert(2, 987_654);
+        m.current_rate_bps.insert(2, 555); // 若误累积会污染结果
+        m.last_reprice_ts = 0;
+        assert_eq!(m.live_acc_rate_bps_ms(2, 1_000_000), 987_654, "冷启动 now>0 仍返回 acc 原值");
+    }
+
+    #[test]
+    fn live_acc_non_positive_elapsed_returns_acc_unchanged() {
+        // LoanRateCurveTest.liveAcc_nonPositiveElapsed_returnsAccUnchanged
+        let mut m = FloatingRateModel::default();
+        m.acc_rate_bps_ms.insert(2, 987_654);
+        m.current_rate_bps.insert(2, 555);
+        m.last_reprice_ts = 1_000;
+        assert_eq!(m.live_acc_rate_bps_ms(2, 1_000), 987_654, "elapsed=0 返回 acc 原值");
+        assert_eq!(m.live_acc_rate_bps_ms(2, 500), 987_654, "elapsed<0 返回 acc 原值");
+        assert_eq!(m.live_acc_rate_bps_ms(2, 2_000), 987_654 + 555 * 1_000, "elapsed>0 正常累积");
+    }
+
+    // ---- advance_accumulator ----
+
+    #[test]
+    fn advance_accumulator_cold_start_is_noop() {
+        // LoanRateCurveTest.advanceAccumulator_coldStart_isNoOp
+        let mut m = FloatingRateModel::default();
+        m.acc_rate_bps_ms.insert(2, 100);
+        m.current_rate_bps.insert(2, 555);
+        m.last_reprice_ts = 0;
+        m.advance_accumulator(2, 5_000);
+        assert_eq!(*m.acc_rate_bps_ms.get(&2).unwrap(), 100, "冷启动 advance 为 no-op");
+    }
+
+    #[test]
+    fn advance_accumulator_tick_not_after_last_reprice_is_noop() {
+        // LoanRateCurveTest.advanceAccumulator_tickNotAfterLastReprice_isNoOp
+        let mut m = FloatingRateModel::default();
+        m.acc_rate_bps_ms.insert(2, 100);
+        m.current_rate_bps.insert(2, 555);
+        m.last_reprice_ts = 1_000;
+        m.advance_accumulator(2, 1_000); // 相等
+        assert_eq!(*m.acc_rate_bps_ms.get(&2).unwrap(), 100, "tickTs=lastRepriceTs 为 no-op");
+        m.advance_accumulator(2, 500); // 更早
+        assert_eq!(*m.acc_rate_bps_ms.get(&2).unwrap(), 100, "tickTs<lastRepriceTs 为 no-op");
+    }
+
+    #[test]
+    fn advance_accumulator_positive_accumulates_rate_times_elapsed() {
+        // LoanRateCurveTest.advanceAccumulator_positive_accumulatesRateTimesElapsed
+        let mut m = FloatingRateModel::default();
+        m.acc_rate_bps_ms.insert(2, 100);
+        m.current_rate_bps.insert(2, 555);
+        m.last_reprice_ts = 1_000;
+        m.advance_accumulator(2, 3_000);
+        assert_eq!(*m.acc_rate_bps_ms.get(&2).unwrap(), 100 + 555 * 2_000, "累积 555×(3000−1000)");
+    }
+}

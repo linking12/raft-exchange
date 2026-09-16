@@ -10,5 +10,6 @@ pub mod loan;
 pub mod loan_rate_pricing_processor;
 pub mod matching_engine_router;
 pub mod risk_engine;
+pub mod risk_engine_command_dispatcher;
 pub mod symbol_specification_provider;
 pub mod user_profile_service;

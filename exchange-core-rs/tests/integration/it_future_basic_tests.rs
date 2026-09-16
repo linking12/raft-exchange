@@ -75,7 +75,7 @@ mod tests {
         api.add_currency(BASE_CURRENCY_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(futures_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, MARK), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, MARK, 0), CommandResultCode::Success);
         api
     }
 
@@ -629,7 +629,7 @@ mod tests {
             reduce_only: false,
         };
 
-        assert_eq!(api.set_mark_price_at(FC_FUT, 100, 1_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(FC_FUT, 100, 1_000), CommandResultCode::Success);
         // 借款人 LONG 10@100 leverage 10（margin 100）：M1 挂 ASK@100 开 SHORT，借款人 BID@100 吃单。
         assert_eq!(api.place_futures_order(order(1, M1, 100, 10, OrderAction::Ask)), CommandResultCode::Success);
         assert_eq!(api.place_futures_order(order(2, BORROWER, 100, 10, OrderAction::Bid)), CommandResultCode::Success);
@@ -643,7 +643,7 @@ mod tests {
         assert_eq!(api.place_futures_order(order(3, M2, 92, 10, OrderAction::Bid)), CommandResultCode::Success);
 
         // mark 跌到 94：借款人 LONG（avg100/lev10/margin100）equity=100-60=40 < MM(47) → 触发强平。
-        assert_eq!(api.set_mark_price_at(FC_FUT, 94, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(FC_FUT, 94, 2_000), CommandResultCode::Success);
 
         // FORCE 已由 markprice 钩子生成并被 run_liquidation_cascade 排空重喂、成交平仓。
         assert!(
@@ -691,7 +691,7 @@ mod tests {
         api.add_currency(USD, 1);
         api.add_currency(JPY, 1);
         assert_eq!(api.add_futures_symbol(a_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, A_MARK), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_MARGIN, A_MARK, 0), CommandResultCode::Success);
         for uid in [u1, u2, u3, u4] {
             assert_eq!(api.add_user(uid), CommandResultCode::Success);
             assert_eq!(api.balance_adjustment(uid, JPY, 10_000_000, 1), CommandResultCode::Success);

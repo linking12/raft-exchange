@@ -64,7 +64,7 @@ mod tests {
         api.add_currency(BASE_CURRENCY_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(futures_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, PRICE), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, PRICE, 0), CommandResultCode::Success);
         api
     }
 

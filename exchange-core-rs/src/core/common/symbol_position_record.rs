@@ -1204,4 +1204,203 @@ mod tests {
         assert_eq!(r.open_init_margin_sum, 240); // mark=80: (80*3)/leverage(1)
         assert_eq!(r.profit, 100); // 翻仓平腿已实现盈亏
     }
+
+    // ================================================================
+    // Java 单测对拍：tests/unit/SymbolPositionRecordTest.java（黄金值逐条钉死）
+    // 目的：交叉验证 Rust 翻译。若某值与 Java 不同 = 候选翻译 bug，
+    // 保留 Java 期望值、标 #[ignore] 并上报，绝不改期望迁就 Rust。
+    // ================================================================
+    mod java_parity {
+        use super::*;
+        use std::collections::BTreeMap;
+
+        /// setUp spec：FUTURES_PERP initMargin10 initMarginScaleK100 mm={1000:8} mmScaleK100。
+        fn liq_spec() -> CoreSymbolSpecification {
+            CoreSymbolSpecification {
+                init_margin: 10,
+                init_margin_scale_k: 100,
+                maintenance_margin: BTreeMap::from([(1000i64, 8i64)]),
+                maintenance_margin_scale_k: 100,
+                ..Default::default()
+            }
+        }
+
+        /// Java createPosition(marginMode, direction, volume)：symbol=1001, leverage=1。
+        fn pos(margin_mode: MarginMode, direction: PositionDirection, open_volume: i64) -> SymbolPositionRecord {
+            let mut p = SymbolPositionRecord::new(1, 1001, 2, margin_mode, 1);
+            p.direction = direction;
+            p.open_volume = open_volume;
+            p
+        }
+
+        // --- pendingHoldBudget（E2: futures BUDGET 单）---
+
+        #[test]
+        fn pending_hold_budget_empty_state_avg_price_eq_budget_over_size() {
+            // Java: pendingHoldBudget_emptyState_avgPriceEqualsBudgetOverSize
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
+            p.pending_hold_budget(OrderAction::Bid, 10, 1000);
+            assert_eq!(p.pending_buy_size, 10);
+            assert_eq!(p.pending_buy_avg_price, 100);
+            assert_eq!(p.pending_buy_size * p.pending_buy_avg_price, 1000);
+        }
+
+        #[test]
+        fn pending_hold_budget_over_existing_limit_maintains_total_notional() {
+            // Java: pendingHoldBudget_overExistingLimit_maintainsTotalNotional
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
+            p.pending_hold(OrderAction::Bid, 100, 10);
+            assert_eq!(p.pending_buy_size * p.pending_buy_avg_price, 1000, "limit notional baseline");
+            p.pending_hold_budget(OrderAction::Bid, 50, 600);
+            assert_eq!(p.pending_buy_size, 150);
+            assert_eq!(p.pending_buy_avg_price, 11); // ceil(1600/150)=11
+            assert_eq!(p.pending_buy_size * p.pending_buy_avg_price, 1650);
+        }
+
+        #[test]
+        fn pending_hold_budget_ask_side_independent_from_bid() {
+            // Java: pendingHoldBudget_askSide_independentFromBid
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
+            p.pending_hold_budget(OrderAction::Ask, 20, 400);
+            assert_eq!(p.pending_sell_size, 20);
+            assert_eq!(p.pending_sell_avg_price, 20);
+            assert_eq!(p.pending_buy_size, 0);
+            assert_eq!(p.pending_buy_avg_price, 0);
+        }
+
+        #[test]
+        fn pending_hold_budget_zero_size_noop() {
+            // Java: pendingHoldBudget_zeroSize_noop
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
+            p.pending_hold_budget(OrderAction::Bid, 0, 100);
+            assert_eq!(p.pending_buy_size, 0);
+            assert_eq!(p.pending_buy_avg_price, 0);
+        }
+
+        #[test]
+        fn pending_hold_budget_then_release_clears_state() {
+            // Java: pendingHoldBudget_thenRelease_clearsState
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
+            p.pending_hold_budget(OrderAction::Bid, 10, 1000);
+            let released = p.pending_release(OrderAction::Bid, 10);
+            assert_eq!(released, 10);
+            assert_eq!(p.pending_buy_size, 0);
+            assert_eq!(p.pending_buy_avg_price, 0);
+        }
+
+        // --- estimateLiquidationPrice（迭代法精确解）---
+        // 全部 markPrice=50000, vol=10, openPriceSum=500000 → notional=500000, mm=calc_mm(500000)=40000。
+
+        #[test]
+        fn estimate_liq_price_no_position_returns_zero() {
+            // Java: shouldReturnZeroWhenNoPosition
+            let spec = liq_spec();
+            let p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 0, 0, 0), 0);
+        }
+
+        #[test]
+        fn estimate_liq_price_cross_long_normal() {
+            // Java: testNormalCase → 48369
+            let spec = liq_spec();
+            let mut p = pos(MarginMode::Cross, PositionDirection::Long, 10);
+            p.open_price_sum = 500000;
+            let mm = spec.calculate_maintenance_margin(10 * 50000);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 100000, -5000, mm + 40000), 48369);
+        }
+
+        #[test]
+        fn estimate_liq_price_cross_short() {
+            // Java: testShortCase → 55555
+            let spec = liq_spec();
+            let mut p = pos(MarginMode::Cross, PositionDirection::Short, 10);
+            p.open_price_sum = 500000;
+            p.open_init_margin_sum = 50000;
+            let mm = spec.calculate_maintenance_margin(10 * 50000);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 100000, 0, mm), 55555);
+        }
+
+        #[test]
+        fn estimate_liq_price_isolated_short() {
+            // Java: testShortCase2 → 50926（迭代法精确解，旧近似给 51000）
+            let spec = liq_spec();
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Short, 10);
+            p.open_price_sum = 500000;
+            p.open_init_margin_sum = 50000;
+            let mm = spec.calculate_maintenance_margin(10 * 50000);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 100000, 0, mm), 50926);
+        }
+
+        #[test]
+        fn estimate_liq_price_cross_long_profit() {
+            // Java: testNormalCase2 → 47282
+            let spec = liq_spec();
+            let mut p = pos(MarginMode::Cross, PositionDirection::Long, 10);
+            p.open_price_sum = 500000;
+            let mm = spec.calculate_maintenance_margin(10 * 50000);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 100000, 5000, mm + 40000), 47282);
+        }
+
+        #[test]
+        fn estimate_liq_price_cross_long_no_liq() {
+            // Java: testNormalCase3 → -1（pnl = estimateUnrealizedProfit(mark) = 0）
+            let spec = liq_spec();
+            let mut p = pos(MarginMode::Cross, PositionDirection::Long, 10);
+            p.open_price_sum = 500000;
+            let pnl = p.estimate_unrealized_profit(50000);
+            let mm = spec.calculate_maintenance_margin(10 * 50000);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 60000, pnl, mm + 40000), -1);
+        }
+
+        #[test]
+        fn estimate_liq_price_isolated_long() {
+            // Java: testIsolatedNormalCase → 48913（迭代法精确解，旧近似给 49000）
+            let spec = liq_spec();
+            let mut p = pos(MarginMode::Isolated, PositionDirection::Long, 10);
+            p.open_price_sum = 500000;
+            p.open_init_margin_sum = 50000;
+            let mm = spec.calculate_maintenance_margin(10 * 50000);
+            assert_eq!(p.estimate_liquidation_price(&spec, 50000, 60000, 0, mm), 48913);
+        }
+
+        // --- calculateBankruptcyPrice BP fee 集成回归（takerFee+liquidationFee 合并 + SHORT 分母 sign）---
+        // ISOLATED, openPriceSum=1000, openInitMarginSum=100, openVolume=10, margin_base_fn=|_|0。
+
+        fn fixed_fee_spec(taker_fee: i64, liquidation_fee: i64) -> CoreSymbolSpecification {
+            CoreSymbolSpecification { taker_fee, liquidation_fee, fee_scale_k: 0, ..Default::default() }
+        }
+        fn dynamic_fee_spec(taker_fee: i64, liquidation_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
+            CoreSymbolSpecification { taker_fee, liquidation_fee, fee_scale_k, ..Default::default() }
+        }
+        fn bp_pos(direction: PositionDirection) -> SymbolPositionRecord {
+            let mut p = pos(MarginMode::Isolated, direction, 10);
+            p.open_price_sum = 1000;
+            p.open_init_margin_sum = 100;
+            p
+        }
+
+        #[test]
+        fn bp_isolated_long_fixed_fee_with_liquidation_fee() {
+            // Java: bp_isolated_long_fixedFee_withLiquidationFee → 96
+            assert_eq!(bp_pos(PositionDirection::Long).calculate_bankruptcy_price(&fixed_fee_spec(1, 5), |_| 0), 96);
+        }
+
+        #[test]
+        fn bp_isolated_short_fixed_fee_with_liquidation_fee() {
+            // Java: bp_isolated_short_fixedFee_withLiquidationFee → 104
+            assert_eq!(bp_pos(PositionDirection::Short).calculate_bankruptcy_price(&fixed_fee_spec(1, 5), |_| 0), 104);
+        }
+
+        #[test]
+        fn bp_isolated_long_dynamic_fee_with_liquidation_fee() {
+            // Java: bp_isolated_long_dynamicFee_withLiquidationFee → 95
+            assert_eq!(bp_pos(PositionDirection::Long).calculate_bankruptcy_price(&dynamic_fee_spec(20, 30, 1000), |_| 0), 95);
+        }
+
+        #[test]
+        fn bp_isolated_short_dynamic_fee_with_liquidation_fee() {
+            // Java: bp_isolated_short_dynamicFee_withLiquidationFee → 105（SHORT 分母 sign 修复锁定）
+            assert_eq!(bp_pos(PositionDirection::Short).calculate_bankruptcy_price(&dynamic_fee_spec(20, 30, 1000), |_| 0), 105);
+        }
+    }
 }

@@ -78,7 +78,7 @@ mod tests {
         api.add_currency(USD, CURRENCY_SCALE_K);
         api.add_currency(JPY, CURRENCY_SCALE_K);
         assert_eq!(api.add_futures_symbol(spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM, PRICE), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, PRICE, 0), CommandResultCode::Success);
         api
     }
 
