@@ -132,9 +132,15 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 
 **③ 黄金向量对拍(差分,Java 当 oracle)** —— 根治 ①② 的 oracle 受限 + 漂移
 `tests/conformance.rs` + Java `exchange-core/…/ConformanceExporter.java`。一份**与实现无关的命令流** `.stream`(`tests/conformance_vectors/`),两侧各有解释器喂各自引擎:Java 侧跑 `exchange-core` **直接把实际输出当黄金**写成 `.golden`(不依赖 Java 单测断不断言),Rust 侧 replay **同一** `.stream`、产**同一格式**输出、逐行断言 == `.golden`。
-- 对拍:每命令 `result_code` + 最终状态摘要(账户/仓位/费用池)+ **结算类 fund event 多重集**(funding/pnl/liquidation/adl/fee)。
-- *关键收益*:清算/ADL 的最终状态与结算事件——Java 单测本身不断言、① 对不了的——现在由 **Java 引擎实际输出**当 oracle,Rust 必须逐字节一致;且两侧都可入 CI,任一侧行为漂移即报错。
-- 5 个向量全绿:`spot_full_cycle`、`perp_funding`、`delivery_settle`、`liquidation_isolated`、`adl`(loser 强平 + winner ADL 减仓 + 重定价逐值对拍)。
+- 对拍:每命令 `result_code` + 最终状态摘要(账户/仓位/费用池)+ **结算类 fund event 多重集**(funding/pnl/fee 等)。
+- *关键收益*:清算/ADL 的最终状态——Java 单测本身不断言、① 对不了的——现在由 **Java 引擎实际输出**当 oracle,Rust 必须逐字节一致(如 ADL:loser 强平 + winner 减仓 10→5 + 重定价 openPriceSum,逐值对拍)。
+- **同步 vs 异步**:funding/delivery 的结算事件(命令 `.join()` 后已到)逐条对拍;**清算/ADL 的 fund event 走 Java 独立异步线程、捕获不确定**,故这些向量 `#!events=off` **只对拍确定性的 STATE**(账户/仓位始终一致),不对拍其事件流。
+- 当前 25 向量全绿:5 域场景(`spot_full_cycle`/`perp_funding`/`delivery_settle`/`liquidation_isolated`/`adl`)+ 16 差分模糊(见下)+ 4 IOC/FOK 手造。
+
+**③b 差分模糊(随机流批量)**
+`cargo run --example gen_conformance_fuzz` 用确定性 PRNG(固定种子)批量生成随机现货命令流 `.stream`,走同一 Java-oracle→Rust-replay 流程,把撮合引擎压满(crossing/partial/NSF)。
+- **已抓到真分歧**:IOC/FOK 现货在复杂多单序列下 `result_code`/结算与 Java 不一致(GTC 完全干净;简单 IOC/FOK 手造用例也对)。**这是一个待根因的开放发现**——正是差分模糊的价值。故随机流暂配 GTC(干净、持续差分覆盖),IOC/FOK 的可用用例由手写向量覆盖。
+- 真·live 双引擎同进程比对(JNI/双跑)更重,未做。
 
 ### 归一化规格(= 刻意差异清单)
 
@@ -155,6 +161,8 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 ### 一致性对拍工作流
 
 ```bash
+# 0)(可选)差分模糊:确定性 PRNG 批量生成随机现货向量
+cargo run --example gen_conformance_fuzz
 # 1) Java 当 oracle 生成/更新黄金向量(在 exchange-core 模块)
 mvn -q -Dtest=ConformanceExporter -DfailIfNoTests=false test
 # 2) Rust replay 同一批 .stream,逐行断言 == .golden

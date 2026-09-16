@@ -1,0 +1,76 @@
+# 差分模糊生成(seed=1):现货多用户随机 PLACE。勿手改;由 gen_conformance_fuzz 生成。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=100 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+USER uid=1
+BAL uid=1 cur=1 amount=1000000000 txid=1
+BAL uid=1 cur=2 amount=1000000000000 txid=2
+USER uid=2
+BAL uid=2 cur=1 amount=1000000000 txid=3
+BAL uid=2 cur=2 amount=1000000000000 txid=4
+USER uid=3
+BAL uid=3 cur=1 amount=1000000000 txid=5
+BAL uid=3 cur=2 amount=1000000000000 txid=6
+USER uid=4
+BAL uid=4 cur=1 amount=1000000000 txid=7
+BAL uid=4 cur=2 amount=1000000000000 txid=8
+PLACE oid=1001 uid=3 sym=100 price=9721 size=6 action=BID type=GTC reserve=9957
+PLACE oid=1002 uid=2 sym=100 price=10151 size=4 action=ASK type=GTC
+PLACE oid=1003 uid=1 sym=100 price=10466 size=7 action=BID type=GTC reserve=10481
+PLACE oid=1004 uid=4 sym=100 price=10436 size=6 action=ASK type=GTC
+PLACE oid=1005 uid=4 sym=100 price=9614 size=1 action=ASK type=GTC
+PLACE oid=1006 uid=3 sym=100 price=10038 size=2 action=BID type=GTC reserve=10513
+PLACE oid=1007 uid=1 sym=100 price=9553 size=4 action=BID type=GTC reserve=9726
+PLACE oid=1008 uid=1 sym=100 price=10118 size=7 action=BID type=GTC reserve=10506
+PLACE oid=1009 uid=2 sym=100 price=9749 size=7 action=ASK type=GTC
+PLACE oid=1010 uid=4 sym=100 price=10339 size=5 action=ASK type=GTC
+PLACE oid=1011 uid=4 sym=100 price=9777 size=5 action=ASK type=GTC
+PLACE oid=1012 uid=1 sym=100 price=9789 size=3 action=BID type=GTC reserve=10098
+PLACE oid=1013 uid=2 sym=100 price=10170 size=1 action=ASK type=GTC
+PLACE oid=1014 uid=1 sym=100 price=9600 size=2 action=BID type=GTC reserve=9820
+PLACE oid=1015 uid=2 sym=100 price=9728 size=5 action=ASK type=GTC
+PLACE oid=1016 uid=4 sym=100 price=10036 size=2 action=ASK type=GTC
+PLACE oid=1017 uid=2 sym=100 price=9652 size=6 action=ASK type=GTC
+PLACE oid=1018 uid=4 sym=100 price=9631 size=2 action=ASK type=GTC
+PLACE oid=1019 uid=4 sym=100 price=10173 size=7 action=ASK type=GTC
+PLACE oid=1020 uid=2 sym=100 price=9794 size=6 action=ASK type=GTC
+PLACE oid=1021 uid=2 sym=100 price=10109 size=3 action=ASK type=GTC
+PLACE oid=1022 uid=1 sym=100 price=9568 size=2 action=BID type=GTC reserve=9981
+PLACE oid=1023 uid=1 sym=100 price=9868 size=3 action=BID type=GTC reserve=10228
+PLACE oid=1024 uid=4 sym=100 price=9615 size=2 action=ASK type=GTC
+PLACE oid=1025 uid=3 sym=100 price=9728 size=6 action=BID type=GTC reserve=9810
+PLACE oid=1026 uid=2 sym=100 price=10231 size=5 action=ASK type=GTC
+PLACE oid=1027 uid=1 sym=100 price=10056 size=6 action=BID type=GTC reserve=10468
+PLACE oid=1028 uid=2 sym=100 price=9816 size=1 action=ASK type=GTC
+PLACE oid=1029 uid=1 sym=100 price=10461 size=4 action=BID type=GTC reserve=10484
+PLACE oid=1030 uid=4 sym=100 price=9625 size=339478200 action=ASK type=GTC
+PLACE oid=1031 uid=1 sym=100 price=10471 size=4 action=BID type=GTC reserve=10842
+PLACE oid=1032 uid=1 sym=100 price=9905 size=1 action=BID type=GTC reserve=10036
+PLACE oid=1033 uid=2 sym=100 price=10298 size=2 action=ASK type=GTC
+PLACE oid=1034 uid=2 sym=100 price=9519 size=5 action=ASK type=GTC
+PLACE oid=1035 uid=1 sym=100 price=9872 size=7 action=BID type=GTC reserve=10124
+PLACE oid=1036 uid=1 sym=100 price=10422 size=7 action=BID type=GTC reserve=10942
+PLACE oid=1037 uid=3 sym=100 price=9514 size=4 action=BID type=GTC reserve=9875
+PLACE oid=1038 uid=2 sym=100 price=9836 size=3 action=ASK type=GTC
+PLACE oid=1039 uid=3 sym=100 price=10210 size=5 action=BID type=GTC reserve=10288
+PLACE oid=1040 uid=3 sym=100 price=9651 size=4 action=BID type=GTC reserve=10066
+PLACE oid=1041 uid=2 sym=100 price=9543 size=2 action=ASK type=GTC
+PLACE oid=1042 uid=1 sym=100 price=9907 size=7 action=BID type=GTC reserve=10272
+PLACE oid=1043 uid=1 sym=100 price=9714 size=1 action=BID type=GTC reserve=9996
+PLACE oid=1044 uid=2 sym=100 price=10440 size=6 action=ASK type=GTC
+PLACE oid=1045 uid=3 sym=100 price=9998 size=2 action=BID type=GTC reserve=10322
+PLACE oid=1046 uid=2 sym=100 price=9684 size=7 action=ASK type=GTC
+PLACE oid=1047 uid=2 sym=100 price=10449 size=6 action=ASK type=GTC
+PLACE oid=1048 uid=3 sym=100 price=10332 size=4 action=BID type=GTC reserve=10569
+PLACE oid=1049 uid=1 sym=100 price=9796 size=1 action=BID type=GTC reserve=10120
+PLACE oid=1050 uid=1 sym=100 price=9839 size=7 action=BID type=GTC reserve=10261
+PLACE oid=1051 uid=1 sym=100 price=9829 size=1 action=BID type=GTC reserve=10405
+PLACE oid=1052 uid=2 sym=100 price=9862 size=4 action=ASK type=GTC
+PLACE oid=1053 uid=3 sym=100 price=9936 size=7 action=BID type=GTC reserve=10038
+PLACE oid=1054 uid=2 sym=100 price=9612 size=4 action=ASK type=GTC
+PLACE oid=1055 uid=1 sym=100 price=9847 size=4 action=BID type=GTC reserve=10266
+PLACE oid=1056 uid=4 sym=100 price=9620 size=3 action=ASK type=GTC
+PLACE oid=1057 uid=3 sym=100 price=10267 size=5 action=BID type=GTC reserve=10767
+PLACE oid=1058 uid=1 sym=100 price=10085 size=6 action=BID type=GTC reserve=10453
+PLACE oid=1059 uid=4 sym=100 price=9742 size=2 action=ASK type=GTC
+PLACE oid=1060 uid=1 sym=100 price=10142 size=3 action=BID type=GTC reserve=10700

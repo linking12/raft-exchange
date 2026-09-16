@@ -1,0 +1,13 @@
+# IOC 跨多档:ASK 10000×1 + ASK 10200×1;buyer IOC BID 10200×2 → 成交 1@10000+1@10200。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=100 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+USER uid=1
+USER uid=2
+USER uid=4
+BAL uid=1 cur=2 amount=1000000000 txid=1
+BAL uid=2 cur=1 amount=1000000 txid=2
+BAL uid=4 cur=1 amount=1000000 txid=3
+PLACE oid=1 uid=2 sym=100 price=10000 size=1 action=ASK type=GTC
+PLACE oid=2 uid=4 sym=100 price=10200 size=1 action=ASK type=GTC
+PLACE oid=3 uid=1 sym=100 price=10200 size=2 action=BID type=IOC reserve=10200
