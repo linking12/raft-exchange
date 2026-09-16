@@ -190,6 +190,13 @@ impl ExchangeApi {
         self.core.query_insurance_fund()
     }
 
+    /// symbol / currency 规格报表：全部 symbol（含 `base_scale_k`/`quote_scale_k`/费率档）+ 全部 currency
+    /// （含 `currency_scale_k`）。**client 侧缩放的数据源**——引擎所有金额都是 i64 定点,client 用这里的 scale
+    /// 把 raw i64 转人类可读(见 README「报表」节)。对应 Java `SymbolsReportQuery` / currency 配置查询。
+    pub fn symbol_currency(&self) -> crate::core::reports::SymbolCurrencyReport {
+        self.core.query_symbol_currency()
+    }
+
     /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。**必须先于引用它的 symbol 调用**（见模块级文档）。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
