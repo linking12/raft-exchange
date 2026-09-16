@@ -1,17 +1,13 @@
 //! 对应 Java `ADLUserPosition`：ADL 候选视图；Java 侵入式链表+对象池不移植，改用 `Vec`。
-use crate::core::common::position_direction::PositionDirection;
 
-/// 对应 Java `ADLUserPosition`（`uid`/`symbol`/`direction`/`volume`/`score`）。
+/// 对应 Java `ADLUserPosition`。仅保留下游 R1 预占 / R2 释放真正读取的 `uid` + `volume`；
+/// Java 的 `symbol`/`direction`/`score` 在本移植里死字段（symbol/direction 由外层 cmd 上下文导出，score 仅在
+/// 构造前的本地排序用），故不携带。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdlUserPosition {
     pub uid: i64,
-    pub symbol: i32,
-    /// 候选仓位方向（与触发 ADL 的 `cmd.action` 相反）。
-    pub direction: PositionDirection,
     /// 本次 ADL 中该仓位可贡献的最大数量（R1 预占量 = 对称释放量，不管 merge 实际消费多少）。
     pub volume: i64,
-    /// 排序用分值（`LiquidationService::risk_score`），R1 算好写入，merge 只读比较。
-    pub score: i64,
 }
 
 #[cfg(test)]
@@ -20,7 +16,7 @@ mod tests {
 
     #[test]
     fn is_plain_copy_value_type() {
-        let a = AdlUserPosition { uid: 1, symbol: 100, direction: PositionDirection::Long, volume: 5, score: 42 };
+        let a = AdlUserPosition { uid: 1, volume: 5 };
         let b = a; // Copy，不是 move-then-error
         assert_eq!(a, b);
     }

@@ -13,6 +13,8 @@ use crate::core::orderbook::orders_bucket_naive::MakerFill;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::orders_bucket_naive::OrdersBucketNaive;
+// 成交名义额 size×price 及累加的溢出守卫，统一用 CoreArithmeticUtils 的 *_exact。
+use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact};
 
 /// 整簿（naive 实现）：ask_buckets 升序、bid_buckets 用 rev() 取最高价、id_index 存 (side,price,uid) 供 O(log n) 定位+所有权校验。对应 Java OrderBookNaiveImpl。
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -190,7 +192,7 @@ impl OrderBookNaiveImpl {
                 remaining_in_call -= f.trade;
                 let active_order_completed = remaining_in_call == 0;
                 taker_filled += f.trade;
-                taker_filled_notional += f.trade * p;
+                taker_filled_notional = add_exact(taker_filled_notional, mul_exact(f.trade, p));
                 // bidder_hold_price = 成交双方中 BID 一方的 reserve_bid_price（对应 Java OrdersBucketNaive.match）。
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
@@ -285,7 +287,7 @@ impl OrderBookNaiveImpl {
                 remaining_in_call -= f.trade;
                 let active_order_completed = remaining_in_call == 0;
                 taker_filled += f.trade;
-                taker_filled_notional += f.trade * p;
+                taker_filled_notional = add_exact(taker_filled_notional, mul_exact(f.trade, p));
                 // 同 match_against 的 bidderHoldPrice 语义（见该处注释）。
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
@@ -315,7 +317,7 @@ impl OrderBookNaiveImpl {
                     matched_order_filled_notional: f.filled_notional,
                     next: None,
                 });
-                remaining_budget -= f.trade * p;
+                remaining_budget = sub_exact(remaining_budget, mul_exact(f.trade, p));
                 if f.completed {
                     id_index.remove(&f.order_id);
                 }
@@ -470,9 +472,9 @@ impl OrderBookNaiveImpl {
         for (price, available_size) in iter {
             if size > available_size {
                 size -= available_size;
-                budget += available_size * price;
+                budget = add_exact(budget, mul_exact(available_size, price));
             } else {
-                return Some(budget + size * price);
+                return Some(add_exact(budget, mul_exact(size, price)));
             }
         }
         None
@@ -1542,10 +1544,10 @@ mod ob_base_tests {
                 let v = self.ask_volumes[i];
                 let p = self.ask_prices[i];
                 if v < size {
-                    budget += v * p;
+                    budget = add_exact(budget, mul_exact(v, p));
                     size -= v;
                 } else {
-                    return budget + size * p;
+                    return add_exact(budget, mul_exact(size, p));
                 }
             }
             panic!("Can not collect size {size}");
@@ -1558,10 +1560,10 @@ mod ob_base_tests {
                 let v = self.bid_volumes[i];
                 let p = self.bid_prices[i];
                 if v < size {
-                    expectation += v * p;
+                    expectation = add_exact(expectation, mul_exact(v, p));
                     size -= v;
                 } else {
-                    return expectation + size * p;
+                    return add_exact(expectation, mul_exact(size, p));
                 }
             }
             panic!("Can not collect size {size}");

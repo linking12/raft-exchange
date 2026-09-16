@@ -6,22 +6,7 @@ use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::processors::liquidation::liquidation_flow::LiquidationFlow;
-use crate::core::utils::core_arithmetic_utils::{calculate_taker_fee, ceil_divide, ceil_mul_div, trunc_mul_div};
-
-/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。
-fn add_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
-}
-
-/// 对应 Java `Math.subtractExact(long, long)`。
-fn sub_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
-}
-
-/// 对应 Java `Math.multiplyExact(long, long)`。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{add_exact, calculate_taker_fee, ceil_divide, ceil_mul_div, mul_exact, sub_exact, trunc_mul_div};
 
 /// 对应 Java `SymbolPositionRecord`：期货 / 保证金交易的单 symbol、单方向持仓记录。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

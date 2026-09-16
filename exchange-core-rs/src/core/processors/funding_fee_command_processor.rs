@@ -11,11 +11,12 @@ use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_status::UserStatus;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
-use crate::core::utils::core_arithmetic_utils::distribute_remainder_by_one;
+use crate::core::utils::core_arithmetic_utils::{distribute_remainder_by_one, mul_exact};
 
-/// 对应 Java `Math.multiplyExact`：溢出 panic。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
+/// i64 值序列的溢出安全求和：i128 累加后收窄，超 i64 即 panic（跨用户/跨 shard notional 聚合用）。
+fn sum_i64_checked<'a>(vals: impl Iterator<Item = &'a i64>) -> i64 {
+    let s: i128 = vals.map(|&v| v as i128).sum();
+    i64::try_from(s).unwrap_or_else(|_| panic!("overflow: funding notional sum {s}"))
 }
 
 /// 对应 Java `FundingPaymentAndRecvNotional`：单 shard 一份，`uid -> fee`（payer 侧，R1 已算好精确值）+ `uid -> raw notional`（receiver 侧，费用留到 merge/R2 再算）。
@@ -74,8 +75,9 @@ impl FundingFeeCommandProcessor {
     /// merge：对应 Java `buildMatcherEvents`——两级 pro-rata 的第一级：`total_pay`（跨 shard payer 费用求和）按各 shard 的 receiver notional 占比截断分配 + [`distribute_remainder_by_one`] 余数分配（shard-id 升序，确定性）。
     /// `total_pay==0 || total_recv_notional==0` → 返回空 `Vec`（无可结算的东西）。参与分配的判定统一用 `receiver_notionals` 非空（notional 恒 >0）。`amount<=0 且 payer_amounts 为空` 的 shard 跳过。
     pub fn build_matcher_events(shards_data: &[FundingPaymentAndRecvNotional]) -> Vec<(usize, i64)> {
-        let total_pay: i64 = shards_data.iter().map(|s| s.payer_amounts.values().sum::<i64>()).sum();
-        let total_recv_notional: i64 = shards_data.iter().map(|s| s.receiver_notionals.values().sum::<i64>()).sum();
+        // 跨用户/跨 shard notional 聚合用 i128 求和 + 收窄守卫，防单币种总名义额超 i64（每笔已 i64-bounded，聚合可溢）。
+        let total_pay = sum_i64_checked(shards_data.iter().flat_map(|s| s.payer_amounts.values()));
+        let total_recv_notional = sum_i64_checked(shards_data.iter().flat_map(|s| s.receiver_notionals.values()));
         if total_pay == 0 || total_recv_notional == 0 {
             return Vec::new();
         }
@@ -83,7 +85,7 @@ impl FundingFeeCommandProcessor {
         let mut weights: BTreeMap<usize, i64> = BTreeMap::new();
         for (shard_id, shard) in shards_data.iter().enumerate() {
             if !shard.receiver_notionals.is_empty() {
-                weights.insert(shard_id, shard.receiver_notionals.values().sum());
+                weights.insert(shard_id, sum_i64_checked(shard.receiver_notionals.values()));
             }
         }
         let shard_recv_amount = distribute_remainder_by_one(total_pay, &weights);

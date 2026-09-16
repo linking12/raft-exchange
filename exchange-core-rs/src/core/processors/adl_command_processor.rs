@@ -11,7 +11,6 @@ impl AdlCommandProcessor {
     /// R1：对应 Java `collectInput`——按 risk_score DESC 贪心分配，筛选反向+浮盈候选，直至 remaining_size 耗尽；不写回 pending_adl_size（调用方职责）。
     pub fn collect_input(
         candidates: Vec<SymbolPositionRecord>,
-        symbol: i32,
         action: OrderAction,
         bankruptcy_price: i64,
         remaining_size: i64,
@@ -34,13 +33,13 @@ impl AdlCommandProcessor {
 
         let mut remaining = remaining_size;
         let mut out = Vec::new();
-        for (score, pos) in &scored {
+        for (_, pos) in &scored {
             if remaining <= 0 {
                 break;
             }
             let available = pos.open_volume - pos.pending_adl_size;
             let can_take = available.min(remaining);
-            out.push(AdlUserPosition { uid: pos.uid, symbol, direction: pos.direction, volume: can_take, score: *score });
+            out.push(AdlUserPosition { uid: pos.uid, volume: can_take });
             remaining -= can_take;
         }
         out
@@ -90,7 +89,7 @@ mod tests {
         // action=Bid（做多）触发 ADL 时，只吃 SHORT 候选（反向）；LONG 候选（同向）必须被过滤掉。
         let long_pos = candidate(1, PositionDirection::Long, 10, 500, 100, 100, 0); // bankruptcy=100 -> unrealizedPnl=(100*10-500)*1=500>0 但同向
         let short_pos = candidate(2, PositionDirection::Short, 10, 1500, 100, 100, 0); // unrealizedPnl=(100*10-1500)*-1=500>0 反向
-        let picks = AdlCommandProcessor::collect_input(vec![long_pos, short_pos], 100, OrderAction::Bid, 100, 100);
+        let picks = AdlCommandProcessor::collect_input(vec![long_pos, short_pos], OrderAction::Bid, 100, 100);
         assert_eq!(picks.len(), 1);
         assert_eq!(picks[0].uid, 2);
     }
@@ -99,7 +98,7 @@ mod tests {
     fn collect_input_filters_out_non_positive_unrealized_pnl() {
         // SHORT 候选但按破产价已经不盈利（unrealizedPnl<=0）-> 过滤掉
         let losing_short = candidate(1, PositionDirection::Short, 10, 500, 100, 100, 0); // (100*10-500)*-1 = -500 <=0
-        let picks = AdlCommandProcessor::collect_input(vec![losing_short], 100, OrderAction::Bid, 100, 100);
+        let picks = AdlCommandProcessor::collect_input(vec![losing_short], OrderAction::Bid, 100, 100);
         assert!(picks.is_empty());
     }
 
@@ -107,7 +106,7 @@ mod tests {
     fn collect_input_filters_out_when_pending_adl_size_covers_open_volume() {
         // openVolume <= pendingADLSize -> 已经没有余量可摊派
         let fully_reserved = candidate(1, PositionDirection::Short, 10, 1500, 100, 100, 10);
-        let picks = AdlCommandProcessor::collect_input(vec![fully_reserved], 100, OrderAction::Bid, 100, 100);
+        let picks = AdlCommandProcessor::collect_input(vec![fully_reserved], OrderAction::Bid, 100, 100);
         assert!(picks.is_empty());
     }
 
@@ -118,7 +117,7 @@ mod tests {
         // 两个 SHORT 候选，eligibility 不同 -> risk_score 不同，验证选取顺序按分值 DESC
         let low_score = candidate(1, PositionDirection::Short, 5, 750, 100, 10, 0); // eligibility=10
         let high_score = candidate(2, PositionDirection::Short, 5, 750, 100, 90, 0); // eligibility=90，其余相同 -> 分值更高
-        let picks = AdlCommandProcessor::collect_input(vec![low_score, high_score], 100, OrderAction::Bid, 100, 3);
+        let picks = AdlCommandProcessor::collect_input(vec![low_score, high_score], OrderAction::Bid, 100, 3);
         assert_eq!(picks[0].uid, 2, "高分候选必须排第一个被选中");
     }
 
@@ -127,7 +126,7 @@ mod tests {
         // 分值相同时 Java reverseThis 会反转相对序，先扫到的 uid1 反而排后——逐字对齐 tie-break。
         let a = candidate(1, PositionDirection::Short, 5, 750, 100, 50, 0);
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 50, 0);
-        let picks = AdlCommandProcessor::collect_input(vec![a, b], 100, OrderAction::Bid, 100, 10);
+        let picks = AdlCommandProcessor::collect_input(vec![a, b], OrderAction::Bid, 100, 10);
         assert_eq!(picks.len(), 2);
         assert_eq!(picks[0].uid, 2, "reverseThis 把同分序反转：后扫到的 uid2 排第一");
         assert_eq!(picks[1].uid, 1);
@@ -136,7 +135,7 @@ mod tests {
     #[test]
     fn collect_input_greedy_take_caps_at_min_available_and_remaining() {
         let big_candidate = candidate(1, PositionDirection::Short, 100, 15000, 100, 100, 0); // available=100
-        let picks = AdlCommandProcessor::collect_input(vec![big_candidate], 100, OrderAction::Bid, 100, 30);
+        let picks = AdlCommandProcessor::collect_input(vec![big_candidate], OrderAction::Bid, 100, 30);
         assert_eq!(picks.len(), 1);
         assert_eq!(picks[0].volume, 30, "canTake = min(available=100, remaining=30) = 30");
     }
@@ -147,7 +146,7 @@ mod tests {
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 90, 0);
         let c = candidate(3, PositionDirection::Short, 5, 750, 100, 80, 0);
         // remaining=7: a(可用5)+b(可用2, 部分)后耗尽，c 完全不入选
-        let picks = AdlCommandProcessor::collect_input(vec![a, b, c], 100, OrderAction::Bid, 100, 7);
+        let picks = AdlCommandProcessor::collect_input(vec![a, b, c], OrderAction::Bid, 100, 7);
         assert_eq!(picks.len(), 2);
         assert_eq!(picks[0].uid, 1);
         assert_eq!(picks[0].volume, 5);
@@ -158,7 +157,7 @@ mod tests {
     #[test]
     fn collect_input_remaining_non_positive_returns_empty() {
         let a = candidate(1, PositionDirection::Short, 5, 750, 100, 100, 0);
-        let picks = AdlCommandProcessor::collect_input(vec![a], 100, OrderAction::Bid, 100, 0);
+        let picks = AdlCommandProcessor::collect_input(vec![a], OrderAction::Bid, 100, 0);
         assert!(picks.is_empty());
     }
 
@@ -167,8 +166,8 @@ mod tests {
     #[test]
     fn build_matcher_events_full_consumption_when_sum_covers_remaining() {
         let picks = vec![
-            AdlUserPosition { uid: 1, symbol: 100, direction: PositionDirection::Short, volume: 5, score: 100 },
-            AdlUserPosition { uid: 2, symbol: 100, direction: PositionDirection::Short, volume: 2, score: 90 },
+            AdlUserPosition { uid: 1, volume: 5 },
+            AdlUserPosition { uid: 2, volume: 2 },
         ];
         let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, 7);
         assert_eq!(events, vec![(1, 5), (2, 2)]);
@@ -178,7 +177,7 @@ mod tests {
     #[test]
     fn build_matcher_events_partial_candidate_list_consumes_only_available() {
         // 候选总量(5) < remaining_size(20) -> 只能消费到候选耗尽，不是全部 remaining
-        let picks = vec![AdlUserPosition { uid: 1, symbol: 100, direction: PositionDirection::Short, volume: 5, score: 100 }];
+        let picks = vec![AdlUserPosition { uid: 1, volume: 5 }];
         let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, 20);
         assert_eq!(events, vec![(1, 5)]);
         assert_eq!(consumed, 5, "候选不够，实际消费 < 原始请求量，cmd.size 应改写为这个真实值");
@@ -198,7 +197,7 @@ mod tests {
         // 单 shard 下每个候选都被完整消费，不存在"部分消费改 volume"分支（见模块文档）。
         let a = candidate(1, PositionDirection::Short, 5, 750, 100, 100, 0);
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 90, 0);
-        let picks = AdlCommandProcessor::collect_input(vec![a, b], 100, OrderAction::Bid, 100, 8);
+        let picks = AdlCommandProcessor::collect_input(vec![a, b], OrderAction::Bid, 100, 8);
         assert_eq!(picks.iter().map(|p| p.volume).sum::<i64>(), 8);
 
         let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, 8);

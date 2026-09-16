@@ -864,7 +864,7 @@ mod liquidation_engine_e2e_tests {
     /// 守恒（含 IF）：Σaccounts + fees + adjustments + Σ仓位(pnl+extra_margin) + ΣIFNotional.available + ΣIF接管仓pnl，scale 全 1 可直接相加。
     fn conserved(core: &ExchangeCore) -> i64 {
         let cur = QUOTE;
-        let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.last_price).unwrap_or(0);
+        let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.mark_price).unwrap_or(0);
         let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
         total += *core.risk.fees.get(&cur).unwrap_or(&0);
         total += *core.risk.adjustments.get(&cur).unwrap_or(&0);
@@ -1338,7 +1338,7 @@ mod settle_pnl_tests {
 
     fn conserved(core: &ExchangeCore) -> i64 {
         let cur = QUOTE;
-        let mark = core.risk.last_price_cache.get(&DELIV).map(|r| r.last_price).unwrap_or(0);
+        let mark = core.risk.last_price_cache.get(&DELIV).map(|r| r.mark_price).unwrap_or(0);
         let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
         total += *core.risk.fees.get(&cur).unwrap_or(&0);
         total += *core.risk.adjustments.get(&cur).unwrap_or(&0);

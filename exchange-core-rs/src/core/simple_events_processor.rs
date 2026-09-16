@@ -302,7 +302,7 @@ mod tests {
         let taker_trade = trades.iter().find(|r| !r.is_maker).unwrap();
         assert_eq!(taker_trade.account_id, BUYER);
         assert_eq!(taker_trade.last_qty, 10);
-        assert_eq!(taker_trade.last_price, 100);
+        assert_eq!(taker_trade.mark_price, 100);
         assert_eq!(taker_trade.cl_ord_id, 77);
         // maker TRADE 视角：卖方 uid。
         let maker_trade = trades.iter().find(|r| r.is_maker).unwrap();

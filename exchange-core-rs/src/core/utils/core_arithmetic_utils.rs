@@ -38,19 +38,19 @@ fn log10(x: i64) -> i32 {
 }
 
 /// 对应 Java `Math.multiplyExact(long, long)`：`i128` 中间精度相乘后收窄回 `i64`，溢出则 panic。
-fn mul_exact(a: i64, b: i64) -> i64 {
+pub(crate) fn mul_exact(a: i64, b: i64) -> i64 {
     let product = a as i128 * b as i128;
     i64::try_from(product).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
 
 /// 对应 Java `Math.addExact(long, long)`。
-fn add_exact(a: i64, b: i64) -> i64 {
+pub(crate) fn add_exact(a: i64, b: i64) -> i64 {
     let sum = a as i128 + b as i128;
     i64::try_from(sum).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
 /// 对应 Java `Math.subtractExact(long, long)`。
-fn sub_exact(a: i64, b: i64) -> i64 {
+pub(crate) fn sub_exact(a: i64, b: i64) -> i64 {
     let diff = a as i128 - b as i128;
     i64::try_from(diff).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
