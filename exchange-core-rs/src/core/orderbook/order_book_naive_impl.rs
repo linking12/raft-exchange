@@ -1114,7 +1114,7 @@ mod ob_tests {
         assert!(book.fill_l2(10).ask_prices.is_empty());
     }
 
-    // ---- uid 所有权校验（补此前遗留的 concerns）----
+    // ---- uid 所有权校验 ----
 
     #[test]
     fn cancel_other_users_order_returns_unknown() {

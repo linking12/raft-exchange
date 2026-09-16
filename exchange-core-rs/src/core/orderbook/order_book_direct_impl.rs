@@ -1478,7 +1478,7 @@ mod tests {
         assert_eq!(book.bucket(idx).num_orders, 3);
     }
 
-    // ---- IOrderBook 骨架占位：编译 + 不 panic，不做行为断言（补全后再断言真实语义）----
+    // ---- IOrderBook 边界行为：未知 order_type、未知订单、空簿快照/hash ----
 
     #[test]
     fn skeleton_new_order_reports_unsupported_for_unset_order_type() {

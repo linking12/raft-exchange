@@ -19,7 +19,7 @@ pub struct Order {
     pub timestamp: i64,
     /// 对应 Java `Order.userCookie`：写入 `MatcherTradeEvent.matched_user_cookie`。
     pub user_cookie: i32,
-    /// 该挂单最初下单命令的类型（对应 Java `Order.command`），P6-G：撮合时写入 `MatcherTradeEvent.matched_order_command_type`。
+    /// 该挂单最初下单命令的类型（对应 Java `Order.command`）：撮合时写入 `MatcherTradeEvent.matched_order_command_type`。
     pub command: OrderCommandType,
 }
 

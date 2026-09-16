@@ -32,8 +32,8 @@ impl LiquidationScheduler {
     pub fn new(scan_slice_count: i64, reprice_every_n_ticks: i64, shard_id: i32) -> Self {
         LiquidationScheduler {
             scan_tick: 0,
-            // 非正配置归一为 1（对齐 Java `Math.max(1,...)`），而非"从不 reprice"。
             scan_slice_count,
+            // 非正配置归一为 1（对齐 Java `Math.max(1,...)`），而非"从不 reprice"。
             reprice_every_n_ticks: reprice_every_n_ticks.max(1),
             shard_id,
             is_running: false,

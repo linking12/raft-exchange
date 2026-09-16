@@ -21,7 +21,6 @@ impl MatchingEngineRouter {
         MatchingEngineRouter { books: BTreeMap::new() }
     }
 
-    /// 撮合簿子状态哈希（对应 Java StateHashReport `MATCHING_ORDER_BOOKS`）：按 symbol 升序折入各簿 `state_hash`。
     /// 按 uid 反查全部簿的挂单，返回 `(symbol, Order)`（按 symbol、再 order_id 升序，确定性）。报表冷路径用，按需扫簿。
     pub fn user_orders(&self, uid: i64) -> Vec<(i32, Order)> {
         let mut out = Vec::new();
@@ -33,6 +32,7 @@ impl MatchingEngineRouter {
         out
     }
 
+    /// 撮合簿子状态哈希（对应 Java StateHashReport `MATCHING_ORDER_BOOKS`）：按 symbol 升序折入各簿 `state_hash`。
     pub fn order_books_state_hash(&self) -> i64 {
         let mut h: i64 = 17;
         for (&sym, book) in &self.books {
@@ -59,13 +59,16 @@ impl MatchingEngineRouter {
             || (cmd.command.is_loan()
                 && cmd.command != OrderCommandType::LoanForceLiquidate
                 && cmd.command != OrderCommandType::LoanCrossForceLiquidate)
-            // SettleFundingfees/IfTakeover/AutoDeleveraging 的 collect+merge 已折进 R1、结算在 R2；ME 对其为
-            // no-op，须保留 R1 结果码（对齐 Java ME 对这三者的显式处理分支，不落 UNSUPPORTED）。
+            // SettleFundingfees/IfTakeover/AutoDeleveraging 的 collect+merge 已折进 R1、结算在 R2；
+            // LiquidationScan 在 R1 做 check_positions 扫描（symbol=-1，无订单簿）。这几者 ME 均为 no-op，
+            // 须保留 R1 结果码（对齐 Java ME：LIQUIDATION_SCAN 不在撮合分支里、fall-through 不改 resultCode），
+            // 否则 symbol=-1 会落到订单簿查找 → MatchingInvalidOrderBookId 覆盖 R1 的 Success。
             || matches!(
                 cmd.command,
                 OrderCommandType::SettleFundingfees
                     | OrderCommandType::IfTakeover
                     | OrderCommandType::AutoDeleveraging
+                    | OrderCommandType::LiquidationScan
             )
         {
             return cmd.result_code.unwrap_or(CommandResultCode::MatchingUnsupportedCommand);

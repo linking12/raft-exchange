@@ -1,4 +1,4 @@
-//! 期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（Ruling P6-I，本文件 scale 全 1 恒等缩放）。
+//! 期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（本文件 scale 全 1 恒等缩放）。
 use proptest::prelude::*;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -22,7 +22,7 @@ const FUT: i32 = 500;
 // 守恒 helper（含 IF 项）
 // ================================================================================================
 
-/// 全局守恒（含 IF，Ruling P6-I）——见文件头文档。scale 全 1，IF 项直接相加。
+/// 全局守恒（含 IF）——见文件头文档。scale 全 1，IF 项直接相加。
 fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
     let mark = *core.risk.last_price_cache.get(&FUT).unwrap_or(&0);
     let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
