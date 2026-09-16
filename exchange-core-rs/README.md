@@ -77,10 +77,10 @@ process_command(cmd):
     R1  risk.pre_process_command   // 校验/冻结/仓位预处理/扫描判定
     ME  matching.process_order     // 撮合(下单/撤单/改单/减量/强平吃单);非交易命令 no-op
     R2  risk.handler_risk_release  // 成交结算/释放/PnL/费用入池/事件产出
-    drain_liquidation_commands     // 排空 R1/扫描生成的 FORCE→IF→ADL / loan 强平命令,逐条重喂过管线
+    run_liquidation_cascade        // 排空 R1/扫描生成的 FORCE→IF→ADL / loan 强平命令,逐条重喂过管线
 ```
 
-强平不是旁路线程:markprice 更新或 `LIQUIDATION_SCAN` 在 R1 里做仓位检查,把生成的强平命令塞进队列,`drain_liquidation_commands` 再把它们当普通命令跑一遍管线(FORCE 接不住 → IF 接管 → 仍接不住 → ADL 自动排空级联)。整个过程在同一次 `process_command` 内闭合,确定且可复制。
+强平不是旁路线程:markprice 更新或 `LIQUIDATION_SCAN` 在 R1 里做仓位检查,把生成的强平命令塞进队列,`run_liquidation_cascade` 再把它们当普通命令跑一遍管线(FORCE 接不住 → IF 接管 → 仍接不住 → ADL 自动排空级联)。整个过程在同一次 `process_command` 内闭合,确定且可复制。
 
 ### 单 crate 模块划分
 
