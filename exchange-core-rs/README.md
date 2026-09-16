@@ -56,68 +56,15 @@ assert_eq!(rc, CommandResultCode::Success);
 // 4) 查询:上条命令的撮合事件链(TRADE/REDUCE/REJECT)
 let _ev = api.last_matcher_event();
 
-// 5) 报表:只读快照(见下「报表」小节)
-assert!(api.total_balance().is_global_zero());     // 全局账面净零(强不变量)
-let _base = api.single_user(2, 0).accounts.get(&1).copied().unwrap_or(0); // buyer 收到的 base
+// 5) 报表:只读快照(对账/风控/展示外部拉)——total_balance / single_user / insurance_fund /
+//    symbol_currency(client 缩放数据源)/ fee_report / loan_platform / state_hash;与 ExchangeCore::query_* 一一对齐
+assert!(api.total_balance().is_global_zero());     // 例:全局账面净零(强不变量)
 ```
 
 `ExchangeApi` 的方法按 **配置 → 撮合 → 查询 → 报表** 分层(见 `src/core/exchange_api.rs`)。两个入口:
 
 - **`ExchangeApi`**(`src/core/exchange_api.rs`)—— 高层门面,把常用操作封成方法(`place_order` / `cancel_order` / `move_order` / `place_futures_order` / `close_position` / `margin_adjustment` / `balance_adjustment` …),并缓存上一条命令的事件供读取(`last_matcher_event` / `last_fund_events`)。适合测试与嵌入。
 - **`ExchangeCore`**(`src/core/exchange_core.rs`)—— 底层引擎。唯一入口 `process_command(&mut OrderCommand)`,加上快照 `to_snapshot_bytes` / `from_snapshot_bytes`。Raft 状态机直接喂 `OrderCommand` 走这个。
-
-### 报表(查询引擎状态)
-
-报表是**只读快照**,不改状态、不进 Raft 日志——生产里由**外部**按需拉取(对账、风控展示、水位告警)。对应 Java 的 `ReportQuery` 系列;`ExchangeApi` 暴露 **7 个**,与底层 `ExchangeCore::query_*` **一一对齐**。
-
-```rust
-// ① 单用户:账户 / 仓位(含派生风控字段)/ 活动挂单 / 借贷。now_ms 用于 loan 实时利息与 LTV。
-let u = api.single_user(uid, now_ms);
-if u.found {
-    let _base_bal  = u.accounts.get(&base_cur).copied().unwrap_or(0);        // 可用账户(不含冻结)
-    let _base_lock = u.exchange_locked.get(&base_cur).copied().unwrap_or(0); // 现货挂单冻结
-    for p in &u.positions {                 // 期货仓位视图(现货用户为空)
-        let _ = (p.symbol, p.direction, p.open_volume,
-                 p.unrealized_pnl,           // 按当前 mark 的未实现盈亏
-                 p.liquidation_price,        // 强平价
-                 p.margin_ratio_scale_k);    // 保证金率(×scaleK)
-    }
-    for (sym, order) in &u.orders { let _ = (sym, order.order_id, order.price, order.size); }
-    let _ = (u.user_status, &u.isolated_loans, &u.cross_loans, u.cross_account_ltv_bps);
-}
-
-// ② 全局余额守恒:逐币种各桶 + 守恒校验(对账用)。
-let tb = api.total_balance();
-assert!(tb.is_global_zero());               // 平台账面净零(否则 global_balances_sum() 给出各币非零残差)
-let _user_sum = tb.currency_balances.get(&quote_cur).copied().unwrap_or(0); // 用户账户合计
-let _fees     = tb.fees.get(&quote_cur).copied().unwrap_or(0);             // 费用池
-let _locked   = tb.exchange_locked.get(&quote_cur).copied().unwrap_or(0);  // 现货冻结合计
-// 另有 extra_margin / adjustments / suspends / loan_balances / loan_collateral /
-//     symbol_open_interest_long|short / if_balances / if_open_interest_long|short 桶。
-
-// ③ 保险基金:期货 IF(available/reserved/position_value)+ 借贷 LIF。
-let ins = api.insurance_fund();
-if let Some(e) = ins.futures.get(&perp_symbol) { let _ = (e.available, e.reserved, e.position_value); }
-let _lif = ins.loan_insurance_fund.get(&quote_cur).copied().unwrap_or(0);
-
-// ④ symbol/currency 规格:**client 缩放的数据源**(见下「缩放约定」)。
-let sc = api.symbol_currency();
-for c in &sc.currencies { let _ = (c.currency, c.currency_scale_k); }       // 人类值 = raw / currency_scale_k
-for s in &sc.symbols { let _ = (s.symbol_id, s.base_scale_k, s.quote_scale_k); }
-
-// ⑤~⑦ 另有:fee_report()(全币种费池)、loan_platform()(借贷池水位:
-//     pool_available/pool_borrowed/interest_revenue/loan_insurance_fund,池告警外部拉此)、
-//     state_hash()(复制态一致性校验哈希)。
-```
-
-**缩放约定(client 侧做)**:引擎内一切金额/价格都是 **i64 定点**、不带小数;缩放/展示是 client 职责,`symbol_currency()` 就是数据源。
-
-- 币种金额 raw → 人类:`raw / currency_scale_k`(`currency_scale_k = 10^digit`)。
-- 现货**量** size 是"手数",实际 base = `size × base_scale_k`;**价** price 是"价位步",实际报价 = `price × quote_scale_k`。
-- 反向(人类值 → 引擎 i64)乘回对应 scale。
-
-> `PositionView` 的 `unrealized_pnl` / `liquidation_price` / `margin_ratio_scale_k` 是**派生字段**(按传入 `now_ms` 的 mark price 实时算),引擎不落库、每次查询重算。
-
 
 ## 架构
 
