@@ -11,6 +11,7 @@
 
 #[cfg(test)]
 mod tests {
+    use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
     use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
@@ -99,7 +100,7 @@ mod tests {
         spec.loan_config.update(6_000, 8_500, 7_500, i64::MAX, 365);
         assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
         core.matching.add_symbol(&spec);
-        core.risk.last_price_cache.insert(SYMBOL, MARK_PRICE);
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(MARK_PRICE));
         core.risk.loan_service.global_config.numeraire_currency = USDT;
         let (rc, _) = submit(&mut core, cmd_pool_deposit(1, USDT, 1_000_000));
         assert_eq!(rc, CommandResultCode::Success);

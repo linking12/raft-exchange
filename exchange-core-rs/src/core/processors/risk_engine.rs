@@ -19,6 +19,7 @@ use crate::core::common::position_mode::PositionMode;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::matcher_trade_event::MatcherTradeEvent;
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -50,9 +51,8 @@ pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
     pub suspends: BTreeMap<i32, i64>,
-    pub last_price_cache: BTreeMap<i32, i64>,
-    /// markPrice 上次更新的确定性命令时间，供现货 `apply_trade_price` 的 15s 时间加权 EMA 用（进 state_hash/snapshot）。
-    pub mark_price_ts: BTreeMap<i32, i64>,
+    /// 每 symbol 最新价快照（markPrice=`last_price` + 更新时间 `last_price_ts`）；期货外部喂价，现货由 `apply_trade_price` 维护。进 state_hash/snapshot。
+    pub last_price_cache: BTreeMap<i32, LastPriceCacheRecord>,
     pub cfg_margin_trading_enabled: bool,
     /// per-shard 借贷池状态+利率模型，供 LoanCommandDispatcher 读写；默认空，对现货/期货既有路径 no-op。
     pub loan_service: LoanService,
@@ -73,7 +73,6 @@ impl RiskEngine {
             fees: BTreeMap::new(),
             suspends: BTreeMap::new(),
             last_price_cache: BTreeMap::new(),
-            mark_price_ts: BTreeMap::new(),
             cfg_margin_trading_enabled: true,
             loan_service: LoanService::new(),
             liquidation_service: LiquidationService::new(),
@@ -87,7 +86,6 @@ impl RiskEngine {
         self.fees.clear();
         self.suspends.clear();
         self.last_price_cache.clear();
-        self.mark_price_ts.clear();
         self.loan_service = LoanService::new();
         self.liquidation_service = LiquidationService::new();
     }
@@ -565,14 +563,15 @@ impl RiskEngine {
             }
         };
         if trade_price > 0 {
-            Self::apply_trade_price(&mut self.last_price_cache, &mut self.mark_price_ts, cmd.symbol, cmd.timestamp, trade_price);
+            // 对齐 Java `lastPriceCache.getIfAbsentPut(symbol).applyTradePrice(...)`：拿到（缺则建）record，滑动混合更新。
+            self.last_price_cache.entry(cmd.symbol).or_default().apply_trade_price(cmd.timestamp, trade_price);
         }
     }
 
 
     /// 测试 / `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验直接写 last_price_cache，命令路径请走 markprice_adjustment。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
-        self.last_price_cache.insert(symbol, price);
+        self.last_price_cache.entry(symbol).or_default().last_price = price;
     }
 
 
@@ -930,10 +929,7 @@ impl RiskEngine {
 
     /// markPrice 读取：None 与 Some(0) 统一折叠成 None。
     pub fn mark_price(&self, symbol: i32) -> Option<i64> {
-        match self.last_price_cache.get(&symbol) {
-            Some(&p) if p != 0 => Some(p),
-            _ => None,
-        }
+        self.last_price_cache.get(&symbol).map(|r| r.last_price).filter(|&p| p != 0)
     }
 
     /// 用户某 currency 全量锁定额 = 期货保证金占用 + 现货冻结 + 借贷抵押；仅用于报表/事件/结算后余额校验，NSF 场景不走此路径（各走 calculate_free_futures_margin）。
@@ -967,7 +963,7 @@ impl RiskEngine {
         self.calculate_free_futures_margin_for_symbol(user_profile, currency, -1, ssp)
     }
 
-    pub(crate) fn futures_estimates(last_price_cache: &BTreeMap<i32, i64>, up: &UserProfile, pos: &SymbolPositionRecord, spec: &CoreSymbolSpecification, ssp: &SymbolSpecificationProvider) -> (i64, i64, i64, i64) {
+    pub(crate) fn futures_estimates(last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>, up: &UserProfile, pos: &SymbolPositionRecord, spec: &CoreSymbolSpecification, ssp: &SymbolSpecificationProvider) -> (i64, i64, i64, i64) {
         if pos.open_volume == 0 {
             return (0, 0, 0, 0);
         }
@@ -1020,28 +1016,6 @@ impl RiskEngine {
     // ===== 内部 helper =====
 
     /// 现货 markPrice 由本所成交价维护（15s 时间加权 EMA，抗单笔操纵）：窗口内按 dt 混合旧 mark 与新成交价，首次/超窗直接取成交价；ts<=上次 ts 或 price<=0 不更新。供 loan 现货抵押估值读取。
-    fn apply_trade_price(cache: &mut BTreeMap<i32, i64>, ts_map: &mut BTreeMap<i32, i64>, symbol: i32, ts: i64, price: i64) {
-        const WINDOW_MS: i64 = 15_000;
-        if price <= 0 {
-            return;
-        }
-        let prev_ts = ts_map.get(&symbol).copied().unwrap_or(0);
-        if ts <= prev_ts {
-            return;
-        }
-        let prev_mark = cache.get(&symbol).copied().unwrap_or(0);
-        let dt = ts - prev_ts;
-        let new_mark = if prev_mark <= 0 || dt >= WINDOW_MS {
-            price
-        } else {
-            // i128 中间量防溢出：两个 i64 价格的加权平均落在 i64 范围内，仅乘积中间值可能超界
-            ((prev_mark as i128 * (WINDOW_MS - dt) as i128 + price as i128 * dt as i128)
-                / WINDOW_MS as i128) as i64
-        };
-        cache.insert(symbol, new_mark);
-        ts_map.insert(symbol, ts);
-    }
-
     /// 现货→place_exchange_order；期货→校验分配仓位后 can_place_margin_order NSF 检查；非现货非期货→UnsupportedSymbolType（不 panic）。
     fn place_order(
         &mut self,
@@ -1838,7 +1812,7 @@ impl RiskEngine {
         cmd_command: OrderCommandType,
         fund_events: &mut Vec<FundEvent>,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         first_mte: &MatcherTradeEvent,
         spec: &CoreSymbolSpecification,
         taker_action: OrderAction,
@@ -1878,7 +1852,7 @@ impl RiskEngine {
         cmd_command: OrderCommandType,
         fund_events: &mut Vec<FundEvent>,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         mte: &MatcherTradeEvent,
         spec: &CoreSymbolSpecification,
         taker_action: OrderAction,
@@ -1945,7 +1919,7 @@ impl RiskEngine {
     fn settle_margin_position_event(
         fund_events: &mut Vec<FundEvent>,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         up: &mut UserProfile,
         position_key: i32,
         required: bool,
@@ -2089,14 +2063,14 @@ impl RiskEngine {
         }
     }
 
-    fn mark_of(last_price_cache: &BTreeMap<i32, i64>, symbol: i32) -> i64 {
-        last_price_cache.get(&symbol).copied().unwrap_or(0)
+    fn mark_of(last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>, symbol: i32) -> i64 {
+        last_price_cache.get(&symbol).map(|r| r.last_price).unwrap_or(0)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_futures_event(
         fund_events: &mut Vec<FundEvent>,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         event_type: FundEventType,
         order_id: i64,
         pos: &SymbolPositionRecord,
@@ -2207,7 +2181,7 @@ impl RiskEngine {
         spec: &CoreSymbolSpecification,
         currency_spec: &CoreCurrencySpecification,
         fund_events: &mut Vec<FundEvent>,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         ssp: &SymbolSpecificationProvider,
         close_event_type: FundEventType,
         order_id: i64,
@@ -3669,7 +3643,7 @@ mod tests {
         ups.get_mut(UID).unwrap().add_to_account(FUT_QUOTE, quote_balance);
 
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(FUT_SYMBOL, mark_price);
+        engine.last_price_cache.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(mark_price));
         (engine, ups, ssp)
     }
 
@@ -3775,7 +3749,7 @@ mod tests {
         ups.get_mut(UID).unwrap().add_to_account(FUT_QUOTE, 100_000);
 
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(FUT_SYMBOL, 100);
+        engine.last_price_cache.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         // leverage=10 > 5x 上限，即便资金充裕也应在 isValidLeverage 处直接拒绝（NSF 检查之前）。
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 10, MarginMode::Isolated, false);
@@ -3908,7 +3882,7 @@ mod tests {
         const OTHER_SYMBOL: i32 = 201;
         let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 600, 100);
         assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
-        engine.last_price_cache.insert(OTHER_SYMBOL, 200); // OTHER_SYMBOL mark 涨到 200
+        engine.last_price_cache.insert(OTHER_SYMBOL, LastPriceCacheRecord::with_mark(200)); // OTHER_SYMBOL mark 涨到 200
 
         // 已有 CROSS 仓（LONG open_volume=10@100）：estimatePnl=1000；calculateRequiredMarginForFutures=500。
         let mut other_pos = SymbolPositionRecord::new(UID, OTHER_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
@@ -3932,7 +3906,7 @@ mod tests {
         // balance=1_000：ISOLATED 其它仓需把 calculateRequiredMarginForFutures(=500) 从 spendable 剥离（不加浮盈抵扣）；required 实际=1520 > 1_000 → 必须 NSF。
         let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 1_000, 100);
         assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
-        engine.last_price_cache.insert(OTHER_SYMBOL, 200);
+        engine.last_price_cache.insert(OTHER_SYMBOL, LastPriceCacheRecord::with_mark(200));
 
         let mut other_pos = SymbolPositionRecord::new(UID, OTHER_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
         other_pos.direction = PositionDirection::Long;
@@ -4786,8 +4760,8 @@ mod tests {
             up.add_to_account(USDT, 100); // 够正确口径(≈2)，远不够被放大 10000× 的错误口径(≈10001)
         }
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(SYMBOL_A, 100);
-        engine.last_price_cache.insert(SYMBOL_B, 10_000);
+        engine.last_price_cache.insert(SYMBOL_A, LastPriceCacheRecord::with_mark(100));
+        engine.last_price_cache.insert(SYMBOL_B, LastPriceCacheRecord::with_mark(10_000));
 
         let mut cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -5020,8 +4994,8 @@ mod tests {
         }
 
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(JP_SYM_A, 100);
-        engine.last_price_cache.insert(JP_SYM_B, 10_000);
+        engine.last_price_cache.insert(JP_SYM_A, LastPriceCacheRecord::with_mark(100));
+        engine.last_price_cache.insert(JP_SYM_B, LastPriceCacheRecord::with_mark(10_000));
 
         let mut cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -5120,7 +5094,7 @@ mod tests {
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(FUT_SYMBOL, 200);
+        engine.last_price_cache.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(200));
         {
             let up = ups.get_mut(UID).unwrap();
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
@@ -5565,7 +5539,7 @@ mod tests {
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(1, 10, 100));
 
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(FUT_SYMBOL, 100);
+        engine.last_price_cache.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         let cmd = leverage_adjustment_cmd(FUT_SYMBOL, 5);
         assert_eq!(RiskEngineCommandDispatcher::leverage_adjustment(&mut engine, &cmd, &mut ups, &ssp), CommandResultCode::RiskInvalidLeverage);

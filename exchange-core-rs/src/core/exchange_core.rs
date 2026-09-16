@@ -2,6 +2,8 @@
 //! `risk`/`matching`/`ups`/`ssp` 作为平级字段直接持有，靠字段级借用过借用检查，故 `process_command` 不拆分成私有 r1/r2 辅助方法。
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
+#[cfg(test)]
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
@@ -681,7 +683,7 @@ mod loan_force_liquidate_tests {
         core.ups.add_empty_user_profile(BORROWER);
         core.ups.add_empty_user_profile(MAKER);
         core.risk.loan_service.global_config.numeraire_currency = QUOTE;
-        core.risk.last_price_cache.insert(SYMBOL, 1); // markPrice=1, scale-identity valueInNumeraire
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1)); // markPrice=1, scale-identity valueInNumeraire
         core
     }
 
@@ -862,7 +864,7 @@ mod liquidation_engine_e2e_tests {
     /// 守恒（含 IF）：Σaccounts + fees + adjustments + Σ仓位(pnl+extra_margin) + ΣIFNotional.available + ΣIF接管仓pnl，scale 全 1 可直接相加。
     fn conserved(core: &ExchangeCore) -> i64 {
         let cur = QUOTE;
-        let mark = *core.risk.last_price_cache.get(&FUT).unwrap_or(&0);
+        let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.last_price).unwrap_or(0);
         let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
         total += *core.risk.fees.get(&cur).unwrap_or(&0);
         total += *core.risk.adjustments.get(&cur).unwrap_or(&0);
@@ -1043,7 +1045,7 @@ mod loan_scanner_e2e_tests {
         core.matching.add_symbol(&loan_spot_spec());
         core.ups.add_empty_user_profile(BORROWER);
         core.ups.add_empty_user_profile(MAKER);
-        core.risk.last_price_cache.insert(SYMBOL, 1); // markPrice 1
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1)); // markPrice 1
         core.risk.liquidation_engine.is_running = true; // leader
 
         // 直接建一笔越线 isolated loan：抵押 1000 COLL、本金 900 LOANC（LTV 90% >= 80%）。
@@ -1336,7 +1338,7 @@ mod settle_pnl_tests {
 
     fn conserved(core: &ExchangeCore) -> i64 {
         let cur = QUOTE;
-        let mark = *core.risk.last_price_cache.get(&DELIV).unwrap_or(&0);
+        let mark = core.risk.last_price_cache.get(&DELIV).map(|r| r.last_price).unwrap_or(0);
         let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
         total += *core.risk.fees.get(&cur).unwrap_or(&0);
         total += *core.risk.adjustments.get(&cur).unwrap_or(&0);

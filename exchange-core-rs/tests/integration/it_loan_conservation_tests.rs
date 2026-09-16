@@ -15,6 +15,7 @@
 
 #[cfg(test)]
 mod tests {
+    use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
     use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
@@ -176,7 +177,7 @@ mod tests {
         assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
         core.matching.add_symbol(&spec);
 
-        core.risk.last_price_cache.insert(SYMBOL, MARK_PRICE);
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(MARK_PRICE));
         core.risk.loan_service.global_config.numeraire_currency = USDT; // ofGlobalNumeraire(USDT)
 
         let (rc, _) = submit(&mut core, cmd_pool_deposit(1, USDT, POOL_FUND));
@@ -332,7 +333,7 @@ mod tests {
         let mut core = boot();
         cross_borrow(&mut core, 11);
         // 砸价到 5000：proceeds=3×5000=15000 << 债务 60000 → underwater → LIF 接管。
-        core.risk.last_price_cache.insert(SYMBOL, 5_000);
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(5_000));
         let (rc, _) = submit(&mut core, cmd_place_order(2001, LP, SYMBOL, 5_000, COLLATERAL_LOTS, OrderAction::Bid, OrderType::Gtc));
         assert_eq!(rc, CommandResultCode::Success);
         let (rc, _) = submit(&mut core, cmd_loan_cross_force_liquidate(3000, BORROWER, SYMBOL, 11, 5_000, COLLATERAL_LOTS, 2_000));

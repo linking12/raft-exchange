@@ -24,7 +24,7 @@ const FUT: i32 = 500;
 
 /// 全局守恒（含 IF）——见文件头文档。scale 全 1，IF 项直接相加。
 fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
-    let mark = *core.risk.last_price_cache.get(&FUT).unwrap_or(&0);
+    let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.last_price).unwrap_or(0);
     let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
     total += *core.risk.fees.get(&cur).unwrap_or(&0);
     total += *core.risk.adjustments.get(&cur).unwrap_or(&0);

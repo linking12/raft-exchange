@@ -2,6 +2,7 @@
 //! 由 `LiquidationEngine::check_positions` 尾部委托，targeted 三索引并集 + scan 切片兜底。预警 no-op；submit→pending_commands 队列。
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::cross_loan_record::CrossLoanRecord;
@@ -59,7 +60,7 @@ impl LoanLiquidationEngine {
         cmd: &OrderCommand,
         ups: &UserProfileService,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         loan_service: &LoanService,
         fund_events: &mut Vec<FundEvent>,
     ) {
@@ -99,7 +100,7 @@ impl LoanLiquidationEngine {
         up: &UserProfile,
         ts: i64,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         loan_service: &LoanService,
         fund_events: &mut Vec<FundEvent>,
     ) {
@@ -115,7 +116,7 @@ impl LoanLiquidationEngine {
         loan: &IsolatedLoanRecord,
         ts: i64,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         loan_service: &LoanService,
         fund_events: &mut Vec<FundEvent>,
     ) {
@@ -127,7 +128,7 @@ impl LoanLiquidationEngine {
             None => return,
         };
         let mark_price = match last_price_cache.get(&loan.symbol_id) {
-            Some(&p) if p != 0 => p,
+            Some(r) if r.last_price != 0 => r.last_price,
             _ => return,
         };
         let base_spec = ssp.get_currency(loan.collateral_currency);
@@ -192,7 +193,7 @@ impl LoanLiquidationEngine {
         up: &UserProfile,
         ts: i64,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         loan_service: &LoanService,
         fund_events: &mut Vec<FundEvent>,
     ) {
@@ -224,7 +225,7 @@ impl LoanLiquidationEngine {
         };
         // pick 已保证现货对存在且 markPrice 就绪。
         let spec = ssp.find_spot_symbol(selling_currency, target_loan.loan_currency).expect("pick 保证现货对存在");
-        let mark_price = *last_price_cache.get(&spec.symbol_id).expect("pick 保证 markPrice 就绪");
+        let mark_price = last_price_cache.get(&spec.symbol_id).expect("pick 保证 markPrice 就绪").last_price;
         let available_collateral = up.cross_loan_collateral(selling_currency);
         let selling_currency_spec = match ssp.get_currency(selling_currency) {
             Some(s) => s,
@@ -324,7 +325,7 @@ impl LoanLiquidationEngine {
         &self,
         up: &UserProfile,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
     ) -> Option<i32> {
         let mut best_currency: Option<i32> = None;
         let mut best_weight: i32 = -1;
@@ -363,7 +364,7 @@ impl LoanLiquidationEngine {
         up: &UserProfile,
         selling_currency: i32,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
     ) -> Option<CrossLoanRecord> {
         let mut best: Option<&CrossLoanRecord> = None;
         for loan in up.cross_loans.values() {
@@ -395,10 +396,10 @@ impl LoanLiquidationEngine {
         selling_currency: i32,
         loan_currency: i32,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
     ) -> bool {
         match ssp.find_spot_symbol(selling_currency, loan_currency) {
-            Some(spec) => matches!(last_price_cache.get(&spec.symbol_id), Some(&p) if p > 0),
+            Some(spec) => matches!(last_price_cache.get(&spec.symbol_id), Some(r) if r.last_price > 0),
             None => false,
         }
     }
@@ -476,9 +477,9 @@ mod tests {
         ssp
     }
 
-    fn price_cache() -> BTreeMap<i32, i64> {
+    fn price_cache() -> BTreeMap<i32, LastPriceCacheRecord> {
         let mut m = BTreeMap::new();
-        m.insert(SYMBOL, 1); // markPrice 1（1 COLL = 1 LOANC）
+        m.insert(SYMBOL, LastPriceCacheRecord::with_mark(1)); // markPrice 1（1 COLL = 1 LOANC）
         m
     }
 
@@ -636,7 +637,7 @@ mod tests {
         }
         let mut pc = BTreeMap::new();
         for c in [10, 11, 12] {
-            pc.insert(1000 + c, 1);
+            pc.insert(1000 + c, LastPriceCacheRecord::with_mark(1));
         }
 
         let e = LoanLiquidationEngine::new();
@@ -667,7 +668,7 @@ mod tests {
         s.quote_currency = LOANC;
         ssp.add_symbol(s); // 只有 10->LOANC 有对
         let mut pc = BTreeMap::new();
-        pc.insert(1010, 1);
+        pc.insert(1010, LastPriceCacheRecord::with_mark(1));
 
         let e = LoanLiquidationEngine::new();
         let mut up = profile(UID);

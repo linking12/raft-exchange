@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 
+use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
 use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
@@ -367,7 +368,7 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
     core.matching.add_symbol(&spec);
     core.ups.add_empty_user_profile(BORROWER);
-    core.risk.last_price_cache.insert(SYMBOL, 1);
+    core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
 
     let (rc, _) = submit(&mut core, cmd_pool_deposit(1, QUOTE, 1_000_000));
     assert_eq!(rc, CommandResultCode::Success);
@@ -457,7 +458,7 @@ fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
     assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
     core.matching.add_symbol(&spec);
     core.ups.add_empty_user_profile(BORROWER);
-    core.risk.last_price_cache.insert(SYMBOL, 1);
+    core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
     core.risk.loan_service.global_config.numeraire_currency = QUOTE;
 
     let (rc, _) = submit(&mut core, cmd_pool_deposit(1, QUOTE, 1_000_000));
@@ -661,7 +662,7 @@ fn scenario_reprice_then_accrue_then_repay() {
     assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
     core.matching.add_symbol(&spec);
     core.ups.add_empty_user_profile(BORROWER);
-    core.risk.last_price_cache.insert(SYMBOL, 1);
+    core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
     core.risk.loan_service.global_config.numeraire_currency = QUOTE;
 
     // Tiny pool (1_000) so a 900 borrow pushes utilization to 90%, moving reprice rate off the cold-start default.
@@ -754,9 +755,9 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
 
     core.ups.add_empty_user_profile(BORROWER);
     core.ups.add_empty_user_profile(MAKER);
-    core.risk.last_price_cache.insert(SYM_TARGET, 1);
-    core.risk.last_price_cache.insert(SYM_DEBT_NUM, 1);
-    core.risk.last_price_cache.insert(SYM_COLLAT_NUM, 1);
+    core.risk.last_price_cache.insert(SYM_TARGET, LastPriceCacheRecord::with_mark(1));
+    core.risk.last_price_cache.insert(SYM_DEBT_NUM, LastPriceCacheRecord::with_mark(1));
+    core.risk.last_price_cache.insert(SYM_COLLAT_NUM, LastPriceCacheRecord::with_mark(1));
     core.risk.loan_service.global_config.numeraire_currency = NUM;
     core.risk.loan_service.global_config.loan_liquidation_fee_bps = 0;
 
@@ -930,8 +931,8 @@ fn proptest_world(n_users: usize) -> (ExchangeCore, Vec<i64>) {
     core.ssp.add_symbol(cross_spec.clone());
     core.matching.add_symbol(&cross_spec);
 
-    core.risk.last_price_cache.insert(PT_SYMBOL, 50);
-    core.risk.last_price_cache.insert(PT_SYMBOL_CROSS, 50);
+    core.risk.last_price_cache.insert(PT_SYMBOL, LastPriceCacheRecord::with_mark(50));
+    core.risk.last_price_cache.insert(PT_SYMBOL_CROSS, LastPriceCacheRecord::with_mark(50));
     core.risk.loan_service.global_config.numeraire_currency = PT_QUOTE;
     let (rc, _) = submit(&mut core, cmd_pool_deposit(1, PT_QUOTE, 1_000_000_000));
     assert_eq!(rc, CommandResultCode::Success);
@@ -1060,7 +1061,7 @@ proptest! {
                 }
                 GenLoanCmd::SetMarkPrice { on_cross_symbol, price } => {
                     let symbol = if *on_cross_symbol { PT_SYMBOL_CROSS } else { PT_SYMBOL };
-                    core.risk.last_price_cache.insert(symbol, *price);
+                    core.risk.last_price_cache.insert(symbol, LastPriceCacheRecord::with_mark(*price));
                 }
                 GenLoanCmd::AdvanceTime { delta_ms } => {
                     now += *delta_ms;

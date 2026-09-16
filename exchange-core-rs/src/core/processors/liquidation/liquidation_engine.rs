@@ -2,6 +2,7 @@
 //! 移植偏差：预警 no-op；submit→pending_commands 队列；provider 传参不持有；is_running 为 leader 门。
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -83,7 +84,7 @@ impl LiquidationEngine {
         cmd: &OrderCommand,
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         loan_service: &LoanService,
         fund_events: &mut Vec<FundEvent>,
     ) {
@@ -127,7 +128,7 @@ impl LiquidationEngine {
         ts: i64,
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         fund_events: &mut Vec<FundEvent>,
     ) {
         // ---- 阶段 1：只读 profile，算全部决策 ----
@@ -151,7 +152,7 @@ impl LiquidationEngine {
                     continue;
                 }
                 let mark_price = match last_price_cache.get(&position.symbol) {
-                    Some(&p) => p,
+                    Some(r) => r.last_price,
                     None => continue,
                 };
                 if position.margin_mode == MarginMode::Isolated {
@@ -209,7 +210,7 @@ impl LiquidationEngine {
         profile: &UserProfile,
         cross_by_currency: &BTreeMap<i32, Vec<i32>>,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         decisions: &mut Vec<LiquidationDecision>,
     ) {
         if cross_by_currency.is_empty() {
@@ -219,7 +220,7 @@ impl LiquidationEngine {
         let alloc = profile.cross_margin_base_allocation(
             |s| ssp.get_symbol(s),
             |c| ssp.get_currency(c),
-            |s| last_price_cache.get(&s).copied(),
+            |s| last_price_cache.get(&s).map(|r| r.last_price),
         );
 
         for (&currency, keys) in cross_by_currency.iter() {
@@ -238,7 +239,7 @@ impl LiquidationEngine {
                     None => continue,
                 };
                 let mark_price = match last_price_cache.get(&position.symbol) {
-                    Some(&p) => p,
+                    Some(r) => r.last_price,
                     None => continue,
                 };
                 let raw_maintenance = position.calculate_maintenance_margin(spec, mark_price);
@@ -296,7 +297,7 @@ impl LiquidationEngine {
         deficit: i64,
         alloc: &BTreeMap<i32, i64>,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         decisions: &mut Vec<LiquidationDecision>,
     ) {
         let mut margin_released: i64 = 0;
@@ -310,7 +311,7 @@ impl LiquidationEngine {
                 None => continue,
             };
             let mark_price = match last_price_cache.get(&position.symbol) {
-                Some(&p) => p,
+                Some(r) => r.last_price,
                 None => continue,
             };
             let bankruptcy_price = position.calculate_bankruptcy_price(spec, |p| alloc.get(&Self::pos_key(p)).copied().unwrap_or(0));
@@ -554,7 +555,7 @@ mod tests {
         }
     }
 
-    fn seeded() -> (LiquidationEngine, UserProfileService, SymbolSpecificationProvider, BTreeMap<i32, i64>) {
+    fn seeded() -> (LiquidationEngine, UserProfileService, SymbolSpecificationProvider, BTreeMap<i32, LastPriceCacheRecord>) {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
         let mut ssp = SymbolSpecificationProvider::new();
@@ -673,7 +674,7 @@ mod tests {
         engine.is_running = false; // follower
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, 50); // 深度水下
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50)); // 深度水下
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
         assert!(engine.pending_commands.is_empty(), "follower 不检测、不提交");
@@ -687,7 +688,7 @@ mod tests {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, 50); // mark=50：profit=-500，equity=-400 < MM=25 -> 触发
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50)); // mark=50：profit=-500，equity=-400 < MM=25 -> 触发
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
@@ -713,7 +714,7 @@ mod tests {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, 100); // mark=100：profit=0，equity=100 >= MM=50 -> 健康
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100)); // mark=100：profit=0，equity=100 >= MM=50 -> 健康
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
@@ -727,7 +728,7 @@ mod tests {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, 50);
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
@@ -743,7 +744,7 @@ mod tests {
         ups.add_empty_user_profile(2);
         insert_long(&mut ups, 1);
         insert_long(&mut ups, 2);
-        lpc.insert(FUT_SYMBOL, 50);
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
         // scan slice：sliceCount=2、scanSlice=1 -> 只查 uid mod 2 == 1（uid=1），跳过 uid=2。
         let scan = OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid: 1, size: 2, timestamp: 5_000, ..Default::default() };
 
@@ -804,7 +805,7 @@ mod tests {
         engine.on_position_opened(U, SYMBOL);
 
         let mut lpc = BTreeMap::new();
-        lpc.insert(SYMBOL, 1_000_000i64);
+        lpc.insert(SYMBOL, LastPriceCacheRecord::with_mark(1_000_000i64));
         let cmd = markprice_cmd(SYMBOL, 1_000);
 
         // ① 不 panic（Rust assertDoesNotThrow 等价：调用不 panic 即通过）。

@@ -163,7 +163,7 @@ mod tests {
     /// 全局守恒（对拍 Java `isGlobalBalancesAllZero`）：逐币种 Σaccounts + fees + adjustments +
     /// Σ(仓位 estimate_pnl(mark) + extra_margin) == 0。现货无仓位，期货多空撮合量相等 → PnL 项净零。
     fn assert_globally_conserved(api: &ExchangeApi) {
-        let mark = *api.risk().last_price_cache.get(&SYMBOL_MARGIN).unwrap_or(&0);
+        let mark = api.risk().last_price_cache.get(&SYMBOL_MARGIN).map(|r| r.last_price).unwrap_or(0);
         for cur in ALL_CURRENCIES {
             let mut total: i64 = api.ups().users.values().map(|u| u.account(cur)).sum();
             total += api.fees(cur);
