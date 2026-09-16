@@ -80,8 +80,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
     private IntObjectHashMap<LastPriceCacheRecord> lastPriceCache;
     private LoanService loanService;
 
-    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId,
-        ExchangeConfiguration exchangeConfiguration) {
+    public LiquidationEngine(Supplier<FundEvent> eventSupplier, int shardId, ExchangeConfiguration exchangeConfiguration) {
         super(Long.parseLong(System.getProperty("raftexchange.liquidation.interval", "2")), TimeUnit.SECONDS,
             exchangeConfiguration.getPerformanceCfg().getLiquidationThreadFactory(), shardId,
             Integer.parseInt(System.getProperty("raftexchange.liquidation.scanSlices", "10")),
@@ -91,9 +90,8 @@ public final class LiquidationEngine extends LiquidationScheduledService {
         this.loanLiquidationEngine = new LoanLiquidationEngine(eventsHelper, this::getCommandSubmitter);
     }
 
-    public void updateProvider(SymbolSpecificationProvider symbolSpecProvider,
-        CurrencySpecificationProvider currencySpecProvider, UserProfileService userService,
-        IntObjectHashMap<LastPriceCacheRecord> lastPriceService, LoanService loanSvc) {
+    public void updateProvider(SymbolSpecificationProvider symbolSpecProvider, CurrencySpecificationProvider currencySpecProvider,
+        UserProfileService userService, IntObjectHashMap<LastPriceCacheRecord> lastPriceService, LoanService loanSvc) {
         symbolSpecificationProvider = symbolSpecProvider;
         currencySpecificationProvider = currencySpecProvider;
         userProfileService = userService;
@@ -118,8 +116,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
                 }
             });
         });
-        loanLiquidationEngine.updateProvider(symbolSpecProvider, currencySpecProvider, userService, lastPriceService,
-            loanSvc);
+        loanLiquidationEngine.updateProvider(symbolSpecProvider, currencySpecProvider, userService, lastPriceService, loanSvc);
     }
 
     /**
@@ -188,26 +185,26 @@ public final class LiquidationEngine extends LiquidationScheduledService {
                 return;
             }
             if (position.marginMode == MarginMode.ISOLATED) {
-                checkIsolated(userProfile, spec, priceRecord, position);
+                checkIsolated(userProfile, spec, priceRecord, position, ts);
             } else {
                 crossPositionsByCurrency.getIfAbsentPut(spec.quoteCurrency, FastList.newList()).add(position);
             }
         });
-        checkCross(userProfile, crossPositionsByCurrency);
+        checkCross(userProfile, crossPositionsByCurrency, ts);
     }
 
     private void checkIsolated(UserProfile userProfile, CoreSymbolSpecification spec, LastPriceCacheRecord priceRecord,
-        SymbolPositionRecord position) {
+        SymbolPositionRecord position, long ts) {
         final long profit = position.estimateUnrealizedProfit(priceRecord);
         final long equity = position.openInitMarginSum + profit + position.extraMargin;
         final long maintenanceMargin = position.calculateMaintenanceMargin(spec, priceRecord);
         final long warningThreshold = Math.multiplyExact(maintenanceMargin, 6) / 5; // 1.2× 维持保证金：预警线
         if (equity < maintenanceMargin) {
             final long price = position.calculateBankruptcyPrice(spec, NO_CROSS);
-            final long sizeToLiquidate = Math.min(position.openVolume,
-                CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord));
+            final long sizeToLiquidate =
+                Math.min(position.openVolume, CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord));
             if (sizeToLiquidate > 0) {
-                startLiquidationFlow(userProfile, position, price, sizeToLiquidate);
+                startLiquidationFlow(userProfile, position, price, sizeToLiquidate, ts);
             }
         } else if (equity < warningThreshold) {
             sendWarningEvent(userProfile, position, equity, warningThreshold);
@@ -215,48 +212,41 @@ public final class LiquidationEngine extends LiquidationScheduledService {
     }
 
     /** 逐 quote 币种判定全仓联合风险：equity 跌破维持保证金则从最危险仓位起逐仓强平至覆盖亏空；跌破 1.2× 预警线则发预警。 */
-    private void checkCross(UserProfile userProfile,
-        IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency) {
+    private void checkCross(UserProfile userProfile, IntObjectHashMap<List<SymbolPositionRecord>> crossPositionsByCurrency, long ts) {
         if (crossPositionsByCurrency.isEmpty()) {
             return;
         }
-        final ObjectLongHashMap<SymbolPositionRecord> alloc =
-            userProfile.crossMarginBaseAllocation(symbolSpecificationProvider::getSymbolSpecification,
-                currencySpecificationProvider::getCurrencySpecification, lastPriceCache);
+        final ObjectLongHashMap<SymbolPositionRecord> alloc = userProfile.crossMarginBaseAllocation(
+            symbolSpecificationProvider::getSymbolSpecification, currencySpecificationProvider::getCurrencySpecification, lastPriceCache);
         crossPositionsByCurrency.forEachKeyValue((currency, records) -> {
-            final CoreCurrencySpecification currencySpec =
-                currencySpecificationProvider.getCurrencySpecification(currency);
+            final CoreCurrencySpecification currencySpec = currencySpecificationProvider.getCurrencySpecification(currency);
             long totalProfit = 0;
             long totalMaintenanceMargin = 0;
             final List<LongObjectPair<SymbolPositionRecord>> riskPairs = FastList.newList(records.size());
             for (SymbolPositionRecord position : records) {
-                final CoreSymbolSpecification spec =
-                    symbolSpecificationProvider.getSymbolSpecification(position.symbol);
+                final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
                 final LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
                 final long rawMaintenance = position.calculateMaintenanceMargin(spec, priceRecord);
                 if (rawMaintenance == 0) {
                     continue; // 无维持保证金要求：不占账户风险
                 }
-                final long profit =
-                    CoreArithmeticUtils.sizePriceToCurrencyScale(position.estimatePnl(priceRecord), spec, currencySpec);
-                final long maintenance =
-                    CoreArithmeticUtils.sizePriceToCurrencyScale(rawMaintenance, spec, currencySpec);
+                final long profit = CoreArithmeticUtils.sizePriceToCurrencyScale(position.estimatePnl(priceRecord), spec, currencySpec);
+                final long maintenance = CoreArithmeticUtils.sizePriceToCurrencyScale(rawMaintenance, spec, currencySpec);
                 totalProfit += profit;
                 totalMaintenanceMargin += maintenance;
                 if (maintenance != 0) { // 缩放后归零不能做除数：PnL 已计入 totals，仅不参与风险排序
-                    riskPairs.add(
-                        PrimitiveTuples.pair(Math.multiplyExact(profit - maintenance, 100) / maintenance, position));
+                    riskPairs.add(PrimitiveTuples.pair(Math.multiplyExact(profit - maintenance, 100) / maintenance, position));
                 }
             }
-            final long equity = totalProfit + userProfile.calculateCrossAvailable(currency, currencySpec,
-                symbolSpecificationProvider::getSymbolSpecification);
+            final long equity = totalProfit
+                + userProfile.calculateCrossAvailable(currency, currencySpec, symbolSpecificationProvider::getSymbolSpecification);
             final long warningThreshold = Math.multiplyExact(totalMaintenanceMargin, 6) / 5; // 1.2× 维持保证金：预警线
             if (equity >= warningThreshold) {
                 return;
             }
             riskPairs.sort(Comparator.comparingLong(LongObjectPair::getOne)); // 风险度升序：最危险的仓位优先强平
             if (equity < totalMaintenanceMargin) {
-                forceCrossLiquidation(userProfile, riskPairs, totalMaintenanceMargin - equity, alloc);
+                forceCrossLiquidation(userProfile, riskPairs, totalMaintenanceMargin - equity, alloc, ts);
             } else {
                 sendWarningEvent(userProfile, riskPairs.get(0).getTwo(), equity, warningThreshold);
             }
@@ -264,9 +254,8 @@ public final class LiquidationEngine extends LiquidationScheduledService {
     }
 
     /** 按风险度升序（最危险优先）逐仓强平，直至释放保证金覆盖 deficit 或仓位耗尽。 */
-    private void forceCrossLiquidation(UserProfile userProfile,
-        List<LongObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
-        ObjectLongHashMap<SymbolPositionRecord> alloc) {
+    private void forceCrossLiquidation(UserProfile userProfile, List<LongObjectPair<SymbolPositionRecord>> positionPairs, long deficit,
+        ObjectLongHashMap<SymbolPositionRecord> alloc, long ts) {
         long marginReleased = 0;
         for (LongObjectPair<SymbolPositionRecord> pair : positionPairs) {
             if (marginReleased >= deficit)
@@ -275,22 +264,21 @@ public final class LiquidationEngine extends LiquidationScheduledService {
             final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(position.symbol);
             final LastPriceCacheRecord priceRecord = lastPriceCache.get(position.symbol);
             final long price = position.calculateBankruptcyPrice(spec, alloc::get);
-            final long sizeToLiquidate = Math.min(position.openVolume,
-                CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord));
+            final long sizeToLiquidate =
+                Math.min(position.openVolume, CoreArithmeticUtils.calculateSizeToLiquidate(position, spec, priceRecord));
             if (sizeToLiquidate > 0) {
-                marginReleased +=
-                    CoreArithmeticUtils.calculateDeficitAfterLiquidate(sizeToLiquidate, position, spec, priceRecord);
-                startLiquidationFlow(userProfile, position, price, sizeToLiquidate);
+                marginReleased += CoreArithmeticUtils.calculateDeficitAfterLiquidate(sizeToLiquidate, position, spec, priceRecord);
+                startLiquidationFlow(userProfile, position, price, sizeToLiquidate, ts);
             }
         }
     }
 
     /** 提交 FORCE_LIQUIDATION 并发强平预警事件；已有进行中流程（幂等保护）则跳过。 */
-    private void startLiquidationFlow(UserProfile userProfile, SymbolPositionRecord position, long price, long size) {
+    private void startLiquidationFlow(UserProfile userProfile, SymbolPositionRecord position, long price, long size, long ts) {
         if (position.liquidationFlow != null) {
             return;
         }
-        final long orderId = LiquidationService.generateLiquidationOrderId(position);
+        final long orderId = LiquidationService.generateLiquidationOrderId(position, ts);
         position.liquidationFlow = new LiquidationFlow(price, size, orderId);
         submit(buildForceCmd(position, orderId, price, size), null);
         final FundEvent event = eventsHelper.sendLiquidationAlertEvent(orderId, position);
@@ -299,12 +287,10 @@ public final class LiquidationEngine extends LiquidationScheduledService {
     }
 
     /** 越预警线通知：走 leader-local ringbuffer、bypass raft 的 best-effort 事件；去重/限流由下游消费方负责。 */
-    private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, long equity,
-        long warningThreshold) {
+    private void sendWarningEvent(UserProfile userProfile, SymbolPositionRecord position, long equity, long warningThreshold) {
         final FundEvent event = eventsHelper.sendMarginAlertEvent(position);
         submit(ApiSystemLiquidationNotify.builder().fundEvent(event).build(), null);
-        log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity,
-            warningThreshold);
+        log.debug("Margin call: uid={} symbol={} equity={} threshold={}", userProfile.uid, position.symbol, equity, warningThreshold);
     }
 
     /**
@@ -317,8 +303,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
         final LiquidationFlow flow = pos.liquidationFlow;
         if (flow == null) {
             if (cmd.command != OrderCommandType.FORCE_LIQUIDATION) {
-                log.warn("Illegal liquidation cmd={} on null ctx: skip uid={} symbol={}", cmd.command, pos.uid,
-                    pos.symbol);
+                log.warn("Illegal liquidation cmd={} on null ctx: skip uid={} symbol={}", cmd.command, pos.uid, pos.symbol);
                 return;
             }
             pos.liquidationFlow = new LiquidationFlow(cmd.price, cmd.size, cmd.orderId);
@@ -330,8 +315,8 @@ public final class LiquidationEngine extends LiquidationScheduledService {
                 default -> null;
             };
             if (flow.state != expected) {
-                log.warn("Duplicate liquidation cmd={} ctx.state={} expected={} uid={} symbol={}: skip", cmd.command,
-                    flow.state, expected, pos.uid, pos.symbol);
+                log.warn("Duplicate liquidation cmd={} ctx.state={} expected={} uid={} symbol={}: skip", cmd.command, flow.state, expected,
+                    pos.uid, pos.symbol);
                 return;
             }
         }
@@ -355,8 +340,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
         // REJECT 事件携带的剩余量
         flow.size = firstEvent.size;
         flow.state = LiquidationState.WAIT_IF_EXECUTION;
-        log.warn("Publish IF takeover: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, flow.size,
-            flow.bankruptcyPrice);
+        log.warn("Publish IF takeover: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, flow.size, flow.bankruptcyPrice);
         submit(buildIFCmd(pos, flow), null);
     }
 
@@ -368,27 +352,24 @@ public final class LiquidationEngine extends LiquidationScheduledService {
             return;
         }
         flow.state = LiquidationState.WAIT_ADL_EXECUTION;
-        log.warn("Publish ADL: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, flow.size,
-            flow.bankruptcyPrice);
+        log.warn("Publish ADL: uid={} symbol={} size={} price={}", pos.uid, pos.symbol, flow.size, flow.bankruptcyPrice);
         submit(buildADLCmd(pos, flow), null);
     }
 
     private ApiLiquidationOrder buildForceCmd(SymbolPositionRecord pos, long orderId, long price, long size) {
-        return ApiLiquidationOrder.builder().orderType(OrderType.IOC).orderId(orderId).uid(pos.uid).symbol(pos.symbol)
-            .price(price).size(size).action(pos.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID)
-            .build();
+        return ApiLiquidationOrder.builder().orderType(OrderType.IOC).orderId(orderId).uid(pos.uid).symbol(pos.symbol).price(price)
+            .size(size).action(pos.direction == PositionDirection.LONG ? OrderAction.ASK : OrderAction.BID).build();
     }
 
     private ApiIFTakeOver buildIFCmd(SymbolPositionRecord pos, LiquidationFlow flow) {
-        return ApiIFTakeOver.builder().orderId(LiquidationService.generateIFOrderId(flow.originalOrderId)).uid(pos.uid)
-            .symbol(pos.symbol).action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK)
-            .size(flow.size).price(flow.bankruptcyPrice).build();
+        return ApiIFTakeOver.builder().orderId(LiquidationService.generateIFOrderId(flow.originalOrderId)).uid(pos.uid).symbol(pos.symbol)
+            .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK).size(flow.size).price(flow.bankruptcyPrice)
+            .build();
     }
 
     private ApiAutoDeleveraging buildADLCmd(SymbolPositionRecord pos, LiquidationFlow flow) {
-        return ApiAutoDeleveraging.builder().orderId(LiquidationService.generateADLOrderId(flow.originalOrderId))
-            .uid(pos.uid).symbol(pos.symbol)
-            .action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK).size(flow.size)
+        return ApiAutoDeleveraging.builder().orderId(LiquidationService.generateADLOrderId(flow.originalOrderId)).uid(pos.uid)
+            .symbol(pos.symbol).action(pos.direction == PositionDirection.LONG ? OrderAction.BID : OrderAction.ASK).size(flow.size)
             .price(flow.bankruptcyPrice).build();
     }
 

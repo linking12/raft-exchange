@@ -218,7 +218,7 @@ class LiquidationServiceTest {
     @Test
     void testGenerateLiquidationOrderId_encodesSymbolUidSide() {
         SymbolPositionRecord pos = newPos(0xABCDEF, 12345L, PositionDirection.LONG);
-        long id = LiquidationService.generateLiquidationOrderId(pos);
+        long id = LiquidationService.generateLiquidationOrderId(pos, 0L);
 
         assertEquals(0xABCDEFL, id >>> 32, "symbol in bits 32-63");
         long expectedUidHash = (12345L * 31 + 17) & 0xFFFFF;
@@ -229,7 +229,7 @@ class LiquidationServiceTest {
     @Test
     void testGenerateLiquidationOrderId_shortSetsSideBit() {
         SymbolPositionRecord pos = newPos(1001, 100L, PositionDirection.SHORT);
-        long id = LiquidationService.generateLiquidationOrderId(pos);
+        long id = LiquidationService.generateLiquidationOrderId(pos, 0L);
         assertEquals(1L, (id >>> 11) & 1L, "SHORT → side bit = 1");
     }
 
@@ -238,15 +238,15 @@ class LiquidationServiceTest {
         // HEDGE 模式同 symbol 同 uid 双向破产，orderId 必须不同
         SymbolPositionRecord longPos = newPos(1001, 100L, PositionDirection.LONG);
         SymbolPositionRecord shortPos = newPos(1001, 100L, PositionDirection.SHORT);
-        long idLong = LiquidationService.generateLiquidationOrderId(longPos);
-        long idShort = LiquidationService.generateLiquidationOrderId(shortPos);
+        long idLong = LiquidationService.generateLiquidationOrderId(longPos, 0L);
+        long idShort = LiquidationService.generateLiquidationOrderId(shortPos, 0L);
         assertNotEquals(idLong, idShort, "LONG/SHORT 必须有不同 orderId（差 side bit）");
     }
 
     @Test
     void testIsLiquidationOrderId_recognizesForceOrderId() {
         SymbolPositionRecord pos = newPos(1001, 200L, PositionDirection.LONG);
-        long id = LiquidationService.generateLiquidationOrderId(pos);
+        long id = LiquidationService.generateLiquidationOrderId(pos, 0L);
         assertTrue(LiquidationService.isLiquidationOrderId(id, 1001, 200L));
         // 不同 uid 不应识别为对应 user 的强平单
         assertFalse(LiquidationService.isLiquidationOrderId(id, 1001, 999L));
@@ -258,7 +258,7 @@ class LiquidationServiceTest {
     void testIsLiquidationOrderId_rejectsDerivedIFAndADL() {
         // IF/ADL orderId 不是 FORCE orderId，反查必须返 false（高字节是 tag 不是 symbol）
         SymbolPositionRecord pos = newPos(1001, 200L, PositionDirection.LONG);
-        long forceId = LiquidationService.generateLiquidationOrderId(pos);
+        long forceId = LiquidationService.generateLiquidationOrderId(pos, 0L);
         long ifId = LiquidationService.generateIFOrderId(forceId);
         long adlId = LiquidationService.generateADLOrderId(forceId);
         assertFalse(LiquidationService.isLiquidationOrderId(ifId, 1001, 200L), "IF orderId 不应被识别为 FORCE");
