@@ -30,8 +30,7 @@ use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
 use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
-use exchange_core_rs::core::common::isolated_loan_record::LoanRateMode;
-use exchange_core_rs::core::exchange_api::{ExchangeApi, LoanCreateRequest, PlaceFuturesOrderRequest, PlaceOrderRequest};
+use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest, PlaceOrderRequest};
 
 fn parse_line(line: &str) -> Option<(String, BTreeMap<String, String>)> {
     let line = line.trim();
@@ -244,7 +243,14 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 margin_mode: margin_of(kv.get("margin").map(String::as_str)),
                 reduce_only: false,
             })),
-            "SCAN" => Some(api.liquidation_scan(opt_i64(&kv, "slice", 0), opt_i64(&kv, "sliceCount", 0), opt_i64(&kv, "ts", 0))),
+            "SCAN" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LiquidationScan,
+                symbol: -1,
+                uid: opt_i64(&kv, "slice", 0),
+                size: opt_i64(&kv, "sliceCount", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
             "IF_DEPOSIT" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::IfDeposit,
                 symbol: i32_of(&kv, "sym"),
@@ -278,24 +284,29 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
-            // isolated loan 开仓/还款:走带 timestamp 的专属 facade(dogfood + 验证与旧 raw-submit 构造等价)。
-            "LOAN_CREATE" => Some(api.loan_create(LoanCreateRequest {
+            // isolated loan 开仓:reserveBidPrice=loanId / size=collateral / price=principal / userCookie=rateMode。
+            "LOAN_CREATE" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanCreate,
                 uid: i64_of(&kv, "uid"),
                 symbol: i32_of(&kv, "sym"),
-                loan_id: i64_of(&kv, "loanId"),
-                collateral: i64_of(&kv, "collateral"),
-                principal: i64_of(&kv, "principal"),
-                rate_mode: LoanRateMode::of_code(opt_i64(&kv, "rateMode", 0) as i8),
-                txid: opt_i64(&kv, "txid", 0),
+                reserve_bid_price: i64_of(&kv, "loanId"),
+                size: i64_of(&kv, "collateral"),
+                price: i64_of(&kv, "principal"),
+                user_cookie: opt_i64(&kv, "rateMode", 0) as i32,
+                order_id: opt_i64(&kv, "txid", 0),
                 timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
             })),
-            "LOAN_REPAY" => Some(api.loan_repay(
-                i64_of(&kv, "uid"),
-                i64_of(&kv, "loanId"),
-                i64_of(&kv, "repay"),
-                opt_i64(&kv, "txid", 0),
-                opt_i64(&kv, "ts", 0),
-            )),
+            // isolated loan 还款:reserveBidPrice=loanId / price=repayAmount。
+            "LOAN_REPAY" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanRepay,
+                uid: i64_of(&kv, "uid"),
+                reserve_bid_price: i64_of(&kv, "loanId"),
+                price: i64_of(&kv, "repay"),
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
             other => panic!("未支持的命令 verb: {other}"),
         };
         if let Some(rc) = rc {
