@@ -25,6 +25,7 @@ use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
 use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
 use exchange_core_rs::core::common::fund_event::{FundEvent, FundEventType};
+use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, GlobalLoanConfig};
 use exchange_core_rs::core::common::margin_mode::MarginMode;
 use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
@@ -152,8 +153,8 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
         }};
     }
 
-    // MARK_AT/SCAN/IF_DEPOSIT 是触发/setup,不发 R 行(对齐 Java 把它们当 setup);其余真实命令发 R。
-    let no_r = |v: &str| matches!(v, "MARK_AT" | "SCAN" | "IF_DEPOSIT");
+    // MARK_AT/SCAN/IF_DEPOSIT/LIF_DEPOSIT 是触发/setup,不发 R 行(对齐 Java 把它们当 setup);其余真实命令发 R。
+    let no_r = |v: &str| matches!(v, "MARK_AT" | "SCAN" | "IF_DEPOSIT" | "LIF_DEPOSIT");
     for line in stream.lines() {
         let Some((verb, kv)) = parse_line(line) else { continue };
         let rc: Option<CommandResultCode> = match verb.as_str() {
@@ -305,6 +306,73 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 price: i64_of(&kv, "repay"),
                 order_id: opt_i64(&kv, "txid", 0),
                 timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
+            // 全局 loan 运行时配置(numeraire/cross LTV 阈值等),对应 Java BatchAddLoanCommand.ofGlobal*。
+            // 直接 facade(不经命令管线,与 CUR/SYM_SPOT 同),不发 R;未给字段=0=不改(partial-update)。
+            "LOAN_GLOBAL" => {
+                api.add_loan(BatchAddLoanCommand {
+                    global: Some(GlobalLoanConfig {
+                        numeraire_currency: opt_i64(&kv, "numeraire", 0) as i32,
+                        cross_liquidation_ltv_bps: opt_i64(&kv, "crossLiqLtv", 0) as i32,
+                        cross_margin_call_ltv_bps: opt_i64(&kv, "crossMcLtv", 0) as i32,
+                        loan_pool_utilization_cap_bps: opt_i64(&kv, "poolCap", 0) as i32,
+                        loan_liquidation_fee_bps: opt_i64(&kv, "liqFee", 0) as i32,
+                        ltv_liquidation_buffer_bps: opt_i64(&kv, "liqBuf", 0) as i32,
+                        ltv_margin_call_buffer_bps: opt_i64(&kv, "mcBuf", 0) as i32,
+                    }),
+                    symbol: None,
+                    rate_curve: None,
+                });
+                None
+            }
+            // cross loan 抵押注资:cmd.symbol=currency / size=amount,对应 Java ApiLoanCrossAddCollateral。
+            "LOAN_CROSS_ADD_COLLATERAL" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanCrossAddCollateral,
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "cur"),
+                size: i64_of(&kv, "amount"),
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
+            // cross loan 抵押提取。
+            "LOAN_CROSS_WITHDRAW_COLLATERAL" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanCrossWithdrawCollateral,
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "cur"),
+                size: i64_of(&kv, "amount"),
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
+            // cross loan 借款:symbol=计息 symbol / price=principal / reserveBidPrice=loanId。
+            "LOAN_CROSS_BORROW" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanCrossBorrow,
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+                price: i64_of(&kv, "principal"),
+                reserve_bid_price: i64_of(&kv, "loanId"),
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
+            // cross loan 还款:price=repayAmount / reserveBidPrice=loanId。
+            "LOAN_CROSS_REPAY" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanCrossRepay,
+                uid: i64_of(&kv, "uid"),
+                price: i64_of(&kv, "repay"),
+                reserve_bid_price: i64_of(&kv, "loanId"),
+                order_id: opt_i64(&kv, "txid", 0),
+                timestamp: opt_i64(&kv, "ts", 0),
+                ..Default::default()
+            })),
+            // loan 保险基金(LIF)注资:cmd.symbol=currency / size=amount,对应 Java ApiLoanIfDeposit。运维 setup,不发 R。
+            "LIF_DEPOSIT" => Some(api.submit(OrderCommand {
+                command: OrderCommandType::LoanIfDeposit,
+                symbol: i32_of(&kv, "cur"),
+                size: i64_of(&kv, "amount"),
+                order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
             other => panic!("未支持的命令 verb: {other}"),

@@ -311,4 +311,648 @@ mod tests {
 
         assert!(!proc.fund_handler().fund.is_empty(), "现货成交应产生资金事件回报");
     }
+
+    // =====================================================================================
+    // Java↔Rust 组件级黄金对拍（防线 ①b）：移植 Java `SimpleEventsProcessorTest` 的事件投影用例。
+    // 手工构造 MatcherTradeEvent / FundEvent 输入，断言投影出的执行回报 / 资金事件字段等于 Java 黄金值。
+    // Java 是 oracle；任何 Rust 计算值与黄金不符都是移植 bug（不改黄金迁就 Rust）。
+    // =====================================================================================
+    use crate::core::common::fund_event::{FundEvent, FundEventType};
+    use crate::core::common::margin_mode::MarginMode;
+    use crate::core::common::matcher_trade_event::MatcherTradeEvent;
+    use crate::core::common::order_action::OrderAction as OA;
+    use crate::core::common::position_direction::PositionDirection;
+    use crate::core::trade_events_handler::OrderStatus;
+
+    /// 建一套只含现货 symbol=3 的 core（对应 Java `fakeSpotSymbol`：base=1/quote=2/baseScaleK=quoteScaleK=1000，无费）。
+    /// symbol=30（balance-adjustment 用）无需注册：BALANCE_ADJUSTMENT 非可回报命令，`send_execution_report` 早退不读 spec。
+    fn spot_core() -> ExchangeCore {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: 1, currency_scale_k: 1000, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: 2, currency_scale_k: 1000, ..Default::default() });
+        let spec = CoreSymbolSpecification {
+            symbol_id: 3,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: 1,
+            quote_currency: 2,
+            base_scale_k: 1000,
+            quote_scale_k: 1000,
+            ..Default::default()
+        };
+        assert_eq!(core.ssp.add_symbol(spec), CommandResultCode::Success);
+        core
+    }
+
+    fn sample_cancel_command() -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::CancelOrder,
+            order_id: 123,
+            symbol: 3,
+            price: 12800,
+            size: 3,
+            reserve_bid_price: 12800,
+            action: Some(OA::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: 29851,
+            timestamp: 1578930983745201,
+            user_cookie: 44188,
+            result_code: Some(CommandResultCode::Success),
+            ..Default::default()
+        }
+    }
+
+    fn sample_reduce_command() -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::ReduceOrder,
+            order_id: 123,
+            symbol: 3,
+            price: 52200,
+            size: 3200,
+            reserve_bid_price: 12800,
+            action: Some(OA::Bid),
+            order_type: Some(OrderType::Gtc),
+            uid: 29851,
+            timestamp: 1578930983745201,
+            user_cookie: 44188,
+            result_code: Some(CommandResultCode::Success),
+            ..Default::default()
+        }
+    }
+
+    fn sample_place_command() -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 123,
+            symbol: 3,
+            price: 52200,
+            size: 3200,
+            reserve_bid_price: 12800,
+            action: Some(OA::Bid),
+            order_type: Some(OrderType::Ioc),
+            uid: 29851,
+            timestamp: 1578930983745201,
+            user_cookie: 44188,
+            result_code: Some(CommandResultCode::Success),
+            margin_mode: MarginMode::Isolated,
+            ..Default::default()
+        }
+    }
+
+    /// LOCKED 资金事件（single/two-trade 共用）：Java 位置构造解码后仅 currency/scaleK/free/locked 参与断言。
+    fn fund_locked_trade() -> FundEvent {
+        FundEvent {
+            event_type: FundEventType::Locked,
+            order_id: 10,
+            uid: 100,
+            currency: 10,
+            currency_scale_k: 1000,
+            free: 0,
+            locked: 10,
+            symbol: 1,
+            base_scale_k: 1000,
+            quote_scale_k: 1000,
+            ..Default::default()
+        }
+    }
+
+    /// UNLOCKED 资金事件（single/two-trade 共用）：Java 位置构造逐字段解码，投影到 PositionSnapshot 全字段黄金。
+    fn fund_unlocked_trade() -> FundEvent {
+        FundEvent {
+            event_type: FundEventType::Unlocked,
+            order_id: 10,
+            uid: 100,
+            currency: 10,
+            currency_scale_k: 1000,
+            free: 0,
+            locked: 10,
+            symbol: 1,
+            base_scale_k: 1000,
+            quote_scale_k: 10000,
+            direction: PositionDirection::Long,
+            open_volume: 1,
+            open_init_margin_sum: 2,
+            open_price_sum: 3,
+            profit: 4,
+            pending_sell_size: 5,
+            pending_buy_size: 6,
+            pending_sell_avg_price: 7,
+            pending_buy_avg_price: 8,
+            leverage: 9,
+            margin_mode: MarginMode::Isolated,
+            extra_margin: 10,
+            unrealized_profit: 11,
+            liquidation_price: 12,
+            margin_ratio_scale_k: 13,
+            maintenance_margin_scale_k: 0,
+            mark_price: 14,
+            ..Default::default()
+        }
+    }
+
+    fn run_proc(core: &ExchangeCore, cmd: &OrderCommand, seq: i64) -> (TradeRec, FundRec) {
+        let mut proc = SimpleEventsProcessor::new(TradeRec::default(), FundRec::default());
+        proc.process(core, cmd, seq);
+        proc.into_handlers()
+    }
+
+    #[test]
+    fn should_handle_simple_command() {
+        let core = spot_core();
+        let mut cmd = sample_cancel_command();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: true,
+            ..Default::default()
+        }));
+        cmd.fund_events = vec![fund_locked_trade(), fund_unlocked_trade()];
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 1);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 2);
+
+        let report = &tr.spot[0];
+        assert_eq!(report.order_id, 123);
+        assert_eq!(report.symbol, 3);
+        assert_eq!(report.account_id, 29851);
+
+        assert_eq!(fr.fund[0].event_type, FundEventType::Locked);
+        assert_eq!(fr.fund[1].event_type, FundEventType::Unlocked);
+    }
+
+    #[test]
+    fn should_handle_with_reduce_command() {
+        let core = spot_core();
+        let mut cmd = sample_reduce_command();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: true,
+            maker_order_id: 0,
+            maker_order_completed: false,
+            filled: 100,
+            filled_notional: 10000,
+            bidder_hold_price: 20100,
+            ..Default::default()
+        }));
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 1);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 0);
+
+        let r = &tr.spot[0];
+        assert_eq!(r.execution_type, ExecType::Reduce);
+        assert_eq!(r.order_status, OrderStatus::Canceled);
+        assert_eq!(r.symbol, 3);
+        assert_eq!(r.base_scale_k, 1000);
+        assert_eq!(r.quote_scale_k, 1000);
+        assert_eq!(r.account_id, 29851);
+        assert_eq!(r.cl_ord_id, 44188);
+        assert_eq!(r.order_id, 123);
+        assert_eq!(r.order_type, OrderType::Gtc);
+        assert_eq!(r.side, OA::Bid);
+        assert_eq!(r.qty, 3200);
+        assert_eq!(r.price, 52200);
+        assert_eq!(r.quote_order_qty, 0);
+        assert_eq!(r.order_creation_time, 1578930983745201);
+        assert_eq!(r.last_qty, 0);
+        assert_eq!(r.mark_price, 0);
+        assert_eq!(r.cumulative_qty, 100);
+        assert_eq!(r.cumulative_quote_qty, 10000);
+        assert_eq!(r.commission, 0);
+        assert_eq!(r.commission_asset, 2);
+        assert!(!r.is_maker);
+        assert!(!r.working_indicator);
+    }
+
+    #[test]
+    fn should_handle_with_single_trade() {
+        let core = spot_core();
+        let mut cmd = sample_place_command();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 276810,
+            matched_order_uid: 10332,
+            maker_order_completed: true,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
+            matched_order_filled: 123,
+            matched_order_filled_notional: 1000,
+            matched_order_type: OrderType::Gtc,
+            matched_order_price: 12233,
+            matched_order_size: 23,
+            matched_user_cookie: 778899,
+            matched_order_timestamp: 177777777777,
+            price: 20100,
+            size: 8272,
+            filled: 123,
+            filled_notional: 1000,
+            bidder_hold_price: 13233,
+            ..Default::default()
+        }));
+        cmd.fund_events = vec![fund_locked_trade(), fund_unlocked_trade()];
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 3);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 2);
+
+        // reports[0] NEW（下单回报）。
+        let new_order = &tr.spot[0];
+        assert_eq!(new_order.execution_type, ExecType::New);
+        assert_eq!(new_order.order_status, OrderStatus::New);
+        assert_eq!(new_order.symbol, 3);
+        assert_eq!(new_order.base_scale_k, 1000);
+        assert_eq!(new_order.quote_scale_k, 1000);
+        assert_eq!(new_order.account_id, 29851);
+        assert_eq!(new_order.cl_ord_id, 44188);
+        assert_eq!(new_order.order_id, 123);
+        assert_eq!(new_order.order_type, OrderType::Ioc);
+        assert_eq!(new_order.side, OA::Bid);
+        assert_eq!(new_order.qty, 3200);
+        assert_eq!(new_order.price, 52200);
+        assert_eq!(new_order.quote_order_qty, 0);
+        assert_eq!(new_order.order_creation_time, 1578930983745201);
+        assert_eq!(new_order.last_qty, 0);
+        assert_eq!(new_order.mark_price, 0);
+        assert_eq!(new_order.cumulative_qty, 0);
+        assert_eq!(new_order.cumulative_quote_qty, 0);
+        assert_eq!(new_order.commission, 0);
+        assert_eq!(new_order.commission_asset, 2);
+        assert!(!new_order.is_maker);
+        assert!(!new_order.working_indicator);
+
+        // reports[1] taker 视角（active order 123；Java 变量名叫 maker 但 isMaker=false）。
+        let taker_view = &tr.spot[1];
+        assert_eq!(taker_view.execution_type, ExecType::Trade);
+        assert_eq!(taker_view.order_status, OrderStatus::PartiallyFilled);
+        assert_eq!(taker_view.symbol, 3);
+        assert_eq!(taker_view.base_scale_k, 1000);
+        assert_eq!(taker_view.quote_scale_k, 1000);
+        assert_eq!(taker_view.account_id, 29851);
+        assert_eq!(taker_view.cl_ord_id, 44188);
+        assert_eq!(taker_view.order_id, 123);
+        assert_eq!(taker_view.order_type, OrderType::Ioc);
+        assert_eq!(taker_view.side, OA::Bid);
+        assert_eq!(taker_view.qty, 3200);
+        assert_eq!(taker_view.price, 52200);
+        assert_eq!(taker_view.quote_order_qty, 0);
+        assert_eq!(taker_view.order_creation_time, 1578930983745201);
+        assert_eq!(taker_view.trade_id, 789862400);
+        assert_eq!(taker_view.last_qty, 8272);
+        assert_eq!(taker_view.mark_price, 20100);
+        assert_eq!(taker_view.cumulative_qty, 123);
+        assert_eq!(taker_view.cumulative_quote_qty, 1000);
+        assert_eq!(taker_view.commission, 0);
+        assert_eq!(taker_view.commission_asset, 2);
+        assert!(!taker_view.is_maker);
+        assert!(!taker_view.working_indicator);
+
+        // reports[2] maker 视角（matched order 276810；Java 变量名叫 taker 但 isMaker=true）。
+        let maker_view = &tr.spot[2];
+        assert_eq!(maker_view.execution_type, ExecType::Trade);
+        assert_eq!(maker_view.order_status, OrderStatus::Filled);
+        assert_eq!(maker_view.symbol, 3);
+        assert_eq!(maker_view.base_scale_k, 1000);
+        assert_eq!(maker_view.quote_scale_k, 1000);
+        assert_eq!(maker_view.account_id, 10332);
+        assert_eq!(maker_view.cl_ord_id, 778899);
+        assert_eq!(maker_view.order_id, 276810);
+        assert_eq!(maker_view.order_type, OrderType::Gtc);
+        assert_eq!(maker_view.side, OA::Ask);
+        assert_eq!(maker_view.qty, 23);
+        assert_eq!(maker_view.price, 12233);
+        assert_eq!(maker_view.quote_order_qty, 0);
+        assert_eq!(maker_view.order_creation_time, 177777777777);
+        assert_eq!(maker_view.trade_id, 789862400);
+        assert_eq!(maker_view.last_qty, 8272);
+        assert_eq!(maker_view.mark_price, 20100);
+        assert_eq!(maker_view.cumulative_qty, 123);
+        assert_eq!(maker_view.cumulative_quote_qty, 1000);
+        assert_eq!(maker_view.commission, 0);
+        assert_eq!(maker_view.commission_asset, 2);
+        assert!(maker_view.is_maker);
+        assert!(!maker_view.working_indicator);
+
+        assert_eq!(taker_view.trade_id, maker_view.trade_id);
+
+        // 资金事件：LOCKED（余额）+ UNLOCKED（持仓快照）。
+        assert_eq!(fr.fund[0].event_type, FundEventType::Locked);
+        assert_eq!(fr.fund[0].balances.locked, 10);
+        assert_eq!(fr.fund[0].balances.free, 0);
+        assert_eq!(fr.fund[0].balances.currency, 10);
+        assert_eq!(fr.fund[0].balances.currency_scale_k, 1000);
+
+        let pos = &fr.fund[1].positions;
+        assert_eq!(fr.fund[1].event_type, FundEventType::Unlocked);
+        assert_eq!(pos.symbol_id, 1);
+        assert_eq!(pos.base_scale_k, 1000);
+        assert_eq!(pos.quote_scale_k, 10000);
+        assert_eq!(pos.direction, PositionDirection::Long);
+        assert_eq!(pos.quantity, 1);
+        assert_eq!(pos.open_price_sum, 3);
+        assert_eq!(pos.cum_realized, 4);
+        assert!(pos.isolated);
+        assert_eq!(pos.isolated_wallet, 10);
+        assert_eq!(pos.leverage, 9);
+        assert_eq!(pos.open_init_margin_sum, 2);
+        assert_eq!(pos.mark_price, 14);
+        assert_eq!(pos.unrealized_profit, 11);
+        assert_eq!(pos.liquidation_price, 12);
+        assert_eq!(pos.margin_ratio_scale_k, 13);
+    }
+
+    #[test]
+    fn should_handle_with_two_trades() {
+        let core = spot_core();
+        let mut cmd = sample_place_command();
+
+        let second = MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 276811,
+            matched_order_uid: 10333,
+            maker_order_completed: false,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
+            matched_order_filled: 223,
+            matched_order_filled_notional: 1100,
+            matched_order_type: OrderType::Gtc,
+            matched_order_price: 12233,
+            matched_order_size: 13,
+            matched_user_cookie: 778999,
+            matched_order_timestamp: 177777777778,
+            price: 20101,
+            size: 8273,
+            filled: 124,
+            filled_notional: 10000,
+            bidder_hold_price: 13233,
+            ..Default::default()
+        };
+        let first = MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 276810,
+            matched_order_uid: 10332,
+            maker_order_completed: true,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
+            matched_order_filled: 123,
+            matched_order_filled_notional: 1000,
+            matched_order_type: OrderType::Gtc,
+            matched_order_price: 12233,
+            matched_order_size: 23,
+            matched_user_cookie: 778899,
+            matched_order_timestamp: 177777777777,
+            price: 20100,
+            size: 8272,
+            filled: 123,
+            filled_notional: 1000,
+            bidder_hold_price: 13233,
+            next: Some(Box::new(second)),
+            ..Default::default()
+        };
+        cmd.matcher_event = Some(Box::new(first));
+        cmd.fund_events = vec![fund_locked_trade(), fund_unlocked_trade()];
+
+        let (tr, fr) = run_proc(&core, &cmd, 12981721239);
+
+        assert_eq!(tr.spot.len(), 5);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 2);
+
+        assert_eq!(tr.spot[0].execution_type, ExecType::New);
+
+        // reports[3] 第二笔 taker 视角（active order 123）。
+        let taker_view = &tr.spot[3];
+        assert_eq!(taker_view.execution_type, ExecType::Trade);
+        assert_eq!(taker_view.order_status, OrderStatus::PartiallyFilled);
+        assert_eq!(taker_view.symbol, 3);
+        assert_eq!(taker_view.base_scale_k, 1000);
+        assert_eq!(taker_view.quote_scale_k, 1000);
+        assert_eq!(taker_view.account_id, 29851);
+        assert_eq!(taker_view.cl_ord_id, 44188);
+        assert_eq!(taker_view.order_id, 123);
+        assert_eq!(taker_view.order_type, OrderType::Ioc);
+        assert_eq!(taker_view.side, OA::Bid);
+        assert_eq!(taker_view.qty, 3200);
+        assert_eq!(taker_view.price, 52200);
+        assert_eq!(taker_view.quote_order_qty, 0);
+        assert_eq!(taker_view.order_creation_time, 1578930983745201);
+        assert_eq!(taker_view.trade_id, 53173130196993);
+        assert_eq!(taker_view.last_qty, 8273);
+        assert_eq!(taker_view.mark_price, 20101);
+        assert_eq!(taker_view.cumulative_qty, 124);
+        assert_eq!(taker_view.cumulative_quote_qty, 10000);
+        assert_eq!(taker_view.commission, 0);
+        assert_eq!(taker_view.commission_asset, 2);
+        assert!(!taker_view.is_maker);
+        assert!(!taker_view.working_indicator);
+
+        // reports[4] 第二笔 maker 视角（matched order 276811，未成交完 → working_indicator=true）。
+        let maker_view = &tr.spot[4];
+        assert_eq!(maker_view.execution_type, ExecType::Trade);
+        assert_eq!(maker_view.order_status, OrderStatus::PartiallyFilled);
+        assert_eq!(maker_view.symbol, 3);
+        assert_eq!(maker_view.base_scale_k, 1000);
+        assert_eq!(maker_view.quote_scale_k, 1000);
+        assert_eq!(maker_view.account_id, 10333);
+        assert_eq!(maker_view.cl_ord_id, 778999);
+        assert_eq!(maker_view.order_id, 276811);
+        assert_eq!(maker_view.order_type, OrderType::Gtc);
+        assert_eq!(maker_view.side, OA::Ask);
+        assert_eq!(maker_view.qty, 13);
+        assert_eq!(maker_view.price, 12233);
+        assert_eq!(maker_view.quote_order_qty, 0);
+        assert_eq!(maker_view.order_creation_time, 177777777778);
+        assert_eq!(maker_view.trade_id, 53173130196993);
+        assert_eq!(maker_view.last_qty, 8273);
+        assert_eq!(maker_view.mark_price, 20101);
+        assert_eq!(maker_view.cumulative_qty, 223);
+        assert_eq!(maker_view.cumulative_quote_qty, 1100);
+        assert_eq!(maker_view.commission, 0);
+        assert_eq!(maker_view.commission_asset, 2);
+        assert!(maker_view.is_maker);
+        assert!(maker_view.working_indicator);
+
+        assert_eq!(taker_view.trade_id, maker_view.trade_id);
+
+        assert_eq!(fr.fund[0].event_type, FundEventType::Locked);
+        assert_eq!(fr.fund[1].event_type, FundEventType::Unlocked);
+    }
+
+    #[test]
+    fn should_handle_with_two_trades_and_reject() {
+        let core = spot_core();
+        let mut cmd = sample_place_command();
+
+        let reject = MatcherTradeEvent {
+            event_type: MatcherEventType::Reject,
+            active_order_completed: true,
+            size: 8272,
+            ..Default::default()
+        };
+        let second = MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 276811,
+            matched_order_uid: 10333,
+            maker_order_completed: false,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
+            matched_order_filled: 223,
+            matched_order_filled_notional: 1100,
+            matched_order_type: OrderType::Gtc,
+            matched_order_price: 12233,
+            matched_order_size: 13,
+            matched_user_cookie: 778999,
+            matched_order_timestamp: 177777777778,
+            price: 20101,
+            size: 8273,
+            filled: 124,
+            filled_notional: 10000,
+            bidder_hold_price: 13233,
+            next: Some(Box::new(reject)),
+            ..Default::default()
+        };
+        let first = MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 276810,
+            matched_order_uid: 10332,
+            maker_order_completed: true,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
+            matched_order_filled: 123,
+            matched_order_filled_notional: 1000,
+            matched_order_type: OrderType::Gtc,
+            matched_order_price: 12233,
+            matched_order_size: 23,
+            matched_user_cookie: 778899,
+            matched_order_timestamp: 177777777777,
+            price: 20100,
+            size: 8272,
+            filled: 123,
+            filled_notional: 1000,
+            bidder_hold_price: 13233,
+            next: Some(Box::new(second)),
+            ..Default::default()
+        };
+        cmd.matcher_event = Some(Box::new(first));
+
+        let (tr, fr) = run_proc(&core, &cmd, 12981721239);
+
+        // 头部事件是 TRADE（非 REJECT），故无独立 reject 回报：NEW + 2×(taker+maker) = 5，与 Java 一致。
+        assert_eq!(tr.spot.len(), 5);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 0);
+
+        assert_eq!(tr.spot[0].execution_type, ExecType::New);
+
+        let taker_view = &tr.spot[3];
+        assert_eq!(taker_view.execution_type, ExecType::Trade);
+        assert_eq!(taker_view.order_id, 123);
+        assert_eq!(taker_view.symbol, 3);
+        assert_eq!(taker_view.account_id, 29851);
+
+        let maker_view = &tr.spot[4];
+        assert_eq!(maker_view.execution_type, ExecType::Trade);
+        assert_eq!(maker_view.order_id, 276811);
+        assert_eq!(maker_view.symbol, 3);
+        assert_eq!(maker_view.account_id, 10333);
+    }
+
+    #[test]
+    fn should_handle_with_single_reject() {
+        let core = spot_core();
+        let mut cmd = sample_place_command();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reject,
+            active_order_completed: true,
+            size: 8272,
+            price: 52201,
+            ..Default::default()
+        }));
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 2);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 0);
+
+        let new_order = &tr.spot[0];
+        assert_eq!(new_order.execution_type, ExecType::New);
+        assert_eq!(new_order.order_status, OrderStatus::New);
+        assert_eq!(new_order.symbol, 3);
+        assert_eq!(new_order.base_scale_k, 1000);
+        assert_eq!(new_order.quote_scale_k, 1000);
+        assert_eq!(new_order.account_id, 29851);
+        assert_eq!(new_order.cl_ord_id, 44188);
+        assert_eq!(new_order.order_id, 123);
+        assert_eq!(new_order.order_type, OrderType::Ioc);
+        assert_eq!(new_order.side, OA::Bid);
+        assert_eq!(new_order.qty, 3200);
+        assert_eq!(new_order.price, 52200);
+        assert_eq!(new_order.quote_order_qty, 0);
+        assert_eq!(new_order.order_creation_time, 1578930983745201);
+        assert_eq!(new_order.last_qty, 0);
+        assert_eq!(new_order.mark_price, 0);
+        assert_eq!(new_order.cumulative_qty, 0);
+        assert_eq!(new_order.cumulative_quote_qty, 0);
+        assert_eq!(new_order.commission, 0);
+        assert_eq!(new_order.commission_asset, 2);
+        assert!(!new_order.is_maker);
+        assert!(!new_order.working_indicator);
+
+        let reject = &tr.spot[1];
+        assert_eq!(reject.execution_type, ExecType::Reject);
+        assert_eq!(reject.order_status, OrderStatus::Rejected);
+        assert_eq!(reject.symbol, 3);
+        assert_eq!(reject.base_scale_k, 1000);
+        assert_eq!(reject.quote_scale_k, 1000);
+        assert_eq!(reject.account_id, 29851);
+        assert_eq!(reject.cl_ord_id, 44188);
+        assert_eq!(reject.order_id, 123);
+        assert_eq!(reject.order_type, OrderType::Ioc);
+        assert_eq!(reject.side, OA::Bid);
+        assert_eq!(reject.qty, 3200);
+        assert_eq!(reject.price, 52200);
+        assert_eq!(reject.quote_order_qty, 0);
+        assert_eq!(reject.order_creation_time, 1578930983745201);
+        assert_eq!(reject.last_qty, 0);
+        assert_eq!(reject.mark_price, 0);
+        assert_eq!(reject.cumulative_qty, 0);
+        assert_eq!(reject.cumulative_quote_qty, 0);
+        assert_eq!(reject.commission, 0);
+        assert_eq!(reject.commission_asset, 2);
+        assert!(!reject.is_maker);
+        assert!(!reject.working_indicator);
+    }
+
+    #[test]
+    fn should_gen_fund_event_when_balance_change() {
+        let core = spot_core();
+        let mut cmd = OrderCommand {
+            command: OrderCommandType::BalanceAdjustment,
+            uid: 301,
+            symbol: 30,
+            order_id: 13143,
+            price: 12800,
+            timestamp: 1978930983745201,
+            result_code: Some(CommandResultCode::Success),
+            ..Default::default()
+        };
+        cmd.fund_events = vec![FundEvent { uid: 301, symbol: 30, order_id: 13143, currency: 20000, ..Default::default() }];
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 0);
+        assert_eq!(tr.futures.len(), 0);
+        assert_eq!(fr.fund.len(), 1);
+
+        let report = &fr.fund[0];
+        // Java 断言 eventType == null；Rust `FundEventType` 是非空枚举，未设值取默认 `Deposit`（结构性建模差异，
+        // 非计算值分歧——Rust 无法表达 null 事件类型）。仍断言核心黄金 balances.currency == 20000。
+        assert_eq!(report.event_type, FundEventType::Deposit);
+        assert_eq!(report.balances.currency, 20000);
+    }
 }

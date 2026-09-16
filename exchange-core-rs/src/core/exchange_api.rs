@@ -10,6 +10,8 @@ use crate::core::common::order_type::OrderType;
 use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::symbol_type::SymbolType;
+use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::processors::risk_engine::RiskEngine;
@@ -118,6 +120,8 @@ impl ExchangeApi {
     // 配置:引擎 / 市场 / 账户初始化
     // ==========================================================================================
 
+    // ---- 单条便捷入口 ----
+
     /// 直接注册 currency spec（非命令，对应 Java `ExchangeApi` 里 currency 是启动期静态配置）。**必须先于引用它的 symbol 调用**（见模块级文档）。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
@@ -154,6 +158,60 @@ impl ExchangeApi {
     /// （对应 Java `ExchangeTestContainer.enableLiquidationEngines()`；生产由 raft leader 选举置位）。
     pub fn enable_liquidation(&mut self) {
         self.core.risk.liquidation_engine.is_running = true;
+    }
+
+    // ---- 批量入口:一一对应 Java `api.binary` 的四个 Batch* 命令(一条 raft entry 原子应用多项配置)。
+    //      上面的单条版是便捷入口;这组才与 BatchAddCurrencies / Symbols / Accounts / Loan 语义对齐。 ----
+
+    /// 批量注册 currency,对应 Java `BatchAddCurrenciesCommand`。currency 必须先于引用它的 symbol 注册。
+    pub fn add_currencies(&mut self, currencies: impl IntoIterator<Item = CoreCurrencySpecification>) {
+        for spec in currencies {
+            self.core.ssp.add_currency(spec);
+        }
+    }
+
+    /// 批量注册 symbol + 建 order book,对应 Java `BatchAddSymbolsCommand`。非现货 symbol 受 margin trading
+    /// 开关门控(对齐 Java `isCfgMarginTradingEnabled`,关闭时跳过并告警);base/quote 币种缺失的 symbol 跳过
+    /// (复用单个 [`add_symbol`](Self::add_symbol) 的 `InvalidSymbol` 校验)。
+    pub fn add_symbols(&mut self, symbols: impl IntoIterator<Item = CoreSymbolSpecification>) {
+        for spec in symbols {
+            if spec.symbol_type != SymbolType::CurrencyExchangePair && !self.core.risk.cfg_margin_trading_enabled {
+                log::warn!("Margin symbols are not allowed: symbol={}", spec.symbol_id);
+                continue;
+            }
+            self.add_symbol(spec);
+        }
+    }
+
+    /// 批量开户并 seed 初始余额,对应 Java `BatchAddAccountsCommand`。已存在的 uid 跳过(不覆盖)。seed 语义同
+    /// Java `seedNewUserBalance`:账户 `+= amount`、adjustments 桶 `-= amount`(资金来自调整桶,守恒)。
+    /// 入参:`(uid, [(currency, amount), ...])`。
+    pub fn add_accounts(&mut self, accounts: impl IntoIterator<Item = (i64, Vec<(i32, i64)>)>) {
+        for (uid, balances) in accounts {
+            if self.core.ups.add_empty_user_profile(uid) != CommandResultCode::Success {
+                continue; // 已存在:与 Java 一致,不重复 seed
+            }
+            if let Some(up) = self.core.ups.get_mut(uid) {
+                for (currency, amount) in balances {
+                    up.add_to_account(currency, amount);
+                    *self.core.risk.adjustments.entry(currency).or_insert(0) -= amount;
+                }
+            }
+        }
+    }
+
+    /// 应用一批 loan 运行时配置,对应 Java `BatchAddLoanCommand`(`RiskEngineCommandDispatcher` 的 instanceof 分支)。
+    /// 每个 `BatchAddLoanCommand` 含 global / symbol / rate-curve 三段独立可选、各自校验、一段非法不影响另外两段;
+    /// 全局 loan 配置(numeraire / cross LTV 阈值 / 池上限 / 清算费等)的公开入口。
+    pub fn add_loans(&mut self, cmds: impl IntoIterator<Item = BatchAddLoanCommand>) {
+        for cmd in cmds {
+            self.core.risk.apply_add_loan(&cmd, &mut self.core.ssp);
+        }
+    }
+
+    /// 单条 [`add_loans`](Self::add_loans) 便捷入口。
+    pub fn add_loan(&mut self, cmd: BatchAddLoanCommand) {
+        self.core.risk.apply_add_loan(&cmd, &mut self.core.ssp);
     }
 
     // ==========================================================================================
@@ -803,5 +861,61 @@ mod tests {
         let l2 = api.request_l2(FUT_SYMBOL, 10);
         assert!(l2.bid_prices.is_empty());
         assert!(l2.ask_prices.is_empty());
+    }
+
+    // ---- 批量配置接口(对应 Java Batch* 命令) ----
+
+    #[test]
+    fn add_currencies_and_symbols_batch() {
+        use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+        let mut api = ExchangeApi::new();
+        // 批量注册两个 currency
+        api.add_currencies([
+            CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() },
+            CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() },
+        ]);
+        assert!(api.ssp().get_currency(BASE).is_some());
+        assert!(api.ssp().get_currency(QUOTE).is_some());
+        // 批量注册两个现货 symbol(margin 无关,现货恒放行)
+        let s1 = CoreSymbolSpecification { symbol_id: 100, symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: BASE, quote_currency: QUOTE, base_scale_k: 1, quote_scale_k: 1, ..Default::default() };
+        let mut s2 = s1.clone(); s2.symbol_id = 101; s2.base_currency = QUOTE; s2.quote_currency = BASE;
+        api.add_symbols([s1, s2]);
+        assert!(api.ssp().get_symbol(100).is_some());
+        assert!(api.ssp().get_symbol(101).is_some());
+    }
+
+    #[test]
+    fn add_symbols_margin_gate_blocks_futures_when_disabled() {
+        use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+        let mut api = ExchangeApi::new();
+        api.add_currencies([
+            CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() },
+            CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() },
+        ]);
+        api.core.risk.cfg_margin_trading_enabled = false; // test mod 可访问父模块私有字段
+        let fut = CoreSymbolSpecification { symbol_id: 200, symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: BASE, quote_currency: QUOTE, base_scale_k: 1, quote_scale_k: 1, ..Default::default() };
+        let spot = CoreSymbolSpecification { symbol_id: 201, symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: BASE, quote_currency: QUOTE, base_scale_k: 1, quote_scale_k: 1, ..Default::default() };
+        api.add_symbols([fut, spot]);
+        assert!(api.ssp().get_symbol(200).is_none(), "margin 关闭时期货 symbol 被门控跳过(对齐 Java)");
+        assert!(api.ssp().get_symbol(201).is_some(), "现货 symbol 恒放行");
+    }
+
+    #[test]
+    fn add_accounts_batch_seeds_balance_and_conserves() {
+        use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+        let mut api = ExchangeApi::new();
+        api.add_currencies([CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() }]);
+        // 批量开户 + seed:uid=10 得 1000 QUOTE,uid=11 得 500 QUOTE
+        api.add_accounts([(10i64, vec![(QUOTE, 1000i64)]), (11i64, vec![(QUOTE, 500i64)])]);
+        assert_eq!(api.ups().get(10).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 1000);
+        assert_eq!(api.ups().get(11).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 500);
+        // seed 走 adjustments 桶(-1500),全局守恒:Σ账户 + 调整桶 == 0
+        assert!(api.total_balance().is_global_zero(), "seed 后全局守恒(账户 +1500 / 调整桶 -1500)");
+        // 已存在的 uid 不重复 seed
+        api.add_accounts([(10i64, vec![(QUOTE, 9999i64)])]);
+        assert_eq!(api.ups().get(10).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 1000, "已存在 uid 跳过,不覆盖");
     }
 }
