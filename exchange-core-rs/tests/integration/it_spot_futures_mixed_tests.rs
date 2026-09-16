@@ -377,7 +377,7 @@ mod tests {
     fn spot_lock_and_futures_margin_both_constrain_withdrawal() {
         let mut api = setup_spot();
         assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(PERP_SYMBOL, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYMBOL, 1_000), CommandResultCode::Success);
 
         fund(&mut api, UID_1, QUOTE_ID, 5_000, 1);
         fund(&mut api, UID_2, QUOTE_ID, 100_000, 2);
@@ -520,7 +520,7 @@ mod tests {
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success);
         assert_eq!(api.add_symbol(spot_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(PERP_SYMBOL, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYMBOL, 1_000), CommandResultCode::Success);
 
         fund(&mut api, UID_1, QUOTE_ID, 20_000, 1);
         fund(&mut api, UID_2, QUOTE_ID, 20_000, 2);
@@ -578,7 +578,7 @@ mod tests {
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(delivery_spec()), CommandResultCode::Success);
         assert_eq!(api.add_symbol(spot_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(DELIVERY_SYMBOL, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(DELIVERY_SYMBOL, 1_000), CommandResultCode::Success);
 
         fund(&mut api, UID_1, QUOTE_ID, 10_000, 1);
         fund(&mut api, UID_2, QUOTE_ID, 10_000, 2);

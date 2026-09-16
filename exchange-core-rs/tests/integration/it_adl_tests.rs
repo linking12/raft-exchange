@@ -121,7 +121,7 @@ mod tests {
         seed_user(&mut api, winner, 50_000, 2);
         seed_user(&mut api, maker, MAX_VALUE, 3);
 
-        assert_eq!(api.set_mark_price(SYM, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 1_000), CommandResultCode::Success);
 
         // 1. LOSER 开高杠杆多仓 5 @1000（ISOLATED），MAKER 对手 ASK（CROSS）。
         assert_eq!(place(&mut api, 1, loser, 1_000, 5, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
@@ -135,7 +135,7 @@ mod tests {
 
         // 3. 价格暴跌 1000→600：LOSER 多头巨亏被强平；无 IF、无书面对手 → ADL 减 WINNER 盈利空仓。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(SYM, 600, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 600), CommandResultCode::Success);
 
         // 4. LOSER 清仓；WINNER 被 ADL 减到 5。
         assert!(api.user_position(loser, SYM).is_none(), "LOSER 应被清仓");
@@ -170,7 +170,7 @@ mod tests {
         seed_user(&mut api, loser, 5_000, 1);
         seed_user(&mut api, maker, MAX_VALUE, 2);
 
-        assert_eq!(api.set_mark_price(SYM, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 1_000), CommandResultCode::Success);
 
         // LOSER 多头 5，MAKER 空头 5（CROSS，ADL 资格 0）。
         assert_eq!(place(&mut api, 1, loser, 1_000, 5, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
@@ -182,7 +182,7 @@ mod tests {
 
         // 价格暴跌触发强平：MAKER 不可 ADL（CROSS 资格 0）→ IF 接管。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(SYM, 600, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 600), CommandResultCode::Success);
 
         // LOSER 清仓；MAKER 保持 5（无 ADL）；IF 接管 LONG 5。
         assert!(api.user_position(loser, SYM).is_none(), "LOSER 应清仓");
@@ -224,7 +224,7 @@ mod tests {
         seed_user(&mut api, loser, 20_000, 1);
         seed_user(&mut api, maker, MAX_VALUE, 2);
 
-        assert_eq!(api.set_mark_price(SYM, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 1_000), CommandResultCode::Success);
 
         // ===== 第一次 =====
         assert_eq!(if_deposit(&mut api, 3 * 1_000, 1), CommandResultCode::Success);
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(place(&mut api, 2, maker, 1_000, 5, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(SYM, 600, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 600), CommandResultCode::Success);
         assert!(api.user_position(loser, SYM).is_none(), "第一次应清仓");
 
         // ===== 第二次 =====
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(place(&mut api, 3, loser, 700, 4, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 4, maker, 700, 4, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
-        assert_eq!(api.set_mark_price(SYM, 400, 3_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 400), CommandResultCode::Success);
         assert!(api.user_position(loser, SYM).is_none(), "第二次也应清仓");
 
         // reserved 全部释放，无 pending 泄漏。

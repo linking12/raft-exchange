@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(api.add_futures_symbol(bnb_usdt_spec()), CommandResultCode::Success);
 
         let mark_price = 750 * QUOTE_SCALE_K; // 75_000_000
-        assert_eq!(api.set_mark_price(SYMBOL_ID, mark_price, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, mark_price), CommandResultCode::Success);
 
         let deposit = 10_000 * 1_000_000; // 10000 * USDT currencyScaleK
         for (i, uid) in [UID_1, UID_2, UID_3, UID_4, UID_5].into_iter().enumerate() {
@@ -294,7 +294,7 @@ mod tests {
         assert_eq!(api.balance_adjustment(UID_2, USDT_ID, 10_000, 2), CommandResultCode::Success);
 
         assert_eq!(api.adjust_position_mode(UID_1, true), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, 650, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 650), CommandResultCode::Success);
 
         // UID_1 BID 1@652（LONG）+ UID_2 ASK 1@652（对手 SHORT）→ 撮合，UID_1 LONG=1。
         assert_eq!(place_on(&mut api, 101, UID_1, SYMBOL_ID, 652, 1, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 0), CommandResultCode::Success);
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(api.add_futures_symbol(bnb_usdt_delivery_spec()), CommandResultCode::Success);
 
         let mark_price = 750 * QUOTE_SCALE_K; // 75_000_000
-        assert_eq!(api.set_mark_price(DELIVERY_ID, mark_price, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(DELIVERY_ID, mark_price), CommandResultCode::Success);
 
         let deposit = 10_000 * 1_000_000;
         for (i, uid) in [UID_1, UID_2, UID_3].into_iter().enumerate() {
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(place_on(&mut api, 10004, UID_3, DELIVERY_ID, 80_000_000, 50, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
 
         // mark 涨到 800（尚未结算，account 不变）。
-        assert_eq!(api.set_mark_price(DELIVERY_ID, 800 * QUOTE_SCALE_K, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(DELIVERY_ID, 800 * QUOTE_SCALE_K), CommandResultCode::Success);
         assert_eq!(api.user_account(UID_1, USDT_ID), deposit);
         assert_eq!(sym_position_count(&api, UID_1, DELIVERY_ID), 2);
 
@@ -666,7 +666,7 @@ mod tests {
 
         api.enable_liquidation();
         // 暴跌 750→700：LONG（lev50，~2% 保证金）爆仓；SHORT 盈利、对手 lev1 不爆。
-        assert_eq!(api.set_mark_price(SYMBOL_ID, 700 * QUOTE_SCALE_K, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 700 * QUOTE_SCALE_K), CommandResultCode::Success);
 
         // 核心语义：per-leg 强平——LONG 腿被清、SHORT 盈利腿原样保留，双腿互不牵连。
         assert!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).is_none(), "LONG 腿应被强平清仓");

@@ -179,7 +179,7 @@ mod tests {
         // perpetual 无 mark price → MarkpriceNotAvailable。
         assert_eq!(settle_funding_fees(&mut api, 10000, OrderAction::Bid, 33, 100, 1003), CommandResultCode::RiskMarkpriceNotAvailable);
         // 设 mark 后 → Success。
-        assert_eq!(api.set_mark_price(10000, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(10000, 10_000), CommandResultCode::Success);
         assert_eq!(settle_funding_fees(&mut api, 10000, OrderAction::Bid, 33, 100, 1003), CommandResultCode::Success);
     }
 
@@ -225,7 +225,7 @@ mod tests {
         assert!(api.user_position(UID_1, DELIVERY_SYM).is_none());
         assert_conserved(&api);
 
-        assert_eq!(api.set_mark_price(DELIVERY_SYM, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(DELIVERY_SYM, 1_000), CommandResultCode::Success);
 
         // 下 BID 10 @1000 但无对手盘 → 静止挂单（pendingBuy），不开仓、不扣 accounts。
         assert_eq!(place(&mut api, 1, UID_1, DELIVERY_SYM, 1_000, 10, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
@@ -268,7 +268,7 @@ mod tests {
         seed_user(&mut api, UID_2, deposit, 2);
         assert_conserved(&api);
 
-        assert_eq!(api.set_mark_price(DELIVERY_SYM, 1_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(DELIVERY_SYM, 1_000), CommandResultCode::Success);
 
         // 开仓：UID_1 BID(maker,LONG) + UID_2 ASK(taker,SHORT) @1000 size10。
         assert_eq!(place(&mut api, 1, UID_1, DELIVERY_SYM, 1_000, 10, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
@@ -302,7 +302,7 @@ mod tests {
         seed_user(&mut api, UID_1, deposit, 1);
         assert_conserved(&api);
 
-        assert_eq!(api.set_mark_price(PERP_SYM, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYM, 10_000), CommandResultCode::Success);
 
         assert_eq!(place(&mut api, 1, UID_1, PERP_SYM, 1_000, 10, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         {
@@ -345,7 +345,7 @@ mod tests {
         assert_conserved(&api);
 
         // mark = 1500，开仓价 1000。
-        assert_eq!(api.set_mark_price(PERP_SYM, updated_price, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYM, updated_price), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1, UID_1, PERP_SYM, 1_000, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 2, UID_2, PERP_SYM, 1_000, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
@@ -418,7 +418,7 @@ mod tests {
         seed_user(&mut api, UID_3, deposit, 3);
         assert_conserved(&api);
 
-        assert_eq!(api.set_mark_price(PERP_SYM, updated_price, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYM, updated_price), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1, UID_1, PERP_SYM, 1_000, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 2, UID_2, PERP_SYM, 1_000, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
@@ -491,7 +491,7 @@ mod tests {
         }
         assert_conserved(&api);
 
-        assert_eq!(api.set_mark_price(sym, updated_price, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(sym, updated_price), CommandResultCode::Success);
 
         // UID_1 做多 1000@10（maker），UID_2 ASK 吃单（taker）。
         assert_eq!(place(&mut api, 101, UID_1, sym, price, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
@@ -510,7 +510,7 @@ mod tests {
 
         // 开启强平 + 定向扫描（重发 mark 1100 触发 checkPositions）：UID_1 equity < maintenance → 全平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(sym, updated_price, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(sym, updated_price), CommandResultCode::Success);
 
         assert!(api.user_position(UID_1, sym).is_none(), "UID_1 应被强平清仓");
         assert_conserved(&api);

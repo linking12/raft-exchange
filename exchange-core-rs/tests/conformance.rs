@@ -211,10 +211,10 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 None
             }
             "MARK" => {
-                assert_eq!(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price"), 0), CommandResultCode::Success);
+                assert_eq!(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price")), CommandResultCode::Success);
                 None
             }
-            "MARK_AT" => Some(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price"), i64_of(&kv, "ts"))),
+            "MARK_AT" => Some(api.set_mark_price(i32_of(&kv, "sym"), i64_of(&kv, "price"))),
             "ENABLE_LIQ" => {
                 api.enable_liquidation();
                 None

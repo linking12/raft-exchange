@@ -113,7 +113,7 @@ fn seed_btc(mark: i64) -> ExchangeApi {
     api.add_currency(XBT, 1);
     api.add_currency(USD, 1);
     assert_eq!(api.add_futures_symbol(btc_futures_spec()), CommandResultCode::Success);
-    assert_eq!(api.set_mark_price(BTC_SYM, mark, 0), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(BTC_SYM, mark), CommandResultCode::Success);
     api
 }
 
@@ -524,7 +524,7 @@ fn dynamic_fee_trading_with_eth_symbol() {
     api.add_currency(USD, 1);
     api.add_currency(ETH, 1);
     assert_eq!(api.add_futures_symbol(eth_futures_spec()), CommandResultCode::Success);
-    assert_eq!(api.set_mark_price(ETH_SYM, price, 0), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(ETH_SYM, price), CommandResultCode::Success);
     seed_user(&mut api, MAKER, deposit, 1);
     seed_user(&mut api, TAKER, deposit, 2);
 
@@ -886,7 +886,7 @@ fn futures_reverse_opening_fee_calculation() {
     let fees_after_open = api.fees(USD);
 
     // mark 推到 reverse_price，聚焦翻仓 fee。
-    assert_eq!(api.set_mark_price(BTC_SYM, reverse_price, 0), CommandResultCode::Success);
+    assert_eq!(api.set_mark_price(BTC_SYM, reverse_price), CommandResultCode::Success);
 
     // 翻仓：U1 ASK 12（reverse，平满 LONG10 再开 SHORT2，resting maker）+ U3 BID 12（taker，开 LONG12）。
     assert_eq!(place(&mut api, 11003, U1, BTC_SYM, reverse_price, reverse_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);

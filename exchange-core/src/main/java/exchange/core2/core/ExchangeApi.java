@@ -660,7 +660,7 @@ public final class ExchangeApi {
             cmd.orderId = -1;
             cmd.symbol = -1;
             cmd.uid = userId;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.resultCode = CommandResultCode.NEW;
 
             promises.put(seq, callback);
@@ -673,7 +673,7 @@ public final class ExchangeApi {
             cmd.orderId = -1;
             cmd.symbol = -1;
             cmd.uid = userId;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.resultCode = CommandResultCode.NEW;
 
             promises.put(seq, callback);
@@ -686,7 +686,7 @@ public final class ExchangeApi {
             cmd.orderId = -1;
             cmd.symbol = -1;
             cmd.uid = userId;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.resultCode = CommandResultCode.NEW;
 
             promises.put(seq, callback);
@@ -745,7 +745,7 @@ public final class ExchangeApi {
             cmd.price = longAmount;
             cmd.orderType = OrderType.of(adjustmentType.getCode());
             cmd.size = 0;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.resultCode = CommandResultCode.NEW;
 
             promises.put(seq, callback);
@@ -776,7 +776,7 @@ public final class ExchangeApi {
             cmd.symbol = symbolId;
             cmd.uid = -1;
             cmd.size = depth;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.resultCode = CommandResultCode.NEW;
 
             promises.put(seq, callback);
@@ -792,7 +792,7 @@ public final class ExchangeApi {
             cmd.symbol = symbolId;
             cmd.uid = -1;
             cmd.size = depth;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.resultCode = CommandResultCode.NEW;
 
             promises.put(seq, cmd1 -> future.complete(cmd1.marketData));
@@ -814,7 +814,7 @@ public final class ExchangeApi {
             cmd.reserveBidPrice = reservedBidPrice;
             cmd.size = size;
             cmd.orderId = seq;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.action = action;
             cmd.orderType = orderType;
             cmd.symbol = symbol;
@@ -863,7 +863,7 @@ public final class ExchangeApi {
 
             cmd.price = price;
             cmd.orderId = orderId;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.symbol = symbol;
             cmd.uid = uid;
 
@@ -894,7 +894,7 @@ public final class ExchangeApi {
             cmd.resultCode = CommandResultCode.NEW;
 
             cmd.orderId = orderId;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.symbol = symbol;
             cmd.uid = uid;
 
@@ -924,7 +924,7 @@ public final class ExchangeApi {
 
             cmd.size = reduceSize;
             cmd.orderId = orderId;
-            cmd.timestamp = System.currentTimeMillis();
+            cmd.timestamp = 0L; // 去墙钟:ts 属命令层,由 Raft apply(leader propose)统一注入共识时间;测试直发默认 0
             cmd.symbol = symbol;
             cmd.uid = uid;
 

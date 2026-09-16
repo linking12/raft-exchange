@@ -129,7 +129,7 @@ mod tests {
         api.add_currency(BASE_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(PERP_SYMBOL, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYMBOL, 10_000), CommandResultCode::Success);
         assert_eq!(api.add_symbol(exchange_spec()), CommandResultCode::Success);
 
         assert_eq!(api.add_user(UID_1), CommandResultCode::Success);
@@ -208,7 +208,7 @@ mod tests {
         api.add_currency(BASE_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(PERP_SYMBOL, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(PERP_SYMBOL, 10_000), CommandResultCode::Success);
         api
     }
 

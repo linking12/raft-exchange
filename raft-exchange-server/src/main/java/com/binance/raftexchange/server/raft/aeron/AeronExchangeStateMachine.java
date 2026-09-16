@@ -247,7 +247,7 @@ final class AeronExchangeStateMachine implements ClusteredService {
             fillPending(correlationId, errorResponse());
             return;
         }
-
+        cmd = cmd.toBuilder().setTimestamp(timestamp).build();
         pending.put(correlationId, new PendingCommand(sessionId, startNanos, entryLogPosition, 0L, null));
         dispatch(cmd, correlationId);
         drainPending();
