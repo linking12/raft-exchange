@@ -324,8 +324,10 @@ impl ExchangeApi {
         self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
     }
 
-    /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。用于本门面未提供专属封装的命令
-    /// （loan 全套 / internal_transfer / settle_pnl / settle_fundingfees / position_mode / liquidation_scan / if_deposit/withdraw / reset_fee 等）。
+    /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。对应 Java `ExchangeApi::submitCommand(ApiCommand)`
+    /// 的统一入口（Java 在其中 `instanceof` 分派翻成 `OrderCommand`；此处无 DTO 层，直接喂原始 `OrderCommand`）。
+    /// 用于本门面未提供专属封装的命令（loan 全套 / internal_transfer / settle_pnl / settle_fundingfees /
+    /// liquidation_scan / if_deposit/withdraw / reset_fee 等）。
     pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
         self.run(cmd)
     }
