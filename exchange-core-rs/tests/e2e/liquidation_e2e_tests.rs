@@ -1,18 +1,18 @@
 //! 期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（本文件 scale 全 1 恒等缩放）。
 use proptest::prelude::*;
 
-use crate::core::common::cmd::command_result_code::CommandResultCode;
-use crate::core::common::cmd::order_command::OrderCommand;
-use crate::core::common::cmd::order_command_type::OrderCommandType;
-use crate::core::common::core_currency_specification::CoreCurrencySpecification;
-use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-use crate::core::common::margin_mode::MarginMode;
-use crate::core::common::order_action::OrderAction;
-use crate::core::common::order_type::OrderType;
-use crate::core::common::position_direction::PositionDirection;
-use crate::core::common::symbol_type::SymbolType;
+use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
+use exchange_core_rs::core::common::core_currency_specification::CoreCurrencySpecification;
+use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+use exchange_core_rs::core::common::margin_mode::MarginMode;
+use exchange_core_rs::core::common::order_action::OrderAction;
+use exchange_core_rs::core::common::order_type::OrderType;
+use exchange_core_rs::core::common::position_direction::PositionDirection;
+use exchange_core_rs::core::common::symbol_type::SymbolType;
 
-use super::exchange_core::ExchangeCore;
+use exchange_core_rs::core::exchange_core::ExchangeCore;
 
 const BASE: i32 = 1;
 const QUOTE: i32 = 2;

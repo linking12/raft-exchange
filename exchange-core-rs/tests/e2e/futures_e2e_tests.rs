@@ -1,15 +1,15 @@
 //! 期货 e2e 场景 + 守恒 proptest（参考文档 §7）。核心断言（[`assert_futures_conservation`]）：Σ_users accounts+adjustments+fees + Σ_open_positions(estimate_pnl(mark)+extra_margin) == 0——比 naive 公式多出的两项（estimate_pnl/extra_margin）对应两类"资金已离开 accounts、尚未转回"的时间差场景（isolated MARGIN_ADJUSTMENT 递延退款、平仓对手方与开仓对手方不同导致的未实现浮亏递延），均非生产代码 bug，详见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`] 与场景 D。
 use proptest::prelude::*;
 
-use crate::core::common::cmd::command_result_code::CommandResultCode;
-use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-use crate::core::common::margin_mode::MarginMode;
-use crate::core::common::order_action::OrderAction;
-use crate::core::common::order_type::OrderType;
-use crate::core::common::position_direction::PositionDirection;
-use crate::core::common::symbol_type::SymbolType;
+use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+use exchange_core_rs::core::common::margin_mode::MarginMode;
+use exchange_core_rs::core::common::order_action::OrderAction;
+use exchange_core_rs::core::common::order_type::OrderType;
+use exchange_core_rs::core::common::position_direction::PositionDirection;
+use exchange_core_rs::core::common::symbol_type::SymbolType;
 
-use super::exchange_api::{
+use exchange_core_rs::core::exchange_api::{
     ClosePositionRequest, ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest,
 };
 

@@ -3,18 +3,18 @@ use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 
-use crate::core::common::cmd::command_result_code::CommandResultCode;
-use crate::core::common::cmd::order_command::OrderCommand;
-use crate::core::common::cmd::order_command_type::OrderCommandType;
-use crate::core::common::core_currency_specification::CoreCurrencySpecification;
-use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-use crate::core::common::cross_loan_record::CrossLoanRecord;
-use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
-use crate::core::common::order_action::OrderAction;
-use crate::core::common::order_type::OrderType;
-use crate::core::common::symbol_type::SymbolType;
-use crate::core::exchange_core::ExchangeCore;
-use crate::core::processors::loan::loan_service::LoanService;
+use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
+use exchange_core_rs::core::common::core_currency_specification::CoreCurrencySpecification;
+use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+use exchange_core_rs::core::common::cross_loan_record::CrossLoanRecord;
+use exchange_core_rs::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode};
+use exchange_core_rs::core::common::order_action::OrderAction;
+use exchange_core_rs::core::common::order_type::OrderType;
+use exchange_core_rs::core::common::symbol_type::SymbolType;
+use exchange_core_rs::core::exchange_core::ExchangeCore;
+use exchange_core_rs::core::processors::loan::loan_service::LoanService;
 
 // ================================================================================================
 // 守恒 / 不变式 helper
