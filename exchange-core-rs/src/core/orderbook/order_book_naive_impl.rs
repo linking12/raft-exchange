@@ -20,7 +20,7 @@ pub struct OrderBookNaiveImpl {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,
     id_index: BTreeMap<i64, (OrderAction, i64, i64)>,
-    /// 对应 Java OrderBookNaiveImpl.symbolSpec：move_order 现货 BID 风控读取（:495-497）；None = 跳过守卫。
+    /// 对应 Java OrderBookNaiveImpl.symbolSpec：move_order 现货 BID 风控读取；None = 跳过守卫。
     symbol_spec: Option<CoreSymbolSpecification>,
 }
 
@@ -616,7 +616,7 @@ impl IOrderBook for OrderBookNaiveImpl {
             return CommandResultCode::MatchingUnknownOrderId;
         }
 
-        // cmd.action 在风控守卫之前回填（Naive 与 Direct 的既有差异：Direct 在守卫后设）。对应 Java OrderBookNaiveImpl.java:492。
+        // cmd.action 在风控守卫之前回填（Naive 与 Direct 的既有差异：Direct 在守卫后设）。对应 Java OrderBookNaiveImpl.java。
         cmd.action = Some(action);
 
         // 现货 BID 风控守卫：move 目标价不得超过挂单自身 reserve_bid_price，否则
@@ -2349,5 +2349,5 @@ mod ob_base_tests {
     }
 
     // `multipleCommandsKeepInternalStateTest` 跳过：需要 Java 侧 `TestOrdersGenerator`（带种子的随机命令生成器）+
-    // `IOrderBook.validateInternalState()`——两者都是测试基础设施而非核心撮合逻辑，本任务未复刻该 harness（见 task-7-report.md skip 表）。
+    // `IOrderBook.validateInternalState()`——两者都是测试基础设施而非核心撮合逻辑，未复刻该 harness。
 }

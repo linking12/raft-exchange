@@ -27,7 +27,6 @@ fn add_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 零大小类型。
 pub struct LoanCommandDispatcher;
 
 impl LoanCommandDispatcher {

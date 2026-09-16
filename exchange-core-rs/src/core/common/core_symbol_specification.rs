@@ -206,7 +206,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // calculate_init_margin — Java `:135-141`
+    // calculate_init_margin
     // ------------------------------------------------------------------
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // calculate_maintenance_margin — Java `:150-174`
+    // calculate_maintenance_margin
     // ------------------------------------------------------------------
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         spec.maintenance_margin_scale_k = 10_000;
         spec.maintenance_margin.insert(50_000, 50); // tier1 rate 0.5%
         spec.maintenance_margin.insert(200_000, 100); // tier2 rate 1%
-        // 每档 rate 生效区间比配置表面晚一档兑现（逐字对齐 Java `:150-174` 循环体）。
+        // 每档 rate 生效区间比配置表面晚一档兑现（逐字对齐 Java 循环体）。
         assert_eq!(spec.calculate_maintenance_margin(100_000), 500);
     }
 
@@ -273,7 +273,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // is_valid_leverage — Java `:118-130`
+    // is_valid_leverage
     // ------------------------------------------------------------------
 
     #[test]

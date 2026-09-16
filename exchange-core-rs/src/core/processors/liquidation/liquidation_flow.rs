@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn is_copy_value_type() {
         let a = LiquidationFlow::new(1, 2, 3);
-        let b = a; // Copy，非 move
+        let b = a;
         assert_eq!(a, b);
     }
 }

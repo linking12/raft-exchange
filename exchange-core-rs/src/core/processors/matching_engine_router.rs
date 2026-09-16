@@ -62,7 +62,6 @@ impl MatchingEngineRouter {
             | OrderCommandType::ForceLiquidation
             | OrderCommandType::LoanForceLiquidate
             | OrderCommandType::LoanCrossForceLiquidate => {
-                // PlaceOrder/ClosePosition/两强平码/ForceLiquidation 共用 new_order 分支。
                 if cmd.result_code == Some(CommandResultCode::ValidForMatchingEngine) {
                     // new_order 内部已写 cmd.result_code，此处透传其返回值。
                     book.new_order(cmd)

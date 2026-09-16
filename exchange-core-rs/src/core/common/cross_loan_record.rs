@@ -63,7 +63,7 @@ impl CrossLoanRecord {
         self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `stateHash()`（`:174-178`），风格对齐 `IsolatedLoanRecord::state_hash`。
+    /// 对应 Java `stateHash()`，风格对齐 `IsolatedLoanRecord::state_hash`。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);

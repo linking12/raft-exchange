@@ -45,7 +45,6 @@ fn sub_exact(a: i64, b: i64) -> i64 {
     i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
 
-/// suspends 桶未移植（SUSPEND_USER 未落地）。
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
@@ -94,25 +93,6 @@ impl RiskEngine {
     }
 
     // ===== 核心行为 =====
-
-    /// R2 后回写：cmd 是现货（CurrencyExchangePair）且有成交时，取首个 TRADE 事件价经 apply_trade_price 更新 markPrice。
-    pub fn apply_spot_trade_price_from(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) {
-        let Some(spec) = ssp.get_symbol(cmd.symbol) else { return };
-        if spec.symbol_type != SymbolType::CurrencyExchangePair {
-            return;
-        }
-        let mut cur = cmd.matcher_event.as_deref();
-        let trade_price = loop {
-            match cur {
-                Some(ev) if ev.event_type == MatcherEventType::Trade => break ev.price,
-                Some(ev) => cur = ev.next.as_deref(),
-                None => break 0,
-            }
-        };
-        if trade_price > 0 {
-            Self::apply_trade_price(&mut self.last_price_cache, &mut self.mark_price_ts, cmd.symbol, cmd.timestamp, trade_price);
-        }
-    }
 
     /// R1 —— 风控预处理(管线第一段,`ExchangeCore::process_command` 首先调用)。
     ///
@@ -573,6 +553,20 @@ impl RiskEngine {
         }
 
         cmd.matcher_event = mte_owned; // 现货结算/loan 钩子后放回链，供 SimpleEventsProcessor 读取
+
+        // R2 尾（对齐 Java handlerRiskRelease 尾部 applyTradePrice）：现货成交价动态回写 markPrice，供 loan 现货抵押估值。
+        // 仅现货分支到达此处（期货在上方 return），故无需再判 symbol_type；取事件链首个 TRADE 价。
+        let mut cur = cmd.matcher_event.as_deref();
+        let trade_price = loop {
+            match cur {
+                Some(ev) if ev.event_type == MatcherEventType::Trade => break ev.price,
+                Some(ev) => cur = ev.next.as_deref(),
+                None => break 0,
+            }
+        };
+        if trade_price > 0 {
+            Self::apply_trade_price(&mut self.last_price_cache, &mut self.mark_price_ts, cmd.symbol, cmd.timestamp, trade_price);
+        }
     }
 
 

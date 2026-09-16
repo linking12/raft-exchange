@@ -10,7 +10,7 @@ use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 pub struct LoanRatePricingProcessor;
 
 impl LoanRatePricingProcessor {
-    /// R1：对应 Java `collectInput`（`:35-53`）。编码进 `BTreeMap<i32,i64>`：borrowed@key=currency，available@key=!currency，跳过 0 值。
+    /// R1：对应 Java `collectInput`。编码进 `BTreeMap<i32,i64>`：borrowed@key=currency，available@key=!currency，跳过 0 值。
     pub fn collect_input(loan_service: &LoanService) -> BTreeMap<i32, i64> {
         let mut shard_data = BTreeMap::new();
         for (&currency, &v) in &loan_service.loan_pool_borrowed {
@@ -26,7 +26,7 @@ impl LoanRatePricingProcessor {
         shard_data
     }
 
-    /// merge：对应 Java `buildMatcherEvents`（`:56-91`）。跨 shard 累加后按币种算利用率，currency 升序输出；空池返回空 Vec（对应 `mte == null` 早退）。
+    /// merge：对应 Java `buildMatcherEvents`。跨 shard 累加后按币种算利用率，currency 升序输出；空池返回空 Vec（对应 `mte == null` 早退）。
     pub fn build_matcher_events(shard_data: &[BTreeMap<i32, i64>]) -> Vec<(i32, i64)> {
         let mut total_borrowed: BTreeMap<i32, i64> = BTreeMap::new();
         let mut total_available: BTreeMap<i32, i64> = BTreeMap::new();
@@ -53,7 +53,7 @@ impl LoanRatePricingProcessor {
             .collect()
     }
 
-    /// R2 per-event：对应 Java `applyEvent`（`:93-104`）。顺序不可颠倒：先 advance_accumulator 再 reprice_currency；set_last_reprice_ts 由调用方统一调用一次。
+    /// R2 per-event：对应 Java `applyEvent`。顺序不可颠倒：先 advance_accumulator 再 reprice_currency；set_last_reprice_ts 由调用方统一调用一次。
     pub fn apply_event(loan_service: &mut LoanService, currency: i32, util_bps: i64, tick_ts: i64) {
         loan_service.floating_rate.advance_accumulator(currency, tick_ts);
         loan_service.floating_rate.reprice_currency(currency, util_bps);

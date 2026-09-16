@@ -17,7 +17,7 @@ use crate::core::common::order_type::OrderType;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 
-/// 挂单节点（slab 元素）。对应 Java `DirectOrder`(`:960-1093`)；parent/next/prev 退化为 slab 索引。
+/// 挂单节点（slab 元素）。对应 Java `DirectOrder`；parent/next/prev 退化为 slab 索引。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectOrder {
     pub order_id: i64,
@@ -41,7 +41,7 @@ pub struct DirectOrder {
     pub prev: Option<usize>,
 }
 
-/// 价位桶：同价位挂单的聚合视图。对应 Java `Bucket`(`:1096-1100`)；价格隐含=tail.price，桶间衔接靠全局单链。
+/// 价位桶：同价位挂单的聚合视图。对应 Java `Bucket`；价格隐含=tail.price，桶间衔接靠全局单链。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bucket {
     /// 桶内所有挂单剩余量（`size - filled`）之和。
@@ -185,7 +185,7 @@ impl<'de> serde::Deserialize<'de> for OrderBookDirectImpl {
 
 impl OrderBookDirectImpl {
     // ===== 构造/配置 =====
-    /// 建空簿。对应 Java 构造函数 `OrderBookDirectImpl(...)`（`:60-73`），仅保留 `symbolSpec`。
+    /// 建空簿。对应 Java 构造函数 `OrderBookDirectImpl(...)`，仅保留 `symbolSpec`。
     pub fn new() -> Self {
         Self {
             orders: Vec::new(),
@@ -209,7 +209,7 @@ impl OrderBookDirectImpl {
     // ===== 核心行为 =====
     // ---- 挂单入链/入桶 ----
 
-    /// 挂单入链+入桶，对应 Java `insertOrder(order, freeBucket)`(`:638-715`)；`free_bucket` 仅 moveOrder 传入复用。
+    /// 挂单入链+入桶，对应 Java `insertOrder(order, freeBucket)`；`free_bucket` 仅 moveOrder 传入复用。
     pub fn insert_order(&mut self, order_idx: usize, free_bucket: Option<usize>) {
         let (is_ask, price, remaining) = {
             let o = self.order(order_idx);
@@ -304,7 +304,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 摘链摘桶，cancel/reduce(全删)/move 共用，对应 Java `removeOrder`(`:599-635`)；不释放 order 自身槽位（交调用方处理）。
+    /// 摘链摘桶，cancel/reduce(全删)/move 共用，对应 Java `removeOrder`；不释放 order 自身槽位（交调用方处理）。
     fn remove_order(&mut self, order_idx: usize) -> Option<usize> {
         let (size, filled, action, price, next, prev, parent) = {
             let o = self.order(order_idx);
@@ -354,7 +354,7 @@ impl OrderBookDirectImpl {
         bucket_removed
     }
 
-    /// GTC 下单，对应 Java `newOrderPlaceGtc`(`:148-189`)：先撮合，全成则不挂、重复 order_id 拒绝剩余、否则挂簿。
+    /// GTC 下单，对应 Java `newOrderPlaceGtc`：先撮合，全成则不挂、重复 order_id 拒绝剩余、否则挂簿。
     fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
         let size = cmd.size;
         let action = cmd.action.expect("GTC order requires action");
@@ -427,7 +427,7 @@ impl OrderBookDirectImpl {
             return (0, 0);
         }
 
-        // `priceBucketTail`(Java `:270`)：起始 maker 所在桶的 tail，撮合到该 order 即整桶清空。
+        // `priceBucketTail`（对应 Java 同名字段）：起始 maker 所在桶的 tail，撮合到该 order 即整桶清空。
         let mut price_bucket_tail: usize = {
             let parent = self.order(maker_idx0).parent.expect("maker must have parent bucket");
             self.bucket(parent).tail
@@ -578,7 +578,7 @@ impl OrderBookDirectImpl {
         (taker_filled, taker_filled_notional)
     }
 
-    /// IOC：即时撮合（价格受限），未成交剩余直接 REJECT、从不挂簿，对应 Java `newOrderMatchIoc`(`:191-202`)。
+    /// IOC：即时撮合（价格受限），未成交剩余直接 REJECT、从不挂簿，对应 Java `newOrderMatchIoc`。
     fn new_order_match_ioc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC order requires action");
         let price = cmd.price;
@@ -592,7 +592,7 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// IOC_BUDGET：仅支持 BID（用预算上限买），ASK 语义模糊整单 REJECT（同 Naive），对应 Java `newOrderMatchIocBudget`(`:133-145`)。
+    /// IOC_BUDGET：仅支持 BID（用预算上限买），ASK 语义模糊整单 REJECT（同 Naive），对应 Java `newOrderMatchIocBudget`。
     fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC_BUDGET order requires action");
         if action != OrderAction::Bid {
@@ -864,7 +864,7 @@ impl OrderBookDirectImpl {
     }
 
     // ===== 内部 helper =====
-    /// 无价格限制探测撮合满 `size` 所需总预算，对应 Java `checkBudgetToFill`(`:222-250`)；按桶粒度走，凑不够返回 `i64::MAX` 哨兵，累加用 `i128` 防溢出。
+    /// 无价格限制探测撮合满 `size` 所需总预算，对应 Java `checkBudgetToFill`；按桶粒度走，凑不够返回 `i64::MAX` 哨兵，累加用 `i128` 防溢出。
     fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
         let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
         let mut budget: i128 = 0;
@@ -891,7 +891,7 @@ impl OrderBookDirectImpl {
         i64::MAX // 流动性不足以吃满 size（对应 Java `Long.MAX_VALUE` 哨兵）
     }
 
-    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本<=limit、ASK 要求收入>=limit；`i64::MAX` 哨兵恒不满足。
+    /// 对应 Java `isBudgetLimitSatisfied`：BID 要求成本<=limit、ASK 要求收入>=limit；`i64::MAX` 哨兵恒不满足。
     fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
         calculated != i64::MAX
             && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
@@ -2328,7 +2328,7 @@ mod tests {
 
     /// 回归测试（code review 发现的严重 bug）：`match_against_budget_ioc` 曾在"吃穿整个桶、跨到下一个（更差）价位"（`midx == price_bucket_tail`）时忘记把 `batch_remaining` 清零，
     /// 导致把按*旧*价位算出的预算余量（`batch_remaining` 仍 >0，因这一档是被"流动性耗尽"而非"预算/量耗尽"截断）原封不动套到*新*价位上继续吃，完全跳过对新价位的 affordability 检查——
-    /// 这与 Naive 对每个价位都独立重新计算 `size_cap`（`match_against_budget`, `order_book_naive_impl.rs:261-271`）不一致，会产生比预算实际能负担的更多成交
+    /// 这与 Naive 对每个价位都独立重新计算 `size_cap`（`match_against_budget`, `order_book_naive_impl.rs`）不一致，会产生比预算实际能负担的更多成交
     /// （复现：asks `100 -> {size 3}` 后 `200 -> {size 100}`，taker BID IOC_BUDGET `size=10` `budget(price)=1000`；旧 bug 版本会在跨桶后继续用价位 100 算出的 `size_cap=10` 里剩下的 `7` 去吃 200 那一档而不重新核对 700 的预算，得到 filled=10、notional=1700>1000）。
     ///
     /// 正确结果（Naive 与修复后的 Direct 都应如此）：价位 100 的 `size_cap=min(10,1000/100=10)=10`，但该桶只有 3 → 吃 3（`maker_completed=true`），花掉 300，剩预算 700；
@@ -2845,7 +2845,7 @@ mod tests {
 
     #[test]
     fn move_ask_ignores_reserve_price_guard_even_on_exchange_pair_spec() {
-        // 风控只针对 BID（Java `:565`：`orderToMove.action == OrderAction.BID` 是必要条件）。
+        // 风控只针对 BID（对应 Java：`orderToMove.action == OrderAction.BID` 是必要条件）。
         let mut book = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
         book.new_order(&mut gtc_cmd(1, OrderAction::Ask, 100, 5)); // ASK，reserve_bid_price 恒 0
 

@@ -68,7 +68,7 @@ impl OrdersBucketNaive {
         Some(o.clone())
     }
 
-    /// 从桶头 FIFO 撮合 to_collect，返回剩余未撮合量；回调携带 maker 的 uid/reserve_bid_price/command 供填 MatcherTradeEvent 字段。对应 Java `OrdersBucketNaive.match` / `OrderBookEventsHelper.java:75`。
+    /// 从桶头 FIFO 撮合 to_collect，返回剩余未撮合量；回调携带 maker 的 uid/reserve_bid_price/command 供填 MatcherTradeEvent 字段。对应 Java `OrdersBucketNaive.match` / `OrderBookEventsHelper.java`。
     pub fn match_forward(&mut self, mut to_collect: i64,
                          on_trade: &mut impl FnMut(MakerFill)) -> i64 {
         let seqs: Vec<i64> = self.entries.keys().copied().collect();
