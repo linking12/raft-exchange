@@ -76,12 +76,11 @@ impl ExchangeCore {
             return;
         }
 
-        // ---- R1 风控预处理:校验/冻结/仓位预处理/两步命令 collect/强平扫描判定 ----
+        // R1（职责见上方 doc 表）
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
-        // ---- ME 撮合:下单/撤单/改单/减量/强平吃单;非交易命令在此 no-op(保留 R1 结果码) ----
+        // ME（非交易命令在此 no-op，保留 R1 结果码）
         self.matching.process_order(cmd);
-        // ---- R2 风控后置:成交结算/释放/PnL/费用入池/两步命令 apply/事件产出 ----
-        //      只读遍历事件链、不消费,`matcher_event` 留在 cmd 上供下游结果处理器读取(链存活到结果处理器)。
+        // R2：只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游结果处理器读取（链存活到结果处理器）。
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
         // R2 尾:现货成交动态回写 markPrice(对齐 Java handlerRiskRelease 尾部 applyTradePrice),供 loan 现货抵押估值。
         self.risk.apply_spot_trade_price_from(cmd, &self.ssp);

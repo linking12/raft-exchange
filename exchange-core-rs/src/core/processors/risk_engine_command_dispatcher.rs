@@ -1,6 +1,6 @@
 //! 对应 Java `exchange.core2.core.processors.RiskEngineCommandDispatcher`：把非交易命令（账户 / 行情 / 运营）
 //! 的 R1 处理从 `RiskEngine` 抽出，令 RiskEngine 只留撮合交易 + R2 结算，与 `LoanCommandDispatcher` 对称。
-//! `pre_process_command` 的 ② 非交易 lane 整块委托本 dispatcher。方法体从 RiskEngine 原样搬迁（行为中性）。
+//! `pre_process_command` 的 ② 非交易 lane 整块委托本 dispatcher。
 
 use std::collections::BTreeMap;
 use crate::core::common::cmd::command_result_code::CommandResultCode;

@@ -114,7 +114,6 @@ impl RiskEngine {
         }
     }
 
-    /// R1 入口，按 cmd.command 路由（非交易命令整块委托/PlaceOrder→风控冻结/ClosePosition→纯减仓/其余直落 ME）。
     /// R1 —— 风控预处理(管线第一段,`ExchangeCore::process_command` 首先调用)。
     ///
     /// 按四条互斥 lane 分派(命中即定 `cmd.result_code` 或写 collect 载体,后续 lane 不再触及):
@@ -192,9 +191,7 @@ impl RiskEngine {
         } else if cmd.command == OrderCommandType::LiquidationScan {
             // ④ 扫描 lane：LIQUIDATION_SCAN 纯扫描（check_positions），单 shard 恒 Success；命中的强平命令入队待级联。
             let mut _alerts = Vec::new();
-
             self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut _alerts);
-
             cmd.fund_events.append(&mut _alerts);
             cmd.result_code = Some(CommandResultCode::Success);
         }
@@ -281,43 +278,39 @@ impl RiskEngine {
         ssp: &SymbolSpecificationProvider,
     ) {
         log::trace!("R2 handler_risk_release: cmd={:?} uid={} symbol={} result={:?}", cmd.command, cmd.uid, cmd.symbol, cmd.result_code);
-        // ① RepriceLoanRates 虽 is_non_trading() 但需真正 R2 处理，须在通用 is_non_trading 早退前特判。
+        // ①~⑤ 专属载体命令（顺序/载体见上方 doc 表），都须在通用 is_non_trading 早退前特判。
+        // ① RepriceLoanRates
         if cmd.command == OrderCommandType::RepriceLoanRates {
             self.reprice_loan_rates_apply(cmd);
             return;
         }
-        // ② InternalTransfer 同理需在 is_non_trading 早退前特判；载体为 cmd.internal_transfer_event 而非 matcher_event。
+        // ② InternalTransfer
         if cmd.command == OrderCommandType::InternalTransfer {
             self.internal_transfer_apply(cmd, ups, ssp);
             return;
         }
-        // ③ SettleFundingfees 非 is_non_trading，用 cmd.funding_fee_event 专属载体，须在 cmd.matcher_event.take() 之前特判。
+        // ③ SettleFundingfees
         if cmd.command == OrderCommandType::SettleFundingfees {
-            // 门控：无 funding 事件（cmd.funding_fee_event=None）则不触发 checkPositions。
+            // 门控：无 funding 事件则不触发 checkPositions；有则结算后查同 symbol 强平（结算可能致仓破产）。
             let had_funding_event = cmd.funding_fee_event.is_some();
             self.settle_funding_fees_apply(cmd, ups, ssp);
-            // 资金费结算后触发同 symbol 强平检测（结算可能致仓破产）。
             if had_funding_event {
                 let mut _alerts = Vec::new();
-
                 self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut _alerts);
-
                 cmd.fund_events.append(&mut _alerts);
             }
             return;
         }
-        // ④ IfTakeover 用 cmd.if_takeover_size/if_preview_cover 专属载体，不走 matcher_event 链。
+        // ④ IfTakeover
         if cmd.command == OrderCommandType::IfTakeover {
             self.if_takeover_apply(cmd, ups, ssp);
-            // IF R2 结算后推进状态机（REJECT→ADL）。
-            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
+            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups); // 结算后推进状态机（REJECT→ADL）
             return;
         }
-        // ⑤ AutoDeleveraging 用 cmd.adl_events/adl_user_positions 专属载体。
+        // ⑤ AutoDeleveraging
         if cmd.command == OrderCommandType::AutoDeleveraging {
             self.adl_apply(cmd, ups, ssp);
-            // ADL R2 结算后推进状态机（恒终态）。
-            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
+            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups); // 结算后推进状态机（恒终态）
             return;
         }
         // 其余非交易命令：R1 已定结果码，R2 无事可做。
