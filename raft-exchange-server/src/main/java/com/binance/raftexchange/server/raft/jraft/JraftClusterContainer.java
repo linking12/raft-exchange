@@ -41,8 +41,6 @@ import com.binance.raftexchange.server.raft.jraft.closure.BatchClosure;
 import com.binance.raftexchange.server.raft.jraft.closure.BatchClosure.PendingCmd;
 import com.binance.raftexchange.server.raft.jraft.closure.SingleClosure;
 import com.binance.raftexchange.server.util.AppHome;
-import com.binance.raftexchange.server.util.SerializeHelper;
-import com.google.protobuf.GeneratedMessageV3;
 
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.processors.liquidation.LiquidationScheduledService;
@@ -169,21 +167,17 @@ public class JraftClusterContainer implements RaftClusterContainer {
 
     @Override
     public void requestConsensus(byte[] cmdBytes, BiConsumer<RaftResponse, Throwable> callback) {
-        ByteBuffer data = ByteBuffer.wrap(cmdBytes);
-        GeneratedMessageV3 msg;
+        final com.binance.raftexchange.stubs.request.ApiCommand msg;
         try {
-            msg = SerializeHelper.deserializeWithType(data);
+            msg = com.binance.raftexchange.stubs.request.ApiCommand.newBuilder().mergeFrom(cmdBytes)
+                .setTimestamp(System.currentTimeMillis()).build();
         } catch (Exception e) {
             LOGGER.warn("Failed to pre-parse for leader fast path", e);
             callback.accept(null, e);
             return;
         }
-        if (msg instanceof com.binance.raftexchange.stubs.request.ApiCommand api) {
-            com.binance.raftexchange.stubs.request.ApiCommand stamped = api.toBuilder().setTimestamp(System.currentTimeMillis()).build();
-            cmdBytes = stamped.toByteArray();
-            data = ByteBuffer.wrap(cmdBytes);
-            msg = stamped;
-        }
+        cmdBytes = msg.toByteArray();
+        final ByteBuffer data = ByteBuffer.wrap(cmdBytes);
         if (batchCommandHelper == null || !jraftExchangeStateMachine.canBatch(msg)) {
             raftGroupService.getRaftNode().apply(new Task(data, new SingleClosure(callback, msg)));
             return;
