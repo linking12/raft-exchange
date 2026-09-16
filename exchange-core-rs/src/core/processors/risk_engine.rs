@@ -2385,7 +2385,7 @@ impl RiskEngine {
                 }
             }
         } else {
-            // IF 全拒：合成 REJECT 供 advance_liquidation 升级 ADL（P6-A 下接受走 if_takeover_size 载体、拒绝仍经 matcher_event）。
+            // IF 全拒：合成 REJECT 供 advance_liquidation 升级 ADL（接受走 if_takeover_size 载体、拒绝仍经 matcher_event）。
             cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
                 event_type: MatcherEventType::Reject,
                 ..Default::default()
@@ -3105,7 +3105,7 @@ mod tests {
 
         engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
-        // 端到端验证：REDUCE 释放 0 + buy 结算全额释放 held_total → taker quote 冻结清零，验证 Task5 release_sp=0 的前提成立。
+        // 端到端验证：REDUCE 释放 0 + buy 结算全额释放 held_total → taker quote 冻结清零，验证 release_sp=0 的前提成立。
         assert_eq!(
             ups.get(UID).unwrap().locked(QUOTE),
             0,
@@ -3751,7 +3751,7 @@ mod tests {
         );
     }
 
-    /// Task5/7 一致性证明：IOC_BUDGET 部分成交时须释放整份 held_total（非本次成交量），对应 Task5 的 release_sp=0 假设；断言 hold_quote 等于下单时锁定的 locked_after_place。
+    /// 一致性证明：IOC_BUDGET 部分成交时须释放整份 held_total（非本次成交量），对应 release_sp=0 假设；断言 hold_quote 等于下单时锁定的 locked_after_place。
     #[test]
     fn buy_ioc_budget_partial_fill_releases_full_held_total_matching_task5_assumption() {
         // taker_fee=500/1_000_000=0.05%，maker_fee=100/1_000_000=0.01%。
@@ -3786,7 +3786,7 @@ mod tests {
         buyer_cmd.matcher_event = Some(trade_event(400, 50, 60_000, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // 核心断言：taker quote 冻结应清零，hold_quote 恰等于 held_total 全额，与部分成交量无关，即 Task5 release_sp=0 的前提。
+        // 核心断言：taker quote 冻结应清零，hold_quote 恰等于 held_total 全额，与部分成交量无关，即 release_sp=0 的前提。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(
             buyer.locked(QUOTE),
@@ -5855,7 +5855,7 @@ mod tests {
 
         #[test]
         fn symbol_section_rejects_collateral_weight_above_10000_and_applies_nothing() {
-            // 前瞻性护栏测试：保证 collateral_weight_bps 恒在 [0,10000]，防 Task5 cross-LTV trunc_mul_div panic 不可达失效。
+            // 前瞻性护栏测试：保证 collateral_weight_bps 恒在 [0,10000]，防 cross-LTV trunc_mul_div panic 不可达失效。
             let (mut engine, mut ssp) = add_loan_setup();
             let s = SymbolLoanConfig {
                 symbol_id: SYMBOL,

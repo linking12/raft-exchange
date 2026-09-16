@@ -12,5 +12,3 @@ pub mod matching_engine_router;
 pub mod risk_engine;
 pub mod symbol_specification_provider;
 pub mod user_profile_service;
-
-// TODO(port): 各处理器移植状态见对应子模块。

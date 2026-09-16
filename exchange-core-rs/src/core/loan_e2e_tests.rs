@@ -17,7 +17,7 @@ use crate::core::exchange_core::ExchangeCore;
 use crate::core::processors::loan::loan_service::LoanService;
 
 // ================================================================================================
-// 守恒 / 不变式 helper（Step 1）
+// 守恒 / 不变式 helper
 // ================================================================================================
 
 /// 全局守恒断言（参考文档 §6.2，逐桶对齐 Java 报告），零容差：每个已注册 currency 上式必须恰好等于 0。
@@ -347,7 +347,7 @@ fn spot_spec(symbol_id: i32, base: i32, quote: i32) -> CoreSymbolSpecification {
 }
 
 // ================================================================================================
-// e2e 场景 1：Isolated open → accrue → partial repay → full repay（Step 2）。
+// e2e 场景 1：Isolated open → accrue → partial repay → full repay。
 // ================================================================================================
 
 #[test]
@@ -439,7 +439,7 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
 }
 
 // ================================================================================================
-// e2e 场景 2：Cross borrow（多笔）→ withdraw-collateral 边界（拒绝 + 放行）→ repay（Step 2）。
+// e2e 场景 2：Cross borrow（多笔）→ withdraw-collateral 边界（拒绝 + 放行）→ repay。
 // ================================================================================================
 
 #[test]
@@ -507,7 +507,7 @@ fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
 }
 
 // ================================================================================================
-// e2e 场景 3：Isolated force-liquidate 全成交 + LIF 接管（欠抵押）（Step 2）。
+// e2e 场景 3：Isolated force-liquidate 全成交 + LIF 接管（欠抵押）。
 // ================================================================================================
 
 fn isolated_force_liquidate_world() -> (ExchangeCore, i32, i32, i32, i64, i64) {
@@ -597,7 +597,7 @@ fn scenario_isolated_force_liquidate_lif_takeover_undercollateralized() {
 }
 
 // ================================================================================================
-// e2e 场景 4：POOL_DEPOSIT/WITHDRAW + LOAN_IF_DEPOSIT/WITHDRAW 运维序列（Step 2）。
+// e2e 场景 4：POOL_DEPOSIT/WITHDRAW + LOAN_IF_DEPOSIT/WITHDRAW 运维序列。
 // ================================================================================================
 
 #[test]
@@ -641,7 +641,7 @@ fn scenario_pool_and_if_ops() {
 }
 
 // ================================================================================================
-// e2e 场景 5：reprice → accrue → repay（Step 2；利息按 repriced 利率计提）。
+// e2e 场景 5：reprice → accrue → repay（利息按 repriced 利率计提）。
 // ================================================================================================
 
 #[test]
@@ -723,7 +723,7 @@ fn scenario_reprice_then_accrue_then_repay() {
 
 // ================================================================================================
 // e2e 场景 6：Cross force-liquidate 触发多笔剩余 cross loan 一并交给 LIF（loanId 升序 sweep，
-// 价值在于跨副本确定性——聚合桶结果对处理顺序本身不敏感，Step 2）。
+// 价值在于跨副本确定性——聚合桶结果对处理顺序本身不敏感）。
 // ================================================================================================
 
 #[test]
@@ -816,7 +816,7 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
 }
 
 // ================================================================================================
-// Step 3：全局守恒 proptest —— 随机 loan 命令流 + 随机 mark 价 + 时间推进（Step 3）。
+// 全局守恒 proptest —— 随机 loan 命令流 + 随机 mark 价 + 时间推进。
 // ================================================================================================
 
 #[derive(Debug, Clone)]
@@ -971,7 +971,7 @@ fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenLoanCmd>)> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
-    /// Step 3：任意合式 loan 命令流逐步跑完都不 panic，全局守恒/tracker 一致/accounts 非负每步零容差成立。
+    /// 任意合式 loan 命令流逐步跑完都不 panic，全局守恒/tracker 一致/accounts 非负每步零容差成立。
     #[test]
     fn loan_conservation_holds_for_random_command_stream(
         (n_users, cmds) in scenario_strategy()

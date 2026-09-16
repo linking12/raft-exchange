@@ -34,6 +34,8 @@ mod tests {
     use exchange_core_rs::core::common::order_type::OrderType;
     use exchange_core_rs::core::common::symbol_type::SymbolType;
     use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
+    use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+    use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
 
     const XBT: i32 = 3762;
     const USD: i32 = 840; // QUOTE_ID
@@ -457,6 +459,54 @@ mod tests {
 
         let remaining = open_volume(&api, trader, BTC_SYM) + open_volume(&api, trader, ETH_SYM);
         assert!(remaining < initial_total, "全仓强平后总仓位应小于初始（至少一个仓位被减）");
+        assert_conserved(&api);
+    }
+
+    // LIQUIDATION_SCAN 切片端到端：两个都该爆的用户（uid 奇偶不同），发只覆盖一个切片的 SCAN，
+    // 断言只有中签 uid 被强平、另一个到下一片才处理。验证 uid 轮询切片（covered_by_scan_slice）真的生效。
+    #[test]
+    fn liquidation_scan_slice_only_covers_matching_uid() {
+        let entry = 10_000i64;
+        let bp_fill = 9_920i64;
+        let trader_even = 1_000i64; // slice 0（偶）
+        let trader_odd = 1_001i64; // slice 1（奇）
+        let lp = 2_000i64;
+        let size = 10i64;
+
+        let mut api = setup_btc(entry);
+        seed_user(&mut api, trader_even, 3_000, 1);
+        seed_user(&mut api, trader_odd, 3_000, 2);
+        seed_user(&mut api, lp, 1_000_000, 3);
+
+        // 两个 trader 各 ISOLATED long 10@entry；lp CROSS short 对手。
+        assert_eq!(place(&mut api, 1, trader_even, BTC_SYM, entry, size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 2, lp, BTC_SYM, entry, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 3, trader_odd, BTC_SYM, entry, size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
+        assert_eq!(place(&mut api, 4, lp, BTC_SYM, entry, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
+        assert_eq!(open_volume(&api, trader_even, BTC_SYM), size);
+        assert_eq!(open_volume(&api, trader_odd, BTC_SYM), size);
+
+        // lp 在破产价挂大额接单流动性（够两次强平）。
+        assert_eq!(place(&mut api, 5, lp, BTC_SYM, bp_fill, 3 * size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
+
+        // 先在 is_running=false 时压低 markprice：价格入缓存但 check_positions 早退，不触发定向扫描。
+        assert_eq!(api.set_mark_price_at(BTC_SYM, 500, 2_000), CommandResultCode::Success);
+        assert_eq!(open_volume(&api, trader_even, BTC_SYM), size, "未开清算前不扫");
+        assert_eq!(open_volume(&api, trader_odd, BTC_SYM), size);
+
+        api.enable_liquidation();
+
+        // 切片 0（size=2，覆盖偶 uid）→ 只强平 trader_even。
+        let scan = |slice: i64| OrderCommand {
+            command: OrderCommandType::LiquidationScan, symbol: -1, uid: slice, size: 2, timestamp: 3_000, ..Default::default()
+        };
+        assert_eq!(api.submit(scan(0)), CommandResultCode::Success);
+        assert!(api.user_position(trader_even, BTC_SYM).is_none(), "偶 uid 中签切片0 → 被强平");
+        assert_eq!(open_volume(&api, trader_odd, BTC_SYM), size, "奇 uid 未中签切片0 → 保留");
+
+        // 切片 1（覆盖奇 uid）→ trader_odd 才被强平。
+        assert_eq!(api.submit(scan(1)), CommandResultCode::Success);
+        assert!(api.user_position(trader_odd, BTC_SYM).is_none(), "奇 uid 中签切片1 → 被强平");
         assert_conserved(&api);
     }
 }

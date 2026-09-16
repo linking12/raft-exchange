@@ -1220,7 +1220,7 @@ mod snapshot_tests {
 }
 
 // ============================================================================
-// SETTLE_PNL（交割合约到期结算）e2e——对应 Java RiskEngine.settlePnl（:695）。
+// SETTLE_PNL（交割合约到期结算）e2e——对应 Java RiskEngine.settlePnl。
 // ============================================================================
 #[cfg(test)]
 mod settle_pnl_tests {

@@ -508,10 +508,10 @@ fn scenario_self_trade_conserves_globally() {
 }
 
 // ============================================================================================
-// Step 2/3：随机命令流守恒 proptest（设计文档 §7 / 参考文档 §6）。
+// 随机命令流守恒 proptest（设计文档 §7 / 参考文档 §6）。
 // ============================================================================================
 
-/// 随机命令生成器：price/size 范围避免溢出，BID 恒取 reserve_bid_price==price（不覆盖 BUDGET 语义），CANCEL/REDUCE 从 `issued` 里取目标；断言策略见 `assert_invariants_gated`（P3-C 裁决：exchange_locked 非负仅 fixed_fee 分支断言）。
+/// 随机命令生成器：price/size 范围避免溢出，BID 恒取 reserve_bid_price==price（不覆盖 BUDGET 语义），CANCEL/REDUCE 从 `issued` 里取目标；断言策略见 `assert_invariants_gated`（裁决：exchange_locked 非负仅 fixed_fee 分支断言）。
 #[derive(Debug, Clone)]
 enum GenCmd {
     Place { uid_idx: usize, is_bid: bool, order_type_idx: u8, price: i64, size: i64 },
@@ -559,7 +559,7 @@ fn scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<(i64, i64)>, V
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Step 2/3：任意合式命令流逐步跑完不 panic，守恒式恒成立、accounts 恒非负，exchange_locked 非负仅 fixed_fee=true 分支断言。比例费分支 maker_fee 刻意固定为 0，规避 `RiskEngine.handleMatcherEventsExchangeSell` 里 `calculate_amount_bid_release_corr_maker` 与 fees 池独立 ceil 不满足 `ceil(a-b)==ceil(a)-ceil(b)` 导致的第二个未裁决 Java 继承缺陷（与文件末尾 characterization 的 exchange_locked 超可加性缺陷不同根因，未修复、待单独立项）。
+    /// 任意合式命令流逐步跑完不 panic，守恒式恒成立、accounts 恒非负，exchange_locked 非负仅 fixed_fee=true 分支断言。比例费分支 maker_fee 刻意固定为 0，规避 `RiskEngine.handleMatcherEventsExchangeSell` 里 `calculate_amount_bid_release_corr_maker` 与 fees 池独立 ceil 不满足 `ceil(a-b)==ceil(a)-ceil(b)` 导致的第二个未裁决 Java 继承缺陷（与文件末尾 characterization 的 exchange_locked 超可加性缺陷不同根因，未修复、待单独立项）。
     #[test]
     fn conservation_holds_for_random_command_stream(
         (fixed_fee, n_users, balances, cmds) in scenario_strategy()
@@ -644,10 +644,10 @@ proptest! {
 }
 
 // ============================================================================================
-// Characterization test：Java 参考实现既有缺陷，P3-C 裁决保留 parity 不修生产代码——断言缺陷确实按 Java 方式发生。
+// Characterization test：Java 参考实现既有缺陷，裁决保留 parity 不修生产代码——断言缺陷确实按 Java 方式发生。
 // ============================================================================================
 //
-// 最小复现：比例费 BID 挂单被两笔独立 ASK 分两次吃完，第二次结算后 exchange_locked[QUOTE] 变为 -1。根因：Java `RiskEngine.handleMatcherEventsExchangeSell` ~1154-1163 / `handleMatcherRejectReduceEventExchange` ~1094-1120（经 `CoreArithmeticUtils.calculateAmountBidTakerFee` ~96-101 行）每次释放独立重新 ceil，ceiling 超可加性导致跨 ≥2 次释放时总释放额超过原始冻结额；只影响 `exchange_locked` 记账标记，不参与真实守恒等式求和，故 P3-C 裁决不修，仅断言 parity。
+// 最小复现：比例费 BID 挂单被两笔独立 ASK 分两次吃完，第二次结算后 exchange_locked[QUOTE] 变为 -1。根因：Java `RiskEngine.handleMatcherEventsExchangeSell` ~1154-1163 / `handleMatcherRejectReduceEventExchange` ~1094-1120（经 `CoreArithmeticUtils.calculateAmountBidTakerFee` ~96-101 行）每次释放独立重新 ceil，ceiling 超可加性导致跨 ≥2 次释放时总释放额超过原始冻结额；只影响 `exchange_locked` 记账标记，不参与真实守恒等式求和，故裁决不修，仅断言 parity。
 #[test]
 fn characterization_proportional_fee_bid_multi_release_matches_java_negative_lock() {
     const MAKER: i64 = 1; // 挂 BID，被两笔独立 ASK 分两次吃完。
@@ -711,7 +711,7 @@ fn characterization_proportional_fee_bid_multi_release_matches_java_negative_loc
         CommandResultCode::Success
     );
 
-    // Characterization：exchange_locked 确实变成 Java 会产生的负值 -1（P3-C 裁决：保留 parity，断言缺陷发生了）。
+    // Characterization：exchange_locked 确实变成 Java 会产生的负值 -1（裁决：保留 parity，断言缺陷发生了）。
     assert_eq!(
         api.user_locked(MAKER, QUOTE),
         -1,

@@ -54,7 +54,7 @@ pub enum OrderCommandType {
 
     /// 对应 Java `REPRICE_LOAN_RATES`（码 63）：**不属于** `isLoan()` 的 14 码；走
     /// `isNonTrading()` → `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`
-    /// （TwoStep reprice 管线，参考文档 §4.2；此处只落分类，管线本体留后续）。
+    /// （TwoStep reprice 管线，参考文档 §4.2）。
     RepriceLoanRates,
 
     // 期货强平/ADL/资金费/内部转账命令码。

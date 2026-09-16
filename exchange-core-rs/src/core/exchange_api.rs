@@ -494,7 +494,7 @@ mod tests {
         });
         assert_eq!(bid_rc, CommandResultCode::Success);
 
-        // ---- 逐用户余额断言（手算见 task-10 报告，taker_fee=10/maker_fee=5 固定费）----
+        // ---- 逐用户余额断言（taker_fee=10/maker_fee=5 固定费）----
         // 卖方（maker/ASK）：quote 收到 size*price − maker_fee = 45_000。
         assert_eq!(api.user_account(SELLER, BASE), 0);
         assert_eq!(api.user_locked(SELLER, BASE), 0);
@@ -620,7 +620,7 @@ mod tests {
         assert!(api.ssp().get_symbol(SYMBOL).is_none(), "拒绝的 symbol 不得注册");
     }
 
-    /// Step 1（RED→GREEN）：一笔期货 taker/maker 成交端到端——建期货 symbol/建用户/充值/设 mark 价 → 空方
+    /// 一笔期货 taker/maker 成交端到端——建期货 symbol/建用户/充值/设 mark 价 → 空方
     /// （SHORT_USER）先挂 ASK（maker，开空）、多方（LONG_USER）吃单 BID（taker，开多）完全成交 → 断言双方头寸
     /// （direction/open_volume/open_init_margin_sum）+ accounts（仅 fees 流出）+ 全局守恒；再把 mark 价推高后双方互相平仓，
     /// 断言已实现 PnL 结算进 accounts 且守恒依旧成立、position 记录被拆除。

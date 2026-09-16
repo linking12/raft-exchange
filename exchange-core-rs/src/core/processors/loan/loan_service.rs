@@ -944,7 +944,7 @@ mod tests {
         assert_eq!(s2.calculate_cross_account_ltv_bps(&up2, 1_000, &ssp, &price_cache, true), 0);
     }
 
-    /// 核心分歧断言（brief Step1 要求）：同一账户状态下，加权口径（`applyWeight=true`，`collateralWeightBps=5000`=50%）与不加权口径（`applyWeight=false`，pricing 用）必须给出不同的 LTV 数值——分母打了 5 折，加权 LTV 应恰好是不加权 LTV 的 2 倍。
+    /// 核心分歧断言：同一账户状态下，加权口径（`applyWeight=true`，`collateralWeightBps=5000`=50%）与不加权口径（`applyWeight=false`，pricing 用）必须给出不同的 LTV 数值——分母打了 5 折，加权 LTV 应恰好是不加权 LTV 的 2 倍。
     #[test]
     fn weighted_and_raw_cross_ltv_diverge_when_collateral_weight_below_full() {
         let (ssp, price_cache) = cross_fixture(5_000); // 50% weight

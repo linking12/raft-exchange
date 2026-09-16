@@ -5,7 +5,6 @@ use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::common::user_status::UserStatus;
 
-/// 对应 Java `UserProfileService`（现货子集：注册表 + addEmptyUserProfile/getUserProfile/getUserProfileOrAddSuspended）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct UserProfileService {
     pub users: BTreeMap<i64, UserProfile>,

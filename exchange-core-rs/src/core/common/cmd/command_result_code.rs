@@ -28,12 +28,12 @@ pub enum CommandResultCode {
     SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
 
     // ================================================================
-    // 内部转账，逐字对应 Java `CommandResultCode.java:74`（handler 留后续，见参考文档 §5.1；这里只落码值，供 InternalTransferProcessor.collectInput 的 R1 校验用）。
+    // 内部转账，逐字对应 Java `CommandResultCode.java:74`；供 InternalTransferProcessor.collectInput 的 R1 校验用。
     // ================================================================
     InternalTransferInvalidSelf, // -4301，from == to 自转
 
     // ================================================================
-    // 现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`（handler 本身留后续，这里先落码值，供后续直接引用）。
+    // 现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`。
     // ================================================================
     LoanNotEnabled,          // -6001，spec.loanConfig.initialLtvBps == 0
     LoanAlreadyExists,       // -6002，loanId 已存在（Isolated / Cross 命名空间独立）
