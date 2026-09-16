@@ -17,9 +17,15 @@ import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiInsuranceFundDeposit;
 import exchange.core2.core.common.api.ApiLoanCreate;
+import exchange.core2.core.common.api.ApiLoanCrossAddCollateral;
+import exchange.core2.core.common.api.ApiLoanCrossBorrow;
+import exchange.core2.core.common.api.ApiLoanCrossRepay;
+import exchange.core2.core.common.api.ApiLoanCrossWithdrawCollateral;
+import exchange.core2.core.common.api.ApiLoanIfDeposit;
 import exchange.core2.core.common.api.ApiLoanRepay;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiPoolDeposit;
+import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.ApiSettleFundingFees;
 import exchange.core2.core.common.api.ApiSettlePNL;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
@@ -100,7 +106,10 @@ public class ConformanceExporter {
         boolean eventsOn = lines.stream().noneMatch(l -> l.replaceFirst("^#+", "").trim().equals("!events=off"));
         StringBuilder out = new StringBuilder();
         List<Long> uids = new ArrayList<>();
-        final List<String> feAccum = new ArrayList<>();
+        // 线程安全:同步/join 路径由主线程 append,但异步清算(FORCE→IF→ADL)的 fund event 由 disruptor
+        // 结果线程(E 阶段)append、由主线程 SCAN 循环读——裸 ArrayList 跨线程会漏读/串读(曾致 LIQUIDATION_FEE
+        // 被读成两条)。用 synchronizedList 保证可见性与原子性。
+        final List<String> feAccum = Collections.synchronizedList(new ArrayList<>());
 
         IEventsHandler4Test handler = new IEventsHandler4Test() {
             @Override public void process(FundEventReport r) { fundEventReport(r); }
@@ -119,6 +128,10 @@ public class ConformanceExporter {
             }
         };
 
+        // 清算/ADL 事件级对拍需捕获确定:把后台定时扫描线程间隔拉到 24h,使其本次导出期间永不触发——唯一扫描来自
+        // SCAN 循环的显式 triggerLiquidation,消除后台线程注入的非确定扫描。纯测试侧;LiquidationEngine 仅构造时读一次,
+        // 须在 create() 前设;非清算向量不开清算引擎、不受影响。
+        System.setProperty("raftexchange.liquidation.interval", "86400");
         try (ExchangeTestContainer c = ExchangeTestContainer.create(
                 PerformanceConfiguration.DEFAULT, new SimpleEventsProcessor4Test(handler))) {
             ExchangeApi api = c.getApi();
@@ -221,6 +234,9 @@ public class ConformanceExporter {
                                         });
                                     }
                                 }
+                                // 稳定判据同时纳入已捕获事件数:级联最后一批命令的 fund event 可能晚于仓位定格才到达,
+                                // 只看仓位会提前判稳、漏掉迟到事件。事件数不再变化才算真静默 → 捕获确定。
+                                snap.append("|fe=").append(feAccum.size());
                                 String cur = snap.toString();
                                 stable = cur.equals(prev) ? stable + 1 : 0;
                                 prev = cur;
@@ -261,6 +277,40 @@ public class ConformanceExporter {
                         rc = api.submitCommandAsync(ApiLoanRepay.builder()
                                 .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid"))
                                 .loanId(pl(kv, "loanId")).repayAmount(pl(kv, "repay")).build()).join();
+                        break;
+                    case "LOAN_GLOBAL":
+                        // 全局 loan 运行时配置(numeraire/cross LTV/池上限/清算费/派生缓冲),走 binary 命令
+                        // (对应 Rust api.add_loan 直接 facade);setup,不发 R。7 参顺序 == GlobalLoanConfig 字段顺序。
+                        c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofGlobal(
+                                (int) pl(kv, "numeraire", 0), (int) pl(kv, "crossLiqLtv", 0),
+                                (int) pl(kv, "crossMcLtv", 0), (int) pl(kv, "poolCap", 0),
+                                (int) pl(kv, "liqFee", 0), (int) pl(kv, "liqBuf", 0),
+                                (int) pl(kv, "mcBuf", 0)), 5000);
+                        break;
+                    case "LOAN_CROSS_ADD_COLLATERAL":
+                        rc = api.submitCommandAsync(ApiLoanCrossAddCollateral.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid"))
+                                .currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        break;
+                    case "LOAN_CROSS_WITHDRAW_COLLATERAL":
+                        rc = api.submitCommandAsync(ApiLoanCrossWithdrawCollateral.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid"))
+                                .currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        break;
+                    case "LOAN_CROSS_BORROW":
+                        rc = api.submitCommandAsync(ApiLoanCrossBorrow.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid"))
+                                .loanId(pl(kv, "loanId")).symbolId(pi(kv, "sym")).principal(pl(kv, "principal")).build()).join();
+                        break;
+                    case "LOAN_CROSS_REPAY":
+                        rc = api.submitCommandAsync(ApiLoanCrossRepay.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid"))
+                                .loanId(pl(kv, "loanId")).repayAmount(pl(kv, "repay")).build()).join();
+                        break;
+                    case "LIF_DEPOSIT":
+                        rc = api.submitCommandAsync(ApiLoanIfDeposit.builder()
+                                .shardId(0).currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        rc = null; // 与 Rust 对齐:LIF_DEPOSIT 运维 setup,不入 R
                         break;
                     default:
                         throw new IllegalArgumentException("未支持 verb: " + verb);

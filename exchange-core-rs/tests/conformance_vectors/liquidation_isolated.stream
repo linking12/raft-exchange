@@ -1,4 +1,3 @@
-#!events=off
 # 逐仓多头暴跌被强平。镜像 it_liquidation basic_liquidation_isolated_long。
 # Java 需 SCAN(triggerLiquidation,exporter 循环触发至级联 settle)触发;Rust MARK_AT 即定向扫。
 # 状态 + 结算类 fund event(LIQUIDATION_CLOSE/FEE/PNL_SETTLEMENT)均对拍 Java。
