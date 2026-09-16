@@ -7,7 +7,6 @@ pub mod order_book_direct_impl;
 pub mod order_book_naive_impl;
 pub mod orders_bucket_naive;
 
-#[cfg(test)]
-mod direct_naive_diff_tests;
+// Direct vs Naive 差分测试已迁至 `tests/orderbook_diff.rs`(只用公开 API)。
 
 pub use order_book_direct_impl::OrderBookDirectImpl;

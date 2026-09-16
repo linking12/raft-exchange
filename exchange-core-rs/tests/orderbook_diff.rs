@@ -7,15 +7,15 @@ use std::panic;
 
 use proptest::prelude::*;
 
-use crate::core::common::cmd::command_result_code::CommandResultCode;
-use crate::core::common::cmd::order_command::OrderCommand;
-use crate::core::common::cmd::order_command_type::OrderCommandType;
-use crate::core::common::matcher_trade_event::MatcherTradeEvent;
-use crate::core::common::order_action::OrderAction;
-use crate::core::common::order_type::OrderType;
-use crate::core::orderbook::i_order_book::IOrderBook;
-use crate::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
-use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
+use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
+use exchange_core_rs::core::common::matcher_trade_event::MatcherTradeEvent;
+use exchange_core_rs::core::common::order_action::OrderAction;
+use exchange_core_rs::core::common::order_type::OrderType;
+use exchange_core_rs::core::orderbook::i_order_book::IOrderBook;
+use exchange_core_rs::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
+use exchange_core_rs::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
 // ============================================================================================
 // 命令生成器

@@ -137,6 +137,11 @@ impl ExchangeApi {
         &self.core.last_cascade_events
     }
 
+    /// 最近一条命令触发的级联次级命令产生的**撮合事件**(展平链;强平 FORCE 成交等)。
+    pub fn cascade_matcher_events(&self) -> &[crate::core::common::matcher_trade_event::MatcherTradeEvent] {
+        &self.core.last_cascade_matcher_events
+    }
+
     /// 通用命令提交：任意 `OrderCommand` 走完整管线（含事件捕获）。用于本门面未提供专属封装的命令
     /// （loan 全套 / internal_transfer / settle_pnl / settle_fundingfees / position_mode / liquidation_scan / if_deposit/withdraw / reset_fee 等）。
     pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {

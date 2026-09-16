@@ -12,13 +12,4 @@ pub mod reports;
 pub mod simple_events_processor;
 pub mod trade_events_handler;
 
-#[cfg(test)]
-mod e2e_tests;
-#[cfg(test)]
-mod futures_e2e_tests;
-#[cfg(test)]
-mod loan_e2e_tests;
-#[cfg(test)]
-mod liquidation_e2e_tests;
-#[cfg(test)]
-mod spot_e2e_java_parity_tests;
+// 引擎级 e2e 测试已迁至 `tests/e2e/`(只用公开 API)。
