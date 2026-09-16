@@ -92,7 +92,7 @@ mod tests {
         api.add_currency(ETH, 1);
         api.add_currency(XBT, 1);
         assert_eq!(api.add_symbol(eth_xbt_loan_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL, MARK_PRICE, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL, MARK_PRICE), CommandResultCode::Success);
 
         assert_eq!(api.submit(cmd_pool_deposit(5000, XBT, POOL_FUND)), CommandResultCode::Success);
 

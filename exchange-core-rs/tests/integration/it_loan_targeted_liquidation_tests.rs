@@ -75,7 +75,7 @@ mod tests {
         api.add_currency(ETH, 1);
         api.add_currency(XBT, 1);
         assert_eq!(api.add_symbol(eth_xbt_loan_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL, OPEN_MARK, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL, OPEN_MARK), CommandResultCode::Success);
 
         assert_eq!(api.submit(cmd_pool_deposit(5000, XBT, POOL_FUND)), CommandResultCode::Success);
 
@@ -107,7 +107,7 @@ mod tests {
         api.enable_liquidation(); // is_running=true，但不主动发 scan
 
         // 关键：仅抵押 spot 对 MARKPRICE 暴跌 → targeted 触发 + 同步 drain 出的 force-sell 撮合掉抵押。
-        assert_eq!(api.set_mark_price(SYMBOL, CRASH_MARK, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL, CRASH_MARK), CommandResultCode::Success);
 
         // 抵押被 targeted 强平消费：loan 全平后从 map 移除（或残留 < 初始）。
         let collateral_now = api

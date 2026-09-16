@@ -80,7 +80,7 @@ mod tests {
     /// 注册一个期货 symbol 并设 mark 价（对应 initFutureSymbol + initMarkPrice）。
     fn add_futures(api: &mut ExchangeApi, symbol_id: i32, mark: i64) {
         assert_eq!(api.add_futures_symbol(futures_spec(symbol_id)), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(symbol_id, mark, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(symbol_id, mark), CommandResultCode::Success);
     }
 
     /// 对应 `createUserWithSpecificMoney(uid, amount, USD)`。

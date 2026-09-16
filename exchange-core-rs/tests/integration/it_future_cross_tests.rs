@@ -146,7 +146,7 @@ mod tests {
         api.add_currency(BASE_CURRENCY_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(single_futures_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYMBOL_ID, MARK, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYMBOL_ID, MARK), CommandResultCode::Success);
         api
     }
 
@@ -158,8 +158,8 @@ mod tests {
         api.add_currency(ETH, 1);
         assert_eq!(api.add_futures_symbol(btc_futures_spec()), CommandResultCode::Success);
         assert_eq!(api.add_futures_symbol(eth_futures_spec()), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(BTC_SYM, MARK, 0), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, MARK, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, MARK), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, MARK), CommandResultCode::Success);
         api
     }
 
@@ -392,8 +392,8 @@ mod tests {
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - 10 - 150);
 
         // mark：BTC→15000（LONG 浮盈 +5000）、ETH→5000（SHORT 浮盈 +10000）；双方均盈利，不触发强平。
-        assert_eq!(api.set_mark_price(BTC_SYM, 15_000, 0), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 5_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 15_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 5_000), CommandResultCode::Success);
 
         // 浮盈虽高，但现金 9840 < 提现额 10000 → NSF。
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -deposit, 500), CommandResultCode::RiskNsf);
@@ -584,8 +584,8 @@ mod tests {
 
         // 两价均暴跌（BTC→2000 LONG 巨亏、ETH→35000 SHORT 巨亏）→ 全仓强平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(BTC_SYM, 2_000, 2_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 35_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 35_000), CommandResultCode::Success);
 
         let remaining = api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume).unwrap_or(0)
             + api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume).unwrap_or(0);
@@ -618,8 +618,8 @@ mod tests {
 
         // 价格波动到预警区间：BTC→5300、ETH→20000 → 不强平。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(BTC_SYM, 5_300, 2_000), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(ETH_SYM, 20_000, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(BTC_SYM, 5_300), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 20_000), CommandResultCode::Success);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840, "预警不改账户");
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "预警不强平");
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));

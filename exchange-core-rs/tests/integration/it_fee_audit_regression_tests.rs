@@ -100,7 +100,7 @@ mod tests {
         api.add_currency(BASE_ID, 1);
         api.add_currency(USD, 1);
         assert_eq!(api.add_futures_symbol(spec), CommandResultCode::Success);
-        assert_eq!(api.set_mark_price(SYM, 10_000, 0), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, 10_000), CommandResultCode::Success);
 
         let user_size = 10i64;
         let open_price = 10_000i64;
@@ -123,7 +123,7 @@ mod tests {
 
         // 开启强平引擎 + 跌价触发定向扫描 → FORCE 全平 loser（对应 Java updateCurrentPriceTo + triggerLiquidation）。
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(SYM, liquidation_price, 2_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(SYM, liquidation_price), CommandResultCode::Success);
 
         // 算账（BP=10103，fill 均价 10103）：
         //   开仓 makerFee    = ceil(10 × 10000 × 50 / 10000)  = 500

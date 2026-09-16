@@ -48,10 +48,11 @@ import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.core.processors.liquidation.LiquidationScheduledService;
 
 /**
- * SOFA-JRaft 作为 raft consensus backend 的容器实现：{@link RaftGroupService} +
- * {@link JraftExchangeStateMachine} + 可选 {@link BatchCommandHelper}（sysprop {@code raftexchange.batch.enabled}）。
+ * SOFA-JRaft 作为 raft consensus backend 的容器实现：{@link RaftGroupService} + {@link JraftExchangeStateMachine} + 可选
+ * {@link BatchCommandHelper}（sysprop {@code raftexchange.batch.enabled}）。
  *
- * <p>默认调优：8M slot disruptor / applyBatch=128 / replicator inflight 2048 / lease read，匹配 5MT/s 撮合留余量。
+ * <p>
+ * 默认调优：8M slot disruptor / applyBatch=128 / replicator inflight 2048 / lease read，匹配 5MT/s 撮合留余量。
  */
 public class JraftClusterContainer implements RaftClusterContainer {
 
@@ -59,8 +60,7 @@ public class JraftClusterContainer implements RaftClusterContainer {
     private static final int SNAPSHOT_INTERVAL_SECS = 3600;
     private static final int SNAPSHOT_LOG_INDEX_MARGIN =
         Integer.parseInt(System.getProperty("raftexchange.snapshot.logIndexMargin", "10000000"));
-    private static final boolean BATCH_ENABLED =
-        Boolean.parseBoolean(System.getProperty("raftexchange.batch.enabled", "false"));
+    private static final boolean BATCH_ENABLED = Boolean.parseBoolean(System.getProperty("raftexchange.batch.enabled", "false"));
     private static final byte[] EMPTY_REQUEST_CONTEXT = new byte[0];
 
     private final RaftClusterDiscovery raftClusterDiscovery;
@@ -152,8 +152,7 @@ public class JraftClusterContainer implements RaftClusterContainer {
         raftGroupService = new RaftGroupService(raftClusterDiscovery.getRaftClusterName(), selfPeer, nodeOptions);
         Node node = raftGroupService.start();
         node.resetPeers(conf);
-        RaftExchangeMetrics.Raft.register(node::isLeader, node::getLastCommittedIndex,
-            jraftExchangeStateMachine::lastAppliedIndex);
+        RaftExchangeMetrics.Raft.register(node::isLeader, node::getLastCommittedIndex, jraftExchangeStateMachine::lastAppliedIndex);
         LOGGER.info("SOFA-JRaft Node started on {}", selfPeer);
     }
 
@@ -178,6 +177,12 @@ public class JraftClusterContainer implements RaftClusterContainer {
             LOGGER.warn("Failed to pre-parse for leader fast path", e);
             callback.accept(null, e);
             return;
+        }
+        if (msg instanceof com.binance.raftexchange.stubs.request.ApiCommand api) {
+            com.binance.raftexchange.stubs.request.ApiCommand stamped = api.toBuilder().setTimestamp(System.currentTimeMillis()).build();
+            cmdBytes = stamped.toByteArray();
+            data = ByteBuffer.wrap(cmdBytes);
+            msg = stamped;
         }
         if (batchCommandHelper == null || !jraftExchangeStateMachine.canBatch(msg)) {
             raftGroupService.getRaftNode().apply(new Task(data, new SingleClosure(callback, msg)));
@@ -270,8 +275,7 @@ public class JraftClusterContainer implements RaftClusterContainer {
             return AdminResult.ok();
         }
         PeerId self = node.getNodeId().getPeerId();
-        PeerId target = node.getOptions().getInitialConf().getPeers().stream().filter(peer -> !peer.equals(self))
-            .findFirst().orElse(null);
+        PeerId target = node.getOptions().getInitialConf().getPeers().stream().filter(peer -> !peer.equals(self)).findFirst().orElse(null);
         if (target == null) {
             return AdminResult.error("no other peers available for leadership transfer");
         }
