@@ -32,6 +32,7 @@ pub struct OrdersBucketNaive {
 }
 
 impl OrdersBucketNaive {
+    // ===== 构造 =====
     pub fn new(price: i64) -> Self {
         Self {
             price,
@@ -42,23 +43,7 @@ impl OrdersBucketNaive {
         }
     }
 
-    pub fn price(&self) -> i64 {
-        self.price
-    }
-
-    pub fn total_volume(&self) -> i64 {
-        self.total_volume
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// 桶内挂单数量。对应 Java `OrdersBucketNaive.getNumOrders`。
-    pub fn num_orders(&self) -> usize {
-        self.entries.len()
-    }
-
+    // ===== 核心行为 =====
     pub fn put(&mut self, order: Order) {
         self.total_volume += order.remaining();
         let seq = self.next_seq;
@@ -74,12 +59,6 @@ impl OrdersBucketNaive {
         Some(o)
     }
 
-    /// 按 order_id 只读定位订单，不移除（cancel/reduce 判定剩余量用）。
-    pub fn get(&self, order_id: i64) -> Option<&Order> {
-        let seq = *self.id_to_seq.get(&order_id)?;
-        self.entries.get(&seq)
-    }
-
     /// 原地减少挂单 size 并扣减 total_volume，返回减量后快照，未找到返回 None。对应 Java `order.size -= reduceBy; ordersBucket.reduceSize(reduceBy)`。
     pub fn reduce(&mut self, order_id: i64, reduce_by: i64) -> Option<Order> {
         let seq = *self.id_to_seq.get(&order_id)?;
@@ -87,11 +66,6 @@ impl OrdersBucketNaive {
         o.size -= reduce_by;
         self.total_volume -= reduce_by;
         Some(o.clone())
-    }
-
-    /// 按 FIFO 只读遍历桶内订单（供 state_hash 确定性折叠用）。对应 Java `OrdersBucketNaive.forEachOrder`/`getAllOrders`。
-    pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
-        self.entries.values()
     }
 
     /// 从桶头 FIFO 撮合 to_collect，返回剩余未撮合量；回调携带 maker 的 uid/reserve_bid_price/command 供填 MatcherTradeEvent 字段。对应 Java `OrdersBucketNaive.match` / `OrderBookEventsHelper.java:75`。
@@ -135,6 +109,35 @@ impl OrdersBucketNaive {
             }
         }
         to_collect
+    }
+
+    // ===== 查询/访问器 =====
+    pub fn price(&self) -> i64 {
+        self.price
+    }
+
+    pub fn total_volume(&self) -> i64 {
+        self.total_volume
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// 桶内挂单数量。对应 Java `OrdersBucketNaive.getNumOrders`。
+    pub fn num_orders(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 按 order_id 只读定位订单，不移除（cancel/reduce 判定剩余量用）。
+    pub fn get(&self, order_id: i64) -> Option<&Order> {
+        let seq = *self.id_to_seq.get(&order_id)?;
+        self.entries.get(&seq)
+    }
+
+    /// 按 FIFO 只读遍历桶内订单（供 state_hash 确定性折叠用）。对应 Java `OrdersBucketNaive.forEachOrder`/`getAllOrders`。
+    pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
+        self.entries.values()
     }
 }
 

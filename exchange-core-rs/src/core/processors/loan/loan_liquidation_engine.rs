@@ -33,6 +33,7 @@ pub struct LoanLiquidationEngine {
 }
 
 impl LoanLiquidationEngine {
+    // ===== 构造 / 配置 =====
     pub fn new() -> Self {
         LoanLiquidationEngine::default()
     }
@@ -51,6 +52,7 @@ impl LoanLiquidationEngine {
         }
     }
 
+    // ===== 核心行为 =====
     /// 强平检测入口：targeted 查三索引并集，symbol<0 全量整扫+切片过滤。
     pub fn check_loans(
         &mut self,
@@ -265,6 +267,58 @@ impl LoanLiquidationEngine {
         });
     }
 
+    // ================================================================
+    // 索引维护（由 LoanCommandDispatcher 在 apply 时确定性调用，不进 snapshot）
+    // ================================================================
+
+    /// isolated loan 开仓登记进 symbol 索引。
+    pub fn on_isolated_loan_opened(&mut self, uid: i64, symbol_id: i32) {
+        self.isolated_loan_symbol_to_users.entry(symbol_id).or_default().insert(uid);
+    }
+
+    /// isolated loan 清空——该 uid 在此 symbol 上已无其它非空 loan 时才摘除（一 uid 可持多笔同 symbol）。
+    pub fn on_isolated_loan_closed(&mut self, up: &UserProfile, symbol_id: i32) {
+        let holds_other = up.isolated_loans.values().any(|l| !l.is_empty() && l.symbol_id == symbol_id);
+        if holds_other {
+            return;
+        }
+        if let Some(s) = self.isolated_loan_symbol_to_users.get_mut(&symbol_id) {
+            s.remove(&up.uid);
+            if s.is_empty() {
+                self.isolated_loan_symbol_to_users.remove(&symbol_id);
+            }
+        }
+    }
+
+    /// cross 敞口变更后 reconcile 索引：登记当前敞口币种（抵押>0 或有非空借款）；非对称容忍——部分币种退出留 stale（无害 over-trigger，下次 rebuild 清），仅账户全退出（零抵押且零借款）才从各币种桶精确摘除。
+    pub fn sync_cross_exposure(&mut self, up: &UserProfile) {
+        for (&currency, &amount) in up.cross_loan_collateral.iter() {
+            if amount > 0 {
+                self.cross_loan_currency_to_users.entry(currency).or_default().insert(up.uid);
+            }
+        }
+        for loan in up.cross_loans.values() {
+            if !loan.is_empty() {
+                self.cross_loan_currency_to_users.entry(loan.loan_currency).or_default().insert(up.uid);
+            }
+        }
+        let has_loan = up.cross_loans.values().any(|l| !l.is_empty());
+        let has_collateral = up.cross_loan_collateral.values().any(|&a| a > 0);
+        if !has_loan && !has_collateral {
+            // 账户全退出：从每个币种桶精确摘除该 uid。
+            let currencies: Vec<i32> = self.cross_loan_currency_to_users.keys().copied().collect();
+            for currency in currencies {
+                if let Some(s) = self.cross_loan_currency_to_users.get_mut(&currency) {
+                    s.remove(&up.uid);
+                    if s.is_empty() {
+                        self.cross_loan_currency_to_users.remove(&currency);
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== 内部 helper =====
     /// 选卖出抵押币：权重 DESC → 数量 DESC → 币种 ASC，且该币须能偿到某笔债（有就绪现货对）。无合格者返回 None。
     fn pick_cross_collateral_to_sell(
         &self,
@@ -368,57 +422,6 @@ impl LoanLiquidationEngine {
         let needed_lots = LoanService::quote_amount_to_lots(real_debt, limit_price, spec, loan_currency_spec);
         let available_lots = LoanService::collateral_amount_to_lots(available, spec, selling_currency_spec);
         available_lots.min(needed_lots)
-    }
-
-    // ================================================================
-    // 索引维护（由 LoanCommandDispatcher 在 apply 时确定性调用，不进 snapshot）
-    // ================================================================
-
-    /// isolated loan 开仓登记进 symbol 索引。
-    pub fn on_isolated_loan_opened(&mut self, uid: i64, symbol_id: i32) {
-        self.isolated_loan_symbol_to_users.entry(symbol_id).or_default().insert(uid);
-    }
-
-    /// isolated loan 清空——该 uid 在此 symbol 上已无其它非空 loan 时才摘除（一 uid 可持多笔同 symbol）。
-    pub fn on_isolated_loan_closed(&mut self, up: &UserProfile, symbol_id: i32) {
-        let holds_other = up.isolated_loans.values().any(|l| !l.is_empty() && l.symbol_id == symbol_id);
-        if holds_other {
-            return;
-        }
-        if let Some(s) = self.isolated_loan_symbol_to_users.get_mut(&symbol_id) {
-            s.remove(&up.uid);
-            if s.is_empty() {
-                self.isolated_loan_symbol_to_users.remove(&symbol_id);
-            }
-        }
-    }
-
-    /// cross 敞口变更后 reconcile 索引：登记当前敞口币种（抵押>0 或有非空借款）；非对称容忍——部分币种退出留 stale（无害 over-trigger，下次 rebuild 清），仅账户全退出（零抵押且零借款）才从各币种桶精确摘除。
-    pub fn sync_cross_exposure(&mut self, up: &UserProfile) {
-        for (&currency, &amount) in up.cross_loan_collateral.iter() {
-            if amount > 0 {
-                self.cross_loan_currency_to_users.entry(currency).or_default().insert(up.uid);
-            }
-        }
-        for loan in up.cross_loans.values() {
-            if !loan.is_empty() {
-                self.cross_loan_currency_to_users.entry(loan.loan_currency).or_default().insert(up.uid);
-            }
-        }
-        let has_loan = up.cross_loans.values().any(|l| !l.is_empty());
-        let has_collateral = up.cross_loan_collateral.values().any(|&a| a > 0);
-        if !has_loan && !has_collateral {
-            // 账户全退出：从每个币种桶精确摘除该 uid。
-            let currencies: Vec<i32> = self.cross_loan_currency_to_users.keys().copied().collect();
-            for currency in currencies {
-                if let Some(s) = self.cross_loan_currency_to_users.get_mut(&currency) {
-                    s.remove(&up.uid);
-                    if s.is_empty() {
-                        self.cross_loan_currency_to_users.remove(&currency);
-                    }
-                }
-            }
-        }
     }
 }
 

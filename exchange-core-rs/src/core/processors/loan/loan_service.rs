@@ -58,45 +58,13 @@ pub struct LoanService {
 }
 
 impl LoanService {
+    // ===== 构造 / 配置 =====
     /// 全部桶空、各字段默认值。
     pub fn new() -> Self {
         LoanService::default()
     }
 
-    // 桶存取（缺省 0，delta 可为负）。
-
-    pub fn get_loan_pool_available(&self, currency: i32) -> i64 {
-        *self.loan_pool_available.get(&currency).unwrap_or(&0)
-    }
-
-    pub fn add_to_loan_pool_available(&mut self, currency: i32, delta: i64) {
-        *self.loan_pool_available.entry(currency).or_insert(0) += delta;
-    }
-
-    pub fn get_loan_pool_borrowed(&self, currency: i32) -> i64 {
-        *self.loan_pool_borrowed.get(&currency).unwrap_or(&0)
-    }
-
-    pub fn add_to_loan_pool_borrowed(&mut self, currency: i32, delta: i64) {
-        *self.loan_pool_borrowed.entry(currency).or_insert(0) += delta;
-    }
-
-    pub fn get_interest_revenue(&self, currency: i32) -> i64 {
-        *self.interest_revenue.get(&currency).unwrap_or(&0)
-    }
-
-    pub fn add_to_interest_revenue(&mut self, currency: i32, delta: i64) {
-        *self.interest_revenue.entry(currency).or_insert(0) += delta;
-    }
-
-    pub fn get_loan_insurance_fund(&self, currency: i32) -> i64 {
-        *self.loan_insurance_fund.get(&currency).unwrap_or(&0)
-    }
-
-    pub fn add_to_loan_insurance_fund(&mut self, currency: i32, delta: i64) {
-        *self.loan_insurance_fund.entry(currency).or_insert(0) += delta;
-    }
-
+    // ===== 核心行为 =====
     // 利率模型二分派：按 loan.is_fixed_rate() 分派。
 
     /// 写路径：补计截至 `now` 的利息进 `loan.accumulated_interest` 并推进游标，返回本次新增利息（≥ 0）。
@@ -200,15 +168,6 @@ impl LoanService {
         )
     }
 
-    // ================================================================
-    // Cross 账户级 LTV
-    // ================================================================
-
-    /// 币种作 Cross 抵押的折价率（bps），读 collateral_weight_bps；未配置/spec 缺失返回 0（不可作抵押）。
-    pub fn collateral_weight_for_base(currency: i32, ssp: &SymbolSpecificationProvider) -> i32 {
-        ssp.get_currency(currency).map(|s| s.collateral_weight_bps).unwrap_or(0)
-    }
-
     /// 把 amount 经 find_spot_symbol(currency, numeraire) 现货对 markPrice 折算成 numeraire 的 currencyScale；同币种恒等返回 amount。任一 spec/markPrice 缺失 → -1（价格未就绪，调用方按 fail_closed 取舍）。
     pub fn value_in_numeraire(
         currency: i32,
@@ -232,79 +191,6 @@ impl LoanService {
         // currency 视作 base、numeraire 视作 quote，复用 Isolated LTV 同套折算。
         let currency_spec = ssp.get_currency(currency);
         Self::collateral_value_in_quote_currency(amount, spec, mark_price, currency_spec, Some(numeraire_spec))
-    }
-
-    /// 账户级 LTV 核心，calculate_cross_account_ltv_bps（apply_weight=true）与 calculate_cross_raw_ltv_bps（false）共享。numeraire 读 self.global_config。
-    /// 无债或未配 numeraire → 0；numeraire spec 缺失 → unevaluable（fail_closed ? i64::MAX : 0）。
-    /// debt 侧加法溢出 → 恒 i64::MAX（视作无穷大 LTV 倾向拒绝，不受 fail_closed 影响）；collateral 侧溢出 → unevaluable；用 checked_add_i64 复刻"捕获而非崩溃"。
-    /// total_collateral<=0（无合格抵押币）→ i64::MAX。
-    fn cross_ltv_bps(
-        &self,
-        up: &UserProfile,
-        now: i64,
-        ssp: &SymbolSpecificationProvider,
-        price_cache: &std::collections::BTreeMap<i32, i64>,
-        fail_closed_on_missing_price: bool,
-        apply_weight: bool,
-    ) -> i64 {
-        let numeraire_currency = self.global_config.numeraire_currency;
-        if up.cross_loans.is_empty() || numeraire_currency == 0 {
-            return 0;
-        }
-        let unevaluable = if fail_closed_on_missing_price { i64::MAX } else { 0 };
-        let numeraire_spec = match ssp.get_currency(numeraire_currency) {
-            Some(s) => s,
-            None => return unevaluable,
-        };
-
-        // 债务侧：逐笔折算成 numeraire 后求和（pending-interest-inclusive）。
-        let mut total_debt: i64 = 0;
-        for loan in up.cross_loans.values() {
-            if loan.outstanding_principal <= 0 {
-                continue;
-            }
-            let display_interest = self.calculate_display_interest(loan, now);
-            let real_debt = match checked_add_i64(loan.outstanding_principal, display_interest) {
-                Some(v) => v,
-                None => return i64::MAX,
-            };
-            let value_in_num =
-                Self::value_in_numeraire(loan.loan_currency, real_debt, numeraire_currency, numeraire_spec, ssp, price_cache);
-            if value_in_num < 0 {
-                return unevaluable; // 缺 markPrice / spec
-            }
-            total_debt = match checked_add_i64(total_debt, value_in_num) {
-                Some(v) => v,
-                None => return i64::MAX,
-            };
-        }
-
-        // 抵押侧：折算 numeraire 后求和，apply_weight 决定是否再打 collateralWeightBps 折。
-        let mut total_collateral: i64 = 0;
-        for (&currency, &amount) in up.cross_loan_collateral.iter() {
-            if amount <= 0 {
-                continue;
-            }
-            let weight = Self::collateral_weight_for_base(currency, ssp);
-            if weight <= 0 {
-                continue; // 非抵押白名单币：两种口径都不计入
-            }
-            let value_in_num = Self::value_in_numeraire(currency, amount, numeraire_currency, numeraire_spec, ssp, price_cache);
-            if value_in_num < 0 {
-                return unevaluable;
-            }
-            let contribution =
-                if apply_weight { arithmetic::trunc_mul_div(value_in_num, weight as i64, BPS_SCALE) } else { value_in_num };
-            total_collateral = match checked_add_i64(total_collateral, contribution) {
-                Some(v) => v,
-                None => return unevaluable, // 溢出不放大抵押，保守按不可估值处理
-            };
-        }
-
-        if total_collateral <= 0 {
-            return i64::MAX;
-        }
-        arithmetic::trunc_mul_div(total_debt, BPS_SCALE, total_collateral)
     }
 
     /// 加权口径（apply_weight=true），trigger 决策与 Cross BORROW/WITHDRAW guard 共用。fail_closed_on_missing_price：true=缺价拒绝（i64::MAX，防超借/提空），false=缺价保守 skip（0，scanner/展示）。
@@ -368,14 +254,6 @@ impl LoanService {
         arithmetic::ceil_divide(notional, mark_price)
     }
 
-    /// force-sell orderId 位编码：tag<<56 | subtype<<48 | uidHash<<28 | loanIdHash<<12 | tsSec。tick_time_ms 用触发命令 timestamp（确定性）。
-    pub fn force_sell_order_id(subtype: i64, uid: i64, loan_id: i64, tick_time_ms: i64) -> i64 {
-        let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & ORDERID_UID_MASK;
-        let loan_id_hash = (loan_id.wrapping_mul(31).wrapping_add(17)) & ORDERID_LOANID_MASK;
-        let ts_sec = (tick_time_ms / 1000) & ORDERID_TS_MASK;
-        (ORDERID_NAMESPACE_TAG << 56) | (subtype << 48) | (uid_hash << 28) | (loan_id_hash << 12) | ts_sec
-    }
-
     /// 强平所得 received_quote（已扣 takerFee）：先按 loan_liquidation_fee_bps 抽费（ceil 不少收）进 LIF，再 accrue+apply_debt_payment 抵债，overpay 留 account。返回结算的利息部分。Isolated/Cross 共用。
     pub fn settle_liquidation_proceeds<L: LoanRecord>(
         &mut self,
@@ -391,33 +269,6 @@ impl LoanService {
         self.add_to_loan_insurance_fund(currency, liq_fee);
         self.accrue_to(loan, now);
         self.apply_debt_payment(loan, account, received_quote - liq_fee)
-    }
-
-    /// 该抵押币是否结构上可变现——只看永久能力，不看 markPrice 临时状态。weight>0 且存在到某笔未偿 Cross 债币种的现货对、量够 ≥1 lot。
-    pub fn is_structurally_sellable(
-        currency: i32,
-        amount: i64,
-        up: &UserProfile,
-        ssp: &SymbolSpecificationProvider,
-    ) -> bool {
-        if amount <= 0 {
-            return false;
-        }
-        let currency_spec = match ssp.get_currency(currency) {
-            Some(s) if s.collateral_weight_bps > 0 => s,
-            _ => return false,
-        };
-        for loan in up.cross_loans.values() {
-            if loan.outstanding_principal <= 0 {
-                continue;
-            }
-            if let Some(spec) = ssp.find_spot_symbol(currency, loan.loan_currency) {
-                if Self::collateral_amount_to_lots(amount, spec, currency_spec) > 0 {
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     /// Cross LIF 承接：按 target 债占账户总债比例，从共享抵押池按 weight 降序、同权重 currency 升序定额扣等值抵押（不逐币种等比切，避免尘埃碎片化）。fail-closed：任一价格/spec 缺失 → false，调用方须保留 loan 原样。
@@ -531,6 +382,85 @@ impl LoanService {
         true
     }
 
+    // ===== 查询 / 访问器 =====
+    // 桶存取（缺省 0，delta 可为负）。
+
+    pub fn get_loan_pool_available(&self, currency: i32) -> i64 {
+        *self.loan_pool_available.get(&currency).unwrap_or(&0)
+    }
+
+    pub fn add_to_loan_pool_available(&mut self, currency: i32, delta: i64) {
+        *self.loan_pool_available.entry(currency).or_insert(0) += delta;
+    }
+
+    pub fn get_loan_pool_borrowed(&self, currency: i32) -> i64 {
+        *self.loan_pool_borrowed.get(&currency).unwrap_or(&0)
+    }
+
+    pub fn add_to_loan_pool_borrowed(&mut self, currency: i32, delta: i64) {
+        *self.loan_pool_borrowed.entry(currency).or_insert(0) += delta;
+    }
+
+    pub fn get_interest_revenue(&self, currency: i32) -> i64 {
+        *self.interest_revenue.get(&currency).unwrap_or(&0)
+    }
+
+    pub fn add_to_interest_revenue(&mut self, currency: i32, delta: i64) {
+        *self.interest_revenue.entry(currency).or_insert(0) += delta;
+    }
+
+    pub fn get_loan_insurance_fund(&self, currency: i32) -> i64 {
+        *self.loan_insurance_fund.get(&currency).unwrap_or(&0)
+    }
+
+    pub fn add_to_loan_insurance_fund(&mut self, currency: i32, delta: i64) {
+        *self.loan_insurance_fund.entry(currency).or_insert(0) += delta;
+    }
+
+    // ================================================================
+    // Cross 账户级 LTV
+    // ================================================================
+
+    /// 币种作 Cross 抵押的折价率（bps），读 collateral_weight_bps；未配置/spec 缺失返回 0（不可作抵押）。
+    pub fn collateral_weight_for_base(currency: i32, ssp: &SymbolSpecificationProvider) -> i32 {
+        ssp.get_currency(currency).map(|s| s.collateral_weight_bps).unwrap_or(0)
+    }
+
+    /// force-sell orderId 位编码：tag<<56 | subtype<<48 | uidHash<<28 | loanIdHash<<12 | tsSec。tick_time_ms 用触发命令 timestamp（确定性）。
+    pub fn force_sell_order_id(subtype: i64, uid: i64, loan_id: i64, tick_time_ms: i64) -> i64 {
+        let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & ORDERID_UID_MASK;
+        let loan_id_hash = (loan_id.wrapping_mul(31).wrapping_add(17)) & ORDERID_LOANID_MASK;
+        let ts_sec = (tick_time_ms / 1000) & ORDERID_TS_MASK;
+        (ORDERID_NAMESPACE_TAG << 56) | (subtype << 48) | (uid_hash << 28) | (loan_id_hash << 12) | ts_sec
+    }
+
+    /// 该抵押币是否结构上可变现——只看永久能力，不看 markPrice 临时状态。weight>0 且存在到某笔未偿 Cross 债币种的现货对、量够 ≥1 lot。
+    pub fn is_structurally_sellable(
+        currency: i32,
+        amount: i64,
+        up: &UserProfile,
+        ssp: &SymbolSpecificationProvider,
+    ) -> bool {
+        if amount <= 0 {
+            return false;
+        }
+        let currency_spec = match ssp.get_currency(currency) {
+            Some(s) if s.collateral_weight_bps > 0 => s,
+            _ => return false,
+        };
+        for loan in up.cross_loans.values() {
+            if loan.outstanding_principal <= 0 {
+                continue;
+            }
+            if let Some(spec) = ssp.find_spot_symbol(currency, loan.loan_currency) {
+                if Self::collateral_amount_to_lots(amount, spec, currency_spec) > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// 确定性状态 hash：折叠排序后的 4 个资金桶 + global_config/floating_rate/fixed_rate 各自 state_hash()。只保证同状态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
@@ -554,6 +484,80 @@ impl LoanService {
         h = h.wrapping_mul(31).wrapping_add(self.floating_rate.state_hash() as i64);
         h = h.wrapping_mul(31).wrapping_add(self.fixed_rate.state_hash() as i64);
         ((h >> 32) as i32) ^ (h as i32)
+    }
+
+    // ===== 内部 helper =====
+    /// 账户级 LTV 核心，calculate_cross_account_ltv_bps（apply_weight=true）与 calculate_cross_raw_ltv_bps（false）共享。numeraire 读 self.global_config。
+    /// 无债或未配 numeraire → 0；numeraire spec 缺失 → unevaluable（fail_closed ? i64::MAX : 0）。
+    /// debt 侧加法溢出 → 恒 i64::MAX（视作无穷大 LTV 倾向拒绝，不受 fail_closed 影响）；collateral 侧溢出 → unevaluable；用 checked_add_i64 复刻"捕获而非崩溃"。
+    /// total_collateral<=0（无合格抵押币）→ i64::MAX。
+    fn cross_ltv_bps(
+        &self,
+        up: &UserProfile,
+        now: i64,
+        ssp: &SymbolSpecificationProvider,
+        price_cache: &std::collections::BTreeMap<i32, i64>,
+        fail_closed_on_missing_price: bool,
+        apply_weight: bool,
+    ) -> i64 {
+        let numeraire_currency = self.global_config.numeraire_currency;
+        if up.cross_loans.is_empty() || numeraire_currency == 0 {
+            return 0;
+        }
+        let unevaluable = if fail_closed_on_missing_price { i64::MAX } else { 0 };
+        let numeraire_spec = match ssp.get_currency(numeraire_currency) {
+            Some(s) => s,
+            None => return unevaluable,
+        };
+
+        // 债务侧：逐笔折算成 numeraire 后求和（pending-interest-inclusive）。
+        let mut total_debt: i64 = 0;
+        for loan in up.cross_loans.values() {
+            if loan.outstanding_principal <= 0 {
+                continue;
+            }
+            let display_interest = self.calculate_display_interest(loan, now);
+            let real_debt = match checked_add_i64(loan.outstanding_principal, display_interest) {
+                Some(v) => v,
+                None => return i64::MAX,
+            };
+            let value_in_num =
+                Self::value_in_numeraire(loan.loan_currency, real_debt, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if value_in_num < 0 {
+                return unevaluable; // 缺 markPrice / spec
+            }
+            total_debt = match checked_add_i64(total_debt, value_in_num) {
+                Some(v) => v,
+                None => return i64::MAX,
+            };
+        }
+
+        // 抵押侧：折算 numeraire 后求和，apply_weight 决定是否再打 collateralWeightBps 折。
+        let mut total_collateral: i64 = 0;
+        for (&currency, &amount) in up.cross_loan_collateral.iter() {
+            if amount <= 0 {
+                continue;
+            }
+            let weight = Self::collateral_weight_for_base(currency, ssp);
+            if weight <= 0 {
+                continue; // 非抵押白名单币：两种口径都不计入
+            }
+            let value_in_num = Self::value_in_numeraire(currency, amount, numeraire_currency, numeraire_spec, ssp, price_cache);
+            if value_in_num < 0 {
+                return unevaluable;
+            }
+            let contribution =
+                if apply_weight { arithmetic::trunc_mul_div(value_in_num, weight as i64, BPS_SCALE) } else { value_in_num };
+            total_collateral = match checked_add_i64(total_collateral, contribution) {
+                Some(v) => v,
+                None => return unevaluable, // 溢出不放大抵押，保守按不可估值处理
+            };
+        }
+
+        if total_collateral <= 0 {
+            return i64::MAX;
+        }
+        arithmetic::trunc_mul_div(total_debt, BPS_SCALE, total_collateral)
     }
 }
 

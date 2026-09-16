@@ -107,38 +107,7 @@ pub struct SpotExecutionReport {
 }
 
 impl SpotExecutionReport {
-    fn base(cmd: &OrderCommand, spec: &CoreSymbolSpecification, execution_type: ExecType, order_status: OrderStatus, execution_id: i64) -> Self {
-        let order_type = cmd.order_type.unwrap_or(OrderType::Gtc);
-        let budget = is_budget(order_type);
-        SpotExecutionReport {
-            execution_id,
-            execution_type,
-            order_status,
-            symbol: cmd.symbol,
-            base_scale_k: spec.base_scale_k,
-            quote_scale_k: spec.quote_scale_k,
-            account_id: cmd.uid,
-            cl_ord_id: cmd.user_cookie,
-            order_id: cmd.order_id,
-            order_type,
-            side: cmd.action.unwrap_or(OrderAction::Ask),
-            qty: cmd.size,
-            price: if budget { 0 } else { cmd.price },
-            quote_order_qty: if budget { cmd.price } else { 0 },
-            order_creation_time: cmd.timestamp,
-            trade_id: -1,
-            last_qty: 0,
-            last_price: 0,
-            last_quote_qty: 0,
-            cumulative_qty: 0,
-            cumulative_quote_qty: 0,
-            commission: 0,
-            commission_asset: spec.quote_currency,
-            is_maker: false,
-            working_indicator: false,
-        }
-    }
-
+    // ===== 核心行为 =====
     /// 对应 Java `SpotExecutionReport.placeOrder`。
     pub fn place_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) -> Self {
         let mut r = Self::base(cmd, spec, ExecType::New, OrderStatus::New, ExecutionIdGenerator::build_new_exec_id(seq));
@@ -208,6 +177,39 @@ impl SpotExecutionReport {
             working_indicator: ev.matched_order_type == OrderType::Gtc && !ev.maker_order_completed,
         }
     }
+
+    // ===== 内部 helper =====
+    fn base(cmd: &OrderCommand, spec: &CoreSymbolSpecification, execution_type: ExecType, order_status: OrderStatus, execution_id: i64) -> Self {
+        let order_type = cmd.order_type.unwrap_or(OrderType::Gtc);
+        let budget = is_budget(order_type);
+        SpotExecutionReport {
+            execution_id,
+            execution_type,
+            order_status,
+            symbol: cmd.symbol,
+            base_scale_k: spec.base_scale_k,
+            quote_scale_k: spec.quote_scale_k,
+            account_id: cmd.uid,
+            cl_ord_id: cmd.user_cookie,
+            order_id: cmd.order_id,
+            order_type,
+            side: cmd.action.unwrap_or(OrderAction::Ask),
+            qty: cmd.size,
+            price: if budget { 0 } else { cmd.price },
+            quote_order_qty: if budget { cmd.price } else { 0 },
+            order_creation_time: cmd.timestamp,
+            trade_id: -1,
+            last_qty: 0,
+            last_price: 0,
+            last_quote_qty: 0,
+            cumulative_qty: 0,
+            cumulative_quote_qty: 0,
+            commission: 0,
+            commission_asset: spec.quote_currency,
+            is_maker: false,
+            working_indicator: false,
+        }
+    }
 }
 
 /// 对应 Java `ITradeEventsHandler.FuturesExecutionReport`（去对象池）。
@@ -242,40 +244,7 @@ pub struct FuturesExecutionReport {
 }
 
 impl FuturesExecutionReport {
-    #[allow(clippy::too_many_arguments)]
-    fn base(cmd: &OrderCommand, spec: &CoreSymbolSpecification, position_side: PositionMode, execution_type: ExecType, order_status: OrderStatus, uni_id: i64) -> Self {
-        let order_type = cmd.order_type.unwrap_or(OrderType::Gtc);
-        let budget = is_budget(order_type);
-        FuturesExecutionReport {
-            uni_id,
-            execution_type,
-            order_status,
-            symbol_id: cmd.symbol,
-            order_qty_scale: spec.base_scale_k,
-            price_scale: spec.quote_scale_k,
-            user_id: cmd.uid,
-            cl_order_id: cmd.user_cookie,
-            order_id: cmd.order_id,
-            order_type,
-            side: cmd.action.unwrap_or(OrderAction::Ask),
-            counterparty_id: -1,
-            price: if budget { 0 } else { cmd.price },
-            order_qty: if budget { cmd.price } else { cmd.size },
-            create_time: cmd.timestamp,
-            exec_id: -1,
-            contract_type: spec.symbol_type,
-            position_side,
-            last_qty: 0,
-            last_px: 0,
-            cum_qty: 0,
-            cum_quote_qty: 0,
-            avg_px: 0,
-            fee: 0,
-            fee_asset_id: spec.quote_currency,
-            is_maker: false,
-        }
-    }
-
+    // ===== 核心行为 =====
     /// 对应 Java `FuturesExecutionReport.placeOrder`。
     pub fn place_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, position_side: PositionMode) -> Self {
         Self::base(cmd, spec, position_side, ExecType::New, OrderStatus::New, ExecutionIdGenerator::build_new_exec_id(seq))
@@ -339,6 +308,41 @@ impl FuturesExecutionReport {
             fee: calculate_maker_fee(ev.size, ev.price, spec.maker_fee, spec.fee_scale_k),
             fee_asset_id: spec.quote_currency,
             is_maker: true,
+        }
+    }
+
+    // ===== 内部 helper =====
+    #[allow(clippy::too_many_arguments)]
+    fn base(cmd: &OrderCommand, spec: &CoreSymbolSpecification, position_side: PositionMode, execution_type: ExecType, order_status: OrderStatus, uni_id: i64) -> Self {
+        let order_type = cmd.order_type.unwrap_or(OrderType::Gtc);
+        let budget = is_budget(order_type);
+        FuturesExecutionReport {
+            uni_id,
+            execution_type,
+            order_status,
+            symbol_id: cmd.symbol,
+            order_qty_scale: spec.base_scale_k,
+            price_scale: spec.quote_scale_k,
+            user_id: cmd.uid,
+            cl_order_id: cmd.user_cookie,
+            order_id: cmd.order_id,
+            order_type,
+            side: cmd.action.unwrap_or(OrderAction::Ask),
+            counterparty_id: -1,
+            price: if budget { 0 } else { cmd.price },
+            order_qty: if budget { cmd.price } else { cmd.size },
+            create_time: cmd.timestamp,
+            exec_id: -1,
+            contract_type: spec.symbol_type,
+            position_side,
+            last_qty: 0,
+            last_px: 0,
+            cum_qty: 0,
+            cum_quote_qty: 0,
+            avg_px: 0,
+            fee: 0,
+            fee_asset_id: spec.quote_currency,
+            is_maker: false,
         }
     }
 }

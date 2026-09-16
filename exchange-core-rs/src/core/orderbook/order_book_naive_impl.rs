@@ -25,6 +25,7 @@ pub struct OrderBookNaiveImpl {
 }
 
 impl OrderBookNaiveImpl {
+    // ===== 构造/配置 =====
     pub fn new() -> Self {
         Self {
             ask_buckets: BTreeMap::new(),
@@ -39,20 +40,7 @@ impl OrderBookNaiveImpl {
         Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
 
-    fn buckets_by_action_mut(&mut self, action: OrderAction) -> &mut BTreeMap<i64, OrdersBucketNaive> {
-        match action {
-            OrderAction::Ask => &mut self.ask_buckets,
-            OrderAction::Bid => &mut self.bid_buckets,
-        }
-    }
-
-    fn buckets_by_action(&self, action: OrderAction) -> &BTreeMap<i64, OrdersBucketNaive> {
-        match action {
-            OrderAction::Ask => &self.ask_buckets,
-            OrderAction::Bid => &self.bid_buckets,
-        }
-    }
-
+    // ===== 核心行为 =====
     /// GTC 下单：先即时撮合，剩余量挂入本方桶。对应 Java newOrderPlaceGtc。
     fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("GTC order requires action");
@@ -354,56 +342,6 @@ impl OrderBookNaiveImpl {
         filled
     }
 
-    /// 生成 REJECT 事件插入 cmd.matcher_event 链头，不改簿。对应 Java attachRejectEvent。
-    fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
-        let event = MatcherTradeEvent {
-            event_type: MatcherEventType::Reject,
-            active_order_completed: true,
-            price: cmd.price,
-            size: rejected_size,
-            // 对应 Java attachRejectEvent: bidderHoldPrice = cmd.reserveBidPrice。REJECT 无 maker，其余字段取默认。
-            bidder_hold_price: cmd.reserve_bid_price,
-            next: cmd.matcher_event.take(),
-            ..Default::default()
-        };
-        cmd.matcher_event = Some(Box::new(event));
-    }
-
-    /// 无副作用统计对手侧价格范围内可撮合总量（FOK 探测用）。对应 Java subtreeForMatching 价格过滤范围。
-    fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64) -> i64 {
-        match taker_action {
-            OrderAction::Bid => self
-                .ask_buckets
-                .range(..=taker_price)
-                .map(|(_, b)| b.total_volume())
-                .sum(),
-            OrderAction::Ask => self
-                .bid_buckets
-                .range(taker_price..)
-                .map(|(_, b)| b.total_volume())
-                .sum(),
-        }
-    }
-
-    /// 探测吃满 size 所需总预算，纯函数；None 表示流动性不足。对应 Java checkBudgetToFill。
-    fn check_budget_to_fill(iter: impl Iterator<Item = (i64, i64)>, mut size: i64) -> Option<i64> {
-        let mut budget: i64 = 0;
-        for (price, available_size) in iter {
-            if size > available_size {
-                size -= available_size;
-                budget += available_size * price;
-            } else {
-                return Some(budget + size * price);
-            }
-        }
-        None
-    }
-
-    /// 对应 Java `isBudgetLimitSatisfied`：BID 要求成本 <= limit（预算上限），ASK 要求收入 >= limit（最低收入）。
-    fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
-        calculated == limit || ((action == OrderAction::Bid) != (calculated > limit))
-    }
-
     /// IOC：即时撮合，剩余量丢弃不挂单，未成交部分发 REJECT。对应 Java newOrderMatchIoc。
     fn new_order_match_ioc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC order requires action");
@@ -478,6 +416,71 @@ impl OrderBookNaiveImpl {
             }
             _ => Self::attach_reject_event(cmd, size),
         }
+    }
+
+    // ===== 内部 helper =====
+    fn buckets_by_action_mut(&mut self, action: OrderAction) -> &mut BTreeMap<i64, OrdersBucketNaive> {
+        match action {
+            OrderAction::Ask => &mut self.ask_buckets,
+            OrderAction::Bid => &mut self.bid_buckets,
+        }
+    }
+
+    fn buckets_by_action(&self, action: OrderAction) -> &BTreeMap<i64, OrdersBucketNaive> {
+        match action {
+            OrderAction::Ask => &self.ask_buckets,
+            OrderAction::Bid => &self.bid_buckets,
+        }
+    }
+
+    /// 生成 REJECT 事件插入 cmd.matcher_event 链头，不改簿。对应 Java attachRejectEvent。
+    fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
+        let event = MatcherTradeEvent {
+            event_type: MatcherEventType::Reject,
+            active_order_completed: true,
+            price: cmd.price,
+            size: rejected_size,
+            // 对应 Java attachRejectEvent: bidderHoldPrice = cmd.reserveBidPrice。REJECT 无 maker，其余字段取默认。
+            bidder_hold_price: cmd.reserve_bid_price,
+            next: cmd.matcher_event.take(),
+            ..Default::default()
+        };
+        cmd.matcher_event = Some(Box::new(event));
+    }
+
+    /// 无副作用统计对手侧价格范围内可撮合总量（FOK 探测用）。对应 Java subtreeForMatching 价格过滤范围。
+    fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64) -> i64 {
+        match taker_action {
+            OrderAction::Bid => self
+                .ask_buckets
+                .range(..=taker_price)
+                .map(|(_, b)| b.total_volume())
+                .sum(),
+            OrderAction::Ask => self
+                .bid_buckets
+                .range(taker_price..)
+                .map(|(_, b)| b.total_volume())
+                .sum(),
+        }
+    }
+
+    /// 探测吃满 size 所需总预算，纯函数；None 表示流动性不足。对应 Java checkBudgetToFill。
+    fn check_budget_to_fill(iter: impl Iterator<Item = (i64, i64)>, mut size: i64) -> Option<i64> {
+        let mut budget: i64 = 0;
+        for (price, available_size) in iter {
+            if size > available_size {
+                size -= available_size;
+                budget += available_size * price;
+            } else {
+                return Some(budget + size * price);
+            }
+        }
+        None
+    }
+
+    /// 对应 Java `isBudgetLimitSatisfied`：BID 要求成本 <= limit（预算上限），ASK 要求收入 >= limit（最低收入）。
+    fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
+        calculated == limit || ((action == OrderAction::Bid) != (calculated > limit))
     }
 }
 

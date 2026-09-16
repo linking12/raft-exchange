@@ -184,6 +184,7 @@ impl<'de> serde::Deserialize<'de> for OrderBookDirectImpl {
 }
 
 impl OrderBookDirectImpl {
+    // ===== 构造/配置 =====
     /// 建空簿。对应 Java 构造函数 `OrderBookDirectImpl(...)`（`:60-73`），仅保留 `symbolSpec`。
     pub fn new() -> Self {
         Self {
@@ -205,69 +206,7 @@ impl OrderBookDirectImpl {
         Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
 
-    /// 访问器：symbol spec（对应 Java `getSymbolSpec`）。
-    pub fn symbol_spec(&self) -> Option<&CoreSymbolSpecification> {
-        self.symbol_spec.as_ref()
-    }
-
-    // ---- slab 原语：order ----
-
-    /// 分配一个 order 槽：优先复用最近释放的槽（LIFO），否则追加新槽。返回 slab 索引。
-    pub fn alloc_order(&mut self, order: DirectOrder) -> usize {
-        if let Some(idx) = self.order_free.pop() {
-            self.orders[idx] = Some(order);
-            idx
-        } else {
-            self.orders.push(Some(order));
-            self.orders.len() - 1
-        }
-    }
-
-    /// 释放一个 order 槽：置空并推入空闲栈供后续复用。
-    pub fn free_order(&mut self, idx: usize) {
-        self.orders[idx] = None;
-        self.order_free.push(idx);
-    }
-
-    /// 按 slab 索引取 order 只读引用。索引须来自本簿当前存活的分配（否则 panic）。
-    pub fn order(&self, idx: usize) -> &DirectOrder {
-        self.orders[idx].as_ref().expect("dangling order slab index")
-    }
-
-    /// 按 slab 索引取 order 可变引用。索引须来自本簿当前存活的分配（否则 panic）。
-    pub fn order_mut(&mut self, idx: usize) -> &mut DirectOrder {
-        self.orders[idx].as_mut().expect("dangling order slab index")
-    }
-
-    // ---- slab 原语：bucket ----
-
-    /// 分配一个 bucket 槽：优先复用最近释放的槽（LIFO），否则追加新槽。返回 slab 索引。
-    pub fn alloc_bucket(&mut self, bucket: Bucket) -> usize {
-        if let Some(idx) = self.bucket_free.pop() {
-            self.buckets[idx] = Some(bucket);
-            idx
-        } else {
-            self.buckets.push(Some(bucket));
-            self.buckets.len() - 1
-        }
-    }
-
-    /// 释放一个 bucket 槽：置空并推入空闲栈供后续复用。
-    pub fn free_bucket(&mut self, idx: usize) {
-        self.buckets[idx] = None;
-        self.bucket_free.push(idx);
-    }
-
-    /// 按 slab 索引取 bucket 只读引用。索引须来自本簿当前存活的分配（否则 panic）。
-    pub fn bucket(&self, idx: usize) -> &Bucket {
-        self.buckets[idx].as_ref().expect("dangling bucket slab index")
-    }
-
-    /// 按 slab 索引取 bucket 可变引用。索引须来自本簿当前存活的分配（否则 panic）。
-    pub fn bucket_mut(&mut self, idx: usize) -> &mut Bucket {
-        self.buckets[idx].as_mut().expect("dangling bucket slab index")
-    }
-
+    // ===== 核心行为 =====
     // ---- 挂单入链/入桶 ----
 
     /// 挂单入链+入桶，对应 Java `insertOrder(order, freeBucket)`(`:638-715`)；`free_bucket` 仅 moveOrder 传入复用。
@@ -653,81 +592,23 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 无价格限制探测撮合满 `size` 所需总预算，对应 Java `checkBudgetToFill`(`:222-250`)；按桶粒度走，凑不够返回 `i64::MAX` 哨兵，累加用 `i128` 防溢出。
-    fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
-        let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
-        let mut budget: i128 = 0;
-
-        while let Some(idx) = maker {
-            let o = self.order(idx);
-            let price = o.price;
-            let parent = o.parent.expect("maker must have parent bucket");
-            let bucket = self.bucket(parent);
-            let available = bucket.volume;
-
-            if size > available {
-                size -= available;
-                budget += (available as i128) * (price as i128);
-            } else {
-                let total = budget + (size as i128) * (price as i128);
-                return if total > i64::MAX as i128 { i64::MAX } else { total as i64 };
-            }
-
-            // 跳到下一个（更差价）桶，桶内其余 order 已被 `bucket.volume` 一次性计入（对应 Java `bucket.tail.prev`）。
-            maker = self.order(bucket.tail).prev;
+    /// IOC_BUDGET：仅支持 BID（用预算上限买），ASK 语义模糊整单 REJECT（同 Naive），对应 Java `newOrderMatchIocBudget`(`:133-145`)。
+    fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
+        let action = cmd.action.expect("IOC_BUDGET order requires action");
+        if action != OrderAction::Bid {
+            Self::attach_reject_event(cmd, cmd.size);
+            return;
         }
 
-        i64::MAX // 流动性不足以吃满 size（对应 Java `Long.MAX_VALUE` 哨兵）
-    }
-
-    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本<=limit、ASK 要求收入>=limit；`i64::MAX` 哨兵恒不满足。
-    fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
-        calculated != i64::MAX
-            && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
-    }
-
-    /// FOK_BUDGET：预算满足（不设每单价上限）则整单撮合，否则整单 REJECT 不改簿。对应 Java `newOrderMatchFokBudget`。
-    fn new_order_match_fok_budget(&mut self, cmd: &mut OrderCommand) {
-        let action = cmd.action.expect("FOK_BUDGET order requires action");
         let size = cmd.size;
-        let limit = cmd.price;
+        let budget = cmd.price; // product-scale 总预算
         let reserve_bid_price = cmd.reserve_bid_price;
 
-        let budget = self.check_budget_to_fill(action, size);
-
-        if Self::is_budget_limit_satisfied(action, budget, limit) {
-            // 预算已证足够吃满 size：调用不限价的 try_match_instantly，之后不再 reject。
-            self.try_match_instantly(action, size, reserve_bid_price, None, cmd);
-        } else {
-            Self::attach_reject_event(cmd, size);
+        let (filled, _) = self.match_against_budget_ioc(size, reserve_bid_price, budget, cmd);
+        let rejected_size = size - filled;
+        if rejected_size != 0 {
+            Self::attach_reject_event(cmd, rejected_size);
         }
-    }
-
-    /// 限价内可撮合总量探测（纯函数，不改簿），镜像 Naive `available_volume_for_match`；供裸 FOK 判定用。
-    /// 逐桶累加（`bucket.volume` 为整桶剩余量，跳桶用 `bucket.tail.prev`，同 `check_budget_to_fill`），限价外即停；
-    /// 用 `i128` 累加并在达到 `taker_size` 时提前饱和返回 `taker_size`，避免深簿求和溢出——FOK 只需判定 `>= size`。
-    fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64, taker_size: i64) -> i64 {
-        let is_bid = taker_action == OrderAction::Bid;
-        let mut maker = if is_bid { self.best_ask } else { self.best_bid };
-        let mut available: i128 = 0;
-
-        while let Some(idx) = maker {
-            let o = self.order(idx);
-            let price = o.price;
-            let within_limit = if is_bid { price <= taker_price } else { price >= taker_price };
-            if !within_limit {
-                break;
-            }
-            let parent = o.parent.expect("maker must have parent bucket");
-            let bucket = self.bucket(parent);
-            available += bucket.volume as i128;
-            if available >= taker_size as i128 {
-                return taker_size;
-            }
-            maker = self.order(bucket.tail).prev;
-        }
-
-        available.min(taker_size as i128) as i64
     }
 
     /// 裸 FOK：探测限价内可撮合总量，够则整单成交、否则整单 REJECT 不改簿，对齐 Naive `new_order_match_fok`。
@@ -745,22 +626,20 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// IOC_BUDGET：仅支持 BID（用预算上限买），ASK 语义模糊整单 REJECT（同 Naive），对应 Java `newOrderMatchIocBudget`(`:133-145`)。
-    fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
-        let action = cmd.action.expect("IOC_BUDGET order requires action");
-        if action != OrderAction::Bid {
-            Self::attach_reject_event(cmd, cmd.size);
-            return;
-        }
-
+    /// FOK_BUDGET：预算满足（不设每单价上限）则整单撮合，否则整单 REJECT 不改簿。对应 Java `newOrderMatchFokBudget`。
+    fn new_order_match_fok_budget(&mut self, cmd: &mut OrderCommand) {
+        let action = cmd.action.expect("FOK_BUDGET order requires action");
         let size = cmd.size;
-        let budget = cmd.price; // product-scale 总预算
+        let limit = cmd.price;
         let reserve_bid_price = cmd.reserve_bid_price;
 
-        let (filled, _) = self.match_against_budget_ioc(size, reserve_bid_price, budget, cmd);
-        let rejected_size = size - filled;
-        if rejected_size != 0 {
-            Self::attach_reject_event(cmd, rejected_size);
+        let budget = self.check_budget_to_fill(action, size);
+
+        if Self::is_budget_limit_satisfied(action, budget, limit) {
+            // 预算已证足够吃满 size：调用不限价的 try_match_instantly，之后不再 reject。
+            self.try_match_instantly(action, size, reserve_bid_price, None, cmd);
+        } else {
+            Self::attach_reject_event(cmd, size);
         }
     }
 
@@ -898,19 +777,68 @@ impl OrderBookDirectImpl {
         (taker_filled, taker_filled_notional)
     }
 
-    /// 不挂单、不改簿的 REJECT 事件，前插到 `cmd.matcher_event` 链头。对应 Java `OrderBookEventsHelper.attachRejectEvent`（同 Naive 的 `attach_reject_event`）。
-    fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
-        let event = MatcherTradeEvent {
-            event_type: MatcherEventType::Reject,
-            active_order_completed: true,
-            price: cmd.price,
-            size: rejected_size,
-            // REJECT 无 maker，其余字段取默认（同 Naive 的 attach_reject_event）。
-            bidder_hold_price: cmd.reserve_bid_price,
-            next: cmd.matcher_event.take(),
-            ..Default::default()
-        };
-        cmd.matcher_event = Some(Box::new(event));
+    // ===== 查询/访问器 =====
+    /// 访问器：symbol spec（对应 Java `getSymbolSpec`）。
+    pub fn symbol_spec(&self) -> Option<&CoreSymbolSpecification> {
+        self.symbol_spec.as_ref()
+    }
+
+    // ---- slab 原语：order ----
+
+    /// 分配一个 order 槽：优先复用最近释放的槽（LIFO），否则追加新槽。返回 slab 索引。
+    pub fn alloc_order(&mut self, order: DirectOrder) -> usize {
+        if let Some(idx) = self.order_free.pop() {
+            self.orders[idx] = Some(order);
+            idx
+        } else {
+            self.orders.push(Some(order));
+            self.orders.len() - 1
+        }
+    }
+
+    /// 释放一个 order 槽：置空并推入空闲栈供后续复用。
+    pub fn free_order(&mut self, idx: usize) {
+        self.orders[idx] = None;
+        self.order_free.push(idx);
+    }
+
+    /// 按 slab 索引取 order 只读引用。索引须来自本簿当前存活的分配（否则 panic）。
+    pub fn order(&self, idx: usize) -> &DirectOrder {
+        self.orders[idx].as_ref().expect("dangling order slab index")
+    }
+
+    /// 按 slab 索引取 order 可变引用。索引须来自本簿当前存活的分配（否则 panic）。
+    pub fn order_mut(&mut self, idx: usize) -> &mut DirectOrder {
+        self.orders[idx].as_mut().expect("dangling order slab index")
+    }
+
+    // ---- slab 原语：bucket ----
+
+    /// 分配一个 bucket 槽：优先复用最近释放的槽（LIFO），否则追加新槽。返回 slab 索引。
+    pub fn alloc_bucket(&mut self, bucket: Bucket) -> usize {
+        if let Some(idx) = self.bucket_free.pop() {
+            self.buckets[idx] = Some(bucket);
+            idx
+        } else {
+            self.buckets.push(Some(bucket));
+            self.buckets.len() - 1
+        }
+    }
+
+    /// 释放一个 bucket 槽：置空并推入空闲栈供后续复用。
+    pub fn free_bucket(&mut self, idx: usize) {
+        self.buckets[idx] = None;
+        self.bucket_free.push(idx);
+    }
+
+    /// 按 slab 索引取 bucket 只读引用。索引须来自本簿当前存活的分配（否则 panic）。
+    pub fn bucket(&self, idx: usize) -> &Bucket {
+        self.buckets[idx].as_ref().expect("dangling bucket slab index")
+    }
+
+    /// 按 slab 索引取 bucket 可变引用。索引须来自本簿当前存活的分配（否则 panic）。
+    pub fn bucket_mut(&mut self, idx: usize) -> &mut Bucket {
+        self.buckets[idx].as_mut().expect("dangling bucket slab index")
     }
 
     /// 内部状态校验（测试/对拍用，不在生产路径调用），违反任一不变式直接 panic。对应 Java `validateInternalState`。
@@ -933,6 +861,82 @@ impl OrderBookDirectImpl {
             chain_ids, index_ids,
             "order_id_index must exactly equal the union of both chains (no orphans)"
         );
+    }
+
+    // ===== 内部 helper =====
+    /// 无价格限制探测撮合满 `size` 所需总预算，对应 Java `checkBudgetToFill`(`:222-250`)；按桶粒度走，凑不够返回 `i64::MAX` 哨兵，累加用 `i128` 防溢出。
+    fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
+        let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
+        let mut budget: i128 = 0;
+
+        while let Some(idx) = maker {
+            let o = self.order(idx);
+            let price = o.price;
+            let parent = o.parent.expect("maker must have parent bucket");
+            let bucket = self.bucket(parent);
+            let available = bucket.volume;
+
+            if size > available {
+                size -= available;
+                budget += (available as i128) * (price as i128);
+            } else {
+                let total = budget + (size as i128) * (price as i128);
+                return if total > i64::MAX as i128 { i64::MAX } else { total as i64 };
+            }
+
+            // 跳到下一个（更差价）桶，桶内其余 order 已被 `bucket.volume` 一次性计入（对应 Java `bucket.tail.prev`）。
+            maker = self.order(bucket.tail).prev;
+        }
+
+        i64::MAX // 流动性不足以吃满 size（对应 Java `Long.MAX_VALUE` 哨兵）
+    }
+
+    /// 对应 Java `isBudgetLimitSatisfied`(`:217-220`)：BID 要求成本<=limit、ASK 要求收入>=limit；`i64::MAX` 哨兵恒不满足。
+    fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
+        calculated != i64::MAX
+            && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
+    }
+
+    /// 限价内可撮合总量探测（纯函数，不改簿），镜像 Naive `available_volume_for_match`；供裸 FOK 判定用。
+    /// 逐桶累加（`bucket.volume` 为整桶剩余量，跳桶用 `bucket.tail.prev`，同 `check_budget_to_fill`），限价外即停；
+    /// 用 `i128` 累加并在达到 `taker_size` 时提前饱和返回 `taker_size`，避免深簿求和溢出——FOK 只需判定 `>= size`。
+    fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64, taker_size: i64) -> i64 {
+        let is_bid = taker_action == OrderAction::Bid;
+        let mut maker = if is_bid { self.best_ask } else { self.best_bid };
+        let mut available: i128 = 0;
+
+        while let Some(idx) = maker {
+            let o = self.order(idx);
+            let price = o.price;
+            let within_limit = if is_bid { price <= taker_price } else { price >= taker_price };
+            if !within_limit {
+                break;
+            }
+            let parent = o.parent.expect("maker must have parent bucket");
+            let bucket = self.bucket(parent);
+            available += bucket.volume as i128;
+            if available >= taker_size as i128 {
+                return taker_size;
+            }
+            maker = self.order(bucket.tail).prev;
+        }
+
+        available.min(taker_size as i128) as i64
+    }
+
+    /// 不挂单、不改簿的 REJECT 事件，前插到 `cmd.matcher_event` 链头。对应 Java `OrderBookEventsHelper.attachRejectEvent`（同 Naive 的 `attach_reject_event`）。
+    fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
+        let event = MatcherTradeEvent {
+            event_type: MatcherEventType::Reject,
+            active_order_completed: true,
+            price: cmd.price,
+            size: rejected_size,
+            // REJECT 无 maker，其余字段取默认（同 Naive 的 attach_reject_event）。
+            bidder_hold_price: cmd.reserve_bid_price,
+            next: cmd.matcher_event.take(),
+            ..Default::default()
+        };
+        cmd.matcher_event = Some(Box::new(event));
     }
 
     /// 单侧（ask/bid）不变式 1/2/3/4/5/6/7/9/10 校验（8 跨侧，在 `validate_internal_state` 里做）。

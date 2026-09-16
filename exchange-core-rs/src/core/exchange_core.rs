@@ -25,6 +25,10 @@ pub struct ExchangeCore {
 }
 
 impl ExchangeCore {
+    // ==========================================================================================
+    // 构造
+    // ==========================================================================================
+
     pub fn new() -> Self {
         ExchangeCore {
             risk: RiskEngine::new(),
@@ -35,6 +39,10 @@ impl ExchangeCore {
             last_cascade_matcher_events: Vec::new(),
         }
     }
+
+    // ==========================================================================================
+    // 核心行为:命令管线 / RESET / 强平级联 / 快照
+    // ==========================================================================================
 
     /// 确定性顺序管线：R1(`pre_process_command`)→ME(`process_order`)→R2(`handler_risk_release`)；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
@@ -102,6 +110,10 @@ impl ExchangeCore {
         core.restore_non_replicated_state();
         core
     }
+
+    // ==========================================================================================
+    // 内部 helper
+    // ==========================================================================================
 
     /// 复原非复制 leader-local 状态到"换届后新 leader"语义（对应 Java `updateProvider`）：0. 重建 `ssp` 现货对派生索引；1. 仓位 `adl_eligibility` 按 margin_mode 归一（ISOLATED=100/CROSS=0）；2. 重建 `liquidation_engine` 的 targeted 索引（futures symbol_to_users + loan 扫描器双索引）。
     fn restore_non_replicated_state(&mut self) {

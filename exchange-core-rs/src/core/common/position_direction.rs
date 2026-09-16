@@ -9,19 +9,7 @@ pub enum PositionDirection {
 }
 
 impl PositionDirection {
-    /// 对应 Java `PositionDirection.getMultiplier()`：`LONG=1, SHORT=-1, EMPTY=0`。
-    pub fn multiplier(self) -> i32 {
-        match self {
-            PositionDirection::Long => 1,
-            PositionDirection::Short => -1,
-            PositionDirection::Empty => 0,
-        }
-    }
-
-    /// 对应 Java `PositionDirection.of(byte code)`：`code` 与 `multiplier` 共用同一取值域。
-    pub fn code(self) -> i8 {
-        self.multiplier() as i8
-    }
+    // ===== 构造/配置 =====
 
     /// 对应 Java `PositionDirection.of(byte code)`：未知码值 panic（对应 Java `IllegalArgumentException`）。
     pub fn of_code(code: i8) -> Self {
@@ -40,6 +28,22 @@ impl PositionDirection {
         } else {
             PositionDirection::Short
         }
+    }
+
+    // ===== 查询/访问器 =====
+
+    /// 对应 Java `PositionDirection.getMultiplier()`：`LONG=1, SHORT=-1, EMPTY=0`。
+    pub fn multiplier(self) -> i32 {
+        match self {
+            PositionDirection::Long => 1,
+            PositionDirection::Short => -1,
+            PositionDirection::Empty => 0,
+        }
+    }
+
+    /// 对应 Java `PositionDirection.of(byte code)`：`code` 与 `multiplier` 共用同一取值域。
+    pub fn code(self) -> i8 {
+        self.multiplier() as i8
     }
 
     /// 对应 Java `isOppositeToAction`：`LONG` 与 `ASK` 相对，`SHORT` 与 `BID` 相对（`EMPTY` 恒不相对）。

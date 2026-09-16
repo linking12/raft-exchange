@@ -17,9 +17,13 @@ pub struct SymbolSpecificationProvider {
 }
 
 impl SymbolSpecificationProvider {
+    // ===== 构造/配置 =====
+
     pub fn new() -> Self {
         Self::default()
     }
+
+    // ===== 核心行为 =====
 
     /// 对应 Java `SymbolSpecificationProvider.addSymbol`：拒重复 symbol_id；现货额外拒重复 (base,quote)，期货/期权豁免。
     pub fn add_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
@@ -42,14 +46,6 @@ impl SymbolSpecificationProvider {
         self.currencies.insert(spec.currency, spec);
     }
 
-    pub fn get_symbol(&self, symbol_id: i32) -> Option<&CoreSymbolSpecification> {
-        self.symbols.get(&symbol_id)
-    }
-
-    pub fn get_currency(&self, currency: i32) -> Option<&CoreCurrencySpecification> {
-        self.currencies.get(&currency)
-    }
-
     /// 从 `symbols` 重建现货对索引（派生态，不序列化）。快照恢复后由 `ExchangeCore::restore_non_replicated_state` 调用，
     /// 对应 Java `rebuildSpotPairIndex`（`:87-90`，`BytesIn` 构造末尾调用）。
     pub fn rebuild_spot_pair_index(&mut self) {
@@ -59,6 +55,16 @@ impl SymbolSpecificationProvider {
                 self.spot_pair_index.insert((spec.base_currency, spec.quote_currency));
             }
         }
+    }
+
+    // ===== 查询/访问器 =====
+
+    pub fn get_symbol(&self, symbol_id: i32) -> Option<&CoreSymbolSpecification> {
+        self.symbols.get(&symbol_id)
+    }
+
+    pub fn get_currency(&self, currency: i32) -> Option<&CoreCurrencySpecification> {
+        self.currencies.get(&currency)
     }
 
     /// 对应 Java `findSpotSymbol(int baseCurrency, int quoteCurrency)`（`:77-81`）：反查 base/quote 现货对 spec，线性扫 BTreeMap。
