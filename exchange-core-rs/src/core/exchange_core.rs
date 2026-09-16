@@ -14,6 +14,11 @@ pub struct ExchangeCore {
     pub matching: MatchingEngineRouter,
     pub ups: UserProfileService,
     pub ssp: SymbolSpecificationProvider,
+    /// 测试可观测缓冲(非复制):`run_liquidation_cascade` 排空的每条次级命令(FORCE/IF/ADL/loan 强平)
+    /// 的 `fund_events` 累加于此,供测试对拍级联事件流(`last_fund_events()` 只含本条命令、抓不到排空命令)。
+    /// 每次 `process_command` 开头清空;`#[serde(skip)]` 不进快照/state_hash。
+    #[serde(skip)]
+    pub last_cascade_events: Vec<crate::core::common::fund_event::FundEvent>,
 }
 
 impl ExchangeCore {
@@ -23,11 +28,13 @@ impl ExchangeCore {
             matching: MatchingEngineRouter::new(),
             ups: UserProfileService::new(),
             ssp: SymbolSpecificationProvider::new(),
+            last_cascade_events: Vec::new(),
         }
     }
 
     /// 确定性顺序管线：R1(`pre_process_command`)→ME(`process_order`)→R2(`handler_risk_release`)；所有命令统一流过三段，非交易命令靠 ME/R2 的 no-op 守卫短路。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
+        self.last_cascade_events.clear(); // 每条命令重置级联事件观测缓冲
         if cmd.command == crate::core::common::cmd::order_command_type::OrderCommandType::Reset {
             // 对应 Java RiskEngine `case RESET`：清空全引擎业务态并回 SUCCESS，不过 R1→ME→R2。
             self.reset();
@@ -63,6 +70,8 @@ impl ExchangeCore {
             self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
             // loan-force 卖抵押也在现货簿成交，同样回写现货 markPrice。
             self.risk.apply_spot_trade_price_from(&generated, &self.ssp);
+            // 累加该次级命令的 fund event 到观测缓冲（供测试对拍级联事件流）。
+            self.last_cascade_events.extend(generated.fund_events.iter().cloned());
         }
     }
 

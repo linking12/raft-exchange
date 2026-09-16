@@ -30,6 +30,7 @@ mod tests {
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
     use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
     use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::fund_event::FundEventType;
     use exchange_core_rs::core::common::margin_mode::MarginMode;
     use exchange_core_rs::core::common::order_action::OrderAction;
     use exchange_core_rs::core::common::order_type::OrderType;
@@ -364,6 +365,16 @@ mod tests {
         assert_eq!(settle_funding_fees(&mut api, PERP_SYM, OrderAction::Bid, 1, 100, 1345), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, PERP_SYM).unwrap().profit, -150);
         assert_eq!(api.user_position(UID_2, PERP_SYM).unwrap().profit, 150);
+        // 事件级对拍 Java（ITPerpetualContractIntegration:571/604）：两条 FUNDINGFEE_SETTLEMENT，
+        // LONG(UID_1) 付 → free=19750/profit=-150；SHORT(UID_2) 收 → free=19650/profit=+150。
+        let fe: Vec<_> = api.last_fund_events().iter().filter(|e| e.event_type == FundEventType::FundingfeeSettlement).collect();
+        assert_eq!(fe.len(), 2, "两条资金费结算事件");
+        let e1 = fe.iter().find(|e| e.uid == UID_1).expect("UID_1 funding 事件");
+        assert_eq!(e1.free, 19_750, "Java golden UID_1 free");
+        assert_eq!(e1.profit, -150);
+        let e2 = fe.iter().find(|e| e.uid == UID_2).expect("UID_2 funding 事件");
+        assert_eq!(e2.free, 19_650, "Java golden UID_2 free");
+        assert_eq!(e2.profit, 150);
         assert_conserved(&api);
 
         // 平仓 1 手：UID_1 ASK(maker) + UID_3 BID(taker) @1500。

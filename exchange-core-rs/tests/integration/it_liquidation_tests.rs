@@ -36,6 +36,7 @@ mod tests {
     use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
     use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
+    use exchange_core_rs::core::common::fund_event::FundEventType;
 
     const XBT: i32 = 3762;
     const USD: i32 = 840; // QUOTE_ID
@@ -194,6 +195,20 @@ mod tests {
         assert_eq!(api.user_account(lp, USD), 99_700, "LP 对手方净结算");
         // lp 的接单流动性被强平卖单消耗 10（25→15）。
         assert_eq!(api.user_position(lp, BTC_SYM).unwrap().pending_buy_size, liquidity - position_size, "lp 流动性被消耗 10");
+        // 级联事件流锚点(Java ITLiquidation 只验 state,不断言事件;此处钉 Rust 事件流,补事件级覆盖):
+        // 被强平方(trader)UnlockPending→LiquidationClose→PnlSettlement→LiquidationFee;对手(lp)UnlockPending→ClosePosition。
+        let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
+        assert_eq!(seq, vec![
+            (FundEventType::UnlockPending, trader),
+            (FundEventType::LiquidationClose, trader),
+            (FundEventType::PnlSettlement, trader),
+            (FundEventType::UnlockPending, lp),
+            (FundEventType::ClosePosition, lp),
+            (FundEventType::LiquidationFee, trader),
+        ], "强平级联事件流(类型+uid)");
+        // 被强平方结算后 free 与账户一致;强平费事件存在。
+        let pnl = api.cascade_fund_events().iter().find(|e| e.event_type == FundEventType::PnlSettlement && e.uid == trader).unwrap();
+        assert_eq!(pnl.free, 1_900, "PnlSettlement 事件 free == 最终账户");
         assert_conserved(&api);
     }
 
