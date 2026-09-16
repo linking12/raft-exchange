@@ -1,12 +1,11 @@
-//! 对应 Java `LastPriceCacheRecord`：每 symbol 最新价快照，进 raft snapshot、参与 state hash；期货外部喂价，现货由 `apply_trade_price` 维护。Java `markPrice`/`markPriceTs` 改名 `last_price`/`last_price_ts`。
+//! 对应 Java `LastPriceCacheRecord`：每 symbol 最新价快照，进 raft snapshot、参与 state hash；期货外部喂价，现货由 `apply_trade_price` 维护。
+//! Java `markPrice`/`markPriceTs` 改名 `last_price`/`last_price_ts`。Java 还有 `askPrice`/`bidPrice` 两字段，但引擎逻辑从不读取（只由 L2 行情赋值、不进风控/结算），本移植刻意不携带，令 record 收敛为 markPrice + ts 两字段。
 
 /// 对应 Java `LastPriceCacheRecord.WINDOW_MS`：15 秒滑动混合窗口。
 pub const WINDOW_MS: i64 = 15_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LastPriceCacheRecord {
-    pub ask_price: i64,
-    pub bid_price: i64,
     /// 对应 Java `markPrice`：期货由外部喂价，现货由 [`apply_trade_price`] 滑动混合维护。
     pub last_price: i64,
     /// 对应 Java `markPriceTs`：`last_price` 最近一次更新的时间戳。
@@ -14,17 +13,17 @@ pub struct LastPriceCacheRecord {
 }
 
 impl LastPriceCacheRecord {
-    /// 对应 Java 无参构造：`askPrice=MAX_VALUE, bidPrice=0, markPrice=0, markPriceTs=0`。
     pub fn new() -> Self {
-        LastPriceCacheRecord { ask_price: i64::MAX, bid_price: 0, last_price: 0, last_price_ts: 0 }
+        LastPriceCacheRecord { last_price: 0, last_price_ts: 0 }
     }
 
-    /// 对应 Java `LastPriceCacheRecord(long, long, long)`：`markPriceTs` 缺省 0。
-    pub fn with_prices(ask_price: i64, bid_price: i64, last_price: i64) -> Self {
-        LastPriceCacheRecord { ask_price, bid_price, last_price, last_price_ts: 0 }
+    /// 便捷构造：只给 markPrice（`last_price_ts` 缺省 0）。
+    pub fn with_mark(last_price: i64) -> Self {
+        LastPriceCacheRecord { last_price, last_price_ts: 0 }
     }
 
     /// 对应 Java `applyTradePrice(long, long)`：现货专用，成交价滑动混合维护 `markPrice`；过期/非法输入 no-op，首次或超窗口直接采纳，否则按时间占比线性混合。
+    /// 混合乘积用 `i128` 中间量防溢出（Java 用 `long`，极端价可溢出；此处收窄为安全实现）。
     pub fn apply_trade_price(&mut self, ts: i64, price: i64) {
         if price <= 0 || ts <= self.last_price_ts {
             return;
@@ -33,7 +32,8 @@ impl LastPriceCacheRecord {
         self.last_price = if self.last_price <= 0 || dt >= WINDOW_MS {
             price
         } else {
-            (self.last_price * (WINDOW_MS - dt) + price * dt) / WINDOW_MS
+            ((self.last_price as i128 * (WINDOW_MS - dt) as i128 + price as i128 * dt as i128)
+                / WINDOW_MS as i128) as i64
         };
         self.last_price_ts = ts;
     }
@@ -41,8 +41,6 @@ impl LastPriceCacheRecord {
     /// 对应 Java `stateHash()`，风格对齐 `UserProfile::state_hash`；不保证与 Java 数值相等，仅保证同态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
-        h = h.wrapping_mul(31).wrapping_add(self.ask_price);
-        h = h.wrapping_mul(31).wrapping_add(self.bid_price);
         h = h.wrapping_mul(31).wrapping_add(self.last_price);
         h = h.wrapping_mul(31).wrapping_add(self.last_price_ts);
         ((h >> 32) as i32) ^ (h as i32)
@@ -60,10 +58,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_matches_java_defaults() {
+    fn new_is_zeroed() {
         let r = LastPriceCacheRecord::new();
-        assert_eq!(r.ask_price, i64::MAX);
-        assert_eq!(r.bid_price, 0);
         assert_eq!(r.last_price, 0);
         assert_eq!(r.last_price_ts, 0);
     }
@@ -123,21 +119,24 @@ mod tests {
     }
 
     #[test]
+    fn apply_trade_price_blend_no_overflow_on_large_price() {
+        // i128 中间量守卫：last_price 接近 i64 上限时，i64 的 last_price*(WINDOW-dt) 会溢出；i128 混合不溢出。
+        let mut r = LastPriceCacheRecord::new();
+        r.apply_trade_price(1, i64::MAX / 2);
+        r.apply_trade_price(2, i64::MAX / 2); // dt=1 窗口内混合，两侧同值→仍 = i64::MAX/2，不 panic/wrap
+        assert_eq!(r.last_price, i64::MAX / 2);
+    }
+
+    #[test]
     fn state_hash_deterministic_and_sensitive_to_each_field() {
-        let a = LastPriceCacheRecord::with_prices(1, 2, 3);
-        let b = LastPriceCacheRecord::with_prices(1, 2, 3);
+        let a = LastPriceCacheRecord::with_mark(3);
+        let b = LastPriceCacheRecord::with_mark(3);
         assert_eq!(a.state_hash(), b.state_hash());
 
-        let diff_ask = LastPriceCacheRecord::with_prices(9, 2, 3);
-        assert_ne!(a.state_hash(), diff_ask.state_hash());
-
-        let diff_bid = LastPriceCacheRecord::with_prices(1, 9, 3);
-        assert_ne!(a.state_hash(), diff_bid.state_hash());
-
-        let diff_last = LastPriceCacheRecord::with_prices(1, 2, 9);
+        let diff_last = LastPriceCacheRecord::with_mark(9);
         assert_ne!(a.state_hash(), diff_last.state_hash());
 
-        let mut diff_ts = LastPriceCacheRecord::with_prices(1, 2, 3);
+        let mut diff_ts = LastPriceCacheRecord::with_mark(3);
         diff_ts.last_price_ts = 9;
         assert_ne!(a.state_hash(), diff_ts.state_hash());
     }

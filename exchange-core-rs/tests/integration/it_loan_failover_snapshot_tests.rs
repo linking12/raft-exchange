@@ -19,6 +19,7 @@
 
 #[cfg(test)]
 mod tests {
+    use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, RateCurveConfig};
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
@@ -130,7 +131,7 @@ mod tests {
         let spec = spot_loan_spec(SYMBOL, WBTC, USDT, 6_000, 8_500, 7_500);
         assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
         core.matching.add_symbol(&spec);
-        core.risk.last_price_cache.insert(SYMBOL, MARK);
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(MARK));
         core.risk.loan_service.global_config.numeraire_currency = USDT;
 
         assert_eq!(submit(&mut core, cmd_pool_deposit(5000, USDT, POOL_FUND)), CommandResultCode::Success);
@@ -202,7 +203,7 @@ mod tests {
         let spec = spot_loan_spec(RC_SYMBOL, RC_BTC, RC_USDT, 6_000, 8_500, 7_500);
         assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
         core.matching.add_symbol(&spec);
-        core.risk.last_price_cache.insert(RC_SYMBOL, RC_MARK);
+        core.risk.last_price_cache.insert(RC_SYMBOL, LastPriceCacheRecord::with_mark(RC_MARK));
         core.risk.loan_service.global_config.numeraire_currency = RC_USDT;
         // 非默认利率曲线（对齐 ITLoanDynamicRate）。
         core.risk.apply_add_loan(

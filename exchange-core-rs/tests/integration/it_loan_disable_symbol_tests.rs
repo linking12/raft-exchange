@@ -14,6 +14,7 @@
 
 #[cfg(test)]
 mod tests {
+    use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, SymbolLoanConfig, UNSET, UNSET_AMOUNT};
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
@@ -104,7 +105,7 @@ mod tests {
         let spec = eth_xbt_loan_spec();
         assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
         core.matching.add_symbol(&spec);
-        core.risk.last_price_cache.insert(SYMBOL, MARK);
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(MARK));
 
         assert_eq!(submit(&mut core, cmd_pool_deposit(5000, XBT, POOL_FUND)), CommandResultCode::Success);
 

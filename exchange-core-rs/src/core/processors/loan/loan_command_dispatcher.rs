@@ -1,4 +1,6 @@
 //! Java `LoanCommandDispatcher`：借贷命令 dispatch 表 + 公共 preamble。零大小类型，逐次显式传参。
+#[cfg(test)]
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -1226,7 +1228,7 @@ mod tests {
     /// 标准治具：spec 挂 50% initialLtv/80% liquidationLtv，markPrice=1，池注资 1_000_000 quote，用户 10_000 base 抵押。
     fn setup() -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
         let mut engine = RiskEngine::new();
-        engine.last_price_cache.insert(SYMBOL, 1);
+        engine.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
         engine.loan_service.add_to_loan_pool_available(QUOTE, 1_000_000);
 
         let mut ups = UserProfileService::new();

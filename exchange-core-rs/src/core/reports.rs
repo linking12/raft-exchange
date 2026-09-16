@@ -183,7 +183,7 @@ impl ExchangeCore {
                 }
             }
             for pos in up.positions.values() {
-                let mark = self.risk.last_price_cache.get(&pos.symbol).copied().unwrap_or(0);
+                let mark = self.risk.last_price_cache.get(&pos.symbol).map(|r| r.last_price).unwrap_or(0);
                 add(&mut pnl_by_symbol, pos.symbol, pos.estimate_pnl(mark));
                 if pos.extra_margin > 0 {
                     add(&mut extra_margin_by_symbol, pos.symbol, pos.extra_margin);
@@ -232,7 +232,7 @@ impl ExchangeCore {
                 PositionDirection::Short => add(&mut r.if_open_interest_short, pos.symbol, pos.open_volume),
                 PositionDirection::Empty => {}
             }
-            let mark = self.risk.last_price_cache.get(&pos.symbol).copied().unwrap_or(0);
+            let mark = self.risk.last_price_cache.get(&pos.symbol).map(|r| r.last_price).unwrap_or(0);
             let position_value = pos.position_value(mark);
             if let Some((ccy, v)) = self.size_price_to_currency(position_value, pos.symbol) {
                 add(&mut r.if_balances, ccy, v);
@@ -262,7 +262,7 @@ impl ExchangeCore {
             .positions
             .values()
             .map(|pos| {
-                let mark = self.risk.last_price_cache.get(&pos.symbol).copied().unwrap_or(0);
+                let mark = self.risk.last_price_cache.get(&pos.symbol).map(|r| r.last_price).unwrap_or(0);
                 let (liquidation_price, margin_ratio_scale_k, maintenance_margin_scale_k) =
                     self.position_estimates(up, pos);
                 PositionView {
@@ -292,7 +292,7 @@ impl ExchangeCore {
             .values()
             .map(|l| {
                 let display_interest = self.risk.loan_service.calculate_display_interest(l, now_ms);
-                let mark_price = self.risk.last_price_cache.get(&l.symbol_id).copied().unwrap_or(0);
+                let mark_price = self.risk.last_price_cache.get(&l.symbol_id).map(|r| r.last_price).unwrap_or(0);
                 let mut ltv_bps = 0i64;
                 if mark_price > 0 {
                     if let Some(spec) = self.ssp.get_symbol(l.symbol_id) {
@@ -354,7 +354,7 @@ impl ExchangeCore {
         let mut position_values: BTreeMap<i32, i64> = BTreeMap::new();
         for pos in self.risk.liquidation_service.positions.values() {
             symbols.insert(pos.symbol);
-            let mark = self.risk.last_price_cache.get(&pos.symbol).copied().unwrap_or(0);
+            let mark = self.risk.last_price_cache.get(&pos.symbol).map(|r| r.last_price).unwrap_or(0);
             *position_values.entry(pos.symbol).or_insert(0) += pos.position_value(mark);
         }
         for sym in symbols {
@@ -369,7 +369,7 @@ impl ExchangeCore {
             );
         }
         r.loan_insurance_fund = self.risk.loan_service.loan_insurance_fund.clone();
-        r.mark_price = self.risk.last_price_cache.clone();
+        r.mark_price = self.risk.last_price_cache.iter().map(|(&k, v)| (k, v.last_price)).collect();
         r
     }
 
@@ -441,9 +441,12 @@ impl ExchangeCore {
         // 对应 Java StateHashReport 的 MATCHING_ORDER_BOOKS + RISK_LAST_PRICE_CACHE 子模块哈希：撮合簿与价格缓存
         // 也须折入，否则两节点仅在这两块子状态分歧时算出相同 hash，raft 跨节点分叉探测漏检。
         // mark_price_ts 是复制态（随现货成交/MARKPRICE_ADJUSTMENT 确定性更新），须折入否则跨节点分歧漏检。
-        components.insert("risk_mark_price_ts".to_string(), hash_bucket(&self.risk.mark_price_ts));
+        // last_price_cache 现为 record map；分别折入 mark_price 与 mark_price_ts 两块（两者都是复制态，缺一则跨节点分歧漏检）。
+        let mark_prices: BTreeMap<i32, i64> = self.risk.last_price_cache.iter().map(|(&k, v)| (k, v.last_price)).collect();
+        let mark_price_ts: BTreeMap<i32, i64> = self.risk.last_price_cache.iter().map(|(&k, v)| (k, v.last_price_ts)).collect();
+        components.insert("risk_mark_price_ts".to_string(), hash_bucket(&mark_price_ts));
         components.insert("order_books".to_string(), self.matching.order_books_state_hash());
-        components.insert("risk_last_price_cache".to_string(), hash_bucket(&self.risk.last_price_cache));
+        components.insert("risk_last_price_cache".to_string(), hash_bucket(&mark_prices));
         StateHashReport { components }
     }
 
@@ -744,7 +747,7 @@ mod tests {
             timestamp: 10_000,
             ..Default::default()
         });
-        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).copied(), None, "挂单未成交不应回写");
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.last_price), None, "挂单未成交不应回写");
         core.process_command(&mut OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 11,
@@ -758,8 +761,8 @@ mod tests {
             timestamp: 10_000,
             ..Default::default()
         });
-        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).copied(), Some(50), "现货成交价应回写 markPrice");
-        assert_eq!(core.risk.mark_price_ts.get(&SYMBOL).copied(), Some(10_000));
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.last_price), Some(50), "现货成交价应回写 markPrice");
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.last_price_ts), Some(10_000));
     }
 
     #[test]

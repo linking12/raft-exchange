@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
@@ -141,7 +142,7 @@ impl LiquidationService {
     pub fn compute_profitable_positions_by_symbol(
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
     ) -> BTreeMap<i32, Vec<SymbolPositionRecord>> {
         let mut result: BTreeMap<i32, Vec<SymbolPositionRecord>> = BTreeMap::new();
 
@@ -169,7 +170,7 @@ impl LiquidationService {
                     continue;
                 }
                 let mark_price = match last_price_cache.get(&position.symbol) {
-                    Some(&p) => p,
+                    Some(r) => r.last_price,
                     None => continue,
                 };
 
@@ -255,7 +256,7 @@ impl LiquidationService {
         currency: i32,
         keys: &[i32],
         ssp: &SymbolSpecificationProvider,
-        last_price_cache: &BTreeMap<i32, i64>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         result: &mut BTreeMap<i32, Vec<SymbolPositionRecord>>,
     ) {
         let currency_spec = match ssp.get_currency(currency) {
@@ -272,7 +273,7 @@ impl LiquidationService {
                 None => continue,
             };
             let mark_price = match last_price_cache.get(&position.symbol) {
-                Some(&p) => p,
+                Some(r) => r.last_price,
                 None => continue,
             };
             let maintenance = position.calculate_maintenance_margin(spec, mark_price);
@@ -300,7 +301,7 @@ impl LiquidationService {
         for &key in keys {
             let symbol = profile.positions[&key].symbol;
             let mark_price = match last_price_cache.get(&symbol) {
-                Some(&p) => p,
+                Some(r) => r.last_price,
                 None => continue,
             };
             if profile.positions[&key].estimate_unrealized_profit(mark_price) <= 0 {
@@ -661,7 +662,7 @@ mod tests {
             },
         );
         let mut last_price_cache = BTreeMap::new();
-        last_price_cache.insert(SYMBOL, 100);
+        last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         let result = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
 
@@ -686,7 +687,7 @@ mod tests {
             },
         );
         let mut last_price_cache = BTreeMap::new();
-        last_price_cache.insert(SYMBOL, 100);
+        last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         let result = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
         assert!(result.get(&SYMBOL).is_none() || result[&SYMBOL].is_empty());
@@ -709,7 +710,7 @@ mod tests {
         );
         // equity = balance(0) + total_profit(100) = 100; totalMaintenance=1000 -> equity(100) < warning_threshold(1200)，门不过——先验证这条路径被拒（下面单独测通过的场景）。
         let mut last_price_cache = BTreeMap::new();
-        last_price_cache.insert(SYMBOL, 100);
+        last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(100));
         let result = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
         assert!(result.get(&SYMBOL).is_none() || result[&SYMBOL].is_empty(), "equity 不足 1.2x maintenance -> gating 不过，不入选");
         assert_eq!(ups.get(1).unwrap().positions[&SYMBOL].adl_eligibility, 0, "gating 不过，adl_eligibility 保持 CROSS 默认值 0");
@@ -742,7 +743,7 @@ mod tests {
         // factor = clamp((1400-1000)*100/1000, 0, 100) = clamp(40, 0, 100) = 40（非边界值，验证非只有 0/100 两个极端 clamp 分支）。
         ups.get_mut(1).unwrap().add_to_account(QUOTE, 1_300);
         let mut last_price_cache = BTreeMap::new();
-        last_price_cache.insert(SYMBOL, 100);
+        last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         let result = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
         assert_eq!(result[&SYMBOL][0].adl_eligibility, 40);
@@ -765,7 +766,7 @@ mod tests {
         );
         ups.get_mut(1).unwrap().add_to_account(QUOTE, 1_000_000); // 余额充足也救不了：totalProfit<=0 就直接拒
         let mut last_price_cache = BTreeMap::new();
-        last_price_cache.insert(SYMBOL, 100);
+        last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         let result = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
         assert!(result.get(&SYMBOL).is_none() || result[&SYMBOL].is_empty());
@@ -836,7 +837,7 @@ mod tests {
             },
         );
         let mut last_price_cache = BTreeMap::new();
-        last_price_cache.insert(SYMBOL, 100);
+        last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(100));
 
         let first = LiquidationService::compute_profitable_positions_by_symbol(&mut ups, &ssp, &last_price_cache);
         assert_eq!(first[&SYMBOL].len(), 1);

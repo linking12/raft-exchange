@@ -1,6 +1,7 @@
 //! Java `LoanService`：per-shard 单例，纯状态 + 纯函数工具类，不持有 RiskEngine 引用。
 use std::collections::BTreeMap;
 
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -175,7 +176,7 @@ impl LoanService {
         numeraire_currency: i32,
         numeraire_spec: &CoreCurrencySpecification,
         ssp: &SymbolSpecificationProvider,
-        price_cache: &std::collections::BTreeMap<i32, i64>,
+        price_cache: &std::collections::BTreeMap<i32, LastPriceCacheRecord>,
     ) -> i64 {
         if currency == numeraire_currency {
             return amount;
@@ -185,7 +186,7 @@ impl LoanService {
             None => return -1,
         };
         let mark_price = match price_cache.get(&spec.symbol_id) {
-            Some(&p) if p > 0 => p,
+            Some(r) if r.last_price > 0 => r.last_price,
             _ => return -1,
         };
         // currency 视作 base、numeraire 视作 quote，复用 Isolated LTV 同套折算。
@@ -199,7 +200,7 @@ impl LoanService {
         up: &UserProfile,
         now: i64,
         ssp: &SymbolSpecificationProvider,
-        price_cache: &std::collections::BTreeMap<i32, i64>,
+        price_cache: &std::collections::BTreeMap<i32, LastPriceCacheRecord>,
         fail_closed_on_missing_price: bool,
     ) -> i64 {
         self.cross_ltv_bps(up, now, ssp, price_cache, fail_closed_on_missing_price, true)
@@ -211,7 +212,7 @@ impl LoanService {
         up: &UserProfile,
         now: i64,
         ssp: &SymbolSpecificationProvider,
-        price_cache: &std::collections::BTreeMap<i32, i64>,
+        price_cache: &std::collections::BTreeMap<i32, LastPriceCacheRecord>,
     ) -> i64 {
         self.cross_ltv_bps(up, now, ssp, price_cache, false, false)
     }
@@ -282,7 +283,7 @@ impl LoanService {
         target_loan_id: i64,
         now: i64,
         ssp: &SymbolSpecificationProvider,
-        price_cache: &BTreeMap<i32, i64>,
+        price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
     ) -> bool {
         let numeraire_currency = self.global_config.numeraire_currency;
         if numeraire_currency == 0 {
@@ -496,7 +497,7 @@ impl LoanService {
         up: &UserProfile,
         now: i64,
         ssp: &SymbolSpecificationProvider,
-        price_cache: &std::collections::BTreeMap<i32, i64>,
+        price_cache: &std::collections::BTreeMap<i32, LastPriceCacheRecord>,
         fail_closed_on_missing_price: bool,
         apply_weight: bool,
     ) -> i64 {
@@ -863,7 +864,7 @@ mod tests {
     const NUMERAIRE_CUR: i32 = 2; // quote，同时充作 loanCurrency，免去 debt 侧折算
     const SPOT_SYMBOL: i32 = 100; // base=COLLATERAL_CUR / quote=NUMERAIRE_CUR
 
-    fn cross_fixture(weight_bps: i32) -> (SymbolSpecificationProvider, std::collections::BTreeMap<i32, i64>) {
+    fn cross_fixture(weight_bps: i32) -> (SymbolSpecificationProvider, std::collections::BTreeMap<i32, LastPriceCacheRecord>) {
         let mut ssp = SymbolSpecificationProvider::new();
         ssp.add_symbol(CoreSymbolSpecification {
             symbol_id: SPOT_SYMBOL,
@@ -881,7 +882,7 @@ mod tests {
         });
         ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
         let mut price_cache = std::collections::BTreeMap::new();
-        price_cache.insert(SPOT_SYMBOL, 1); // markPrice=1, scale-identity -> value_in_numeraire 恒等于 amount
+        price_cache.insert(SPOT_SYMBOL, LastPriceCacheRecord::with_mark(1)); // markPrice=1, scale-identity -> value_in_numeraire 恒等于 amount
         (ssp, price_cache)
     }
 
@@ -927,7 +928,7 @@ mod tests {
         // 无 base=999/quote=NUMERAIRE_CUR 现货对。
         assert_eq!(LoanService::value_in_numeraire(999, 1_000, NUMERAIRE_CUR, numeraire_spec, &ssp, &price_cache), -1);
         // 有现货对，但 price_cache 里没有该 symbol 的 markPrice。
-        let empty_price_cache: std::collections::BTreeMap<i32, i64> = std::collections::BTreeMap::new();
+        let empty_price_cache: std::collections::BTreeMap<i32, LastPriceCacheRecord> = std::collections::BTreeMap::new();
         assert_eq!(
             LoanService::value_in_numeraire(COLLATERAL_CUR, 1_000, NUMERAIRE_CUR, numeraire_spec, &ssp, &empty_price_cache),
             -1
@@ -992,7 +993,7 @@ mod tests {
         // 只注册 numeraire 币种 spec；debt currency 用一个没有对应现货对的另一个币种，逼 valueInNumeraire 返回 -1。
         let debt_currency = 3;
         ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
-        let price_cache: std::collections::BTreeMap<i32, i64> = std::collections::BTreeMap::new();
+        let price_cache: std::collections::BTreeMap<i32, LastPriceCacheRecord> = std::collections::BTreeMap::new();
 
         let mut s = LoanService::new();
         s.global_config.numeraire_currency = NUMERAIRE_CUR;
@@ -1119,7 +1120,7 @@ mod tests {
         ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
         // debt_currency (3) != NUMERAIRE_CUR and has no registered spot pair to it at all -> value_in_numeraire returns -1 (unlike using NUMERAIRE_CUR itself as the debt currency, which would hit the same-currency identity shortcut and never need a price at all).
         let debt_currency = 3;
-        let price_cache: BTreeMap<i32, i64> = BTreeMap::new();
+        let price_cache: BTreeMap<i32, LastPriceCacheRecord> = BTreeMap::new();
         let mut s = LoanService::new();
         s.global_config.numeraire_currency = NUMERAIRE_CUR;
         let mut up = UserProfile::new(1, crate::core::common::user_status::UserStatus::Active);
