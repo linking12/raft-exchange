@@ -138,8 +138,9 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 - 当前 25 向量全绿:5 域场景(`spot_full_cycle`/`perp_funding`/`delivery_settle`/`liquidation_isolated`/`adl`)+ 16 差分模糊(见下)+ 4 IOC/FOK 手造。
 
 **③b 差分模糊(随机流批量)**
-`cargo run --example gen_conformance_fuzz` 用确定性 PRNG(固定种子)批量生成随机现货命令流 `.stream`,走同一 Java-oracle→Rust-replay 流程,把撮合引擎压满(crossing/partial/NSF)。
-- **已抓到真分歧**:IOC/FOK 现货在复杂多单序列下 `result_code`/结算与 Java 不一致(GTC 完全干净;简单 IOC/FOK 手造用例也对)。**这是一个待根因的开放发现**——正是差分模糊的价值。故随机流暂配 GTC(干净、持续差分覆盖),IOC/FOK 的可用用例由手写向量覆盖。
+`cargo run --example gen_conformance_fuzz` 用确定性 PRNG(固定种子)批量生成随机现货命令流 `.stream`(GTC+IOC),走同一 Java-oracle→Rust-replay 流程,把撮合引擎压满(crossing/partial/NSF)。**已抓到并定性两个 Java 侧问题(均经 Java 测试确认,Rust 皆正确):**
+- **① Java 批处理 R1/R2 时序 hazard**:未成交 IOC ASK 的 R2 锁释放滞后于下条 R1 读 → 无 barrier 时后续订单 spurious `RISK_NSF`(Java 引擎释放逻辑本身正确、settle 后归零,属 Disruptor 已知特性)。Rust 单管线无此 hazard。**已解决**:conformance exporter 每命令后 flush(比两侧 settled 语义)。Java 侧特征化见 `ITIocAskLockRelease`。
+- **② Java 未实现现货普通 FOK**:`OrderBookNaiveImpl`/`OrderBookDirectImpl` 均 `// TODO FOK support`、default 整单 reject;Rust 已正确实现 FOK(fill-or-kill)。属 Java **功能缺口**(非 bug),Rust 更完整 → 随机流不含普通 FOK,其可用用例由手写向量覆盖。
 - 真·live 双引擎同进程比对(JNI/双跑)更重,未做。
 
 ### 归一化规格(= 刻意差异清单)
@@ -153,6 +154,8 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 - **记账/锁事件**(`balance_adjustment` 的 fund event 等):Java 发、Rust 不发 → 排除。
 - **撮合明细**:Java 是 `SpotExecutionReport`/`FuturesExecutionReport` 高层报告,Rust 是 raw `MatcherTradeEvent`,抽象不同 → 不进 ③(撮合正确性由 ① 逐值对拍)。
 - **`state_hash`**:Rust 逐字段折叠是超集,不与 Java hash 直接互比;跨实现比对用 ③ 的语义状态摘要,不用 hash。
+- **现货普通 FOK**:Java 未实现(`// TODO FOK support`,整单 reject),Rust 实现了 fill-or-kill → 能成交时分歧。Rust 更完整;差分模糊不随机普通 FOK,可用用例由手写向量覆盖。
+- **批处理 R1/R2 时序**:Java 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(spurious NSF,须 barrier),Rust 单管线 R2 恒先于下条 R1 → conformance exporter 每命令 flush,比 settled 语义。
 
 ### 这套设计发现过的真 bug
 

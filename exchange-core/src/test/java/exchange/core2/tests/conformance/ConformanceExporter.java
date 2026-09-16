@@ -236,6 +236,11 @@ public class ConformanceExporter {
                 if (rc != null) {
                     out.append("R ").append(seq).append(' ').append(rc.name()).append('\n');
                 }
+                // 每条命令后 flush 管线:report query 走完整管线,强制把上一条的 R2(如未成交 IOC ASK 的锁释放)
+                // 落地,再进下一条 R1。否则 Java 批处理 R1/R2 lag 会让下一条读到未 settle 的 exchangeLocked
+                // (spurious RISK_NSF)——这是 Java 已知的批处理时序 hazard(reprice-r2-r1 同类),Rust 单管线无此问题。
+                // conformance 要比的是两侧 settled 语义,故这里显式 settle。
+                c.totalBalanceReport();
                 seq++;
             }
 
