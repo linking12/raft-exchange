@@ -11,31 +11,35 @@
 //!   ETH(id 10001): maker_fee=1 taker_fee=2 fee_scale_k=100（比例费）, 其余同 BTC。
 //! 货币 digit(0) → scale_k=1（恒等缩放，无 size_price 换算）。
 //!
-//! **未翻译的 @Test（及原因）**——harness 缺相应命令/字段，按简报规则跳过：
-//!   - HEDGE 双向持仓类（`testFuturesHedgeFullLifecycleWithDepositWithdraw`,
-//!     `testFuturesIsolatedHedgeFullLifecycleWithDepositWithdraw`, `testHedgeModePositionOpeningFeeEvents`,
-//!     `testHedgeModePartialClosingFeeEvents`, `testHedgeModePositionReversalFeeEvents`,
-//!     `testHedgeModeMixedOrderTypesFeeEvents`, `testHedgeModeFeeConsistencyWithGlobalBalance`）：
-//!     `ExchangeApi` 未暴露 position-mode（HEDGE）切换方法，且 `user_position(uid,symbol)` 只处理 ONEWAY
-//!     单键（不处理 ±symbol 双腿键），无法建/验双向持仓。
-//!   - 强平类（`testFuturesLiquidationFullLifecycleConservation`,
-//!     `testFuturesHedgeLiquidationFullLifecycleConservation`）：harness 无 triggerLiquidation /
-//!     LiquidationEngine 控制 / updateCurrentPriceTo / groupingControl，无法驱动 FORCE→IF→ADL 强平流程。
-//!   共 9 个跳过，其余 18 个已翻译。
+//! HEDGE 双向持仓类现已翻译（harness 提供 `api.adjust_position_mode(uid, hedge)`；双腿经
+//! `api.ups().get(uid).positions.values()` 按 `direction` 过滤读取 ±symbol 双键，见本文件 `hedge_leg` helper）：
+//!   `testFuturesHedgeFullLifecycleWithDepositWithdraw`, `testFuturesIsolatedHedgeFullLifecycleWithDepositWithdraw`,
+//!   `testHedgeModePositionOpeningFeeEvents`, `testHedgeModePartialClosingFeeEvents`,
+//!   `testHedgeModePositionReversalFeeEvents`, `testHedgeModeMixedOrderTypesFeeEvents`,
+//!   `testHedgeModeFeeConsistencyWithGlobalBalance`。逐笔 `FuturesExecutionReport.fee` 仍用等价的累计
+//!   `api.fees(USD)` + 逐用户 `api.user_account` 断言（同 ONEWAY 版）。
+//!
+//! **仍跳过的 @Test（及原因）**——强平类：`testFuturesLiquidationFullLifecycleConservation`,
+//!   `testFuturesHedgeLiquidationFullLifecycleConservation`：harness 无 triggerLiquidation /
+//!   LiquidationEngine 控制 / updateCurrentPriceTo / groupingControl，无法驱动 FORCE→IF→ADL 强平流程（genuinely N/A）。
+//!   共 2 个跳过，其余 25 个已翻译。
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::position_direction::PositionDirection;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest};
-    use crate::core::utils::core_arithmetic_utils::{calculate_maker_fee, calculate_taker_fee};
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
+    use exchange_core_rs::core::common::symbol_position_record::SymbolPositionRecord;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{
+        ClosePositionRequest, ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest,
+    };
+    use exchange_core_rs::core::utils::core_arithmetic_utils::{calculate_maker_fee, calculate_taker_fee};
 
 // ================================================================================================
 // 常量：逐字对齐 Java TestConstants / initFutureSymbols
@@ -175,6 +179,23 @@ fn assert_conserved_usd(api: &ExchangeApi) {
         }
     }
     assert_eq!(total, 0, "期货全局守恒被打破：USD total={total}");
+}
+
+/// HEDGE 双腿读取：`ups().get(uid).positions.values()` 按 `direction` 过滤（±symbol 双键，两腿 `.symbol==symbol`）。
+fn hedge_leg(api: &ExchangeApi, uid: i64, symbol: i32, dir: PositionDirection) -> Option<&SymbolPositionRecord> {
+    api.ups()
+        .get(uid)?
+        .positions
+        .values()
+        .find(|p| p.symbol == symbol && p.direction == dir)
+}
+
+/// 某 symbol 下 openVolume 总和（跨双腿）。用于平仓后断言全部归零。
+fn hedge_open_volume_sum(api: &ExchangeApi, uid: i64, symbol: i32) -> i64 {
+    api.ups()
+        .get(uid)
+        .map(|p| p.positions.values().filter(|r| r.symbol == symbol).map(|r| r.open_volume).sum())
+        .unwrap_or(0)
 }
 
 // ================================================================================================
@@ -891,5 +912,411 @@ fn futures_reverse_opening_fee_calculation() {
     assert_eq!(global_fees_collected, expected_maker_fee + expected_taker_fee);
     assert!(global_fees_collected > 0);
     assert_conserved_usd(&api);
+}
+
+// ================================================================================================
+// 23. testHedgeModePositionOpeningFeeEvents —— HEDGE 开 LONG+SHORT，用户两腿都是 maker
+// ================================================================================================
+
+#[test]
+fn hedge_mode_position_opening_fee_events() {
+    const USER: i64 = 1;
+    const CP1: i64 = 2;
+    const CP2: i64 = 3;
+    let long_size = 15i64;
+    let short_size = 10i64;
+    let price = 50_000i64;
+    let deposit = 100_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, USER, deposit, 1);
+    seed_user(&mut api, CP1, deposit, 2);
+    seed_user(&mut api, CP2, deposit, 3);
+
+    // 切 HEDGE。
+    assert_eq!(api.adjust_position_mode(USER, true), CommandResultCode::Success);
+
+    // 开 LONG：user BID（maker，resting）+ CP1 ASK（taker）。
+    assert_eq!(place(&mut api, 12001, USER, BTC_SYM, price, long_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 12002, CP1, BTC_SYM, price, long_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    // 开 SHORT：user ASK（maker，resting）+ CP2 BID（taker）。
+    assert_eq!(place(&mut api, 12003, USER, BTC_SYM, price, short_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 12004, CP2, BTC_SYM, price, short_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    // 双腿到位。
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).unwrap().open_volume, long_size);
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, short_size);
+
+    // user 两腿都是 maker：付 makerFee(long)+makerFee(short)。
+    let expected_long_maker = btc_maker(long_size, price); // 150
+    let expected_short_maker = btc_maker(short_size, price); // 100
+    assert_eq!(api.user_account(USER, USD), deposit - expected_long_maker - expected_short_maker);
+    // 对手是 taker。
+    assert_eq!(api.user_account(CP1, USD), deposit - btc_taker(long_size, price));
+    assert_eq!(api.user_account(CP2, USD), deposit - btc_taker(short_size, price));
+    // 全局 fees = 两腿 maker + 两腿 taker。
+    assert_eq!(api.fees(USD), expected_long_maker + expected_short_maker + btc_taker(long_size, price) + btc_taker(short_size, price));
+    assert_conserved_usd(&api);
+}
+
+// ================================================================================================
+// 24. testHedgeModePartialClosingFeeEvents —— HEDGE 部分平多仓，close 挂单是 maker 全量收费
+// ================================================================================================
+
+#[test]
+fn hedge_mode_partial_closing_fee_events() {
+    const USER: i64 = 1;
+    const CP1: i64 = 2;
+    const CP2: i64 = 3;
+    const CP3: i64 = 4;
+    let long_size = 20i64;
+    let short_size = 15i64;
+    let partial_close = 8i64;
+    let price = 48_000i64;
+    let deposit = 100_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, USER, deposit, 1);
+    seed_user(&mut api, CP1, deposit, 2);
+    seed_user(&mut api, CP2, deposit, 3);
+    seed_user(&mut api, CP3, deposit, 4);
+
+    assert_eq!(api.adjust_position_mode(USER, true), CommandResultCode::Success);
+
+    // 建双向持仓（user 两腿 maker）。
+    assert_eq!(place(&mut api, 13001, USER, BTC_SYM, price, long_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 13002, CP1, BTC_SYM, price, long_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 13003, USER, BTC_SYM, price, short_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 13004, CP2, BTC_SYM, price, short_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).unwrap().open_volume, long_size);
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, short_size);
+    let fees_after_open = api.fees(USD);
+    let account_after_open = api.user_account(USER, USD);
+
+    // 部分平多：ApiClosePosition ASK 8（user maker，resting）+ CP3 BID 8（taker）。
+    assert_eq!(
+        api.close_position(ClosePositionRequest {
+            order_id: 13005,
+            uid: USER,
+            symbol: BTC_SYM,
+            action: OrderAction::Ask,
+            price,
+            size: partial_close,
+            order_type: OrderType::Gtc,
+        }),
+        CommandResultCode::Success
+    );
+    assert_eq!(place(&mut api, 13006, CP3, BTC_SYM, price, partial_close, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    // 平仓后：LONG 12、SHORT 15（双腿都在）。
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).unwrap().open_volume, long_size - partial_close);
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, short_size);
+
+    // close 挂单按 maker 率全量收；mark==price → 递延 pnl=0，account 只减 close maker fee。
+    let expected_close_maker = btc_maker(partial_close, price); // 80
+    let expected_close_taker = btc_taker(partial_close, price); // 160
+    assert_eq!(api.user_account(USER, USD), account_after_open - expected_close_maker);
+    assert_eq!(api.user_account(CP3, USD), deposit - expected_close_taker);
+    assert_eq!(api.fees(USD) - fees_after_open, expected_close_maker + expected_close_taker);
+    assert_conserved_usd(&api);
+}
+
+// ================================================================================================
+// 25. testHedgeModePositionReversalFeeEvents —— 平满多仓 + 反向开空，close/open 各按 maker 收
+// ================================================================================================
+
+#[test]
+fn hedge_mode_position_reversal_fee_events() {
+    const USER: i64 = 1;
+    const CP1: i64 = 2;
+    const CP2: i64 = 3;
+    let initial_long = 12i64;
+    let reversal = 18i64;
+    let new_short = reversal - initial_long; // 6
+    let price = 51_000i64;
+    let deposit = 100_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, USER, deposit, 1);
+    seed_user(&mut api, CP1, deposit, 2);
+    seed_user(&mut api, CP2, deposit, 3);
+
+    assert_eq!(api.adjust_position_mode(USER, true), CommandResultCode::Success);
+
+    // 建 LONG 12（user maker BID + CP1 taker ASK）。
+    assert_eq!(place(&mut api, 14001, USER, BTC_SYM, price, initial_long, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 14002, CP1, BTC_SYM, price, initial_long, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).unwrap().open_volume, initial_long);
+    let fees_after_open = api.fees(USD);
+
+    // 平满 LONG（ApiClosePosition ASK 12，resting maker）。
+    assert_eq!(
+        api.close_position(ClosePositionRequest {
+            order_id: 14003,
+            uid: USER,
+            symbol: BTC_SYM,
+            action: OrderAction::Ask,
+            price,
+            size: initial_long,
+            order_type: OrderType::Gtc,
+        }),
+        CommandResultCode::Success
+    );
+    // 反向开新 SHORT 6（user ASK，resting maker）。
+    assert_eq!(place(&mut api, 14004, USER, BTC_SYM, price, new_short, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    // CP2 BID 18 一次吃满 close(12)+short(6)。
+    assert_eq!(place(&mut api, 14005, CP2, BTC_SYM, price, reversal, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    // 反向后：LONG 平掉（拆除）、SHORT openVolume=6。
+    assert!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).is_none(), "LONG 全平后应拆除");
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, new_short);
+
+    // user：close maker(12) + short-open maker(6)；mark==price → pnl=0。
+    let expected_close_maker = btc_maker(initial_long, price); // 120
+    let expected_short_maker = btc_maker(new_short, price); // 60
+    assert_eq!(api.user_account(USER, USD), deposit - btc_maker(initial_long, price) - expected_close_maker - expected_short_maker);
+    // CP2 taker 全量 18。
+    assert_eq!(api.user_account(CP2, USD), deposit - btc_taker(reversal, price));
+    let global_delta = api.fees(USD) - fees_after_open;
+    assert_eq!(global_delta, expected_close_maker + expected_short_maker + btc_taker(reversal, price));
+    assert!(global_delta > 0);
+    assert_conserved_usd(&api);
+}
+
+// ================================================================================================
+// 26. testHedgeModeMixedOrderTypesFeeEvents —— GTC 双腿 + IOC taker（无对手盘 → 不成交）
+// ================================================================================================
+
+#[test]
+fn hedge_mode_mixed_order_types_fee_events() {
+    const USER: i64 = 1;
+    const CP1: i64 = 2;
+    const CP2: i64 = 3;
+    const CP3: i64 = 4;
+    let long_size = 10i64;
+    let short_size = 8i64;
+    let ioc_size = 5i64;
+    let price = 49_000i64;
+    let deposit = 100_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, USER, deposit, 1);
+    seed_user(&mut api, CP1, deposit, 2);
+    seed_user(&mut api, CP2, deposit, 3);
+    seed_user(&mut api, CP3, deposit, 4);
+
+    assert_eq!(api.adjust_position_mode(USER, true), CommandResultCode::Success);
+
+    // GTC 开 LONG（user maker BID + CP1 taker ASK）。
+    assert_eq!(place(&mut api, 15001, USER, BTC_SYM, price, long_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 15002, CP1, BTC_SYM, price, long_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    // GTC 开 SHORT（user maker ASK + CP2 taker BID）。
+    assert_eq!(place(&mut api, 15003, USER, BTC_SYM, price, short_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 15004, CP2, BTC_SYM, price, short_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    let fees_after_gtc = api.fees(USD);
+
+    // IOC BID：此刻盘口无 resting ASK（CP3 的 ASK 在其后才下）→ IOC 不成交（faithful：Java 同序，断言宽松）。
+    assert_eq!(place(&mut api, 15005, USER, BTC_SYM, price, ioc_size, OrderAction::Bid, OrderType::Ioc, MarginMode::Cross, 0), CommandResultCode::Success);
+    // CP3 ASK 挂在 IOC 之后 → 无 resting BID 可吃，自身 resting（不成交）。
+    assert_eq!(place(&mut api, 15006, CP3, BTC_SYM, price, ioc_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    // 双腿 GTC 成交定格；IOC 未成交不改双腿。
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).unwrap().open_volume, long_size);
+    assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, short_size);
+    // IOC 无成交 → user 只付两腿 maker fee，fees 池自 GTC 后无增量。
+    assert_eq!(api.fees(USD), fees_after_gtc);
+    assert_eq!(api.user_account(USER, USD), deposit - btc_maker(long_size, price) - btc_maker(short_size, price));
+    assert_eq!(api.fees(USD), btc_maker(long_size, price) + btc_maker(short_size, price) + btc_taker(long_size, price) + btc_taker(short_size, price));
+    assert_conserved_usd(&api);
+}
+
+// ================================================================================================
+// 27. testHedgeModeFeeConsistencyWithGlobalBalance —— HEDGE 开双腿，全局 fees 与逐笔一致 + 守恒
+// ================================================================================================
+
+#[test]
+fn hedge_mode_fee_consistency_with_global_balance() {
+    const USER: i64 = 1;
+    const CP1: i64 = 2;
+    const CP2: i64 = 3;
+    let long_size = 25i64;
+    let short_size = 20i64;
+    let price = 47_000i64;
+    let deposit = 100_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, USER, deposit, 1);
+    seed_user(&mut api, CP1, deposit, 2);
+    seed_user(&mut api, CP2, deposit, 3);
+
+    let initial_fees = api.fees(USD);
+    assert_eq!(api.adjust_position_mode(USER, true), CommandResultCode::Success);
+
+    // 开 LONG（user maker BID + CP1 taker ASK）+ 开 SHORT（user maker ASK + CP2 taker BID）。
+    assert_eq!(place(&mut api, 16001, USER, BTC_SYM, price, long_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 16002, CP1, BTC_SYM, price, long_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 16003, USER, BTC_SYM, price, short_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 16004, CP2, BTC_SYM, price, short_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    let global_fees_collected = api.fees(USD) - initial_fees;
+    let expected = btc_maker(long_size, price) + btc_taker(long_size, price)
+        + btc_maker(short_size, price) + btc_taker(short_size, price);
+    assert_eq!(global_fees_collected, expected, "全局 fees == 四笔 maker+taker 之和");
+    assert!(global_fees_collected > 0);
+    // 全局守恒（对应 Java finalBalance.isGlobalBalancesAllZero()）。
+    assert!(api.total_balance().is_global_zero(), "HEDGE 双向开仓后全局守恒");
+    assert_conserved_usd(&api);
+}
+
+// ================================================================================================
+// 28. testFuturesHedgeFullLifecycleWithDepositWithdraw —— CROSS + HEDGE 全生命周期 × 4 种 taker 类型
+// ================================================================================================
+
+fn run_hedge_full_lifecycle(taker_type: OrderType) {
+    const MAKER: i64 = 9401;
+    const TAKER: i64 = 9402;
+    let size = 4i64;
+    let price = 50_000i64;
+    // HEDGE 同时锁多空两腿保证金，deposit 留足余量。
+    let deposit = 100_000_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, MAKER, deposit, 1);
+    seed_user(&mut api, TAKER, deposit, 2);
+    assert_conserved_usd(&api);
+
+    // taker 切 HEDGE。
+    assert_eq!(api.adjust_position_mode(TAKER, true), CommandResultCode::Success);
+
+    let taker_price = match taker_type {
+        OrderType::FokBudget | OrderType::IocBudget => size * price,
+        _ => price,
+    };
+    // IOC_BUDGET ASK 引擎不支持 → 开空腿退化 GTC（同 Java）。
+    let ask_taker_type = if taker_type == OrderType::IocBudget { OrderType::Gtc } else { taker_type };
+    let ask_taker_price = match ask_taker_type {
+        OrderType::FokBudget | OrderType::IocBudget => size * price,
+        _ => price,
+    };
+
+    // 开多：maker GTC ASK + taker <type> BID。
+    assert_eq!(place(&mut api, 9501, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9502, TAKER, BTC_SYM, taker_price, size, OrderAction::Bid, taker_type, MarginMode::Cross, 0), CommandResultCode::Success);
+    // 开空：maker GTC BID + taker <askType> ASK（HEDGE 下 ASK 不抵消多仓，建新空仓）。
+    assert_eq!(place(&mut api, 9503, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9504, TAKER, BTC_SYM, ask_taker_price, size, OrderAction::Ask, ask_taker_type, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    assert_eq!(hedge_leg(&api, TAKER, BTC_SYM, PositionDirection::Long).unwrap().open_volume, size, "[{taker_type:?}] taker LONG openVolume");
+    assert_eq!(hedge_leg(&api, TAKER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, size, "[{taker_type:?}] taker SHORT openVolume");
+    assert_conserved_usd(&api);
+
+    // 平多：taker ApiClosePosition ASK + maker GTC BID。
+    assert_eq!(api.close_position(ClosePositionRequest { order_id: 9505, uid: TAKER, symbol: BTC_SYM, action: OrderAction::Ask, price, size, order_type: OrderType::Gtc }), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9506, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+    // 平空：taker ApiClosePosition BID + maker GTC ASK。
+    assert_eq!(api.close_position(ClosePositionRequest { order_id: 9507, uid: TAKER, symbol: BTC_SYM, action: OrderAction::Bid, price, size, order_type: OrderType::Gtc }), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9508, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+
+    assert_eq!(hedge_open_volume_sum(&api, TAKER, BTC_SYM), 0, "[{taker_type:?}] 平仓后 openVolume 总和为 0");
+    assert_conserved_usd(&api);
+
+    // 提现全部余额。
+    let maker_bal = api.user_account(MAKER, USD);
+    let taker_bal = api.user_account(TAKER, USD);
+    if maker_bal != 0 { assert_eq!(api.balance_adjustment(MAKER, USD, -maker_bal, 3), CommandResultCode::Success); }
+    if taker_bal != 0 { assert_eq!(api.balance_adjustment(TAKER, USD, -taker_bal, 4), CommandResultCode::Success); }
+
+    // 终态：账户清零，adjustments + fees == 0，全局守恒。
+    assert_eq!(api.user_account(MAKER, USD), 0, "[{taker_type:?}] maker account");
+    assert_eq!(api.user_account(TAKER, USD), 0, "[{taker_type:?}] taker account");
+    assert_eq!(api.adjustments(USD) + api.fees(USD), 0, "[{taker_type:?}] adjustments + fees == 0");
+    assert_conserved_usd(&api);
+}
+
+#[test]
+fn futures_hedge_full_lifecycle_with_deposit_withdraw() {
+    run_hedge_full_lifecycle(OrderType::Gtc);
+    run_hedge_full_lifecycle(OrderType::Ioc);
+    run_hedge_full_lifecycle(OrderType::FokBudget);
+    run_hedge_full_lifecycle(OrderType::IocBudget);
+}
+
+// ================================================================================================
+// 29. testFuturesIsolatedHedgeFullLifecycleWithDepositWithdraw —— ISOLATED + HEDGE 全生命周期 × 4
+//     额外校验：多空两腿各自独立锁逐仓保证金（openInitMarginSum > 0），leverage 正确写入两腿。
+// ================================================================================================
+
+fn run_isolated_hedge_full_lifecycle(taker_type: OrderType) {
+    const MAKER: i64 = 9601;
+    const TAKER: i64 = 9602;
+    let size = 4i64;
+    let price = 50_000i64;
+    let leverage = 10i32;
+    let deposit = 100_000_000i64;
+
+    let mut api = seed_btc(price);
+    seed_user(&mut api, MAKER, deposit, 1);
+    seed_user(&mut api, TAKER, deposit, 2);
+    assert_conserved_usd(&api);
+
+    assert_eq!(api.adjust_position_mode(TAKER, true), CommandResultCode::Success);
+
+    let taker_price = match taker_type {
+        OrderType::FokBudget | OrderType::IocBudget => size * price,
+        _ => price,
+    };
+    let ask_taker_type = if taker_type == OrderType::IocBudget { OrderType::Gtc } else { taker_type };
+    let ask_taker_price = match ask_taker_type {
+        OrderType::FokBudget | OrderType::IocBudget => size * price,
+        _ => price,
+    };
+
+    // 开多（ISOLATED leverage=10）。
+    assert_eq!(place(&mut api, 9701, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9702, TAKER, BTC_SYM, taker_price, size, OrderAction::Bid, taker_type, MarginMode::Isolated, leverage), CommandResultCode::Success);
+    // 开空（ISOLATED leverage=10）。
+    assert_eq!(place(&mut api, 9703, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9704, TAKER, BTC_SYM, ask_taker_price, size, OrderAction::Ask, ask_taker_type, MarginMode::Isolated, leverage), CommandResultCode::Success);
+
+    // 两腿独立锁逐仓保证金。
+    let long_leg = hedge_leg(&api, TAKER, BTC_SYM, PositionDirection::Long).expect("LONG leg");
+    assert_eq!(long_leg.open_volume, size, "[{taker_type:?}] LONG openVolume");
+    assert_eq!(long_leg.margin_mode, MarginMode::Isolated, "[{taker_type:?}] LONG marginMode");
+    assert!(long_leg.open_init_margin_sum > 0, "[{taker_type:?}] LONG openInitMarginSum > 0");
+    let short_leg = hedge_leg(&api, TAKER, BTC_SYM, PositionDirection::Short).expect("SHORT leg");
+    assert_eq!(short_leg.open_volume, size, "[{taker_type:?}] SHORT openVolume");
+    assert_eq!(short_leg.margin_mode, MarginMode::Isolated, "[{taker_type:?}] SHORT marginMode");
+    assert!(short_leg.open_init_margin_sum > 0, "[{taker_type:?}] SHORT openInitMarginSum > 0");
+    assert_conserved_usd(&api);
+
+    // 平多 + 平空。
+    assert_eq!(api.close_position(ClosePositionRequest { order_id: 9705, uid: TAKER, symbol: BTC_SYM, action: OrderAction::Ask, price, size, order_type: OrderType::Gtc }), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9706, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+    assert_eq!(api.close_position(ClosePositionRequest { order_id: 9707, uid: TAKER, symbol: BTC_SYM, action: OrderAction::Bid, price, size, order_type: OrderType::Gtc }), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9708, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+
+    assert_eq!(hedge_open_volume_sum(&api, TAKER, BTC_SYM), 0, "[{taker_type:?}] 平仓后 openVolume 总和为 0");
+    assert_conserved_usd(&api);
+
+    // 提现全部余额。
+    let maker_bal = api.user_account(MAKER, USD);
+    let taker_bal = api.user_account(TAKER, USD);
+    if maker_bal != 0 { assert_eq!(api.balance_adjustment(MAKER, USD, -maker_bal, 3), CommandResultCode::Success); }
+    if taker_bal != 0 { assert_eq!(api.balance_adjustment(TAKER, USD, -taker_bal, 4), CommandResultCode::Success); }
+
+    assert_eq!(api.user_account(MAKER, USD), 0, "[{taker_type:?}] maker account");
+    assert_eq!(api.user_account(TAKER, USD), 0, "[{taker_type:?}] taker account");
+    assert_eq!(api.adjustments(USD) + api.fees(USD), 0, "[{taker_type:?}] adjustments + fees == 0");
+    assert_conserved_usd(&api);
+}
+
+#[test]
+fn futures_isolated_hedge_full_lifecycle_with_deposit_withdraw() {
+    run_isolated_hedge_full_lifecycle(OrderType::Gtc);
+    run_isolated_hedge_full_lifecycle(OrderType::Ioc);
+    run_isolated_hedge_full_lifecycle(OrderType::FokBudget);
+    run_isolated_hedge_full_lifecycle(OrderType::IocBudget);
 }
 }

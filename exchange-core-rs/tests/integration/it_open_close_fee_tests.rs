@@ -15,13 +15,13 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
 
     // Java `ITOpenCloseFeeIntegration` 常量 + `TestConstants`。
     const BASE_CURRENCY_ID: i32 = 1;

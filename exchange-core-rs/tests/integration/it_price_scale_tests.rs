@@ -6,24 +6,27 @@
 //! Σ accounts[cur] + adjustments[cur] + fees[cur] == 0（exchangeLocked 在 Java 聚合里既进 accountBalances
 //! 的减项又单列一桶，净额等于 raw accounts，故守恒式只需 raw accounts）。
 //!
-//! 未翻译（依赖 ExchangeApi 门面未暴露的能力，见文件末尾说明）：
-//!   - testWithdrawBlockedBySpotLockOnSpotOnlyMode（需 createSpotOnly / marginTradingMode=DISABLED 容器）
+//! 已随 harness 补齐（SUSPEND_USER / SingleUserReport.liquidationPrice / total_balance 已暴露）：
 //!   - testSuspendSweepsDustToFees / testSuspendDoesNotSweepWhenUserHasRealAccounts /
-//!     testSuspendCleanAccountDoesNotTriggerSweep（需 SUSPEND_USER 命令）
-//!   - testCrossLiquidationPriceAccountsForSpotLock（需 SingleUserReport.liquidationPrice）
+//!     testSuspendCleanAccountDoesNotTriggerSweep（SUSPEND_USER dust sweep，见下方旁注对拍 Rust 实际行为）
+//!   - testCrossLiquidationPriceAccountsForSpotLock（single_user positions[].liquidation_price）
+//!
+//! 仍未翻译（ExchangeApi 门面未暴露的能力）：
+//!   - testWithdrawBlockedBySpotLockOnSpotOnlyMode（需 createSpotOnly / marginTradingMode=DISABLED 容器；
+//!     ExchangeApi 无 spot-only 部署开关，无法构造 marginTradingEnabled=false 的引擎，保持跳过）
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::position_direction::PositionDirection;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{
         CancelOrderRequest, ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest, PlaceOrderRequest,
     };
 
@@ -785,5 +788,145 @@ mod tests {
         assert_eq!(l2.bid_prices, vec![spot_price], "现货挂单仍在");
         assert_eq!(conserved(&api, USDT), 0);
         assert_eq!(conserved(&api, BNB), 0);
+    }
+
+    // ================================================================
+    // SUSPEND_USER dust sweep（对拍 Rust `RiskEngine::suspend_user` 实际行为）
+    // ================================================================
+
+    // 对拍 testSuspendSweepsDustToFees：cancel/withdraw 到 accounts==exchangeLocked==dust 后，
+    // SUSPEND 触发 sweep（accounts −= dust、fees += dust、exchangeLocked 清零、user 移除），守恒不破。
+    // Rust `suspend_user` 的 sweep 与 Java 同向（dust locked→fees）：eligibility 要求无持仓、每币
+    // locked<1000 且 accounts==locked（纯 dust）。此处断言 sweep 前后 fees 增量恰为 dust 与全局守恒，
+    // 不硬编码撮合累计费绝对值（对 fee 缩放实现更鲁棒）。
+    #[test]
+    fn suspend_sweeps_dust_to_fees() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(XBT, C8_SCALE);
+        api.add_currency(LTC, C8_SCALE);
+        assert_eq!(api.add_symbol(xbt_ltc_fee()), CommandResultCode::Success);
+
+        create_user_with_money(&mut api, UID_1, LTC, 100_000, 1);
+        create_user_with_money(&mut api, UID_2, XBT, 100_000_000i64 * 100_000_000, 2);
+
+        let price = 1_933;
+        // maker BID size=4 → 4 个 size=1 ASK 撮合 → 残 1 LTC dust。
+        assert_eq!(api.place_order(spot_bid(70001, UID_1, SYM_FEE, price, 4, OrderType::Gtc)), CommandResultCode::Success);
+        for i in 0..4 {
+            assert_eq!(api.place_order(spot_ask(70100 + i, UID_2, SYM_FEE, price, 1, OrderType::Ioc)), CommandResultCode::Success);
+        }
+        // 撮合后：accounts[LTC]=99_896、exchangeLocked[LTC]=1、accounts[XBT]=400。
+        assert_eq!(api.user_locked(UID_1, LTC), 1);
+        assert_eq!(api.user_account(UID_1, LTC), 99_896);
+        assert_eq!(api.user_account(UID_1, XBT), 400);
+
+        // 提现所有 LTC free (=99_895) → accounts[LTC]=1, exchangeLocked[LTC]=1。
+        assert_eq!(api.balance_adjustment(UID_1, LTC, -99_895, 10), CommandResultCode::Success);
+        // 提现所有 XBT (=400) → accounts[XBT]=0。
+        assert_eq!(api.balance_adjustment(UID_1, XBT, -400, 11), CommandResultCode::Success);
+        assert_eq!(api.user_account(UID_1, LTC), 1, "LTC 剩 dust 1");
+        assert_eq!(api.user_locked(UID_1, LTC), 1, "dust 仍在 lock");
+        assert_eq!(api.user_account(UID_1, XBT), 0, "XBT 已全提");
+
+        // SUSPEND 触发 dust sweep：accounts[LTC] 1→0、fees[LTC] += 1、user 被移除。
+        let fees_before = api.fees(LTC);
+        assert_eq!(api.suspend_user(UID_1), CommandResultCode::Success);
+        assert!(api.ups().get(UID_1).is_none(), "SUSPEND 成功后 user 被移除");
+        assert_eq!(api.fees(LTC), fees_before + 1, "dust 1 已 sweep 到 fees bucket");
+        assert!(api.total_balance().is_global_zero(), "SUSPEND(含 dust sweep) 后全局守恒仍成立");
+    }
+
+    // 对拍 testSuspendDoesNotSweepWhenUserHasRealAccounts：有真实 accounts（非纯 dust）时 sweep 守卫不过，
+    // SUSPEND 被拒（NON_EMPTY_ACCOUNTS），accounts / exchangeLocked 一动不动。
+    #[test]
+    fn suspend_no_sweep_with_real_accounts() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(BNB, BNB_SCALE);
+        api.add_currency(USDT, USDT_SCALE);
+        assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
+
+        let usdt_deposit = 1_000 * USDT_SCALE;
+        create_user_with_money(&mut api, UID_1, USDT, usdt_deposit, 1);
+
+        // 现货 BID 1 BNB @500 → 冻结 500 USDT；accounts(1000) != exchangeLocked(500)，非 dust-only。
+        assert_eq!(api.place_order(spot_bid(80001, UID_1, SYM_SPOT, 500 * 100_000, 1_000, OrderType::Gtc)), CommandResultCode::Success);
+        let spot_lock = 500 * USDT_SCALE;
+
+        assert_eq!(api.suspend_user(UID_1), CommandResultCode::UserMgmtUserNotSuspendableNonEmptyAccounts);
+        // sweep 未发生：accounts / exchangeLocked 未动。
+        assert_eq!(api.user_account(UID_1, USDT), usdt_deposit);
+        assert_eq!(api.user_locked(UID_1, USDT), spot_lock);
+        assert!(api.total_balance().is_global_zero());
+    }
+
+    // 对拍 testSuspendCleanAccountDoesNotTriggerSweep：全 0 账户 SUSPEND 直接成功，fees 无任何变化。
+    #[test]
+    fn suspend_clean_account_no_sweep() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(USDT, USDT_SCALE);
+        assert_eq!(api.add_user(UID_1), CommandResultCode::Success);
+
+        let fees_before = api.fees(USDT);
+        assert_eq!(api.suspend_user(UID_1), CommandResultCode::Success);
+        assert_eq!(api.fees(USDT), fees_before, "无 dust sweep 进入 fees bucket");
+        assert!(api.ups().get(UID_1).is_none(), "干净账户 SUSPEND 后 user 被移除");
+        assert!(api.total_balance().is_global_zero());
+    }
+
+    // ================================================================
+    // CROSS 强平价格必须扣减现货 exchangeLocked（single_user 报表）
+    // ================================================================
+
+    // 对拍 testCrossLiquidationPriceAccountsForSpotLock：有现货挂单冻结时，CROSS 仓位的强平价必须升高
+    // （有效余额变少），否则说明 SingleUserReport 的 liquidation_price 未从 accounts 扣减 exchangeLocked。
+    #[test]
+    fn cross_liquidation_price_accounts_for_spot_lock() {
+        let mut api = ExchangeApi::new();
+        api.add_currency(BNB, BNB_SCALE);
+        api.add_currency(USDT, USDT_SCALE);
+        assert_eq!(api.add_futures_symbol(bnb_usdt_fut()), CommandResultCode::Success);
+        assert_eq!(api.add_symbol(bnb_usdt_spot()), CommandResultCode::Success);
+
+        let mark_price = 500 * 100_000; // 50_000_000
+        assert_eq!(api.set_mark_price(SYM_FUT, mark_price), CommandResultCode::Success);
+
+        // UID_1 仅 300 USDT + leverage 10：openPriceSum(500 USDT) > balance(300 USDT)，强平价才为正。
+        let uid1_deposit = 300 * USDT_SCALE;
+        create_user_with_money(&mut api, UID_1, USDT, uid1_deposit, 1);
+        create_user_with_money(&mut api, UID_2, USDT, 10_000 * USDT_SCALE * 100, 2);
+
+        let fut_size = 1_000; // 1 BNB * baseScaleK
+        let fut_price = mark_price;
+        // UID_2 提供 CROSS ASK 流动性（无 leverage → 归一为 1）。
+        assert_eq!(api.place_futures_order(fut(50001, UID_2, SYM_FUT, fut_price, fut_size, OrderAction::Ask, OrderType::Gtc, 1, MarginMode::Cross)), CommandResultCode::Success);
+        // UID_1 CROSS BID 开多仓 leverage 10（initMargin≈50 USDT，300 足够）。
+        assert_eq!(api.place_futures_order(fut(50002, UID_1, SYM_FUT, fut_price, fut_size, OrderAction::Bid, OrderType::Ioc, 10, MarginMode::Cross)), CommandResultCode::Success);
+
+        // 无现货挂单时的强平价。
+        let liq_no_spot = {
+            let report = api.single_user(UID_1, 0);
+            assert_eq!(report.exchange_locked.get(&USDT).copied().unwrap_or(0), 0, "无现货挂单冻结");
+            let pos = report.positions.iter().find(|p| p.symbol == SYM_FUT).expect("CROSS 仓位已开");
+            assert!(pos.liquidation_price > 0, "强平价格必须为正值");
+            pos.liquidation_price
+        };
+
+        // UID_1 现货挂买单，冻结 100 USDT（50 低于市价，不成交）。
+        let spot_lock = 100 * USDT_SCALE;
+        assert_eq!(api.place_order(spot_bid(50003, UID_1, SYM_SPOT, 50 * 100_000, 2_000, OrderType::Gtc)), CommandResultCode::Success);
+        assert_eq!(api.user_locked(UID_1, USDT), spot_lock, "现货 lock 已冻结 100 USDT");
+
+        // 有现货挂单时的强平价：必须 > 无现货挂单时。
+        let liq_with_spot = {
+            let report = api.single_user(UID_1, 0);
+            assert_eq!(report.exchange_locked.get(&USDT).copied().unwrap_or(0), spot_lock);
+            report.positions.iter().find(|p| p.symbol == SYM_FUT).expect("仓位仍在").liquidation_price
+        };
+        assert!(
+            liq_with_spot > liq_no_spot,
+            "现货挂单冻结应抬高强平价：with_spot={liq_with_spot} no_spot={liq_no_spot}（若相等则 liquidation_price 未扣 exchangeLocked）"
+        );
+
+        assert!(api.total_balance().is_global_zero());
     }
 }

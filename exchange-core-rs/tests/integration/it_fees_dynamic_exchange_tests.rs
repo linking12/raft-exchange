@@ -19,13 +19,13 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceOrderRequest};
-    use crate::core::utils::core_arithmetic_utils::{
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceOrderRequest};
+    use exchange_core_rs::core::utils::core_arithmetic_utils::{
         calculate_amount_bid_taker_fee, calculate_maker_fee, calculate_taker_fee,
         size_price_to_currency_scale, symbol_to_currency_scale,
     };
@@ -287,5 +287,15 @@ mod tests {
     fn should_not_process_fees_ask_gtc_maker_partial_bid_fok_taker() {
         // budget = PRICE（仅够 1 lot），要 10 → kill。
         run_spot(OrderAction::Ask, 500, OrderType::FokBudget, 10, PRICE, PRICE, 0);
+    }
+    // Java ITFeesDynamic* 用独立内联公式 calculateFee = price*size*step*sideFee/scale（step=quoteScaleK,
+    // scale=feeScaleK, 整除）——把生产函数派生的费用 oracle 钉死到该独立公式，证明"金额对"不依赖被测库自身函数。
+    #[test]
+    fn fee_oracle_matches_java_independent_formula() {
+        for filled in [1i64, 30, 100] {
+            let java_maker = PRICE * filled * QUOTE_SCALE_K * MAKER_FEE / FEE_SCALE_K;
+            let java_taker = PRICE * filled * QUOTE_SCALE_K * TAKER_FEE / FEE_SCALE_K;
+            assert_eq!(fee_pool(filled), java_maker + java_taker, "fee_pool@{filled} = Java (maker+taker) price*size*step*sideFee/scale");
+        }
     }
 }

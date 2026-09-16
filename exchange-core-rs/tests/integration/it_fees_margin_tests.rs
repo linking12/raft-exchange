@@ -24,15 +24,15 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::core::common::cmd::command_result_code::CommandResultCode;
-    use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-    use crate::core::common::margin_mode::MarginMode;
-    use crate::core::common::order_action::OrderAction;
-    use crate::core::common::order_type::OrderType;
-    use crate::core::common::position_direction::PositionDirection;
-    use crate::core::common::symbol_type::SymbolType;
-    use crate::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest};
-    use crate::core::utils::core_arithmetic_utils::{
+    use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
+    use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
+    use exchange_core_rs::core::common::margin_mode::MarginMode;
+    use exchange_core_rs::core::common::order_action::OrderAction;
+    use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
+    use exchange_core_rs::core::common::symbol_type::SymbolType;
+    use exchange_core_rs::core::exchange_api::{CancelOrderRequest, ExchangeApi, PlaceFuturesOrderRequest};
+    use exchange_core_rs::core::utils::core_arithmetic_utils::{
         calculate_maker_fee, calculate_taker_fee, size_price_to_currency_scale,
     };
 
@@ -268,5 +268,12 @@ mod tests {
         assert_eq!(api.fees(JPY), 0);
         assert_eq!(api.fees(USD), 0);
         assert_conserved(&api);
+    }
+    // Java ITFeesMargin 用独立字面公式 sideFee×filled（固定费 FEE_SCALE_K=0）——把生产函数派生的费用 oracle
+    // 钉死到该独立公式，证明"金额对"不依赖被测库自身函数（去自指）。
+    #[test]
+    fn fee_oracle_matches_java_independent_formula() {
+        assert_eq!(maker_fee(30), MAKER_FEE * 30, "Java makerFee×30 = 60");
+        assert_eq!(taker_fee(30), TAKER_FEE * 30, "Java takerFee×30 = 90");
     }
 }

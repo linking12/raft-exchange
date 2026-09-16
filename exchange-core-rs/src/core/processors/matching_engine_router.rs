@@ -59,6 +59,14 @@ impl MatchingEngineRouter {
             || (cmd.command.is_loan()
                 && cmd.command != OrderCommandType::LoanForceLiquidate
                 && cmd.command != OrderCommandType::LoanCrossForceLiquidate)
+            // SettleFundingfees/IfTakeover/AutoDeleveraging 的 collect+merge 已折进 R1、结算在 R2；ME 对其为
+            // no-op，须保留 R1 结果码（对齐 Java ME 对这三者的显式处理分支，不落 UNSUPPORTED）。
+            || matches!(
+                cmd.command,
+                OrderCommandType::SettleFundingfees
+                    | OrderCommandType::IfTakeover
+                    | OrderCommandType::AutoDeleveraging
+            )
         {
             return cmd.result_code.unwrap_or(CommandResultCode::MatchingUnsupportedCommand);
         }
