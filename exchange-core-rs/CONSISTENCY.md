@@ -1,0 +1,262 @@
+# Java ↔ Rust 一致性保障
+
+`exchange-core-rs` 是 Java [`exchange-core`](https://github.com/exchange-core/exchange-core)(`exchange.core2`)撮合引擎的 Rust 全量对等移植。两套独立实现同一套业务,核心工程问题有二:
+
+- **(A) 证明行为等价**——此刻 Rust 与 Java 对同样输入产出同样结果;
+- **(B) 防止漂移**——任一侧后续演进(Java 打补丁 / Rust 重构)后仍等价,且能自动发现回归。
+
+本文档描述为此建立的**三层递进防线 + 一份归一化规格**,以及框架已发现的真实问题。它不是"人肉翻译几个断言"就完事——每一层针对前一层的盲区。
+
+---
+
+## 目录
+
+- [1. 总览](#1-总览)
+- [2. 防线①:IT 翻译对拍](#2-防线it-翻译对拍)
+- [3. 防线②:守恒 proptest](#3-防线守恒-proptest)
+- [4. 防线③:黄金向量对拍(Java 当 oracle)](#4-防线黄金向量对拍java-当-oracle)
+- [5. 防线③b:差分模糊](#5-防线b差分模糊)
+- [6. 归一化规格(刻意差异清单)](#6-归一化规格刻意差异清单)
+- [7. 框架发现的真实问题](#7-框架发现的真实问题)
+- [8. 命令流 DSL 参考](#8-命令流-dsl-参考)
+- [9. 输出格式规格](#9-输出格式规格)
+- [10. 工作流与 CI 门禁](#10-工作流与-ci-门禁)
+- [11. 路线图 / 未做](#11-路线图--未做)
+
+---
+
+## 1. 总览
+
+| 层 | 手段 | 主要抓什么 | Oracle | 主要盲区 |
+|----|------|-----------|--------|---------|
+| ① IT 翻译 | 逐条翻译 Java IT,断言结果码/事件/费用/仓位/守恒 | 已知场景的逐值行为 | Java 单测的黄金值 | 只覆盖翻译到的场景;受限于 Java 断言强度;静态、会漂移 |
+| ② 守恒 proptest | 随机命令流每步断言全局守恒等不变量 | 输入空间里的金额/守恒破坏 | 不变量(无需 oracle) | 抓不住"守恒集内的归属互换" |
+| ③ 黄金向量对拍 | 同一命令流两侧各跑,Java 实际输出当黄金,Rust replay 断言 | 任意场景(含 Java 单测不断言的)的逐值行为 + 抗漂移 | Java **引擎实际输出** | 需归一化刻意差异;异步事件需 settle |
+| ③b 差分模糊 | 确定性 PRNG 批量生成随机流,喂 ③ 的流程 | 输入空间的边角、未覆盖组合 | 同 ③ | 同 ③ |
+
+三层的关键递进:
+- ① 强在"直接对拍 Java 数字",但**只能对拍 Java 断言过的东西**——Java 宽松处(清算/ADL 只验 state、不断言 fund event)① 无能为力。
+- ② 用不变量绕开 oracle 覆盖输入空间,但守恒是**必要非充分**(金额总额对、归属可错)。
+- ③ 用 **Java 引擎的实际输出**当 oracle,补上 ① 的 oracle 盲区(清算/ADL 的最终状态现在能逐值对拍)、并让两侧入 CI 抗漂移。
+- ③b 在 ③ 之上用随机流把输入空间压满。
+
+---
+
+## 2. 防线①:IT 翻译对拍
+
+**位置**:`tests/integration/it_*.rs`(独立集成 crate,只用公开 API)。
+
+**做法**:把 Java `exchange.core2.tests.integration` 的每个 IT 逐条翻译成 Rust,喂**相同命令序列**,逐值断言:
+- **API 结果码**:`Success` / `RiskNsf` / `MatchingMoveFailedPriceOverRiskLimit` / `AuthInvalidUser` / `LoanNotEnabled` / `InvalidSymbol` …
+- **matcher event 逐字段**:`TRADE`(price / size / maker_order_id / matched_order_uid / maker_order_completed / active_order_completed / bidder_hold_price)、`REDUCE`、`REJECT`。字段按 Java→Rust 映射(`matchedOrderId→maker_order_id` 等)。
+- **fund event**:直接提交命令的资金事件(现货费池、internal_transfer 双腿、reset_fee shape、funding 落 position.profit)。
+- **费用**:费池金额 + 逐用户 maker/taker 归属拆分。
+- **仓位 / 账户 / 守恒**:`user_account`、`user_position`、`total_balance().is_global_zero()`。
+
+**强**:凡 Java 自身断言过黄金值的路径(现货/期货/费用/资金费/交割/cross 预警的 `liquidation_price`/`margin_ratio` 等),都是真·逐值对拍 Java——行为等价的直接证据。
+
+**弱 / 盲区**:
+1. **受限于 Java 断言强度**:`ITLiquidationIntegration` / `ITExchangeCoreADL` 本身**零 fund event 断言**、只验 state,故清算/ADL 的金额/事件 ① 对不了(靠 ③ 补)。
+2. **静态点覆盖**:只覆盖翻译到的场景。
+3. **会漂移**:纯 Rust 侧测试,Java 变更不会触发它红。
+
+---
+
+## 3. 防线②:守恒 proptest
+
+**位置**:`tests/e2e/`(`e2e_tests` 现货、`futures_e2e_tests` 期货、`loan_e2e_tests` 借贷、`liquidation_e2e_tests` 清算级联)。
+
+**做法**:`proptest` 生成任意**合式**命令流,逐步跑,每步断言:
+- **全局守恒**:每币种 `Σ账户 + 调整桶 + 费用桶 + Σ开仓(estimate_pnl(mark) + extra_margin) + IF/LIF 桶 == 0`。
+- **账户非负**、仓位内部字段非负。
+- 清算 proptest 额外覆盖 `FORCE→IF→ADL` 级联下含 IF 的守恒。
+
+**强**:覆盖输入空间,抓金额漂移 / 守恒破坏 / panic。
+
+**弱 / 盲区**:守恒是**必要非充分**——它抓不住"同一守恒集内的归属互换"(如把 maker 费记到 taker 头上,池总额与守恒都不变)。这正是 ① 里补逐用户 maker/taker 拆分断言的原因。
+
+---
+
+## 4. 防线③:黄金向量对拍(Java 当 oracle)
+
+这是根治 ①② 的 oracle 受限 + 漂移的核心层。
+
+### 4.1 三步流水线(Java 夹在中间)
+
+```
+① gen_conformance_fuzz (Rust, 可选)   →  写 .stream(随机流)
+② ConformanceExporter  (Java)         →  读 .stream, 跑 exchange-core, 写 .golden   ← oracle 在这
+③ tests/conformance.rs (Rust)         →  读 .stream + .golden, 跑 exchange-core-rs, 逐行断言 == .golden
+```
+
+- **命令流 `.stream`**:与实现无关的 DSL(见 §8),存放 `tests/conformance_vectors/`。
+- **Java 导出器**:`exchange-core/src/test/java/exchange/core2/tests/conformance/ConformanceExporter.java`。用 `ExchangeTestContainer` 跑真实 exchange-core,**直接把引擎实际输出**写成同名 `.golden`——**不依赖 Java 单测断不断言**。
+- **Rust replayer**:`tests/conformance.rs`。同一 DSL 解释器喂 `ExchangeApi`,产**同格式**输出,`assert_eq!` 逐行比对 `.golden`。
+- `.stream` 与 `.golden` **一并入库**(种子固定、可复现)。
+
+### 4.2 为什么 Java 必须夹在中间(而非并进 Rust 一个进程)
+
+golden 由 Java 在**生成之后、断言之前**产出。若把生成器并进 `conformance.rs`,跑 `cargo test` 会重写 `.stream` 但此刻没有对应的新 Java golden → 必然失败。故生成器是 `examples/` 下的**一次性工具**(要加/换向量时手动跑),不是每次 `cargo test` 都跑的东西;`conformance.rs` 只读、只断言。
+
+### 4.3 对拍内容
+
+每个向量的 `.golden` 含三段(见 §9 格式):
+1. **每命令结果码** `R <seq> <CODE>`(`CODE` 用 Rust CamelCase 自动转 Java SCREAMING_SNAKE,命名分歧会被对拍直接抓到)。
+2. **最终状态摘要** `STATE`:排序的账户 `A`、仓位 `POS`、费用池 `FEE`(跳 0 值,分片/线程无关)。
+3. **结算类 fund event 多重集** `EVENTS`:见下。
+
+### 4.4 关键收益:清算/ADL 的状态现在能逐值对拍
+
+`ITLiquidationIntegration` / `ITExchangeCoreADL` 自己**不断言** fund event、仅验 state,① 对不了这些数。③ 用 **Java 引擎实际跑出的最终状态**当 oracle,Rust 必须逐字节一致。例:ADL 向量断言 loser 强平清仓、winner 减仓 `10→5` 且 `open_price_sum` 重定价、maker 剩余 5 手、fee 30——全部对拍 Java 实际输出。
+
+### 4.5 同步 vs 异步(事件层的边界)
+
+- **fund event 多重集**用**全流累加、排序后比对**(不比逐命令归属)——因为强平触发时机是刻意差异(Rust markprice 定向扫 vs Java `LIQUIDATION_SCAN`),但"发了哪些结算事件"多重集可比。
+- **同步路径**(funding / delivery,命令 `.join()` 后事件已到):结算事件逐条对拍。例 funding:`FUNDINGFEE_SETTLEMENT` 两条 free=`19750`/`19650` 精确命中 Java `ITPerpetualContractIntegration` 黄金值;delivery:`PNL_SETTLEMENT` free=`24900`/`14800`。
+- **异步路径**(清算/ADL:Java 强平走独立线程、fund event 在不同 scan 周期触发、捕获不确定):向量用 `#!events=off` **只对拍确定性的 STATE**,不对拍其事件流。exporter 的 `SCAN` 会循环 `triggerLiquidation`+`groupingControl` 直到状态**连续 6 轮稳定**(对齐 Java `testADL` 的 `waitForCondition`)。
+
+### 4.6 确定性
+
+Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳定循环收敛——已验证连续 3 次生成 golden 逐字节一致。**exporter 每命令后 `totalBalanceReport()` flush** 消除 Java 批处理 R1/R2 时序(见 §7①)对结果码的影响。
+
+---
+
+## 5. 防线③b:差分模糊
+
+**位置**:`examples/gen_conformance_fuzz.rs`。
+
+**做法**:xorshift64 确定性 PRNG(无依赖,固定种子)批量生成随机现货命令流(多用户、GTC+IOC、各类价/量/方向、偶发巨量触发 NSF),写入 `conformance_vectors/`,走 §4 的同一流程。把撮合引擎压满:crossing / partial fill / IOC / NSF / 多档吃单。
+
+**跑**:`cargo run --example gen_conformance_fuzz`(重生成)→ Java 导出 golden → `cargo test --test conformance`。
+
+**成效**:已抓到并定性两个 Java 侧问题(见 §7),二者 Rust 皆正确。
+
+**未做**:真·live 双引擎同进程比对(JNI 或双跑同一随机流实时比对)——更重,当前用"生成向量 + 入库 golden"的离线差分替代。
+
+---
+
+## 6. 归一化规格(刻意差异清单)
+
+差分对拍前必须声明"哪些刻意不同、归一化后排除/折叠,其余必须逐字节相等"。**清单内是设计取舍,不是逻辑分歧**;清单外的任何差异即真分叉、报错。
+
+| 差异 | Java | Rust | 处理 |
+|------|------|------|------|
+| **并发/分片** | Disruptor 多处理器 + RiskEngine 按 `uid & shardMask` 多实例分片 | 单线程确定性单管线、单分片(`shardMask=0`) | 状态经报表聚合后分片无关,可比;事件用全流多重集 |
+| **强平触发时机** | `LIQUIDATION_SCAN` / 周期扫描 | markprice 更新即 targeted 定向扫 | 事件用全流多重集比,不比逐命令归属 |
+| **`MARGIN_ALERT`/`LIQUIDATION_ALERT`** | 引擎内发事件 | 刻意外置(不发,水位告警走外部拉报表) | 两侧都排除 |
+| **仓位生命周期事件** `OPEN_POSITION`/`CLOSE_POSITION` | 期货开仓只对 maker 发 | maker+taker 都发(钱一致、事件数不同) | 排除(与 `POS` 状态冗余) |
+| **记账/锁事件** `Deposit`/`Locked`/… | `balance_adjustment` 等会发 | 部分不发 | 排除(只对拍结算类) |
+| **撮合明细事件** | `SpotExecutionReport`/`FuturesExecutionReport`(高层报告) | raw `MatcherTradeEvent`(单链) | 不进 ③;撮合正确性由 ① 逐值对拍 |
+| **`state_hash`** | Java 自己的 hash | 逐字段折叠、是超集 | 不互比;跨实现用 ③ 的语义状态摘要 |
+| **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
+| **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |
+
+**结算类事件白名单**(进 `EVENTS` 多重集的):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`。两侧白名单必须同步维护。
+
+---
+
+## 7. 框架发现的真实问题
+
+差分/翻译对拍不是形式主义,已抓出多个真实缺陷:
+
+### 7.1 IT 翻译经真实管线抓到的引擎 bug(已修 Rust)
+`matching_engine_router::process_order` 对 `SETTLE_FUNDINGFEES` / `IF_TAKEOVER` / `AUTO_DELEVERAGING` / `LIQUIDATION_SCAN` 落到 `_ => MatchingUnsupportedCommand` / 订单簿查找,**覆盖了 R1 设的 `Success` 结果码**(这些命令 ME 应 no-op、保留 R1 结果,对齐 Java ME 的显式分支)。老单测走 `run_full_pipeline` 跳过 ME 掩盖了它;IT 走完整 `process_command` 才现形。
+
+### 7.2 差分模糊抓到、经 Java 测试定性的两个 Java 侧问题(Rust 皆正确)
+
+**① Java 批处理 R1/R2 时序 hazard(非逻辑 bug)**
+未成交(空簿)IOC 现货 ASK 的 base 锁释放在 R2、滞后于下一条命令的 R1 读;两条 IOC ASK 之间若无 barrier 直接连提,第二条读到未 settle 的 `exchangeLocked` → spurious `RISK_NSF`。
+- Java 侧 `ITIocAskLockRelease` 定性:`unfilledIocAskReleasesBaseLock`(中间 report=flush → settle 后释放**正确**、通过)vs `consecutiveIocAskWithoutFlushHazard`(裸连提 → 第二条 `RISK_NSF`)。
+- 属 exchange-core Disruptor 已知特性(同 reprice R2/R1 序 hazard,惯例用 barrier 规避,非引擎逻辑错)。Rust 单管线无此 hazard。
+- **解决**:conformance exporter 每命令后 flush,比两侧 settled 语义。
+
+**② Java 未实现现货普通 FOK(功能缺口)**
+`OrderBookNaiveImpl`/`OrderBookDirectImpl` 的 `newOrder` switch 对 `OrderType.FOK` 落 default 整单 reject(`// TODO FOK support`);Rust 已正确实现 fill-or-kill。能成交时两侧分歧。Rust 更完整。
+- 注:**`FOK_BUDGET`/`IOC_BUDGET` 两侧都已实现且逐值对拍**(向量 `fok_budget`/`ioc_budget`)——不要误以为整个 FOK 家族都没实现。
+
+> **教训**:定 Java 侧"bug"前,必用**不含任何 report / `validateUserState` 的裸命令序列**复现——中间任何 report query 会 flush R2、掩盖批处理时序 hazard;Java 未实现的 order type 会走 default reject。
+
+---
+
+## 8. 命令流 DSL 参考
+
+`.stream` 每行一条:`VERB key=value key=value …`;`#` 开头为注释;首部 `#!events=off` 表示该向量只对拍 result+state(异步清算向量用)。两侧解释器(`tests/conformance.rs` / `ConformanceExporter.java`)必须同步支持每个 verb。
+
+| VERB | 字段 | 语义 | 发 R 行? |
+|------|------|------|:--:|
+| `CUR` | `id digit` | 注册货币,`scale_k = 10^digit` | 否(setup) |
+| `SYM_SPOT` | `id base quote baseScale quoteScale taker maker` | 现货对 | 否(setup) |
+| `SYM_FUT` | `id kind(PERP/DELIVERY) base quote baseScale quoteScale taker maker feeScale initMargin initMarginScaleK` | 期货 symbol(MM/杠杆档表两侧固定) | 否(setup) |
+| `MARK` | `sym price` | 设标记价(不触发扫描) | 否(setup) |
+| `MARK_AT` | `sym price ts` | 带时间戳标记价(Rust 触发定向扫) | 否(trigger) |
+| `ENABLE_LIQ` | — | 开清算引擎 leader 门 | 否 |
+| `USER` | `uid` | 开户 | 是 |
+| `BAL` | `uid cur amount txid` | 充值/提现 | 是 |
+| `PLACE` | `oid uid sym price size action(BID/ASK) type(GTC/IOC/FOK/FOK_BUDGET/IOC_BUDGET) reserve` | 现货下单(BUDGET:`price`=预算) | 是 |
+| `PLACE_FUT` | `oid uid sym price size action type leverage margin(ISOLATED/CROSS)` | 期货下单 | 是 |
+| `SCAN` | `slice sliceCount ts` | 清算扫描(Java=triggerLiquidation 循环至 settle) | 否(trigger) |
+| `IF_DEPOSIT` | `sym amount txid` | 保险基金充值 | 否(setup) |
+| `SETTLE_PNL` | `sym price txid` | 交割结算 | 是 |
+| `SETTLE_FUNDING` | `sym action rate rateScaleK txid` | 资金费结算 | 是 |
+
+---
+
+## 9. 输出格式规格
+
+`.golden`(与 Rust replay 输出逐行相等):
+
+```
+R <seq> <CODE>              # 每条发 R 行的命令的结果码(SCREAMING_SNAKE)
+...
+STATE
+A <uid> <cur> <account>    # 非零账户,uid→cur 升序
+POS <uid> <sym> <DIR> <open_volume> <open_price_sum>   # open_volume≠0,DIR∈{LONG,SHORT}
+FEE <cur> <amount>         # 非零费用池,cur 升序
+EVENTS                     # 若非 #!events=off
+FE <TYPE> uid=<uid> cur=<cur> free=<free> locked=<locked>   # 结算类白名单,整体排序后逐行
+```
+
+- `CODE`:Rust `CommandResultCode` 的 CamelCase Debug 名自动转 SCREAMING_SNAKE,与 Java `enum.name()` 对齐。
+- `EVENTS` 段是**排序后的多重集**(顺序无关),只含 §6 白名单事件。
+
+---
+
+## 10. 工作流与 CI 门禁
+
+```bash
+# 0)(可选)差分模糊:重生成随机向量
+cargo run --example gen_conformance_fuzz
+
+# 1) Java 当 oracle 生成/更新黄金向量(在 exchange-core 模块)
+mvn -q -Dtest=ConformanceExporter -DfailIfNoTests=false test
+
+# 2) Rust replay 同一批 .stream,逐行断言 == .golden
+cargo test --test conformance
+```
+
+- **加一个场景** = 写一个 `.stream`(现货/期货/清算/ADL 皆可)→ Java 导出 golden → Rust 对拍。DSL 缺 verb 就两侧解释器各加一条分支。
+- **引擎行为有意变更** → 同步更新两侧实现 + 重新生成 golden + **评审 golden diff**。
+- **门禁建议**:两侧都入 CI。Rust CI 跑 `cargo test`(五个 target:lib / e2e / integration / orderbook_diff / conformance);Java CI 跑 `ConformanceExporter` 生成的 golden 与入库版本 diff(golden 漂移即 Java 行为变了)。
+
+---
+
+## 11. 路线图 / 未做
+
+- **真·live 差分**:共享 PRNG 两引擎同进程实时比对(JNI 或双跑),覆盖比离线向量更广。
+- **清算/ADL 的 fund event 层**:目前只对拍 STATE(Java 异步捕获不稳);要事件级需 Java 侧确定性捕获机制。
+- **Java 侧两个问题**(§7.2)属参考引擎的架构特性/功能缺口,是否在 Java 侧修(深修批处理时序 / 补普通 FOK)是独立决策,当前 Rust 已正确、conformance 已规避。
+- **差分模糊扩面**:目前随机现货 GTC+IOC;可扩期货/清算随机流(需处理异步 settle 的确定性)。
+
+---
+
+## 附:测试布局速查
+
+| 位置 | 内容 | 跑 |
+|------|------|----|
+| `src/**` 内 `#[cfg(test)]` | 与生产代码同文件的单元测试 | `cargo test --lib` |
+| `tests/e2e/` | 引擎级 e2e + 守恒 proptest(防线②) | `cargo test --test e2e` |
+| `tests/integration/` | Java IT 对拍(防线①) | `cargo test --test integration` |
+| `tests/conformance.rs` + `tests/conformance_vectors/` | 黄金向量对拍(防线③/③b) | `cargo test --test conformance` |
+| `tests/orderbook_diff.rs` | Direct vs Naive 订单簿差分 | `cargo test --test orderbook_diff` |
+| `examples/gen_conformance_fuzz.rs` | 差分模糊向量生成器 | `cargo run --example gen_conformance_fuzz` |
+| `exchange-core/.../conformance/ConformanceExporter.java` | Java oracle 导出器 | `mvn -Dtest=ConformanceExporter test` |

@@ -58,8 +58,9 @@ fn gen_vector(seed: u64) -> String {
         // 偶发大 size 触发 NSF(两侧结果码应一致)。
         let size = if rng.range(0, 20) == 0 { rng.range(1, 900_000_000) } else { rng.range(1, 8) };
         // GTC + IOC:两侧逐值一致(IOC 靠 exporter 每命令 flush 消除 Java R1/R2 lag)。
-        // **不随机普通 FOK**:Java 未实现现货普通 FOK(Naive/Direct 均 `// TODO FOK support`,default 整单 reject),
-        // Rust 已正确实现 → 能成交时两侧分歧(Java 功能缺口,非 bug)。FOK 的可用用例由手写向量覆盖。
+        // **不随机普通 FOK(OrderType.FOK)**:仅这一种 Java 未实现(Naive/Direct 均 `// TODO FOK support`,
+        // default 整单 reject),Rust 已正确实现 → 能成交时两侧分歧(Java 功能缺口,非 bug)。
+        // 注:FOK_BUDGET / IOC_BUDGET 两侧都已实现且对拍一致(手写向量 fok_budget/ioc_budget),此处未随机仅为简化。
         let ot = if rng.range(0, 2) == 0 { "GTC" } else { "IOC" };
         if action == "BID" {
             // 现货 BID 需 reserve ≥ price;给足冗余。
