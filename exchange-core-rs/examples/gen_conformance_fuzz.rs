@@ -57,10 +57,10 @@ fn gen_vector(seed: u64) -> String {
         let price = rng.range(9_500, 10_501);
         // 偶发大 size 触发 NSF(两侧结果码应一致)。
         let size = if rng.range(0, 20) == 0 { rng.range(1, 900_000_000) } else { rng.range(1, 8) };
-        // 只随机 GTC:GTC 撮合两侧逐值一致(已验证)。IOC/FOK 现货在复杂序列下与 Java 有 result_code/结算分歧
-        // (模糊器抓到,见 README/memory 的开放发现),暂不进随机流以免 CI 假红;IOC/FOK 的**可用**用例由手写
-        // 向量(ioc_probe/ioc_multi/fok_kill/iocask_nsf)覆盖。
-        let ot = "GTC";
+        // GTC + IOC:两侧逐值一致(IOC 靠 exporter 每命令 flush 消除 Java R1/R2 lag)。
+        // **不随机普通 FOK**:Java 未实现现货普通 FOK(Naive/Direct 均 `// TODO FOK support`,default 整单 reject),
+        // Rust 已正确实现 → 能成交时两侧分歧(Java 功能缺口,非 bug)。FOK 的可用用例由手写向量覆盖。
+        let ot = if rng.range(0, 2) == 0 { "GTC" } else { "IOC" };
         if action == "BID" {
             // 现货 BID 需 reserve ≥ price;给足冗余。
             let reserve = price + rng.range(0, 600);

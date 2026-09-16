@@ -175,4 +175,21 @@ mod tests {
         assert_eq!(acct(&api, BUYER, QUOTE), quote_before, "FOK 未成交不应动余额");
         assert_eq!(locked(&api, BUYER, QUOTE), 0, "FOK 未成交不应留下冻结");
     }
+
+    // 10) 未成交 IOC ASK 立即释放 base 冻结,连下不误拒。
+    //     差分模糊抓到、并经 Java 侧 ITIocAskLockRelease 定性:Java 的**批处理 R1/R2 时序 hazard**——
+    //     第一条未成交 IOC ASK 的 R2 锁释放滞后于第二条 R1 读,无 barrier 时第二条 spurious RISK_NSF
+    //     (Java 引擎释放逻辑本身正确、settle 后归零;属 Disruptor 已知特性,用 barrier 规避)。
+    //     Rust 单管线 R2 恒先于下条 R1,无此 hazard——下面两条连提都成功。
+    #[test]
+    fn unfilled_ioc_ask_releases_base_lock_no_leak() {
+        let mut api = setup(); // SELLER 有 1_000_000 base
+        let base0 = acct(&api, SELLER, BASE);
+        // 空簿连下两个 IOC ASK:都未成交,都应 SUCCESS 且各自完全释放冻结。
+        assert_eq!(api.place_order(ask(3001, SELLER, 20_000, 600_000, OrderType::Ioc)), CommandResultCode::Success);
+        assert_eq!(locked(&api, SELLER, BASE), 0, "第一个未成交 IOC ASK 应释放全部 base 冻结");
+        assert_eq!(api.place_order(ask(3002, SELLER, 20_000, 600_000, OrderType::Ioc)), CommandResultCode::Success, "锁已释放,第二个不应 NSF(Java 此处会因泄漏锁误拒)");
+        assert_eq!(locked(&api, SELLER, BASE), 0);
+        assert_eq!(acct(&api, SELLER, BASE), base0, "未成交不动余额");
+    }
 }
