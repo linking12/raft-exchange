@@ -1,0 +1,10 @@
+# IOC ASK NSF:seller base=100。① ASK IOC 150>100 应 NSF;② ASK IOC 100(空簿,无对手)base 恰够。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=100 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+USER uid=1
+USER uid=2
+BAL uid=2 cur=1 amount=100 txid=1
+BAL uid=1 cur=2 amount=1000000000 txid=2
+PLACE oid=1 uid=2 sym=100 price=10000 size=150 action=ASK type=IOC
+PLACE oid=2 uid=2 sym=100 price=10000 size=100 action=ASK type=IOC
