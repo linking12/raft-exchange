@@ -17,7 +17,7 @@ use crate::core::processors::loan::loan_service::{
 };
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
-use crate::core::utils::core_arithmetic_utils::ceil_mul_div;
+use crate::core::utils::core_arithmetic_utils::{add_exact, ceil_mul_div, mul_exact};
 
 /// 天→毫秒，期限强平换算。
 const MS_PER_DAY: i64 = 86_400 * 1_000;
@@ -128,7 +128,7 @@ impl LoanLiquidationEngine {
             None => return,
         };
         let mark_price = match last_price_cache.get(&loan.symbol_id) {
-            Some(r) if r.last_price != 0 => r.last_price,
+            Some(r) if r.mark_price != 0 => r.mark_price,
             _ => return,
         };
         let base_spec = ssp.get_currency(loan.collateral_currency);
@@ -138,14 +138,14 @@ impl LoanLiquidationEngine {
         if collateral_value <= 0 {
             return; // 抵押估值 <=0 无法定破产价（除零）
         }
-        let real_debt = add_exact_local(loan.outstanding_principal, loan_service.calculate_display_interest(loan, ts));
-        let ltv_scaled = mul_exact_local(real_debt, BPS_SCALE);
+        let real_debt = add_exact(loan.outstanding_principal, loan_service.calculate_display_interest(loan, ts));
+        let ltv_scaled = mul_exact(real_debt, BPS_SCALE);
 
         let term_expired = loan.rate_mode == LoanRateMode::Locked
             && spec.loan_config.max_term_days > 0
             && (ts - loan.opened_at_ts) > spec.loan_config.max_term_days as i64 * MS_PER_DAY;
 
-        if term_expired || ltv_scaled >= mul_exact_local(collateral_value, spec.loan_config.liquidation_ltv_bps as i64) {
+        if term_expired || ltv_scaled >= mul_exact(collateral_value, spec.loan_config.liquidation_ltv_bps as i64) {
             let base_spec = match base_spec {
                 Some(b) => b,
                 None => return, // collateral_value>0 已保证 spec 存在，防御性
@@ -170,7 +170,7 @@ impl LoanLiquidationEngine {
                 ..Default::default()
             });
         } else if spec.loan_config.margin_call_ltv_bps > 0
-            && ltv_scaled >= mul_exact_local(collateral_value, spec.loan_config.margin_call_ltv_bps as i64)
+            && ltv_scaled >= mul_exact(collateral_value, spec.loan_config.margin_call_ltv_bps as i64)
         {
             fund_events.push(FundEvent {
                 event_type: FundEventType::LoanMarginCall,
@@ -225,7 +225,7 @@ impl LoanLiquidationEngine {
         };
         // pick 已保证现货对存在且 markPrice 就绪。
         let spec = ssp.find_spot_symbol(selling_currency, target_loan.loan_currency).expect("pick 保证现货对存在");
-        let mark_price = last_price_cache.get(&spec.symbol_id).expect("pick 保证 markPrice 就绪").last_price;
+        let mark_price = last_price_cache.get(&spec.symbol_id).expect("pick 保证 markPrice 就绪").mark_price;
         let available_collateral = up.cross_loan_collateral(selling_currency);
         let selling_currency_spec = match ssp.get_currency(selling_currency) {
             Some(s) => s,
@@ -399,7 +399,7 @@ impl LoanLiquidationEngine {
         last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
     ) -> bool {
         match ssp.find_spot_symbol(selling_currency, loan_currency) {
-            Some(spec) => matches!(last_price_cache.get(&spec.symbol_id), Some(r) if r.last_price > 0),
+            Some(spec) => matches!(last_price_cache.get(&spec.symbol_id), Some(r) if r.mark_price > 0),
             None => false,
         }
     }
@@ -416,7 +416,7 @@ impl LoanLiquidationEngine {
         selling_currency_spec: &crate::core::common::core_currency_specification::CoreCurrencySpecification,
         loan_currency_spec: &crate::core::common::core_currency_specification::CoreCurrencySpecification,
     ) -> i64 {
-        let real_debt = add_exact_local(target_loan.outstanding_principal, loan_service.calculate_display_interest(target_loan, now));
+        let real_debt = add_exact(target_loan.outstanding_principal, loan_service.calculate_display_interest(target_loan, now));
         if real_debt <= 0 || limit_price <= 0 {
             return 0;
         }
@@ -424,16 +424,6 @@ impl LoanLiquidationEngine {
         let available_lots = LoanService::collateral_amount_to_lots(available, spec, selling_currency_spec);
         available_lots.min(needed_lots)
     }
-}
-
-/// 对应 Java `Math.multiplyExact`：i128 中间精度、溢出 panic。
-fn mul_exact_local(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
-
-/// 对应 Java `Math.addExact`：i128 中间精度、溢出 panic（避免 release 下 real_debt 静默 wrap）。
-fn add_exact_local(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
 #[cfg(test)]

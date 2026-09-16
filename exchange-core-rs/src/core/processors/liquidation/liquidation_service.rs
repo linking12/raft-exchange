@@ -9,12 +9,7 @@ use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
-use crate::core::utils::core_arithmetic_utils::size_price_to_currency_scale;
-
-/// 对应 Java `Math.multiplyExact`：溢出 panic。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{mul_exact, size_price_to_currency_scale};
 
 /// 对应 Java `LiquidationService.IFNotional`：IF 单 symbol 名义资金——`available` 可动用，`reserved` 为强平预冻结（R1/R2 独立记账线）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -42,8 +37,11 @@ pub struct IfPositionRecord {
 
 impl IfPositionRecord {
     pub fn position_value(&self, mark: i64) -> i64 {
-        let unrealized = self.direction.multiplier() as i64 * (self.open_volume * mark - self.open_price_sum);
-        self.open_price_sum + unrealized
+        // i128 中间量防溢出：open_volume × mark 及 unrealized 累加（与仓内 mul_exact 惯例同姿态）。
+        let unrealized: i128 = self.direction.multiplier() as i128
+            * (self.open_volume as i128 * mark as i128 - self.open_price_sum as i128);
+        i64::try_from(self.open_price_sum as i128 + unrealized)
+            .unwrap_or_else(|_| panic!("overflow: IF position_value open_volume={} mark={mark}", self.open_volume))
     }
 
     fn fold_hash(&self, h: i64) -> i64 {
@@ -170,7 +168,7 @@ impl LiquidationService {
                     continue;
                 }
                 let mark_price = match last_price_cache.get(&position.symbol) {
-                    Some(r) => r.last_price,
+                    Some(r) => r.mark_price,
                     None => continue,
                 };
 
@@ -273,7 +271,7 @@ impl LiquidationService {
                 None => continue,
             };
             let mark_price = match last_price_cache.get(&position.symbol) {
-                Some(r) => r.last_price,
+                Some(r) => r.mark_price,
                 None => continue,
             };
             let maintenance = position.calculate_maintenance_margin(spec, mark_price);
@@ -301,7 +299,7 @@ impl LiquidationService {
         for &key in keys {
             let symbol = profile.positions[&key].symbol;
             let mark_price = match last_price_cache.get(&symbol) {
-                Some(r) => r.last_price,
+                Some(r) => r.mark_price,
                 None => continue,
             };
             if profile.positions[&key].estimate_unrealized_profit(mark_price) <= 0 {

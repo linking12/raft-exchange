@@ -96,7 +96,7 @@ pub struct SpotExecutionReport {
     pub order_creation_time: i64,
     pub trade_id: i64,
     pub last_qty: i64,
-    pub last_price: i64,
+    pub mark_price: i64,
     pub last_quote_qty: i64,
     pub cumulative_qty: i64,
     pub cumulative_quote_qty: i64,
@@ -135,7 +135,7 @@ impl SpotExecutionReport {
         let mut r = Self::base(cmd, spec, ExecType::Trade, status, ExecutionIdGenerator::build_trade_exec_id(seq, trade_index, false));
         r.trade_id = ExecutionIdGenerator::build_trade_id(seq, trade_index);
         r.last_qty = ev.size;
-        r.last_price = ev.price;
+        r.mark_price = ev.price;
         r.last_quote_qty = calculate_amount_bid(ev.size, ev.price);
         r.cumulative_qty = ev.filled;
         r.cumulative_quote_qty = ev.filled_notional;
@@ -167,7 +167,7 @@ impl SpotExecutionReport {
             order_creation_time: ev.matched_order_timestamp,
             trade_id: ExecutionIdGenerator::build_trade_id(seq, trade_index),
             last_qty: ev.size,
-            last_price: ev.price,
+            mark_price: ev.price,
             last_quote_qty: calculate_amount_bid(ev.size, ev.price),
             cumulative_qty: ev.matched_order_filled,
             cumulative_quote_qty: ev.matched_order_filled_notional,
@@ -200,7 +200,7 @@ impl SpotExecutionReport {
             order_creation_time: cmd.timestamp,
             trade_id: -1,
             last_qty: 0,
-            last_price: 0,
+            mark_price: 0,
             last_quote_qty: 0,
             cumulative_qty: 0,
             cumulative_quote_qty: 0,

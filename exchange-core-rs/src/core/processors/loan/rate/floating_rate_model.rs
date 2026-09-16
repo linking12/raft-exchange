@@ -3,22 +3,7 @@ use std::collections::BTreeMap;
 
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
-use crate::core::utils::core_arithmetic_utils::trunc_mul_div;
-
-/// 对应 Java `Math.addExact`。
-fn add_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
-}
-
-/// 对应 Java `Math.subtractExact(long, long)`。
-fn sub_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
-}
-
-/// 对应 Java `Math.multiplyExact(long, long)`。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact, trunc_mul_div};
 
 pub const DEFAULT_BASE_BPS: i32 = 200; // 零利用率 2%
 pub const DEFAULT_KINK_UTIL_BPS: i32 = 8000; // 拐点 80%

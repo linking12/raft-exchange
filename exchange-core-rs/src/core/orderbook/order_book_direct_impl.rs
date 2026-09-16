@@ -16,6 +16,8 @@ use crate::core::common::order::Order;
 use crate::core::common::order_type::OrderType;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
+// 成交名义额 size×price 及累加的溢出守卫，统一用 CoreArithmeticUtils 的 *_exact（release 下溢出 panic，不静默回绕）。
+use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact};
 
 /// 挂单节点（slab 元素）。对应 Java `DirectOrder`；parent/next/prev 退化为 slab 索引。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,12 +467,12 @@ impl OrderBookDirectImpl {
             let trade_price = m_price;
 
             taker_filled += trade_size;
-            taker_filled_notional += trade_size * trade_price;
+            taker_filled_notional = add_exact(taker_filled_notional, mul_exact(trade_size, trade_price));
 
             {
                 let o = self.order_mut(midx);
                 o.filled += trade_size;
-                o.filled_notional += trade_size * trade_price;
+                o.filled_notional = add_exact(o.filled_notional, mul_exact(trade_size, trade_price));
             }
             self.bucket_mut(m_parent).volume -= trade_size;
 
@@ -505,7 +507,7 @@ impl OrderBookDirectImpl {
                 matched_order_timestamp: m_timestamp,
                 matched_user_cookie: m_user_cookie,
                 matched_order_filled: m_filled_before + trade_size,
-                matched_order_filled_notional: m_filled_notional_before + trade_size * trade_price,
+                matched_order_filled_notional: add_exact(m_filled_notional_before, mul_exact(trade_size, trade_price)),
                 next: None,
             });
 
@@ -700,11 +702,11 @@ impl OrderBookDirectImpl {
             let trade_size = batch_remaining.min(m_size - m_filled_before);
 
             taker_filled += trade_size;
-            taker_filled_notional += trade_size * trade_price;
+            taker_filled_notional = add_exact(taker_filled_notional, mul_exact(trade_size, trade_price));
             {
                 let o = self.order_mut(midx);
                 o.filled += trade_size;
-                o.filled_notional += trade_size * trade_price;
+                o.filled_notional = add_exact(o.filled_notional, mul_exact(trade_size, trade_price));
             }
             self.bucket_mut(m_parent).volume -= trade_size;
 
@@ -714,7 +716,7 @@ impl OrderBookDirectImpl {
             }
 
             remaining -= trade_size;
-            remaining_budget -= trade_size * trade_price;
+            remaining_budget = sub_exact(remaining_budget, mul_exact(trade_size, trade_price));
             batch_remaining -= trade_size;
             // 本批次是否耗尽（≠ taker 整体是否成交完——见函数文档）。
             let active_order_completed = batch_remaining == 0;
@@ -739,7 +741,7 @@ impl OrderBookDirectImpl {
                 matched_order_timestamp: m_timestamp,
                 matched_user_cookie: m_user_cookie,
                 matched_order_filled: m_filled_before + trade_size,
-                matched_order_filled_notional: m_filled_notional_before + trade_size * trade_price,
+                matched_order_filled_notional: add_exact(m_filled_notional_before, mul_exact(trade_size, trade_price)),
                 next: None,
             });
 

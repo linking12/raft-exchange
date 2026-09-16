@@ -316,7 +316,7 @@ impl RiskEngineCommandDispatcher {
         }
         engine.set_mark_price(cmd.symbol, cmd.price);
         // 外部喂价也推进 ts，使后续现货 applyTradePrice EMA 从此刻起算。
-        engine.last_price_cache.entry(cmd.symbol).or_default().last_price_ts = cmd.timestamp;
+        engine.last_price_cache.entry(cmd.symbol).or_default().mark_price_ts = cmd.timestamp;
         // 价格更新后触发 targeted 强平检测（价格波动是主强平触发）；产出的 FORCE 命令入 liquidation_engine.pending_commands 由
         // ExchangeCore 排空重喂，margin/liquidation 告警须并入 cmd.fund_events（同 scan/funding 两路）。
         let mut alerts = Vec::new();

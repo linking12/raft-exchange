@@ -35,16 +35,7 @@ use crate::core::processors::risk_engine_command_dispatcher::RiskEngineCommandDi
 use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
-
-/// 对应 Java `Math.multiplyExact(long, long)`；局部私有重复，对齐 symbol_position_record.rs 同款 helper。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
-
-/// 对应 Java `Math.subtractExact(long, long)`。
-fn sub_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 - b as i128).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{mul_exact, sub_exact};
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskEngine {
@@ -398,6 +389,8 @@ impl RiskEngine {
                 // FORCE apply 后推进状态机（全成交闭环 / REJECT→WAIT_IF 入队 IF）。
                 Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             }
+            // R2 尾（对齐 Java 1001-1021）：期货刷新 ask/bid（无 spot 的 markPrice 混合）。
+            Self::refresh_price_record(&mut self.last_price_cache, cmd, false);
             return;
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
@@ -552,26 +545,48 @@ impl RiskEngine {
 
         cmd.matcher_event = mte_owned; // 现货结算/loan 钩子后放回链，供 SimpleEventsProcessor 读取
 
-        // R2 尾（对齐 Java handlerRiskRelease 尾部 applyTradePrice）：现货成交价动态回写 markPrice，供 loan 现货抵押估值。
-        // 仅现货分支到达此处（期货在上方 return），故无需再判 symbol_type；取事件链首个 TRADE 价。
-        let mut cur = cmd.matcher_event.as_deref();
-        let trade_price = loop {
-            match cur {
-                Some(ev) if ev.event_type == MatcherEventType::Trade => break ev.price,
-                Some(ev) => cur = ev.next.as_deref(),
-                None => break 0,
-            }
-        };
-        if trade_price > 0 {
-            // 对齐 Java `lastPriceCache.getIfAbsentPut(symbol).applyTradePrice(...)`：拿到（缺则建）record，滑动混合更新。
-            self.last_price_cache.entry(cmd.symbol).or_default().apply_trade_price(cmd.timestamp, trade_price);
-        }
+        // R2 尾（对齐 Java handlerRiskRelease 尾部 1001-1021）：刷新价格缓存 record（ask/bid + 现货 markPrice 滑动混合）。
+        Self::refresh_price_record(&mut self.last_price_cache, cmd, true);
     }
 
 
     /// 测试 / `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验直接写 last_price_cache，命令路径请走 markprice_adjustment。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
-        self.last_price_cache.entry(symbol).or_default().last_price = price;
+        self.last_price_cache.entry(symbol).or_default().mark_price = price;
+    }
+
+    /// 对应 Java `handlerRiskRelease` 尾部（1001-1021）：撮合结算后刷新该 symbol 的 [`LastPriceCacheRecord`]。
+    /// ask/bid 优先取 L2 首档（`cmd.market_data`，本移植仅 OrderBookRequest 回填，撮合命令通常为空 → 走 fallback），
+    /// 否则 fallback 到事件链首个 TRADE 价；`is_spot` 时额外用 `apply_trade_price` 滑动混合维护 `mark_price`（期货 markPrice 走外部喂价，不在此动）。
+    fn refresh_price_record(cache: &mut BTreeMap<i32, LastPriceCacheRecord>, cmd: &OrderCommand, is_spot: bool) {
+        let has_book = cmd
+            .market_data
+            .as_ref()
+            .map_or(false, |md| !md.ask_prices.is_empty() && !md.bid_prices.is_empty());
+        let trade_price = if is_spot || !has_book {
+            let mut cur = cmd.matcher_event.as_deref();
+            loop {
+                match cur {
+                    Some(ev) if ev.event_type == MatcherEventType::Trade => break ev.price,
+                    Some(ev) => cur = ev.next.as_deref(),
+                    None => break 0,
+                }
+            }
+        } else {
+            0
+        };
+        let record = cache.entry(cmd.symbol).or_default();
+        if has_book {
+            let md = cmd.market_data.as_ref().unwrap();
+            record.ask_price = md.ask_prices[0];
+            record.bid_price = md.bid_prices[0];
+        } else if trade_price > 0 {
+            record.ask_price = trade_price;
+            record.bid_price = trade_price;
+        }
+        if is_spot {
+            record.apply_trade_price(cmd.timestamp, trade_price);
+        }
     }
 
 
@@ -769,7 +784,7 @@ impl RiskEngine {
         let mut candidates_map = LiquidationService::compute_profitable_positions_by_symbol(ups, ssp, &self.last_price_cache);
         let candidates = candidates_map.remove(&symbol).unwrap_or_default();
 
-        let picks = AdlCommandProcessor::collect_input(candidates, symbol, action, bankruptcy_price, remaining_size);
+        let picks = AdlCommandProcessor::collect_input(candidates, action, bankruptcy_price, remaining_size);
 
         // R1 写回：预占 pending_adl_size（与 finalize 对称释放，见 `adl_apply` 文档）。
         for pick in &picks {
@@ -929,7 +944,7 @@ impl RiskEngine {
 
     /// markPrice 读取：None 与 Some(0) 统一折叠成 None。
     pub fn mark_price(&self, symbol: i32) -> Option<i64> {
-        self.last_price_cache.get(&symbol).map(|r| r.last_price).filter(|&p| p != 0)
+        self.last_price_cache.get(&symbol).map(|r| r.mark_price).filter(|&p| p != 0)
     }
 
     /// 用户某 currency 全量锁定额 = 期货保证金占用 + 现货冻结 + 借贷抵押；仅用于报表/事件/结算后余额校验，NSF 场景不走此路径（各走 calculate_free_futures_margin）。
@@ -2064,7 +2079,7 @@ impl RiskEngine {
     }
 
     fn mark_of(last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>, symbol: i32) -> i64 {
-        last_price_cache.get(&symbol).map(|r| r.last_price).unwrap_or(0)
+        last_price_cache.get(&symbol).map(|r| r.mark_price).unwrap_or(0)
     }
 
     #[allow(clippy::too_many_arguments)]

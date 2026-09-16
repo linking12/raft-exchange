@@ -13,6 +13,7 @@ use crate::core::processors::loan::rate::fixed_rate_model::FixedRateModel;
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
+use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact};
 
 /// 1 年（ms），跨节点确定性形式，不依赖日历/闰年。
 pub const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
@@ -26,16 +27,6 @@ pub const ORDERID_SUBTYPE_CROSS: i64 = 0x43; // 'C'
 const ORDERID_UID_MASK: i64 = 0xF_FFFF; // 20 bit uid hash
 const ORDERID_LOANID_MASK: i64 = 0xFFFF; // 16 bit loanId hash
 const ORDERID_TS_MASK: i64 = 0xFFF; // 12 bit 秒
-
-/// 对应 Java `Math.multiplyExact`。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
-
-/// 对应 Java `Math.addExact(long, long)`。
-fn add_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
-}
 
 /// crossLtvBps 里 try/catch 溢出折哨兵值的加法，与 panic-on-overflow 的 add_exact 语义不同故单独起名。
 fn checked_add_i64(a: i64, b: i64) -> Option<i64> {
@@ -186,7 +177,7 @@ impl LoanService {
             None => return -1,
         };
         let mark_price = match price_cache.get(&spec.symbol_id) {
-            Some(r) if r.last_price > 0 => r.last_price,
+            Some(r) if r.mark_price > 0 => r.mark_price,
             _ => return -1,
         };
         // currency 视作 base、numeraire 视作 quote，复用 Isolated LTV 同套折算。

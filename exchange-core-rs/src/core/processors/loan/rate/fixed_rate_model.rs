@@ -3,12 +3,7 @@
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
-use crate::core::utils::core_arithmetic_utils::trunc_mul_div;
-
-/// 对应 Java `Math.addExact`。
-fn add_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{add_exact, trunc_mul_div};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FixedRateModel {

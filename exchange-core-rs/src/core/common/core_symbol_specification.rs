@@ -3,12 +3,7 @@ use std::collections::BTreeMap;
 
 use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use crate::core::common::symbol_type::SymbolType;
-use crate::core::utils::core_arithmetic_utils::{ceil_mul_div, trunc_mul_div};
-
-/// 对应 Java `Math.addExact(long, long)`：`i128` 中间精度相加后收窄回 `i64`，溢出 panic。
-fn add_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{add_exact, ceil_mul_div, trunc_mul_div};
 
 /// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。`#[derive(Default)]` 零值兜底 = 未配置期货保证金（100%初始/维持保证金率、不限杠杆）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order::Order;
 use crate::core::common::order_type::OrderType;
+use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact};
 
 /// maker 单笔成交明细（撮合侧据此填 `MatcherTradeEvent` 的 taker/maker 字段）；`filled`/`filled_notional` 为本笔后值。
 #[derive(Debug, Clone, Copy)]
@@ -81,7 +82,7 @@ impl OrdersBucketNaive {
                 let avail = o.remaining();
                 let trade = to_collect.min(avail);
                 o.filled += trade;
-                o.filled_notional += trade * o.price;
+                o.filled_notional = add_exact(o.filled_notional, mul_exact(trade, o.price));
                 MakerFill {
                     order_id: o.order_id,
                     trade,

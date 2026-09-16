@@ -18,16 +18,7 @@ use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
-
-/// 对应 Java `Math.multiplyExact`。
-fn mul_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
-}
-
-/// 对应 Java `Math.addExact(long, long)`。
-fn add_exact(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 + b as i128).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
-}
+use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact};
 
 pub struct LoanCommandDispatcher;
 

@@ -21,7 +21,7 @@ use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::{
-    calculate_deficit_after_liquidate, calculate_size_to_liquidate, size_price_to_currency_scale,
+    calculate_deficit_after_liquidate, calculate_size_to_liquidate, mul_exact, size_price_to_currency_scale,
 };
 
 /// 待执行的强平决策（检测阶段产出，应用阶段消费）；`position_key` = ONEWAY symbol / HEDGE ±symbol。
@@ -152,7 +152,7 @@ impl LiquidationEngine {
                     continue;
                 }
                 let mark_price = match last_price_cache.get(&position.symbol) {
-                    Some(r) => r.last_price,
+                    Some(r) => r.mark_price,
                     None => continue,
                 };
                 if position.margin_mode == MarginMode::Isolated {
@@ -220,7 +220,7 @@ impl LiquidationEngine {
         let alloc = profile.cross_margin_base_allocation(
             |s| ssp.get_symbol(s),
             |c| ssp.get_currency(c),
-            |s| last_price_cache.get(&s).map(|r| r.last_price),
+            |s| last_price_cache.get(&s).map(|r| r.mark_price),
         );
 
         for (&currency, keys) in cross_by_currency.iter() {
@@ -239,7 +239,7 @@ impl LiquidationEngine {
                     None => continue,
                 };
                 let mark_price = match last_price_cache.get(&position.symbol) {
-                    Some(r) => r.last_price,
+                    Some(r) => r.mark_price,
                     None => continue,
                 };
                 let raw_maintenance = position.calculate_maintenance_margin(spec, mark_price);
@@ -262,13 +262,13 @@ impl LiquidationEngine {
                 total_maintenance += maintenance;
                 if maintenance != 0 {
                     // 缩放后归零不能做除数，仅不参与风险排序。
-                    let risk = mul_exact_local(profit - maintenance, 100) / maintenance;
+                    let risk = mul_exact(profit - maintenance, 100) / maintenance;
                     risk_pairs.push((risk, key));
                 }
             }
             let equity = total_profit
                 + profile.calculate_cross_available(currency, currency_spec, |s| ssp.get_symbol(s));
-            let warning_threshold = mul_exact_local(total_maintenance, 6) / 5; // 1.2×
+            let warning_threshold = mul_exact(total_maintenance, 6) / 5; // 1.2×
             if equity >= warning_threshold {
                 continue;
             }
@@ -311,7 +311,7 @@ impl LiquidationEngine {
                 None => continue,
             };
             let mark_price = match last_price_cache.get(&position.symbol) {
-                Some(r) => r.last_price,
+                Some(r) => r.mark_price,
                 None => continue,
             };
             let bankruptcy_price = position.calculate_bankruptcy_price(spec, |p| alloc.get(&Self::pos_key(p)).copied().unwrap_or(0));
@@ -460,8 +460,8 @@ impl LiquidationEngine {
         size: i64,
         mark_price: i64,
     ) -> i64 {
-        let notional_now = mul_exact_local(position.open_volume, mark_price);
-        let notional_after = mul_exact_local(position.open_volume - size, mark_price);
+        let notional_now = mul_exact(position.open_volume, mark_price);
+        let notional_after = mul_exact(position.open_volume - size, mark_price);
         calculate_deficit_after_liquidate(
             size,
             position.direction.multiplier() as i64,
@@ -519,11 +519,6 @@ impl LiquidationEngine {
             ..Default::default()
         }
     }
-}
-
-/// 对应 Java `Math.multiplyExact`：溢出 panic。
-fn mul_exact_local(a: i64, b: i64) -> i64 {
-    i64::try_from(a as i128 * b as i128).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
 
 #[cfg(test)]
