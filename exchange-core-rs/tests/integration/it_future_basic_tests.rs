@@ -645,7 +645,7 @@ mod tests {
         // mark 跌到 94：借款人 LONG（avg100/lev10/margin100）equity=100-60=40 < MM(47) → 触发强平。
         assert_eq!(api.set_mark_price_at(FC_FUT, 94, 2_000), CommandResultCode::Success);
 
-        // FORCE 已由 markprice 钩子生成并被 drain_liquidation_commands 排空重喂、成交平仓。
+        // FORCE 已由 markprice 钩子生成并被 run_liquidation_cascade 排空重喂、成交平仓。
         assert!(
             api.risk().liquidation_engine.pending_commands.is_empty(),
             "强平队列必须被排空（FORCE 已处理）"

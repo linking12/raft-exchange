@@ -40,7 +40,7 @@ impl ExchangeCore {
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp); // R2
         // 现货成交动态更新 markPrice（对齐 Java handlerRiskRelease 尾部 applyTradePrice）：供 loan 现货抵押估值。
         self.risk.apply_spot_trade_price_from(cmd, &self.ssp);
-        self.drain_liquidation_commands();
+        self.run_liquidation_cascade();
     }
 
     /// 对应 Java `RiskEngine.reset()` + 各 provider `reset()`：RESET 清空全引擎业务态（用户/仓位/费用/specs/价格缓存/loan+IF 服务/撮合簿）。保留 leader-local 的 `liquidation_engine`。
@@ -53,8 +53,9 @@ impl ExchangeCore {
         self.matching.reset();
     }
 
-    /// 排空强平引擎提交队列，把生成的 FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING 命令逐条喂回 R1→ME→R2；FIFO 逐条弹出保序，链深≤3/仓位必然收敛。
-    fn drain_liquidation_commands(&mut self) {
+    /// 驱动强平级联：把强平引擎生成的次级命令(FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING/loan 强平)
+    /// 逐条回流过 R1→ME→R2;过程中新生成的命令继续入队,FIFO 保序直至排空(FORCE→IF→ADL 级联,链深≤3/仓位必然收敛)。
+    fn run_liquidation_cascade(&mut self) {
         while !self.risk.liquidation_engine.pending_commands.is_empty() {
             let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
             self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
@@ -843,7 +844,7 @@ mod liquidation_engine_e2e_tests {
         let before = conserved(&core);
         core.process_command(&mut markprice(94, 2_000));
 
-        // FORCE 已由 markprice 钩子生成并被 drain_liquidation_commands 排空重喂、成交平仓。
+        // FORCE 已由 markprice 钩子生成并被 run_liquidation_cascade 排空重喂、成交平仓。
         assert!(
             core.risk.liquidation_engine.pending_commands.is_empty(),
             "队列必须被排空（生成的 FORCE 已处理）"
