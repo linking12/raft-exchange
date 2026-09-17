@@ -1,19 +1,3 @@
-//! 翻译自 Java `exchange.core2.tests.integration.ITLoanTargetedRecovery`（1 个 @Test）——
-//! loan targeted 索引在 snapshot 恢复后仍工作：建仓 → 落盘快照 → 全新实例恢复（驱动 `updateProvider` →
-//! `LoanLiquidationEngine` 从恢复出的用户态重建 isolatedLoanSymbolToUsers / crossLoanCurrencyToUsers）→
-//! 恢复后仅发 MARKPRICE 抵押价暴跌（不发 LIQUIDATION_SCAN）→ 抵押被 targeted 强平消费。证明 targeted 索引不是
-//! 构造时的一次性产物，recover 路径重建出的索引同样可用，新 leader 不会因索引空白而漏检。
-//!
-//! `ExchangeApi` 无 snapshot round-trip 入口，故直连 `ExchangeCore`：`to_snapshot_bytes()` /
-//! `from_snapshot_bytes()` 即真实 bincode 复制态 round-trip，后者内部调 `restore_non_replicated_state`
-//! （= Java `updateProvider`：`liquidation_engine` 是 `#[serde(skip)]` leader-local，反序列化后
-//! `LoanLiquidationEngine::rebuild_indices` 从恢复出的 loan 记录重建 targeted 双索引）。恢复后置 `is_running`
-//! + 喂 MARKPRICE_ADJUSTMENT 触发 targeted 扫描并同步 drain force-sell（对齐 Java enableLiquidationEngines +
-//! updateCurrentPriceTo，无需轮询）。
-//!
-//! 货币/符号对齐 Java `TestConstants`：ETH=3928 XBT=3762 SYMBOL_EXCHANGE=9269；loan 配置 `ofSymbol(6000/8000/7000)`。
-//! 开仓 mark=1000 → LTV 50% < 60% initial；暴跌 mark=500 → LTV 100% ≥ 80% liquidation → 触发。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -104,7 +88,6 @@ mod tests {
 
     #[test]
     fn loan_index_rebuilds_after_snapshot_recovery_targeted_still_triggers_force_sell() {
-        // ===== 原 leader：建仓，落盘快照 =====
         let (re, me) = {
             let mut core = ExchangeCore::new();
             core.ssp.add_currency(CoreCurrencySpecification { currency: ETH, currency_scale_k: 1, ..Default::default() });
@@ -128,10 +111,8 @@ mod tests {
             core.to_snapshot_bytes()
         };
 
-        // ===== 全新实例：从快照恢复（驱动 rebuild_indices 重建 targeted 索引） =====
         let mut r = ExchangeCore::from_snapshot_bytes(&re, &me);
 
-        // 恢复后 targeted 索引已重建：isolated loan symbol 索引里应有 BORROWER。
         assert!(
             r.risk
                 .liquidation_engine
@@ -143,15 +124,13 @@ mod tests {
         );
         assert!(r.query_total_balance().is_global_zero(), "恢复后应守恒");
 
-        // LP 在暴跌价挂 BID（余额随快照恢复，这里只补挂单），接强平的 ASK IOC 卖单。
         assert_eq!(
             submit(&mut r, cmd_place_order(2000, LP, SYMBOL, CRASH_MARK, ETH_COLLATERAL, OrderAction::Bid, 1_500)),
             CommandResultCode::Success
         );
 
-        r.risk.liquidation_engine.is_running = true; // is_running=true，但不发 scan
+        r.risk.liquidation_engine.is_running = true;
 
-        // 关键：仅抵押 spot 对 MARKPRICE 暴跌 → targeted 触发；若恢复后索引未重建，本该命中的 loan-only 用户会被漏检。
         assert_eq!(submit(&mut r, cmd_markprice(SYMBOL, CRASH_MARK, 2_000)), CommandResultCode::Success);
 
         let collateral_now = r

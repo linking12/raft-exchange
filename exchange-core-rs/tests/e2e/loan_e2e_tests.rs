@@ -1,4 +1,3 @@
-//! loan 全局守恒扩展 + loan e2e 场景 + 全局守恒 proptest，逐桶对齐 Java `TotalCurrencyBalanceReportResult`（参考文档 §6.2/§6.3/§6.4），`loanPoolBorrowed` 作为 tracker 单独一致性核验、不入守恒式。
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
@@ -17,14 +16,9 @@ use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_core::ExchangeCore;
 use exchange_core_rs::core::processors::loan::loan_service::LoanService;
 
-// ================================================================================================
-// 守恒 / 不变式 helper
-// ================================================================================================
-
-/// 全局守恒断言（参考文档 §6.2，逐桶对齐 Java 报告），零容差：每个已注册 currency 上式必须恰好等于 0。
 fn assert_loan_conservation(core: &ExchangeCore) {
     for &cur in core.ssp.currencies.keys() {
-        let mut account_balances: i64 = 0; // Σ_user (accounts − exchangeLocked − loanCollateral)
+        let mut account_balances: i64 = 0;
         let mut exchange_locked_sum: i64 = 0;
         let mut loan_collateral_sum: i64 = 0;
         let mut extra_margin_sum: i64 = 0;
@@ -80,7 +74,6 @@ fn assert_loan_conservation(core: &ExchangeCore) {
     }
 }
 
-/// tracker 一致性（参考文档 §6.2"loanPoolBorrowed 排除"段）：`loanPoolBorrowed[c]` 必须等于全体用户 isolated+cross 未偿本金之和。
 fn assert_loan_pool_borrowed_tracker_consistent(core: &ExchangeCore) {
     let mut outstanding: BTreeMap<i32, i64> = BTreeMap::new();
     for p in core.ups.users.values() {
@@ -101,7 +94,6 @@ fn assert_loan_pool_borrowed_tracker_consistent(core: &ExchangeCore) {
     }
 }
 
-/// `accounts` 恒非负（LIF 桶明确豁免——接管时可合法转负，代表平台已垫资，非资金丢失，参考文档 §6.3）。
 fn assert_accounts_non_negative(core: &ExchangeCore) {
     for p in core.ups.users.values() {
         for (&cur, &bal) in &p.accounts {
@@ -110,16 +102,11 @@ fn assert_accounts_non_negative(core: &ExchangeCore) {
     }
 }
 
-/// 每步复合断言：守恒 + tracker 一致性 + accounts 非负（隐含无 panic）。e2e 场景与 proptest 共用。
 fn assert_loan_invariants(core: &ExchangeCore) {
     assert_loan_conservation(core);
     assert_loan_pool_borrowed_tracker_consistent(core);
     assert_accounts_non_negative(core);
 }
-
-// ================================================================================================
-// 命令构造 helper（字段映射对齐 `loan_command_dispatcher.rs` 各 handler 文档）
-// ================================================================================================
 
 fn submit(core: &mut ExchangeCore, mut cmd: OrderCommand) -> (CommandResultCode, OrderCommand) {
     core.process_command(&mut cmd);
@@ -297,7 +284,6 @@ fn cmd_loan_if_withdraw(order_id: i64, currency: i32, amount: i64) -> OrderComma
     OrderCommand { command: OrderCommandType::LoanIfWithdraw, order_id, symbol: currency, size: amount, ..Default::default() }
 }
 
-/// `BALANCE_ADJUSTMENT`：唯一合法的"外部注资"入口（`accounts+=amount; adjustments-=amount`，天然守恒），本文件塞初始余额一律走此 helper，不直接 `add_to_account`。
 fn cmd_balance_adjustment(order_id: i64, uid: i64, currency: i32, amount: i64) -> OrderCommand {
     OrderCommand { command: OrderCommandType::BalanceAdjustment, order_id, uid, symbol: currency, price: amount, ..Default::default() }
 }
@@ -347,10 +333,6 @@ fn spot_spec(symbol_id: i32, base: i32, quote: i32) -> CoreSymbolSpecification {
     }
 }
 
-// ================================================================================================
-// e2e 场景 1：Isolated open → accrue → partial repay → full repay。
-// ================================================================================================
-
 #[test]
 fn scenario_isolated_open_accrue_partial_full_repay() {
     const BASE: i32 = 1;
@@ -364,7 +346,7 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
     core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
     let mut spec = spot_spec(SYMBOL, BASE, QUOTE);
-    spec.loan_config.update(5_000, 8_000, 0, 0, 0); // 50% initial / 80% liquidation LTV, no cap.
+    spec.loan_config.update(5_000, 8_000, 0, 0, 0);
     assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
     core.matching.add_symbol(&spec);
     core.ups.add_empty_user_profile(BORROWER);
@@ -378,7 +360,6 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
 
-    // Open: collateral=1000, principal=500 (50% LTV), default open rate 200bps (no reprice yet).
     let (rc, _) = submit(&mut core, cmd_loan_create(10, BORROWER, SYMBOL, LOAN_ID, 1_000, 500, false, 1_000));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -390,7 +371,6 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     }
     assert_eq!(core.ups.get(BORROWER).unwrap().account(QUOTE), 500);
 
-    // Accrue: 1yr elapses, settled by an ADD_COLLATERAL touch; interest = 500*2%*1yr = 10.
     let (rc, _) = submit(&mut core, cmd_loan_add_collateral(11, BORROWER, LOAN_ID, 100, 1_000 + YEAR_MS));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -400,7 +380,6 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
         assert_eq!(loan.collateral_amount, 1_100);
     }
 
-    // Partial repay 200 (< payoff 510): interest(10) first, then principal(190).
     let (rc, _) = submit(&mut core, cmd_loan_repay(12, BORROWER, LOAN_ID, 200, 1_000 + YEAR_MS));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -411,12 +390,10 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     }
     assert_eq!(core.ups.get(BORROWER).unwrap().account(QUOTE), 500 - 200);
 
-    // Remaining principal (310) exceeds disbursed QUOTE (300); top up 20 extra QUOTE before final repay.
     let (rc, _) = submit(&mut core, cmd_balance_adjustment(14, BORROWER, QUOTE, 20));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
 
-    // Full repay clears debt, but Isolated REPAY never releases collateral — loan survives as a zero-debt shell.
     let (rc, _) = submit(&mut core, cmd_loan_repay(15, BORROWER, LOAN_ID, 0, 1_000 + YEAR_MS));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -429,19 +406,13 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     assert_eq!(core.ups.get(BORROWER).unwrap().account(QUOTE), 500 - 200 + 20 - 310);
     assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 10);
 
-    // Releasing all collateral now (debt=0) finally removes the empty shell.
     let (rc, _) = submit(&mut core, cmd_loan_release_collateral(16, BORROWER, LOAN_ID, 1_100, 1_000 + YEAR_MS));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
     let borrower = core.ups.get(BORROWER).unwrap();
     assert!(!borrower.isolated_loans.contains_key(&LOAN_ID), "zero-debt/zero-collateral shell removed");
-    // Collateral is a virtual lock, not a physical transfer — accounts[BASE] stays at the funded 2_000 throughout.
     assert_eq!(borrower.account(1), 2_000);
 }
-
-// ================================================================================================
-// e2e 场景 2：Cross borrow（多笔）→ withdraw-collateral 边界（拒绝 + 放行）→ repay。
-// ================================================================================================
 
 #[test]
 fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
@@ -473,8 +444,6 @@ fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
 
-    // Two Cross debts: LTV after each borrow must stay <= initial_ltv_bps(50%) of the collateral
-    // value (2000 -> max total principal 1000). Borrow 400 then 500 (total 900, ok).
     let (rc, _) = submit(&mut core, cmd_loan_cross_borrow(11, BORROWER, SYMBOL, 1, 400, 1_000));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -483,20 +452,17 @@ fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
     assert_loan_invariants(&core);
     assert_eq!(core.ups.get(BORROWER).unwrap().cross_loans.len(), 2);
 
-    // Boundary: withdraw 1200 breaches the 85% cross liquidation LTV line, must be rejected and reverted.
     let before = core.ups.get(BORROWER).unwrap().cross_loan_collateral(SELL);
     let (rc, _) = submit(&mut core, cmd_loan_cross_withdraw_collateral(13, BORROWER, SELL, 1_200, 1_000));
     assert_eq!(rc, CommandResultCode::LoanCrossLtvTooHighAfterWithdraw);
     assert_loan_invariants(&core);
     assert_eq!(core.ups.get(BORROWER).unwrap().cross_loan_collateral(SELL), before, "rejected withdraw must revert");
 
-    // Safe withdraw: 500 leaves 1500 vs 900 debt -> LTV=60% < 85%, succeeds.
     let (rc, _) = submit(&mut core, cmd_loan_cross_withdraw_collateral(14, BORROWER, SELL, 500, 1_000));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
     assert_eq!(core.ups.get(BORROWER).unwrap().cross_loan_collateral(SELL), before - 500);
 
-    // Repay both loans in full.
     let (rc, _) = submit(&mut core, cmd_loan_cross_repay(15, BORROWER, 1, 0, 1_000));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -506,10 +472,6 @@ fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
     assert!(core.ups.get(BORROWER).unwrap().cross_loans.is_empty());
     assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
 }
-
-// ================================================================================================
-// e2e 场景 3：Isolated force-liquidate 全成交 + LIF 接管（欠抵押）。
-// ================================================================================================
 
 fn isolated_force_liquidate_world() -> (ExchangeCore, i32, i32, i32, i64, i64) {
     const BASE: i32 = 1;
@@ -570,7 +532,7 @@ fn scenario_isolated_force_liquidate_full_fill() {
     let up = core.ups.get(borrower).unwrap();
     assert!(!up.isolated_loans.contains_key(&LOAN_ID));
     assert_eq!(up.account(1), 0);
-    assert_eq!(core.risk.loan_service.get_loan_insurance_fund(quote), 20); // ceil(1000*2%)
+    assert_eq!(core.risk.loan_service.get_loan_insurance_fund(quote), 20);
     assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(quote), 0);
 }
 
@@ -580,7 +542,6 @@ fn scenario_isolated_force_liquidate_lif_takeover_undercollateralized() {
     const LOAN_ID: i64 = 42;
     const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
 
-    // 10% annual rate, opened exactly 1yr before liquidation; no maker at all -> full reject.
     open_isolated_loan_direct(&mut core, borrower, quote, 1, symbol, LOAN_ID, 1_000, 500, 1_000, 1_000, 5);
     assert_loan_invariants(&core);
 
@@ -591,15 +552,10 @@ fn scenario_isolated_force_liquidate_lif_takeover_undercollateralized() {
     let up = core.ups.get(borrower).unwrap();
     assert!(!up.isolated_loans.contains_key(&LOAN_ID), "taken over -> removed");
     assert_eq!(up.account(1), 0, "collateral physically taken by LIF");
-    // remainDebt = 500 principal + 50 interest (10%*1yr on 500) = 550.
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(quote), -550);
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(1), 1_000);
     assert_eq!(core.risk.loan_service.get_interest_revenue(quote), 50);
 }
-
-// ================================================================================================
-// e2e 场景 4：POOL_DEPOSIT/WITHDRAW + LOAN_IF_DEPOSIT/WITHDRAW 运维序列。
-// ================================================================================================
 
 #[test]
 fn scenario_pool_and_if_ops() {
@@ -614,7 +570,6 @@ fn scenario_pool_and_if_ops() {
     assert_eq!(core.risk.loan_service.get_loan_pool_available(QUOTE), 1_000);
     assert_eq!(*core.risk.adjustments.get(&QUOTE).unwrap(), -1_000);
 
-    // Over-withdraw: rejected, no state change.
     let (rc, _) = submit(&mut core, cmd_pool_withdraw(2, QUOTE, 5_000));
     assert_eq!(rc, CommandResultCode::LoanPoolInsufficient);
     assert_loan_invariants(&core);
@@ -630,7 +585,6 @@ fn scenario_pool_and_if_ops() {
     assert_loan_invariants(&core);
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 300);
 
-    // Over-withdraw from LIF: rejected (LIF never pushed further negative by an operator withdraw).
     let (rc, _) = submit(&mut core, cmd_loan_if_withdraw(5, QUOTE, 900));
     assert_eq!(rc, CommandResultCode::LoanIfInsufficient);
     assert_loan_invariants(&core);
@@ -640,10 +594,6 @@ fn scenario_pool_and_if_ops() {
     assert_loan_invariants(&core);
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 0);
 }
-
-// ================================================================================================
-// e2e 场景 5：reprice → accrue → repay（利息按 repriced 利率计提）。
-// ================================================================================================
 
 #[test]
 fn scenario_reprice_then_accrue_then_repay() {
@@ -665,7 +615,6 @@ fn scenario_reprice_then_accrue_then_repay() {
     core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
     core.risk.loan_service.global_config.numeraire_currency = QUOTE;
 
-    // Tiny pool (1_000) so a 900 borrow pushes utilization to 90%, moving reprice rate off the cold-start default.
     let (rc, _) = submit(&mut core, cmd_pool_deposit(1, QUOTE, 1_000));
     assert_eq!(rc, CommandResultCode::Success);
 
@@ -675,7 +624,6 @@ fn scenario_reprice_then_accrue_then_repay() {
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
 
-    // Bootstrap reprice BEFORE the borrow (0% utilization = base_bps 200) to end the floating accumulator's cold start.
     let (rc, _) = submit(&mut core, cmd_reprice(1_000));
     assert_eq!(rc, CommandResultCode::Success);
     assert_eq!(*core.risk.loan_service.floating_rate.current_rate_bps.get(&QUOTE).unwrap(), 200);
@@ -684,9 +632,8 @@ fn scenario_reprice_then_accrue_then_repay() {
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
     let rate_before_reprice = core.ups.get(BORROWER).unwrap().cross_loans.get(&LOAN_ID).unwrap().rate_bps;
-    assert_eq!(rate_before_reprice, 200); // display-only open rate, matches the bootstrap reprice
+    assert_eq!(rate_before_reprice, 200);
 
-    // Reprice again a year later at 90% utilization; `advance_accumulator` settles the prior segment at the OLD rate before overwriting `current_rate_bps`.
     let (rc, reprice_cmd) = submit(&mut core, cmd_reprice(1_000 + YEAR_MS));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -694,14 +641,12 @@ fn scenario_reprice_then_accrue_then_repay() {
     assert!(new_rate > 200, "90% utilization should push the rate above the base 2%: got {new_rate}");
     drop(reprice_cmd);
 
-    // Read-only pending-interest check at the reprice tick: segment 1 settled at the OLD (200bps) rate = 900*2% = 18.
     let interest_after_first_year = {
         let loan = core.ups.get(BORROWER).unwrap().cross_loans.get(&LOAN_ID).unwrap();
         core.risk.loan_service.calculate_display_interest(loan, 1_000 + YEAR_MS)
     };
     assert_eq!(interest_after_first_year, 18);
 
-    // Another year at the NEW (repriced) rate: segment 2 [1_000+YEAR_MS, 1_000+2*YEAR_MS).
     let expected_segment2 = (900i64 * new_rate) / 10_000;
     let interest_after_second_year = {
         let loan = core.ups.get(BORROWER).unwrap().cross_loans.get(&LOAN_ID).unwrap();
@@ -709,12 +654,10 @@ fn scenario_reprice_then_accrue_then_repay() {
     };
     assert_eq!(interest_after_second_year, 18 + expected_segment2, "second year accrues at the repriced rate");
 
-    // Top up with outside funds to cover accrued interest before the final repay.
     let (rc, _) = submit(&mut core, cmd_balance_adjustment(13, BORROWER, QUOTE, interest_after_second_year));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
 
-    // Repay everything: accrue_to commits the full pending interest into `accumulated_interest` before paying it off.
     let (rc, _) = submit(&mut core, cmd_loan_cross_repay(14, BORROWER, LOAN_ID, 0, 1_000 + 2 * YEAR_MS));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -722,20 +665,15 @@ fn scenario_reprice_then_accrue_then_repay() {
     assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), interest_after_second_year);
 }
 
-// ================================================================================================
-// e2e 场景 6：Cross force-liquidate 触发多笔剩余 cross loan 一并交给 LIF（loanId 升序 sweep，
-// 价值在于跨副本确定性——聚合桶结果对处理顺序本身不敏感）。
-// ================================================================================================
-
 #[test]
 fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order() {
-    const SELL1: i32 = 1; // target loan's own collateral, sold in a real trade
-    const QUOTE: i32 = 2; // loan currency for all three cross loans
-    const SELL2: i32 = 3; // shared collateral pool for loan50/loan90's sweep
-    const NUM: i32 = 4; // numeraire, distinct from QUOTE (see module doc)
-    const SYM_TARGET: i32 = 100; // SELL1/QUOTE — actually traded
-    const SYM_DEBT_NUM: i32 = 101; // QUOTE/NUM — price reference only
-    const SYM_COLLAT_NUM: i32 = 102; // SELL2/NUM — price reference only
+    const SELL1: i32 = 1;
+    const QUOTE: i32 = 2;
+    const SELL2: i32 = 3;
+    const NUM: i32 = 4;
+    const SYM_TARGET: i32 = 100;
+    const SYM_DEBT_NUM: i32 = 101;
+    const SYM_COLLAT_NUM: i32 = 102;
     const BORROWER: i64 = 10;
     const MAKER: i64 = 20;
     const TARGET_ID: i64 = 42;
@@ -749,7 +687,6 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
     let target_spec = spot_spec(SYM_TARGET, SELL1, QUOTE);
     assert_eq!(core.ssp.add_symbol(target_spec.clone()), CommandResultCode::Success);
     core.matching.add_symbol(&target_spec);
-    // Deliberately NOT registering a (SELL2, QUOTE) pair: SELL2 is structurally unsellable against the loan currency, though it has real value against the numeraire.
     assert_eq!(core.ssp.add_symbol(spot_spec(SYM_DEBT_NUM, QUOTE, NUM)), CommandResultCode::Success);
     assert_eq!(core.ssp.add_symbol(spot_spec(SYM_COLLAT_NUM, SELL2, NUM)), CommandResultCode::Success);
 
@@ -761,7 +698,6 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
     core.risk.loan_service.global_config.numeraire_currency = NUM;
     core.risk.loan_service.global_config.loan_liquidation_fee_bps = 0;
 
-    // Target loan (42): principal 100, collateral SELL1=100 (exact match, fully sellable).
     let (rc, _) = submit(&mut core, cmd_pool_deposit(1, QUOTE, 1_000_000));
     assert_eq!(rc, CommandResultCode::Success);
     let (rc, _) = submit(&mut core, cmd_balance_adjustment(3, BORROWER, SELL1, 100));
@@ -776,7 +712,6 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
     let up = core.ups.get_mut(BORROWER).unwrap();
     core.risk.loan_service.disburse_loan(up, QUOTE, 100);
 
-    // Two more Cross debts inserted in descending loanId order (90 before 50), sharing the SELL2 pool: principal 700 and 300, rate=0.
     let (rc, _) = submit(&mut core, cmd_balance_adjustment(4, BORROWER, SELL2, 999));
     assert_eq!(rc, CommandResultCode::Success);
     {
@@ -794,10 +729,9 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
     rest_maker_bid(&mut core, MAKER, SYM_TARGET, 1, 1, 100, QUOTE, 5);
     assert_loan_invariants(&core);
 
-    let before_quote = 0i64; // placeholder, real check is assert_loan_invariants below
+    let before_quote = 0i64;
     let _ = before_quote;
 
-    // Force-liquidate the target: fully repays it cleanly, but SELL2 is structurally unsellable so all_collateral_exhausted=true regardless -> sweep triggers for loans 50/90 in BTreeMap-ascending order.
     let (rc, _) = submit(&mut core, cmd_loan_cross_force_liquidate(2, BORROWER, SYM_TARGET, TARGET_ID, 1, 100, 2_000));
     assert_eq!(rc, CommandResultCode::Success);
     assert_loan_invariants(&core);
@@ -809,16 +743,11 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
     assert_eq!(up.account(SELL1), 0);
     assert_eq!(up.account(SELL2), 0);
 
-    // Aggregate bucket totals: both debts (300+700) fully forgiven by LIF, all 999 SELL2 collateral recovered by LIF.
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), -(300 + 700));
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(SELL2), 999);
     assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
-    assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 0); // rate=0 on both swept loans
+    assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 0);
 }
-
-// ================================================================================================
-// 全局守恒 proptest —— 随机 loan 命令流 + 随机 mark 价 + 时间推进。
-// ================================================================================================
 
 #[derive(Debug, Clone)]
 enum GenLoanCmd {
@@ -834,7 +763,6 @@ enum GenLoanCmd {
     PoolWithdraw { currency_idx: usize, amount: i64 },
     IfDeposit { currency_idx: usize, amount: i64 },
     IfWithdraw { currency_idx: usize, amount: i64 },
-    /// `full_drain`: review coverage fix — forces `lots` to the loan's actual remaining collateral so the terminal LIF-takeover branch in `post_process_loan_force_liquidate` gets fuzzer coverage (previously 0 hits).
     ForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64, full_drain: bool },
     CrossForceLiquidate { uid_idx: usize, loan_id: i64, lots: i64 },
     Reprice,
@@ -875,9 +803,6 @@ fn gen_loan_cmd(n_users: usize) -> impl Strategy<Value = GenLoanCmd> {
         (0usize..3, 1i64..=5_000).prop_map(|(currency_idx, amount)| GenLoanCmd::IfDeposit { currency_idx, amount });
     let if_withdraw =
         (0usize..3, 1i64..=5_000).prop_map(|(currency_idx, amount)| GenLoanCmd::IfWithdraw { currency_idx, amount });
-    // 40% full_drain: strengthens coverage toward the isolated LIF-takeover terminal branch (see
-    // `GenLoanCmd::ForceLiquidate` doc) while keeping the majority partial/random-overshoot, as
-    // before, for rejection-path and partial-fill coverage.
     let force_liquidate = (0..n_users, loan_id_space.clone(), 1i64..=2_000, prop::bool::weighted(0.4))
         .prop_map(|(uid_idx, loan_id, lots, full_drain)| GenLoanCmd::ForceLiquidate { uid_idx, loan_id, lots, full_drain });
     let cross_force_liquidate = (0..n_users, loan_id_space, 1i64..=2_000)
@@ -911,8 +836,8 @@ fn gen_loan_cmd(n_users: usize) -> impl Strategy<Value = GenLoanCmd> {
 const PT_BASE: i32 = 1;
 const PT_QUOTE: i32 = 2;
 const PT_SELL: i32 = 3;
-const PT_SYMBOL: i32 = 100; // BASE/QUOTE, isolated
-const PT_SYMBOL_CROSS: i32 = 101; // SELL/QUOTE, cross
+const PT_SYMBOL: i32 = 100;
+const PT_SYMBOL_CROSS: i32 = 101;
 const PT_CURRENCIES: [i32; 3] = [PT_BASE, PT_QUOTE, PT_SELL];
 
 fn proptest_world(n_users: usize) -> (ExchangeCore, Vec<i64>) {
@@ -937,7 +862,6 @@ fn proptest_world(n_users: usize) -> (ExchangeCore, Vec<i64>) {
     let (rc, _) = submit(&mut core, cmd_pool_deposit(1, PT_QUOTE, 1_000_000_000));
     assert_eq!(rc, CommandResultCode::Success);
 
-    // Seed order_ids kept < 1000, disjoint from the proptest loop's `next_order_id` counter, to avoid `try_claim_tx` idempotency collisions.
     let mut fund_order_id: i64 = 1;
     let uids: Vec<i64> = (1..=n_users as i64).collect();
     for &uid in &uids {
@@ -949,7 +873,6 @@ fn proptest_world(n_users: usize) -> (ExchangeCore, Vec<i64>) {
         }
     }
 
-    // Deep resting liquidity from a dedicated maker so force-liquidate ASKs have something to hit (depth exhaustion still exercises the LIF path).
     const MAKER: i64 = 9_000;
     core.ups.add_empty_user_profile(MAKER);
     let (rc, _) = submit(&mut core, cmd_balance_adjustment(fund_order_id, MAKER, PT_QUOTE, 1_000_000_000_000));
@@ -972,7 +895,6 @@ fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenLoanCmd>)> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
-    /// 任意合式 loan 命令流逐步跑完都不 panic，全局守恒/tracker 一致/accounts 非负每步零容差成立。
     #[test]
     fn loan_conservation_holds_for_random_command_stream(
         (n_users, cmds) in scenario_strategy()
@@ -981,7 +903,7 @@ proptest! {
         assert_loan_invariants(&core);
 
         let mut now: i64 = 1_000;
-        let mut next_order_id: i64 = 1_000; // disjoint from `proptest_world`'s seed order_ids (< 1000)
+        let mut next_order_id: i64 = 1_000;
 
         for gen_cmd in &cmds {
             let order_id = next_order_id;
@@ -1038,7 +960,6 @@ proptest! {
                 }
                 GenLoanCmd::ForceLiquidate { uid_idx, loan_id, lots, full_drain } => {
                     let uid = uids[*uid_idx];
-                    // full_drain: read the loan's actual live collateral_amount so the generator can reach `collateral_amount -> 0` and trigger the terminal LIF-takeover branch; falls back to the generated `lots` otherwise.
                     let effective_lots = if *full_drain {
                         core.ups.get(uid).and_then(|up| up.isolated_loans.get(loan_id)).and_then(|loan| {
                             let spec = core.ssp.get_symbol(PT_SYMBOL)?;

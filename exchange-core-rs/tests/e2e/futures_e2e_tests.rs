@@ -1,4 +1,3 @@
-//! 期货 e2e 场景 + 守恒 proptest（参考文档 §7）。核心断言（[`assert_futures_conservation`]）：Σ_users accounts+adjustments+fees + Σ_open_positions(estimate_pnl(mark)+extra_margin) == 0——比 naive 公式多出的两项（estimate_pnl/extra_margin）对应两类"资金已离开 accounts、尚未转回"的时间差场景（isolated MARGIN_ADJUSTMENT 递延退款、平仓对手方与开仓对手方不同导致的未实现浮亏递延），均非生产代码 bug，详见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`] 与场景 D。
 use proptest::prelude::*;
 
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -17,11 +16,6 @@ const BASE: i32 = 1;
 const QUOTE: i32 = 2;
 const FUT_SYMBOL: i32 = 300;
 
-// ================================================================================================
-// 守恒 / 非负断言 helper
-// ================================================================================================
-
-/// 全局守恒断言，见文件头文档——本文件唯一使用的守恒 helper；本文件 scale_k 恒为 1，故 estimate_pnl/extra_margin 可直接求和，无需 `size_price_to_currency_scale` 换算（生产代码非 1 缩放下需换算）。
 fn assert_futures_conservation(api: &ExchangeApi) {
     for &cur in api.ssp().currencies.keys() {
         let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -44,7 +38,6 @@ fn assert_futures_conservation(api: &ExchangeApi) {
     }
 }
 
-/// `accounts` 恒非负——期货 NSF 校验（`can_place_margin_order`/`margin_adjustment`）应保证此点。
 fn assert_accounts_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &bal) in &p.accounts {
@@ -53,7 +46,6 @@ fn assert_accounts_non_negative(api: &ExchangeApi) {
     }
 }
 
-/// 仓位记录内部不变式：`open_volume`/`open_init_margin_sum` 恒非负（双保险，触发即代表仓位原语有真实 bug）。
 fn assert_positions_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for pos in p.positions.values() {
@@ -75,18 +67,12 @@ fn assert_positions_non_negative(api: &ExchangeApi) {
     }
 }
 
-/// 复合 helper：每条命令后调用一次——守恒 + 两类非负 + （隐含）无 panic。
 fn assert_futures_invariants(api: &ExchangeApi) {
     assert_futures_conservation(api);
     assert_accounts_non_negative(api);
     assert_positions_non_negative(api);
 }
 
-// ================================================================================================
-// spec / api 构造 helper
-// ================================================================================================
-
-/// 固定费期货 spec：scale_k=1，init/maintenance_margin/max_leverage 留空，任意非负杠杆放行（简化场景/proptest 合式性）。
 fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -102,7 +88,6 @@ fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecifica
     }
 }
 
-/// 比例费期货 spec（同上，fee_scale_k 非零）。期货比例费按前述结论精确守恒（不同于 spot 的 ceiling 超可加性缺陷），两费率均可任意非零，无需像 e2e_tests.rs 那样钉 maker_fee=0。
 fn futures_spec_proportional_fee(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -125,10 +110,6 @@ fn new_seeded_futures_api(spec: CoreSymbolSpecification) -> ExchangeApi {
     assert_eq!(api.add_futures_symbol(spec), CommandResultCode::Success);
     api
 }
-
-// ================================================================================================
-// 场景 A：多用户开多/开空对敲 → mark 变动后互相平仓 → PnL 结算 → 记录拆除；全程唯一对手方，额外满足 naive 公式，顺带验证。
-// ================================================================================================
 
 fn naive_conservation(api: &ExchangeApi, currency: i32) -> i64 {
     let user_sum: i64 = api.ups().users.values().map(|p| p.account(currency)).sum();
@@ -153,7 +134,6 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // SHORT_USER 先挂 ASK@100 size6（maker，开空）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 1, uid: SHORT_USER, symbol: FUT_SYMBOL, price: 100, size: 6,
@@ -165,7 +145,6 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
-    // LONG_USER 吃单 BID@100 size6（taker，开多），与 SHORT_USER 完全撮合。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 2, uid: LONG_USER, symbol: FUT_SYMBOL, price: 100, size: 6,
@@ -184,7 +163,6 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert_eq!(short_pos.direction, PositionDirection::Short);
     assert_eq!(short_pos.open_volume, 6);
 
-    // mark 价推高到 150，双方互相平仓。
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 150), CommandResultCode::Success);
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
@@ -215,10 +193,6 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert!(api.user_account(SHORT_USER, QUOTE) < 100_000, "空头应实现负 PnL");
 }
 
-// ================================================================================================
-// 场景 B：同向加仓 → 部分减仓 → 完全平仓，唯一对手方，用手算结果交叉验证 `assert_futures_conservation` 本身没算错。
-// ================================================================================================
-
 #[test]
 fn scenario_b_increase_then_partial_reduce_then_full_close() {
     const TRADER: i64 = 1;
@@ -232,7 +206,6 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // 开仓：COUNTER ASK@100 size5（maker，开空），TRADER BID@100 size5（taker，开多）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 1, uid: COUNTER, symbol: FUT_SYMBOL, price: 100, size: 5,
@@ -253,7 +226,6 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
-    // 加仓（同向）：@110 size5，mark 仍是 100（保证金按 mark 算）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 3, uid: COUNTER, symbol: FUT_SYMBOL, price: 110, size: 5,
@@ -282,7 +254,6 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
-    // 部分减仓 4/10：COUNTER 先挂 BID@130 size4（maker，减空），TRADER 吃单 ASK@130 size4（taker，减多）。
     assert_eq!(
         api.close_position(ClosePositionRequest {
             order_id: 5, uid: COUNTER, symbol: FUT_SYMBOL, action: OrderAction::Bid,
@@ -308,7 +279,6 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 140), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // 完全平仓剩余 6：mirror pair 收尾。
     assert_eq!(
         api.close_position(ClosePositionRequest {
             order_id: 7, uid: COUNTER, symbol: FUT_SYMBOL, action: OrderAction::Bid,
@@ -330,14 +300,9 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert!(api.user_position(TRADER, FUT_SYMBOL).is_none());
     assert!(api.user_position(COUNTER, FUT_SYMBOL).is_none());
 
-    // 手算：TRADER taker fee=200，COUNTER maker fee=100，最终 pnl_raw=310（TRADER +310，COUNTER -310）。
     assert_eq!(api.user_account(TRADER, QUOTE), 100_000 - 200 + 310);
     assert_eq!(api.user_account(COUNTER, QUOTE), 100_000 - 100 - 310);
 }
-
-// ================================================================================================
-// 场景 C：FLIP——大额反向单先平满仓再反手开新仓，profit 递延到新仓非空为止；唯一对手方对称翻仓，额外满足 naive 公式。
-// ================================================================================================
 
 #[test]
 fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
@@ -352,7 +317,6 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // 开仓：COUNTER ASK@100 size10（maker，开空），FLIPPER BID@100 size10（taker，开多）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 1, uid: COUNTER, symbol: FUT_SYMBOL, price: 100, size: 10,
@@ -376,7 +340,6 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 120), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // 翻仓：COUNTER 先挂 BID@120 size15（maker，超过其现有 Short10，平满 10 再反手开多 5）；FLIPPER 吃单 ASK@120 size15（taker，非 reduce-only，超过其现有 Long10，平满 10 再反手开空 5）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 3, uid: COUNTER, symbol: FUT_SYMBOL, price: 120, size: 15,
@@ -407,7 +370,6 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert_eq!(counter_pos.open_volume, 5);
     assert_eq!(counter_pos.profit, -200, "对侧对称亏损，同样递延未支付");
 
-    // 最终收尾：mark 再变动，双方对敲平掉翻仓后的剩余 5，profit 一次性结清支付。
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 90), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
@@ -431,14 +393,9 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
 
     assert!(api.user_position(FLIPPER, FUT_SYMBOL).is_none(), "最终全平，记录拆除");
     assert!(api.user_position(COUNTER, FUT_SYMBOL).is_none());
-    // 这里只做方向性 sanity check，精确手算已在场景 B 交叉验证过 `assert_futures_conservation`。
     assert!(api.user_account(FLIPPER, QUOTE) > 100_000, "净盈利为正（先赚 200 后又赚 150，扣费仍为正）");
     assert!(api.user_account(COUNTER, QUOTE) < 100_000, "净亏损");
 }
-
-// ================================================================================================
-// 场景 D：MARGIN_ADJUSTMENT 追加保证金 → 平仓退还（ISOLATED 专属）；追加那一步 naive 公式不成立（文件头文档第一类偏差），显式断言为预期行为，完整公式全程精确成立。
-// ================================================================================================
 
 #[test]
 fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
@@ -475,7 +432,6 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
 
     let acct_before_margin = api.user_account(MARGIN_USER, QUOTE);
 
-    // 追加 500 isolated 保证金：action 字段在 ONEWAY 下被忽略，故随意传 Bid。
     assert_eq!(
         api.margin_adjustment(MarginAdjustmentRequest {
             uid: MARGIN_USER, symbol: FUT_SYMBOL, action: OrderAction::Bid, amount: 500,
@@ -483,9 +439,7 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
         }),
         CommandResultCode::Success
     );
-    // 完整公式全程精确成立：extra_margin 被显式计入。
     assert_futures_invariants(&api);
-    // naive 公式在这一步**不**成立——文件头文档解释的第一类偏差，显式验证（不是遗漏）。
     assert_eq!(
         naive_conservation(&api, QUOTE),
         -500,
@@ -495,10 +449,9 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
     let pos = api.user_position(MARGIN_USER, FUT_SYMBOL).expect("追加保证金前必须已有仓位");
     assert_eq!(pos.extra_margin, 500, "500 转入仓内 extra_margin（scale_k=1 恒等换算）");
 
-    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success); // 价格不变，聚焦保证金退款
+    assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // 平仓：mirror pair 全平，extra_margin 应整额退回 accounts。
     assert_eq!(
         api.close_position(ClosePositionRequest {
             order_id: 3, uid: COUNTER, symbol: FUT_SYMBOL, action: OrderAction::Bid,
@@ -515,21 +468,15 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
         CommandResultCode::Success
     );
     assert_futures_invariants(&api);
-    // 价格未变（100 -> 100），pnl=0，全部资金已回流 accounts：naive 公式在终态重新精确成立。
     assert_eq!(naive_conservation(&api, QUOTE), 0, "平仓后 extra_margin 已全额退款，naive 公式重新成立");
 
     assert!(api.user_position(MARGIN_USER, FUT_SYMBOL).is_none());
     assert!(api.user_position(COUNTER, FUT_SYMBOL).is_none());
-    // 价格未变（pnl=0），accounts 最终只反映 fee 支出；extra_margin 整额 500 已退回。
     assert_eq!(
         api.user_account(MARGIN_USER, QUOTE),
-        100_000 - 100 /* 开仓 taker fee */ - 500 /* margin add */ - 100 /* 平仓 taker fee */ + 500, /* 退款 */
+        100_000 - 100  - 500  - 100  + 500,
     );
 }
-
-// ================================================================================================
-// 场景 E：多用户 maker/taker（一个 maker 挂单被两个 taker 分两次吃完）+ 比例费 symbol，全程同价位（pnl恒0）naive 公式依旧精确成立；验证结论：期货比例费精确配对，不像 spot 那样因 ceiling 超可加性漂移。
-// ================================================================================================
 
 #[test]
 fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
@@ -537,7 +484,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     const TAKER1: i64 = 2;
     const TAKER2: i64 = 3;
 
-    // taker_fee=1000/1_000_000=0.1%，maker_fee=500/1_000_000=0.05%。
     let mut api = new_seeded_futures_api(futures_spec_proportional_fee(1_000, 500, 1_000_000));
     for uid in [MAKER, TAKER1, TAKER2] {
         assert_eq!(api.add_user(uid), CommandResultCode::Success);
@@ -546,7 +492,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 1_000), CommandResultCode::Success);
     assert_futures_invariants(&api);
 
-    // MAKER 挂 ASK@1000 size20（resting，尚无对手盘，纯 pending，不动 accounts）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 1, uid: MAKER, symbol: FUT_SYMBOL, price: 1_000, size: 20,
@@ -558,7 +503,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
-    // TAKER1 吃 8。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 2, uid: TAKER1, symbol: FUT_SYMBOL, price: 1_000, size: 8,
@@ -570,7 +514,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     assert_futures_invariants(&api);
     assert_eq!(naive_conservation(&api, QUOTE), 0);
 
-    // TAKER2 吃剩下的 12。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 3, uid: TAKER2, symbol: FUT_SYMBOL, price: 1_000, size: 12,
@@ -587,7 +530,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     assert_eq!(api.user_position(TAKER2, FUT_SYMBOL).unwrap().open_volume, 12);
     assert!(api.fees(QUOTE) > 0, "比例费应有非零手续费入账");
 
-    // 收尾：MAKER 挂 BID@1000 size20（同价位，pnl 恒 0），TAKER1/TAKER2 分别 ASK 平仓对敲。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 4, uid: MAKER, symbol: FUT_SYMBOL, price: 1_000, size: 20,
@@ -623,10 +565,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     assert!(api.user_position(TAKER1, FUT_SYMBOL).is_none());
     assert!(api.user_position(TAKER2, FUT_SYMBOL).is_none());
 }
-
-// ================================================================================================
-// 场景 F：CROSS 保证金模式开仓/平仓。
-// ================================================================================================
 
 #[test]
 fn scenario_f_cross_margin_mode_open_and_close_conserves() {
@@ -691,24 +629,19 @@ fn scenario_f_cross_margin_mode_open_and_close_conserves() {
     assert!(api.user_account(CROSS_USER, QUOTE) > 100_000 - 100, "CROSS 多头应实现正 PnL");
 }
 
-// ================================================================================================
-// Characterization：实证记录 naive 公式在两类场景下不精确成立、完整公式精确成立——非生产代码 bug，见文件头文档。
-// ================================================================================================
-
 #[test]
 fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
     const A: i64 = 1;
     const B: i64 = 2;
     const C: i64 = 3;
 
-    let mut api = new_seeded_futures_api(futures_spec_fixed_fee(0, 0)); // 费率清零，聚焦 PnL 本身
+    let mut api = new_seeded_futures_api(futures_spec_fixed_fee(0, 0));
     for uid in [A, B, C] {
         assert_eq!(api.add_user(uid), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(uid, QUOTE, 10_000, uid), CommandResultCode::Success);
     }
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
 
-    // B 开空 10，A 开多 10 @100（互为对手方）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 1, uid: B, symbol: FUT_SYMBOL, price: 100, size: 10,
@@ -730,8 +663,6 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
 
     assert_eq!(api.set_mark_price(FUT_SYMBOL, 120), CommandResultCode::Success);
 
-    // C 开一笔全新的多头 @120（resting maker），A 拿自己已有的多头 10 去平（taker，对手方是
-    // 从未跟 A 打过交道的 C，不是 B）。
     assert_eq!(
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id: 3, uid: C, symbol: FUT_SYMBOL, price: 120, size: 10,
@@ -748,7 +679,6 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
         CommandResultCode::Success
     );
 
-    // A 已全平并把 200 已实现盈利（(120-100)*10）整笔付进 accounts；B 仍持有对称的 -200 未实现浮亏，但那笔浮亏只存在于 B 的仓位字段（open_volume/open_price_sum），不在 accounts/adjustments/fees 里——naive 公式因此偏差 +200；完整公式把 B 仓位的 `estimate_pnl(mark)` 加回来后精确为 0。
     assert!(api.user_position(A, FUT_SYMBOL).is_none(), "A 已全平");
     assert_eq!(api.user_account(A, QUOTE), 10_000 + 200, "A 已实现盈利 200（费率为 0）");
     assert_eq!(
@@ -756,12 +686,8 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
         200,
         "naive 公式偏差 200——不是 bug，是 B 未平仓的浮亏尚未离开它自己的仓位字段"
     );
-    assert_futures_conservation(&api); // 完整公式：把 B 仓位的 estimate_pnl(mark) 加回来后精确为 0
+    assert_futures_conservation(&api);
 }
-
-// ================================================================================================
-// 守恒 proptest：随机期货命令流。
-// ================================================================================================
 
 #[derive(Debug, Clone)]
 enum FutGenCmd {
@@ -771,7 +697,6 @@ enum FutGenCmd {
     SetMarkPrice { price: i64 },
 }
 
-/// 单条命令生成策略：price/size 有界避免溢出；杠杆按用户预生成（见 [`fut_scenario_strategy`]）以避免同一用户杠杆不一致、提高有效撮合命中率。
 fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
     let place = (0..n_users, any::<bool>(), 50i64..=200, 1i64..=50)
         .prop_map(|(uid_idx, is_bid, price, size)| FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size });
@@ -782,7 +707,6 @@ fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
     prop_oneof![5 => place, 3 => close, 1 => margin_add, 1 => mark]
 }
 
-/// 顶层策略：fixed_fee 二选一、n_users∈[2,4]、每用户固定杠杆∈[1,5]、初始充值∈[1e6,1e8]（NSF 摩擦最小化但不排除偶发拒绝）、命令流长度∈[10,80)。
 fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<i64>, Vec<FutGenCmd>)> {
     (any::<bool>(), 2usize..=4).prop_flat_map(|(fixed_fee, n_users)| {
         let leverages = prop::collection::vec(1i32..=5, n_users);
@@ -795,7 +719,6 @@ fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// 任意合式期货命令流跑完（且逐步）都不 panic，[`assert_futures_conservation`] 恒成立，`accounts` 恒非负，仓位记录内部字段恒非负。**必须**用完整公式（含仓位 `estimate_pnl` + `extra_margin`）——通用多用户随机撮合无法保证"每次全平都恰好对敲同一原始对手方"，见文件头文档；用 naive 公式会在几乎第一次"平仓对手方与开仓对手方不同"时就产生预期内的非零偏差（不是 bug，见 [`characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl`]）。
     #[test]
     fn conservation_holds_for_random_futures_command_stream(
         (fixed_fee, n_users, leverages, balances, cmds) in fut_scenario_strategy()
@@ -824,7 +747,6 @@ proptest! {
         prop_assert_eq!(api.set_mark_price(FUT_SYMBOL, 100), CommandResultCode::Success);
         assert_futures_invariants(&api);
 
-        // 命令级 order_id 全局单调递增（同时充当 order book id 与 MARGIN_ADJUSTMENT 的幂等 txid 命名空间），从 1000 起跳，确保不与上面播种阶段用过的 1..=n_users 冲突。
         let mut next_order_id: i64 = 1000;
 
         for cmd in &cmds {
@@ -849,7 +771,6 @@ proptest! {
                 }
                 FutGenCmd::ClosePosition { uid_idx, price, size } => {
                     let uid = uids[*uid_idx];
-                    // 按当前仓位方向选反向 action；无仓位/无敞口时随意选 Bid，`close_position_risk_check` 会因 `max_closable_size==0` 静默 no-op。
                     let action = match api.user_position(uid, FUT_SYMBOL) {
                         Some(pos) if pos.direction == PositionDirection::Long => OrderAction::Ask,
                         Some(pos) if pos.direction == PositionDirection::Short => OrderAction::Bid,
@@ -874,7 +795,7 @@ proptest! {
                     let _ = api.margin_adjustment(MarginAdjustmentRequest {
                         uid,
                         symbol: FUT_SYMBOL,
-                        action: OrderAction::Bid, // OneWay 下被忽略
+                        action: OrderAction::Bid,
                         amount: *amount,
                         margin_mode: MarginMode::Isolated,
                         order_id,

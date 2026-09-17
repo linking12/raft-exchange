@@ -1,31 +1,19 @@
-//! 各状态类型的 Chronicle 读写(`writeMarshallable` 镜像)。读写**成对**放同一 impl,配 round-trip 测试防漂移。
-//! 字段顺序严格照 Java `writeMarshallable`;结构体字段顺序无关。
-
-//! `ChronicleMarshallable` trait + 跨类型共享 helper + RE/ME 顶层模块组装。
-//! **各类型的 `impl ChronicleMarshallable` 放各自文件**(类比 Java 每个类 implements 接口),此处只留契约与组装。
-
 use std::collections::BTreeMap;
 
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 
-/// 与 Java `WriteBytesMarshallable`/`readMarshallable` 对应的读写契约。各状态类型在自己文件里实现。
 pub trait ChronicleMarshallable: Sized {
     fn chronicle_write(&self, w: &mut ChronicleWriter);
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError>;
 }
 
-/// 收集 (i32,V) 对成 BTreeMap(各类型 read 复用)。
 pub fn to_btree_i32<V>(pairs: Vec<(i32, V)>) -> BTreeMap<i32, V> {
     pairs.into_iter().collect()
 }
-/// 收集 (i64,V) 对成 BTreeMap(各类型 read 复用)。
 pub fn to_btree_i64<V>(pairs: Vec<(i64, V)>) -> BTreeMap<i64, V> {
     pairs.into_iter().collect()
 }
-
-// RE 模块组装(`write/read_risk_engine_payload`)在 `processors::risk_engine`(对应 Java RiskEngine.writeMarshallable),
-// ME 是 `impl ChronicleMarshallable for MatchingEngineRouter`(对应 Java MatchingEngineRouter.writeMarshallable)。
 
 #[cfg(test)]
 mod tests {
@@ -54,15 +42,12 @@ mod tests {
         let payload = crate::core::snapshot::module_frame::decode_module_payload(re0).unwrap();
         let mut core = ExchangeCore::default();
         read_risk_engine_payload(&payload, &mut core).unwrap();
-        // 2 个带 name 的 currency
         assert_eq!(core.ssp.currencies.len(), 2);
         assert_eq!(core.ssp.currencies[&1].name, "BTC");
         assert_eq!(core.ssp.currencies[&2].name, "USDT");
         assert_eq!(core.ssp.currencies[&1].collateral_weight_bps, 8000);
-        // 1 个 symbol
         assert_eq!(core.ssp.symbols.len(), 1);
         assert!(core.ssp.symbols.contains_key(&100));
-        // user 42 余额 1_000_000 @ currency 2
         assert_eq!(core.ups.users.len(), 1);
         assert_eq!(core.ups.users[&42].accounts.get(&2), Some(&1_000_000));
     }
@@ -91,7 +76,6 @@ mod tests {
 
     #[test]
     fn re_payload_write_read_roundtrip_from_real_re0() {
-        // 读真实 RE → 重新写出 → 应与原 payload 字节一致(写读对称,含 name/digit 变换)。
         let re0 = include_bytes!("../../../tests/snapshot_fixtures/re0.ecs");
         let payload = crate::core::snapshot::module_frame::decode_module_payload(re0).unwrap();
         let mut core = ExchangeCore::default();
@@ -102,12 +86,11 @@ mod tests {
 
     #[test]
     fn currency_read_matches_java_fixture() {
-        // Java CoreCurrencySpecification(id=7,name="BTC",digit=8,cwBps=9000) → 07000000 03425443 08000000 28230000
         let bytes = hx("07000000034254430800000028230000");
         let spec = CoreCurrencySpecification::chronicle_read(&mut ChronicleReader::new(&bytes)).unwrap();
         assert_eq!(spec.currency, 7);
         assert_eq!(spec.name, "BTC");
-        assert_eq!(spec.currency_scale_k, 100_000_000); // 10^8
+        assert_eq!(spec.currency_scale_k, 100_000_000);
         assert_eq!(spec.collateral_weight_bps, 9000);
     }
 
@@ -116,7 +99,7 @@ mod tests {
         let spec = CoreCurrencySpecification {
             currency: 7,
             name: "BTC".to_string(),
-            currency_scale_k: 100_000_000, // digit 8
+            currency_scale_k: 100_000_000,
             collateral_weight_bps: 9000,
         };
         let mut w = ChronicleWriter::new();
@@ -125,7 +108,6 @@ mod tests {
         assert_eq!(hex, "07000000034254430800000028230000");
     }
 
-    /// write→read→write 字节对拍(不需 PartialEq,且验证读消费全部字节 + 写稳定)。
     fn rt<T: ChronicleMarshallable>(v: &T) {
         let mut w1 = ChronicleWriter::new();
         v.chronicle_write(&mut w1);

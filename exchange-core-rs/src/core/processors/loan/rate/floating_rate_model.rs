@@ -1,43 +1,31 @@
-//! 对应 Java `FloatingRateModel`：浮动利率引擎（kinked 曲线 + reprice 生效利率 + 累加器计息），加法非复利。
 use std::collections::BTreeMap;
 
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact, trunc_mul_div};
 
-pub const DEFAULT_BASE_BPS: i32 = 200; // 零利用率 2%
-pub const DEFAULT_KINK_UTIL_BPS: i32 = 8000; // 拐点 80%
-pub const DEFAULT_SLOPE1_BPS: i32 = 400; // 0→kink 增幅
-pub const DEFAULT_SLOPE2_BPS: i32 = 6000; // kink→100% 陡增幅
+pub const DEFAULT_BASE_BPS: i32 = 200;
+pub const DEFAULT_KINK_UTIL_BPS: i32 = 8000;
+pub const DEFAULT_SLOPE1_BPS: i32 = 400;
+pub const DEFAULT_SLOPE2_BPS: i32 = 6000;
 
-/// current_rate_bps/acc_rate_bps_ms 用 BTreeMap 保持确定性迭代序（禁 HashMap）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatingRateModel {
-    /// 零利用率基础利率。
     pub base_bps: i32,
-    /// 利用率拐点。
     pub kink_util_bps: i32,
-    /// 拐点前斜率。
     pub slope1_bps: i32,
-    /// 拐点后斜率。
     pub slope2_bps: i32,
-    /// 每币种当前生效利率（reprice 写入）。
     pub current_rate_bps: BTreeMap<i32, i64>,
-    /// 每币种计息累加器：截至 `last_reprice_ts` 累积的"利率 × 时间"（bps·ms）。
     pub acc_rate_bps_ms: BTreeMap<i32, i64>,
-    /// 上次 reprice 时刻（ms）；`<= 0` 表示尚未 reprice 过（冷启动）。
     pub last_reprice_ts: i64,
 }
 
 impl FloatingRateModel {
-    // ===== 核心行为 =====
-    /// 利用率（bps）= borrowed / (borrowed + available)；空池返 0。
     pub fn utilization_bps(borrowed: i64, available: i64) -> i64 {
         let total = add_exact(borrowed, available);
         if total <= 0 { 0 } else { trunc_mul_div(borrowed, BPS_SCALE, total) }
     }
 
-    /// kinked 曲线：util（clamp 到 [0, BPS_SCALE]）过曲线得 rateBps，纯整数。
     pub fn curve_rate_bps(&self, util_bps: i64) -> i64 {
         let util = if util_bps < 0 { 0 } else { util_bps.min(BPS_SCALE) };
         let kink = self.kink_util_bps as i64;
@@ -51,7 +39,6 @@ impl FloatingRateModel {
         }
     }
 
-    /// reprice 前半步：旧利率结算 [last_reprice_ts, tick_ts) 区间入累加器，必须先于 reprice_currency 调用。
     pub fn advance_accumulator(&mut self, currency: i32, tick_ts: i64) {
         if self.last_reprice_ts > 0 && tick_ts > self.last_reprice_ts {
             let elapsed = tick_ts - self.last_reprice_ts;
@@ -61,26 +48,22 @@ impl FloatingRateModel {
         }
     }
 
-    /// reprice 后半步：util 过曲线写入 current_rate_bps，成为新生效利率。
     pub fn reprice_currency(&mut self, currency: i32, util_bps: i64) {
         let rate = self.curve_rate_bps(util_bps);
         self.current_rate_bps.insert(currency, rate);
     }
 
-    /// 开仓：acc_snapshot 定在当前 liveAcc，此后只计从此刻起新增的利息。
     pub fn init_open_snapshot<L: LoanRecord>(&self, loan: &mut L, now: i64) {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         loan.set_acc_snapshot(live);
     }
 
-    /// 写路径：按累加器差值补计利息到 now，推进 acc_snapshot；truncated-but-chargeable（F1）截断得 0 时保留 acc_snapshot 避免吞息。
     pub fn accrue<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         let delta = Self::pending_from_live(loan, live);
         if delta > 0 {
             loan.set_accumulated_interest(add_exact(loan.accumulated_interest(), delta));
         }
-        // 普通减法（非 subtractExact）：数学上必不溢出。
         let delta_acc = live - loan.acc_snapshot();
         let truncated_but_chargeable = delta == 0 && loan.outstanding_principal() > 0 && delta_acc > 0;
         if !truncated_but_chargeable {
@@ -89,8 +72,6 @@ impl FloatingRateModel {
         delta
     }
 
-    // ===== 查询 / 访问器 =====
-    /// 对排序后 (key,value) 对逐个折叠，仅保证同状态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.base_bps as i64);
@@ -109,7 +90,6 @@ impl FloatingRateModel {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 某币种当前利率，未 reprice 过时回退 base_bps。
     pub fn current_rate_bps_or_base(&self, currency: i32) -> i32 {
         match self.current_rate_bps.get(&currency) {
             Some(&v) => v as i32,
@@ -117,12 +97,10 @@ impl FloatingRateModel {
         }
     }
 
-    /// 开仓利率 = 当前生效利率（未 reprice 过则回退 base）。
     pub fn open_rate_bps(&self, loan_currency: i32) -> i32 {
         self.current_rate_bps_or_base(loan_currency)
     }
 
-    /// 累加器实时值：用当前生效利率把上次 reprice 之后的区间外推到 now，冷启动不外推。
     pub fn live_acc_rate_bps_ms(&self, currency: i32, now: i64) -> i64 {
         let acc = *self.acc_rate_bps_ms.get(&currency).unwrap_or(&0);
         let elapsed = now - self.last_reprice_ts;
@@ -132,25 +110,20 @@ impl FloatingRateModel {
         add_exact(acc, mul_exact(self.current_rate_bps_or_base(currency) as i64, elapsed))
     }
 
-    /// 读路径：截至 now 的 pending 利息（不含 accumulated_interest），不改 loan。
     pub fn pending_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         Self::pending_from_live(loan, live)
     }
 
-    /// 读路径：accumulated_interest + 到 now 的 pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let live = self.live_acc_rate_bps_ms(loan.loan_currency(), now);
         add_exact(loan.accumulated_interest(), Self::pending_from_live(loan, live))
     }
 
-    /// 字段本是 pub，此 setter 供处理器按 Java 调用习惯使用。
     pub fn set_last_reprice_ts(&mut self, ts: i64) {
         self.last_reprice_ts = ts;
     }
 
-    // ===== 内部 helper =====
-    /// pending = (liveAcc − accSnapshot) 换算成本金对应的利息；deltaAcc<=0 或无本金则免息。
     fn pending_from_live<L: LoanRecord>(loan: &L, live_acc: i64) -> i64 {
         let delta_acc = sub_exact(live_acc, loan.acc_snapshot());
         if delta_acc <= 0 || loan.outstanding_principal() <= 0 {
@@ -211,25 +184,18 @@ mod tests {
         r
     }
 
-    // ---- (b) kinked curve above/below kink ----
-
     #[test]
     fn curve_rate_bps_below_kink_is_linear_from_base() {
-        let m = FloatingRateModel::default(); // base=200 kink=8000 slope1=400 slope2=6000
-        // util = half of kink -> base + slope1 * util / kink = 200 + 400*4000/8000 = 400
+        let m = FloatingRateModel::default();
         assert_eq!(m.curve_rate_bps(4000), 400);
-        // util = 0 -> exactly base
         assert_eq!(m.curve_rate_bps(0), 200);
     }
 
     #[test]
     fn curve_rate_bps_at_and_above_kink_switches_to_slope2() {
         let m = FloatingRateModel::default();
-        // exactly at kink -> base + slope1 (slope2 segment contributes 0)
         assert_eq!(m.curve_rate_bps(8000), 600);
-        // above kink: base+slope1 + slope2*(util-kink)/(BPS-kink) = 600 + 6000*1000/2000 = 3600
         assert_eq!(m.curve_rate_bps(9000), 3600);
-        // full utilization
         assert_eq!(m.curve_rate_bps(10000), 600 + 6000);
     }
 
@@ -243,30 +209,26 @@ mod tests {
     #[test]
     fn utilization_bps_empty_pool_is_zero_and_scales_correctly() {
         assert_eq!(FloatingRateModel::utilization_bps(0, 0), 0);
-        assert_eq!(FloatingRateModel::utilization_bps(5_000, 5_000), 5_000); // 50%
-        assert_eq!(FloatingRateModel::utilization_bps(8_000, 2_000), 8_000); // 80%
+        assert_eq!(FloatingRateModel::utilization_bps(5_000, 5_000), 5_000);
+        assert_eq!(FloatingRateModel::utilization_bps(8_000, 2_000), 8_000);
     }
-
-    // ---- (c) additive accumulator: two loans share one accumulator, each with its own acc_snapshot ----
 
     #[test]
     fn additive_accumulator_two_loans_opened_at_different_times_use_own_snapshot() {
         let cur = 7;
         let mut model = FloatingRateModel::default();
         model.last_reprice_ts = 1_000;
-        model.current_rate_bps.insert(cur, 500); // 5%, effective since last_reprice_ts
+        model.current_rate_bps.insert(cur, 500);
 
-        let principal = 315_360_000_000; // chosen so trunc_mul_div below divides exactly
+        let principal = 315_360_000_000;
         let mut loan_a = floating_loan(cur, principal, 1_000);
-        model.init_open_snapshot(&mut loan_a, 1_000); // opened right at the reprice tick
+        model.init_open_snapshot(&mut loan_a, 1_000);
         assert_eq!(loan_a.acc_snapshot(), 0);
 
         let mut loan_b = floating_loan(cur, principal, 2_000);
-        model.init_open_snapshot(&mut loan_b, 2_000); // opened 1000ms later, mid-interval
-        assert_eq!(loan_b.acc_snapshot(), 500_000); // 500bps * 1000ms already accrued in the live acc
+        model.init_open_snapshot(&mut loan_b, 2_000);
+        assert_eq!(loan_b.acc_snapshot(), 500_000);
 
-        // at now=3000: loan_a has accrued over its full 2000ms lifetime, loan_b only 1000ms,
-        // even though both read the SAME shared accumulator.
         assert_eq!(model.pending_interest(&loan_a, 3_000), 1_000);
         assert_eq!(model.pending_interest(&loan_b, 3_000), 500);
     }
@@ -280,59 +242,50 @@ mod tests {
         let mut loan = floating_loan(cur, 315_360_000_000, 1_000);
         model.init_open_snapshot(&mut loan, 1_000);
 
-        let d1 = model.accrue(&mut loan, 2_000); // 1000ms elapsed at 5% -> pending 500
+        let d1 = model.accrue(&mut loan, 2_000);
         assert_eq!(d1, 500);
         assert_eq!(loan.accumulated_interest(), 500);
-        assert_eq!(loan.acc_snapshot(), 500_000); // cursor advanced to live acc at t=2000
+        assert_eq!(loan.acc_snapshot(), 500_000);
 
-        let d2 = model.accrue(&mut loan, 3_000); // next 1000ms slice
+        let d2 = model.accrue(&mut loan, 3_000);
         assert_eq!(d2, 500);
-        assert_eq!(loan.accumulated_interest(), 1_000); // additive, not compounding
+        assert_eq!(loan.accumulated_interest(), 1_000);
     }
-
-    // ---- (d) truncated-but-chargeable: F1 cursor freeze ----
 
     #[test]
     fn accrue_truncated_but_chargeable_freezes_snapshot_until_threshold_crossed() {
         let cur = 9;
         let mut model = FloatingRateModel::default();
-        model.current_rate_bps.insert(cur, 1); // 1 bps — deliberately tiny
-        model.last_reprice_ts = 1; // "warm": elapsed since this ts extrapolates live acc at 1bps
-        let principal = 1; // tiny principal maximizes truncation
+        model.current_rate_bps.insert(cur, 1);
+        model.last_reprice_ts = 1;
+        let principal = 1;
         let mut loan = floating_loan(cur, principal, 1);
         loan.set_acc_snapshot(0);
 
-        // First accrue: live = 1bps * (100-1)ms = 99 bps*ms; pending = trunc(99*1/(YEAR_MS*BPS_SCALE)) = 0.
         let d1 = model.accrue(&mut loan, 100);
         assert_eq!(d1, 0);
         assert_eq!(loan.acc_snapshot(), 0, "F1: snapshot must NOT advance when truncated to 0 but principal>0 and time elapsed");
 
-        // Keep calling with ever-larger `now`; snapshot stays frozen at 0 until the accumulated
-        // deltaAcc finally crosses the truncation threshold and a nonzero charge is possible.
-        let threshold = YEAR_MS * BPS_SCALE; // deltaAcc needed for principal=1 to yield pending=1
-        let now = 1 + threshold; // elapsed since last_reprice_ts=1 -> live = 1*threshold
+        let threshold = YEAR_MS * BPS_SCALE;
+        let now = 1 + threshold;
         let d2 = model.accrue(&mut loan, now);
         assert!(d2 > 0, "sub-threshold interest must eventually be charged, not lost forever");
         assert_eq!(loan.acc_snapshot(), threshold, "snapshot advances once interest is actually charged");
     }
-
-    // ---- (e) advance_accumulator MUST run before reprice_currency ----
 
     #[test]
     fn advance_accumulator_before_reprice_settles_old_interval_at_old_rate() {
         let cur = 3;
         let mut base = FloatingRateModel::default();
         base.last_reprice_ts = 1_000;
-        base.current_rate_bps.insert(cur, 300); // old rate: 3%
+        base.current_rate_bps.insert(cur, 300);
 
-        // Correct order (per contract): advance_accumulator THEN reprice_currency.
         let mut correct = base.clone();
         correct.advance_accumulator(cur, 2_000);
-        correct.reprice_currency(cur, 9_000); // util above kink -> new rate very different from 300
+        correct.reprice_currency(cur, 9_000);
         let correct_acc = *correct.acc_rate_bps_ms.get(&cur).unwrap();
         assert_eq!(correct_acc, 300 * 1_000, "old interval must settle at the OLD rate");
 
-        // Reversed (buggy) order: reprice_currency THEN advance_accumulator.
         let mut reversed = base.clone();
         reversed.reprice_currency(cur, 9_000);
         reversed.advance_accumulator(cur, 2_000);
@@ -352,12 +305,6 @@ mod tests {
     }
 }
 
-/// Java 黄金值对拍：逐条镜像 `LoanRateCurveTest`（曲线/利用率/openRate/liveAcc/advance 部分）。
-/// 期望值即 Java `assertEquals` 的字面量；若 Rust 算出不同值那是翻译 bug，不得改期望。
-/// 注意 Java `curveRateBps(util, base, kink, s1, s2)` 是静态显式传参，Rust 是读 self 字段的方法，
-/// 故变参用例先构造对应参数的 FloatingRateModel。
-
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
@@ -389,7 +336,6 @@ impl ChronicleMarshallable for FloatingRateModel {
 mod java_parity {
     use super::*;
 
-    /// 构造带指定曲线参数的模型（对应 Java 静态 curveRateBps 的显式入参）。
     fn model_with(base: i32, kink: i32, s1: i32, s2: i32) -> FloatingRateModel {
         let mut m = FloatingRateModel::default();
         m.base_bps = base;
@@ -399,41 +345,33 @@ mod java_parity {
         m
     }
 
-    // ---- curve（默认参数 base=200 kink=8000 slope1=400 slope2=6000） ----
-
     #[test]
     fn curve_at_zero_util_is_base() {
-        // LoanRateCurveTest.curve_atZeroUtil_isBase
         assert_eq!(FloatingRateModel::default().curve_rate_bps(0), 200);
     }
 
     #[test]
     fn curve_below_kink_linear_on_slope1() {
-        // LoanRateCurveTest.curve_belowKink_linearOnSlope1: 200 + 400×4000/8000 = 400
         assert_eq!(FloatingRateModel::default().curve_rate_bps(4000), 400);
     }
 
     #[test]
     fn curve_at_kink_is_base_plus_slope1() {
-        // LoanRateCurveTest.curve_atKink_isBasePlusSlope1: 200 + 400 = 600
         assert_eq!(FloatingRateModel::default().curve_rate_bps(8000), 600);
     }
 
     #[test]
     fn curve_above_kink_steep_on_slope2() {
-        // LoanRateCurveTest.curve_aboveKink_steepOnSlope2: 600 + 6000×1000/2000 = 3600
         assert_eq!(FloatingRateModel::default().curve_rate_bps(9000), 3600);
     }
 
     #[test]
     fn curve_at_full_util_is_base_plus_both_slopes() {
-        // LoanRateCurveTest.curve_atFullUtil_isBasePlusBothSlopes: 200 + 400 + 6000 = 6600
         assert_eq!(FloatingRateModel::default().curve_rate_bps(10000), 6600);
     }
 
     #[test]
     fn curve_clamps_out_of_range_util() {
-        // LoanRateCurveTest.curve_clampsOutOfRangeUtil
         let m = FloatingRateModel::default();
         assert_eq!(m.curve_rate_bps(-5), 200, "负 util clamp 到 0");
         assert_eq!(m.curve_rate_bps(20000), 6600, "超 100% clamp 到 BPS");
@@ -441,24 +379,18 @@ mod java_parity {
 
     #[test]
     fn curve_kink_zero_whole_range_is_slope2() {
-        // LoanRateCurveTest.curve_kinkZero_wholeRangeIsSlope2:
-        // curveRateBps(5000, 100, 0, 400, 600) = 100 + 400 + 600×5000/10000 = 800
         assert_eq!(model_with(100, 0, 400, 600).curve_rate_bps(5000), 800);
     }
 
     #[test]
     fn curve_kink_at_bps_scale_no_slope2_segment() {
-        // LoanRateCurveTest.curve_kinkAtBpsScale_noSlope2Segment
         let m = model_with(200, 10000, 400, 6000);
         assert_eq!(m.curve_rate_bps(10000), 600, "kink=10000 满 util → base+slope1");
         assert_eq!(m.curve_rate_bps(20000), 600, "超范围 clamp 后仍 base+slope1");
     }
 
-    // ---- utilization ----
-
     #[test]
     fn utilization_basic() {
-        // LoanRateCurveTest.utilization_basic
         assert_eq!(FloatingRateModel::utilization_bps(0, 0), 0, "空池");
         assert_eq!(FloatingRateModel::utilization_bps(30, 70), 3000, "30/(30+70)=30%");
         assert_eq!(FloatingRateModel::utilization_bps(100, 0), 10000, "全借出=100%");
@@ -466,37 +398,29 @@ mod java_parity {
 
     #[test]
     fn utilization_overflow_scale_path_uses_trunc_mul_div_128() {
-        // LoanRateCurveTest.utilization_overflowScalePath_usesTruncMulDiv128
-        let half = i64::MAX / 2; // borrowed×10000 溢出 64-bit fast path
+        let half = i64::MAX / 2;
         assert_eq!(FloatingRateModel::utilization_bps(half, half), 5000, "溢出 fallback 后 50%");
     }
 
-    // ---- openRate（floating 半部；LoanService/fixed 半部见 loan_service.rs / fixed_rate_model.rs） ----
-
     #[test]
     fn floating_open_rate_falls_back_to_base_when_unpriced_then_uses_current() {
-        // LoanRateCurveTest.floatingModel_openRate_fallsBackToBaseWhenUnpriced
         let mut m = FloatingRateModel::default();
         assert_eq!(m.open_rate_bps(2), 200, "未 reprice → 回退曲线 base=200");
         m.current_rate_bps.insert(2, 555);
         assert_eq!(m.open_rate_bps(2), 555, "已 reprice → 用生效值");
     }
 
-    // ---- liveAcc ----
-
     #[test]
     fn live_acc_cold_start_returns_acc_unchanged() {
-        // LoanRateCurveTest.liveAcc_coldStart_returnsAccUnchanged
         let mut m = FloatingRateModel::default();
         m.acc_rate_bps_ms.insert(2, 987_654);
-        m.current_rate_bps.insert(2, 555); // 若误累积会污染结果
+        m.current_rate_bps.insert(2, 555);
         m.last_reprice_ts = 0;
         assert_eq!(m.live_acc_rate_bps_ms(2, 1_000_000), 987_654, "冷启动 now>0 仍返回 acc 原值");
     }
 
     #[test]
     fn live_acc_non_positive_elapsed_returns_acc_unchanged() {
-        // LoanRateCurveTest.liveAcc_nonPositiveElapsed_returnsAccUnchanged
         let mut m = FloatingRateModel::default();
         m.acc_rate_bps_ms.insert(2, 987_654);
         m.current_rate_bps.insert(2, 555);
@@ -506,11 +430,8 @@ mod java_parity {
         assert_eq!(m.live_acc_rate_bps_ms(2, 2_000), 987_654 + 555 * 1_000, "elapsed>0 正常累积");
     }
 
-    // ---- advance_accumulator ----
-
     #[test]
     fn advance_accumulator_cold_start_is_noop() {
-        // LoanRateCurveTest.advanceAccumulator_coldStart_isNoOp
         let mut m = FloatingRateModel::default();
         m.acc_rate_bps_ms.insert(2, 100);
         m.current_rate_bps.insert(2, 555);
@@ -521,20 +442,18 @@ mod java_parity {
 
     #[test]
     fn advance_accumulator_tick_not_after_last_reprice_is_noop() {
-        // LoanRateCurveTest.advanceAccumulator_tickNotAfterLastReprice_isNoOp
         let mut m = FloatingRateModel::default();
         m.acc_rate_bps_ms.insert(2, 100);
         m.current_rate_bps.insert(2, 555);
         m.last_reprice_ts = 1_000;
-        m.advance_accumulator(2, 1_000); // 相等
+        m.advance_accumulator(2, 1_000);
         assert_eq!(*m.acc_rate_bps_ms.get(&2).unwrap(), 100, "tickTs=lastRepriceTs 为 no-op");
-        m.advance_accumulator(2, 500); // 更早
+        m.advance_accumulator(2, 500);
         assert_eq!(*m.acc_rate_bps_ms.get(&2).unwrap(), 100, "tickTs<lastRepriceTs 为 no-op");
     }
 
     #[test]
     fn advance_accumulator_positive_accumulates_rate_times_elapsed() {
-        // LoanRateCurveTest.advanceAccumulator_positive_accumulatesRateTimesElapsed
         let mut m = FloatingRateModel::default();
         m.acc_rate_bps_ms.insert(2, 100);
         m.current_rate_bps.insert(2, 555);

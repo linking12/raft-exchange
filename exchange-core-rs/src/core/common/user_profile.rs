@@ -1,5 +1,3 @@
-//! 对应 Java `UserProfile`：现货子集（accounts/exchangeLocked/processedTransactionIds）+ 期货子集
-//! （positionMode/positions）+ 现货借贷字段。
 use std::collections::BTreeMap;
 
 use crate::core::common::time_window_dedup_set::TimeWindowDedupSet;
@@ -20,32 +18,18 @@ use crate::core::utils::core_arithmetic_utils as arithmetic;
 pub struct UserProfile {
     pub uid: i64,
     pub user_status: UserStatus,
-    /// currency -> balance（对应 Java `IntLongHashMap accounts`；用户物理余额总额，未拆锁定）。
     pub accounts: BTreeMap<i32, i64>,
-    /// currency -> locked amount（对应 Java `IntLongHashMap exchangeLocked`；现货挂单冻结）。
     pub exchange_locked: BTreeMap<i32, i64>,
-    /// 对应 Java `UserProfile.processedTransactionIds`：`BALANCE_ADJUSTMENT`/`INTERNAL_TRANSFER`/loan 等命令
-    /// 按 `orderId` + 命令时间幂等去重（时间窗+hardCap 淘汰，见 [`TimeWindowDedupSet`]）。
     pub processed_tx_ids: TimeWindowDedupSet,
-    /// 对应 Java `UserProfile.positionMode`：单向 / 双向持仓，默认 `ONEWAY`。
     pub position_mode: PositionMode,
-    /// 对应 Java `UserProfile.positions`（`IntObjectHashMap<SymbolPositionRecord>`）：
-    /// symbol -> 持仓记录；`HEDGE` 下正 symbol 为多头、负 symbol 为空头，键由
-    /// [`Self::create_positions_key`] 统一计算。
     pub positions: BTreeMap<i32, SymbolPositionRecord>,
 
-    // 现货借贷
-    /// loanId -> record（对应 Java `LongObjectHashMap<IsolatedLoanRecord> isolatedLoans`）。
     pub isolated_loans: BTreeMap<i64, IsolatedLoanRecord>,
-    /// currency -> amount（对应 Java `IntLongHashMap crossLoanCollateral`）：账户级 Cross 抵押池，多笔 Cross debt 共享。
     pub cross_loan_collateral: BTreeMap<i32, i64>,
-    /// loanId -> record（对应 Java `LongObjectHashMap<CrossLoanRecord> crossLoans`）；与
-    /// `isolated_loans` 是独立的 loanId 命名空间。
     pub cross_loans: BTreeMap<i64, CrossLoanRecord>,
 }
 
 impl UserProfile {
-    // ===== 构造/配置 =====
 
     pub fn new(uid: i64, user_status: UserStatus) -> Self {
         UserProfile {
@@ -62,10 +46,6 @@ impl UserProfile {
         }
     }
 
-    // ===== 核心行为 =====
-
-    /// 对应 Java `processPositionRecord(int symbol, Consumer<SymbolPositionRecord> consumer)`：
-    /// 对指定 symbol 下所有仓位记录（`ONEWAY` 0/1 条，`HEDGE` 0/1/2 条）依次调用 `consumer`。
     pub fn process_position_record<F>(&mut self, symbol: i32, mut consumer: F)
     where
         F: FnMut(&mut SymbolPositionRecord),
@@ -80,33 +60,22 @@ impl UserProfile {
         }
     }
 
-    /// 对应 Java `TimeWindowDedupSet.tryClaim(id, nowMs)`：首次见到该 `tx_id`（且未超窗）→ 记录返回 `true`；
-    /// 窗口内已见过 → `false`。`now_ms` 须为确定性命令时间（`cmd.timestamp`，随 raft 复制）。
     pub fn try_claim_tx(&mut self, tx_id: i64, now_ms: i64) -> bool {
         self.processed_tx_ids.try_claim(tx_id, now_ms)
     }
 
-    /// 对应 Java `accounts.addToValue(currency, delta)`：缺省 0 起累加，`delta` 可为负。
     pub fn add_to_account(&mut self, currency: i32, delta: i64) {
         *self.accounts.entry(currency).or_insert(0) += delta;
     }
 
-    /// 对应 Java `exchangeLocked.addToValue(currency, delta)`。
     pub fn add_to_locked(&mut self, currency: i32, delta: i64) {
         *self.exchange_locked.entry(currency).or_insert(0) += delta;
     }
 
-    /// 对应 Java `crossLoanCollateral.addToValue(currency, delta)`：账户级 Cross 抵押池
-    /// 缺省 0 起累加，`delta` 可为负（`LOAN_CROSS_WITHDRAW_COLLATERAL` 的 subtract-then-check 与其失败
-    /// 回滚都走这一入口）。
     pub fn add_to_cross_loan_collateral(&mut self, currency: i32, delta: i64) {
         *self.cross_loan_collateral.entry(currency).or_insert(0) += delta;
     }
 
-    // ===== 查询/访问器 =====
-
-    /// 对应 Java `createPositionsKey`：`ONEWAY` 恒返回 `symbol`；`HEDGE` 下 `BID -> +symbol`（多头腿）、
-    /// `ASK -> -symbol`（空头腿），`CLOSE_POSITION`/`FORCE_LIQUIDATION` 再整体翻符号指向被平的那条腿。
     pub fn create_positions_key(&self, symbol: i32, action: OrderAction, command: OrderCommandType) -> i32 {
         if self.position_mode == PositionMode::Hedge {
             let key = if action == OrderAction::Bid { symbol } else { -symbol };
@@ -119,8 +88,6 @@ impl UserProfile {
         }
     }
 
-    /// 对应 Java `createPositionsKey(SymbolPositionRecord)`：`HEDGE` 下键 = `direction.multiplier * symbol`
-    /// （`EMPTY -> 0`）；`ONEWAY` 恒为 `symbol`。
     pub fn create_positions_key_of(&self, position: &SymbolPositionRecord) -> i32 {
         if self.position_mode == PositionMode::Hedge {
             position.direction.multiplier() * position.symbol
@@ -129,9 +96,6 @@ impl UserProfile {
         }
     }
 
-    /// 对应 Java `countPositionRecord(int symbol, Predicate<SymbolPositionRecord> predicate)`：
-    /// 统计指定 symbol 下满足 `predicate` 的仓位数——`ONEWAY` 最多 1 条（键=`symbol`），`HEDGE`
-    /// 最多 2 条（键=`symbol`/`-symbol`，多空两腿独立计数）。
     pub fn count_position_record<F>(&self, symbol: i32, predicate: F) -> i32
     where
         F: Fn(&SymbolPositionRecord) -> bool,
@@ -152,10 +116,6 @@ impl UserProfile {
         count
     }
 
-    /// 对应 Java `calculateCrossAvailable`：cross 可支配余额（currency scale）=
-    /// `accounts − exchangeLocked − Σ 同 currency 各 ISOLATED 仓的虚拟锁定保证金`。**不**减 CROSS 仓保证金
-    /// （账户级虚拟分配，见 [`Self::cross_margin_base_allocation`]），**不**加 UPnL。`symbol_spec_lookup`
-    /// 用闭包解耦避免 `common` 反向依赖 `processors`；spec 缺失的仓跳过不扣（宁可 equity 略高估也不 panic）。
     pub fn calculate_cross_available<'a, F>(
         &self,
         currency: i32,
@@ -184,17 +144,6 @@ impl UserProfile {
         cross_available
     }
 
-    /// 对应 Java `crossMarginBaseAllocation`：一次算好整账户所有 CROSS 仓的破产价基础 `marginBase`
-    /// （position key → marginBase，与 `open_init_margin_sum` 同 sizePrice scale），喂
-    /// `calculate_bankruptcy_price` 的 CROSS 回调。按 currency 分组，组内账户级 `marginBalance` 按 MM 占比分摊：
-    /// ```text
-    /// marginBalance = crossAvailable + Σ UPnL（该 currency 全部 CROSS 仓）
-    /// allocated_i   = truncMulDiv(marginBalance, mm_i, ΣMM)   （向零截断）
-    /// marginBase_i  = allocated_i − UPnL_i                    （currency scale）
-    /// ```
-    /// 守恒不变式：`Σ marginBase_i = crossAvailable`——`truncMulDiv` 截断引入 ≤ (n−1) 个 currency 最小单位
-    /// 的误差，与 Java 逐字一致（非本移植新引入）。边界：`ΣMM == 0` 的 currency 组不产出 entry；单个仓
-    /// spec/mark price 缺失则跳过。三个 lookup 用闭包解耦避免 `common` 反向依赖 `processors`。
     pub fn cross_margin_base_allocation<'a, FS, FC, FM>(
         &self,
         symbol_spec_lookup: FS,
@@ -208,8 +157,6 @@ impl UserProfile {
     {
         let mut margin_base_by_pos: BTreeMap<i32, i64> = BTreeMap::new();
 
-        // 账户级 marginBalance 分摊在单一 currency 内闭合，先按仓位 currency 字段分组
-        // （不是 position key——同一 currency 下可能有多个 symbol 的 CROSS 仓）。
         let mut cross_by_currency: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
         for (&key, p) in self.positions.iter() {
             if p.margin_mode == MarginMode::Cross {
@@ -220,7 +167,7 @@ impl UserProfile {
         for (&currency, keys) in cross_by_currency.iter() {
             let currency_spec = match currency_spec_lookup(currency) {
                 Some(c) => c,
-                None => continue, // currency spec 缺失整组跳过，无法做 scale 换算
+                None => continue,
             };
 
             let mut upnl_by_pos: BTreeMap<i32, i64> = BTreeMap::new();
@@ -268,8 +215,6 @@ impl UserProfile {
             for (&key, &mm) in mm_by_pos.iter() {
                 let allocated = arithmetic::trunc_mul_div(margin_balance, mm, total_mm);
                 let margin_base_currency = allocated - upnl_by_pos[&key];
-                // currency scale → sizePriceScale（喂 SPR.calculate_bankruptcy_price，与
-                // open_init_margin_sum 同 scale）；spec 在上面累加循环里已确认存在。
                 let pos_spec = symbol_spec_lookup(self.positions[&key].symbol)
                     .expect("symbol spec disappeared between accumulation and allocation loops");
                 margin_base_by_pos.insert(
@@ -287,29 +232,22 @@ impl UserProfile {
         margin_base_by_pos
     }
 
-    /// 对应 Java `accounts.get(currency)`：Eclipse Collections 原始类型 map 缺省值语义，缺省 0。
     pub fn account(&self, currency: i32) -> i64 {
         *self.accounts.get(&currency).unwrap_or(&0)
     }
 
-    /// 对应 Java `exchangeLocked.get(currency)`：缺省 0。
     pub fn locked(&self, currency: i32) -> i64 {
         *self.exchange_locked.get(&currency).unwrap_or(&0)
     }
 
-    /// 对应 Java `crossLoanCollateral.get(currency)`：缺省 0。
     pub fn cross_loan_collateral(&self, currency: i32) -> i64 {
         *self.cross_loan_collateral.get(&currency).unwrap_or(&0)
     }
 
-    /// 确定性状态 hash：折入的字段集与 Java `stateHash()` 一致（uid/user_status/processed_tx_ids/accounts/
-    /// exchange_locked/position_mode/positions/三个借贷字段；`BTreeMap` 天然升序保证确定性），算法不同，
-    /// 不保证与 Java 数值相等，只保证同状态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
         h = h.wrapping_mul(31).wrapping_add(self.user_status.code() as i64);
-        // 去重集折入 state_hash（对齐 Java）：按 FIFO 逻辑序折 (id, time)；缺此项时两节点仅去重集不同会算出相同 hash，削弱 raft 分叉探测。
         h = self.processed_tx_ids.fold_hash(h);
         for (&cur, &amt) in &self.accounts {
             h = h.wrapping_mul(31).wrapping_add(cur as i64);
@@ -324,7 +262,6 @@ impl UserProfile {
             h = h.wrapping_mul(31).wrapping_add(key as i64);
             h = h.wrapping_mul(31).wrapping_add(record.state_hash() as i64);
         }
-        // 三个借贷字段折入 state_hash（对齐 Java）：isolatedLoans/crossLoanCollateral/crossLoans。
         for (&loan_id, loan) in &self.isolated_loans {
             h = h.wrapping_mul(31).wrapping_add(loan_id);
             h = h.wrapping_mul(31).wrapping_add(loan.state_hash() as i64);
@@ -341,16 +278,11 @@ impl UserProfile {
     }
 }
 
-
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for UserProfile {
-    /// Java 序:uid,userStatus(byte),processedTransactionIds,accounts(int-long),exchangeLocked(int-long),
-    /// positionMode(byte),positions(int-key SPR),isolatedLoans(long-key),crossLoanCollateral(int-long),crossLoans(long-key)。
-    /// SPR/loan 的 `uid` 不序列化,读后由本 UserProfile 的 uid 注入。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i64(self.uid);
         w.write_u8(self.user_status.code() as u8);
@@ -436,7 +368,7 @@ mod tests {
         p.add_to_account(1, 100);
         p.add_to_account(1, -30);
         assert_eq!(p.account(1), 70);
-        assert_eq!(p.account(2), 0); // 未涉及币种仍缺省 0
+        assert_eq!(p.account(2), 0);
     }
 
     #[test]
@@ -485,8 +417,6 @@ mod tests {
         assert!(p.positions.is_empty());
     }
 
-    // create_positions_key
-
     #[test]
     fn create_positions_key_oneway_is_always_raw_symbol() {
         let p = UserProfile::new(1, UserStatus::Active);
@@ -507,11 +437,8 @@ mod tests {
     fn create_positions_key_hedge_close_or_force_liquidation_flips_sign() {
         let mut p = UserProfile::new(1, UserStatus::Active);
         p.position_mode = PositionMode::Hedge;
-        // BID + CLOSE_POSITION: 先按 action 得 +100，再因 CLOSE_POSITION 翻符号 -> -100
         assert_eq!(p.create_positions_key(100, OrderAction::Bid, OrderCommandType::ClosePosition), -100);
-        // ASK + CLOSE_POSITION: 先按 action 得 -100，再翻符号 -> +100
         assert_eq!(p.create_positions_key(100, OrderAction::Ask, OrderCommandType::ClosePosition), 100);
-        // FORCE_LIQUIDATION 与 CLOSE_POSITION 同规则
         assert_eq!(p.create_positions_key(100, OrderAction::Bid, OrderCommandType::ForceLiquidation), -100);
         assert_eq!(p.create_positions_key(100, OrderAction::Ask, OrderCommandType::ForceLiquidation), 100);
     }
@@ -539,10 +466,6 @@ mod tests {
         rec.direction = crate::core::common::position_direction::PositionDirection::Empty;
         assert_eq!(p.create_positions_key_of(&rec), 0);
     }
-
-    // ------------------------------------------------------------------
-    // count_position_record / process_position_record
-    // ------------------------------------------------------------------
 
     #[test]
     fn count_position_record_oneway_counts_only_raw_symbol_key() {
@@ -611,15 +534,10 @@ mod tests {
         assert_ne!(h0, diff_positions.state_hash());
     }
 
-    // calculate_cross_available
-
     fn currency_spec_scale1(currency: i32) -> CoreCurrencySpecification {
         CoreCurrencySpecification { currency, currency_scale_k: 1, ..Default::default() }
     }
 
-    /// `base_scale_k=quote_scale_k=currency_scale_k=1`：`size_price_to_currency_scale`/
-    /// `currency_to_size_price_scale` 恒等换算，让测试算术直接在原始整数上验证公式，不被 scale 换算
-    /// 噪声干扰（scale 换算本身已在 `core_arithmetic_utils` 单测覆盖）。
     fn symbol_spec_scale1(symbol_id: i32, base_currency: i32, quote_currency: i32) -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id,
@@ -631,11 +549,7 @@ mod tests {
         }
     }
 
-    /// 构造真实开仓（非空）的仓位：`leverage=1` + `init_margin` 未配置（0，按 Java 文档 100% 初始
-    /// 保证金率）时，`calculate_required_margin_for_futures` 退化为直接返回 `open_init_margin_sum`
-    /// （无 pending 挂单，`new_exposure_notional=0`）——测试按此口径手工摆放 `open_init_margin_sum`，
-    /// 等价于「先开仓再收敛保证金」但省去中间步骤。
-    #[allow(clippy::too_many_arguments)] // 测试 helper，逐字对应仓位关键字段，拆分反而失真
+    #[allow(clippy::too_many_arguments)]
     fn open_position(
         uid: i64,
         symbol: i32,
@@ -696,7 +610,6 @@ mod tests {
 
         let spec = symbol_spec_scale1(100, 1, 2);
         let currency_spec = currency_spec_scale1(2);
-        // CROSS 仓的保证金不减——它是账户级虚拟分配，见 cross_margin_base_allocation。
         let available = up.calculate_cross_available(2, &currency_spec, |s| if s == 100 { Some(&spec) } else { None });
 
         assert_eq!(available, 100_000);
@@ -709,7 +622,7 @@ mod tests {
         let iso_other_cur = open_position(
             1,
             100,
-            3, // 另一 currency
+            3,
             MarginMode::Isolated,
             crate::core::common::position_direction::PositionDirection::Long,
             10,
@@ -722,7 +635,6 @@ mod tests {
         let currency_spec = currency_spec_scale1(2);
         let available = up.calculate_cross_available(2, &currency_spec, |s| if s == 100 { Some(&spec) } else { None });
 
-        // 只查 currency=2 的账户/冻结，仓位在 currency=3 上，不扣。
         assert_eq!(available, 100_000);
     }
 
@@ -743,14 +655,11 @@ mod tests {
         up.positions.insert(100, iso);
 
         let currency_spec = currency_spec_scale1(2);
-        // spec 查找恒返回 None：宁可 equity 略高估也不 panic。
         let available =
             up.calculate_cross_available(2, &currency_spec, |_s: i32| -> Option<&CoreSymbolSpecification> { None });
 
         assert_eq!(available, 100_000);
     }
-
-    // cross_margin_base_allocation
 
     #[test]
     fn cross_margin_base_allocation_invariant_sum_equals_cross_available_with_even_mm_split() {
@@ -758,13 +667,8 @@ mod tests {
 
         let mut up = UserProfile::new(1, UserStatus::Active);
         up.add_to_account(2, 100_000);
-        // 无 ISOLATED 仓、无冻结 → cross_available = 100_000。
 
-        // P1: LONG，open_volume=10，mark=100 → notional=1000 → MM1=1000（未配置分档表按 100%）；
-        //     open_price_sum=900 → UPnL1 = 1*(1000-900) = 100。
         let p1 = open_position(1, 100, 2, MarginMode::Cross, PositionDirection::Long, 10, 900, 0);
-        // P2: SHORT，open_volume=20，mark=50 → notional=1000 → MM2=1000；
-        //     open_price_sum=1100 → UPnL2 = -1*(1000-1100) = 100。
         let p2 = open_position(1, 200, 2, MarginMode::Cross, PositionDirection::Short, 20, 1100, 0);
         up.positions.insert(100, p1);
         up.positions.insert(200, p2);
@@ -799,13 +703,9 @@ mod tests {
 
         let allocation = up.cross_margin_base_allocation(symbol_spec_lookup, currency_spec_lookup, mark_price_lookup);
 
-        // MM 相等（各 1000）→ marginBalance(100_200) 均分，无截断误差。
-        // margin_base_i(currency scale) = allocated_i(50_100) - upnl_i(100) = 50_000。
-        // scale 恒等（base=quote=currency_scale_k=1）→ sizePrice scale 数值不变。
         assert_eq!(*allocation.get(&100).unwrap(), 50_000);
         assert_eq!(*allocation.get(&200).unwrap(), 50_000);
 
-        // 守恒不变式：Σ marginBase_i == cross_available（currency scale；此处 scale 恒等）。
         let cross_available = up.calculate_cross_available(2, &currency_spec, symbol_spec_lookup);
         let sum: i64 = allocation.values().sum();
         assert_eq!(sum, cross_available);
@@ -819,8 +719,6 @@ mod tests {
         let mut up = UserProfile::new(1, UserStatus::Active);
         up.add_to_account(2, 100_000);
 
-        // MM1=1000（volume10×mark100，1/3 权重）、MM2=2000（volume20×mark100，2/3 权重）；
-        // UPnL 均 0（open_price_sum == open_volume × mark）。
         let p1 = open_position(1, 100, 2, MarginMode::Cross, PositionDirection::Long, 10, 1_000, 0);
         let p2 = open_position(1, 200, 2, MarginMode::Cross, PositionDirection::Long, 20, 2_000, 0);
         up.positions.insert(100, p1);
@@ -850,14 +748,9 @@ mod tests {
 
         let allocation = up.cross_margin_base_allocation(symbol_spec_lookup, currency_spec_lookup, mark_price_lookup);
 
-        // marginBalance = cross_available(100_000) + totalUpnl(0) = 100_000；MM1:MM2 = 1:2。
-        // allocated1 = trunc(100_000*1000/3000) = 33_333；allocated2 = trunc(100_000*2000/3000) = 66_666。
-        // marginBase_i = allocated_i（UPnL_i=0）。
         assert_eq!(*allocation.get(&100).unwrap(), 33_333);
         assert_eq!(*allocation.get(&200).unwrap(), 66_666);
 
-        // 截断误差 1（100_000 - 33_333 - 66_666 = 1）：与 Java truncMulDiv 逐字一致的已知舍入行为，
-        // 不是本移植引入的新误差（见 cross_margin_base_allocation 文档注释）。
         let cross_available = up.calculate_cross_available(2, &currency_spec, symbol_spec_lookup);
         let sum: i64 = allocation.values().sum();
         assert_eq!(cross_available - sum, 1);
@@ -869,7 +762,6 @@ mod tests {
 
         let mut up = UserProfile::new(1, UserStatus::Active);
         up.add_to_account(2, 100_000);
-        // open_volume=0 → calculate_maintenance_margin 恒 0（Java: 空仓不计维持保证金）。
         let empty_cross = open_position(1, 100, 2, MarginMode::Cross, PositionDirection::Empty, 0, 0, 0);
         up.positions.insert(100, empty_cross);
 
@@ -893,7 +785,7 @@ mod tests {
         let p1 = open_position(1, 100, 2, MarginMode::Cross, PositionDirection::Long, 10, 1_000, 0);
         let p2 = open_position(1, 200, 2, MarginMode::Cross, PositionDirection::Long, 10, 1_000, 0);
         up.positions.insert(100, p1);
-        up.positions.insert(200, p2); // symbol 200 无 mark price
+        up.positions.insert(200, p2);
 
         let spec1 = symbol_spec_scale1(100, 1, 2);
         let spec2 = symbol_spec_scale1(200, 1, 2);
@@ -908,10 +800,9 @@ mod tests {
                 None
             },
             |c| if c == 2 { Some(&currency_spec) } else { None },
-            |s| if s == 100 { Some(100) } else { None }, // symbol 200 缺 mark price
+            |s| if s == 100 { Some(100) } else { None },
         );
 
-        // symbol 200 跳过（不计入 UPnL/MM，也不产出 entry）；symbol 100 独占全部 marginBalance。
         assert!(allocation.contains_key(&100));
         assert!(!allocation.contains_key(&200));
         assert_eq!(*allocation.get(&100).unwrap(), 100_000);

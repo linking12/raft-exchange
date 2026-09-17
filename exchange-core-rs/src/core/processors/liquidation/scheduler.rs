@@ -1,8 +1,6 @@
-//! 对应 Java `LiquidationScheduledService`+`coveredByScanSlice`：定时 harness，简化为手动 tick，命令入 pending_commands 队列。
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 
-/// 对应 Java `coveredByScanSlice`：非 SCAN 或 size<=0 恒 true，否则 `floorMod(uid, sliceCount)==scanSlice`。
 pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
         return true;
@@ -10,30 +8,21 @@ pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     uid.rem_euclid(cmd.size) == cmd.uid
 }
 
-/// shard-0-only 强平扫描 tick（非复制）；切片经 `LIQUIDATION_SCAN` 命令字段 raft 复制。
 #[derive(Debug)]
 pub struct LiquidationScheduler {
-    /// 本地递增 tick 计数（非复制）；切片号 = `scan_tick mod scan_slice_count`。
     pub scan_tick: i64,
-    /// 扫描切片总数（round-robin，每 tick 扫一片）。
     pub scan_slice_count: i64,
-    /// 每 N tick 提交一次 `REPRICE_LOAN_RATES`。
     pub reprice_every_n_ticks: i64,
-    /// shard id：只有 shard 0 跑调度器。
     pub shard_id: i32,
-    /// leader 门：`false` 时 `run_one_iteration` no-op。
     pub is_running: bool,
-    /// 提交队列。
     pub pending_commands: Vec<OrderCommand>,
 }
 
 impl LiquidationScheduler {
-    /// `scan_slice_count`/`reprice_every_n_ticks` 对应 Java 系统属性默认；`shard_id`/`is_running` 由 server 按 raft leadership 设置。
     pub fn new(scan_slice_count: i64, reprice_every_n_ticks: i64, shard_id: i32) -> Self {
         LiquidationScheduler {
             scan_tick: 0,
             scan_slice_count,
-            // 非正配置归一为 1（对齐 Java `Math.max(1,...)`），而非"从不 reprice"。
             reprice_every_n_ticks: reprice_every_n_ticks.max(1),
             shard_id,
             is_running: false,
@@ -41,7 +30,6 @@ impl LiquidationScheduler {
         }
     }
 
-    /// 对应 Java `runOneIteration`：shard-0-only 一次 tick——提交本片 `LIQUIDATION_SCAN`，每 N tick 额外提交 `REPRICE_LOAN_RATES`，`scan_tick++`；follower 或非 shard 0 no-op。
     pub fn run_one_iteration(&mut self, timestamp: i64) {
         if !self.is_running || self.shard_id != 0 {
             return;
@@ -87,7 +75,6 @@ mod tests {
 
     #[test]
     fn covered_by_scan_slice_floor_mod_filters_uid() {
-        // sliceCount=10, scanSlice=3 -> 只覆盖 uid mod 10 == 3。
         let cmd = scan_cmd(3, 10);
         assert!(covered_by_scan_slice(&cmd, 3));
         assert!(covered_by_scan_slice(&cmd, 13));
@@ -98,7 +85,6 @@ mod tests {
 
     #[test]
     fn covered_by_scan_slice_negative_uid_uses_floor_mod() {
-        // floorMod(-7, 10) == 3（Rust rem_euclid），与 Java Math.floorMod 一致。
         let cmd = scan_cmd(3, 10);
         assert!(covered_by_scan_slice(&cmd, -7));
     }
@@ -106,7 +92,6 @@ mod tests {
     #[test]
     fn run_one_iteration_leader_gate_off_is_noop() {
         let mut s = LiquidationScheduler::new(10, 30, 0);
-        // is_running 默认 false。
         s.run_one_iteration(1_000);
         assert!(s.pending_commands.is_empty());
         assert_eq!(s.scan_tick, 0);
@@ -114,7 +99,7 @@ mod tests {
 
     #[test]
     fn run_one_iteration_non_shard_zero_is_noop() {
-        let mut s = LiquidationScheduler::new(10, 30, 1); // shard 1
+        let mut s = LiquidationScheduler::new(10, 30, 1);
         s.is_running = true;
         s.run_one_iteration(1_000);
         assert!(s.pending_commands.is_empty());
@@ -125,7 +110,6 @@ mod tests {
     fn run_one_iteration_emits_scan_with_slice_and_advances_tick() {
         let mut s = LiquidationScheduler::new(3, 30, 0);
         s.is_running = true;
-        // tick0: slice=0；tick0 % 30 == 0 -> 也发 reprice。
         s.run_one_iteration(1_000);
         assert_eq!(s.pending_commands.len(), 2, "tick0：LIQUIDATION_SCAN + REPRICE_LOAN_RATES");
         let scan = &s.pending_commands[0];
@@ -137,26 +121,23 @@ mod tests {
         assert_eq!(s.scan_tick, 1);
 
         s.pending_commands.clear();
-        // tick1: slice=1；1 % 30 != 0 -> 不发 reprice。
         s.run_one_iteration(2_000);
         assert_eq!(s.pending_commands.len(), 1, "tick1：只 LIQUIDATION_SCAN");
         assert_eq!(s.pending_commands[0].uid, 1, "slice = tick1 mod 3 = 1");
         assert_eq!(s.scan_tick, 2);
 
         s.pending_commands.clear();
-        // tick2: slice=2。
         s.run_one_iteration(3_000);
         assert_eq!(s.pending_commands[0].uid, 2);
 
         s.pending_commands.clear();
-        // tick3: slice = 3 mod 3 = 0（round-robin 回绕）。
         s.run_one_iteration(4_000);
         assert_eq!(s.pending_commands[0].uid, 0, "slice round-robin 回绕到 0");
     }
 
     #[test]
     fn run_one_iteration_reprice_every_n_ticks() {
-        let mut s = LiquidationScheduler::new(100, 2, 0); // 每 2 tick reprice
+        let mut s = LiquidationScheduler::new(100, 2, 0);
         s.is_running = true;
         let mut reprice_ticks = Vec::new();
         for t in 0..6 {

@@ -1,7 +1,3 @@
-//! 对应 Java `exchange.core2.core.processors.RiskEngineCommandDispatcher`：把非交易命令（账户 / 行情 / 运营）
-//! 的 R1 处理从 `RiskEngine` 抽出，令 RiskEngine 只留撮合交易 + R2 结算，与 `LoanCommandDispatcher` 对称。
-//! `pre_process_command` 的 ② 非交易 lane 整块委托本 dispatcher。
-
 use std::collections::BTreeMap;
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -20,12 +16,9 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-/// 非交易命令分派器（无状态；所有状态在传入的 `&mut RiskEngine`）。
 pub struct RiskEngineCommandDispatcher;
 
 impl RiskEngineCommandDispatcher {
-    /// 非交易命令分派（镜像 Java `RiskEngineCommandDispatcher.dispatch`）：账户 / 行情 / 运营命令。
-    /// 结果码在此定死（ME/R2 对其 no-op）；`RepriceLoanRates`/`InternalTransfer` 仅在此做 R1 collect，其 R2 apply 仍在 `RiskEngine::handler_risk_release`。
     pub fn dispatch(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -66,12 +59,10 @@ impl RiskEngineCommandDispatcher {
         rc
     }
 
-    /// 建空 UserProfile，已存在→UserMgmtUserAlreadyExists；uidForThisHandler 分片门未移植（单 shard 恒真）。
     pub fn add_user(_engine: &mut RiskEngine, cmd: &OrderCommand, ups: &mut UserProfileService) -> CommandResultCode {
         ups.add_empty_user_profile(cmd.uid)
     }
 
-    /// 两层校验：外层现货 NSF→内层 NSF→幂等 claim→成功后 account += amount_diff 且 adjustments -= amount_diff（Σ恒定）；提现额度叠加 free futures margin。
     pub fn balance_adjustment(
         engine: &mut RiskEngine,
         cmd: &OrderCommand,
@@ -103,8 +94,6 @@ impl RiskEngineCommandDispatcher {
 
         user_profile.add_to_account(currency, amount_diff);
 
-        // 守恒对冲入桶：SUSPEND 类型（挂起前清零余额）入 `suspends`，否则入 `adjustments`（对齐 Java
-        // `applyBalanceAdjustment` 按 `BalanceAdjustmentType.of(cmd.orderType.getCode())` 分桶）。
         let adj_type = cmd
             .order_type
             .map(|ot| crate::core::common::balance_adjustment_type::BalanceAdjustmentType::of(ot.code()))
@@ -174,7 +163,6 @@ impl RiskEngineCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// CROSS 直接转发 balance_adjustment（同一原语）；ISOLATED 从 accounts 转入 position.extra_margin（不碰 adjustments 桶）；仅支持追加，无"移出保证金"路径。
     pub fn margin_adjustment(
         engine: &mut RiskEngine,
         cmd: &OrderCommand,
@@ -189,11 +177,9 @@ impl RiskEngineCommandDispatcher {
         }
 
         if cmd.margin_mode == MarginMode::Cross {
-            // CROSS：cmd.symbol 是 currency id，语义等价 BALANCE_ADJUSTMENT 的 ADJUSTMENT 充值，直接复用同一原语。
             return Self::balance_adjustment(engine, cmd, ups, ssp);
         }
 
-        // ISOLATED
         let user_profile = match ups.get_mut(cmd.uid) {
             Some(u) => u,
             None => return CommandResultCode::AuthInvalidUser,
@@ -208,17 +194,14 @@ impl RiskEngineCommandDispatcher {
             return CommandResultCode::RiskMarginModeMismatch;
         }
 
-        // NSF：可提余额（现货冻结 / 借贷抵押必扣，不能拨进 isolated margin）≥ 追加保证金。
         if engine.withdrawable_balance(user_profile, currency, ssp) - cmd.price < 0 {
             return CommandResultCode::RiskNsf;
         }
 
-        // ISOLATED 无 adjustments 桶对冲，按 cmd.order_id 自行幂等；NSF 通过后再 claim。
         if !user_profile.try_claim_tx(cmd.order_id, cmd.timestamp) {
             return CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame;
         }
 
-        // accounts −= price，extraMargin += price（须换算到 sizePrice scale，否则爆仓/破产价严重偏低）：同一笔钱内部搬移，不 touch adjustments 桶。
         user_profile.add_to_account(currency, -cmd.price);
         let spec = ssp
             .get_symbol(symbol)
@@ -237,7 +220,6 @@ impl RiskEngineCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 调整 symbol 下用户全部仓位杠杆，全部校验通过才落地（全改或全不改）；leverage==0 归一为 1；持仓存在但 mark price 缺失 panic（不可达不变量）。
     pub fn leverage_adjustment(
         engine: &mut RiskEngine,
         cmd: &OrderCommand,
@@ -308,7 +290,6 @@ impl RiskEngineCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 更新 lastPriceCache，拒绝 price<=0（Java 允许 0，此处收窄避免下游对 None panic 复制状态机）。
     pub fn markprice_adjustment(
         engine: &mut RiskEngine,
         cmd: &mut OrderCommand,
@@ -322,10 +303,7 @@ impl RiskEngineCommandDispatcher {
             return CommandResultCode::RiskInvalidAmount;
         }
         engine.set_mark_price(cmd.symbol, cmd.price);
-        // 外部喂价也推进 ts，使后续现货 applyTradePrice EMA 从此刻起算。
         engine.last_price_cache.entry(cmd.symbol).or_default().mark_price_ts = cmd.timestamp;
-        // 价格更新后触发 targeted 强平检测（价格波动是主强平触发）；产出的 FORCE 命令入 liquidation_engine.pending_commands 由
-        // ExchangeCore 排空重喂，margin/liquidation 告警须并入 cmd.fund_events（同 scan/funding 两路）。
         let mut alerts = Vec::new();
         engine.liquidation_engine.check_positions(cmd, ups, ssp, &engine.last_price_cache, &engine.loan_service, &mut alerts);
         cmd.fund_events.append(&mut alerts);
@@ -341,19 +319,16 @@ impl RiskEngineCommandDispatcher {
         };
         let currency_spec = match ssp.get_currency(spec.quote_currency) {
             Some(c) => c.clone(),
-            None => return CommandResultCode::InvalidSymbol, // spec 存在则 currency 应存在，防御性
+            None => return CommandResultCode::InvalidSymbol,
         };
         let price = cmd.price;
         for up in ups.users.values_mut() {
-            // 该 symbol 上所有非空持仓 key（ONEWAY: symbol；HEDGE: ±symbol），先收集再改避免迭代中改容器。
             let mut keys: Vec<i32> = up
                 .positions
                 .iter()
                 .filter(|(_, p)| p.symbol == symbol && p.open_volume != 0)
                 .map(|(&k, _)| k)
                 .collect();
-            // 对齐 Java processPositionRecord 的腿序：先 +symbol(LONG) 后 -symbol(SHORT)。
-            // BTreeMap 升序会把 -symbol 排前，降序即得 +symbol 优先（HEDGE 双腿结算事件快照才与 Java 一致）。
             keys.sort_unstable_by(|a, b| b.cmp(a));
             for key in keys {
                 let (close_action, size) = {
@@ -361,8 +336,6 @@ impl RiskEngineCommandDispatcher {
                     let action = if pos.direction == PositionDirection::Long { OrderAction::Ask } else { OrderAction::Bid };
                     (action, pos.open_volume)
                 };
-                // 交割结算：关满仓后无条件退保证金+结算盈亏+移除仓位（对齐 Java settlePnl，
-                // 不复用 ADL 的 is_empty 门——交割即便仓位还挂着单也要清算并移除）。
                 up.positions.get_mut(&key).unwrap().close_current_position_futures(close_action, size, price);
                 let currency = up.positions.get(&key).unwrap().currency;
 
@@ -389,7 +362,6 @@ impl RiskEngineCommandDispatcher {
                     );
                     up.add_to_account(currency, profit_scaled);
                 }
-                // 单条 PnlSettlement（Java 无条件发一条；先发再移除，令快照能读到仓位）。
                 RiskEngine::push_futures_event(&mut cmd.fund_events, &engine.last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&key).unwrap(), &spec, up, ssp);
                 up.positions.remove(&key);
             }
@@ -397,7 +369,6 @@ impl RiskEngineCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// futures IF_DEPOSIT 运营充值，与 loan LOAN_IF_DEPOSIT 独立池子；校验序 symbol→amount>0→currency spec→精度可逆，全过才 deposit_to_insurance_fund + adjustments[quote_currency] -= amount（对冲恒定）。
     fn if_deposit(engine: &mut RiskEngine, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let spec = match ssp.get_symbol(cmd.symbol) {
             Some(s) => s,
@@ -432,7 +403,6 @@ impl RiskEngineCommandDispatcher {
         CommandResultCode::Success
     }
 
-    /// 语义与 if_deposit 对称，available 不足→RiskIfInsufficient（与 loan 的 LoanIfInsufficient 互异）；只扣 available 不动 reserved。
     fn if_withdraw(engine: &mut RiskEngine, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let spec = match ssp.get_symbol(cmd.symbol) {
             Some(s) => s,

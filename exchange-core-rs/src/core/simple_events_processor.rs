@@ -1,8 +1,3 @@
-//! 对应 Java `exchange.core2.core.SimpleEventsProcessor`：把命令上的撮合事件链 + 资金事件 + L2 快照
-//! 翻译成对外执行回报，回调 `TradeEventsHandler` / `FundEventsHandler`。
-//!
-//! 移植取向：单节点无 disruptor，`seq` 由调用方给；`process_command` 一次跑完 R1+ME+R2，故不设 Java 的负 seq
-//! （R2-only 资金事件）分支——执行回报 + 资金事件 + 行情一次下发。
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
@@ -16,27 +11,22 @@ use crate::core::trade_events_handler::{
 };
 use crate::core::exchange_core::ExchangeCore;
 
-/// 对应 Java `SimpleEventsProcessor`。持有两个 handler；`process` 需 `&mut self`（handler 回调 `&mut`，本移植不引入内部可变性）。
 pub struct SimpleEventsProcessor<T: TradeEventsHandler, F: FundEventsHandler> {
     trade: T,
     fund: F,
 }
 
 impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
-    // ===== 构造 =====
     pub fn new(trade: T, fund: F) -> Self {
         SimpleEventsProcessor { trade, fund }
     }
 
-    // ===== 核心行为 =====
-    /// 对应 Java `SimpleEventsProcessor.accept`（正 seq 分支）。
     pub fn process(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
         self.send_execution_report(core, cmd, seq);
         self.send_fund_events(cmd, seq);
         self.send_market_data(core, cmd);
     }
 
-    // ===== 访问器 =====
     pub fn trade_handler(&self) -> &T {
         &self.trade
     }
@@ -49,7 +39,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         (self.trade, self.fund)
     }
 
-    // ===== 内部 helper =====
     fn send_execution_report(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
         if !is_reportable_command(cmd.command) {
             return;
@@ -60,7 +49,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
             SymbolType::FuturesContractPerpetual | SymbolType::FuturesContractDelivery => {
                 self.send_futures_execution_report(core, cmd, seq, spec)
             }
-            // 对齐 Java switch：其余类型无执行回报。
             SymbolType::Option => {}
         }
     }
@@ -131,7 +119,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
-    /// 对应 Java `SimpleEventsProcessor.sendFundEvents`：本移植 `cmd.fund_events` 已是单一有序流，逐条编号下发。
     fn send_fund_events(&mut self, cmd: &OrderCommand, seq: i64) {
         for (index, fe) in cmd.fund_events.iter().enumerate() {
             let uni_id = ExecutionIdGenerator::build_trade_exec_id(seq, index as i32, false);
@@ -139,7 +126,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
-    /// 对应 Java `SimpleEventsProcessor.sendMarketData`。
     fn send_market_data(&mut self, core: &ExchangeCore, cmd: &OrderCommand) {
         let Some(md) = &cmd.market_data else { return };
         let asks = md
@@ -249,13 +235,11 @@ mod tests {
             let mut c = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
             run(&mut core, &mut c);
         }
-        // 卖方备 BASE，买方备 QUOTE。
         let mut c = OrderCommand { command: OrderCommandType::BalanceAdjustment, uid: SELLER, symbol: BASE, price: 1_000, order_id: 1, ..Default::default() };
         run(&mut core, &mut c);
         let mut c = OrderCommand { command: OrderCommandType::BalanceAdjustment, uid: BUYER, symbol: QUOTE, price: 1_000_000, order_id: 2, ..Default::default() };
         run(&mut core, &mut c);
 
-        // maker：卖 @100 size 10。
         let mut maker = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 100,
@@ -269,7 +253,6 @@ mod tests {
         };
         run(&mut core, &mut maker);
 
-        // taker：买 @100 size 10（全量吃满 maker）。
         let mut taker = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 101,
@@ -291,20 +274,17 @@ mod tests {
         proc.process(&core, &taker, 5);
 
         let tr = proc.trade_handler();
-        // NEW + taker TRADE + maker TRADE。
         assert_eq!(tr.spot.len(), 3, "spot reports: {:?}", tr.spot);
         assert_eq!(tr.spot[0].execution_type, ExecType::New);
         let trades: Vec<&SpotExecutionReport> = tr.spot.iter().filter(|r| r.execution_type == ExecType::Trade).collect();
         assert_eq!(trades.len(), 2);
         assert!(trades.iter().any(|r| !r.is_maker), "缺 taker TRADE");
         assert!(trades.iter().any(|r| r.is_maker), "缺 maker TRADE");
-        // taker TRADE 视角：买方 uid、last_qty=10、last_price=100。
         let taker_trade = trades.iter().find(|r| !r.is_maker).unwrap();
         assert_eq!(taker_trade.account_id, BUYER);
         assert_eq!(taker_trade.last_qty, 10);
         assert_eq!(taker_trade.mark_price, 100);
         assert_eq!(taker_trade.cl_ord_id, 77);
-        // maker TRADE 视角：卖方 uid。
         let maker_trade = trades.iter().find(|r| r.is_maker).unwrap();
         assert_eq!(maker_trade.account_id, SELLER);
         assert_eq!(maker_trade.order_id, 100);
@@ -312,11 +292,6 @@ mod tests {
         assert!(!proc.fund_handler().fund.is_empty(), "现货成交应产生资金事件回报");
     }
 
-    // =====================================================================================
-    // Java↔Rust 组件级黄金对拍（防线 ①b）：移植 Java `SimpleEventsProcessorTest` 的事件投影用例。
-    // 手工构造 MatcherTradeEvent / FundEvent 输入，断言投影出的执行回报 / 资金事件字段等于 Java 黄金值。
-    // Java 是 oracle；任何 Rust 计算值与黄金不符都是移植 bug（不改黄金迁就 Rust）。
-    // =====================================================================================
     use crate::core::common::fund_event::{FundEvent, FundEventType};
     use crate::core::common::margin_mode::MarginMode;
     use crate::core::common::matcher_trade_event::MatcherTradeEvent;
@@ -324,8 +299,6 @@ mod tests {
     use crate::core::common::position_direction::PositionDirection;
     use crate::core::trade_events_handler::OrderStatus;
 
-    /// 建一套只含现货 symbol=3 的 core（对应 Java `fakeSpotSymbol`：base=1/quote=2/baseScaleK=quoteScaleK=1000，无费）。
-    /// symbol=30（balance-adjustment 用）无需注册：BALANCE_ADJUSTMENT 非可回报命令，`send_execution_report` 早退不读 spec。
     fn spot_core() -> ExchangeCore {
         let mut core = ExchangeCore::new();
         core.ssp.add_currency(CoreCurrencySpecification { currency: 1, currency_scale_k: 1000, ..Default::default() });
@@ -398,7 +371,6 @@ mod tests {
         }
     }
 
-    /// LOCKED 资金事件（single/two-trade 共用）：Java 位置构造解码后仅 currency/scaleK/free/locked 参与断言。
     fn fund_locked_trade() -> FundEvent {
         FundEvent {
             event_type: FundEventType::Locked,
@@ -415,7 +387,6 @@ mod tests {
         }
     }
 
-    /// UNLOCKED 资金事件（single/two-trade 共用）：Java 位置构造逐字段解码，投影到 PositionSnapshot 全字段黄金。
     fn fund_unlocked_trade() -> FundEvent {
         FundEvent {
             event_type: FundEventType::Unlocked,
@@ -560,7 +531,6 @@ mod tests {
         assert_eq!(tr.futures.len(), 0);
         assert_eq!(fr.fund.len(), 2);
 
-        // reports[0] NEW（下单回报）。
         let new_order = &tr.spot[0];
         assert_eq!(new_order.execution_type, ExecType::New);
         assert_eq!(new_order.order_status, OrderStatus::New);
@@ -585,7 +555,6 @@ mod tests {
         assert!(!new_order.is_maker);
         assert!(!new_order.working_indicator);
 
-        // reports[1] taker 视角（active order 123；Java 变量名叫 maker 但 isMaker=false）。
         let taker_view = &tr.spot[1];
         assert_eq!(taker_view.execution_type, ExecType::Trade);
         assert_eq!(taker_view.order_status, OrderStatus::PartiallyFilled);
@@ -611,7 +580,6 @@ mod tests {
         assert!(!taker_view.is_maker);
         assert!(!taker_view.working_indicator);
 
-        // reports[2] maker 视角（matched order 276810；Java 变量名叫 taker 但 isMaker=true）。
         let maker_view = &tr.spot[2];
         assert_eq!(maker_view.execution_type, ExecType::Trade);
         assert_eq!(maker_view.order_status, OrderStatus::Filled);
@@ -639,7 +607,6 @@ mod tests {
 
         assert_eq!(taker_view.trade_id, maker_view.trade_id);
 
-        // 资金事件：LOCKED（余额）+ UNLOCKED（持仓快照）。
         assert_eq!(fr.fund[0].event_type, FundEventType::Locked);
         assert_eq!(fr.fund[0].balances.locked, 10);
         assert_eq!(fr.fund[0].balances.free, 0);
@@ -724,7 +691,6 @@ mod tests {
 
         assert_eq!(tr.spot[0].execution_type, ExecType::New);
 
-        // reports[3] 第二笔 taker 视角（active order 123）。
         let taker_view = &tr.spot[3];
         assert_eq!(taker_view.execution_type, ExecType::Trade);
         assert_eq!(taker_view.order_status, OrderStatus::PartiallyFilled);
@@ -750,7 +716,6 @@ mod tests {
         assert!(!taker_view.is_maker);
         assert!(!taker_view.working_indicator);
 
-        // reports[4] 第二笔 maker 视角（matched order 276811，未成交完 → working_indicator=true）。
         let maker_view = &tr.spot[4];
         assert_eq!(maker_view.execution_type, ExecType::Trade);
         assert_eq!(maker_view.order_status, OrderStatus::PartiallyFilled);
@@ -841,7 +806,6 @@ mod tests {
 
         let (tr, fr) = run_proc(&core, &cmd, 12981721239);
 
-        // 头部事件是 TRADE（非 REJECT），故无独立 reject 回报：NEW + 2×(taker+maker) = 5，与 Java 一致。
         assert_eq!(tr.spot.len(), 5);
         assert_eq!(tr.futures.len(), 0);
         assert_eq!(fr.fund.len(), 0);
@@ -950,8 +914,6 @@ mod tests {
         assert_eq!(fr.fund.len(), 1);
 
         let report = &fr.fund[0];
-        // Java 断言 eventType == null；Rust `FundEventType` 是非空枚举，未设值取默认 `Deposit`（结构性建模差异，
-        // 非计算值分歧——Rust 无法表达 null 事件类型）。仍断言核心黄金 balances.currency == 20000。
         assert_eq!(report.event_type, FundEventType::Deposit);
         assert_eq!(report.balances.currency, 20000);
     }

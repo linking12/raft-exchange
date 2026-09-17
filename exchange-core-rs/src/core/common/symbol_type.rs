@@ -1,4 +1,3 @@
-/// 对应 Java `SymbolType`。现货移植只用 `CurrencyExchangePair`，其余变体仅保留码值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolType {
     CurrencyExchangePair,
@@ -17,7 +16,6 @@ impl SymbolType {
         }
     }
 
-    /// code() 反向映射(快照反序列化)。
     pub fn of_code(code: i8) -> Self {
         match code {
             0 => SymbolType::CurrencyExchangePair,
@@ -28,14 +26,12 @@ impl SymbolType {
         }
     }
 
-    /// 对应 Java `SymbolType.isFuturesContract(SymbolType type)`：永续 / 交割合约二者之一。
     pub fn is_futures_contract(self) -> bool {
         matches!(self, SymbolType::FuturesContractPerpetual | SymbolType::FuturesContractDelivery)
     }
 }
 
 impl Default for SymbolType {
-    /// 隐含默认值：Rust `Default` 契约新增，Java 无显式默认值；既有构造点均显式指定 `symbol_type`。
     fn default() -> Self {
         SymbolType::CurrencyExchangePair
     }

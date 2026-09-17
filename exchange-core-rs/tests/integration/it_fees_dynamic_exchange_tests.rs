@@ -1,22 +1,3 @@
-//! 翻译自 Java 抽象基类 `exchange.core2.tests.integration.ITFeesDynamicExchange`
-//! （XBT/LTC 现货比例费）。
-//!
-//! Java 用报表 + `validateUserState`（`available` = accounts − exchangeLocked）对拍；Rust 映射：
-//!   Java `getFees().get(cur)`        → `api.fees(cur)`
-//!   Java `available(profile, cur)`   → `api.user_account(uid,cur) − api.user_locked(uid,cur)`
-//!   Java `isGlobalBalancesAllZero()` → 每币种 Σ account + adjustments + fees == 0
-//!
-//! 逐字复刻 `SYMBOLSPEC_DYNAMIC_FEE_XBT_LTC`（`TestConstants`）：
-//!   symbolId=9340(SYMBOL_EXCHANGE_FEE), CURRENCY_EXCHANGE_PAIR, base=XBT(3762) quote=LTC(4141),
-//!   baseScaleK=1 quoteScaleK=1, takerFee=2 makerFee=1 feeScaleK=100（比例费）。
-//!   货币 digit=0 → currency_scale_k=1；product scale=1 → 手续费缩放因子=1。
-//!   比例费：maker=ceil(size*price*1/100)，taker=ceil(size*price*2/100)。
-//!
-//! 撮合成交量的 LTC 精确余额（含 reserve/部分成交 taker-hold 修正）由全局守恒兜底；
-//! 逐用户 base(XBT) 余额闭式断言（baseScaleK=1 → base 量 == size）。
-//!
-//! 未翻译：各 @Test 尾部 `checkFeeAfterResetFee`（`ApiResetFee`）——harness 无 RESET-FEE 命令。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -32,22 +13,22 @@ mod tests {
 
     const XBT: i32 = 3762;
     const LTC: i32 = 4141;
-    const SYM: i32 = 9340; // SYMBOL_EXCHANGE_FEE
+    const SYM: i32 = 9340;
     const UID_1: i64 = 1_440_001;
     const UID_2: i64 = 1_440_002;
 
     const BASE_SCALE_K: i64 = 1;
     const QUOTE_SCALE_K: i64 = 1;
-    const CURRENCY_SCALE_K: i64 = 1; // digit 0
+    const CURRENCY_SCALE_K: i64 = 1;
     const MAKER_FEE: i64 = 1;
     const TAKER_FEE: i64 = 2;
-    const FEE_SCALE_K: i64 = 100; // 比例费
+    const FEE_SCALE_K: i64 = 100;
 
-    const PRICE: i64 = 10_000; // maker order101.price
-    const RESERVE: i64 = 10_005; // reservePrice
+    const PRICE: i64 = 10_000;
+    const RESERVE: i64 = 10_005;
     const MAKER_LTC_DEPOSIT: i64 = 10_000_000;
     const TAKER_LTC_DEPOSIT: i64 = 10_000_000;
-    const ASK_MAKER_XBT_DEPOSIT: i64 = 2_000; // Java btcAmount
+    const ASK_MAKER_XBT_DEPOSIT: i64 = 2_000;
 
     fn spec() -> CoreSymbolSpecification {
         CoreSymbolSpecification {
@@ -115,9 +96,6 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.adjustments(cur) + api.fees(cur)
     }
 
-    /// 通用现货撮合：maker(UID_1) GTC 挂 `maker_action`/`maker_size`；
-    /// taker(UID_2) 反向 `taker_type`/`taker_size`（`taker_price` 为其 price 字段，budget 单即预算）。
-    /// buyer 收 base、seller 交 base；断言费池 + 逐用户 XBT + 双币守恒。
     #[allow(clippy::too_many_arguments)]
     fn run_spot(
         maker_action: OrderAction,
@@ -130,8 +108,6 @@ mod tests {
     ) {
         let mut api = new_api();
 
-        // 充值：maker BID → maker 持 LTC，taker(ASK) 持 XBT(=taker_size)；
-        //       maker ASK → maker 持 XBT(=2000)，taker(BID) 持 LTC。
         let (buyer, seller, buyer_xbt_dep, seller_xbt_dep);
         match maker_action {
             OrderAction::Bid => {
@@ -152,7 +128,6 @@ mod tests {
             }
         }
 
-        // maker 挂单（BID 用 reserve=RESERVE）。
         let maker_res = if maker_action == OrderAction::Bid { RESERVE } else { 0 };
         let maker_req = PlaceOrderRequest {
             order_id: 101,
@@ -177,7 +152,6 @@ mod tests {
         };
         assert_eq!(api.place_order(taker_req), CommandResultCode::Success);
 
-        // 费池 + 逐用户 XBT 闭式 + 双币守恒。
         assert_eq!(api.fees(LTC), fee_pool(expected_filled), "LTC 费池");
         assert_eq!(api.fees(XBT), 0);
         assert_eq!(api.user_account(buyer, XBT), buyer_xbt_dep + base_amt(expected_filled), "buyer XBT");
@@ -186,16 +160,11 @@ mod tests {
         assert_eq!(conserved(&api, LTC), 0, "LTC 守恒");
     }
 
-    // ================================================================================================
-    // 1. shouldRequireTakerFees_GtcCancel1 —— BID 需覆盖 notional+taker fee 才能挂（NSF 边界），撤单不收费。
-    // ================================================================================================
-
     #[test]
     fn should_require_taker_fees_gtc_cancel1() {
         let mut api = new_api();
         let price = 11_400i64;
         let size = 30i64;
-        // 挂未成交 BID 的资金门槛 = notional + taker fee（比例）。
         let need = size_price_to_currency_scale(
             calculate_amount_bid_taker_fee(size, price, TAKER_FEE, FEE_SCALE_K),
             BASE_SCALE_K,
@@ -221,7 +190,6 @@ mod tests {
         assert_eq!(api.fees(LTC), 0);
         assert_eq!(conserved(&api, LTC), 0);
 
-        // ---- ASK 挂/撤：无手续费预留，撤后 base 全回 ----
         let btc_amount = 100_000_000i64;
         assert_eq!(api.balance_adjustment(UID_2, XBT, btc_amount, 3), CommandResultCode::Success);
         assert_eq!(api.place_order(ask(204, UID_2, price, 100, OrderType::Gtc)), CommandResultCode::Success);
@@ -233,63 +201,50 @@ mod tests {
         assert_eq!(conserved(&api, XBT), 0);
     }
 
-    // 2. shouldProcessFees_BidGtcMaker_AskIocTakerPartial —— maker BID 500 全成，taker IOC ASK 2000。
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_partial() {
         run_spot(OrderAction::Bid, 500, OrderType::Ioc, 2000, PRICE, 0, 500);
     }
 
-    // 3. shouldProcessFees_BidGtcMakerPartial_AskIocTaker —— maker BID 500，taker IOC ASK 100。
     #[test]
     fn bid_gtc_maker_partial_ask_ioc_taker() {
         run_spot(OrderAction::Bid, 500, OrderType::Ioc, 100, PRICE, 0, 100);
     }
 
-    // 4. shouldProcessFees_BidGtcMaker_AskIocTaker_FullyMatch —— maker BID 500，taker IOC ASK 500。
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_fully_match() {
         run_spot(OrderAction::Bid, 500, OrderType::Ioc, 500, PRICE, 0, 500);
     }
 
-    // 5. shouldProcessFees_AskGtcMaker_BidIocTakerPartial —— maker ASK 100 全成，taker IOC BID 500。
     #[test]
     fn ask_gtc_maker_bid_ioc_taker_partial() {
         run_spot(OrderAction::Ask, 100, OrderType::Ioc, 500, PRICE, RESERVE, 100);
     }
 
-    // 6. shouldProcessFees_AskGtcMakerPartial_BidIocTaker —— maker ASK 500，taker IOC BID 100。
     #[test]
     fn ask_gtc_maker_partial_bid_ioc_taker() {
         run_spot(OrderAction::Ask, 500, OrderType::Ioc, 100, PRICE, RESERVE, 100);
     }
 
-    // 7. shouldProcessFees_AskGtcMakerPartial_BidGtcTaker —— maker ASK 500，taker GTC BID 100。
     #[test]
     fn ask_gtc_maker_partial_bid_gtc_taker() {
         run_spot(OrderAction::Ask, 500, OrderType::Gtc, 100, PRICE, RESERVE, 100);
     }
 
-    // 8. shouldProcessFees_AskGtcMaker_BidGtcTakerPartial —— maker ASK 100，taker GTC BID 500（残 400 挂盘）。
     #[test]
     fn ask_gtc_maker_bid_gtc_taker_partial() {
         run_spot(OrderAction::Ask, 100, OrderType::Gtc, 500, PRICE, RESERVE, 100);
     }
 
-    // 9. shouldProcessFees_AskGtcMakerPartial_BidFokTaker —— maker ASK 500，taker FOK_BUDGET BID 1（全成 1）。
     #[test]
     fn ask_gtc_maker_partial_bid_fok_budget_taker() {
-        // budget = 1 lot notional。
         run_spot(OrderAction::Ask, 500, OrderType::FokBudget, 1, PRICE, PRICE, 1);
     }
 
-    // 10. shouldNotProcessFees_AskGtcMakerPartial_BidFokTaker —— FOK_BUDGET 预算不足 10 lot → 不成交，0 费。
     #[test]
     fn should_not_process_fees_ask_gtc_maker_partial_bid_fok_taker() {
-        // budget = PRICE（仅够 1 lot），要 10 → kill。
         run_spot(OrderAction::Ask, 500, OrderType::FokBudget, 10, PRICE, PRICE, 0);
     }
-    // Java ITFeesDynamic* 用独立内联公式 calculateFee = price*size*step*sideFee/scale（step=quoteScaleK,
-    // scale=feeScaleK, 整除）——把生产函数派生的费用 oracle 钉死到该独立公式，证明"金额对"不依赖被测库自身函数。
     #[test]
     fn fee_oracle_matches_java_independent_formula() {
         for filled in [1i64, 30, 100] {

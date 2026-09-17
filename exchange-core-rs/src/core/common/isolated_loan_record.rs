@@ -1,7 +1,5 @@
-//! 对应 Java `IsolatedLoanRecord`：Isolated 单笔贷款凭证，挂 `UserProfile::isolated_loans`；抵押与本笔 loan 一对一绑定。
 use crate::core::common::loan_record::LoanRecord;
 
-/// 对应 Java `RATE_MODE_LOCKED`/`RATE_MODE_FLOATING`：LOCKED=定息线性计息；FLOATING=活期累加器计息。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoanRateMode {
     Locked,
@@ -26,54 +24,33 @@ impl LoanRateMode {
 }
 
 impl Default for LoanRateMode {
-    /// 对应 Java `initialize(...)`：默认 LOCKED，由 `handleLoanCreate` 后续按 `cmd` 改写。
     fn default() -> Self {
         LoanRateMode::Locked
     }
 }
 
-/// 对应 Java `IsolatedLoanRecord`。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IsolatedLoanRecord {
-    // ── 身份
-    /// 所属用户（上下文注入，不参与序列化，只进 state_hash）。
     pub uid: i64,
-    /// 客户端提供，per-user 唯一，创建时锁死。
     pub loan_id: i64,
 
-    // ── 开仓条款：存续期不变
-    /// 现货 pair（= cmd.symbol），scanner/handler 据此取 spec。
     pub symbol_id: i32,
-    /// = spec.base_currency。
     pub collateral_currency: i32,
-    /// = spec.quote_currency。
     pub loan_currency: i32,
-    /// LOCKED / FLOATING，开仓锁定。
     pub rate_mode: LoanRateMode,
-    /// 年化利率（bps）。LOCKED 计息用；FLOATING 仅作开仓利率展示，计息走累加器。
     pub rate_bps: i32,
-    /// 开仓时间戳（ms），期限强平用（仅 LOCKED 有期限）。
     pub opened_at_ts: i64,
 
-    // ── 债务与抵押：随借还、计息、强平变动
-    /// 已抵押数量（currencyScale）；force-sell 前经 lots 换张数，不足一张的尘埃在 LIF 接管时一并取走。
     pub collateral_amount: i64,
-    /// 剩余未偿本金（loanCurrency）。
     pub outstanding_principal: i64,
-    /// 已计提未付利息（loanCurrency），结算时进 interestRevenue。
     pub accumulated_interest: i64,
-    /// 上次计息时间戳（ms），初始 = opened_at_ts；LOCKED 计息游标。
     pub last_accrue_ts: i64,
-    /// FLOATING 计息游标：上次 accrue 的 liveAcc 快照（bps·ms）；LOCKED 不用。
     pub acc_snapshot: i64,
 
-    // ── 累计量：FundEvent 只发快照，本次量由下游相邻两条相减得出
-    /// 累计已付利息（loanCurrency）。
     pub cum_interest_paid: i64,
 }
 
 impl IsolatedLoanRecord {
-    /// 对应 Java `IsolatedLoanRecord(...)` 构造器：直接调用 `initialize`。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         uid: i64,
@@ -89,7 +66,6 @@ impl IsolatedLoanRecord {
         r
     }
 
-    /// 对应 Java `initialize(...)`：复用一条记录前必须先重置 identity + 可变状态。
     #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         &mut self,
@@ -106,7 +82,7 @@ impl IsolatedLoanRecord {
         self.symbol_id = symbol_id;
         self.collateral_currency = collateral_currency;
         self.loan_currency = loan_currency;
-        self.rate_mode = LoanRateMode::Locked; // 默认 LOCKED；由 handle_loan_create 按 cmd 改写
+        self.rate_mode = LoanRateMode::Locked;
         self.rate_bps = rate_bps;
         self.opened_at_ts = opened_at_ts;
         self.collateral_amount = 0;
@@ -117,12 +93,10 @@ impl IsolatedLoanRecord {
         self.cum_interest_paid = 0;
     }
 
-    /// 对应 Java `isEmpty()`：三个金额字段全 0 才算空（可清理回收）。
     pub fn is_empty(&self) -> bool {
         self.collateral_amount == 0 && self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `stateHash()`，风格对齐 `UserProfile::state_hash`；不保证与 Java 数值相等，仅保证同态同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
@@ -197,14 +171,11 @@ impl LoanRecord for IsolatedLoanRecord {
     }
 }
 
-
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for IsolatedLoanRecord {
-    /// `uid` 不序列化(父 map key 注入)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i64(self.loan_id);
         w.write_i32(self.symbol_id);
@@ -258,7 +229,7 @@ mod tests {
         assert_eq!(r.collateral_amount, 0);
         assert_eq!(r.outstanding_principal, 0);
         assert_eq!(r.accumulated_interest, 0);
-        assert_eq!(r.last_accrue_ts, 1_000); // = opened_at_ts
+        assert_eq!(r.last_accrue_ts, 1_000);
         assert_eq!(r.acc_snapshot, 0);
         assert_eq!(r.cum_interest_paid, 0);
     }

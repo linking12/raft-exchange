@@ -1,5 +1,3 @@
-//! 对应 Java `LiquidationEngine`：期货强平引擎，事件驱动、on-lane 检测（命令 apply 内跑、只读复制态），FORCE→IF→ADL 状态机。
-//! 移植偏差：预警 no-op；submit→pending_commands 队列；provider 传参不持有；is_running 为 leader 门。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -24,7 +22,6 @@ use crate::core::utils::core_arithmetic_utils::{
     calculate_deficit_after_liquidate, calculate_size_to_liquidate, mul_exact, size_price_to_currency_scale,
 };
 
-/// 待执行的强平决策（检测阶段产出，应用阶段消费）；`position_key` = ONEWAY symbol / HEDGE ±symbol。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LiquidationDecision {
     position_key: i32,
@@ -38,32 +35,23 @@ enum IsolatedCheck {
     Healthy,
 }
 
-/// 对应 Java `LiquidationEngine`：只持有非复制 leader-local 状态（provider 传参不持有）。
 #[derive(Debug, Default)]
 pub struct LiquidationEngine {
-    /// 对应 Java `symbolToUsers`：symbol → 持有者 uid 集合，非复制、不进 state_hash，`BTreeSet` 保确定序。
     pub symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
-    /// leader 门，raft leadership 切换时 toggle。
     pub is_running: bool,
-    /// 提交队列：FORCE/IF/ADL 命令由 driver 排空重喂管线。
     pub pending_commands: Vec<OrderCommand>,
-    /// 现货借贷强平扫描器委托对象，产出命令收拢进 pending_commands。
     pub loan_liquidation_engine: LoanLiquidationEngine,
 }
 
 impl LiquidationEngine {
-    // ===== 构造 / 配置 =====
     pub fn new() -> Self {
         LiquidationEngine::default()
     }
 
-    // ===== 核心行为 =====
-    /// 对应 Java `onPositionOpened`：开仓 apply 登记 uid 进 symbol→持有者索引。
     pub fn on_position_opened(&mut self, uid: i64, symbol: i32) {
         self.symbol_to_users.entry(symbol).or_default().insert(uid);
     }
 
-    /// 对应 Java `onPositionClosed`：平仓 apply 摘除 uid，HEDGE 安全（同 symbol 仍有其它方向仓位则不删）。
     pub fn on_position_closed(&mut self, profile: &UserProfile, symbol: i32, closed_key: i32) {
         let holds_other = profile.positions.iter().any(|(&k, p)| k != closed_key && p.symbol == symbol);
         if holds_other {
@@ -77,7 +65,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `checkPositions`：强平检测入口（leader-only）。targeted（`symbol>=0`）查索引；`LIQUIDATION_SCAN`（`symbol<0`）全量整扫+切片过滤。
     #[allow(clippy::too_many_arguments)]
     pub fn check_positions(
         &mut self,
@@ -104,7 +91,6 @@ impl LiquidationEngine {
             self.check_user(*uid, cmd.timestamp, ups, ssp, last_price_cache, fund_events);
         }
 
-        // lazy-prune：targeted 检测时顺带清理已无该 symbol 仓位的持有者（索引精度不影响正确性）。
         if targeted {
             if let Some(holders) = self.symbol_to_users.get_mut(&cmd.symbol) {
                 holders.retain(|uid| {
@@ -115,12 +101,10 @@ impl LiquidationEngine {
                 }
             }
         }
-        // 尾部委托借贷扫描器（对应 Java loanLiquidationEngine.checkLoans）。
         self.loan_liquidation_engine.check_loans(cmd, ups, ssp, last_price_cache, loan_service, fund_events);
         self.pending_commands.append(&mut self.loan_liquidation_engine.pending_commands);
     }
 
-    /// 对应 Java `checkUser`：逐仓分类，ISOLATED 立即判定、CROSS 交给 `check_cross_decisions`；拆两阶段（只读算决策 / `&mut` 应用）应对 Rust 借用规则。
     #[allow(clippy::too_many_arguments)]
     fn check_user(
         &mut self,
@@ -131,14 +115,12 @@ impl LiquidationEngine {
         last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         fund_events: &mut Vec<FundEvent>,
     ) {
-        // ---- 阶段 1：只读 profile，算全部决策 ----
         let decisions: Vec<LiquidationDecision> = {
             let profile = match ups.get(uid) {
                 Some(p) => p,
                 None => return,
             };
             let mut decisions = Vec::new();
-            // CROSS 按 quote_currency 分组；ISOLATED 直接判定。
             let mut cross_by_currency: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
             for (&key, position) in profile.positions.iter() {
                 if position.open_volume == 0 {
@@ -169,7 +151,6 @@ impl LiquidationEngine {
             decisions
         };
 
-        // ---- 阶段 2：&mut 逐条应用（幂等门 + 置 flow + 入队 FORCE）----
         for d in decisions {
             let profile = match ups.get_mut(uid) {
                 Some(p) => p,
@@ -197,7 +178,7 @@ impl LiquidationEngine {
             }
             return IsolatedCheck::Healthy;
         }
-        let bankruptcy_price = position.calculate_bankruptcy_price(spec, |_| 0); // NO_CROSS
+        let bankruptcy_price = position.calculate_bankruptcy_price(spec, |_| 0);
         let size_to_liquidate = position.open_volume.min(Self::size_to_liquidate_for(position, maintenance_margin, mark_price));
         if size_to_liquidate <= 0 {
             return IsolatedCheck::Healthy;
@@ -205,7 +186,6 @@ impl LiquidationEngine {
         IsolatedCheck::Liquidate(LiquidationDecision { position_key, bankruptcy_price, size: size_to_liquidate })
     }
 
-    /// 对应 Java `checkCross` + `forceCrossLiquidation`（纯判定版）：逐 quote 币种算账户级 equity/风险度，`equity < MM` 时按风险度升序逐仓强平至覆盖 deficit；`MM<=equity<1.2×MM` 仅预警（no-op）。
     fn check_cross_decisions(
         profile: &UserProfile,
         cross_by_currency: &BTreeMap<i32, Vec<i32>>,
@@ -216,7 +196,6 @@ impl LiquidationEngine {
         if cross_by_currency.is_empty() {
             return;
         }
-        // alloc：整账户 CROSS 仓破产价 marginBase 回调。
         let alloc = profile.cross_margin_base_allocation(
             |s| ssp.get_symbol(s),
             |c| ssp.get_currency(c),
@@ -230,7 +209,6 @@ impl LiquidationEngine {
             };
             let mut total_profit: i64 = 0;
             let mut total_maintenance: i64 = 0;
-            // (风险度, position_key)，升序排序（最危险优先）。
             let mut risk_pairs: Vec<(i64, i32)> = Vec::new();
             for &key in keys {
                 let position = &profile.positions[&key];
@@ -244,7 +222,7 @@ impl LiquidationEngine {
                 };
                 let raw_maintenance = position.calculate_maintenance_margin(spec, mark_price);
                 if raw_maintenance == 0 {
-                    continue; // 无 MM 要求：不占账户风险
+                    continue;
                 }
                 let profit = size_price_to_currency_scale(
                     position.estimate_pnl(mark_price),
@@ -261,21 +239,19 @@ impl LiquidationEngine {
                 total_profit += profit;
                 total_maintenance += maintenance;
                 if maintenance != 0 {
-                    // 缩放后归零不能做除数，仅不参与风险排序。
                     let risk = mul_exact(profit - maintenance, 100) / maintenance;
                     risk_pairs.push((risk, key));
                 }
             }
             let equity = total_profit
                 + profile.calculate_cross_available(currency, currency_spec, |s| ssp.get_symbol(s));
-            let warning_threshold = mul_exact(total_maintenance, 6) / 5; // 1.2×
+            let warning_threshold = mul_exact(total_maintenance, 6) / 5;
             if equity >= warning_threshold {
                 continue;
             }
             if equity >= total_maintenance {
-                continue; // MM <= equity < 1.2×MM：仅预警（no-op）
+                continue;
             }
-            // 风险度升序（最危险优先），稳定排序。
             risk_pairs.sort_by_key(|p| p.0);
             Self::force_cross_decisions(
                 profile,
@@ -289,7 +265,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `forceCrossLiquidation`（纯判定版）：风险度升序逐仓强平直至覆盖 deficit。
     #[allow(clippy::too_many_arguments)]
     fn force_cross_decisions(
         profile: &UserProfile,
@@ -325,15 +300,14 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `startLiquidationFlow`：幂等提交 FORCE（已有 flow 则跳过），预警通知不移植。
     fn start_liquidation_flow(&mut self, profile: &mut UserProfile, d: LiquidationDecision, ts: i64) {
         let uid = profile.uid;
         let position = match profile.positions.get_mut(&d.position_key) {
             Some(p) => p,
-            None => return, // 决策与应用间仓位已消失（极端时序）——skip
+            None => return,
         };
         if position.liquidation_flow.is_some() {
-            return; // 幂等门
+            return;
         }
         let order_id =
             LiquidationService::generate_liquidation_order_id(uid, position.symbol, position.direction, ts);
@@ -342,7 +316,6 @@ impl LiquidationEngine {
         self.pending_commands.push(force_cmd);
     }
 
-    /// 对应 Java `advanceLiquidation`：强平命令 apply 后推进 FORCE→IF→ADL 状态机（leader-only）。flow=None 时 FORCE 触发换届残余仓恢复，否则校验 state 合法性防重复/错序。
     pub fn advance_liquidation(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         if !self.is_running {
             return;
@@ -350,9 +323,8 @@ impl LiquidationEngine {
         match pos.liquidation_flow {
             None => {
                 if cmd.command != OrderCommandType::ForceLiquidation {
-                    return; // 非法：无进行中流程却来非 FORCE——skip
+                    return;
                 }
-                // 换届后残余仓恢复：新建流程。
                 pos.liquidation_flow = Some(LiquidationFlow::new(cmd.price, cmd.size, cmd.order_id));
             }
             Some(flow) => {
@@ -363,19 +335,18 @@ impl LiquidationEngine {
                     _ => None,
                 };
                 if Some(flow.state) != expected {
-                    return; // 重复/错序推进——skip
+                    return;
                 }
             }
         }
         match cmd.command {
             OrderCommandType::ForceLiquidation => self.on_force_applied(cmd, pos),
             OrderCommandType::IfTakeover => self.on_if_takeover_applied(cmd, pos),
-            OrderCommandType::AutoDeleveraging => pos.liquidation_flow = None, // ADL 恒终态
+            OrderCommandType::AutoDeleveraging => pos.liquidation_flow = None,
             _ => {}
         }
     }
 
-    /// 对应 Java `onForceApplied`：非 REJECT→闭环；REJECT（剩余量）→转 `WaitIfExecution`、入队 IF。
     fn on_force_applied(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         let rejected = matches!(&cmd.matcher_event, Some(ev) if ev.event_type == MatcherEventType::Reject);
         if !rejected {
@@ -383,7 +354,6 @@ impl LiquidationEngine {
             return;
         }
         let remaining = cmd.matcher_event.as_ref().map(|e| e.size).unwrap_or(0);
-        // flow 一定存在（advance_liquidation 已保证）。
         if let Some(flow) = pos.liquidation_flow.as_mut() {
             flow.size = remaining;
             flow.state = LiquidationState::WaitIfExecution;
@@ -394,7 +364,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `onIfTakeoverApplied`：非 REJECT（接管成功）→闭环；REJECT（IF 池不足、仅部分接管）→转 `WaitAdlExecution`、入队 ADL。
     fn on_if_takeover_applied(&mut self, cmd: &OrderCommand, pos: &mut SymbolPositionRecord) {
         let rejected = matches!(&cmd.matcher_event, Some(ev) if ev.event_type == MatcherEventType::Reject);
         if !rejected {
@@ -410,13 +379,10 @@ impl LiquidationEngine {
         }
     }
 
-    // ===== 查询 / 访问器 =====
-    /// 期货 + 借贷扫描器共用的切片过滤，委托 [`scheduler::covered_by_scan_slice`]。
     pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
         crate::core::processors::liquidation::scheduler::covered_by_scan_slice(cmd, uid)
     }
 
-    // ===== 内部 helper =====
     fn notification_event(event_type: FundEventType, uid: i64, position: &SymbolPositionRecord) -> FundEvent {
         FundEvent {
             event_type,
@@ -431,7 +397,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// position → `alloc` map 键（ONEWAY=symbol / HEDGE=±symbol，与 `cross_margin_base_allocation` 产出键一致）。
     fn pos_key(p: &SymbolPositionRecord) -> i32 {
         match p.direction {
             PositionDirection::Short => -p.symbol,
@@ -439,7 +404,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// [`calculate_size_to_liquidate`] 标量提取：E 不含 extra_margin。
     fn size_to_liquidate_for(position: &SymbolPositionRecord, maintenance_margin: i64, mark_price: i64) -> i64 {
         let equity = position.open_init_margin_sum + position.estimate_unrealized_profit(mark_price);
         calculate_size_to_liquidate(
@@ -453,7 +417,6 @@ impl LiquidationEngine {
         )
     }
 
-    /// [`calculate_deficit_after_liquidate`] 标量提取：两次查 spec 分档 MM（notionalNow/notionalAfter）。
     fn deficit_after_for(
         position: &SymbolPositionRecord,
         spec: &CoreSymbolSpecification,
@@ -474,7 +437,6 @@ impl LiquidationEngine {
         )
     }
 
-    /// 对应 Java `buildForceCmd`：IOC → `FORCE_LIQUIDATION`，action 与持仓方向相反。
     fn build_force_cmd(uid: i64, symbol: i32, direction: PositionDirection, order_id: i64, price: i64, size: i64, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::ForceLiquidation,
@@ -490,7 +452,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `buildIFCmd`：→ `IF_TAKEOVER`，orderId 派生（`'I'`），action 为接管方向（perspective-flip）。
     fn build_if_cmd(uid: i64, symbol: i32, direction: PositionDirection, flow: &LiquidationFlow, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::IfTakeover,
@@ -505,7 +466,6 @@ impl LiquidationEngine {
         }
     }
 
-    /// 对应 Java `buildADLCmd`：→ `AUTO_DELEVERAGING`，orderId 派生（`'A'`），action 同 IF 接管方向。
     fn build_adl_cmd(uid: i64, symbol: i32, direction: PositionDirection, flow: &LiquidationFlow, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::AutoDeleveraging,
@@ -533,10 +493,9 @@ mod tests {
     const FUT_BASE: i32 = 1;
     const UID: i64 = 1;
 
-    /// 期货 spec：MM 单档 5%（rate=500, scale=10000）；base/quote scale=1（恒等缩放）。
     fn futures_spec() -> CoreSymbolSpecification {
         let mut mm = BTreeMap::new();
-        mm.insert(i64::MAX, 500); // 单档 5%
+        mm.insert(i64::MAX, 500);
         CoreSymbolSpecification {
             symbol_id: FUT_SYMBOL,
             symbol_type: SymbolType::FuturesContractPerpetual,
@@ -563,7 +522,6 @@ mod tests {
         (engine, ups, ssp, last_price_cache)
     }
 
-    /// 插入一个 ISOLATED LONG 仓（open_volume=10、avg=100、margin=100）。
     fn insert_long(ups: &mut UserProfileService, uid: i64) {
         let pos = SymbolPositionRecord {
             direction: PositionDirection::Long,
@@ -604,8 +562,6 @@ mod tests {
         })
     }
 
-    // ---------------- covered_by_scan_slice ----------------
-
     #[test]
     fn covered_by_scan_slice_non_scan_always_covered() {
         let cmd = markprice_cmd(FUT_SYMBOL, 0);
@@ -614,16 +570,12 @@ mod tests {
 
     #[test]
     fn covered_by_scan_slice_matches_and_misses() {
-        // LIQUIDATION_SCAN：cmd.size = sliceCount = 10，cmd.uid = scanSlice = 3。
         let cmd = OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid: 3, size: 10, ..Default::default() };
         assert!(LiquidationEngine::covered_by_scan_slice(&cmd, 13), "13 mod 10 == 3 -> in slice");
         assert!(!LiquidationEngine::covered_by_scan_slice(&cmd, 14), "14 mod 10 == 4 != 3 -> out of slice");
-        // sliceCount<=0 -> 全扫
         let full = OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid: 0, size: 0, ..Default::default() };
         assert!(LiquidationEngine::covered_by_scan_slice(&full, 999));
     }
-
-    // ---------------- symbol_to_users 索引 ----------------
 
     #[test]
     fn on_position_opened_registers_uid() {
@@ -636,7 +588,6 @@ mod tests {
     fn on_position_closed_removes_uid_when_no_other_position() {
         let (mut engine, mut ups, _ssp, _lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
-        // profile 有单仓，关掉它（closed_key = FUT_SYMBOL，且无其它同 symbol 仓）。
         insert_long(&mut ups, UID);
         engine.on_position_closed(ups.get(UID).unwrap(), FUT_SYMBOL, FUT_SYMBOL);
         assert!(engine.symbol_to_users.get(&FUT_SYMBOL).is_none(), "无其它仓 -> uid 移除 + 空集清理");
@@ -646,7 +597,6 @@ mod tests {
     fn on_position_closed_hedge_keeps_uid_when_other_side_exists() {
         let (mut engine, mut ups, _ssp, _lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
-        // HEDGE：同 symbol 两方向（key=+symbol LONG、key=-symbol SHORT）。关掉 +symbol，-symbol 仍在。
         insert_long(&mut ups, UID);
         let short = SymbolPositionRecord {
             direction: PositionDirection::Short,
@@ -661,29 +611,25 @@ mod tests {
         );
     }
 
-    // ---------------- leader gate ----------------
-
     #[test]
     fn check_positions_leader_gate_off_is_noop() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
-        engine.is_running = false; // follower
+        engine.is_running = false;
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50)); // 深度水下
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
         assert!(engine.pending_commands.is_empty(), "follower 不检测、不提交");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
     }
 
-    // ---------------- ISOLATED 检测（targeted） ----------------
-
     #[test]
     fn check_positions_targeted_isolated_underwater_queues_force_and_sets_flow() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50)); // mark=50：profit=-500，equity=-400 < MM=25 -> 触发
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
         let cmd = markprice_cmd(FUT_SYMBOL, 5_000);
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
@@ -696,7 +642,6 @@ mod tests {
         assert_eq!(force.action, Some(OrderAction::Ask), "LONG 强平 -> ASK（平仓方向相反）");
         assert_eq!(force.order_type, Some(OrderType::Ioc));
         assert_eq!(force.size, 10, "size_to_liquidate = min(open_volume, calc) = 10");
-        // flow 已置，price 一致。
         let flow = ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.expect("flow set");
         assert_eq!(flow.state, LiquidationState::Liquidating);
         assert_eq!(flow.size, 10);
@@ -709,7 +654,7 @@ mod tests {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
-        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100)); // mark=100：profit=0，equity=100 >= MM=50 -> 健康
+        lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100));
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
@@ -735,12 +680,10 @@ mod tests {
     #[test]
     fn check_positions_scan_slice_filters_users() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
-        // 两个水下用户：uid=1（mod 2 == 1）、uid=2（mod 2 == 0）。
         ups.add_empty_user_profile(2);
         insert_long(&mut ups, 1);
         insert_long(&mut ups, 2);
         lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
-        // scan slice：sliceCount=2、scanSlice=1 -> 只查 uid mod 2 == 1（uid=1），跳过 uid=2。
         let scan = OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid: 1, size: 2, timestamp: 5_000, ..Default::default() };
 
         engine.check_positions(&scan, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
@@ -750,11 +693,6 @@ mod tests {
         assert!(ups.get(2).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none(), "uid=2 不在切片内，未触碰");
     }
 
-    // ---------------- CROSS scale 边界（Java LiquidationCheckCrossScaleTest 对拍） ----------------
-
-    /// Java 对拍：`LiquidationCheckCrossScaleTest#checkCross_scaledMaintenanceTruncatesToZero_noDivideByZero`。
-    /// 原始 MM 非零(=5000)、down-scale 到 quote 记账单位后整数除法截断为 0 的 CROSS 期货持有者收到定向价格触发时：
-    /// ① `check_positions` 不得因除零 panic；② 缩放后 MM=0 的健康账户（阈值=0、equity=0≥0 走早退分支）不得被误强平。
     #[test]
     fn check_cross_scaled_maintenance_truncates_to_zero_no_panic_no_force() {
         const SYMBOL: i32 = 5001;
@@ -762,8 +700,6 @@ mod tests {
         const QUOTE_CCY: i32 = 20;
         const U: i64 = 42;
 
-        // baseScaleK×quoteScaleK = 100×100 = 1e4；quote digit=0 → currency_scale_k=1 → down-scale 除以 1e4。
-        // raw MM = trunc_mul_div(notional=1e6, rate=5, scaleK=1000)=5000；缩放后 5000/1e4 = 0（截断归零）。
         let mut mm = BTreeMap::new();
         mm.insert(10_000_000i64, 5i64);
         let spec = CoreSymbolSpecification {
@@ -803,16 +739,11 @@ mod tests {
         lpc.insert(SYMBOL, LastPriceCacheRecord::with_mark(1_000_000i64));
         let cmd = markprice_cmd(SYMBOL, 1_000);
 
-        // ① 不 panic（Rust assertDoesNotThrow 等价：调用不 panic 即通过）。
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
-        // ② 未误强平（Java submitCount==0 → Rust pending_commands 为空、flow 未置）。
         assert!(engine.pending_commands.is_empty(), "缩放后归零的健康 CROSS 账户不得被误强平（且无除零 panic）");
         assert!(ups.get(U).unwrap().positions[&SYMBOL].liquidation_flow.is_none());
     }
 
-    // ---------------- 状态机 advance_liquidation ----------------
-
-    /// 造一个带进行中 flow（Liquidating）的 LONG 仓，返回 (engine, pos)。
     fn pos_with_flow(state: LiquidationState) -> SymbolPositionRecord {
         let mut pos = SymbolPositionRecord {
             direction: PositionDirection::Long,
@@ -847,7 +778,6 @@ mod tests {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
         let mut pos = pos_with_flow(LiquidationState::Liquidating);
-        // REJECT 携带剩余未成交量 = 7。
         let cmd = force_apply_cmd(Some(mte(MatcherEventType::Reject, 7)));
         engine.advance_liquidation(&cmd, &mut pos);
         let flow = pos.liquidation_flow.expect("flow 保留");
@@ -904,7 +834,6 @@ mod tests {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
         let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
-        // flow=None + IF 命令 -> 非法，skip（不 panic、不建 flow）。
         let cmd = OrderCommand { command: OrderCommandType::IfTakeover, uid: UID, symbol: FUT_SYMBOL, matcher_event: Some(mte(MatcherEventType::Reject, 7)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         assert!(pos.liquidation_flow.is_none());
@@ -913,7 +842,6 @@ mod tests {
 
     #[test]
     fn advance_null_flow_force_recovers_new_flow() {
-        // 换届后残余仓恢复：flow=None + FORCE -> 新建 flow 再推进。
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
         let mut pos = SymbolPositionRecord {
@@ -921,7 +849,6 @@ mod tests {
             open_volume: 10,
             ..SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
         };
-        // FORCE REJECT：recovery 建 flow(Liquidating)，随即 onForceApplied REJECT -> WaitIf + 入队 IF。
         let cmd = OrderCommand { command: OrderCommandType::ForceLiquidation, uid: UID, symbol: FUT_SYMBOL, price: 45, size: 8, order_id: 555, matcher_event: Some(mte(MatcherEventType::Reject, 8)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         let flow = pos.liquidation_flow.expect("recovery 建了 flow");
@@ -933,7 +860,6 @@ mod tests {
 
     #[test]
     fn advance_out_of_order_command_skips() {
-        // flow.state=Liquidating 却来了 IF 命令（期望 WaitIfExecution）-> 重复/错序，skip。
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
         let mut pos = pos_with_flow(LiquidationState::Liquidating);

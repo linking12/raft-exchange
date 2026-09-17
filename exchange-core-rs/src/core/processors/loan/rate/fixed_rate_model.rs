@@ -1,5 +1,3 @@
-//! Java `FixedRateModel`：Isolated LOCKED 定期利率，开仓锁定 floating 利率+点差后固定计息。
-//! 不持有 floating 引用（禁 Rc/RefCell），open_rate_bps 改显式传参。
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
@@ -7,25 +5,20 @@ use crate::core::utils::core_arithmetic_utils::{add_exact, trunc_mul_div};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedRateModel {
-    /// 相对 floating 曲线的加/减价（bps），默认 `0` = 与 floating 同价。
     pub locked_rate_adjust_bps: i32,
 }
 
 impl FixedRateModel {
-    // ===== 构造 / 配置 =====
     pub fn reset(&mut self) {
         self.locked_rate_adjust_bps = 0;
     }
 
-    // ===== 核心行为 =====
-    /// floating 当前利率 + spread，下限 0，固化进 loan.rate_bps。
     pub fn open_rate_bps(&self, floating: &FloatingRateModel, loan_currency: i32) -> i32 {
         let adjusted =
             floating.current_rate_bps_or_base(loan_currency) as i64 + self.locked_rate_adjust_bps as i64;
         adjusted.max(0) as i32
     }
 
-    /// 按 rate_bps 补计利息到 now，推进游标；truncated-but-chargeable（F1）截断得 0 时保留游标避免吞息。
     pub fn accrue<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         let delta =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
@@ -40,22 +33,18 @@ impl FixedRateModel {
         delta
     }
 
-    // ===== 查询 / 访问器 =====
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.locked_rate_adjust_bps as i64);
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// accumulated_interest + pending，不改 loan。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let pending =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
         add_exact(loan.accumulated_interest(), pending)
     }
 
-    // ===== 内部 helper =====
-    /// 分两步 trunc_mul_div（先 /YEAR_MS 再 /BPS_SCALE），不可合并为一次连乘。
     fn accrue_delta(outstanding_principal: i64, rate_bps: i32, last_accrue_ts: i64, now: i64) -> i64 {
         if outstanding_principal <= 0 || rate_bps <= 0 {
             return 0;
@@ -103,19 +92,17 @@ mod tests {
 
     use crate::core::common::isolated_loan_record::IsolatedLoanRecord;
 
-    // ---- (a) fixed simple-interest one year = principal × rate, correctly scaled ----
-
     #[test]
     fn accrue_one_year_simple_interest_equals_principal_times_rate_over_bps_scale() {
-        let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 500 /* 5% */, 0);
+        let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 500 , 0);
         loan.set_outstanding_principal(1_000_000);
         let model = FixedRateModel::default();
 
         let delta = model.accrue(&mut loan, YEAR_MS);
 
-        assert_eq!(delta, 50_000); // 1_000_000 * 500 / 10_000
+        assert_eq!(delta, 50_000);
         assert_eq!(loan.accumulated_interest(), 50_000);
-        assert_eq!(loan.last_accrue_ts(), YEAR_MS); // cursor advanced since it actually charged
+        assert_eq!(loan.last_accrue_ts(), YEAR_MS);
     }
 
     #[test]
@@ -127,7 +114,7 @@ mod tests {
         model.accrue(&mut loan, YEAR_MS / 2);
         model.accrue(&mut loan, YEAR_MS);
 
-        assert_eq!(loan.accumulated_interest(), 50_000); // same total as one full-year call
+        assert_eq!(loan.accumulated_interest(), 50_000);
     }
 
     #[test]
@@ -139,11 +126,9 @@ mod tests {
         let pending = model.display_interest(&loan, YEAR_MS);
 
         assert_eq!(pending, 50_000);
-        assert_eq!(loan.accumulated_interest(), 0); // read path: unchanged
-        assert_eq!(loan.last_accrue_ts(), 0); // read path: cursor untouched
+        assert_eq!(loan.accumulated_interest(), 0);
+        assert_eq!(loan.last_accrue_ts(), 0);
     }
-
-    // ---- open_rate_bps: derived from FloatingRateModel's current curve value + spread ----
 
     #[test]
     fn open_rate_bps_is_floating_current_rate_plus_spread_floored_at_zero() {
@@ -154,29 +139,23 @@ mod tests {
         assert_eq!(model.open_rate_bps(&floating, 20), 750);
 
         let negative_spread = FixedRateModel { locked_rate_adjust_bps: -900 };
-        assert_eq!(negative_spread.open_rate_bps(&floating, 20), 0); // floored at 0, not negative
+        assert_eq!(negative_spread.open_rate_bps(&floating, 20), 0);
 
-        // falls back to floating's base_bps when that currency was never repriced
         let default_model = FixedRateModel::default();
         assert_eq!(default_model.open_rate_bps(&floating, 999), floating.base_bps);
     }
 
-    // ---- (d) truncated-but-chargeable: F1 cursor freeze ----
-
     #[test]
     fn accrue_truncated_but_chargeable_freezes_cursor_until_threshold_crossed() {
-        // principal == YEAR_MS isolates truncation to the second trunc_mul_div step (F1 case).
-        let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 5_000 /* 50% */, 0);
+        let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 5_000 , 0);
         loan.set_outstanding_principal(YEAR_MS);
         let model = FixedRateModel::default();
 
-        // elapsed=1: interest_base=1, delta=trunc(1*5000/10000)=0 -> truncated to 0.
         let d1 = model.accrue(&mut loan, 1);
         assert_eq!(d1, 0);
         assert_eq!(loan.accumulated_interest(), 0);
         assert_eq!(loan.last_accrue_ts(), 0, "F1: cursor must NOT advance while principal>0, rate>0, but truncated to 0");
 
-        // elapsed since the STILL-frozen cursor is now 2: interest_base=2, delta=trunc(2*5000/10000)=1.
         let d2 = model.accrue(&mut loan, 2);
         assert_eq!(d2, 1, "sub-threshold interest from the first call must be recovered, not lost");
         assert_eq!(loan.accumulated_interest(), 1);
@@ -185,7 +164,6 @@ mod tests {
 
     #[test]
     fn accrue_advances_cursor_even_at_zero_delta_when_principal_or_rate_is_nonpositive() {
-        // No principal: not the F1 case (F1 only freezes when principal>0 AND rate>0).
         let mut loan = IsolatedLoanRecord::new(1, 1, 100, 10, 20, 500, 0);
         loan.set_outstanding_principal(0);
         let model = FixedRateModel::default();
@@ -196,10 +174,6 @@ mod tests {
     }
 }
 
-/// Java 黄金值对拍：镜像 `LoanRateCurveTest.fixedModel_openRate_appliesAdjustWithFloor`。
-/// 期望值即 Java `assertEquals` 字面量；不同则为翻译 bug，不得改期望。
-
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
@@ -219,7 +193,6 @@ mod java_parity {
 
     #[test]
     fn fixed_open_rate_applies_adjust_with_floor() {
-        // Java 用 LoanService，其 floating current_rate_bps[2]=500；此处直接构造等价 floating。
         let mut floating = FloatingRateModel::default();
         floating.current_rate_bps.insert(2, 500);
 

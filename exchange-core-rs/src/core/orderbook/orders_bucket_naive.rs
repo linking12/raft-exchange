@@ -1,11 +1,9 @@
-//! 单价位 FIFO 桶。对应 Java: exchange.core2.core.orderbook.OrdersBucketNaive
 use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order::Order;
 use crate::core::common::order_type::OrderType;
 use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact};
 
-/// maker 单笔成交明细（撮合侧据此填 `MatcherTradeEvent` 的 taker/maker 字段）；`filled`/`filled_notional` 为本笔后值。
 #[derive(Debug, Clone, Copy)]
 pub struct MakerFill {
     pub order_id: i64,
@@ -27,12 +25,11 @@ pub struct OrdersBucketNaive {
     price: i64,
     total_volume: i64,
     next_seq: i64,
-    entries: BTreeMap<i64, Order>,      // seq -> order（FIFO）
-    id_to_seq: BTreeMap<i64, i64>,      // order_id -> seq
+    entries: BTreeMap<i64, Order>,
+    id_to_seq: BTreeMap<i64, i64>,
 }
 
 impl OrdersBucketNaive {
-    // ===== 构造 =====
     pub fn new(price: i64) -> Self {
         Self {
             price,
@@ -43,7 +40,6 @@ impl OrdersBucketNaive {
         }
     }
 
-    // ===== 核心行为 =====
     pub fn put(&mut self, order: Order) {
         self.total_volume += order.remaining();
         let seq = self.next_seq;
@@ -59,7 +55,6 @@ impl OrdersBucketNaive {
         Some(o)
     }
 
-    /// 原地减少挂单 size 并扣减 total_volume，返回减量后快照，未找到返回 None。对应 Java `order.size -= reduceBy; ordersBucket.reduceSize(reduceBy)`。
     pub fn reduce(&mut self, order_id: i64, reduce_by: i64) -> Option<Order> {
         let seq = *self.id_to_seq.get(&order_id)?;
         let o = self.entries.get_mut(&seq)?;
@@ -68,7 +63,6 @@ impl OrdersBucketNaive {
         Some(o.clone())
     }
 
-    /// 从桶头 FIFO 撮合 to_collect，返回剩余未撮合量；回调携带 maker 的 uid/reserve_bid_price/command 供填 MatcherTradeEvent 字段。对应 Java `OrdersBucketNaive.match` / `OrderBookEventsHelper.java`。
     pub fn match_forward(&mut self, mut to_collect: i64,
                          on_trade: &mut impl FnMut(MakerFill)) -> i64 {
         let seqs: Vec<i64> = self.entries.keys().copied().collect();
@@ -111,7 +105,6 @@ impl OrdersBucketNaive {
         to_collect
     }
 
-    // ===== 查询/访问器 =====
     pub fn price(&self) -> i64 {
         self.price
     }
@@ -124,33 +117,26 @@ impl OrdersBucketNaive {
         self.entries.is_empty()
     }
 
-    /// 桶内挂单数量。对应 Java `OrdersBucketNaive.getNumOrders`。
     pub fn num_orders(&self) -> usize {
         self.entries.len()
     }
 
-    /// 按 order_id 只读定位订单，不移除（cancel/reduce 判定剩余量用）。
     pub fn get(&self, order_id: i64) -> Option<&Order> {
         let seq = *self.id_to_seq.get(&order_id)?;
         self.entries.get(&seq)
     }
 
-    /// 按 FIFO 只读遍历桶内订单（供 state_hash 确定性折叠用）。对应 Java `OrdersBucketNaive.forEachOrder`/`getAllOrders`。
     pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
         self.entries.values()
     }
 }
 
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java OrdersBucketNaive.writeMarshallable)----
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl OrdersBucketNaive {
-    /// 对应 Java `OrdersBucketNaive.writeMarshallable`:symbolSpec + price(long) + entries(LongMap:orderId→Order,FIFO)
-    /// + totalVolume(long)。Rust 桶不持有 symbolSpec(Java 持有并每桶重写),故由订单簿写时传入。
-    /// 非 `ChronicleMarshallable` 成员:trait 的 `chronicle_write(&self, w)` 无法接收额外 symbolSpec 参数。
     pub fn chronicle_write(&self, w: &mut ChronicleWriter, symbol_spec: &CoreSymbolSpecification) {
         symbol_spec.chronicle_write(w);
         w.write_i64(self.price);
@@ -161,18 +147,16 @@ impl OrdersBucketNaive {
         }
         w.write_i64(self.total_volume);
     }
-    /// 对应 Java `OrdersBucketNaive(BytesIn)`:读 symbolSpec(丢弃,订单簿层已持有)+ price + entries(FIFO)+ totalVolume。
     pub fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let _spec = CoreSymbolSpecification::chronicle_read(r)?;
         let price = r.read_i64()?;
         let count = r.read_i32()?;
         let mut bucket = OrdersBucketNaive::new(price);
         for _ in 0..count {
-            let _order_id = r.read_i64()?; // == order.order_id;put() 以 order.order_id 建 id_to_seq 索引
+            let _order_id = r.read_i64()?;
             let order = Order::chronicle_read(r)?;
             bucket.put(order);
         }
-        // put() 已把 total_volume 累加为各单 remaining 之和(与 Java 存量一致);取存量严格对齐字节。
         bucket.total_volume = r.read_i64()?;
         Ok(bucket)
     }
@@ -206,17 +190,14 @@ mod tests {
         b.put(mk(1, 10));
         b.put(mk(2, 5));
         assert_eq!(b.total_volume(), 15);
-        // 先进先出：撮合 12 → 全吃 order1(10) + order2 部分(2)
-        let mut collected: Vec<(i64, i64)> = vec![]; // (maker_id, trade_size)
+        let mut collected: Vec<(i64, i64)> = vec![];
         let remaining = b.match_forward(12, &mut |f: MakerFill| {
             collected.push((f.order_id, f.trade));
         });
-        assert_eq!(remaining, 0); // 请求量全部撮合
+        assert_eq!(remaining, 0);
         assert_eq!(collected, vec![(1, 10), (2, 2)]);
         assert_eq!(b.total_volume(), 3);
     }
-
-    // 翻译自 Java OrdersBucketNaiveTest；remove(orderId, uid) 简化为 remove(order_id)，shuffle 移除顺序简化为固定顺序（不影响断言）。
 
     const JAVA_UID_1: i64 = 412;
     const JAVA_UID_2: i64 = 413;
@@ -238,7 +219,6 @@ mod tests {
         }
     }
 
-    /// 对应 Java `@BeforeEach beforeGlobal`。
     fn setup_bucket() -> OrdersBucketNaive {
         let mut bucket = OrdersBucketNaive::new(1000);
 
@@ -265,7 +245,6 @@ mod tests {
         bucket
     }
 
-    /// Java `shouldAddOrder`
     #[test]
     fn java_should_add_order() {
         let mut bucket = setup_bucket();
@@ -274,7 +253,6 @@ mod tests {
         assert_eq!(bucket.total_volume(), 541);
     }
 
-    /// Java `shouldRemoveOrders`
     #[test]
     fn java_should_remove_orders() {
         let mut bucket = setup_bucket();
@@ -289,7 +267,6 @@ mod tests {
         assert_eq!(bucket.num_orders(), 1);
         assert_eq!(bucket.total_volume(), 1);
 
-        // can not remove existing order (already removed earlier)
         let removed = bucket.remove(4);
         assert!(removed.is_none());
         assert_eq!(bucket.num_orders(), 1);
@@ -301,7 +278,6 @@ mod tests {
         assert_eq!(bucket.total_volume(), 0);
     }
 
-    /// Java `shouldAddManyOrders`
     #[test]
     fn java_should_add_many_orders() {
         let mut bucket = setup_bucket();
@@ -316,7 +292,6 @@ mod tests {
         assert_eq!(bucket.total_volume(), expected_volume);
     }
 
-    /// Java `shouldAddAndRemoveManyOrders`
     #[test]
     fn java_should_add_and_remove_many_orders() {
         let mut bucket = setup_bucket();
@@ -343,7 +318,6 @@ mod tests {
         }
     }
 
-    /// Java `shouldMatchAllOrders`
     #[test]
     fn java_should_match_all_orders() {
         let mut bucket = setup_bucket();
@@ -362,7 +336,6 @@ mod tests {
         assert_eq!(bucket.num_orders(), expected_num_orders);
         assert_eq!(bucket.total_volume(), expected_volume);
 
-        // Java 打乱后取前 80 个移除；这里简化为固定取前 80 个插入的（不影响后续动态重算的断言）。
         for (id, size) in ids.into_iter().take(80) {
             bucket.remove(id);
             expected_num_orders -= 1;
@@ -381,7 +354,6 @@ mod tests {
         assert_eq!(bucket.total_volume(), 0);
     }
 
-    /// Java `shouldMatchAllOrders2`
     #[test]
     fn java_should_match_all_orders_2() {
         let mut bucket = setup_bucket();

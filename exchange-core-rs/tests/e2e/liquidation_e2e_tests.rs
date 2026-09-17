@@ -1,4 +1,3 @@
-//! 期货清算/ADL/IF 全局守恒扩展 + e2e 场景 + 守恒 proptest，守恒恒等式含 IF 项（本文件 scale 全 1 恒等缩放）。
 use proptest::prelude::*;
 
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -18,11 +17,6 @@ const BASE: i32 = 1;
 const QUOTE: i32 = 2;
 const FUT: i32 = 500;
 
-// ================================================================================================
-// 守恒 helper（含 IF 项）
-// ================================================================================================
-
-/// 全局守恒（含 IF）——见文件头文档。scale 全 1，IF 项直接相加。
 fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
     let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.mark_price).unwrap_or(0);
     let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
@@ -35,9 +29,6 @@ fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
             }
         }
     }
-    // IF：available（quote notional）+ IF 接管仓的全额市值 position_value = open_price_sum + 未实现 pnl
-    // （与生产报告 `reports.rs` if_balances 及 `IfPositionRecord::position_value` 同口径）。IF 花的 spend 已从
-    // available 扣、成为仓位成本基，故须按全额市值计入，未实现 pnl 单独计会漏掉 spend（守恒破坏）。
     if cur == QUOTE {
         for n in core.risk.liquidation_service.notionals.values() {
             total += n.available;
@@ -49,20 +40,15 @@ fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
     total
 }
 
-/// IF `available` 永不为负（IF 自限，§2.3）。
 fn assert_if_non_negative(core: &ExchangeCore) {
     for n in core.risk.liquidation_service.notionals.values() {
         assert!(n.available >= 0, "IFNotional.available 不得为负: {}", n.available);
     }
 }
 
-// ================================================================================================
-// 治具
-// ================================================================================================
-
 fn fut_spec() -> CoreSymbolSpecification {
     let mut mm = std::collections::BTreeMap::new();
-    mm.insert(i64::MAX, 500); // MM 单档 5%
+    mm.insert(i64::MAX, 500);
     CoreSymbolSpecification {
         symbol_id: FUT,
         symbol_type: SymbolType::FuturesContractPerpetual,
@@ -75,7 +61,7 @@ fn fut_spec() -> CoreSymbolSpecification {
         fee_scale_k: 10_000,
         maintenance_margin: mm,
         maintenance_margin_scale_k: 10_000,
-        liquidation_fee: 200, // 2%
+        liquidation_fee: 200,
         ..Default::default()
     }
 }
@@ -119,27 +105,21 @@ fn markprice(core: &mut ExchangeCore, price: i64, ts: i64) {
     core.process_command(&mut c);
 }
 
-// ================================================================================================
-// 确定性 e2e 场景（每步断言含 IF 的全局守恒）
-// ================================================================================================
-
 #[test]
 fn force_full_fill_moves_fee_to_if_and_conserves() {
     let (mut core, uids) = seeded(3);
     let (m1, borrower, m2) = (uids[0], uids[1], uids[2]);
     markprice(&mut core, 100, 1_000);
 
-    // m1 挂 ASK@100（开 SHORT），borrower BID@100 吃单开 LONG（lev10 -> margin 100）。
     place(&mut core, 100, m1, 100, 10, false, 10);
     place(&mut core, 101, borrower, 100, 10, true, 10);
     assert_eq!(core.ups.get(borrower).unwrap().positions[&FUT].direction, PositionDirection::Long);
-    // m2 挂 BID@92（破产价，吸收 FORCE ASK）。
     place(&mut core, 102, m2, 92, 10, true, 10);
 
     let before_q = conserved(&core, QUOTE);
     let before_b = conserved(&core, BASE);
 
-    markprice(&mut core, 94, 2_000); // borrower LONG 水下 -> FORCE 全平
+    markprice(&mut core, 94, 2_000);
 
     assert!(core.risk.liquidation_engine.pending_commands.is_empty());
     assert!(!core.ups.get(borrower).unwrap().positions.contains_key(&FUT), "borrower 被全平");
@@ -157,15 +137,11 @@ fn healthy_market_no_liquidation_conserves() {
     place(&mut core, 100, uids[0], 100, 10, false, 5);
     place(&mut core, 101, uids[1], 100, 10, true, 5);
     let before = conserved(&core, QUOTE);
-    markprice(&mut core, 101, 2_000); // 小幅波动，健康
+    markprice(&mut core, 101, 2_000);
     assert!(core.risk.liquidation_engine.pending_commands.is_empty());
     assert!(core.ups.get(uids[1]).unwrap().positions.contains_key(&FUT), "健康仓不被平");
     assert_eq!(conserved(&core, QUOTE), before);
 }
-
-// ================================================================================================
-// 守恒 proptest：随机命令流 + 强平引擎开启，含 IF 的全局守恒每币 == 0、IF 永不负、无 panic
-// ================================================================================================
 
 #[derive(Debug, Clone)]
 enum GenCmd {
@@ -173,7 +149,6 @@ enum GenCmd {
     Mark { price: i64 },
 }
 
-/// 生成器按 uid 奇偶固定方向（偶=BID/奇=ASK），刻意排除自成交——避免触发结算 maker `required=true` 不变式 panic（已知 hazard，非本任务范围，非隐藏 bug）。
 fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
     prop_oneof![
         (0usize..4, 80i64..120, 1i64..20).prop_map(|(uid_idx, price, size)| GenCmd::Place { uid_idx, price, size }),
@@ -184,13 +159,11 @@ fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 120, ..ProptestConfig::default() })]
 
-    /// 4 用户单期货、杠杆 10、强平引擎开启，随机下单+markprice 触发 FORCE→IF→ADL 级联；断言含 IF 的全局守恒（QUOTE+BASE）恒定、IFNotional 非负、不 panic。
     #[test]
     fn conservation_holds_under_random_stream_with_liquidation(cmds in prop::collection::vec(cmd_strategy(), 1..40)) {
         let (mut core, uids) = seeded(4);
         markprice(&mut core, 100, 1_000);
 
-        // 起始守恒基线（此时无仓无 IF）。
         let base_q = conserved(&core, QUOTE);
         let base_b = conserved(&core, BASE);
 
@@ -199,7 +172,6 @@ proptest! {
         for cmd in &cmds {
             match cmd {
                 GenCmd::Place { uid_idx, price, size } => {
-                    // 方向按 uid 奇偶固定（偶=BID，奇=ASK）——排除自成交，见 `cmd_strategy` 文档。
                     let bid = uid_idx % 2 == 0;
                     place(&mut core, oid, uids[*uid_idx], *price, *size, bid, 10);
                     oid += 1;
@@ -209,13 +181,11 @@ proptest! {
                     ts += 1_000;
                 }
             }
-            // 每步：含 IF 的全局守恒 + IF 非负（drain 已在 process_command 内跑完级联）。
             prop_assert_eq!(conserved(&core, QUOTE), base_q, "QUOTE 守恒破坏");
             prop_assert_eq!(conserved(&core, BASE), base_b, "BASE 守恒破坏");
             for n in core.risk.liquidation_service.notionals.values() {
                 prop_assert!(n.available >= 0, "IFNotional.available 为负");
             }
-            // 队列必须每步排空（无残留未处理的强平命令）。
             prop_assert!(core.risk.liquidation_engine.pending_commands.is_empty());
         }
     }
