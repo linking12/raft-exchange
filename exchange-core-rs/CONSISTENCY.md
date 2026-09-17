@@ -286,12 +286,22 @@ cargo test --test conformance
 
 ## 11. 路线图 / 未做
 
-- **真·live 差分**:共享 PRNG 两引擎同进程实时比对(JNI 或双跑),覆盖比离线向量更广。
-- **清算/ADL 的 fund event 层**:目前只对拍 STATE(Java 异步捕获不稳);要事件级需 Java 侧确定性捕获机制。
-- **Java 侧两个问题**(§7.2)属参考引擎的架构特性/功能缺口,是否在 Java 侧修(深修批处理时序 / 补普通 FOK)是独立决策,当前 Rust 已正确、conformance 已规避。
-- **差分模糊扩面**:目前随机现货 GTC+IOC;可扩期货/清算随机流(需处理异步 settle 的确定性)。
-- **①b 组件对拍扩面**:已覆盖 8 个数学敏感 Java 单测;Java `tests/unit` 里非数学的行为类单测、`core/**` 的 orderbook/event 组件测试(`OrderBookBaseTest`/`OrdersBucketNaiveTest`/`SimpleEventsProcessorTest` 等)尚未逐条对拍。
-- **③ 向量扩面**:已覆盖现货/期货/交割/清算/ADL/funding/**loan/cross/hedge**;可继续加 cross-loan、loan 强平、IF/LIF 注资等 loan 子场景。
+**已完成(条目留档;标 ✅ 者为已落地):**
+
+- ✅ **①b 组件对拍**:`OrderBookBaseTest`(78)/`OrdersBucketNaiveTest`(6)/`SimpleEventsProcessorTest`(7) 已全部 `java_` 前缀逐条对拍,外加 8 个数学敏感单测。
+- ✅ **清算/ADL 事件级对拍**:确定性(SCAN 驱动)向量已 events-on——修了 Java `ConformanceExporter` 的异步捕获(`feAccum` synchronizedList + 稳定判据),`adl`/`liquidation_isolated`/`loan_liquidation_isolated` 均事件级对拍。
+- ✅ **差分模糊扩面**:`gen_conformance_fuzz` 已含现货(`gen_vector`)/期货(`gen_futures_vector`)/清算(`gen_liquidation_vector`)三条随机流 + 离线 live-diff 编排(`conformance_live_diff.sh`)。
+- ✅ **③ 向量扩面**:现货/期货/交割/清算/ADL/funding/loan/cross/hedge/if_takeover/loan_liquidation/cross_loan 均入库对拍。
+
+**刻意不做 / 需独立决策:**
+
+- **真·live 同进程双引擎比对(JNI 或双跑)**:比离线向量重得多;当前以"生成向量 + 入库 golden"离线差分替代,已够用。除非要 CI 常态实时比对,否则不投入。
+- **随机 fuzz 清算流的事件级对拍**:随机流的异步 settle 时序无法保证跨引擎确定,故 `gen_liquidation_vector` 刻意 `#!events=off` 只对拍 STATE(确定性 SCAN 向量已 events-on)。
+- **Java 侧两个问题**(§7.2):参考引擎的架构特性/功能缺口(批处理时序 / 普通 FOK),是否在 Java 侧修是独立决策;Rust 已正确、conformance 已规避。
+
+**可继续(开放式,非阻塞):**
+
+- Java `tests/unit` 里非数学的行为类单测逐条对拍;更多 loan 子场景向量(注:LIF 注资向量曾试,对当前对拍口径 inert 已移除)。
 
 ---
 

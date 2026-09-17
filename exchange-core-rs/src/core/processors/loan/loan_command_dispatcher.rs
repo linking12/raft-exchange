@@ -76,7 +76,6 @@ impl LoanCommandDispatcher {
         rc
     }
 
-    // LOAN_CREATE
 
     /// 开仓 Isolated 借贷：字段映射 + cheap→expensive 校验链（spec/enabled/loanId/amount/maxAmount/markPrice/LTV/free-collateral/pool）+ disburse。
     fn handle_loan_create(
@@ -215,7 +214,6 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // LOAN_ADD_COLLATERAL
 
     /// 补抵押降 LTV：校验存在/归属/amount>0/自由余额充足后 accrue_to 再加抵押。
     fn handle_loan_add_collateral(
@@ -261,7 +259,6 @@ impl LoanCommandDispatcher {
         CommandResultCode::Success
     }
 
-    // LOAN_RELEASE_COLLATERAL
 
     /// 减抵押：允许释放到刚好高于清算线（严格 <），accrue 后按 pending-interest-inclusive 的 realDebt 校验 LTV，全零死壳从 map 移除。
     fn handle_loan_release_collateral(
@@ -551,7 +548,6 @@ impl LoanCommandDispatcher {
             return CommandResultCode::LoanNumeraireNotConfigured;
         }
 
-        // subtract-then-check：先扣，重算 LTV 超线再原样加回。
         up.add_to_cross_loan_collateral(currency, -amount);
         let new_ltv =
             engine.loan_service.calculate_cross_account_ltv_bps(up, cmd.timestamp, ssp, &engine.last_price_cache, true);
@@ -1054,7 +1050,6 @@ impl LoanCommandDispatcher {
         });
     }
 
-    // LOAN_REPAY
 
     /// Isolated REPAY 共用核心：accrue→算实抵债额→查余额→抵债（利息优先），不释放抵押。
     fn settle_repay_isolated(

@@ -33,7 +33,7 @@ pub struct FundingPaymentAndRecvNotional {
     pub receiver_notionals: BTreeMap<i64, i64>,
 }
 
-/// 无状态处理器——所有方法都是关联函数，不持有任何字段。
+/// 无状态处理器——参见模块文档。
 pub struct FundingFeeCommandProcessor;
 
 impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
