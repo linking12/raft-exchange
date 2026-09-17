@@ -31,7 +31,7 @@ use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
 use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
-use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest, PlaceOrderRequest};
+use exchange_core_rs::core::exchange_api::{ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest, PlaceOrderRequest};
 
 fn parse_line(line: &str) -> Option<(String, BTreeMap<String, String>)> {
     let line = line.trim();
@@ -274,6 +274,15 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 size: i64_of(&kv, "rateScaleK"),
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
+            })),
+            // 追加保证金:ISOLATED sym=symbol id、action 选腿;CROSS sym=currency id。amount 走 cmd.price(恒正)。对应 Java ApiAdjustMargin。
+            "MARGIN_ADJUST" => Some(api.margin_adjustment(MarginAdjustmentRequest {
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+                action: action_of(kv.get("action").map(String::as_str)),
+                amount: i64_of(&kv, "amount"),
+                margin_mode: margin_of(kv.get("margin").map(String::as_str)),
+                order_id: opt_i64(&kv, "txid", 0),
             })),
             // HEDGE:切换持仓模式(hedge=1 双向 / 0 单向),对应 Java ApiAdjustPositionMode。
             "POS_MODE" => Some(api.adjust_position_mode(i64_of(&kv, "uid"), i64_of(&kv, "hedge") != 0)),
