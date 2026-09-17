@@ -95,7 +95,6 @@ pub struct FundEvent {
     pub margin_ratio_scale_k: i64,
     pub maintenance_margin_scale_k: i64,
     pub mark_price: i64,
-    /// 挂单侧未成交量/均价（对应 Java `FundEvent.pending*`）：`PositionSnapshot` 据此算 bids/asks 名义与数量。
     pub pending_buy_size: i64,
     pub pending_buy_avg_price: i64,
     pub pending_sell_size: i64,
@@ -119,4 +118,3 @@ impl FundEvent {
         FundEvent { event_type, order_id, uid, currency, free, locked, ..Default::default() }
     }
 }
-

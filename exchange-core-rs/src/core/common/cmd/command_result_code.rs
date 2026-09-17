@@ -1,64 +1,57 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandResultCode {
-    ValidForMatchingEngine, // 1
-    Success,                // 100
-    AuthInvalidUser,        // -1001
-    InvalidSymbol,          // -1201
-    UnsupportedSymbolType,  // -1203（非期货 symbol 走期货下单路径）
-    RiskNsf,                // -2001
-    RiskInvalidReserveBidPrice, // -2002
-    RiskAskPriceLowerThanFee,   // -2003
-    RiskMarginTradingDisabled,  // -2004（cfgMarginTradingEnabled==false）
-    RiskInvalidAmount,          // -2005（MARGIN_ADJUSTMENT cmd.price<=0）
-    RiskInvalidLeverage,        // -2006（杠杆倍率不在 symbol 支持范围内）
-    RiskLeverageMismatch,       // -2007（新杠杆与当前仓位杠杆不匹配）
-    RiskMarginModeMismatch,     // -2008（仓位模式不匹配）
-    RiskMarginPositionNotExists, // -2009（MARGIN_ADJUSTMENT ISOLATED 目标仓位不存在）
-    RiskMarkpriceNotAvailable,  // -2011（mark price 缺失/为 0）
-    /// 期货 `IF_WITHDRAW` 时 `available` 不足以覆盖提取额，逐字对齐 Java `CommandResultCode.java:48`（`RISK_IF_INSUFFICIENT(-2012)`）。**与 loan 的 `LoanIfInsufficient`（-6053）是独立池子的独立错误码**，不可混用（同 `IfDeposit`/`LoanIfDeposit` 互异先例，见 `order_command_type.rs`）。
-    RiskIfInsufficient, // -2012（IF_WITHDRAW available 不足）
-    MatchingUnknownOrderId, // -3002
-    MatchingUnsupportedCommand, // -3004
-    MatchingInvalidOrderBookId, // -3005（MatchingEngineRouter 未知 symbol）
-    MatchingMoveFailedPriceOverRiskLimit, // -3041（moveOrder 现货 BID 超出 reserveBidPrice 风控）
-    MatchingReduceFailedWrongSize, // -3051（reduceOrder 请求量 <= 0）
-    UserMgmtUserAlreadyExists, // -4001
-    UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame, // -4101
-    UserMgmtAccountBalanceAdjustmentNsf,                // -4103
-    SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
+    ValidForMatchingEngine,
+    Success,
+    AuthInvalidUser,
+    InvalidSymbol,
+    UnsupportedSymbolType,
+    RiskNsf,
+    RiskInvalidReserveBidPrice,
+    RiskAskPriceLowerThanFee,
+    RiskMarginTradingDisabled,
+    RiskInvalidAmount,
+    RiskInvalidLeverage,
+    RiskLeverageMismatch,
+    RiskMarginModeMismatch,
+    RiskMarginPositionNotExists,
+    RiskMarkpriceNotAvailable,
+    RiskIfInsufficient,
+    MatchingUnknownOrderId,
+    MatchingUnsupportedCommand,
+    MatchingInvalidOrderBookId,
+    MatchingMoveFailedPriceOverRiskLimit,
+    MatchingReduceFailedWrongSize,
+    UserMgmtUserAlreadyExists,
+    UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame,
+    UserMgmtAccountBalanceAdjustmentNsf,
+    SymbolMgmtSymbolAlreadyExists,
 
-    // ================================================================
-    // 内部转账，逐字对应 Java `CommandResultCode.java:74`；供 InternalTransferCommandProcessor.collectInput 的 R1 校验用。
-    // ================================================================
-    InternalTransferInvalidSelf, // -4301，from == to 自转
+    InternalTransferInvalidSelf,
 
-    // ================================================================
-    // 现货借贷错误码，逐字对应 Java `CommandResultCode.java:82-120`。
-    // ================================================================
-    LoanNotEnabled,          // -6001，spec.loanConfig.initialLtvBps == 0
-    LoanAlreadyExists,       // -6002，loanId 已存在（Isolated / Cross 命名空间独立）
-    LoanNotFound,            // -6003，loanId 不存在
-    LoanUidMismatch,         // -6004，loan.uid ≠ cmd.uid
-    LoanUserSuspended,       // -6005，userStatus == SUSPEND 后拒绝所有 LOAN_* 命令
-    LoanInvalidAmount,       // -6010，amount ≤ 0
-    LoanPrincipalExceedsLimit, // -6011，principal > spec.loanConfig.maxAmount
-    LoanMarkpriceNotReady,   // -6012，markPrice 缺失或 0
-    LoanLtvTooHigh,          // -6020，开仓 LTV 超线（LOAN_CREATE Isolated）
-    LoanLtvTooHighAfterBorrow, // -6021，Cross 借后账户级 LTV 超线（LOAN_CROSS_BORROW）
-    LoanLtvTooHighAfterRelease, // -6022，减 Isolated 抵押后 LTV 超线
-    LoanCrossLtvTooHighAfterWithdraw, // -6023，撤 Cross 抵押后账户级 LTV 超线
-    LoanCollateralInsufficient, // -6030，accounts − calculateLocked 不足以覆盖新抵押量
-    LoanCollateralNotAllowed,  // -6031，currencySpec.collateralWeightBps == 0（Cross 抵押白名单）
-    LoanCollateralExceedsLoan, // -6032，减 Isolated 抵押量 > loan.collateralAmount
-    LoanAccountInsufficient,   // -6040，还款时 accounts − calculateLocked < 应还金额
-    LoanPoolInsufficient,      // -6050，池子不够 / POOL_WITHDRAW 抽资超
-    LoanPoolUtilizationExceeded, // -6051，借出后池子利用率超 loanPoolUtilizationCapBps
-    LoanPoolWrongShard,        // -6052，POOL_DEPOSIT/WITHDRAW 参数级路由错（cmd.uid ∉ [0, N)）
-    LoanIfInsufficient,        // -6053，LOAN_IF_WITHDRAW 提取超过 LIF 该币种余额
-    LoanInvalidConfig,         // -6060，阈值序 / 范围违规（initial 应 < liquidation < 10000 等）
-    LoanInvalidSymbolType,     // -6070，试图给非-CURRENCY_EXCHANGE_PAIR（期货/交割）配置 loan
-    LoanNumeraireNotConfigured, // -6080，Cross BORROW / WITHDRAW fail-close：numeraireCurrency 未设
-    LoanNotImplemented,        // -6099，reserved
+    LoanNotEnabled,
+    LoanAlreadyExists,
+    LoanNotFound,
+    LoanUidMismatch,
+    LoanUserSuspended,
+    LoanInvalidAmount,
+    LoanPrincipalExceedsLimit,
+    LoanMarkpriceNotReady,
+    LoanLtvTooHigh,
+    LoanLtvTooHighAfterBorrow,
+    LoanLtvTooHighAfterRelease,
+    LoanCrossLtvTooHighAfterWithdraw,
+    LoanCollateralInsufficient,
+    LoanCollateralNotAllowed,
+    LoanCollateralExceedsLoan,
+    LoanAccountInsufficient,
+    LoanPoolInsufficient,
+    LoanPoolUtilizationExceeded,
+    LoanPoolWrongShard,
+    LoanIfInsufficient,
+    LoanInvalidConfig,
+    LoanInvalidSymbolType,
+    LoanNumeraireNotConfigured,
+    LoanNotImplemented,
 
     RiskMarginPositionExists,
     UserMgmtUserNotSuspendableHasPositions,
@@ -153,7 +146,6 @@ mod tests {
 
     #[test]
     fn p6_internal_transfer_invalid_self_matches_java() {
-        // Java `CommandResultCode.java:74`：INTERNAL_TRANSFER_INVALID_SELF(-4301)。
         assert_eq!(CommandResultCode::InternalTransferInvalidSelf.code(), -4301);
     }
 
@@ -171,7 +163,6 @@ mod tests {
 
     #[test]
     fn p6_futures_if_result_code_matches_java_and_differs_from_loan_lif() {
-        // Java `CommandResultCode.java:48`：RISK_IF_INSUFFICIENT(-2012)，与 loan LoanIfInsufficient(-6053) 是互异的独立池子错误码。
         assert_eq!(CommandResultCode::RiskIfInsufficient.code(), -2012);
         assert_ne!(CommandResultCode::RiskIfInsufficient.code(), CommandResultCode::LoanIfInsufficient.code());
     }

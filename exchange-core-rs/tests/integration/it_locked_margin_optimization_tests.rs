@@ -1,20 +1,3 @@
-//! 翻译自 Java `exchange.core2.tests.integration.ITRiskEngineLockedMarginOptimization`
-//! （`calculateLockedMargin` 优化，10 个 @Test）。直连引擎（撮合同步落地）。逐条对拍 locked margin
-//! （= Σ 仓位 `open_init_margin_sum`）、仓位态、账户余额、pending 挂单、全局守恒。
-//!
-//! 期货 symbol 精确复刻 Java `ExchangeTestContainer.initFutureSymbol(symbolId, CURRENECY_USD)`：
-//!   base=BASE_CURRENCY_ID(1)、quote=USD(840)、base/quoteScaleK=1、makerFee=10、takerFee=20、feeScaleK=0、
-//!   maintenance={1000:5,100000:10}@scaleK=1000、maxLeverage={2000:5,100000:10}、initMargin=1@scaleK=100。
-//!   `createAsk/createBid` 用默认 ISOLATED、leverage 未设 → 归一为 1（故 initMargin = notional/100）。
-//!
-//! **降级/不可复刻的断言**（harness 缺相应基础设施）：
-//!   - Java 用 mockito `spy` 跨命令累计 `fundEventReport`/`futuresExecutionReport`/`spotExecutionReport` 计数
-//!     （`verify(handler, atLeast(n))`）——`ExchangeApi` 只暴露 `last_fund_events()`（最近一条命令），无跨命令累计，
-//!     故所有 `verify(handler, ...)` 断言无法复刻，改以等价的仓位/余额/locked 黄金值断言覆盖。
-//!   - 测试用例 10（`testPerformanceImprovement`）只断言 `durationMs < 1000`（性能计时，依赖环境）——改为
-//!     翻译其命令流的功能正确性（大单扫多档 maker 后持仓/守恒），丢弃计时断言。
-//!   全部 10 个用例的功能部分均已翻译。
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -30,8 +13,8 @@ mod tests {
         CancelOrderRequest, ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest,
     };
 
-    const BASE: i32 = 1; // BASE_CURRENCY_ID
-    const USD: i32 = 840; // CURRENCY_USDT == CURRENECY_USD
+    const BASE: i32 = 1;
+    const USD: i32 = 840;
 
     const SYMBOL_BTC: i32 = 1001;
     const SYMBOL_ETH: i32 = 1002;
@@ -41,7 +24,7 @@ mod tests {
     const TAKER_UID: i64 = 2;
     const USER_MULTI: i64 = 3;
 
-    const MAX_VALUE: i64 = 4_000_000; // Java TestConstants.MAX_VALUE
+    const MAX_VALUE: i64 = 4_000_000;
 
     fn mm_table() -> BTreeMap<i64, i64> {
         BTreeMap::from([(1_000, 5), (100_000, 10)])
@@ -77,19 +60,16 @@ mod tests {
         api
     }
 
-    /// 注册一个期货 symbol 并设 mark 价（对应 initFutureSymbol + initMarkPrice）。
     fn add_futures(api: &mut ExchangeApi, symbol_id: i32, mark: i64) {
         assert_eq!(api.add_futures_symbol(futures_spec(symbol_id)), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(symbol_id, mark), CommandResultCode::Success);
     }
 
-    /// 对应 `createUserWithSpecificMoney(uid, amount, USD)`。
     fn add_user_money(api: &mut ExchangeApi, uid: i64, amount: i64, txid: i64) {
         assert_eq!(api.add_user(uid), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(uid, USD, amount, txid), CommandResultCode::Success);
     }
 
-    /// 对应 `createBidWithOrderId`（默认 ISOLATED、GTC、leverage 归一 1）。
     fn bid(api: &mut ExchangeApi, order_id: i64, uid: i64, size: i64, price: i64, symbol: i32, mode: MarginMode) -> CommandResultCode {
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id, uid, symbol, price, size,
@@ -97,7 +77,6 @@ mod tests {
         })
     }
 
-    /// 对应 `createAskWithOrderId`（默认 ISOLATED、GTC、leverage 归一 1）。
     fn ask(api: &mut ExchangeApi, order_id: i64, uid: i64, size: i64, price: i64, symbol: i32, mode: MarginMode) -> CommandResultCode {
         api.place_futures_order(PlaceFuturesOrderRequest {
             order_id, uid, symbol, price, size,
@@ -105,7 +84,6 @@ mod tests {
         })
     }
 
-    /// 对应 Java helper `getInitialLockedMargin`：Σ 该用户所有仓位的 `open_init_margin_sum`。
     fn locked_margin(api: &ExchangeApi, uid: i64) -> i64 {
         match api.ups().users.get(&uid) {
             Some(p) => p.positions.values().map(|pos| pos.open_init_margin_sum).sum(),
@@ -113,12 +91,10 @@ mod tests {
         }
     }
 
-    /// 对应 Java helper `getBalance`。
     fn balance(api: &ExchangeApi, uid: i64) -> i64 {
         api.user_account(uid, USD)
     }
 
-    /// 全局守恒（完整公式）：Σ accounts + adjustments + fees + Σ_open_positions(estimate_pnl(mark)+extra_margin) == 0。
     fn assert_conserved(api: &ExchangeApi) {
         for &cur in api.ssp().currencies.keys() {
             let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -141,7 +117,6 @@ mod tests {
         }
     }
 
-    // 用例1：基本正确性——单个持仓的 locked 计算。
     #[test]
     fn basic_locked_margin_calculation() {
         let mut api = new_api();
@@ -149,20 +124,17 @@ mod tests {
         add_user_money(&mut api, TAKER_UID, 10_000, 1);
         add_user_money(&mut api, MAKER_UID, MAX_VALUE, 2);
 
-        // Maker 挂单, Taker 开仓。
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 1002, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
         let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("Taker 应有仓位");
         assert_eq!(pos.open_volume, 1);
         assert_eq!(pos.direction, PositionDirection::Long);
-        // notional 100000 / (100*1) = 1000 > 0。
         assert!(pos.open_init_margin_sum > 0, "locked margin 应为正");
         assert_eq!(pos.open_init_margin_sum, 1000);
         assert_conserved(&api);
     }
 
-    // 用例2：多持仓——3 symbol locked 合计 == 1600，加仓后 locked 增加。
     #[test]
     fn multi_position_locked_margin() {
         let mut api = new_api();
@@ -182,11 +154,9 @@ mod tests {
         assert!(api.user_position(USER_MULTI, SYMBOL_BTC).is_some());
         assert!(api.user_position(USER_MULTI, SYMBOL_ETH).is_some());
         assert!(api.user_position(USER_MULTI, SYMBOL_BNB).is_some());
-        // BTC 1000 + ETH 300 + BNB 300 = 1600。
         let initial_locked = locked_margin(&api, USER_MULTI);
         assert_eq!(initial_locked, 1600, "3 持仓 locked 合计应为 1600");
 
-        // 对 BTC 加仓。
         assert_eq!(ask(&mut api, 1004, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2004, USER_MULTI, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
@@ -196,7 +166,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例3：持仓从无到有——takerSpr==null 边界。
     #[test]
     fn new_position_creation() {
         let mut api = new_api();
@@ -218,7 +187,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例4：持仓清空——完全平仓时的 locked 计算。
     #[test]
     fn position_fully_close() {
         let mut api = new_api();
@@ -227,14 +195,12 @@ mod tests {
         add_user_money(&mut api, USER_MULTI, 100_000, 1);
         add_user_money(&mut api, MAKER_UID, MAX_VALUE, 2);
 
-        // 开 BTC + ETH。
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2001, USER_MULTI, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 1002, MAKER_UID, 10, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2002, USER_MULTI, 10, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
         let locked_with_two = locked_margin(&api, USER_MULTI);
 
-        // 完全平掉 BTC（USER_MULTI LONG 2 → ASK 2 平；MAKER SHORT 2 → BID 2 平）。
         assert_eq!(bid(&mut api, 1003, MAKER_UID, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 2003, USER_MULTI, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
@@ -247,7 +213,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例5：带 extraMargin 的持仓清空——验证 refundExtraMargin。
     #[test]
     fn position_close_with_extra_margin() {
         let extra_margin = 1000i64;
@@ -259,7 +224,6 @@ mod tests {
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2001, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
-        // 追加 extraMargin（对应 placeExtraMargin，ISOLATED；action ONEWAY 下被忽略）。
         assert_eq!(
             api.margin_adjustment(MarginAdjustmentRequest {
                 uid: TAKER_UID, symbol: SYMBOL_BTC, action: OrderAction::Bid,
@@ -272,19 +236,16 @@ mod tests {
 
         let balance_before_close = balance(&api, TAKER_UID);
 
-        // 完全平仓（TAKER LONG 1 主动 ASK 吃单 → close taker fee = 20*1）。
         assert_eq!(bid(&mut api, 1002, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 2002, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert!(api.user_position(TAKER_UID, SYMBOL_BTC).is_none(), "已全平");
 
         let balance_after_close = balance(&api, TAKER_UID);
-        // 变化 = 平仓盈亏(0, 同价) + extraMargin 退还 − 平仓 taker fee(20)。
         let expected_close_fee = 20i64;
         assert_eq!(balance_after_close - balance_before_close, extra_margin - expected_close_fee);
         assert_conserved(&api);
     }
 
-    // 用例6：多个 MatcherEvent 链——大单扫多档 maker。
     #[test]
     fn multiple_matcher_events() {
         let mut api = new_api();
@@ -293,17 +254,14 @@ mod tests {
         add_user_money(&mut api, TAKER_UID, 100_000, 1);
         add_user_money(&mut api, MAKER_UID, MAX_VALUE, 2);
 
-        // Maker 3 档 BTC ASK，建盘口深度。
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 1002, MAKER_UID, 1, 100_001, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 1003, MAKER_UID, 1, 100_002, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
-        // 用户已有其他持仓（ETH）。
         assert_eq!(ask(&mut api, 1004, MAKER_UID, 10, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2001, TAKER_UID, 10, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
         let locked_before = locked_margin(&api, TAKER_UID);
 
-        // Taker 大单扫掉 3 档 BTC ASK（BID 100003 覆盖最高 ASK 100002）。
         assert_eq!(bid(&mut api, 2002, TAKER_UID, 3, 100_003, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
         assert_eq!(api.user_position(TAKER_UID, SYMBOL_BTC).unwrap().open_volume, 3);
@@ -312,7 +270,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例7：挂单 pending 的影响——pending 部分通过 position 记录跟踪。
     #[test]
     fn pending_orders_locked_margin() {
         let mut api = new_api();
@@ -330,7 +287,6 @@ mod tests {
             assert_eq!(pos.pending_sell_size, 0);
         }
 
-        // 挂一个增仓限价单（@90000 不会立即成交）。
         assert_eq!(bid(&mut api, 2002, TAKER_UID, 1, 90_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         {
             let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("应有持仓");
@@ -338,7 +294,6 @@ mod tests {
             assert_eq!(pos.pending_buy_avg_price, 90_000);
         }
 
-        // 取消挂单。
         assert_eq!(
             api.cancel_order(CancelOrderRequest { order_id: 2002, uid: TAKER_UID, symbol: SYMBOL_BTC }),
             CommandResultCode::Success
@@ -347,7 +302,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例8：对手方 Maker 的 locked 计算。
     #[test]
     fn maker_locked_margin_calculation() {
         let mut api = new_api();
@@ -356,14 +310,12 @@ mod tests {
         add_user_money(&mut api, MAKER_UID, MAX_VALUE, 1);
         add_user_money(&mut api, TAKER_UID, MAX_VALUE, 2);
 
-        // Maker 开 BTC + ETH（TAKER 挂 resting，MAKER 吃单开 LONG）。
         assert_eq!(ask(&mut api, 1001, TAKER_UID, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2001, MAKER_UID, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 1002, TAKER_UID, 20, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2002, MAKER_UID, 20, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
         let maker_locked_before = locked_margin(&api, MAKER_UID);
 
-        // Maker 挂 BTC ASK（reducing，resting），Taker 吃单 → Maker 部分平 BTC。
         assert_eq!(ask(&mut api, 2003, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 1003, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
@@ -373,7 +325,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例9：全仓（CROSS）模式下的 locked 计算。
     #[test]
     fn cross_margin_locked_calculation() {
         let mut api = new_api();
@@ -382,7 +333,6 @@ mod tests {
         add_user_money(&mut api, USER_MULTI, 100_000, 1);
         add_user_money(&mut api, MAKER_UID, MAX_VALUE, 2);
 
-        // 开仓，用户侧用 CROSS。
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2001, USER_MULTI, 1, 100_000, SYMBOL_BTC, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 1002, MAKER_UID, 10, 3_000, SYMBOL_ETH, MarginMode::Isolated), CommandResultCode::Success);
@@ -391,7 +341,6 @@ mod tests {
         let locked = locked_margin(&api, USER_MULTI);
         assert!(locked > 0, "CROSS 用户应有 locked margin");
 
-        // 平掉 BTC。
         assert_eq!(bid(&mut api, 1003, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 2003, USER_MULTI, 1, 100_000, SYMBOL_BTC, MarginMode::Cross), CommandResultCode::Success);
 
@@ -400,7 +349,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 用例10：性能对比——原测试只计时（丢弃），此处翻译命令流的功能正确性（大单扫多档 maker 后持仓/守恒）。
     #[test]
     fn performance_improvement_functional() {
         let mut api = new_api();
@@ -417,13 +365,11 @@ mod tests {
         assert_eq!(ask(&mut api, 1003, MAKER_UID, 1000, 300, SYMBOL_BNB, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2003, USER_MULTI, 1000, 300, SYMBOL_BNB, MarginMode::Isolated), CommandResultCode::Success);
 
-        // 准备 Maker 订单簿深度（10 档 BTC ASK size1）。
         for i in 0..10i64 {
             let order_id = 1010 + i;
             assert_eq!(ask(&mut api, order_id, MAKER_UID, 1, 100_000 + i, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         }
 
-        // 大单匹配多档 maker（BTC LONG 10 → 20）。
         assert_eq!(bid(&mut api, 2010, USER_MULTI, 10, 200_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(api.user_position(USER_MULTI, SYMBOL_BTC).unwrap().open_volume, 20, "大单扫满 10 档后 BTC LONG=20");
         assert_conserved(&api);

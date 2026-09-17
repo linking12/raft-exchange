@@ -1,5 +1,3 @@
-//! 对应 Java `exchange.core2.core.ITradeEventsHandler`（成交/订单事件回调 + Spot/Futures 执行回报）。
-//! 移植取向：去对象池（无 borrow/recycle），回报结构直接构造按值下发。
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -10,7 +8,6 @@ use crate::core::common::position_mode::PositionMode;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{calculate_amount_bid, calculate_maker_fee, calculate_taker_fee};
 
-/// 对应 Java `ITradeEventsHandler.ExecType`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecType {
     New,
@@ -20,7 +17,6 @@ pub enum ExecType {
     Reject,
 }
 
-/// 对应 Java `ITradeEventsHandler.OrderStatus`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderStatus {
     New,
@@ -30,7 +26,6 @@ pub enum OrderStatus {
     Rejected,
 }
 
-/// 对应 Java `ITradeEventsHandler.OrderBookRecord`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderBookRecord {
     pub price: i64,
@@ -38,7 +33,6 @@ pub struct OrderBookRecord {
     pub orders: i32,
 }
 
-/// 对应 Java `ITradeEventsHandler.OrderBook`：L2 快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderBook {
     pub symbol: i32,
@@ -49,7 +43,6 @@ pub struct OrderBook {
     pub quote_scale_k: i64,
 }
 
-/// 对应 Java `ITradeEventsHandler`：非低延迟场景的成交事件回调；调用顺序 commandResult → reduce/trade | reject → orderBook。
 pub trait TradeEventsHandler {
     fn order_book(&mut self, order_book: OrderBook);
     fn spot_execution_report(&mut self, report: SpotExecutionReport);
@@ -60,7 +53,6 @@ fn is_budget(order_type: OrderType) -> bool {
     matches!(order_type, OrderType::FokBudget | OrderType::IocBudget)
 }
 
-/// REDUCE_ORDER / CANCEL_ORDER 的 (ExecType, OrderStatus) 判定（Spot/Futures 共用）。
 fn reduce_exec_status(cmd: &OrderCommand, event: &MatcherTradeEvent) -> (ExecType, OrderStatus) {
     if cmd.command == OrderCommandType::ReduceOrder {
         let status = if event.filled == 0 {
@@ -76,7 +68,6 @@ fn reduce_exec_status(cmd: &OrderCommand, event: &MatcherTradeEvent) -> (ExecTyp
     }
 }
 
-/// 对应 Java `ITradeEventsHandler.SpotExecutionReport`（去对象池）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpotExecutionReport {
     pub execution_id: i64,
@@ -107,20 +98,16 @@ pub struct SpotExecutionReport {
 }
 
 impl SpotExecutionReport {
-    // ===== 核心行为 =====
-    /// 对应 Java `SpotExecutionReport.placeOrder`。
     pub fn place_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) -> Self {
         let mut r = Self::base(cmd, spec, ExecType::New, OrderStatus::New, ExecutionIdGenerator::build_new_exec_id(seq));
         r.working_indicator = cmd.order_type == Some(OrderType::Gtc);
         r
     }
 
-    /// 对应 Java `SpotExecutionReport.rejectOrder`。
     pub fn reject_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) -> Self {
         Self::base(cmd, spec, ExecType::Reject, OrderStatus::Rejected, ExecutionIdGenerator::build_reject_exec_id(seq))
     }
 
-    /// 对应 Java `SpotExecutionReport.reduceOrder`。
     pub fn reduce_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, event: &MatcherTradeEvent) -> Self {
         let (execution_type, order_status) = reduce_exec_status(cmd, event);
         let mut r = Self::base(cmd, spec, execution_type, order_status, ExecutionIdGenerator::build_reduce_exec_id(seq));
@@ -129,7 +116,6 @@ impl SpotExecutionReport {
         r
     }
 
-    /// 对应 Java `SpotExecutionReport.tradeTaker`。
     pub fn trade_taker(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, ev: &MatcherTradeEvent, trade_index: i32) -> Self {
         let status = if ev.active_order_completed { OrderStatus::Filled } else { OrderStatus::PartiallyFilled };
         let mut r = Self::base(cmd, spec, ExecType::Trade, status, ExecutionIdGenerator::build_trade_exec_id(seq, trade_index, false));
@@ -145,7 +131,6 @@ impl SpotExecutionReport {
         r
     }
 
-    /// 对应 Java `SpotExecutionReport.tradeMaker`（视角切到 maker 挂单，字段取 `MatcherTradeEvent.matched*`）。
     pub fn trade_maker(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, ev: &MatcherTradeEvent, trade_index: i32) -> Self {
         let budget = is_budget(ev.matched_order_type);
         let status = if ev.maker_order_completed { OrderStatus::Filled } else { OrderStatus::PartiallyFilled };
@@ -178,7 +163,6 @@ impl SpotExecutionReport {
         }
     }
 
-    // ===== 内部 helper =====
     fn base(cmd: &OrderCommand, spec: &CoreSymbolSpecification, execution_type: ExecType, order_status: OrderStatus, execution_id: i64) -> Self {
         let order_type = cmd.order_type.unwrap_or(OrderType::Gtc);
         let budget = is_budget(order_type);
@@ -212,7 +196,6 @@ impl SpotExecutionReport {
     }
 }
 
-/// 对应 Java `ITradeEventsHandler.FuturesExecutionReport`（去对象池）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuturesExecutionReport {
     pub uni_id: i64,
@@ -244,24 +227,19 @@ pub struct FuturesExecutionReport {
 }
 
 impl FuturesExecutionReport {
-    // ===== 核心行为 =====
-    /// 对应 Java `FuturesExecutionReport.placeOrder`。
     pub fn place_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, position_side: PositionMode) -> Self {
         Self::base(cmd, spec, position_side, ExecType::New, OrderStatus::New, ExecutionIdGenerator::build_new_exec_id(seq))
     }
 
-    /// 对应 Java `FuturesExecutionReport.rejectOrder`。
     pub fn reject_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, position_side: PositionMode) -> Self {
         Self::base(cmd, spec, position_side, ExecType::Reject, OrderStatus::Rejected, ExecutionIdGenerator::build_reject_exec_id(seq))
     }
 
-    /// 对应 Java `FuturesExecutionReport.reduceOrder`。
     pub fn reduce_order(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, position_side: PositionMode, event: &MatcherTradeEvent) -> Self {
         let (execution_type, order_status) = reduce_exec_status(cmd, event);
         Self::base(cmd, spec, position_side, execution_type, order_status, ExecutionIdGenerator::build_reduce_exec_id(seq))
     }
 
-    /// 对应 Java `FuturesExecutionReport.tradeTaker`。
     pub fn trade_taker(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, position_side: PositionMode, ev: &MatcherTradeEvent, trade_index: i32) -> Self {
         let status = if ev.active_order_completed { OrderStatus::Filled } else { OrderStatus::PartiallyFilled };
         let mut r = Self::base(cmd, spec, position_side, ExecType::Trade, status, ExecutionIdGenerator::build_trade_exec_id(seq, trade_index, false));
@@ -277,7 +255,6 @@ impl FuturesExecutionReport {
         r
     }
 
-    /// 对应 Java `FuturesExecutionReport.tradeMaker`（`maker_position_side` 为 maker 的持仓方向）。
     pub fn trade_maker(cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, maker_position_side: PositionMode, ev: &MatcherTradeEvent, trade_index: i32) -> Self {
         let budget = is_budget(ev.matched_order_type);
         let status = if ev.maker_order_completed { OrderStatus::Filled } else { OrderStatus::PartiallyFilled };
@@ -311,7 +288,6 @@ impl FuturesExecutionReport {
         }
     }
 
-    // ===== 内部 helper =====
     #[allow(clippy::too_many_arguments)]
     fn base(cmd: &OrderCommand, spec: &CoreSymbolSpecification, position_side: PositionMode, execution_type: ExecType, order_status: OrderStatus, uni_id: i64) -> Self {
         let order_type = cmd.order_type.unwrap_or(OrderType::Gtc);
@@ -347,7 +323,6 @@ impl FuturesExecutionReport {
     }
 }
 
-/// 对应 Java `ITradeEventsHandler.ExecutionIdGenerator`：seq 左移 12 位 + 子序号，成交对 taker/maker 各占一号。
 pub struct ExecutionIdGenerator;
 
 impl ExecutionIdGenerator {

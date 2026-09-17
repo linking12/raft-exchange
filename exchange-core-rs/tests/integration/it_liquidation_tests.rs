@@ -1,28 +1,3 @@
-//! 翻译自 Java `exchange.core2.tests.integration.ITLiquidationIntegration`（13 个 @Test）——期货强平
-//! 集成测试。Java 用多分片（`riskEnginesNum=8`）+ `LiquidationEngine::stop`/`triggerLiquidation`/
-//! `updateCurrentPriceTo`/`groupingControl` 驱动跨 shard 强平；Rust `ExchangeApi` 是**单分片**门面，改用
-//! `enable_liquidation()` + `set_mark_price_at(sym, adverse, ts)` 触发定向扫描 + FORCE→IF→ADL 自动排空级联
-//! （见 `src/core/liquidation_e2e_tests.rs`）。
-//!
-//! 强平的逐笔 fund event 走内部排空命令、`last_fund_events()` 不捕获，故断言最终**状态**：被强平者仓位
-//! 移除 / 减仓、保证金模式差异（ISOLATED 被平、CROSS 存活）、流动性提供者挂单被消耗、全局守恒
-//! `total_balance().is_global_zero()`。跨 shard 负载分布、分片计数等**多分片专属断言无法在单分片复刻**，
-//! 相应测试要么按单分片语义翻译核心行为、要么跳过（见下）。
-//!
-//! 期货 symbol 复刻 Java `initFutureSymbols()`：BTC(10000, XBT/USD, maker10/taker20 固定费) +
-//! ETH(10001, ETH/USD, maker1/taker2 比例费 feeScaleK100)，均 MM{1000:5,100000:10}@scaleK1000,
-//! maxLeverage{2000:5,100000:10}, initMargin1/scaleK100。货币 digit0→scaleK1。leverage=1 == Java
-//! createBid/Ask 默认（base initMargin 率）。
-//!
-//! **未翻译的 @Test（及原因）——共 5 个跳过**：
-//!   - `testShardingLoadBalance`：纯多分片负载均衡分布断言（shard0/shard1 强平数差值 ≤ 阈值），单分片无意义。
-//!   - `testUsersServiceSharding`：仅验证用户跨 shard 存在（`riskEnginesNum=8` 分片配置），单分片无意义。
-//!   - `testSymbolIndexMaintainedThroughOpenAndClose` / `testSymbolIndexRebuiltByUpdateProvider`：断言
-//!     `LiquidationEngine.symbolToUsers` 索引内部结构 / `updateProvider` 重建，`ExchangeApi` 未暴露引擎索引内省。
-//!   - `testCrossShardCounterpartyLiquidation`：HEDGE 流动性提供者 + 跨 shard 双 symbol 对手单强平，依赖多分片
-//!     独立性 + HEDGE 双腿 + report `pendingBuy/SellSize` 组合断言，单分片 + `user_position` 单键无法完整复刻。
-//!   其余 8 个已翻译（多分片场景降级为单分片核心行为 + 守恒）。
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -39,7 +14,7 @@ mod tests {
     use exchange_core_rs::core::common::fund_event::FundEventType;
 
     const XBT: i32 = 3762;
-    const USD: i32 = 840; // QUOTE_ID
+    const USD: i32 = 840;
     const ETH: i32 = 3928;
     const BTC_SYM: i32 = 10000;
     const ETH_SYM: i32 = 10001;
@@ -91,7 +66,6 @@ mod tests {
         }
     }
 
-    /// 单 BTC symbol + mark=entry。
     fn setup_btc(entry: i64) -> ExchangeApi {
         let mut api = ExchangeApi::new();
         api.add_currency(XBT, 1);
@@ -101,7 +75,6 @@ mod tests {
         api
     }
 
-    /// BTC + ETH 双 symbol + 两 mark=entry。
     fn setup_two(entry: i64) -> ExchangeApi {
         let mut api = ExchangeApi::new();
         api.add_currency(XBT, 1);
@@ -153,10 +126,6 @@ mod tests {
         api.user_position(uid, sym).map(|p| p.open_volume).unwrap_or(0)
     }
 
-    // ================================================================================================
-    // 1. testBasicLiquidationIsolatedMode —— 逐仓多头，价格暴跌被全平。
-    // ================================================================================================
-
     #[test]
     fn basic_liquidation_isolated_long() {
         let (trader, lp) = (1001i64, 2001i64);
@@ -169,34 +138,23 @@ mod tests {
         seed_user(&mut api, trader, 3_000, 1);
         seed_user(&mut api, lp, 100_000, 2);
 
-        // 逐仓多头开仓：trader BID(ISOLATED)、lp ASK(CROSS) 对手。
         assert_eq!(place(&mut api, 10001, trader, BTC_SYM, entry, position_size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 10002, lp, BTC_SYM, entry, position_size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(open_volume(&api, trader, BTC_SYM), position_size);
 
-        // 强平接单流动性：lp 在破产价上方挂大额 BID。
         let liquidity = position_size + 15;
         assert_eq!(place(&mut api, 10003, lp, BTC_SYM, bp_fill, liquidity, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
-        // 价格暴跌触发定向强平。
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
 
         assert!(api.user_position(trader, BTC_SYM).is_none(), "交易者应被全平");
-        // 金额精确锚点（不止守恒）：
-        //   trader = 3000 − 100(开仓 maker 费 10×10) − 1000(逐仓保证金 notional×initMargin/scaleK=100000/100 全损) = 1900。
         assert_eq!(api.user_account(trader, USD), 1_900, "被强平方亏掉逐仓保证金+已付费，保留 1900");
-        //   fees = 开仓(trader maker 100 + lp taker 200) + 强平成交(被平方 taker 200 + lp maker 100) = 600。
         assert_eq!(api.fees(USD), 600, "开仓+强平两笔成交的 maker/taker 费全入池");
-        //   未配 liquidation_fee → IF 无进项。
         let if_available: i64 = api.insurance_fund().futures.values().map(|e| e.available).sum();
         assert_eq!(if_available, 0, "无 liquidation_fee → IF available 不增");
-        //   lp 对手方净结算金额（cross 平空 + 收付费）——回归锚点。
         assert_eq!(api.user_account(lp, USD), 99_700, "LP 对手方净结算");
-        // lp 的接单流动性被强平卖单消耗 10（25→15）。
         assert_eq!(api.user_position(lp, BTC_SYM).unwrap().pending_buy_size, liquidity - position_size, "lp 流动性被消耗 10");
-        // 级联事件流锚点(Java ITLiquidation 只验 state,不断言事件;此处钉 Rust 事件流,补事件级覆盖):
-        // 被强平方(trader)UnlockPending→LiquidationClose→PnlSettlement→LiquidationFee;对手(lp)UnlockPending→ClosePosition。
         let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
             (FundEventType::UnlockPending, trader),
@@ -206,15 +164,10 @@ mod tests {
             (FundEventType::ClosePosition, lp),
             (FundEventType::LiquidationFee, trader),
         ], "强平级联事件流(类型+uid)");
-        // 被强平方结算后 free 与账户一致;强平费事件存在。
         let pnl = api.cascade_fund_events().iter().find(|e| e.event_type == FundEventType::PnlSettlement && e.uid == trader).unwrap();
         assert_eq!(pnl.free, 1_900, "PnlSettlement 事件 free == 最终账户");
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 2. testTargetedLiquidationByMarkPriceDrop_isolated —— 仅靠 mark price 下跌驱动 targeted 强平（无全量扫）。
-    // ================================================================================================
 
     #[test]
     fn targeted_liquidation_by_mark_price_drop_isolated() {
@@ -234,17 +187,12 @@ mod tests {
 
         assert_eq!(place(&mut api, 110003, lp, BTC_SYM, bp_fill, size + 15, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
-        // 开启引擎后仅靠 MARKPRICE 下跌命令 apply 时的 targeted checkPositions 完成强平（核心收益路径）。
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
 
         assert!(api.user_position(trader, BTC_SYM).is_none(), "targeted 路径应完成逐仓强平");
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 3. testShortPositionLiquidation —— 逐仓空头，价格暴涨被全平。
-    // ================================================================================================
 
     #[test]
     fn short_position_liquidation() {
@@ -258,16 +206,13 @@ mod tests {
         seed_user(&mut api, trader, 8_000, 1);
         seed_user(&mut api, lp, 100_000, 2);
 
-        // 逐仓空头：trader ASK(ISOLATED)、lp BID(CROSS) 对手。
         assert_eq!(place(&mut api, 30001, trader, BTC_SYM, entry, size, OrderAction::Ask, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 30002, lp, BTC_SYM, entry, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(open_volume(&api, trader, BTC_SYM), size);
 
-        // 强平接单流动性：lp 在破产价下方挂 ASK（接收强平买单）。
         let liquidity = size + 13;
         assert_eq!(place(&mut api, 30003, lp, BTC_SYM, bp_fill, liquidity, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
-        // 价格暴涨触发空头强平。
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
 
@@ -275,10 +220,6 @@ mod tests {
         assert!(api.user_position(lp, BTC_SYM).unwrap().pending_sell_size < liquidity, "lp 卖单流动性应被消耗");
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 4. testPartialLiquidation —— 全仓大额多头 + 有限流动性 → 部分强平（减仓不必清零）。
-    // ================================================================================================
 
     #[test]
     fn partial_liquidation_reduces_position() {
@@ -295,21 +236,15 @@ mod tests {
         assert_eq!(place(&mut api, 40002, lp, BTC_SYM, entry, position_size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(open_volume(&api, trader, BTC_SYM), position_size);
 
-        // 有限流动性：只挂一半（模拟部分强平）。
         let liquidity = position_size / 2;
         assert_eq!(place(&mut api, 40003, lp, BTC_SYM, partial_liq_price, liquidity, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, partial_liq_price), CommandResultCode::Success);
 
-        // 持仓应减少（部分或全部强平均可，Java 亦允许两者）。
         assert!(open_volume(&api, trader, BTC_SYM) < position_size, "强平后持仓应减少");
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 5. testMultipleUsersLiquidation —— 多用户同时逐仓多头被强平。
-    // ================================================================================================
 
     #[test]
     fn multiple_users_liquidation() {
@@ -334,7 +269,6 @@ mod tests {
             assert_eq!(open_volume(&api, t, BTC_SYM), position_size);
         }
 
-        // 足够流动性接收全部强平卖单。
         let liquidity = traders.len() as i64 * position_size + 5;
         assert_eq!(place(&mut api, oid, lp, BTC_SYM, liq_price, liquidity, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
@@ -346,10 +280,6 @@ mod tests {
         }
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 6. testMultiUserCrossShardLiquidation —— 单分片降级：6 逐仓多头全平，lp2 流动性被消耗。
-    // ================================================================================================
 
     #[test]
     fn multi_user_liquidation_liquidity_consumed() {
@@ -378,25 +308,18 @@ mod tests {
             assert_eq!(open_volume(&api, u, BTC_SYM), size, "用户 {u} 应有持仓");
         }
 
-        // lp2 大额接单流动性。
         let liquidity = 50i64;
         assert_eq!(place(&mut api, oid, lp2, BTC_SYM, bp_fill, liquidity, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
 
-        // 6 用户各 5 手全平。
         for &u in &users {
             assert!(api.user_position(u, BTC_SYM).is_none(), "用户 {u} 应被全平");
         }
-        // lp2 接到强平卖单（流动性被消耗）。
         assert!(api.user_position(lp2, BTC_SYM).unwrap().pending_buy_size < liquidity, "lp2 流动性应被消耗");
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 7. testMixedMarginModeAcrossShards —— 单分片降级：ISOLATED 被强平、CROSS 存活（模式差异化行为）。
-    // ================================================================================================
 
     #[test]
     fn mixed_margin_mode_isolated_liquidated_cross_survives() {
@@ -405,10 +328,9 @@ mod tests {
         let size = 3i64;
         let entry = 10_000i64;
         let bp_fill = 9_920i64;
-        let liq_price = 8_000i64; // 20% 下跌
+        let liq_price = 8_000i64;
 
         let mut api = setup_btc(entry);
-        // 全仓用户资金充足（不被强平）。
         seed_user(&mut api, cross1, 50_000, 1);
         seed_user(&mut api, cross2, 50_000, 2);
         seed_user(&mut api, iso1, 50_000, 3);
@@ -424,24 +346,18 @@ mod tests {
             assert_eq!(open_volume(&api, u, BTC_SYM), size);
         }
 
-        // 接单流动性。
         let liquidity = 4 * size + 10;
         assert_eq!(place(&mut api, oid, lp, BTC_SYM, bp_fill, liquidity, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
 
-        // 逐仓（隔离保证金仅 1%）被强平；全仓（账户总余额充足）存活。
         assert!(api.user_position(iso1, BTC_SYM).is_none(), "逐仓 iso1 应被强平");
         assert!(api.user_position(iso2, BTC_SYM).is_none(), "逐仓 iso2 应被强平");
         assert_eq!(open_volume(&api, cross1, BTC_SYM), size, "全仓 cross1 不应被强平");
         assert_eq!(open_volume(&api, cross2, BTC_SYM), size, "全仓 cross2 不应被强平");
         assert_conserved(&api);
     }
-
-    // ================================================================================================
-    // 8. testCrossMarginLiquidation —— 全仓双 symbol 多头，两价均跌 → 至少减仓。
-    // ================================================================================================
 
     #[test]
     fn cross_margin_liquidation_reduces_total_volume() {
@@ -455,7 +371,6 @@ mod tests {
         seed_user(&mut api, trader, 20_000, 1);
         seed_user(&mut api, lp, 100_000, 2);
 
-        // 两 symbol 上全仓多头。
         assert_eq!(place(&mut api, 20001, trader, BTC_SYM, entry, size1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 20002, lp, BTC_SYM, entry, size1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 20003, trader, ETH_SYM, entry, size2, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
@@ -463,11 +378,9 @@ mod tests {
         let initial_total = open_volume(&api, trader, BTC_SYM) + open_volume(&api, trader, ETH_SYM);
         assert_eq!(initial_total, size1 + size2);
 
-        // 两 symbol 接单流动性。
         assert_eq!(place(&mut api, 20005, lp, BTC_SYM, bp_fill, size1 + 15, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 20006, lp, ETH_SYM, bp_fill, size2 + 17, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
-        // 两价均跌触发全仓强平。
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(ETH_SYM, liq_price), CommandResultCode::Success);
@@ -477,14 +390,12 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // LIQUIDATION_SCAN 切片端到端：两个都该爆的用户（uid 奇偶不同），发只覆盖一个切片的 SCAN，
-    // 断言只有中签 uid 被强平、另一个到下一片才处理。验证 uid 轮询切片（covered_by_scan_slice）真的生效。
     #[test]
     fn liquidation_scan_slice_only_covers_matching_uid() {
         let entry = 10_000i64;
         let bp_fill = 9_920i64;
-        let trader_even = 1_000i64; // slice 0（偶）
-        let trader_odd = 1_001i64; // slice 1（奇）
+        let trader_even = 1_000i64;
+        let trader_odd = 1_001i64;
         let lp = 2_000i64;
         let size = 10i64;
 
@@ -493,7 +404,6 @@ mod tests {
         seed_user(&mut api, trader_odd, 3_000, 2);
         seed_user(&mut api, lp, 1_000_000, 3);
 
-        // 两个 trader 各 ISOLATED long 10@entry；lp CROSS short 对手。
         assert_eq!(place(&mut api, 1, trader_even, BTC_SYM, entry, size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 2, lp, BTC_SYM, entry, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 3, trader_odd, BTC_SYM, entry, size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
@@ -501,17 +411,14 @@ mod tests {
         assert_eq!(open_volume(&api, trader_even, BTC_SYM), size);
         assert_eq!(open_volume(&api, trader_odd, BTC_SYM), size);
 
-        // lp 在破产价挂大额接单流动性（够两次强平）。
         assert_eq!(place(&mut api, 5, lp, BTC_SYM, bp_fill, 3 * size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
-        // 先在 is_running=false 时压低 markprice：价格入缓存但 check_positions 早退，不触发定向扫描。
         assert_eq!(api.set_mark_price(BTC_SYM, 500), CommandResultCode::Success);
         assert_eq!(open_volume(&api, trader_even, BTC_SYM), size, "未开清算前不扫");
         assert_eq!(open_volume(&api, trader_odd, BTC_SYM), size);
 
         api.enable_liquidation();
 
-        // 切片 0（size=2，覆盖偶 uid）→ 只强平 trader_even。
         let scan = |slice: i64| OrderCommand {
             command: OrderCommandType::LiquidationScan, symbol: -1, uid: slice, size: 2, timestamp: 3_000, ..Default::default()
         };
@@ -519,7 +426,6 @@ mod tests {
         assert!(api.user_position(trader_even, BTC_SYM).is_none(), "偶 uid 中签切片0 → 被强平");
         assert_eq!(open_volume(&api, trader_odd, BTC_SYM), size, "奇 uid 未中签切片0 → 保留");
 
-        // 切片 1（覆盖奇 uid）→ trader_odd 才被强平。
         assert_eq!(api.submit(scan(1)), CommandResultCode::Success);
         assert!(api.user_position(trader_odd, BTC_SYM).is_none(), "奇 uid 中签切片1 → 被强平");
         assert_conserved(&api);

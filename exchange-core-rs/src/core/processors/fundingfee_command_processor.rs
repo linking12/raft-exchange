@@ -1,6 +1,3 @@
-//! 对应 Java `FundingFeeCommandProcessor`（两步处理器）：`SETTLE_FUNDINGFEES` 资金费零和结算——payer 池精确算费、receiver 池 pro-rata 分摊，两者恒等。
-//! R1 collect_input 产出 payer_amounts/receiver_notionals；merge build_matcher_events 做两级 pro-rata 第一级；R2 apply_event 做第二级并经 settle_funding_fee 落账（活仓记 profit，ghost 仓缩放进 accounts[quote_currency]）。
-
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -20,25 +17,20 @@ use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::{distribute_remainder_by_one, mul_exact};
 
-/// i64 值序列的溢出安全求和：i128 累加后收窄，超 i64 即 panic（跨用户/跨 shard notional 聚合用）。
 fn sum_i64_checked<'a>(vals: impl Iterator<Item = &'a i64>) -> i64 {
     let s: i128 = vals.map(|&v| v as i128).sum();
     i64::try_from(s).unwrap_or_else(|_| panic!("overflow: funding notional sum {s}"))
 }
 
-/// 对应 Java `FundingPaymentAndRecvNotional`：单 shard 一份，`uid -> fee`（payer 侧，R1 已算好精确值）+ `uid -> raw notional`（receiver 侧，费用留到 merge/R2 再算）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FundingPaymentAndRecvNotional {
     pub payer_amounts: BTreeMap<i64, i64>,
     pub receiver_notionals: BTreeMap<i64, i64>,
 }
 
-/// 无状态处理器——参见模块文档。
 pub struct FundingFeeCommandProcessor;
 
 impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
-    /// R1：仅 PERPETUAL + markPrice 可用 + size>0 才收集;`collect_input` 扫 ACTIVE 用户产 payer/receiver map,
-    /// `build_matcher_events` 做第一级 pro-rata,写 `cmd.funding_fee_event`。
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         let spec = match ctx.ssp.get_symbol(cmd.symbol) {
             Some(s) if s.symbol_type == SymbolType::FuturesContractPerpetual => s,
@@ -61,8 +53,6 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
         CommandResultCode::Success
     }
 
-    /// R2：消费 `cmd.funding_fee_event`（None 早退），`apply_event` 落账,再对每个 payer/receiver 发
-    /// FUNDINGFEE_SETTLEMENT（活仓走 futures 快照,ghost 仓走 spot 快照）。
     fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
         let Some((payer_amounts, receiver_notionals, shard_recv_amount)) = cmd.funding_fee_event.take() else {
             return;
@@ -75,7 +65,6 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
             .get_currency(spec.quote_currency)
             .cloned()
             .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
-        // apply_event 落账并返回 receiver 的实际分摊 map，供下方门控事件发射（避免重算 distribute_remainder_by_one）。
         let receiver_fees = Self::apply_event(
             ctx.ups,
             symbol,
@@ -91,8 +80,6 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
         let lpc = &ctx.risk.last_price_cache;
         let payer_dir = PositionDirection::of_action(action);
         let recv_dir = PositionDirection::of_action(action.opposite());
-        // 事件只对**实际结算的用户**发,对齐 Java `settleFundingFee` 的内联发射:payer 恒非零(collect_input 只收 fee>0)
-        // 故全发;receiver 只对**非零分摊**发(Java `if (fee==0) continue`,复用 apply_event 已算好的 receiver_fees)。
         for (&uid, dir) in payer_amounts
             .keys()
             .map(|u| (u, payer_dir))
@@ -113,8 +100,6 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
 }
 
 impl FundingFeeCommandProcessor {
-    /// R1：对应 Java `collectInput`。前置门禁（`cmd.size<=0`/mark price 缺失）在调用方 [`Self::collect`] 里判；本函数只扫 ACTIVE 用户产出 payer/receiver 两个 map。
-    /// 仓位遍历对齐 [`UserProfile::process_position_record`]：ONEWAY 只处理 `symbol`，HEDGE 追加处理 `-symbol` 空头腿——否则空头腿不进池、破坏零和（settle 侧已按 `-symbol` 结算，collect 须对称）。HEDGE 多空两腿方向恒相反，按 uid 键不会互相覆盖。
     fn collect_input(
         ups: &UserProfileService,
         symbol: i32,
@@ -155,10 +140,7 @@ impl FundingFeeCommandProcessor {
         shard
     }
 
-    /// merge：对应 Java `buildMatcherEvents`——两级 pro-rata 的第一级：`total_pay`（跨 shard payer 费用求和）按各 shard 的 receiver notional 占比截断分配 + [`distribute_remainder_by_one`] 余数分配（shard-id 升序，确定性）。
-    /// `total_pay==0 || total_recv_notional==0` → 返回空 `Vec`（无可结算的东西）。参与分配的判定统一用 `receiver_notionals` 非空（notional 恒 >0）。`amount<=0 且 payer_amounts 为空` 的 shard 跳过。
     fn build_matcher_events(shards_data: &[FundingPaymentAndRecvNotional]) -> Vec<(usize, i64)> {
-        // 跨用户/跨 shard notional 聚合用 i128 求和 + 收窄守卫，防单币种总名义额超 i64（每笔已 i64-bounded，聚合可溢）。
         let total_pay = sum_i64_checked(shards_data.iter().flat_map(|s| s.payer_amounts.values()));
         let total_recv_notional = sum_i64_checked(shards_data.iter().flat_map(|s| s.receiver_notionals.values()));
         if total_pay == 0 || total_recv_notional == 0 {
@@ -185,9 +167,6 @@ impl FundingFeeCommandProcessor {
         events
     }
 
-    /// R2：对应 Java `applyEvent`——两级 pro-rata 的第二级：先无条件精确扣 `payer_amounts`（逐用户 [`Self::settle_funding_fee`]），再把 `shard_recv_amount` 按 `receiver_notionals` 占比二次截断分配（[`distribute_remainder_by_one`]，weights 换成 uid -> notional），`fee==0` 的用户跳过。
-    /// `shard_recv_amount<=0 || receiver_notionals.is_empty()` → 第二级整体跳过（返回空 map，但 payer 侧已无条件处理）。
-    /// 返回 `uid -> receiver_fee`（含 fee==0 项）供调用方门控事件发射，避免重算 [`distribute_remainder_by_one`]。
     #[allow(clippy::too_many_arguments)]
     fn apply_event(
         ups: &mut UserProfileService,
@@ -216,10 +195,6 @@ impl FundingFeeCommandProcessor {
         receiver_fees
     }
 
-    /// 对应 Java `settleFundingFee`：payer/receiver 共用的落账逻辑。
-    ///
-    /// `position_side`：payer 用 `action` 本身，receiver 用 `action.opposite()`。`signed_fee`：payer 为负（扣），receiver 为正（加）。
-    /// HEDGE 双向查找：先查 `symbol`，方向不符则退查 `-symbol`。活仓命中（`open_volume>0` 且方向一致）→ 直接 `profit += signed_fee`（同 scale，不缩放）；ghost 回落（未命中活仓）→ `size_price_to_currency_scale` 缩放进 `accounts[quote_currency]`，费跟着钱走。用户缺失或非 ACTIVE 直接跳过。
     #[allow(clippy::too_many_arguments)]
     fn settle_funding_fee(
         ups: &mut UserProfileService,
@@ -309,14 +284,10 @@ mod tests {
         }
     }
 
-    // ---- R1 collect_input ----
-
     #[test]
     fn collect_input_payer_side_computes_exact_fee_and_skips_zero_fee() {
         let mut ups = ups_with_user(1);
         ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
-        // action=Bid（多付空）: LONG 持仓与 action 同向 -> payer。notional=100*10=1000,
-        // rate=5, rate_scale_k=1000 -> fee = trunc(1000*5/1000) = 5.
         let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
         assert_eq!(shard.payer_amounts.get(&1), Some(&5));
         assert!(shard.receiver_notionals.is_empty());
@@ -326,7 +297,6 @@ mod tests {
     fn collect_input_payer_side_skips_when_computed_fee_not_positive() {
         let mut ups = ups_with_user(1);
         ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
-        // notional=1000, rate=0 -> fee=0，不记入 payer_amounts（对应 Java `if (fundingFee > 0)`）。
         let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 0, 1000);
         assert!(shard.payer_amounts.is_empty());
     }
@@ -335,7 +305,6 @@ mod tests {
     fn collect_input_receiver_side_records_raw_notional_not_fee() {
         let mut ups = ups_with_user(2);
         ups.get_mut(2).unwrap().positions.insert(SYMBOL, position(2, PositionDirection::Short, 100));
-        // action=Bid: SHORT 持仓与 action 反向 -> receiver。记原始 notional=100*10=1000（不是 fee）。
         let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
         assert_eq!(shard.receiver_notionals.get(&2), Some(&1000));
         assert!(shard.payer_amounts.is_empty());
@@ -345,7 +314,7 @@ mod tests {
     fn collect_input_skips_flat_and_missing_positions_and_inactive_users() {
         let mut ups = ups_with_user(1);
         ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Empty, 0));
-        assert_eq!(ups.add_empty_user_profile(2), CommandResultCode::Success); // no position on SYMBOL at all
+        assert_eq!(ups.add_empty_user_profile(2), CommandResultCode::Success);
         assert_eq!(ups.add_empty_user_profile(3), CommandResultCode::Success);
         ups.get_mut(3).unwrap().positions.insert(SYMBOL, position(3, PositionDirection::Long, 100));
         ups.get_mut(3).unwrap().user_status = crate::core::common::user_status::UserStatus::Suspended;
@@ -357,22 +326,18 @@ mod tests {
 
     #[test]
     fn collect_input_hedge_processes_both_long_and_short_legs() {
-        // HEDGE 用户同时持 +symbol 多腿与 -symbol 空腿：两腿方向恒相反，必然一腿 payer、一腿 receiver。
-        // 对应 Java UserProfile.processPositionRecord 在 HEDGE 下追加处理 -symbol（回归 collect 漏结空头腿的 bug）。
         let mut ups = ups_with_user(1);
         ups.get_mut(1).unwrap().position_mode = PositionMode::Hedge;
         ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
         ups.get_mut(1).unwrap().positions.insert(-SYMBOL, position(1, PositionDirection::Short, 100));
 
         let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
-        // action=Bid: LONG 同向 -> payer fee=trunc(1000*5/1000)=5；SHORT 反向 -> receiver notional=1000。
         assert_eq!(shard.payer_amounts.get(&1), Some(&5), "多腿必须进 payer 池");
         assert_eq!(shard.receiver_notionals.get(&1), Some(&1000), "HEDGE 空腿（-symbol）必须被结算进 receiver 池");
     }
 
     #[test]
     fn collect_input_hedge_collects_lone_short_leg_at_negative_symbol() {
-        // 只有 -symbol 空腿的 HEDGE 用户：修复前 collect 只查 +symbol，会整条漏掉，破坏零和。
         let mut ups = ups_with_user(2);
         ups.get_mut(2).unwrap().position_mode = PositionMode::Hedge;
         ups.get_mut(2).unwrap().positions.insert(-SYMBOL, position(2, PositionDirection::Short, 100));
@@ -384,17 +349,13 @@ mod tests {
 
     #[test]
     fn collect_input_oneway_ignores_negative_symbol_key() {
-        // ONEWAY 用户即便 map 里意外存在 -symbol 记录，也不得被读取（对齐 processPositionRecord 仅 HEDGE 追加 -symbol）。
         let mut ups = ups_with_user(3);
-        // position_mode 默认 OneWay。
         ups.get_mut(3).unwrap().positions.insert(-SYMBOL, position(3, PositionDirection::Short, 100));
 
         let shard = FundingFeeCommandProcessor::collect_input(&ups, SYMBOL, 10, OrderAction::Bid, 5, 1000);
         assert!(shard.receiver_notionals.is_empty(), "ONEWAY 不得读取 -symbol");
         assert!(shard.payer_amounts.is_empty());
     }
-
-    // ---- merge build_matcher_events ----
 
     #[test]
     fn build_matcher_events_single_shard_full_pay_goes_to_single_shard_no_remainder() {
@@ -423,9 +384,6 @@ mod tests {
 
     #[test]
     fn build_matcher_events_multi_shard_pro_rata_by_receiver_notional_with_deterministic_remainder() {
-        // shard 0: payer 100; receiver notional sum = 30
-        // shard 1: payer 0;   receiver notional sum = 70
-        // total_pay=100, total_recv_notional=100 -> shard0 trunc(100*30/100)=30, shard1 trunc(100*70/100)=70，整除无余数。
         let mut shard0 = FundingPaymentAndRecvNotional::default();
         shard0.payer_amounts.insert(1, 100);
         shard0.receiver_notionals.insert(10, 30);
@@ -437,10 +395,6 @@ mod tests {
 
     #[test]
     fn build_matcher_events_multi_shard_remainder_goes_to_lowest_shard_id() {
-        // shard 0: payer 10; receiver notional 1
-        // shard 1: payer 0;  receiver notional 1
-        // shard 2: payer 0;  receiver notional 1
-        // total_pay=10, total_recv_notional=3 -> trunc(10*1/3)=3 每 shard，distributed=9，remainder=1 -> shard 0（升序最小）多拿 1。
         let mut shard0 = FundingPaymentAndRecvNotional::default();
         shard0.payer_amounts.insert(1, 10);
         shard0.receiver_notionals.insert(10, 1);
@@ -452,14 +406,12 @@ mod tests {
         assert_eq!(events, vec![(0, 4), (1, 3), (2, 3)], "余数 1 单位必须分给 shard_id 升序最小的 shard 0");
     }
 
-    // ---- R2 apply_event / settle_funding_fee ----
-
     #[test]
     fn apply_event_one_payer_one_receiver_full_transfer_is_zero_sum() {
         let mut ups = ups_with_user(1);
         assert_eq!(ups.add_empty_user_profile(2), CommandResultCode::Success);
-        ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100)); // payer
-        ups.get_mut(2).unwrap().positions.insert(SYMBOL, position(2, PositionDirection::Short, 100)); // receiver
+        ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
+        ups.get_mut(2).unwrap().positions.insert(SYMBOL, position(2, PositionDirection::Short, 100));
 
         let payer_amounts = BTreeMap::from([(1i64, 50i64)]);
         let receiver_notionals = BTreeMap::from([(2i64, 1000i64)]);
@@ -469,7 +421,7 @@ mod tests {
             OrderAction::Bid,
             &payer_amounts,
             &receiver_notionals,
-            50, // shard_recv_amount == total_pay (single receiver gets it all)
+            50,
             &spec(),
             &currency_spec(),
         );
@@ -483,7 +435,7 @@ mod tests {
 
     #[test]
     fn apply_event_multiple_receivers_pro_rata_with_deterministic_remainder_uid() {
-        let mut ups = ups_with_user(1); // payer
+        let mut ups = ups_with_user(1);
         for uid in [10i64, 20, 30] {
             assert_eq!(ups.add_empty_user_profile(uid), CommandResultCode::Success);
         }
@@ -493,7 +445,6 @@ mod tests {
         ups.get_mut(30).unwrap().positions.insert(SYMBOL, position(30, PositionDirection::Short, 100));
 
         let payer_amounts = BTreeMap::from([(1i64, 10i64)]);
-        // notionals 1:1:1 -> trunc(10*1/3)=3 each, distributed=9, remainder=1 -> uid=10 (升序最小) 拿到 +1.
         let receiver_notionals = BTreeMap::from([(10i64, 1i64), (20i64, 1i64), (30i64, 1i64)]);
         FundingFeeCommandProcessor::apply_event(
             &mut ups,
@@ -522,7 +473,6 @@ mod tests {
         let empty: BTreeMap<i64, i64> = BTreeMap::new();
         let receivers = BTreeMap::from([(2i64, 1000i64)]);
 
-        // shard_recv_amount<=0 -> 第二级分配完全跳过（即使 receiver_notionals 非空）。
         FundingFeeCommandProcessor::apply_event(
             &mut ups,
             SYMBOL,
@@ -539,9 +489,7 @@ mod tests {
     #[test]
     fn apply_event_position_closed_between_r1_and_r2_routes_fee_to_accounts_not_ghost_position() {
         let mut ups = ups_with_user(1);
-        // R1 时刻：用户在 SYMBOL 上有仓（模拟 collect_input 观察到的状态）。
         ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
-        // 模拟 R1/R2 之间该仓被平掉（open_volume 归零，direction 归 Empty，同真实平仓后的状态）。
         let p = ups.get_mut(1).unwrap().positions.get_mut(&SYMBOL).unwrap();
         p.open_volume = 0;
         p.direction = PositionDirection::Empty;
@@ -559,10 +507,9 @@ mod tests {
 
     #[test]
     fn apply_event_receiver_position_closed_between_r1_and_r2_credits_accounts() {
-        let mut ups = ups_with_user(1); // payer
-        assert_eq!(ups.add_empty_user_profile(2), CommandResultCode::Success); // receiver, ghost by R2
+        let mut ups = ups_with_user(1);
+        assert_eq!(ups.add_empty_user_profile(2), CommandResultCode::Success);
         ups.get_mut(1).unwrap().positions.insert(SYMBOL, position(1, PositionDirection::Long, 100));
-        // uid=2 从未在 SYMBOL 开过仓（等价于"已平仓"——两次查找 symbol/-symbol 都不命中活仓）。
 
         let payer_amounts = BTreeMap::from([(1i64, 50i64)]);
         let receiver_notionals = BTreeMap::from([(2i64, 1000i64)]);
@@ -577,9 +524,7 @@ mod tests {
 
     #[test]
     fn apply_event_hedge_dual_direction_lookup_falls_back_to_negative_symbol() {
-        // HEDGE：payer 在 -SYMBOL（空头腿）上持有匹配方向的仓，SYMBOL（多头腿）不存在或方向不符。
         let mut ups = ups_with_user(1);
-        // action=Ask（空付多，payer 方向应为 Short）。SYMBOL 上没有仓，只在 -SYMBOL 上有 SHORT 仓。
         let neg_symbol = -SYMBOL;
         ups.get_mut(1).unwrap().positions.insert(
             neg_symbol,

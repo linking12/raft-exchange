@@ -1,6 +1,3 @@
-//! 对应 Java `LoanRatePricingCommandProcessor`（`TwoStepCommandProcessor` 薄实例）。`REPRICE_LOAN_RATES` 两步处理器：
-//! R1 collect_input 收借贷池、merge build_matcher_events 按利用率算利率事件（currency 升序）、R2 apply_event
-//! 先 advance_accumulator 再 reprice_currency。事件载体用 `OrderCommand.loan_reprice_events`，参考文档 §4.2。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -9,19 +6,15 @@ use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 
-/// 无状态处理器——所有方法都是关联函数，不持有字段（Java 版本的 riskEngine/eventsHelper 只是运行时门禁，本移植不需要）。
 pub struct LoanRatePricingCommandProcessor;
 
 impl TwoStepCommandProcessor for LoanRatePricingCommandProcessor {
-    /// R1：单 shard 归并恒等,collect_input + merge 一次做完,写入 `cmd.loan_reprice_events` 供 R2 消费。
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         let shard_data = Self::collect_input(&ctx.risk.loan_service);
         cmd.loan_reprice_events = Self::build_matcher_events(&[shard_data]);
         CommandResultCode::Success
     }
 
-    /// R2：逐事件 `apply_event`（advance_accumulator 先于 reprice_currency,顺序不可颠倒）,循环后统一
-    /// `set_last_reprice_ts` 一次;空事件完全 no-op（含不推进 ts）。
     fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
         let events = std::mem::take(&mut cmd.loan_reprice_events);
         if events.is_empty() {
@@ -35,7 +28,6 @@ impl TwoStepCommandProcessor for LoanRatePricingCommandProcessor {
 }
 
 impl LoanRatePricingCommandProcessor {
-    /// R1：对应 Java `collectInput`。编码进 `BTreeMap<i32,i64>`：borrowed@key=currency，available@key=!currency，跳过 0 值。
     fn collect_input(loan_service: &LoanService) -> BTreeMap<i32, i64> {
         let mut shard_data = BTreeMap::new();
         for (&currency, &v) in &loan_service.loan_pool_borrowed {
@@ -51,7 +43,6 @@ impl LoanRatePricingCommandProcessor {
         shard_data
     }
 
-    /// merge：对应 Java `buildMatcherEvents`。跨 shard 累加后按币种算利用率，currency 升序输出；空池返回空 Vec（对应 `mte == null` 早退）。
     fn build_matcher_events(shard_data: &[BTreeMap<i32, i64>]) -> Vec<(i32, i64)> {
         let mut total_borrowed: BTreeMap<i32, i64> = BTreeMap::new();
         let mut total_available: BTreeMap<i32, i64> = BTreeMap::new();
@@ -78,7 +69,6 @@ impl LoanRatePricingCommandProcessor {
             .collect()
     }
 
-    /// R2 per-event：对应 Java `applyEvent`。顺序不可颠倒：先 advance_accumulator 再 reprice_currency；set_last_reprice_ts 由调用方统一调用一次。
     fn apply_event(loan_service: &mut LoanService, currency: i32, util_bps: i64, tick_ts: i64) {
         loan_service.floating_rate.advance_accumulator(currency, tick_ts);
         loan_service.floating_rate.reprice_currency(currency, util_bps);
@@ -90,7 +80,6 @@ mod tests {
     use super::*;
 
     fn loan_service_with_pools(entries: &[(i32, i64, i64)]) -> LoanService {
-        // entries: (currency, borrowed, available)
         let mut s = LoanService::new();
         for &(cur, borrowed, available) in entries {
             if borrowed != 0 {
@@ -103,21 +92,19 @@ mod tests {
         s
     }
 
-    // ---- R1 collect_input: key-sign encoding ----
-
     #[test]
     fn collect_input_encodes_borrowed_at_currency_and_available_at_bitwise_complement() {
         let s = loan_service_with_pools(&[(5, 8_000, 2_000)]);
         let shard_data = LoanRatePricingCommandProcessor::collect_input(&s);
-        assert_eq!(shard_data.get(&5), Some(&8_000)); // borrowed @ key = currency
-        assert_eq!(shard_data.get(&!5), Some(&2_000)); // available @ key = !currency
+        assert_eq!(shard_data.get(&5), Some(&8_000));
+        assert_eq!(shard_data.get(&!5), Some(&2_000));
         assert_eq!(shard_data.len(), 2);
     }
 
     #[test]
     fn collect_input_skips_zero_valued_buckets() {
         let mut s = LoanService::new();
-        s.loan_pool_borrowed.insert(5, 0); // explicit zero entry, must not be encoded
+        s.loan_pool_borrowed.insert(5, 0);
         s.loan_pool_available.insert(5, 100);
         let shard_data = LoanRatePricingCommandProcessor::collect_input(&s);
         assert_eq!(shard_data.get(&5), None);
@@ -131,15 +118,13 @@ mod tests {
         assert_eq!(shard_data.get(&0), Some(&100));
         assert_eq!(shard_data.get(&!0), Some(&50));
         assert_eq!(shard_data.get(&1), Some(&200));
-        assert_eq!(shard_data.get(&2), None); // borrowed=0 -> skipped
+        assert_eq!(shard_data.get(&2), None);
         assert_eq!(shard_data.get(&!2), Some(&300));
     }
 
-    // ---- merge build_matcher_events: util computation + ascending order ----
-
     #[test]
     fn build_matcher_events_single_currency_computes_correct_utilization() {
-        let s = loan_service_with_pools(&[(7, 8_000, 2_000)]); // 80% util
+        let s = loan_service_with_pools(&[(7, 8_000, 2_000)]);
         let shard_data = LoanRatePricingCommandProcessor::collect_input(&s);
         let events = LoanRatePricingCommandProcessor::build_matcher_events(&[shard_data]);
         assert_eq!(events, vec![(7, 8_000)]);
@@ -147,11 +132,9 @@ mod tests {
 
     #[test]
     fn build_matcher_events_sums_across_multiple_shard_maps() {
-        // Two "shards" each contributing half the pool for the same currency.
         let shard_a = LoanRatePricingCommandProcessor::collect_input(&loan_service_with_pools(&[(3, 4_000, 1_000)]));
         let shard_b = LoanRatePricingCommandProcessor::collect_input(&loan_service_with_pools(&[(3, 4_000, 1_000)]));
         let events = LoanRatePricingCommandProcessor::build_matcher_events(&[shard_a, shard_b]);
-        // total borrowed=8000, available=2000 -> util=8000bps, same as single-shard equivalent.
         assert_eq!(events, vec![(3, 8_000)]);
     }
 
@@ -174,29 +157,24 @@ mod tests {
 
     #[test]
     fn build_matcher_events_currency_present_only_via_available_or_only_via_borrowed_still_emits() {
-        // currency 4 has only borrowed, currency 6 has only available.
         let s = loan_service_with_pools(&[(4, 500, 0), (6, 0, 500)]);
         let shard_data = LoanRatePricingCommandProcessor::collect_input(&s);
         let events = LoanRatePricingCommandProcessor::build_matcher_events(&[shard_data]);
         assert_eq!(events, vec![(4, FloatingRateModel::utilization_bps(500, 0)), (6, FloatingRateModel::utilization_bps(0, 500))]);
     }
 
-    // ---- R2 apply_event: advance_accumulator strictly before reprice_currency ----
-
     #[test]
     fn apply_event_settles_old_interval_at_old_rate_before_repricing() {
         let mut s = LoanService::new();
         let cur = 3;
         s.floating_rate.last_reprice_ts = 1_000;
-        s.floating_rate.current_rate_bps.insert(cur, 300); // old rate 3%
+        s.floating_rate.current_rate_bps.insert(cur, 300);
 
-        LoanRatePricingCommandProcessor::apply_event(&mut s, cur, 9_000, 2_000); // util above kink -> new rate very different
+        LoanRatePricingCommandProcessor::apply_event(&mut s, cur, 9_000, 2_000);
 
-        // Old 1000ms interval must have been settled at the OLD rate (300bps), not the new one.
         let acc = *s.floating_rate.acc_rate_bps_ms.get(&cur).unwrap();
         assert_eq!(acc, 300 * 1_000, "advance_accumulator must run before reprice_currency, settling at the old rate");
 
-        // New rate must now reflect the curve applied to util=9000.
         let new_rate = s.floating_rate.current_rate_bps_or_base(cur);
         assert_ne!(new_rate as i64, 300);
         assert_eq!(new_rate as i64, s.floating_rate.curve_rate_bps(9_000));
@@ -204,7 +182,7 @@ mod tests {
 
     #[test]
     fn apply_event_updates_current_rate_bps_per_curve_for_computed_utilization() {
-        let mut s = loan_service_with_pools(&[(11, 8_000, 2_000)]); // util = 8000 bps (80%)
+        let mut s = loan_service_with_pools(&[(11, 8_000, 2_000)]);
         let shard_data = LoanRatePricingCommandProcessor::collect_input(&s);
         let events = LoanRatePricingCommandProcessor::build_matcher_events(&[shard_data]);
         assert_eq!(events, vec![(11, 8_000)]);

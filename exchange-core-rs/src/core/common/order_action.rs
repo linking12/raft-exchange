@@ -1,5 +1,3 @@
-//! 对应 Java: exchange.core2.core.common.OrderAction。码值与 Java 严格一致。
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderAction {
     Ask,

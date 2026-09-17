@@ -1,9 +1,3 @@
-//! 验证"现货 markPrice 引擎自维护"设计：期货 markPrice 由外部 `MARKPRICE_ADJUSTMENT` 喂价，
-//! 现货**不喂价**，而是在成交时由 R2 尾部 `apply_trade_price`（EMA）从成交价自维护——供现货抵押 loan 估值。
-//!
-//! 走生产路径（`submit(OrderCommand{ 带真 timestamp })`，非 facade `place_order`，后者 ts=0 是测试局限）：
-//! 无任何外部喂价，一笔现货成交后 `mark_price` 自动变成成交价；并反证 ts 不单调（=0）时不推进（EMA 守卫）。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -38,14 +32,13 @@ mod tests {
             }),
             CommandResultCode::Success
         );
-        api.add_user(1); // seller (base)
-        api.add_user(2); // buyer (quote)
+        api.add_user(1);
+        api.add_user(2);
         api.balance_adjustment(1, BASE, 1_000, 1);
         api.balance_adjustment(2, QUOTE, 10_000_000, 2);
         api
     }
 
-    /// 现货挂单（GTC），`timestamp` 由调用方（生产=Raft apply 层）显式设。
     fn spot_order(oid: i64, uid: i64, action: OrderAction, ts: i64) -> OrderCommand {
         OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -66,14 +59,11 @@ mod tests {
     fn spot_markprice_self_maintained_from_trade_no_external_feed() {
         let mut api = setup();
 
-        // 未成交前：现货从未喂价 → 无 markPrice。
         assert_eq!(api.risk().mark_price(SPOT), None, "现货未成交前无 markPrice（不外部喂价）");
 
-        // seller 挂 ASK（resting，无成交）→ 不产生成交价，markPrice 仍无。
         assert_eq!(api.submit(spot_order(1, 1, OrderAction::Ask, 1_000)), CommandResultCode::Success);
         assert_eq!(api.risk().mark_price(SPOT), None, "resting 挂单不产生成交，markPrice 仍无");
 
-        // buyer 吃单 BID @PX（ts=2000 单调）→ 成交 → R2 尾部 apply_trade_price 从成交价自维护 markPrice。
         assert_eq!(api.submit(spot_order(2, 2, OrderAction::Bid, 2_000)), CommandResultCode::Success);
         assert_eq!(
             api.risk().mark_price(SPOT),
@@ -85,7 +75,6 @@ mod tests {
     #[test]
     fn spot_markprice_not_advanced_when_timestamp_not_monotonic() {
         let mut api = setup();
-        // 两笔挂单都用 ts=0：EMA 守卫 `ts <= mark_price_ts(0)` 命中 → markPrice 不推进（生产须传单调真 ts）。
         assert_eq!(api.submit(spot_order(1, 1, OrderAction::Ask, 0)), CommandResultCode::Success);
         assert_eq!(api.submit(spot_order(2, 2, OrderAction::Bid, 0)), CommandResultCode::Success);
         assert_eq!(

@@ -1,6 +1,3 @@
-//! 翻译自 Java `ITResetFee`：RESET_FEE 把 fees 桶清扫进 adjustments 桶、发 ResetFee 事件(free=费额/locked=0/uid=0)、空账幂等无事件。
-//! 自包含现货费率 symbol(scale 1);金额由引擎算,断言"清扫关系"与事件 shape(对齐 Java 的结构断言)。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -49,11 +46,9 @@ mod tests {
         api.submit(OrderCommand { command: OrderCommandType::ResetFee, order_id: 999, ..Default::default() })
     }
 
-    // 对拍 resetFee_spot_aggregatesAndClears：撮合累计 fees[QUOTE] → RESET_FEE 清入 adjustments,发 1 条 ResetFee 事件。
     #[test]
     fn reset_fee_aggregates_and_clears() {
         let mut api = setup();
-        // 撮合 20 手 @ 50 → maker+taker 费入 fees[QUOTE]。
         assert_eq!(api.place_order(PlaceOrderRequest { order_id: 101, uid: SELLER, symbol: SYMBOL, price: 50, size: 20, reserve_bid_price: 0, action: OrderAction::Ask, order_type: OrderType::Gtc }), CommandResultCode::Success);
         assert_eq!(api.place_order(PlaceOrderRequest { order_id: 102, uid: BUYER, symbol: SYMBOL, price: 50, size: 20, reserve_bid_price: 50, action: OrderAction::Bid, order_type: OrderType::Ioc }), CommandResultCode::Success);
 
@@ -63,12 +58,10 @@ mod tests {
 
         assert_eq!(reset_fee(&mut api), CommandResultCode::Success);
 
-        // fees 清零、adjustments 增加同额、全局守恒。
         assert_eq!(api.fees(QUOTE), 0, "RESET_FEE 后 fees 清零");
         assert_eq!(api.adjustments(QUOTE), adj_before + quote_fees, "费额转入 adjustments");
         assert!(api.total_balance().is_global_zero(), "全局守恒");
 
-        // 恰好 1 条 ResetFee 事件:currency=QUOTE, free=费额, locked=0, uid=0, order_id=SYSTEM_TRIGGERED。
         let reset_events: Vec<_> = api.last_fund_events().iter().filter(|e| e.event_type == FundEventType::ResetFee).collect();
         assert_eq!(reset_events.len(), 1, "只发 1 条 ResetFee(单币种)");
         let ev = reset_events[0];
@@ -79,7 +72,6 @@ mod tests {
         assert_eq!(ev.order_id, SYSTEM_TRIGGERED_ORDER_ID);
     }
 
-    // 对拍 resetFee_empty_noEventsAndIdempotent：无费用时 RESET_FEE 不发事件且幂等。
     #[test]
     fn reset_fee_empty_no_events_idempotent() {
         let mut api = setup();
@@ -91,7 +83,6 @@ mod tests {
             "无费用不应发 ResetFee 事件"
         );
 
-        // 再来一次仍 Success、仍无事件(幂等)。
         assert_eq!(reset_fee(&mut api), CommandResultCode::Success);
         assert!(!api.last_fund_events().iter().any(|e| e.event_type == FundEventType::ResetFee));
         assert!(api.total_balance().is_global_zero());

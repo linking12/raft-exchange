@@ -1,6 +1,3 @@
-//! 对应 Java `RiskEngine`（现货+期货 R1）。
-//! 不持有 ups/ssp 所有权，按需借用；单 shard 单线程，不做 uid 分片。
-
 use std::collections::BTreeMap;
 
 use crate::core::common::user_profile::UserProfile;
@@ -43,23 +40,16 @@ pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
     pub suspends: BTreeMap<i32, i64>,
-    /// 每 symbol 最新价快照（markPrice=`last_price` + 更新时间 `last_price_ts`）；期货外部喂价，现货由 `apply_trade_price` 维护。进 state_hash/snapshot。
     pub last_price_cache: BTreeMap<i32, LastPriceCacheRecord>,
     pub cfg_margin_trading_enabled: bool,
-    /// per-shard 借贷池状态+利率模型，供 LoanCommandDispatcher 读写；默认空，对现货/期货既有路径 no-op。
     pub loan_service: LoanService,
-    /// per-shard 期货保险基金（IF）状态，notionals/positions 都进 state_hash，与 loan LIF 独立。
     pub liquidation_service: LiquidationService,
-    /// per-shard 期货强平引擎，仅 leader-local，不进 state_hash/snapshot（快照不含此字段）；换届后 from_snapshot_bytes 经 restore_non_replicated_state 重建索引。
     pub liquidation_engine: LiquidationEngine,
-    /// RE 模块的 `binaryCommandsProcessor` 快照分片(仅字节兼容,Rust 恒空,忠实透传 Java 中途快照;不进 state_hash)。见 [`BinaryCommandsProcessor`]。
-    pub binary_cmd: BinaryCommandsProcessor,
+    pub(crate) binary_cmd: BinaryCommandsProcessor,
 }
 
 impl RiskEngine {
-    // ===== 构造 / 配置 =====
 
-    /// cfg_margin_trading_enabled 默认 true（唯一构造入口，derive Default 不受影响）。
     pub fn new() -> Self {
         RiskEngine {
             adjustments: BTreeMap::new(),
@@ -74,7 +64,6 @@ impl RiskEngine {
         }
     }
 
-    /// RESET：清空全部风控业务态（fees/adjustments/suspends/价格缓存/loan+IF 服务）；保留 cfg_margin_trading_enabled，且不动 liquidation_engine（其索引由 leader 维护，ups 空后自然 lazy-prune）。
     pub fn reset(&mut self) {
         self.adjustments.clear();
         self.fees.clear();
@@ -84,26 +73,6 @@ impl RiskEngine {
         self.liquidation_service = LiquidationService::new();
     }
 
-    // ===== 核心行为 =====
-
-    /// R1 —— 风控预处理(管线第一段,`ExchangeCore::process_command` 首先调用)。
-    ///
-    /// 按四条互斥 lane 分派(命中即定 `cmd.result_code` 或写 collect 载体,后续 lane 不再触及):
-    ///
-    /// ```text
-    ///   ① loan          is_loan()      → 整块委托 LoanCommandDispatcher
-    ///   ② 非交易         is_non_trading() → AddUser/Balance/Margin/Leverage/Markprice/
-    ///                                       RepriceLoanRates-collect/InternalTransfer-collect/
-    ///                                       IfDeposit/IfWithdraw/SettlePnl/Suspend/Resume/
-    ///                                       PositionMode/ResetFee/SystemLiquidationNotify
-    ///   ③ 交易/两步       PlaceOrder(风控校验+锁定事件) / ClosePosition /
-    ///                     SettleFundingfees-collect / ForceLiquidation / IfTakeover-collect /
-    ///                     AutoDeleveraging-collect
-    ///   ④ 扫描           LiquidationScan → check_positions(单 shard 恒 Success)
-    /// ```
-    ///
-    /// Cancel/Move/Reduce/OrderBookRequest/Reset/Nop 在 R1 无动作(交给 ME/R2)。两步命令(funding/IF/ADL/
-    /// internal_transfer/reprice)在此只做 **collect**(读状态、算分配、写进 cmd 专属载体),**apply** 落在 R2。
     pub fn pre_process_command(
         &mut self,
         cmd: &mut OrderCommand,
@@ -111,18 +80,15 @@ impl RiskEngine {
         ssp: &SymbolSpecificationProvider,
     ) {
         log::trace!("R1 pre_process_command: cmd={:?} uid={} symbol={}", cmd.command, cmd.uid, cmd.symbol);
-        // ① loan lane：is_loan() 命中→整块委托 LoanCommandDispatcher（与 is_non_trading 互斥）。
         if cmd.command.is_loan() {
             cmd.result_code = Some(LoanCommandDispatcher::dispatch(self, cmd, ups, ssp));
             return;
         }
-        // ② 非交易 lane：账户/行情/运营命令整块委托 RiskEngineCommandDispatcher（镜像 Java RiskEngineCommandDispatcher，与 loan/交易 lane 对称）。
         if cmd.command.is_non_trading() {
             cmd.result_code = Some(RiskEngineCommandDispatcher::dispatch(self, cmd, ups, ssp));
             return;
         }
 
-        // ③ 交易/两步 lane：走撮合或需 R2 结算的命令；PLACE_ORDER/CLOSE_POSITION 产 VALID_FOR_MATCHING_ENGINE 交 ME。
         if cmd.command == OrderCommandType::PlaceOrder {
             let rc = self.place_order_risk_check(cmd, ups, ssp);
             cmd.result_code = Some(rc);
@@ -150,12 +116,11 @@ impl RiskEngine {
         } else if cmd.command == OrderCommandType::ForceLiquidation {
             cmd.result_code = Some(Self::normalize_cmd_position_size(cmd, ups));
         } else if cmd.command == OrderCommandType::IfTakeover {
-            // 先 normalize 再 collect（Java 反序）：夹取被放大的 size，防病态输入下预留超过 taker 仓位。
             Self::normalize_cmd_position_size(cmd, ups);
             let mut ctx = TwoStepContext::new(self, ups, ssp);
             cmd.result_code = Some(IfCommandProcessor.collect(&mut ctx, cmd));
         } else if cmd.command == OrderCommandType::AutoDeleveraging {
-            Self::normalize_cmd_position_size(cmd, ups); // 同 IF_TAKEOVER：先夹 size 再 collect
+            Self::normalize_cmd_position_size(cmd, ups);
             let mut ctx = TwoStepContext::new(self, ups, ssp);
             cmd.result_code = Some(AdlCommandProcessor.collect(&mut ctx, cmd));
         } else if cmd.command == OrderCommandType::LiquidationScan {
@@ -164,10 +129,8 @@ impl RiskEngine {
             cmd.fund_events.append(&mut _alerts);
             cmd.result_code = Some(CommandResultCode::Success);
         }
-        // CancelOrder/MoveOrder/ReduceOrder/OrderBookRequest/Reset/Nop：R1 无动作。
     }
 
-    /// 加载 profile/spec（缺失分别→AuthInvalidUser/InvalidSymbol），转 place_order。cfgIgnoreRiskProcessing 未移植（恒走风控）。
     pub fn place_order_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -185,7 +148,6 @@ impl RiskEngine {
         self.place_order(cmd, user_profile, spec, ssp)
     }
 
-    /// CLOSE_POSITION R1，纯减仓无新敞口：缺仓或可平量<=0 恒 Success no-op；否则收敛 size 到可平量，leverage/marginMode 强制随仓，pendingHold 占用。
     pub fn close_position_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -225,21 +187,6 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// R2 —— 风控后置结算(管线第三段,ME 之后调用)。分派顺序**刻意**如下,前置特判都在通用
-    /// `is_non_trading()` 早退之前,因为它们虽属非交易、却各有专属载体需在 R2 真正 apply:
-    ///
-    /// ```text
-    ///   ① RepriceLoanRates   → LoanRatePricingCommandProcessor.apply       (载体 cmd.loan_reprice_events)
-    ///   ② InternalTransfer   → InternalTransferCommandProcessor.apply      (载体 cmd.internal_transfer_event)
-    ///   ③ SettleFundingfees  → FundingFeeCommandProcessor.apply + 结算后 check_positions (载体 cmd.funding_fee_event)
-    ///   ④ IfTakeover         → IfCommandProcessor.apply + advance_liquidation (载体 cmd.if_takeover_size)
-    ///   ⑤ AutoDeleveraging   → AdlCommandProcessor.apply + advance_liquidation (载体 cmd.adl_events)
-    ///   —— 到此其余 is_non_trading()：R1 已定结果码，直接 return ——
-    ///   ⑥ 撮合结算           → 取 cmd.matcher_event 链：现货两段扣费 / 期货 handle_matcher_event_margin
-    /// ```
-    ///
-    /// 不变量:①~⑤ 用专属载体、不走 `matcher_event` 链;⑥ `take()` 事件链后**每个出口都必须把整条链回填** cmd
-    /// (下游结果处理器 + advance/on_force_applied 判 REJECT 升级都要读它),勿新增遗漏回填的 early-return。
     pub fn handler_risk_release(
         &mut self,
         cmd: &mut OrderCommand,
@@ -247,22 +194,17 @@ impl RiskEngine {
         ssp: &SymbolSpecificationProvider,
     ) {
         log::trace!("R2 handler_risk_release: cmd={:?} uid={} symbol={} result={:?}", cmd.command, cmd.uid, cmd.symbol, cmd.result_code);
-        // ①~⑤ 专属载体命令（顺序/载体见上方 doc 表），都须在通用 is_non_trading 早退前特判。
-        // ① RepriceLoanRates
         if cmd.command == OrderCommandType::RepriceLoanRates {
             let mut ctx = TwoStepContext::new(self, ups, ssp);
             LoanRatePricingCommandProcessor.apply(&mut ctx, cmd);
             return;
         }
-        // ② InternalTransfer
         if cmd.command == OrderCommandType::InternalTransfer {
             let mut ctx = TwoStepContext::new(self, ups, ssp);
             InternalTransferCommandProcessor.apply(&mut ctx, cmd);
             return;
         }
-        // ③ SettleFundingfees
         if cmd.command == OrderCommandType::SettleFundingfees {
-            // 门控：无 funding 事件则不触发 checkPositions；有则结算后查同 symbol 强平（结算可能致仓破产）。
             let had_funding_event = cmd.funding_fee_event.is_some();
             {
                 let mut ctx = TwoStepContext::new(self, ups, ssp);
@@ -275,34 +217,28 @@ impl RiskEngine {
             }
             return;
         }
-        // ④ IfTakeover
         if cmd.command == OrderCommandType::IfTakeover {
             {
                 let mut ctx = TwoStepContext::new(self, ups, ssp);
                 IfCommandProcessor.apply(&mut ctx, cmd);
             }
-            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups); // 结算后推进状态机（REJECT→ADL）
+            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
-        // ⑤ AutoDeleveraging
         if cmd.command == OrderCommandType::AutoDeleveraging {
             {
                 let mut ctx = TwoStepContext::new(self, ups, ssp);
                 AdlCommandProcessor.apply(&mut ctx, cmd);
             }
-            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups); // 结算后推进状态机（恒终态）
+            Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             return;
         }
-        // 其余非交易命令：R1 已定结果码，R2 无事可做。
         if cmd.command.is_non_trading() {
             return;
         }
-        // ⑥ 撮合结算：以下按 cmd.matcher_event 链结算（现货两段扣费 / 期货 handle_matcher_event_margin）。
-        // 提前取 mark price 避免与后续 &mut self.fees 借用冲突，unwrap_or(0) 仅防御性兜底（R1 已保证 mark price 存在）。
         let mark_price_for_futures = self.mark_price(cmd.symbol).unwrap_or(0);
         let fees = &mut self.fees;
         let last_price_cache = &self.last_price_cache;
-        // 事件链取到局部、结算只按引用读（不销毁），R2 各出口把整条链原样放回 cmd 供下游读取；结算与 advance_liquidation 期间 cmd.matcher_event 为 None。
         let mte_owned = cmd.matcher_event.take();
         let mte = match mte_owned.as_deref() {
             Some(m) => m,
@@ -317,14 +253,12 @@ impl RiskEngine {
             .unwrap_or_else(|| panic!("symbol spec missing for symbol {}", cmd.symbol))
             .clone();
         if spec.symbol_type != SymbolType::CurrencyExchangePair {
-            // 期货分支 catch-all：PLACE_ORDER/CLOSE_POSITION/ForceLiquidation 等统一走 handle_matcher_event_margin 外循环整条链处理（不像现货分两段）。
             let taker_action = cmd.action.expect("futures matcher event requires taker action");
             let quote_currency_spec = ssp
                 .get_currency(spec.quote_currency)
                 .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency))
                 .clone();
 
-            // ForceLiquidation 的 collect_liquidation_fee 需 TRADE 的 Σsize/Σ(size×price)，先遍历链聚合（同 loan force-liquidate 先例）。
             let is_force = cmd.command == OrderCommandType::ForceLiquidation;
             let (force_taker_size, force_taker_size_price) = if is_force {
                 let mut taker_size: i64 = 0;
@@ -363,12 +297,8 @@ impl RiskEngine {
                 cmd_order_id,
             );
 
-            // R2 结算后放回事件链：advance/on_force_applied 需 matcher_event 可见判 REJECT 升级 IF，下游也读它。
-            // 不变量：take 后每个出口都必须回填，勿新增遗漏回填的 early-return。
             cmd.matcher_event = mte_owned;
-            // ForceLiquidation R2-finalize 钩子：collectLiquidationFee + advanceLiquidation。
             if is_force {
-                // Σtrade 手续费从 taker 扣、计入 IFNotional.available；taker_size==0 时 no-op。
                 if force_taker_size > 0 {
                     let avg_price = (force_taker_size_price / force_taker_size as i128) as i64;
                     let notional_fee = arithmetic::calculate_liquidation_fee(
@@ -383,7 +313,6 @@ impl RiskEngine {
                         spec.quote_scale_k,
                         quote_currency_spec.currency_scale_k,
                     );
-                    // debit/credit 须对称全有全无（taker 缺失即跳过），防守恒破坏。
                     let liq_fee_uid = cmd.uid;
                     let liq_fee_order_id = cmd.order_id;
                     let liq_fee_currency = spec.quote_currency;
@@ -397,16 +326,13 @@ impl RiskEngine {
                         cmd.fund_events.push(ev);
                     }
                 }
-                // FORCE apply 后推进状态机（全成交闭环 / REJECT→WAIT_IF 入队 IF）。
                 Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
             }
-            // R2 尾（对齐 Java 1001-1021）：期货刷新 ask/bid（无 spot 的 markPrice 混合）。
             Self::refresh_price_record(&mut self.last_price_cache, cmd, false);
             return;
         }
         let taker_sell = matches!(cmd.action, Some(OrderAction::Ask));
 
-        // loan force-liquidate 需 TRADE/REJECT 聚合（traded_size/notional/rejected_size），先遍历链算好。
         let is_loan_force_liquidate = matches!(
             cmd.command,
             OrderCommandType::LoanForceLiquidate | OrderCommandType::LoanCrossForceLiquidate
@@ -438,7 +364,6 @@ impl RiskEngine {
             (0i64, 0i128, 0i64)
         };
 
-        // REJECT 总在链头；REDUCE 单独成事件，同样只可能出现在链头。
         let next: Option<&MatcherTradeEvent> =
             if mte.event_type == MatcherEventType::Reduce
                 || mte.event_type == MatcherEventType::Reject
@@ -522,7 +447,6 @@ impl RiskEngine {
             }
         }
 
-        // Loan 强平：spot 标准结算后钩子，把 quote proceeds 路由到 loan/pool/fees/LIF，无论上面 TRADE 链是否跑过都执行。
         if is_loan_force_liquidate {
             let taker_up = ups.get_or_add_suspended(cmd.uid);
             match cmd.command {
@@ -554,21 +478,15 @@ impl RiskEngine {
             }
         }
 
-        cmd.matcher_event = mte_owned; // 现货结算/loan 钩子后放回链，供 SimpleEventsProcessor 读取
+        cmd.matcher_event = mte_owned;
 
-        // R2 尾（对齐 Java handlerRiskRelease 尾部 1001-1021）：刷新价格缓存 record（ask/bid + 现货 markPrice 滑动混合）。
         Self::refresh_price_record(&mut self.last_price_cache, cmd, true);
     }
 
-
-    /// 测试 / `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验直接写 last_price_cache，命令路径请走 markprice_adjustment。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
         self.last_price_cache.entry(symbol).or_default().mark_price = price;
     }
 
-    /// 对应 Java `handlerRiskRelease` 尾部（1001-1021）：撮合结算后刷新该 symbol 的 [`LastPriceCacheRecord`]。
-    /// ask/bid 优先取 L2 首档（`cmd.market_data`，本移植仅 OrderBookRequest 回填，撮合命令通常为空 → 走 fallback），
-    /// 否则 fallback 到事件链首个 TRADE 价；`is_spot` 时额外用 `apply_trade_price` 滑动混合维护 `mark_price`（期货 markPrice 走外部喂价，不在此动）。
     fn refresh_price_record(cache: &mut BTreeMap<i32, LastPriceCacheRecord>, cmd: &OrderCommand, is_spot: bool) {
         let has_book = cmd
             .market_data
@@ -600,7 +518,6 @@ impl RiskEngine {
         }
     }
 
-    /// ADD_LOAN 批量运行时配置：global/symbol/rate_curve 三段各自独立可选独立校验（一段非法只跳过）；无 binary-command 组帧基建，直接开放为配置入口（不经 preamble/幂等/结果码）。symbol 段强制 collateral_weight_bps∈[0,10000]，kill-switch 只清 initial_ltv_bps 保留存量。
     pub fn apply_add_loan(&mut self, cmd: &BatchAddLoanCommand, ssp: &mut SymbolSpecificationProvider) {
         if let Some(g) = &cmd.global {
             let current_liq = self.loan_service.global_config.cross_liquidation_ltv_bps;
@@ -643,7 +560,6 @@ impl RiskEngine {
                 let base_currency = ssp.symbols.get(&s.symbol_id).unwrap().base_currency;
                 let spec = ssp.symbols.get_mut(&s.symbol_id).unwrap();
                 if resolved.initial_ltv_bps == 0 {
-                    // 停借只关开关：liquidation/marginCall/maxAmount/maxTermDays 保留原值，避免存量贷款被连带强平。
                     let cur = spec.loan_config;
                     spec.loan_config.update(
                         0,
@@ -660,7 +576,6 @@ impl RiskEngine {
                         resolved.max_amount,
                         resolved.max_term_days,
                     );
-                    // collateralWeightBps 是 base 币账户级折价率，同 base 多 pair 共享，后写覆盖前写。
                     if let Some(base_spec) = ssp.currencies.get_mut(&base_currency) {
                         base_spec.collateral_weight_bps = resolved.collateral_weight_bps;
                     }
@@ -679,14 +594,10 @@ impl RiskEngine {
         }
     }
 
-    // ===== 查询 / 访问器 =====
-
-    /// markPrice 读取：None 与 Some(0) 统一折叠成 None。
     pub fn mark_price(&self, symbol: i32) -> Option<i64> {
         self.last_price_cache.get(&symbol).map(|r| r.mark_price).filter(|&p| p != 0)
     }
 
-    /// 用户某 currency 全量锁定额 = 期货保证金占用 + 现货冻结 + 借贷抵押；仅用于报表/事件/结算后余额校验，NSF 场景不走此路径（各走 calculate_free_futures_margin）。
     pub fn calculate_locked(
         user_profile: &UserProfile,
         currency: i32,
@@ -707,7 +618,6 @@ impl RiskEngine {
         locked
     }
 
-    /// 转发 for_symbol 版本 cur_pos_symbol=-1（逐仓浮盈一律不计入）。
     pub fn calculate_free_futures_margin(
         &self,
         user_profile: &UserProfile,
@@ -750,7 +660,6 @@ impl RiskEngine {
         (upnl, liq, mr, mmsk)
     }
 
-    /// 提现/转账/加保证金(ISOLATED)共用 NSF 口径 = accounts − 现货冻结 − 借贷抵押 + 期货净盈余（margin trading 开启才计）。
     pub(crate) fn withdrawable_balance(
         &self,
         user_profile: &UserProfile,
@@ -767,10 +676,6 @@ impl RiskEngine {
             + free_futures_margin
     }
 
-    // ===== 内部 helper =====
-
-    /// 现货 markPrice 由本所成交价维护（15s 时间加权 EMA，抗单笔操纵）：窗口内按 dt 混合旧 mark 与新成交价，首次/超窗直接取成交价；ts<=上次 ts 或 price<=0 不更新。供 loan 现货抵押估值读取。
-    /// 现货→place_exchange_order；期货→校验分配仓位后 can_place_margin_order NSF 检查；非现货非期货→UnsupportedSymbolType（不 panic）。
     fn place_order(
         &mut self,
         cmd: &mut OrderCommand,
@@ -790,7 +695,6 @@ impl RiskEngine {
             return self.place_exchange_order(cmd, user_profile, spec, currency_spec, ssp);
         }
         if !spec.symbol_type.is_futures_contract() {
-            // 非现货非期货→UnsupportedSymbolType，绝不 panic（Option 型 symbol 已可注册，R1 热路径不能 crash）。
             return CommandResultCode::UnsupportedSymbolType;
         }
         if !self.cfg_margin_trading_enabled {
@@ -802,7 +706,6 @@ impl RiskEngine {
         };
         let action = cmd.action.expect("PLACE_ORDER requires action");
 
-        // 同 symbol 下所有仓位（ONEWAY 至多 1 条，HEDGE 至多 2 条）必须 marginMode + leverage 一致。
         if user_profile.count_position_record(spec.symbol_id, |pos| pos.margin_mode != cmd.margin_mode) > 0 {
             return CommandResultCode::RiskMarginModeMismatch;
         }
@@ -811,7 +714,6 @@ impl RiskEngine {
         }
 
         let position_key = user_profile.create_positions_key(spec.symbol_id, action, cmd.command);
-        // 新仓需登记进 symbol_to_users 索引（对应 Java onPositionOpened，仅新仓）。
         let is_new_position = !user_profile.positions.contains_key(&position_key);
         let mut position = match user_profile.positions.get(&position_key) {
             Some(existing) => existing.clone(),
@@ -822,7 +724,6 @@ impl RiskEngine {
             }
         };
 
-        // ONEWAY+reduce-only：裁剪 size 到可平量；同向/无仓直接 Success no-op。
         if user_profile.position_mode == PositionMode::OneWay && cmd.is_reduce_only() {
             cmd.size = Self::max_closable_size(&position, action, cmd.size);
             if cmd.size <= 0 {
@@ -843,14 +744,12 @@ impl RiskEngine {
             return CommandResultCode::RiskNsf;
         }
 
-        // 校验全过：BUDGET 单用 pendingHoldBudget，普通限价用 pendingHold，再 commit 回 map。
         if matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget)) {
             position.pending_hold_budget(action, cmd.size, cmd.price);
         } else {
             position.pending_hold(action, cmd.size, cmd.price);
         }
         user_profile.positions.insert(position_key, position);
-        // 新仓 commit 后登记进强平索引（对应 Java onPositionOpened，仅新仓）。
         if is_new_position {
             self.liquidation_engine.on_position_opened(user_profile.uid, spec.symbol_id);
         }
@@ -858,7 +757,6 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 期货下单 NSF 校验，五项加总 scale 后比较可支配额度。
     #[allow(clippy::too_many_arguments)]
     fn can_place_margin_order(
         &self,
@@ -873,7 +771,6 @@ impl RiskEngine {
         let action = cmd.action.expect("PLACE_ORDER requires action");
         let is_budget_order = matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
 
-        // ① positionMargin：本仓含新挂单后总保证金；-1 哨兵→回退 calculateRequiredMarginForFutures。
         let order_notional = if is_budget_order { cmd.price } else { mul_exact(cmd.size, cmd.price) };
         let new_order_margin = position.calculate_required_margin_for_order(spec, action, order_notional);
         let position_margin = if new_order_margin == -1 {
@@ -882,7 +779,6 @@ impl RiskEngine {
             new_order_margin
         };
 
-        // ② crossFreeMargin：遍历账户所有仓位——本仓 CROSS 才加浮盈；其它仓 CROSS 加浮盈、且无论 marginMode 都减其占用保证金。
         let mut cross_free_margin: i64 = 0;
         for (&key, pos_record) in user_profile.positions.iter() {
             if key == position_key {
@@ -921,14 +817,12 @@ impl RiskEngine {
             }
         }
 
-        // ③ pendingFee：本单成交按 taker rate 预扣估算（NSF 预检用，不实收）。
         let pending_fee = if is_budget_order {
             position.calculate_pending_fee_for_order_budget(spec, action, cmd.size, cmd.price)
         } else {
             position.calculate_pending_fee_for_order(spec, action, cmd.size, cmd.price)
         };
 
-        // ④ openLoss：开仓瞬间浮亏预留（防"开仓即爆仓"），BUDGET 单跳过；openingSize 为 ONEWAY 反向时先抵掉 openVolume 的剩余部分，否则为全部 cmd.size。
         let mut open_loss: i64 = 0;
         if !is_budget_order {
             let opposite_to_pos = user_profile.position_mode == PositionMode::OneWay
@@ -950,7 +844,6 @@ impl RiskEngine {
             }
         }
 
-        // ⑤ 比较：可支配 = accounts − 现货冻结 − 借贷抵押；需求 = scale(positionMargin+pendingFee+openLoss) − crossFreeMargin。
         let currency = position.currency;
         let spendable = user_profile.account(currency) - user_profile.locked(currency)
             - Self::loan_collateral_locked(user_profile, currency);
@@ -963,7 +856,6 @@ impl RiskEngine {
         required <= spendable
     }
 
-    /// 借贷抵押虚拟锁定额（currency scale）= Isolated 各 loan collateral_amount 求和 + Cross 池 currency 直取；抵押物仍在 accounts 里未物理转移，只是防止被顶用。
     fn loan_collateral_locked(user_profile: &UserProfile, currency: i32) -> i64 {
         let mut locked: i64 = 0;
         for loan in user_profile.isolated_loans.values() {
@@ -975,7 +867,6 @@ impl RiskEngine {
         locked
     }
 
-    /// 单仓期货保证金占用折算到 currency 记账单位，供 calculate_locked 跨 symbol 累加。
     fn calculate_locked_margin(
         position: &SymbolPositionRecord,
         spec: &CoreSymbolSpecification,
@@ -990,7 +881,6 @@ impl RiskEngine {
         )
     }
 
-    /// 账户净期货盈余取两保守估计 min（计/不计未实现盈亏两种 CROSS 保证金口径）；cur_pos_symbol 仅该 symbol ISOLATED 仓浮盈计入。
     fn calculate_free_futures_margin_for_symbol(
         &self,
         user_profile: &UserProfile,
@@ -998,7 +888,6 @@ impl RiskEngine {
         cur_pos_symbol: i32,
         ssp: &SymbolSpecificationProvider,
     ) -> i64 {
-        // 短路：该 currency 无期货持仓时累加器恒 0，提前返回，避免纯现货用户被迫注册期货 currency spec。
         if !user_profile.positions.values().any(|p| p.currency == currency) {
             return 0;
         }
@@ -1044,7 +933,6 @@ impl RiskEngine {
                     spec.quote_scale_k,
                     currency_spec.currency_scale_k,
                 );
-                // 维持保证金口径：把已锁的初始保证金换成维持保证金。
                 let maintenance_margin = initial_margin - position.open_init_margin_sum
                     + position.calculate_maintenance_margin(spec, mark);
                 cross_maintenance_margin += arithmetic::size_price_to_currency_scale(
@@ -1054,7 +942,6 @@ impl RiskEngine {
                     currency_spec.currency_scale_k,
                 );
             } else {
-                // 逐仓浮盈只能参与自身 symbol 的分摊。
                 if position.symbol == cur_pos_symbol {
                     unrealized_pnl += arithmetic::size_price_to_currency_scale(
                         position.estimate_unrealized_profit(mark),
@@ -1071,7 +958,6 @@ impl RiskEngine {
             .min(realized_pnl - cross_maintenance_margin - isolated_required_margin)
     }
 
-    /// 可平量，仅方向相反时有意义，同向/EMPTY 返回 0（防止误开新敞口）。
     fn max_closable_size(pos: &SymbolPositionRecord, action: OrderAction, requested_size: i64) -> i64 {
         if !pos.direction.is_opposite_to_action(action) {
             return 0;
@@ -1079,7 +965,6 @@ impl RiskEngine {
         requested_size.min(pos.open_volume)
     }
 
-    /// 现货下单冻结（BID 锁 quote/ASK 锁 base）；NSF = accounts − exchange_locked − loan_locked − order_lock + freeFuturesMargin < 0（无期货仓时 freeFuturesMargin 恒 0）。
     fn place_exchange_order(
         &mut self,
         cmd: &OrderCommand,
@@ -1132,13 +1017,11 @@ impl RiskEngine {
 
         let balance = user_profile.account(currency);
         let existing_locked = user_profile.locked(currency);
-        // 期货净盈余顶现货 NSF 额度。
         let free_futures_margin = if self.cfg_margin_trading_enabled {
             self.calculate_free_futures_margin(user_profile, currency, ssp)
         } else {
             0
         };
-        // 借贷抵押必扣不能被现货挂单锁走（单独减 loanCollateralLocked，不调 calculateLocked）；无 loan 用户恒 0。
         let loan_locked = Self::loan_collateral_locked(user_profile, currency);
         if balance - existing_locked - loan_locked - order_lock_amount + free_futures_margin < 0 {
             return CommandResultCode::RiskNsf;
@@ -1147,7 +1030,6 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 撤单/拒单释放单方冻结（ASK 按 size 直退，BID 按订单类型分档计算），accounts 不动。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_reject_reduce_event_exchange(
         cmd: &OrderCommand,
@@ -1223,7 +1105,6 @@ impl RiskEngine {
         ev
     }
 
-    /// taker 卖(ASK)/maker 买(BID) 现货成交结算，逐笔累加 maker 后一次性按均价结算 taker（避免逐笔 ceil 多产 dust）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_sell(
         cmd: &OrderCommand,
@@ -1248,14 +1129,12 @@ impl RiskEngine {
         while let Some(ev) = node {
             debug_assert_eq!(ev.event_type, MatcherEventType::Trade);
 
-            // taker/maker 恒本 shard（单 shard 简化）。
             taker_notional += ev.size as i128 * ev.price as i128;
             taker_size += ev.size;
 
             {
                 let maker_up = ups.get_or_add_suspended(ev.matched_order_uid);
 
-                // maker 挂 BID 时按 taker 费率 + 保守价（bidder_hold_price）冻结的原始 quote。
                 let hold_quote_raw = arithmetic::calculate_amount_bid_taker_fee(
                     ev.size,
                     ev.bidder_hold_price,
@@ -1269,7 +1148,6 @@ impl RiskEngine {
                     quote_currency_spec.currency_scale_k,
                 );
 
-                // 价格改善 + taker→maker 费率差退款。
                 let quote_refund_raw = arithmetic::calculate_amount_bid_release_corr_maker(
                     ev.size,
                     ev.bidder_hold_price,
@@ -1286,10 +1164,8 @@ impl RiskEngine {
                 );
 
                 maker_up.add_to_locked(quote_currency, -hold_quote);
-                // 净 quote 变动 = quote_refund − hold_quote = −(size·price + makerFee)。
                 maker_up.add_to_account(quote_currency, quote_refund - hold_quote);
 
-                // calculateAmountAsk(size)=size：ASK 侧不收费（费用走 quote 侧），maker 收到 base 即成交量本身。
                 let base_gained = arithmetic::symbol_to_currency_scale(
                     arithmetic::calculate_amount_ask(ev.size),
                     spec.base_scale_k,
@@ -1307,7 +1183,6 @@ impl RiskEngine {
             node = ev.next.as_deref();
         }
 
-        // hoist：taker_fee 在 taker 结算块和下面 fees 池都要用，避免重复算一次 ceil。
         let avg_taker_price = if taker_size > 0 {
             i64::try_from(taker_notional / taker_size as i128)
                 .unwrap_or_else(|_| panic!("overflow narrowing avg_taker_price"))
@@ -1324,7 +1199,6 @@ impl RiskEngine {
         {
             let taker_up = ups.get_or_add_suspended(cmd.uid);
 
-            // taker 是卖方：释放 base 冻结、实际扣 base；加 quote = notional − takerFee。
             let base_paid = arithmetic::symbol_to_currency_scale(
                 arithmetic::calculate_amount_ask(taker_size),
                 spec.base_scale_k,
@@ -1348,7 +1222,6 @@ impl RiskEngine {
         }
 
         if taker_size != 0 || maker_size != 0 {
-            // fees 池按均价重算 taker+maker 费单次入账，避免逐笔 ceil 累积 dust（dust 沉 exchangeLocked，sweep 属后续）。
             let avg_maker_price = if maker_size > 0 {
                 i64::try_from(maker_notional / maker_size as i128)
                     .unwrap_or_else(|_| panic!("overflow narrowing avg_maker_price"))
@@ -1375,7 +1248,6 @@ impl RiskEngine {
         }
     }
 
-    /// taker 买/maker 卖现货结算，是 sell 的镜像；BUDGET 子路径 hold_quote 恒为整份预算（与 REDUCE release_sp=0 对齐）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_buy(
         cmd: &OrderCommand,
@@ -1401,7 +1273,6 @@ impl RiskEngine {
         while let Some(ev) = node {
             debug_assert_eq!(ev.event_type, MatcherEventType::Trade);
 
-            // taker/maker 恒本 shard（单 shard 简化）。
             taker_notional += ev.size as i128 * ev.price as i128;
             taker_hold_notional += ev.size as i128 * ev.bidder_hold_price as i128;
             taker_size += ev.size;
@@ -1409,10 +1280,8 @@ impl RiskEngine {
             {
                 let maker_up = ups.get_or_add_suspended(ev.matched_order_uid);
 
-                // calculateAmountBid(size, price) = size × price：原始成交对价（未扣 maker fee）。
                 let quote_gained = arithmetic::calculate_amount_bid(ev.size, ev.price);
 
-                // maker 是卖方，下单时按 base 数量直接冻结（calculateAmountAsk(size)=size），全释放并扣 base。
                 let base_paid = arithmetic::symbol_to_currency_scale(
                     arithmetic::calculate_amount_ask(ev.size),
                     spec.base_scale_k,
@@ -1421,7 +1290,6 @@ impl RiskEngine {
                 maker_up.add_to_locked(base_currency, -base_paid);
                 maker_up.add_to_account(base_currency, -base_paid);
 
-                // maker 收到 quote = 成交对价 − maker fee。
                 let fee = arithmetic::calculate_maker_fee(
                     ev.size,
                     ev.price,
@@ -1446,7 +1314,6 @@ impl RiskEngine {
             node = ev.next.as_deref();
         }
 
-        // hoist：taker_fee 在 taker 结算块和下面 fees 池都要用，避免重复算一次 ceil。
         let avg_taker_price = if taker_size > 0 {
             i64::try_from(taker_notional / taker_size as i128)
                 .unwrap_or_else(|_| panic!("overflow narrowing avg_taker_price"))
@@ -1467,9 +1334,7 @@ impl RiskEngine {
             let is_budget = cmd.command == OrderCommandType::PlaceOrder
                 && matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
 
-            // effective_hold_notional：BUDGET 重赋值为 taker_notional，普通路径保持逐笔 bidder_hold_price 聚合，两路径共用同一 quote_refund 公式。
             let (leftover, hold_quote, effective_hold_notional) = if is_budget {
-                // FOK_BUDGET/IOC_BUDGET：冻结的是预算上限 heldTotal，未匹配部分 leftover 原样退。
                 let held_total = arithmetic::calculate_amount_bid_taker_fee_for_budget(
                     cmd.size,
                     cmd.price,
@@ -1485,7 +1350,6 @@ impl RiskEngine {
                 );
                 (leftover, hold_quote, taker_notional_i64)
             } else {
-                // 普通单：feeHeld 按 bidderHoldPrice 均价冻、takerFee 按实际成交均价收，差额 leftover 退用户。
                 let taker_hold_notional_i64 = i64::try_from(taker_hold_notional)
                     .unwrap_or_else(|_| panic!("overflow narrowing taker_hold_notional"));
                 let avg_hold_price = taker_hold_notional_i64 / taker_size;
@@ -1505,7 +1369,6 @@ impl RiskEngine {
                 (leftover, hold_quote, taker_hold_notional_i64)
             };
 
-            // 价差(holdNotional − notional) + leftover = 应退 quote。
             let quote_refund = arithmetic::size_price_to_currency_scale(
                 effective_hold_notional - taker_notional_i64 + leftover,
                 spec.base_scale_k,
@@ -1516,7 +1379,6 @@ impl RiskEngine {
             let taker_up = ups.get_or_add_suspended(cmd.uid);
 
             taker_up.add_to_locked(quote_currency, -hold_quote);
-            // 净 +(refund − hold) = −实付 = −(notional + takerFee)。
             taker_up.add_to_account(quote_currency, quote_refund - hold_quote);
 
             let to_be_added = arithmetic::symbol_to_currency_scale(
@@ -1557,9 +1419,6 @@ impl RiskEngine {
         }
     }
 
-    // ==== R2 主线：期货 handlers ====
-
-    /// 外层循环把整条事件链逐个喂给 handle_matcher_event_margin_one；期货不像现货需先摘链头 REJECT/REDUCE（同函数按 event_type 分支处理）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin(
         cmd_uid: i64,
@@ -1599,7 +1458,6 @@ impl RiskEngine {
         }
     }
 
-    /// 处理单个撮合事件：taker 块恒执行 + maker 块仅 TRADE；maker 侧 createPositionsKey 用 mte.matched_order_command_type（非 cmd.command），HEDGE 下才生效。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin_one(
         cmd_uid: i64,
@@ -1617,58 +1475,53 @@ impl RiskEngine {
         is_liquidation: bool,
         cmd_order_id: i64,
     ) {
-        // taker 块：单 shard 简化下 taker 恒本地。
         {
             let taker_up = ups.get_or_add_suspended(cmd_uid);
             let position_key = taker_up.create_positions_key(spec.symbol_id, taker_action, cmd_command);
-            // taker 仓位缺失时防御性跳过（不 panic）：理论上 R1 已建立，但不强制假设。
             Self::settle_margin_position_event(
                 fund_events,
                 ssp,
                 last_price_cache,
                 taker_up,
                 position_key,
-                /* required = */ false,
+                 false,
                 mte,
                 spec,
                 taker_action,
                 fees,
                 quote_currency_spec,
                 mark_price,
-                /* is_taker = */ true,
+                 true,
                 is_liquidation,
                 cmd_order_id,
             );
         }
 
-        // maker 块：仅 TRADE 事件（REJECT/REDUCE 无对手方，`matched_order_uid` 恒 0/无意义）。
         if mte.event_type == MatcherEventType::Trade {
             let maker_action = taker_action.opposite();
             let maker_up = ups.get_or_add_suspended(mte.matched_order_uid);
             let position_key =
                 maker_up.create_positions_key(spec.symbol_id, maker_action, mte.matched_order_command_type);
-            // maker 仓位记录必须已存在，缺失即数据损坏，panic 而非静默吞掉。
             Self::settle_margin_position_event(
                 fund_events,
                 ssp,
                 last_price_cache,
                 maker_up,
                 position_key,
-                /* required = */ true,
+                 true,
                 mte,
                 spec,
                 maker_action,
                 fees,
                 quote_currency_spec,
                 mark_price,
-                /* is_taker = */ false,
-                /* is_liquidation = */ false, // maker 是普通对手方，平仓事件恒 ClosePosition（对齐 Java sendClosePositionEvent(...,false,...)）
+                 false,
+                 false,
                 cmd_order_id,
             );
         }
     }
 
-    /// 仓位状态迁移核心：TRADE 走 pendingRelease→closeCurrentPositionFutures→openPositionMargin，REJECT/REDUCE 仅 pendingRelease；is_empty() 后走 refundExtraMargin+removePositionRecord。
     #[allow(clippy::too_many_arguments)]
     fn settle_margin_position_event(
         fund_events: &mut Vec<FundEvent>,
@@ -1696,7 +1549,7 @@ impl RiskEngine {
                     up.uid
                 );
             }
-            return; // taker 仓位缺失的防御性 warn+skip。
+            return;
         }
 
         let quote_currency = spec.quote_currency;
@@ -1735,7 +1588,6 @@ impl RiskEngine {
                 }
 
                 if size_to_open > 0 {
-                    // 保证金按 mark_price（保守）、成本基按 mte.price（用于后续平仓算 PnL）。
                     up.positions.get_mut(&position_key).unwrap().open_position_margin(
                         action,
                         size_to_open,
@@ -1766,16 +1618,13 @@ impl RiskEngine {
                 Self::push_futures_event(fund_events, last_price_cache, FundEventType::UnlockPending, event_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
             }
             MatcherEventType::BinaryEvent => {
-                // 不可达：`handler_risk_release` 顶层已对 BINARY_EVENT 短路返回，链上不会再出现。
             }
         }
 
-        // 仓位清零才触发 extraMargin 退款 + profit 结算 + 拆记录。
         let is_empty = up.positions.get(&position_key).unwrap().is_empty();
         if is_empty {
             let currency = up.positions.get(&position_key).unwrap().currency;
 
-            // extraMargin 以 sizePriceScale 存储，经 size_price_to_currency_scale（非 symbol_to_currency_scale）换算回 accounts。
             let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
             if extra_margin > 0 {
                 let refund = arithmetic::size_price_to_currency_scale(
@@ -1789,8 +1638,6 @@ impl RiskEngine {
                 up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
             }
 
-            // 残余已实现盈亏一次性打入 accounts，再从 map 摘除。
-            // PNL_SETTLEMENT 事件与账户入账同门控在 profit != 0（零利润不发多余事件，与 close_and_settle_futures_position 一致）。
             let profit = up.positions.get(&position_key).unwrap().profit;
             if profit != 0 {
                 let profit_scaled = arithmetic::size_price_to_currency_scale(
@@ -1872,9 +1719,6 @@ impl RiskEngine {
         });
     }
 
-    /// 期货仓位「关仓 + 结算」共享 helper：关仓发 `close_event_type` 事件;仓位清空则退 extraMargin(MARGIN_REFUND)、
-    /// 结算 profit(PNL_SETTLEMENT)、移除。ADL(counterparty/taker)与 IF_TAKEOVER 共用——两者都不收手续费,
-    /// 除 `close_event_type`(AdlPositionClose/AdlOriginClose/IfPositionClose)外逻辑逐字一致。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn close_and_settle_futures_position(
         up: &mut UserProfile,
@@ -1930,7 +1774,6 @@ impl RiskEngine {
         up.positions.remove(&position_key);
     }
 
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_spot_balance_event(
         cmd: &mut OrderCommand,
@@ -1947,7 +1790,6 @@ impl RiskEngine {
         cmd.fund_events.push(Self::spot_snapshot_event(event_type, order_id, up, currency, ssp, cspec, symbol_id));
     }
 
-    /// FORCE/IF/ADL 的 R1 size 归一，cmd.size=min(cmd.size, open_volume)，FORCE 用平仓视角、IF/ADL 用接管视角。
     fn normalize_cmd_position_size(cmd: &mut OrderCommand, ups: &UserProfileService) -> CommandResultCode {
         let action = match cmd.action {
             Some(a) => a,
@@ -1965,7 +1807,6 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
-    /// 强平类命令 R2 结算后推进 FORCE→IF→ADL 状态机；仓位若已 full-fill 移除则 skip，否则调 advance_liquidation。
     fn advance_liquidation_for(engine: &mut LiquidationEngine, cmd: &OrderCommand, ups: &mut UserProfileService) {
         let action = match cmd.action {
             Some(a) => a,
@@ -1984,18 +1825,11 @@ impl RiskEngine {
 
 }
 
-
-// ---- Chronicle 快照:RiskEngine 自身状态 + RE 模块组装 ----
-// RE 模块的快照读写(对应 Java `RiskEngine.writeMarshallable`)。Rust 的 `ssp`/`ups`/`risk` 是 ExchangeCore 的兄弟字段
-// (不能塞进 RiskEngine,否则 `risk.pre_process_command(cmd,&mut ups,&ssp)` 会同时借 receiver 与其字段;且 Rust 无方法
-// 重载,`chronicle_write` 也无法既 `(&self,w)` 又收 ups/ssp),故用一对自由函数直接取 `&ExchangeCore` 组装——这类跨字段
-// 组合最地道的写法。字段序:shardId+shardMask+symbolSpec+currencySpec(=ssp)+userProfiles(=ups)+risk 尾段。
 use crate::core::exchange_core::ExchangeCore;
 use crate::core::snapshot::chronicle_reader::{ChronicleError as SnapChronicleError, ChronicleReader as SnapChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter as SnapChronicleWriter;
 use crate::core::snapshot::marshalling::{to_btree_i32 as snap_to_btree_i32, ChronicleMarshallable};
 
-/// 写出 RE 模块 payload(单片塌缩:shardId/shardMask 写常量 0;binaryCommandsProcessor 忠实透传,Rust 恒空)。
 pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
     let mut w = SnapChronicleWriter::new();
     w.write_i32(0);
@@ -2013,8 +1847,6 @@ pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
     w.into_bytes()
 }
 
-/// 从 RE 模块 payload 读入并填充 `core`:ssp/ups 整体替换(SSP 读后自 rebuild_spot_pair_index),risk 尾段字段逐个搬运——
-/// 从而**保留** `core.risk` 现有的 cfg_margin_trading_enabled(配置)与 liquidation_engine(leader-local,不进快照)。消费须精确到底。
 pub fn read_risk_engine_payload(payload: &[u8], core: &mut ExchangeCore) -> Result<(), SnapChronicleError> {
     let mut r = SnapChronicleReader::new(payload);
     let _shard_id = r.read_i32()?;
@@ -2059,7 +1891,6 @@ mod tests {
         }
     }
 
-    /// 搭建：一个现货 symbol（base/quote_scale_k 均非平凡）+ 两种 currency spec（ASK 侧缩放恒等，BID 侧非恒等）+ 一个已建档充值用户。
     fn setup(
         taker_fee: i64,
         fee_scale_k: i64,
@@ -2115,8 +1946,6 @@ mod tests {
         }
     }
 
-    // ---- BID — 固定费 ----
-
     #[test]
     fn bid_limit_order_sufficient_balance_locks_notional_plus_fixed_fee() {
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
@@ -2166,7 +1995,7 @@ mod tests {
     fn bid_limit_order_reserve_less_than_price_returns_invalid_reserve_price() {
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
         let mut engine = RiskEngine::new();
-        let mut cmd = bid_cmd(1000, 50, 49, OrderType::Gtc); // reserve(49) < price(50)
+        let mut cmd = bid_cmd(1000, 50, 49, OrderType::Gtc);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
@@ -2174,17 +2003,14 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 0);
     }
 
-    // ---- BID — 比例费 ----
-
     #[test]
     fn bid_limit_order_proportional_fee_locks_notional_plus_ceil_fee() {
         let (mut ups, ssp) = setup(500, 1_000_000, 1_000_000_000, 0);
         let mut engine = RiskEngine::new();
-        let mut cmd = bid_cmd(1000, 50, 60, OrderType::Gtc); // reserve(60) > price(50)：保守价冻结
+        let mut cmd = bid_cmd(1000, 50, 60, OrderType::Gtc);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
-        // 用保守价 reserve_bid_price=60（非 cmd.price=50）计算，逐字对照 §2。
         let raw = arithmetic::calculate_amount_bid_taker_fee(1000, 60, 500, 1_000_000);
         let expected = arithmetic::size_price_to_currency_scale(raw, 100, 1_000_000, 1_000_000);
         assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
@@ -2195,7 +2021,6 @@ mod tests {
     fn bid_budget_order_reserve_equals_price_locks_budget_plus_fee() {
         let (mut ups, ssp) = setup(500, 1_000_000, 1_000_000_000, 0);
         let mut engine = RiskEngine::new();
-        // BUDGET 单：cmd.price 是总预算而非单价，reserve 必须严格等于 price。
         let mut cmd = bid_cmd(1000, 60_000, 60_000, OrderType::FokBudget);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
@@ -2210,7 +2035,7 @@ mod tests {
     fn bid_budget_order_reserve_mismatch_returns_invalid_reserve_price() {
         let (mut ups, ssp) = setup(500, 1_000_000, 1_000_000_000, 0);
         let mut engine = RiskEngine::new();
-        let mut cmd = bid_cmd(1000, 60_000, 60_001, OrderType::IocBudget); // reserve != price
+        let mut cmd = bid_cmd(1000, 60_000, 60_001, OrderType::IocBudget);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
@@ -2218,13 +2043,11 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 0);
     }
 
-    // ---- ASK — 固定费 / 比例费 ----
-
     #[test]
     fn ask_order_locks_base_size_scaled_fixed_fee() {
         let (mut ups, ssp) = setup(2, 0, 0, 1_000_000);
         let mut engine = RiskEngine::new();
-        let mut cmd = ask_cmd(1000, 50); // price(50) >= taker_fee(2)：不触发 too-low
+        let mut cmd = ask_cmd(1000, 50);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
@@ -2240,9 +2063,8 @@ mod tests {
     fn ask_order_locks_base_size_scaled_proportional_fee() {
         let (mut ups, ssp) = setup(500, 1_000_000, 0, 1_000_000);
         let mut engine = RiskEngine::new();
-        let mut cmd = ask_cmd(1000, 50); // ceil_divide(1_000_000, 500)=2000，price(50) < 2000 会 too-low！
+        let mut cmd = ask_cmd(1000, 50);
 
-        // 用足够高的价格避免 too-low：ceil(fee_scale_k/taker_fee)=2000。
         cmd.price = 2000;
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
@@ -2256,7 +2078,7 @@ mod tests {
     fn ask_price_too_low_fixed_fee_returns_error() {
         let (mut ups, ssp) = setup(5, 0, 0, 1_000_000);
         let mut engine = RiskEngine::new();
-        let mut cmd = ask_cmd(1000, 1); // price(1) < taker_fee(5)
+        let mut cmd = ask_cmd(1000, 1);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
@@ -2268,7 +2090,6 @@ mod tests {
     fn ask_price_too_low_proportional_fee_returns_error() {
         let (mut ups, ssp) = setup(500, 1_000_000, 0, 1_000_000);
         let mut engine = RiskEngine::new();
-        // ceil_divide(1_000_000, 500) = 2000；price(1999) < 2000 触发 too-low。
         let mut cmd = ask_cmd(1000, 1999);
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
@@ -2291,14 +2112,12 @@ mod tests {
         assert_eq!(p.account(BASE), 10);
     }
 
-    // ---- 用户 / symbol 缺失 ----
-
     #[test]
     fn auth_invalid_user_when_profile_missing() {
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
         let mut engine = RiskEngine::new();
         let mut cmd = bid_cmd(1000, 50, 50, OrderType::Gtc);
-        cmd.uid = 999; // 未建档用户
+        cmd.uid = 999;
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
@@ -2310,14 +2129,12 @@ mod tests {
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
         let mut engine = RiskEngine::new();
         let mut cmd = bid_cmd(1000, 50, 50, OrderType::Gtc);
-        cmd.symbol = 999; // 未注册 symbol
+        cmd.symbol = 999;
 
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
         assert_eq!(result, CommandResultCode::InvalidSymbol);
     }
-
-    // ---- R2 — handler_risk_release：reject/reduce 释放冻结 ----
 
     fn reject_or_reduce_event(
         event_type: MatcherEventType,
@@ -2354,14 +2171,12 @@ mod tests {
     fn bid_plain_limit_pure_reject_releases_full_lock_and_leaves_accounts_untouched() {
         let (mut ups, ssp) = setup(2, 0, 1_000_000, 0);
         let mut engine = RiskEngine::new();
-        // 先下单，冻结 quote（保守价 reserve_bid_price=50=price）。
         let mut cmd = bid_cmd(1000, 50, 50, OrderType::Gtc);
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
         assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
         let locked_after_place = ups.get(UID).unwrap().locked(QUOTE);
         assert!(locked_after_place > 0, "前置条件：下单必须产生非零冻结");
 
-        // 撮合产生纯 REJECT：整单未成交，size = 订单原始 size，bidder_hold_price = 下单时的保守价。
         cmd.matcher_event =
             Some(reject_or_reduce_event(MatcherEventType::Reject, 1000, 50, 50, None));
 
@@ -2378,14 +2193,12 @@ mod tests {
     fn ask_order_reduce_remainder_releases_partial_lock_and_leaves_accounts_untouched() {
         let (mut ups, ssp) = setup(2, 0, 0, 1_000_000);
         let mut engine = RiskEngine::new();
-        // 下单：ASK size=1000，锁 base（base_scale_k=100=currency_scale_k(BASE)，缩放恒等）。
         let mut cmd = ask_cmd(1000, 50);
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
         assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
         let locked_after_place = ups.get(UID).unwrap().locked(BASE);
         assert_eq!(locked_after_place, 1000);
 
-        // 部分成交后剩余 300 未成交，REDUCE 释放对应 base 冻结。
         cmd.matcher_event =
             Some(reject_or_reduce_event(MatcherEventType::Reduce, 300, 50, 0, None));
 
@@ -2408,7 +2221,6 @@ mod tests {
         let locked_after_place = ups.get(UID).unwrap().locked(QUOTE);
         assert!(locked_after_place > 0);
 
-        // 全拒：REJECT 是链上唯一事件（mte.next == None）→ 释放整份预算（用 cmd.size/cmd.price）。
         cmd.matcher_event =
             Some(reject_or_reduce_event(MatcherEventType::Reject, 1000, 60_000, 0, None));
 
@@ -2427,7 +2239,6 @@ mod tests {
         let locked_after_place = ups.get(UID).unwrap().locked(QUOTE);
         assert!(locked_after_place > 0);
 
-        // 部分成交：REDUCE 链头后接一个 TRADE（400/1000 成交），本测试只关心 taker 侧 quote 冻结的完整生命周期。
         let trailing_trade =
             reject_or_reduce_event(MatcherEventType::Trade, 400, 55, 60_000, None);
         cmd.matcher_event = Some(reject_or_reduce_event(
@@ -2440,22 +2251,17 @@ mod tests {
 
         engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
-        // 端到端验证：REDUCE 释放 0 + buy 结算全额释放 held_total → taker quote 冻结清零，验证 release_sp=0 的前提成立。
         assert_eq!(
             ups.get(UID).unwrap().locked(QUOTE),
             0,
             "REDUCE 不重复释放 + buy 结算全额释放 held_total，taker quote 冻结应归零"
         );
-        // 剩余 TRADE 链已被 buy 结算完全消费。
         assert!(cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
     }
-
-    // ---- R2 — handler_risk_release/handle_matcher_events_exchange_sell：taker 卖(ASK)结算，逐 maker+聚合 taker+平台费，全程守恒断言 ----
 
     const BUYER1: i64 = 8;
     const BUYER2: i64 = 9;
 
-    /// 与 spec_with_fee 的区别：额外暴露 maker_fee，quote currency_scale_k 取乘积单位使 size_price_to_currency_scale 恒等，便于精确整数断言。
     fn spec_with_fees(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id: SYMBOL,
@@ -2471,7 +2277,6 @@ mod tests {
         }
     }
 
-    /// 搭建：一个 seller（taker，已建档 + base 余额）+ 若干 buyer（maker，已建档 + quote 余额）。
     fn setup_sell(
         taker_fee: i64,
         maker_fee: i64,
@@ -2531,7 +2336,6 @@ mod tests {
         })
     }
 
-    /// 断言结算全局守恒：base 腿逐笔精确守恒；quote 腿守恒 modulo fees[quote]。
     fn assert_conserved(
         base_deltas: &[i64],
         quote_deltas: &[i64],
@@ -2545,11 +2349,9 @@ mod tests {
 
     #[test]
     fn sell_single_maker_fixed_fee_price_improvement_refund_and_conservation() {
-        // taker_fee=3（固定，每手 3）、maker_fee=1（固定，每手 1）。
         let (mut ups, ssp) = setup_sell(3, 1, 0, 1_000_000, &[(BUYER1, 1_000_000)]);
         let mut engine = RiskEngine::new();
 
-        // seller：ASK size=1000。
         let mut seller_cmd = ask_cmd(1000, 50);
         assert_eq!(
             engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
@@ -2557,7 +2359,6 @@ mod tests {
         );
         assert_eq!(ups.get(UID).unwrap().locked(BASE), 1000);
 
-        // buyer：BID size=1000 @ 55（挂单保守价 55，成交价改善到 50）。
         let mut buyer_cmd = bid_cmd(1000, 55, 55, OrderType::Gtc);
         buyer_cmd.uid = BUYER1;
         assert_eq!(
@@ -2572,23 +2373,19 @@ mod tests {
         let buyer_quote_before = ups.get(BUYER1).unwrap().account(QUOTE);
         let buyer_base_before = ups.get(BUYER1).unwrap().account(BASE);
 
-        // 唯一一笔 TRADE：size=1000 @ 50，maker(BUYER1) 的保守价 55。
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 55, BUYER1, None));
         engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
-        // maker：quote 净变动 = quote_refund(7000) - hold_quote(58000) = -51000；base += 1000；锁定清零。
         let buyer = ups.get(BUYER1).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0, "maker quote 冻结应全额释放");
         assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -51_000);
         assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
 
-        // taker：base released/spent = size(1000)；quote += notional(50000) - takerFee(3000) = 47000。
         let seller = ups.get(UID).unwrap();
         assert_eq!(seller.locked(BASE), 0, "taker base 冻结应全额释放");
         assert_eq!(seller.account(BASE) - seller_base_before, -1000);
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 47_000);
 
-        // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
         assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 4000);
 
         assert!(seller_cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
@@ -2598,11 +2395,10 @@ mod tests {
 
     #[test]
     fn sell_single_maker_proportional_fee_and_conservation() {
-        // taker_fee=100/10000=1%，maker_fee=20/10000=0.2%。
         let (mut ups, ssp) = setup_sell(100, 20, 10_000, 1_000_000, &[(BUYER1, 1_000_000_000)]);
         let mut engine = RiskEngine::new();
 
-        let mut seller_cmd = ask_cmd(1000, 2000); // price(2000) >= ceil(10000/100)=100，不触发 too-low
+        let mut seller_cmd = ask_cmd(1000, 2000);
         assert_eq!(
             engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
             CommandResultCode::ValidForMatchingEngine
@@ -2614,7 +2410,6 @@ mod tests {
             engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
             CommandResultCode::ValidForMatchingEngine
         );
-        // holdQuote = size*price(60000) + ceil(size*price*takerFee/scale)=ceil(6_000_000/10000)=600 → 60600。
         assert_eq!(ups.get(BUYER1).unwrap().locked(QUOTE), 60_600);
 
         let seller_quote_before = ups.get(UID).unwrap().account(QUOTE);
@@ -2622,23 +2417,19 @@ mod tests {
         let buyer_quote_before = ups.get(BUYER1).unwrap().account(QUOTE);
         let buyer_base_before = ups.get(BUYER1).unwrap().account(BASE);
 
-        // 成交价改善到 50（< holdPrice 60）。
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 60, BUYER1, None));
         engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
 
-        // quoteRefund = tradeAmountDiff(10000) + feeDiff(500) = 10500；maker quote 净变动 = 10500 - 60600 = -50100。
         let buyer = ups.get(BUYER1).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -50_100);
         assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
 
-        // takerFee = ceil(1000*50*100/10000) = 500；quote += 50000-500 = 49500。
         let seller = ups.get(UID).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         assert_eq!(seller.account(BASE) - seller_base_before, -1000);
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_500);
 
-        // makerFee(avg price=50) = ceil(1000*50*20/10000) = 100；fees[quote] = 500+100 = 600。
         assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 600);
 
         assert_conserved(&[-1000, 1000], &[49_500, -50_100], 600);
@@ -2681,7 +2472,6 @@ mod tests {
         let buyer2_quote_before = ups.get(BUYER2).unwrap().account(QUOTE);
         let buyer2_base_before = ups.get(BUYER2).unwrap().account(BASE);
 
-        // 两笔 TRADE：event1 对 BUYER1（size1000@50, holdPrice55，价格改善）；event2 对 BUYER2（size1000@60, holdPrice60，无改善）。
         let event2 = trade_event(1000, 60, 60, BUYER2, None);
         seller_cmd.matcher_event = Some(trade_event(1000, 50, 55, BUYER1, Some(event2)));
         engine.handler_risk_release(&mut seller_cmd, &mut ups, &ssp);
@@ -2689,19 +2479,17 @@ mod tests {
         let buyer1 = ups.get(BUYER1).unwrap();
         assert_eq!(buyer1.locked(QUOTE), 0);
         let buyer1_quote_delta = buyer1.account(QUOTE) - buyer1_quote_before;
-        assert_eq!(buyer1_quote_delta, -51_000); // 同单 maker fixed 用例
+        assert_eq!(buyer1_quote_delta, -51_000);
         let buyer1_base_delta = buyer1.account(BASE) - buyer1_base_before;
         assert_eq!(buyer1_base_delta, 1000);
 
         let buyer2 = ups.get(BUYER2).unwrap();
         assert_eq!(buyer2.locked(QUOTE), 0);
-        // holdQuote=1000*60+1000*3=63000；quoteRefund=1000*(60-60)+1000*(3-1)=2000；净=2000-63000=-61000。
         let buyer2_quote_delta = buyer2.account(QUOTE) - buyer2_quote_before;
         assert_eq!(buyer2_quote_delta, -61_000);
         let buyer2_base_delta = buyer2.account(BASE) - buyer2_base_before;
         assert_eq!(buyer2_base_delta, 1000);
 
-        // taker：avgTakerPrice=55；takerFee=2000*3=6000（固定费与价格无关）；quote += 110000-6000=104000。
         let seller = ups.get(UID).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -2709,7 +2497,6 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 104_000);
 
-        // avgMakerPrice=55；makerFee=2000*1=2000；fees[quote]=6000+2000=8000。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 8000);
 
@@ -2737,7 +2524,6 @@ mod tests {
             CommandResultCode::ValidForMatchingEngine
         );
 
-        // 两个 maker 都没有价格改善（holdPrice == 成交价），聚焦"均价重算平台费"这条路径。
         let mut buyer1_cmd = bid_cmd(1000, 40, 40, OrderType::Gtc);
         buyer1_cmd.uid = BUYER1;
         assert_eq!(
@@ -2765,20 +2551,17 @@ mod tests {
         let buyer1 = ups.get(BUYER1).unwrap();
         assert_eq!(buyer1.locked(QUOTE), 0);
         let buyer1_quote_delta = buyer1.account(QUOTE) - buyer1_quote_before;
-        // holdQuote=40400；quoteRefund=320；净=320-40400=-40080。
         assert_eq!(buyer1_quote_delta, -40_080);
         let buyer1_base_delta = buyer1.account(BASE) - buyer1_base_before;
         assert_eq!(buyer1_base_delta, 1000);
 
         let buyer2 = ups.get(BUYER2).unwrap();
         assert_eq!(buyer2.locked(QUOTE), 0);
-        // holdQuote=60600；quoteRefund=480；净=480-60600=-60120。
         let buyer2_quote_delta = buyer2.account(QUOTE) - buyer2_quote_before;
         assert_eq!(buyer2_quote_delta, -60_120);
         let buyer2_base_delta = buyer2.account(BASE) - buyer2_base_before;
         assert_eq!(buyer2_base_delta, 1000);
 
-        // avgTakerPrice=50；takerFee=1000；quote += 100000-1000=99000。
         let seller = ups.get(UID).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -2786,7 +2569,6 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 99_000);
 
-        // avgMakerPrice=50；makerFee=ceil(2000*50*20/10000)=200；fees[quote]=1000+200=1200。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 1200);
 
@@ -2797,12 +2579,9 @@ mod tests {
         );
     }
 
-    // ---- R2 — handler_risk_release/handle_matcher_events_exchange_buy：taker 买(BID)结算（sell 镜像，角色对调），逐 maker+聚合 taker+平台费，全程守恒断言 ----
-
     const SELLER1: i64 = 10;
     const SELLER2: i64 = 11;
 
-    /// 搭建：一个 buyer（taker，已建档 + quote 余额）+ 若干 seller（maker，已建档 + base 余额）。
     fn setup_buy(
         taker_fee: i64,
         maker_fee: i64,
@@ -2833,11 +2612,9 @@ mod tests {
 
     #[test]
     fn buy_single_maker_fixed_fee_price_improvement_refund_and_conservation() {
-        // taker_fee=3（固定）、maker_fee=1（固定）。
         let (mut ups, ssp) = setup_buy(3, 1, 0, 1_000_000, &[(SELLER1, 1_000_000)]);
         let mut engine = RiskEngine::new();
 
-        // maker：seller ASK size=1000。
         let mut seller_cmd = ask_cmd(1000, 50);
         seller_cmd.uid = SELLER1;
         assert_eq!(
@@ -2846,7 +2623,6 @@ mod tests {
         );
         assert_eq!(ups.get(SELLER1).unwrap().locked(BASE), 1000);
 
-        // taker：buyer BID size=1000 @ 55（own 保守价 55，成交价改善到 50）。
         let mut buyer_cmd = bid_cmd(1000, 55, 55, OrderType::Gtc);
         assert_eq!(
             engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
@@ -2860,23 +2636,19 @@ mod tests {
         let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
         let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
 
-        // 唯一一笔 TRADE：size=1000 @ 50，taker(买方) 的保守价 55。
         buyer_cmd.matcher_event = Some(trade_event(1000, 50, 55, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // maker(seller)：base 释放/实付 = size(1000)；quote += notional(50000) - makerFee(1000) = 49000。
         let seller = ups.get(SELLER1).unwrap();
         assert_eq!(seller.locked(BASE), 0, "maker base 冻结应全额释放");
         assert_eq!(seller.account(BASE) - seller_base_before, -1000);
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_000);
 
-        // taker(buyer)：quote 净变动 = quoteRefund(5000) - holdQuote(58000) = -53000；base += 1000；锁定清零。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0, "taker quote 冻结应全额释放");
         assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -53_000);
         assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
 
-        // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
         assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 4000);
 
         assert!(buyer_cmd.matcher_event.is_some(), "R2 只读不消费，TRADE 链保留供事件处理");
@@ -2886,11 +2658,10 @@ mod tests {
 
     #[test]
     fn buy_single_maker_proportional_fee_and_conservation() {
-        // taker_fee=100/10000=1%，maker_fee=20/10000=0.2%。
         let (mut ups, ssp) = setup_buy(100, 20, 10_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
         let mut engine = RiskEngine::new();
 
-        let mut seller_cmd = ask_cmd(1000, 2000); // price(2000) >= ceil(10000/100)=100，不触发 too-low
+        let mut seller_cmd = ask_cmd(1000, 2000);
         seller_cmd.uid = SELLER1;
         assert_eq!(
             engine.place_order_risk_check(&mut seller_cmd, &mut ups, &ssp),
@@ -2902,7 +2673,6 @@ mod tests {
             engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
             CommandResultCode::ValidForMatchingEngine
         );
-        // holdQuote = size*price(60000) + ceil(size*price*takerFee/scale)=ceil(6_000_000/10000)=600 → 60600。
         assert_eq!(ups.get(UID).unwrap().locked(QUOTE), 60_600);
 
         let buyer_quote_before = ups.get(UID).unwrap().account(QUOTE);
@@ -2910,23 +2680,19 @@ mod tests {
         let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
         let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
 
-        // 成交价改善到 50（< holdPrice 60）。
         buyer_cmd.matcher_event = Some(trade_event(1000, 50, 60, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // makerFee(price=50) = ceil(1000*50*20/10000) = 100；maker quote += 50000-100 = 49900。
         let seller = ups.get(SELLER1).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         assert_eq!(seller.account(BASE) - seller_base_before, -1000);
         assert_eq!(seller.account(QUOTE) - seller_quote_before, 49_900);
 
-        // takerFee=500；feeHeld=600；leftover=100；quoteRefund=10100；净=10100-60600=-50500。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         assert_eq!(buyer.account(QUOTE) - buyer_quote_before, -50_500);
         assert_eq!(buyer.account(BASE) - buyer_base_before, 1000);
 
-        // fees[quote] = takerFee(500) + makerFee(avg=50→100) = 600。
         assert_eq!(*engine.fees.get(&QUOTE).unwrap(), 600);
 
         assert_conserved(&[1000, -1000], &[-50_500, 49_900], 600);
@@ -2956,7 +2722,6 @@ mod tests {
             CommandResultCode::ValidForMatchingEngine
         );
 
-        // taker：单笔 BID size=2000 @ 60（own 保守价 60），走两个 maker。
         let mut buyer_cmd = bid_cmd(2000, 60, 60, OrderType::Gtc);
         assert_eq!(
             engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
@@ -2970,7 +2735,6 @@ mod tests {
         let seller2_quote_before = ups.get(SELLER2).unwrap().account(QUOTE);
         let seller2_base_before = ups.get(SELLER2).unwrap().account(BASE);
 
-        // 两笔 TRADE：event1 对 SELLER1（size1000@50，价格改善）；event2 对 SELLER2（size1000@60，无改善）。
         let event2 = trade_event(1000, 60, 60, SELLER2, None);
         buyer_cmd.matcher_event = Some(trade_event(1000, 50, 60, SELLER1, Some(event2)));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
@@ -2978,19 +2742,17 @@ mod tests {
         let seller1 = ups.get(SELLER1).unwrap();
         assert_eq!(seller1.locked(BASE), 0);
         let seller1_quote_delta = seller1.account(QUOTE) - seller1_quote_before;
-        assert_eq!(seller1_quote_delta, 49_000); // 同单 maker fixed 用例
+        assert_eq!(seller1_quote_delta, 49_000);
         let seller1_base_delta = seller1.account(BASE) - seller1_base_before;
         assert_eq!(seller1_base_delta, -1000);
 
         let seller2 = ups.get(SELLER2).unwrap();
         assert_eq!(seller2.locked(BASE), 0);
-        // quoteGained=1000*60=60000；makerFee(固定)=1000；quote += 60000-1000=59000。
         let seller2_quote_delta = seller2.account(QUOTE) - seller2_quote_before;
         assert_eq!(seller2_quote_delta, 59_000);
         let seller2_base_delta = seller2.account(BASE) - seller2_base_before;
         assert_eq!(seller2_base_delta, -1000);
 
-        // taker：avgTakerPrice=55；takerFee=6000（固定与价格无关）；leftover=0；holdQuote=126000；quoteRefund=10000；净=10000-126000=-116000。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -2998,7 +2760,6 @@ mod tests {
         let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
         assert_eq!(buyer_base_delta, 2000);
 
-        // avgMakerPrice=55；makerFee=2000*1=2000；fees[quote]=6000+2000=8000。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 8000);
 
@@ -3046,14 +2807,12 @@ mod tests {
         let seller2_quote_before = ups.get(SELLER2).unwrap().account(QUOTE);
         let seller2_base_before = ups.get(SELLER2).unwrap().account(BASE);
 
-        // event1 大幅价格改善（40 vs holdPrice 60），event2 无改善（60 vs holdPrice 60）。
         let event2 = trade_event(1000, 60, 60, SELLER2, None);
         buyer_cmd.matcher_event = Some(trade_event(1000, 40, 60, SELLER1, Some(event2)));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
         let seller1 = ups.get(SELLER1).unwrap();
         assert_eq!(seller1.locked(BASE), 0);
-        // makerFee(price=40)=ceil(1000*40*20/10000)=80；quote += 40000-80=39920。
         let seller1_quote_delta = seller1.account(QUOTE) - seller1_quote_before;
         assert_eq!(seller1_quote_delta, 39_920);
         let seller1_base_delta = seller1.account(BASE) - seller1_base_before;
@@ -3061,13 +2820,11 @@ mod tests {
 
         let seller2 = ups.get(SELLER2).unwrap();
         assert_eq!(seller2.locked(BASE), 0);
-        // makerFee(price=60)=ceil(1000*60*20/10000)=120；quote += 60000-120=59880。
         let seller2_quote_delta = seller2.account(QUOTE) - seller2_quote_before;
         assert_eq!(seller2_quote_delta, 59_880);
         let seller2_base_delta = seller2.account(BASE) - seller2_base_before;
         assert_eq!(seller2_base_delta, -1000);
 
-        // avgTakerPrice=50；takerFee=1000；feeHeld=1200；leftover=200；holdQuote=121200；quoteRefund=20200；净=20200-121200=-101000。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -3075,7 +2832,6 @@ mod tests {
         let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
         assert_eq!(buyer_base_delta, 2000);
 
-        // avgMakerPrice=50；makerFee=ceil(2000*50*20/10000)=200；fees[quote]=1000+200=1200。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 1200);
 
@@ -3086,14 +2842,11 @@ mod tests {
         );
     }
 
-    /// 一致性证明：IOC_BUDGET 部分成交时须释放整份 held_total（非本次成交量），对应 release_sp=0 假设；断言 hold_quote 等于下单时锁定的 locked_after_place。
     #[test]
     fn buy_ioc_budget_partial_fill_releases_full_held_total_matching_task5_assumption() {
-        // taker_fee=500/1_000_000=0.05%，maker_fee=100/1_000_000=0.01%。
         let (mut ups, ssp) = setup_buy(500, 100, 1_000_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
         let mut engine = RiskEngine::new();
 
-        // maker：seller ASK size=400（等于挂单全部数量），price(2000)>=ceil(1_000_000/500)=2000 不触发 too-low。
         let mut seller_cmd = ask_cmd(400, 2000);
         seller_cmd.uid = SELLER1;
         assert_eq!(
@@ -3101,7 +2854,6 @@ mod tests {
             CommandResultCode::ValidForMatchingEngine
         );
 
-        // taker：IOC_BUDGET，cmd.size=1000（上限）、cmd.price=60000（预算总额，非单价）。
         let mut buyer_cmd = bid_cmd(1000, 60_000, 60_000, OrderType::IocBudget);
         assert_eq!(
             engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
@@ -3117,11 +2869,9 @@ mod tests {
         let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
         let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
 
-        // 只成交 400（40%）；bidder_hold_price 对 BUDGET 分支无意义（被 taker_hold_notional=taker_notional 覆盖），填 60000 仅占位。
         buyer_cmd.matcher_event = Some(trade_event(400, 50, 60_000, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // 核心断言：taker quote 冻结应清零，hold_quote 恰等于 held_total 全额，与部分成交量无关，即 release_sp=0 的前提。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(
             buyer.locked(QUOTE),
@@ -3129,7 +2879,6 @@ mod tests {
             "IOC_BUDGET 部分成交后 taker quote 冻结必须清零（全额释放 held_total，Task 5 依赖此前提）"
         );
 
-        // maker：quoteGained=400*50=20000；makerFee=ceil(400*50*100/1_000_000)=2；quote+=19998。
         let seller = ups.get(SELLER1).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -3137,13 +2886,11 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 19_998);
 
-        // taker：takerFee=10；leftover=40020；quoteRefund=40020；净=40020-60030=-20010；base+=400。
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
         assert_eq!(buyer_quote_delta, -20_010);
         let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
         assert_eq!(buyer_base_delta, 400);
 
-        // fees[quote] = takerFee(10) + makerFee(2) = 12。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 12);
 
@@ -3155,7 +2902,6 @@ mod tests {
         let (mut ups, ssp) = setup_buy(500, 100, 1_000_000, 1_000_000_000, &[(SELLER1, 1_000_000)]);
         let mut engine = RiskEngine::new();
 
-        // price(2000) >= ceil(1_000_000/500)=2000，不触发 too-low。
         let mut seller_cmd = ask_cmd(1000, 2000);
         seller_cmd.uid = SELLER1;
         assert_eq!(
@@ -3177,11 +2923,9 @@ mod tests {
         let seller_quote_before = ups.get(SELLER1).unwrap().account(QUOTE);
         let seller_base_before = ups.get(SELLER1).unwrap().account(BASE);
 
-        // 全额成交：size=1000（原始 size 全部），价格 55。
         buyer_cmd.matcher_event = Some(trade_event(1000, 55, 60_000, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // maker：makerFee=ceil(1000*55*100/1_000_000)=6；quote += 55000-6=54994。
         let seller = ups.get(SELLER1).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -3189,7 +2933,6 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 54_994);
 
-        // taker：即使全额成交，holdQuote 仍是 held_total 原样缩放（60030），非按实际成交价重算。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0, "全额成交也应把整份预算冻结全部释放");
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -3197,7 +2940,6 @@ mod tests {
         let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
         assert_eq!(buyer_base_delta, 1000);
 
-        // fees[quote] = takerFee(28) + makerFee(6) = 34。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 34);
 
@@ -3216,7 +2958,6 @@ mod tests {
             CommandResultCode::ValidForMatchingEngine
         );
 
-        // 固定费预算路径：fee = size*taker_fee(与 budget 无关) = 1000*3 = 3000；held_total=63000。
         let mut buyer_cmd = bid_cmd(1000, 60_000, 60_000, OrderType::FokBudget);
         assert_eq!(
             engine.place_order_risk_check(&mut buyer_cmd, &mut ups, &ssp),
@@ -3234,7 +2975,6 @@ mod tests {
         buyer_cmd.matcher_event = Some(trade_event(1000, 55, 60_000, SELLER1, None));
         engine.handler_risk_release(&mut buyer_cmd, &mut ups, &ssp);
 
-        // maker：makerFee(固定)=1000*1=1000；quote += 55000-1000=54000。
         let seller = ups.get(SELLER1).unwrap();
         assert_eq!(seller.locked(BASE), 0);
         let seller_base_delta = seller.account(BASE) - seller_base_before;
@@ -3242,7 +2982,6 @@ mod tests {
         let seller_quote_delta = seller.account(QUOTE) - seller_quote_before;
         assert_eq!(seller_quote_delta, 54_000);
 
-        // taker：takerFee=3000；leftover=5000；quoteRefund=5000；净=5000-63000=-58000。
         let buyer = ups.get(UID).unwrap();
         assert_eq!(buyer.locked(QUOTE), 0);
         let buyer_quote_delta = buyer.account(QUOTE) - buyer_quote_before;
@@ -3250,14 +2989,11 @@ mod tests {
         let buyer_base_delta = buyer.account(BASE) - buyer_base_before;
         assert_eq!(buyer_base_delta, 1000);
 
-        // fees[quote] = takerFee(3000) + makerFee(1000) = 4000。
         let fees_delta = *engine.fees.get(&QUOTE).unwrap();
         assert_eq!(fees_delta, 4000);
 
         assert_conserved(&[buyer_base_delta, seller_base_delta], &[buyer_quote_delta, seller_quote_delta], fees_delta);
     }
-
-    // ==== ADD_USER / BALANCE_ADJUSTMENT + adjustments 守恒桶 ====
 
     fn add_user_cmd(uid: i64) -> OrderCommand {
         OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() }
@@ -3308,7 +3044,6 @@ mod tests {
 
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1000);
-        // Σ account[cur] + adjustments[cur] 从空账户起恒为 0。
         assert_eq!(ups.get(UID).unwrap().account(QUOTE) + engine.adjustments.get(&QUOTE).unwrap(), 0);
     }
 
@@ -3319,7 +3054,6 @@ mod tests {
         let ssp = SymbolSpecificationProvider::new();
         RiskEngineCommandDispatcher::add_user(&mut engine, &add_user_cmd(UID), &mut ups);
         RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &balance_adjustment_cmd(UID, QUOTE, 1000, 1), &mut ups, &ssp);
-        // 500 冻结在挂单里，可提余额只剩 500。
         ups.get_mut(UID).unwrap().add_to_locked(QUOTE, 500);
 
         let before_account = ups.get(UID).unwrap().account(QUOTE);
@@ -3328,7 +3062,6 @@ mod tests {
         let withdraw_cmd = balance_adjustment_cmd(UID, QUOTE, -600, 2);
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &withdraw_cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
 
-        // NSF：账户与守恒桶都不应变化。
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), before_account);
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap_or(&0), before_adjustments);
     }
@@ -3358,7 +3091,6 @@ mod tests {
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
 
-        // 同 order_id 重复 → AlreadyAppliedSame，账户/adjustments 均不再变化（no-op）。
         let repeat = balance_adjustment_cmd(UID, QUOTE, 1000, 42);
         assert_eq!(
             RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &repeat, &mut ups, &ssp),
@@ -3367,7 +3099,6 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1000);
         assert_eq!(*engine.adjustments.get(&QUOTE).unwrap(), -1000);
 
-        // 不同 order_id 正常再次生效。
         let different_id = balance_adjustment_cmd(UID, QUOTE, 500, 43);
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &different_id, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(QUOTE), 1500);
@@ -3382,15 +3113,13 @@ mod tests {
         RiskEngineCommandDispatcher::add_user(&mut engine, &add_user_cmd(UID), &mut ups);
         RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &balance_adjustment_cmd(UID, QUOTE, 500, 1), &mut ups, &ssp);
 
-        // 提现 600 超过可提余额 500 → NSF，order_id=99 未被 claim。
         let nsf_attempt = balance_adjustment_cmd(UID, QUOTE, -600, 99);
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &nsf_attempt, &mut ups, &ssp), CommandResultCode::RiskNsf);
 
-        // 补充资金后用同一 order_id=99 重试，必须放行（NSF 路径未 claim id）。
         RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &balance_adjustment_cmd(UID, QUOTE, 1000, 2), &mut ups, &ssp);
         let retry = balance_adjustment_cmd(UID, QUOTE, -600, 99);
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &retry, &mut ups, &ssp), CommandResultCode::Success);
-        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 900); // 500 + 1000 - 600
+        assert_eq!(ups.get(UID).unwrap().account(QUOTE), 900);
     }
 
     #[test]
@@ -3401,8 +3130,6 @@ mod tests {
         let cmd = balance_adjustment_cmd(999, QUOTE, 100, 1);
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &cmd, &mut ups, &ssp), CommandResultCode::AuthInvalidUser);
     }
-
-    // ==== 期货 R1 — place_order 期货分支/can_place_margin_order NSF/CLOSE_POSITION；治具：单 symbol（scale 全 1 恒等缩放）+ mark price + 已建档用户，leverage 默认 1 ====
 
     const FUT_SYMBOL: i32 = 200;
     const FUT_BASE: i32 = 1;
@@ -3427,7 +3154,6 @@ mod tests {
         futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k)
     }
 
-    /// 同 [`futures_spec`]，但 `maker_fee` 可配置（R2 需要区分 taker/maker 费率的测试用）。
     fn futures_spec_with_fees(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
         CoreSymbolSpecification { maker_fee, ..futures_spec_for(FUT_SYMBOL, taker_fee, fee_scale_k) }
     }
@@ -3480,15 +3206,11 @@ mod tests {
         }
     }
 
-    // ---- 成功开仓 + pending 记录 —— 固定费（fee_scale_k=0）+ ISOLATED 一组 ----
-
     #[test]
     fn futures_place_order_long_sufficient_margin_fixed_fee_is_valid_and_records_pending() {
-        // taker_fee=2（固定，每手 2）；balance=10_000（充裕）；mark=100。
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
 
-        // 手推：positionMargin=1000+pendingFee=20+openLoss=0=required 1020 ≤ spendable 10_000。
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
             CommandResultCode::ValidForMatchingEngine
@@ -3498,14 +3220,13 @@ mod tests {
             ups.get_mut(UID).unwrap().positions.get(&FUT_SYMBOL).expect("NSF 通过后 position 必须已提交入 map");
         assert_eq!(position.pending_buy_size, 10);
         assert_eq!(position.pending_buy_avg_price, 100);
-        assert_eq!(position.open_volume, 0); // R1 只挂单占用，未成交（成交结算在 R2）
+        assert_eq!(position.open_volume, 0);
         assert_eq!(position.leverage, 1);
         assert_eq!(position.margin_mode, MarginMode::Isolated);
     }
 
     #[test]
     fn futures_place_order_insufficient_margin_fixed_fee_is_nsf_and_position_not_created() {
-        // 同上参数，但 balance=1_000 < required 1020 → NSF；且不得污染 positions map。
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 1_000, 100);
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
 
@@ -3516,11 +3237,8 @@ mod tests {
         );
     }
 
-    // ---- 成功开仓 / NSF 边界 —— 比例费（fee_scale_k>0）+ ISOLATED 一组 ----
-
     #[test]
     fn futures_place_order_proportional_fee_sufficient_margin_is_valid() {
-        // taker_fee=100/fee_scale_k=10_000（1%）：pendingFee=10；required=1000+10+0=1010 ≤ spendable 2_000。
         let (mut engine, mut ups, ssp) = setup_futures(100, 10_000, 2_000, 100);
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
         assert_eq!(
@@ -3531,17 +3249,13 @@ mod tests {
 
     #[test]
     fn futures_place_order_proportional_fee_insufficient_margin_is_nsf() {
-        // required=1010 > spendable 1_005 → NSF（验证比例费模型下 pendingFee 确实被算入比较）。
         let (mut engine, mut ups, ssp) = setup_futures(100, 10_000, 1_005, 100);
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
         assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
     }
 
-    // ---- 杠杆超档 → RiskInvalidLeverage ----
-
     #[test]
     fn futures_place_order_leverage_exceeds_tier_is_invalid_leverage() {
-        // max_leverage 只配一档 {floor:0->5}，相当于全局杠杆上限 5x（见 floor_value 文档）。
         let mut spec = futures_spec(2, 0);
         spec.max_leverage.insert(0, 5);
         let mut ssp = SymbolSpecificationProvider::new();
@@ -3556,15 +3270,12 @@ mod tests {
         let mut engine = RiskEngine::new();
         engine.last_price_cache.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100));
 
-        // leverage=10 > 5x 上限，即便资金充裕也应在 isValidLeverage 处直接拒绝（NSF 检查之前）。
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 10, MarginMode::Isolated, false);
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
             CommandResultCode::RiskInvalidLeverage
         );
     }
-
-    // ---- 崩溃安全性回归：非现货非期货 symbol 绝不 panic（返回 UnsupportedSymbolType，非 unimplemented!） ----
 
     #[test]
     fn futures_place_order_option_symbol_type_returns_unsupported_not_panic() {
@@ -3603,7 +3314,6 @@ mod tests {
             ..Default::default()
         };
 
-        // 走 pre_process_command（真实 R1 入口）；若实现仍是 unimplemented!/panic! 会直接 abort 而非落到下面 assert_eq。
         engine.pre_process_command(&mut cmd, &mut ups, &ssp);
         assert_eq!(cmd.result_code, Some(CommandResultCode::UnsupportedSymbolType));
         assert!(
@@ -3611,8 +3321,6 @@ mod tests {
             "不支持的 symbol 类型不得创建 position"
         );
     }
-
-    // ---- marginMode / leverage 跨腿一致性 ----
 
     #[test]
     fn futures_place_order_margin_mode_mismatch_against_existing_position() {
@@ -3622,7 +3330,6 @@ mod tests {
             .positions
             .insert(FUT_SYMBOL, SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 3));
 
-        // 同 leverage(3)，marginMode 与现仓（ISOLATED）冲突（CROSS）→ 在 NSF 检查之前拒绝。
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 3, MarginMode::Cross, false);
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
@@ -3638,7 +3345,6 @@ mod tests {
             .positions
             .insert(FUT_SYMBOL, SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 3));
 
-        // 同 marginMode(ISOLATED)，leverage 与现仓（3）冲突（5）。
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 5, MarginMode::Isolated, false);
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
@@ -3646,19 +3352,16 @@ mod tests {
         );
     }
 
-    // ---- ONEWAY + reduce-only 夹（§2 "ONEWAY 只减仓特例"） ----
-
     #[test]
     fn futures_place_order_oneway_reduce_only_clamps_size_to_open_volume_and_succeeds() {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
         let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
         pos.direction = PositionDirection::Long;
         pos.open_volume = 5;
-        pos.open_price_sum = 500; // 均价 100
-        pos.open_init_margin_sum = 500; // 与未配置 init_margin 表下 notional/leverage 一致
+        pos.open_price_sum = 500;
+        pos.open_init_margin_sum = 500;
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, pos);
 
-        // reduce-only ASK（与现仓 LONG 反向）请求 size=20 > openVolume=5 → 夹到 5。
         let mut cmd = futures_place_cmd(OrderAction::Ask, 20, 100, 1, MarginMode::Isolated, true);
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
@@ -3674,22 +3377,18 @@ mod tests {
     fn futures_place_order_oneway_reduce_only_no_position_clamps_to_zero_is_noop_success() {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
 
-        // 无仓时 maxClosableSize 恒 0——reduce-only 直接 SUCCESS no-op，绝不开新敞口。
         let mut cmd = futures_place_cmd(OrderAction::Ask, 5, 100, 1, MarginMode::Isolated, true);
         assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert!(!ups.get_mut(UID).unwrap().positions.contains_key(&FUT_SYMBOL));
     }
-
-    // ---- crossFreeMargin 循环 —— CROSS 浮盈可抵扣 / ISOLATED 只扣不抵（§3.3 ②） ----
 
     #[test]
     fn futures_place_order_cross_position_unrealized_profit_credits_other_symbol_order() {
         const OTHER_SYMBOL: i32 = 201;
         let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 600, 100);
         assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
-        engine.last_price_cache.insert(OTHER_SYMBOL, LastPriceCacheRecord::with_mark(200)); // OTHER_SYMBOL mark 涨到 200
+        engine.last_price_cache.insert(OTHER_SYMBOL, LastPriceCacheRecord::with_mark(200));
 
-        // 已有 CROSS 仓（LONG open_volume=10@100）：estimatePnl=1000；calculateRequiredMarginForFutures=500。
         let mut other_pos = SymbolPositionRecord::new(UID, OTHER_SYMBOL, FUT_QUOTE, MarginMode::Cross, 1);
         other_pos.direction = PositionDirection::Long;
         other_pos.open_volume = 10;
@@ -3697,7 +3396,6 @@ mod tests {
         other_pos.open_init_margin_sum = 500;
         ups.get_mut(UID).unwrap().positions.insert(OTHER_SYMBOL, other_pos);
 
-        // 新单 required（不计抵扣）=1020；crossFreeMargin=500 → 实际 required=520 ≤ spendable=600；断言 ValidForMatchingEngine 锁定 CROSS 浮盈抵扣通路。
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
         assert_eq!(
             engine.place_order_risk_check(&mut cmd, &mut ups, &ssp),
@@ -3708,7 +3406,6 @@ mod tests {
     #[test]
     fn futures_place_order_isolated_other_position_margin_is_deducted_without_pnl_credit() {
         const OTHER_SYMBOL: i32 = 201;
-        // balance=1_000：ISOLATED 其它仓需把 calculateRequiredMarginForFutures(=500) 从 spendable 剥离（不加浮盈抵扣）；required 实际=1520 > 1_000 → 必须 NSF。
         let (mut engine, mut ups, mut ssp) = setup_futures(2, 0, 1_000, 100);
         assert_eq!(ssp.add_symbol(futures_spec_for(OTHER_SYMBOL, 2, 0)), CommandResultCode::Success);
         engine.last_price_cache.insert(OTHER_SYMBOL, LastPriceCacheRecord::with_mark(200));
@@ -3723,8 +3420,6 @@ mod tests {
         let mut cmd = futures_place_cmd(OrderAction::Bid, 10, 100, 1, MarginMode::Isolated, false);
         assert_eq!(engine.place_order_risk_check(&mut cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
     }
-
-    // ---- CLOSE_POSITION（§3 CLOSE_POSITION） ----
 
     #[test]
     fn close_position_risk_check_no_position_is_noop_success() {
@@ -3753,12 +3448,12 @@ mod tests {
         let mut cmd = OrderCommand {
             command: OrderCommandType::ClosePosition,
             symbol: FUT_SYMBOL,
-            action: Some(OrderAction::Ask), // 反向平多
-            size: 999,                      // 请求量超过持仓 → 应收敛到 open_volume=5
+            action: Some(OrderAction::Ask),
+            size: 999,
             price: 100,
             uid: UID,
-            leverage: 1,                       // 与仓位 leverage(7) 不同——应被强制覆盖
-            margin_mode: MarginMode::Isolated,  // 与仓位 marginMode(Cross) 不同——应被强制覆盖
+            leverage: 1,
+            margin_mode: MarginMode::Isolated,
             ..Default::default()
         };
 
@@ -3776,7 +3471,6 @@ mod tests {
 
     #[test]
     fn close_position_risk_check_unsupported_symbol_type_for_spot() {
-        // CLOSE_POSITION 对现货 symbol 应直接拒绝（isFuturesContract 守卫），不查 positions。
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(
             ssp.add_symbol(CoreSymbolSpecification {
@@ -3809,8 +3503,6 @@ mod tests {
         );
     }
 
-    // ---- pre_process_command 路由：CLOSE_POSITION → close_position_risk_check ----
-
     #[test]
     fn pre_process_command_routes_close_position_to_close_position_risk_check() {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 100_000, 100);
@@ -3834,8 +3526,6 @@ mod tests {
         assert_eq!(cmd.size, 5);
     }
 
-    // ==== 期货 R2 — handleMatcherEventMargin（开/平/翻/PnL 结算）；两层测试：低层锁定 settle_margin_position_event 结算核心，集成层走 handler_risk_release 验证联动+守恒 ====
-
     const FUT2_MAKER_UID: i64 = 12;
 
     fn fut_currency_spec() -> CoreCurrencySpecification {
@@ -3846,7 +3536,6 @@ mod tests {
         fut_trade_event_with_command(size, price, matched_order_uid, OrderCommandType::PlaceOrder)
     }
 
-    /// 同 fut_trade_event，但允许显式指定 matched_order_command_type（新增，供 ONEWAY 不回归测试：即便与 cmd.command 不同，create_positions_key 应忽略该差异）。
     fn fut_trade_event_with_command(
         size: i64,
         price: i64,
@@ -3861,7 +3550,7 @@ mod tests {
             price,
             size,
             bid_gt_ask: false,
-            bidder_hold_price: 0, // 期货不用 bidderHoldPrice（现货专用字段）。
+            bidder_hold_price: 0,
             matched_order_uid,
             matched_order_command_type,
             filled: 0,
@@ -3877,7 +3566,6 @@ mod tests {
         }
     }
 
-    /// 模拟 R1 已挂单待撮合的前置状态（NSF 通过后才 insert 但一旦通过必已在 map 里）；已有记录则叠加 pending 而非覆盖。
     fn seed_pending_position(ups: &mut UserProfileService, uid: i64, action: OrderAction, size: i64, price: i64) {
         if ups.get(uid).is_none() {
             ups.add_empty_user_profile(uid);
@@ -3917,18 +3605,15 @@ mod tests {
         }
     }
 
-    // ---- 低层：settle_margin_position_event —— TRADE 开/平/翻 + REJECT/REDUCE + teardown ----
-
     #[test]
     fn settle_margin_open_new_position_no_pnl_charges_taker_fee_exact_conservation() {
-        let spec = futures_spec(2, 0); // taker_fee=2（固定，每手 2）
+        let spec = futures_spec(2, 0);
         let currency_spec = fut_currency_spec();
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
         {
             let up = ups.get_mut(UID).unwrap();
             up.add_to_account(FUT_QUOTE, 10_000);
-            // 用刚挂单尚未成交的空仓记录模拟"R1 已建档"，而非假设 R2 能凭空插入新记录。
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.pending_buy_size = 10;
             pos.pending_buy_avg_price = 100;
@@ -3938,18 +3623,17 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
         let pos = up.positions.get(&FUT_SYMBOL).expect("open 后仍非空（open_volume>0），不应被拆记录");
         assert_eq!(pos.direction, PositionDirection::Long);
         assert_eq!(pos.open_volume, 10);
-        assert_eq!(pos.open_price_sum, 1000); // 成本基按 trade price：10*100
-        assert_eq!(pos.open_init_margin_sum, 1000); // 保证金按 mark：notional(100*10)/leverage(1)
+        assert_eq!(pos.open_price_sum, 1000);
+        assert_eq!(pos.open_init_margin_sum, 1000);
         assert_eq!(pos.profit, 0, "开仓不产生已实现盈亏");
 
-        // fee = taker_fee(2 固定) * size(10) = 20；无 PnL；仓非空不触发 teardown。
         assert_eq!(up.account(FUT_QUOTE), 10_000 - 20);
         assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 20);
         assert_eq!((up.account(FUT_QUOTE) - 10_000) + *fees.get(&FUT_QUOTE).unwrap(), 0, "唯一移动是费用配对");
@@ -3967,16 +3651,15 @@ mod tests {
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.direction = PositionDirection::Long;
             pos.open_volume = 20;
-            pos.open_price_sum = 2000; // 均价 100
+            pos.open_price_sum = 2000;
             pos.open_init_margin_sum = 2000;
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
-        // ASK 5（< openVolume 20）@110：部分平，价格优于成本但不实现盈亏——盈亏递延进剩余成本基。
         let mte = fut_trade_event(5, 110, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
@@ -3986,7 +3669,6 @@ mod tests {
         assert_eq!(pos.open_price_sum, 1450, "2000 - tradeSize(5)*tradePrice(110)=2000-550");
         assert_eq!(pos.profit, 0, "部分平不实现盈亏");
 
-        // fee = taker_fee(2) * closedSize(5) = 10；仅此账户变动，无 PnL 入账。
         assert_eq!(up.account(FUT_QUOTE), 10_000 - 10);
         assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 10);
     }
@@ -4003,21 +3685,19 @@ mod tests {
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.direction = PositionDirection::Long;
             pos.open_volume = 10;
-            pos.open_price_sum = 1000; // 均价 100
+            pos.open_price_sum = 1000;
             pos.open_init_margin_sum = 1000;
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
-        // ASK 10（== openVolume）@120：全平，profit=(1200-1000)*(+1)=200，size_to_open=0（无翻仓）。
         let mte = fut_trade_event(10, 120, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
         assert!(!up.positions.contains_key(&FUT_SYMBOL), "全平且无残余挂单 → isEmpty → 拆记录");
-        // fee = taker_fee(2)*closedSize(10)=20；PnL 结算：+200（isEmpty 唯一入账户处）。
         assert_eq!(up.account(FUT_QUOTE), 10_000 - 20 + 200);
         assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 20);
     }
@@ -4034,27 +3714,25 @@ mod tests {
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.direction = PositionDirection::Long;
             pos.open_volume = 10;
-            pos.open_price_sum = 1000; // 均价 100
+            pos.open_price_sum = 1000;
             pos.open_init_margin_sum = 1000;
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
-        // ASK 15（> openVolume 10）@120：平掉 10（实现 profit=200）+ 反手开空 5 @120（mark=100）。
         let mte = fut_trade_event(15, 120, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
         let pos = up.positions.get(&FUT_SYMBOL).expect("翻仓后新方向仓位非空，不拆记录");
         assert_eq!(pos.direction, PositionDirection::Short);
         assert_eq!(pos.open_volume, 5);
-        assert_eq!(pos.open_price_sum, 600); // 5*120（成本基按 trade price）
-        assert_eq!(pos.open_init_margin_sum, 500); // mark(100)*5/leverage(1)（保证金按 mark price）
+        assert_eq!(pos.open_price_sum, 600);
+        assert_eq!(pos.open_init_margin_sum, 500);
         assert_eq!(pos.profit, 200, "平仓腿已实现盈亏累进 profit，但因新仓非空未结算入账户");
 
-        // fee：close 腿 20 + open 腿 10 = 30；account 只扣 fee（profit 未结算，isEmpty()==false）。
         assert_eq!(up.account(FUT_QUOTE), 10_000 - 30);
         assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 30);
     }
@@ -4077,7 +3755,7 @@ mod tests {
         let mte = fut_reject_reduce_event(MatcherEventType::Reject, 4);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
@@ -4096,7 +3774,6 @@ mod tests {
         {
             let up = ups.get_mut(UID).unwrap();
             up.add_to_account(FUT_QUOTE, 1_000);
-            // 合成场景：open_volume=0 但残余 pending 阻止此前 teardown，带 extraMargin/profit 残留，验证 teardown 一次性结清。
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.pending_sell_size = 3;
             pos.profit = 50;
@@ -4104,10 +3781,10 @@ mod tests {
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
-        let mte = fut_reject_reduce_event(MatcherEventType::Reduce, 3); // 释放全部剩余 pending → isEmpty
+        let mte = fut_reject_reduce_event(MatcherEventType::Reduce, 3);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Ask, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
@@ -4126,7 +3803,7 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false, 0,
         );
 
@@ -4146,14 +3823,14 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, true, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, false, false, 0,
         );
     }
 
     #[test]
     fn settle_margin_maker_side_uses_maker_fee_rate_not_taker_rate() {
-        let spec = futures_spec_with_fees(10, 3, 0); // taker=10、maker=3，均固定
+        let spec = futures_spec_with_fees(10, 3, 0);
         let currency_spec = fut_currency_spec();
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
@@ -4169,21 +3846,20 @@ mod tests {
         let mte = fut_trade_event(10, 100, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100,
-            false, // is_taker=false → 必须用 maker_fee(3)，不是 taker_fee(10)
+            false,
             false,
             0,
         );
 
-        assert_eq!(up.account(FUT_QUOTE), 10_000 - 30); // maker_fee(3)*size(10)=30
+        assert_eq!(up.account(FUT_QUOTE), 10_000 - 30);
         assert_eq!(*fees.get(&FUT_QUOTE).unwrap(), 30);
     }
 
     #[test]
     fn settle_margin_proportional_fee_is_exact_no_ceil_drift_taker_and_maker() {
-        // futures 费用同一次计算值借记 accounts+贷记 fees（无现货两套公式落差），比例费天然精确配对无 dust，本测试断言 EXACT 守恒。
-        let spec = futures_spec_with_fees(333, 111, 10_000); // taker≈3.33%、maker≈1.11%，故意选不整除的比例
+        let spec = futures_spec_with_fees(333, 111, 10_000);
         let currency_spec = fut_currency_spec();
         let mut ups = UserProfileService::new();
         assert_eq!(ups.add_empty_user_profile(UID), CommandResultCode::Success);
@@ -4196,10 +3872,10 @@ mod tests {
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let mut fees: BTreeMap<i32, i64> = BTreeMap::new();
-        let mte = fut_trade_event(7, 101, 0); // 刻意用不整除的 size/price 组合放大 ceil 效应
+        let mte = fut_trade_event(7, 101, 0);
 
         let up = ups.get_mut(UID).unwrap();
-        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(), 
+        RiskEngine::settle_margin_position_event(&mut Vec::new(), &SymbolSpecificationProvider::new(), &std::collections::BTreeMap::new(),
             up, FUT_SYMBOL, false, &mte, &spec, OrderAction::Bid, &mut fees, &currency_spec, 100, true, false, 0,
         );
         let taker_fee = arithmetic::calculate_taker_fee(7, 101, 333, 10_000);
@@ -4209,11 +3885,9 @@ mod tests {
         assert_eq!((up.account(FUT_QUOTE) - 100_000) + *fees.get(&FUT_QUOTE).unwrap(), 0, "EXACT 守恒，非近似");
     }
 
-    // ---- 集成层：handler_risk_release —— taker+maker 联动 / 链路分派 / 跨用户全局守恒 ----
-
     #[test]
     fn handler_risk_release_futures_trade_opens_both_sides_and_conserves() {
-        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100); // taker=2 固定，maker=0
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
         assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
         ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
         seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
@@ -4249,7 +3923,6 @@ mod tests {
         assert_eq!(taker_delta + maker_delta + fees_delta, 0, "开仓：唯一移动是费用配对");
     }
 
-    /// create_positions_key maker 侧改用 mte.matched_order_command_type 后 ONEWAY 行为不变，即便与 cmd.command 故意不同（taker=ForceLiquidation/maker=PlaceOrder），断言与开仓用例逐项相同。
     #[test]
     fn handler_risk_release_futures_trade_oneway_unaffected_by_matched_order_command_type_switch() {
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
@@ -4258,7 +3931,6 @@ mod tests {
         seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
         seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 10, 100);
 
-        // taker 命令 ForceLiquidation，maker matched_order_command_type 是 PlaceOrder，故意不同，模拟真实场景。
         let mut cmd = OrderCommand {
             command: OrderCommandType::ForceLiquidation,
             symbol: FUT_SYMBOL,
@@ -4296,13 +3968,12 @@ mod tests {
 
     #[test]
     fn handler_risk_release_futures_full_round_trip_open_then_close_is_zero_sum_between_counterparties() {
-        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100); // taker=2 固定，maker=0
+        let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
         assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
         ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
         seed_pending_position(&mut ups, UID, OrderAction::Bid, 10, 100);
         seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 10, 100);
 
-        // 开仓：UID 多头 10 @100 vs FUT2_MAKER_UID 空头 10 @100。
         let mut open_cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             symbol: FUT_SYMBOL,
@@ -4316,11 +3987,9 @@ mod tests {
         let taker_after_open = ups.get(UID).unwrap().account(FUT_QUOTE);
         let maker_after_open = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE);
 
-        // 平仓前：双方各自再挂一笔平仓单（R1 已建档，pending 叠加到既有 open_volume 之上）。
         seed_pending_position(&mut ups, UID, OrderAction::Ask, 10, 120);
         seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Bid, 10, 120);
 
-        // 平仓：UID 卖出 10 @120 平多，对手 FUT2_MAKER_UID 买回 10 平空——双方都整仓平掉。
         let mut close_cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             symbol: FUT_SYMBOL,
@@ -4340,12 +4009,9 @@ mod tests {
         let taker_final = ups.get(UID).unwrap().account(FUT_QUOTE);
         let maker_final = ups.get(FUT2_MAKER_UID).unwrap().account(FUT_QUOTE);
 
-        // taker(多头) profit=(120-100)*10=200，close_fee=taker_fee(2)*10=20。
         assert_eq!(taker_final - taker_after_open, 200 - 20);
-        // maker(空头) profit=-(120-100)*10=-200，close_fee=maker_fee(0)*10=0。
         assert_eq!(maker_final - maker_after_open, -200);
 
-        // 全局守恒：两用户全程净变动 + fees 净变动 == 0（zero-sum PnL+fee 是唯一真实转移）。
         let total_user_delta = (taker_final - 10_000) + (maker_final - 10_000);
         let fees_total = *engine.fees.get(&FUT_QUOTE).unwrap();
         assert_eq!(total_user_delta + fees_total, 0);
@@ -4353,7 +4019,6 @@ mod tests {
 
     #[test]
     fn handler_risk_release_futures_chain_head_reduce_then_trade_applies_both_in_one_call() {
-        // 验证期货不预摘链头设计：REDUCE(4)+TRADE(6) 同链，一次 handler_risk_release 应把两事件都结算。
         let (mut engine, mut ups, ssp) = setup_futures(2, 0, 10_000, 100);
         assert_eq!(ups.add_empty_user_profile(FUT2_MAKER_UID), CommandResultCode::Success);
         ups.get_mut(FUT2_MAKER_UID).unwrap().add_to_account(FUT_QUOTE, 10_000);
@@ -4361,11 +4026,10 @@ mod tests {
         {
             let up = ups.get_mut(UID).unwrap();
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
-            pos.pending_buy_size = 10; // R1 挂单量（REDUCE(4) 先撤掉一部分，TRADE(6) 成交剩余）
+            pos.pending_buy_size = 10;
             pos.pending_buy_avg_price = 100;
             up.positions.insert(FUT_SYMBOL, pos);
         }
-        // maker 只参与 TRADE(6)（REDUCE 是 taker 自己撤单，与 maker 无关），故 pending 只需覆盖 size=6。
         seed_pending_position(&mut ups, FUT2_MAKER_UID, OrderAction::Ask, 6, 100);
 
         let mut cmd = OrderCommand {
@@ -4390,8 +4054,6 @@ mod tests {
         assert_eq!(maker_pos.open_volume, 6, "maker 只在 TRADE 事件参与，REDUCE 与其无关");
     }
 
-    // ==== 统一账户 — calculate_locked/calculate_free_futures_margin + 现货 NSF/withdrawable 顶账；leverage=1 无 pending 时 calculate_required_margin_for_futures 退化为 open_init_margin_sum ====
-
     #[test]
     fn calculate_locked_zero_when_no_positions_and_no_exchange_locked() {
         let (_engine, ups, ssp) = setup_futures(0, 0, 0, 100);
@@ -4405,21 +4067,18 @@ mod tests {
         let (_engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
-            up.add_to_locked(FUT_QUOTE, 200); // 现货挂单冻结
+            up.add_to_locked(FUT_QUOTE, 200);
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.direction = PositionDirection::Long;
             pos.open_volume = 10;
             pos.open_price_sum = 1000;
-            pos.open_init_margin_sum = 1000; // 见上：leverage=1 无 pending → required = 本值
+            pos.open_init_margin_sum = 1000;
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
-        // ① 期货保证金(1000) + ② 现货冻结(200) + ③④ 借贷抵押(0, 本用户无 loan)。
         assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 1200);
     }
-
-    // ---- loanCollateralLocked 虚拟锁——借贷抵押留在 accounts 但不能被挂单/保证金/提现顶用 ----
 
     fn isolated_loan_with_collateral(loan_id: i64, collateral_currency: i32, collateral_amount: i64)
         -> crate::core::common::isolated_loan_record::IsolatedLoanRecord {
@@ -4438,20 +4097,17 @@ mod tests {
             let up = ups.get_mut(UID).unwrap();
             up.isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
             up.isolated_loans.insert(2, isolated_loan_with_collateral(2, FUT_QUOTE, 50));
-            up.isolated_loans.insert(3, isolated_loan_with_collateral(3, FUT_BASE, 999)); // 他币不计入 FUT_QUOTE
+            up.isolated_loans.insert(3, isolated_loan_with_collateral(3, FUT_BASE, 999));
             up.cross_loan_collateral.insert(FUT_QUOTE, 100);
         }
         let up = ups.get(UID).unwrap();
-        // ③ Isolated(300+50，FUT_BASE 的 999 不算) + ④ Cross(100) = 450。
         assert_eq!(RiskEngine::loan_collateral_locked(up, FUT_QUOTE), 450);
         assert_eq!(RiskEngine::loan_collateral_locked(up, FUT_BASE), 999);
-        // 无任何抵押的币种恒 0。
         assert_eq!(RiskEngine::loan_collateral_locked(up, 12345), 0);
     }
 
     #[test]
     fn loan_collateral_locked_zero_for_user_without_loans() {
-        // 无 loan 用户两个 map 皆空，虚拟锁恒 0。
         let (_engine, ups, _ssp) = setup_futures(0, 0, 1_000, 100);
         assert_eq!(RiskEngine::loan_collateral_locked(ups.get(UID).unwrap(), FUT_QUOTE), 0);
     }
@@ -4461,70 +4117,58 @@ mod tests {
         let (_engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
-            up.add_to_locked(FUT_QUOTE, 200); // ② 现货冻结
-            up.isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300)); // ③ 借贷抵押
+            up.add_to_locked(FUT_QUOTE, 200);
+            up.isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
         }
         let up = ups.get(UID).unwrap();
         let currency_spec = ssp.get_currency(FUT_QUOTE).unwrap();
-        // ① 期货(0) + ② 现货冻结(200) + ③④ 借贷抵押(300) = 500。
         assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, currency_spec), 500);
     }
 
-    // ==== Java 黄金值对拍：RiskEngineCalculateLockedTest / RiskEngineCrossMarginScaleTest ====
-    // 逐条钉住 Java 单测常量。FUT_BASE(1)=Java BTC，FUT_QUOTE(2)=Java USDT。
-
     #[test]
     fn calculate_locked_java_combined_four_components_summed_into_quote_and_base() {
-        // 对拍 RiskEngineCalculateLockedTest.calculate_locked_futuresMarginPlusLoanCollateral_summedIntoQuoteAndBase
         let (_engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
-            // ① 期货仓：quote=FUT_QUOTE，leverage=1 无 pending → required = open_init_margin_sum = 500
             let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
             pos.direction = PositionDirection::Long;
             pos.open_volume = 100;
             pos.open_price_sum = 100;
             pos.open_init_margin_sum = 500;
             up.positions.insert(FUT_SYMBOL, pos);
-            up.add_to_locked(FUT_QUOTE, 200); // ② 现货挂单冻结 USDT 200
-            up.isolated_loans.insert(100, isolated_loan_with_collateral(100, FUT_BASE, 2)); // ③ Isolated BTC 抵押 2
-            up.cross_loan_collateral.insert(FUT_BASE, 3); // ④ Cross BTC 3
-            up.cross_loan_collateral.insert(FUT_QUOTE, 1_000); // ④ Cross USDT 1000
+            up.add_to_locked(FUT_QUOTE, 200);
+            up.isolated_loans.insert(100, isolated_loan_with_collateral(100, FUT_BASE, 2));
+            up.cross_loan_collateral.insert(FUT_BASE, 3);
+            up.cross_loan_collateral.insert(FUT_QUOTE, 1_000);
         }
         let up = ups.get(UID).unwrap();
-        // BTC = 0(①) + 0(②) + 2(③) + 3(④) = 5
         assert_eq!(RiskEngine::calculate_locked(up, FUT_BASE, &ssp, ssp.get_currency(FUT_BASE).unwrap()), 5);
-        // USDT = 500(①) + 200(②) + 0(③, BTC 才是抵押币) + 1000(④) = 1700
         assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, ssp.get_currency(FUT_QUOTE).unwrap()), 1_700);
     }
 
     #[test]
     fn calculate_locked_java_isolated_loan_only_counted_for_its_collateral_currency() {
-        // 对拍 RiskEngineCalculateLockedTest.calculate_locked_isolatedLoanCollateralOnly_includedForCollateralCurrencyOnly
         const ETH: i32 = 3;
         let (_engine, mut ups, mut ssp) = setup_futures(0, 0, 0, 100);
         ssp.add_currency(CoreCurrencySpecification { currency: ETH, currency_scale_k: 1, ..Default::default() });
         {
             let up = ups.get_mut(UID).unwrap();
-            up.isolated_loans.insert(100, isolated_loan_with_collateral(100, FUT_BASE, 3)); // BTC 抵押 3
-            up.isolated_loans.insert(101, isolated_loan_with_collateral(101, ETH, 7)); // ETH 抵押 7
+            up.isolated_loans.insert(100, isolated_loan_with_collateral(100, FUT_BASE, 3));
+            up.isolated_loans.insert(101, isolated_loan_with_collateral(101, ETH, 7));
         }
         let up = ups.get(UID).unwrap();
         assert_eq!(RiskEngine::calculate_locked(up, FUT_BASE, &ssp, ssp.get_currency(FUT_BASE).unwrap()), 3);
         assert_eq!(RiskEngine::calculate_locked(up, ETH, &ssp, ssp.get_currency(ETH).unwrap()), 7);
-        // loanCurrency(USDT) 侧不作 collateral 计入。
         assert_eq!(RiskEngine::calculate_locked(up, FUT_QUOTE, &ssp, ssp.get_currency(FUT_QUOTE).unwrap()), 0);
     }
 
     #[test]
     fn place_margin_order_java_h3_other_cross_position_different_scale_not_blown_up() {
-        // 对拍 RiskEngineCrossMarginScaleTest.placeMarginOrder_otherCrossPositionDifferentScale_marginNotBlownUp_orderAccepted
-        // 账户另持 scale=100×100 的 B 仓，其保证金必须按 B 自身 scale 折算(=1 USDT)，不得被放大 10000× 误拒本单。
         const USDT: i32 = 2;
         const BASE_A: i32 = 10;
         const BASE_B: i32 = 11;
-        const SYMBOL_A: i32 = 7001; // identity scale：下单标的
-        const SYMBOL_B: i32 = 7002; // scale=100×100：已持有 CROSS 仓
+        const SYMBOL_A: i32 = 7001;
+        const SYMBOL_B: i32 = 7002;
         fn fut(symbol_id: i32, base: i32, bsk: i64, qsk: i64) -> CoreSymbolSpecification {
             let mut mm = std::collections::BTreeMap::new();
             mm.insert(1_000_000_000i64, 8i64);
@@ -4560,9 +4204,9 @@ mod tests {
             pos_b.direction = PositionDirection::Long;
             pos_b.open_volume = 1;
             pos_b.open_price_sum = 10_000;
-            pos_b.open_init_margin_sum = 10_000; // sizePrice(B scale)；正确折算 = 1 USDT
+            pos_b.open_init_margin_sum = 10_000;
             up.positions.insert(SYMBOL_B, pos_b);
-            up.add_to_account(USDT, 100); // 够正确口径(≈2)，远不够被放大 10000× 的错误口径(≈10001)
+            up.add_to_account(USDT, 100);
         }
         let mut engine = RiskEngine::new();
         engine.last_price_cache.insert(SYMBOL_A, LastPriceCacheRecord::with_mark(100));
@@ -4589,19 +4233,13 @@ mod tests {
         );
     }
 
-    // ==========================================================================================
-    // Java 单测对拍 —— RiskEngineCalculateLockedTest / RiskEngineCrossMarginScaleTest
-    // 逐条钉住 Java 黄金值；Rust 若算出不同值即候选翻译 bug，勿改期望值。
-    // ==========================================================================================
-
     const JP_BTC: i32 = 1;
     const JP_USDT: i32 = 2;
     const JP_ETH: i32 = 3;
     const JP_UID: i64 = 42;
-    const JP_FUT: i32 = 1001; // 期货 spec (USDT quote)
-    const JP_SPOT: i32 = 2001; // 现货 spec（loan collateral 占位）
+    const JP_FUT: i32 = 1001;
+    const JP_SPOT: i32 = 2001;
 
-    // CalculateLockedTest 的 @BeforeEach：3 currency + 期货1001 + 现货2001 + UID42 空账户。
     fn jp_locked_env() -> (SymbolSpecificationProvider, UserProfileService) {
         let mut ssp = SymbolSpecificationProvider::new();
         ssp.add_currency(CoreCurrencySpecification { currency: JP_BTC, currency_scale_k: 1, ..Default::default() });
@@ -4645,7 +4283,6 @@ mod tests {
         RiskEngine::calculate_locked(up, currency, ssp, cspec)
     }
 
-    // calculateLocked_emptyProfile_returnsZero
     #[test]
     fn parity_calculate_locked_empty_profile_returns_zero() {
         let (ssp, ups) = jp_locked_env();
@@ -4653,7 +4290,6 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_USDT), 0);
     }
 
-    // calculateLocked_spotExchangeLockedOnly_returnsExchangeLocked
     #[test]
     fn parity_calculate_locked_spot_exchange_locked_only() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4662,7 +4298,6 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_USDT), 0, "非匹配 currency 不受影响");
     }
 
-    // calculateLocked_isolatedLoanCollateralOnly_includedForCollateralCurrencyOnly
     #[test]
     fn parity_calculate_locked_isolated_loan_collateral_only() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4676,7 +4311,6 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_USDT), 0, "loanCurrency 侧不作 collateral 计入 locked");
     }
 
-    // calculateLocked_multipleIsolatedLoansSameCollateralCurrency_summed
     #[test]
     fn parity_calculate_locked_multiple_isolated_same_currency_summed() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4688,7 +4322,6 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_BTC), 8, "③ 同 currency 多 loan 累加");
     }
 
-    // calculateLocked_crossLoanCollateralOnly
     #[test]
     fn parity_calculate_locked_cross_loan_collateral_only() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4702,8 +4335,6 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_USDT), 0);
     }
 
-    // calculateLocked_futuresMarginPlusLoanCollateral_summedIntoQuoteAndBase
-    // ①期货 margin(=open_init_margin_sum 500, identity scale) + ②spot lock + ③isolated + ④cross
     #[test]
     fn parity_calculate_locked_futures_margin_plus_loan_collateral() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4721,13 +4352,10 @@ mod tests {
             up.cross_loan_collateral.insert(JP_USDT, 1_000);
             up.add_to_locked(JP_USDT, 200);
         }
-        // BTC：无 futures/spot lock，只 loan 抵押 → ③2 + ④3 = 5
         assert_eq!(jp_locked(&ups, &ssp, JP_BTC), 5, "BTC = ③2 + ④3");
-        // USDT：①500 + ②200 + ③0(BTC 是 collateralCurrency) + ④1000 = 1700
         assert_eq!(jp_locked(&ups, &ssp, JP_USDT), 1_700, "USDT = ①500 + ②200 + ④1000");
     }
 
-    // calculateLocked_isolatedAndCrossOnSameCurrency_summed
     #[test]
     fn parity_calculate_locked_isolated_and_cross_same_currency_summed() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4739,7 +4367,6 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_BTC), 5, "③ + ④ 同 currency 累加");
     }
 
-    // calculateLocked_isolatedLoanWithZeroCollateral_contributesZero
     #[test]
     fn parity_calculate_locked_isolated_zero_collateral_contributes_zero() {
         let (ssp, mut ups) = jp_locked_env();
@@ -4747,11 +4374,10 @@ mod tests {
         assert_eq!(jp_locked(&ups, &ssp, JP_BTC), 0);
     }
 
-    // === RiskEngineCrossMarginScaleTest ===
     const JP_BASE_A: i32 = 10;
     const JP_BASE_B: i32 = 11;
-    const JP_SYM_A: i32 = 7001; // identity scale：下单标的
-    const JP_SYM_B: i32 = 7002; // scale=10^4：已持有 CROSS 仓
+    const JP_SYM_A: i32 = 7001;
+    const JP_SYM_B: i32 = 7002;
 
     fn jp_cross_scale_spec(symbol_id: i32, base_currency: i32, base_scale_k: i64, quote_scale_k: i64) -> CoreSymbolSpecification {
         let mut s = CoreSymbolSpecification {
@@ -4773,8 +4399,6 @@ mod tests {
         s
     }
 
-    // 在 identity-scale 的 A 上下小单，账户另持 scale=10^4 的 B 仓：B 的保证金必须按 B 自身 scale 折算(=1 USDT)，
-    // 单应放行、不被放大 10000× 误拒。Rust 若拒 → 候选翻译 bug（跨 symbol scale 串味）。
     #[test]
     fn parity_place_margin_order_other_cross_position_different_scale_accepted() {
         let mut ssp = SymbolSpecificationProvider::new();
@@ -4788,14 +4412,13 @@ mod tests {
         assert_eq!(ups.add_empty_user_profile(JP_UID), CommandResultCode::Success);
         {
             let up = ups.get_mut(JP_UID).unwrap();
-            // B 的 CROSS 仓：markPrice=openPriceSum/vol → 未实现盈亏 0，隔离出"保证金 scale"这一变量。
             let mut pos_b = SymbolPositionRecord::new(JP_UID, JP_SYM_B, JP_USDT, MarginMode::Cross, 1);
             pos_b.direction = PositionDirection::Long;
             pos_b.open_volume = 1;
             pos_b.open_price_sum = 10_000;
-            pos_b.open_init_margin_sum = 10_000; // sizePrice(B scale) = 1 USDT
+            pos_b.open_init_margin_sum = 10_000;
             up.positions.insert(JP_SYM_B, pos_b);
-            up.add_to_account(JP_USDT, 100); // 够正确口径(≈2)、远不够被放大的错误口径(≈10001)
+            up.add_to_account(JP_USDT, 100);
         }
 
         let mut engine = RiskEngine::new();
@@ -4825,12 +4448,11 @@ mod tests {
 
     #[test]
     fn place_exchange_order_nsf_when_loan_collateral_locks_the_balance() {
-        // accounts=100（其中 100 是 isolated loan 抵押物）：无 loan 时 notional=50 可放行，但借贷抵押虚拟锁走 100 → free=0 → NSF。
         let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 100, 100);
         add_spot_symbol_sharing_fut_quote(&mut ssp);
         ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 100));
 
-        let mut cmd = spot_bid_cmd(50, 1); // notional=50
+        let mut cmd = spot_bid_cmd(50, 1);
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
         assert_eq!(result, CommandResultCode::RiskNsf, "借贷抵押锁走余额后现货挂单应 NSF");
         assert_eq!(ups.get(UID).unwrap().locked(FUT_QUOTE), 0, "NSF 不得锁定任何额度");
@@ -4838,7 +4460,6 @@ mod tests {
 
     #[test]
     fn place_exchange_order_succeeds_when_free_balance_covers_order_despite_loan() {
-        // 对照：同样 100 抵押，但 accounts=200 → free=200-100=100 ≥ notional 50 → 放行。
         let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 200, 100);
         add_spot_symbol_sharing_fut_quote(&mut ssp);
         ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 100));
@@ -4851,7 +4472,6 @@ mod tests {
 
     #[test]
     fn withdrawable_balance_deducts_loan_collateral() {
-        // accounts=500，isolated loan 抵押 300（同币）→ 可提 = 500 − 0 冻结 − 300 抵押 + 0 期货 = 200。
         let (engine, mut ups, ssp) = setup_futures(0, 0, 500, 100);
         ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
         let up = ups.get(UID).unwrap();
@@ -4860,7 +4480,6 @@ mod tests {
 
     #[test]
     fn calculate_free_futures_margin_zero_for_user_with_no_positions() {
-        // 无期货仓的用户，净期货盈余恒 0。
         let (engine, ups, ssp) = setup_futures(0, 0, 1_000, 100);
         let up = ups.get(UID).unwrap();
         assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 0);
@@ -4868,7 +4487,6 @@ mod tests {
 
     #[test]
     fn calculate_free_futures_margin_isolated_position_never_credits_its_own_upnl() {
-        // ISOLATED 仓：required margin 扣，但 2 参重载（curPosSymbol=-1 永不匹配）下浮盈不外借。
         let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 300);
         {
             let up = ups.get_mut(UID).unwrap();
@@ -4876,18 +4494,15 @@ mod tests {
             pos.direction = PositionDirection::Long;
             pos.open_volume = 10;
             pos.open_price_sum = 900;
-            pos.open_init_margin_sum = 200; // required margin = 200（新敞口=0）
-            // mark=300 → 浮盈 = 1*(10*300-900) = 2100，但 ISOLATED + curPosSymbol 不匹配 → 不计。
+            pos.open_init_margin_sum = 200;
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let up = ups.get(UID).unwrap();
-        // 两个估计都只剩 "0 - isolatedRequiredMargin(200)"。
         assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), -200);
     }
 
     #[test]
     fn calculate_free_futures_margin_cross_position_takes_min_of_two_conservative_estimates() {
-        // 维持保证金分档：单档 5%（rate=50/scale_k=1000），覆盖任意 notional，故不复用 setup_futures，改手工搭建。
         let mut fut_spec = futures_spec(0, 0);
         fut_spec.maintenance_margin_scale_k = 1000;
         fut_spec.maintenance_margin.insert(i64::MAX, 50);
@@ -4906,18 +4521,16 @@ mod tests {
             pos.direction = PositionDirection::Long;
             pos.open_volume = 10;
             pos.open_price_sum = 900;
-            pos.open_init_margin_sum = 200; // required(初始) margin = 200（新敞口=0）
-            pos.profit = 500; // 已实现但未派发的"翻仓遗留"利润（见头部注释）
+            pos.open_init_margin_sum = 200;
+            pos.profit = 500;
             up.positions.insert(FUT_SYMBOL, pos);
         }
         let up = ups.get(UID).unwrap();
-        // ①（计浮盈扣初始保证金）=500+1100-200=1400；②（不计浮盈扣维持保证金）=500-100=400；min=400（更保守胜出）。
         assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 400);
     }
 
     #[test]
     fn calculate_free_futures_margin_flat_cross_position_with_carried_profit() {
-        // open_volume=0（同一 flip 循环内 profit 未派发的过渡态）：required margin/浮盈恒 0，净期货盈余=已实现 profit 全额。
         let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         {
             let up = ups.get_mut(UID).unwrap();
@@ -4929,8 +4542,6 @@ mod tests {
         assert_eq!(engine.calculate_free_futures_margin(up, FUT_QUOTE, &ssp), 500);
     }
 
-    // ---- 接线验证：无期货仓用户现货 NSF/withdrawable 是纯 no-op；有 CROSS 浮盈用户两处 NSF 额度顶账 ----
-
     const SPOT_SYMBOL: i32 = 300;
     const SPOT_BASE: i32 = 3;
 
@@ -4939,7 +4550,7 @@ mod tests {
             symbol_id: SPOT_SYMBOL,
             symbol_type: SymbolType::CurrencyExchangePair,
             base_currency: SPOT_BASE,
-            quote_currency: FUT_QUOTE, // 与期货 symbol 共用同一 quote currency，才能顶账
+            quote_currency: FUT_QUOTE,
             base_scale_k: 1,
             quote_scale_k: 1,
             taker_fee: 0,
@@ -4968,11 +4579,10 @@ mod tests {
 
     #[test]
     fn place_exchange_order_position_less_user_nsf_is_unaffected_by_wiring() {
-        // 无期货仓 → calculate_free_futures_margin 恒 0 → 现货 NSF 判定与改动前相同。
         let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 0, 100);
         add_spot_symbol_sharing_fut_quote(&mut ssp);
 
-        let mut cmd = spot_bid_cmd(100, 1); // notional=100，quote 余额=0 → 应 NSF
+        let mut cmd = spot_bid_cmd(100, 1);
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
         assert_eq!(result, CommandResultCode::RiskNsf);
@@ -4981,7 +4591,6 @@ mod tests {
 
     #[test]
     fn place_exchange_order_spot_nsf_topped_up_by_futures_cross_profit() {
-        // 同上测试参数（本应 NSF），但用户有 CROSS 期货仓携带浮盈 500，触发现货 NSF 顶账。
         let (mut engine, mut ups, mut ssp) = setup_futures(0, 0, 0, 100);
         add_spot_symbol_sharing_fut_quote(&mut ssp);
         {
@@ -4991,7 +4600,7 @@ mod tests {
             up.positions.insert(FUT_SYMBOL, pos);
         }
 
-        let mut cmd = spot_bid_cmd(100, 1); // notional=100 > 0 余额，但 < 500 期货净盈余顶账后的额度
+        let mut cmd = spot_bid_cmd(100, 1);
         let result = engine.place_order_risk_check(&mut cmd, &mut ups, &ssp);
 
         assert_eq!(result, CommandResultCode::ValidForMatchingEngine);
@@ -5000,7 +4609,6 @@ mod tests {
 
     #[test]
     fn withdrawable_position_less_user_nsf_is_unaffected_by_wiring() {
-        // 无期货仓的提现 NSF 判定与改动前相同。
         let mut ups = UserProfileService::new();
         let mut engine = RiskEngine::new();
         let ssp = SymbolSpecificationProvider::new();
@@ -5014,7 +4622,6 @@ mod tests {
 
     #[test]
     fn withdrawable_topped_up_by_futures_cross_profit() {
-        // account=500/locked=200：不顶账 withdrawable=300，提现 400 先撞外层 NSF；内层 account+amount_diff 不受影响。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 500, 100);
         {
             let up = ups.get_mut(UID).unwrap();
@@ -5024,7 +4631,6 @@ mod tests {
             up.positions.insert(FUT_SYMBOL, pos);
         }
 
-        // 提现 400：不顶账 withdrawable=300 不够，+500 期货净盈余顶账后足够（800 >= 400）。
         let withdraw_cmd = OrderCommand {
             command: OrderCommandType::BalanceAdjustment,
             uid: UID,
@@ -5036,8 +4642,6 @@ mod tests {
         assert_eq!(RiskEngineCommandDispatcher::balance_adjustment(&mut engine, &withdraw_cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 500 - 400);
     }
-
-    // ==== MARGIN_ADJUSTMENT + mark-price 更新 + LEVERAGE_ADJUSTMENT ====
 
     fn margin_adjustment_cmd(
         action: OrderAction,
@@ -5064,7 +4668,6 @@ mod tests {
 
     #[test]
     fn margin_adjustment_isolated_add_debits_accounts_credits_extra_margin_and_conserves() {
-        // scale 全 1 恒等缩放：currency_to_size_price_scale 恒等映射，price 直接等于 extra_margin 增量。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
 
@@ -5074,13 +4677,12 @@ mod tests {
         let up = ups.get(UID).unwrap();
         assert_eq!(up.account(FUT_QUOTE), 1_000 - 200, "accounts 物理扣 200");
         assert_eq!(up.positions.get(&FUT_SYMBOL).unwrap().extra_margin, 200, "extraMargin 收到等额 200");
-        // 守恒：accounts 减量 == extraMargin 增量（同一笔钱仓↔账户内部搬移，不touch adjustments）。
         assert_eq!(*engine.adjustments.get(&FUT_QUOTE).unwrap_or(&0), 0, "ISOLATED 不touch adjustments 桶");
     }
 
     #[test]
     fn margin_adjustment_isolated_nsf_rejects_and_leaves_state_unchanged() {
-        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 50, 100); // 余额 50 < 追加 200
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 50, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
 
         let cmd = margin_adjustment_cmd(OrderAction::Bid, FUT_SYMBOL, 200, MarginMode::Isolated, 1);
@@ -5093,7 +4695,7 @@ mod tests {
 
     #[test]
     fn margin_adjustment_isolated_position_not_exists_returns_error() {
-        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100); // 未插入任何 position
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
 
         let cmd = margin_adjustment_cmd(OrderAction::Bid, FUT_SYMBOL, 200, MarginMode::Isolated, 1);
         assert_eq!(RiskEngineCommandDispatcher::margin_adjustment(&mut engine, &cmd, &mut ups, &ssp), CommandResultCode::RiskMarginPositionNotExists);
@@ -5128,7 +4730,6 @@ mod tests {
 
         let cmd = margin_adjustment_cmd(OrderAction::Bid, FUT_SYMBOL, 200, MarginMode::Isolated, 1);
         assert_eq!(RiskEngineCommandDispatcher::margin_adjustment(&mut engine, &cmd, &mut ups, &ssp), CommandResultCode::Success);
-        // 同 order_id 重放：不得二次扣款/二次加 extraMargin。
         assert_eq!(
             RiskEngineCommandDispatcher::margin_adjustment(&mut engine, &cmd, &mut ups, &ssp),
             CommandResultCode::UserMgmtAccountBalanceAdjustmentAlreadyAppliedSame
@@ -5142,7 +4743,6 @@ mod tests {
     #[test]
     fn margin_adjustment_margin_mode_mismatch_when_position_is_cross_but_cmd_says_isolated() {
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
-        // ONEWAY 模式键恒为 symbol，与 marginMode 无关——position 是 CROSS，cmd 传 ISOLATED。
         ups.get_mut(UID)
             .unwrap()
             .positions
@@ -5154,7 +4754,6 @@ mod tests {
 
     #[test]
     fn margin_adjustment_cross_credits_account_directly_and_touches_adjustments_bucket() {
-        // CROSS：cmd.symbol 即 currency，无需已有 position，直接转发 balance_adjustment（accounts+=price、adjustments-=price 对冲）。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
 
         let cmd = margin_adjustment_cmd(OrderAction::Bid, FUT_QUOTE, 300, MarginMode::Cross, 1);
@@ -5177,7 +4776,6 @@ mod tests {
 
     #[test]
     fn margin_adjustment_routes_through_pre_process_command() {
-        // 走真实 R1 入口（`is_non_trading()` 门守 + 主 switch）而非直调方法。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
 
@@ -5188,15 +4786,13 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().extra_margin, 200);
     }
 
-    // ---- mark-price 更新命令：last_price_cache 写入 + R1 消费方可见 ----
-
     fn markprice_adjustment_cmd(symbol: i32, price: i64) -> OrderCommand {
         OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, ..Default::default() }
     }
 
     #[test]
     fn markprice_adjustment_sets_last_price_cache() {
-        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100); // 治具已设 mark=100
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         let mut cmd = markprice_adjustment_cmd(FUT_SYMBOL, 250);
         assert_eq!(RiskEngineCommandDispatcher::markprice_adjustment(&mut engine, &mut cmd, &mut ups, &ssp), CommandResultCode::Success);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(250));
@@ -5212,7 +4808,6 @@ mod tests {
 
     #[test]
     fn markprice_adjustment_then_place_order_risk_check_sees_new_mark_price() {
-        // 前置：mark price 缺失时期货下单须 RiskMarkpriceNotAvailable；MARKPRICE_ADJUSTMENT 设价后 place_order 才能看到并算出保证金。
         let mut ssp = SymbolSpecificationProvider::new();
         assert_eq!(ssp.add_symbol(futures_spec(0, 0)), CommandResultCode::Success);
         ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
@@ -5244,25 +4839,20 @@ mod tests {
 
     #[test]
     fn set_mark_price_test_hook_writes_cache_without_symbol_validation() {
-        // `ExchangeApi::set_mark_price` 内部调用的直接 setter：跳过 symbol 注册校验。
         let mut engine = RiskEngine::new();
         engine.set_mark_price(424_242, 777);
         assert_eq!(engine.mark_price(424_242), Some(777));
     }
 
-    // crash-safety 回归：markprice_adjustment 拒绝 price<=0，保住"有头寸⇒标记价有效"不变量，避免下游三处 mark_price().unwrap() panic（proptest 覆盖不到的非法输入角）。
     #[test]
     fn markprice_adjustment_rejects_zero_price_and_prior_mark_survives_without_panic() {
-        // 复刻终审给出的可达崩溃序列：开逐仓仓位(mark=100) → 设 mark=0 → free-futures-margin。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, isolated_position(1));
 
-        // 步骤2：mark=0 被拒（Java 会存 0；本移植收窄为 RiskInvalidAmount），缓存保持上一有效值。
         let mut zero = markprice_adjustment_cmd(FUT_SYMBOL, 0);
         assert_eq!(RiskEngineCommandDispatcher::markprice_adjustment(&mut engine, &mut zero, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100), "被拒的 0 标记价不得污染缓存");
 
-        // 步骤3：free-futures-margin 走到 mark_price()——修复前会因 None panic，修复后仍 Some(100)；不 panic 本身即回归断言。
         let free = engine.calculate_free_futures_margin(ups.get(UID).unwrap(), FUT_QUOTE, &ssp);
         assert_eq!(free, 0, "空逐仓仓位(open_volume=0)净期货盈余为 0，且未 panic");
     }
@@ -5274,8 +4864,6 @@ mod tests {
         assert_eq!(RiskEngineCommandDispatcher::markprice_adjustment(&mut engine, &mut neg, &mut ups, &ssp), CommandResultCode::RiskInvalidAmount);
         assert_eq!(engine.mark_price(FUT_SYMBOL), Some(100));
     }
-
-    // ---- LEVERAGE_ADJUSTMENT：仅有 pending 挂单时才改变 required margin（杠杆变更不追溯已开仓部分） ----
 
     fn leverage_adjustment_cmd(symbol: i32, leverage: i32) -> OrderCommand {
         OrderCommand { command: OrderCommandType::LeverageAdjustment, uid: UID, symbol, leverage, ..Default::default() }
@@ -5297,8 +4885,7 @@ mod tests {
 
     #[test]
     fn leverage_adjustment_increase_never_needs_nsf_and_updates_position() {
-        // leverage 1 -> 2：required 从 1000(=1000/1) 降到 500(=1000/2)，new<=old，跳过 NSF，恒成功。
-        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100); // 余额 0，若走 NSF 必挂
+        let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(1, 10, 100));
 
         let cmd = leverage_adjustment_cmd(FUT_SYMBOL, 2);
@@ -5308,7 +4895,6 @@ mod tests {
 
     #[test]
     fn leverage_adjustment_decrease_sufficient_balance_succeeds_and_updates() {
-        // leverage 2->1：required 500升到1000，diff=500；balance=2000，free=1500 ≥ 500 → 通过。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 2_000, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(2, 10, 100));
 
@@ -5319,7 +4905,6 @@ mod tests {
 
     #[test]
     fn leverage_adjustment_decrease_insufficient_balance_is_nsf_and_leaves_leverage_unchanged() {
-        // 同上但 balance=600：free = 600-500=100 < diff 500 → NSF，杠杆保持原值 2。
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 600, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(2, 10, 100));
 
@@ -5330,7 +4915,6 @@ mod tests {
 
     #[test]
     fn leverage_adjustment_invalid_leverage_returns_error_and_leaves_leverage_unchanged() {
-        // max_leverage 只配一档 {floor:0->1}，等同全局上限 1x（同前面用例治具手法）。
         let mut spec = futures_spec(0, 0);
         spec.max_leverage.insert(0, 1);
         let mut ssp = SymbolSpecificationProvider::new();
@@ -5356,8 +4940,7 @@ mod tests {
         let (mut engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
         ups.get_mut(UID).unwrap().positions.insert(FUT_SYMBOL, position_with_pending_buy(2, 10, 100));
 
-        let cmd = leverage_adjustment_cmd(FUT_SYMBOL, 0); // 归一到 1（比 2 更严格 -> 需要更多保证金）
-        // required 500(lev2)升到1000(lev1)，diff=500>free(0)→NSF；验证 leverage==0 走归一分支而非除零 panic。
+        let cmd = leverage_adjustment_cmd(FUT_SYMBOL, 0);
         assert_eq!(RiskEngineCommandDispatcher::leverage_adjustment(&mut engine, &cmd, &mut ups, &ssp), CommandResultCode::RiskNsf);
     }
 
@@ -5399,7 +4982,6 @@ mod tests {
         assert_eq!(ups.get(UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().leverage, 2);
     }
 
-    // ==== apply_add_loan (ADD_LOAN 三段运行时配置) ====
     mod add_loan_tests {
         use super::*;
         use crate::core::common::batch_add_loan_command::{
@@ -5452,8 +5034,6 @@ mod tests {
             }
         }
 
-        // ---- global 段 ----
-
         #[test]
         fn global_section_applies_partial_update_fields_and_skips_non_positive_ones() {
             let (mut engine, mut ssp) = add_loan_setup();
@@ -5461,9 +5041,9 @@ mod tests {
                 numeraire_currency: QUOTE,
                 cross_liquidation_ltv_bps: 9000,
                 cross_margin_call_ltv_bps: 8500,
-                loan_pool_utilization_cap_bps: 0,  // no-change
+                loan_pool_utilization_cap_bps: 0,
                 loan_liquidation_fee_bps: 300,
-                ltv_liquidation_buffer_bps: 0, // no-change
+                ltv_liquidation_buffer_bps: 0,
                 ltv_margin_call_buffer_bps: 1500,
             };
             let cmd = BatchAddLoanCommand { global: Some(g), symbol: None, rate_curve: None };
@@ -5484,7 +5064,7 @@ mod tests {
             let (mut engine, mut ssp) = add_loan_setup();
             let g = GlobalLoanConfig {
                 cross_liquidation_ltv_bps: 8000,
-                cross_margin_call_ltv_bps: 8000, // eff_margin_call == eff_liquidation -> invalid
+                cross_margin_call_ltv_bps: 8000,
                 ..no_change_global()
             };
             let cmd = BatchAddLoanCommand { global: Some(g), symbol: None, rate_curve: None };
@@ -5501,22 +5081,19 @@ mod tests {
             assert_eq!(engine.loan_service.global_config, LoanGlobalConfig::default());
         }
 
-        // ---- symbol 段 ----
-
         #[test]
         fn symbol_section_resolves_unset_fields_and_writes_collateral_weight_to_base_currency() {
-            let (mut engine, mut ssp) = add_loan_setup(); // global buffers at default (2000/1000)
+            let (mut engine, mut ssp) = add_loan_setup();
             let s = unset_symbol_config(SYMBOL, 6_000, 7_000);
             let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
             engine.apply_add_loan(&cmd, &mut ssp);
 
             let spec = ssp.symbols.get(&SYMBOL).unwrap();
             assert_eq!(spec.loan_config.initial_ltv_bps, 6_000);
-            assert_eq!(spec.loan_config.liquidation_ltv_bps, 8_000); // 6000 + 2000 buffer
-            assert_eq!(spec.loan_config.margin_call_ltv_bps, 7_000); // 8000 - 1000 buffer
+            assert_eq!(spec.loan_config.liquidation_ltv_bps, 8_000);
+            assert_eq!(spec.loan_config.margin_call_ltv_bps, 7_000);
             assert_eq!(spec.loan_config.max_amount, 0);
             assert_eq!(spec.loan_config.max_term_days, 0);
-            // collateralWeightBps lands on the BASE currency, not the symbol/quote.
             assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 7_000);
             assert_eq!(ssp.currencies.get(&QUOTE).unwrap().collateral_weight_bps, 0);
         }
@@ -5524,26 +5101,23 @@ mod tests {
         #[test]
         fn symbol_section_kill_switch_zeroes_only_initial_and_preserves_the_rest() {
             let (mut engine, mut ssp) = add_loan_setup();
-            // Pre-existing config, as if a prior ADD_LOAN had opened the market.
             ssp.symbols.get_mut(&SYMBOL).unwrap().loan_config.update(6_000, 8_000, 7_000, 500_000, 30);
 
-            let s = unset_symbol_config(SYMBOL, 0, UNSET); // initial==0 kill-switch
+            let s = unset_symbol_config(SYMBOL, 0, UNSET);
             let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
             engine.apply_add_loan(&cmd, &mut ssp);
 
             let spec = ssp.symbols.get(&SYMBOL).unwrap();
-            assert_eq!(spec.loan_config.initial_ltv_bps, 0); // only this flips
-            assert_eq!(spec.loan_config.liquidation_ltv_bps, 8_000); // preserved
-            assert_eq!(spec.loan_config.margin_call_ltv_bps, 7_000); // preserved
-            assert_eq!(spec.loan_config.max_amount, 500_000); // preserved
-            assert_eq!(spec.loan_config.max_term_days, 30); // preserved
-            // Kill-switch branch never touches collateralWeightBps.
+            assert_eq!(spec.loan_config.initial_ltv_bps, 0);
+            assert_eq!(spec.loan_config.liquidation_ltv_bps, 8_000);
+            assert_eq!(spec.loan_config.margin_call_ltv_bps, 7_000);
+            assert_eq!(spec.loan_config.max_amount, 500_000);
+            assert_eq!(spec.loan_config.max_term_days, 30);
             assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 0);
         }
 
         #[test]
         fn symbol_section_rejects_collateral_weight_above_10000_and_applies_nothing() {
-            // 前瞻性护栏测试：保证 collateral_weight_bps 恒在 [0,10000]，防 cross-LTV trunc_mul_div panic 不可达失效。
             let (mut engine, mut ssp) = add_loan_setup();
             let s = SymbolLoanConfig {
                 symbol_id: SYMBOL,
@@ -5552,14 +5126,14 @@ mod tests {
                 loan_margin_call_ltv_bps: 7_000,
                 loan_max_amount: 0,
                 loan_max_term_days: 0,
-                collateral_weight_bps: 10_001, // out of [0,10000]
+                collateral_weight_bps: 10_001,
             };
             let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
             engine.apply_add_loan(&cmd, &mut ssp);
 
             let spec = ssp.symbols.get(&SYMBOL).unwrap();
-            assert_eq!(spec.loan_config, Default::default()); // untouched
-            assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 0); // untouched
+            assert_eq!(spec.loan_config, Default::default());
+            assert_eq!(ssp.currencies.get(&BASE).unwrap().collateral_weight_bps, 0);
         }
 
         #[test]
@@ -5572,7 +5146,7 @@ mod tests {
                 loan_margin_call_ltv_bps: 7_000,
                 loan_max_amount: 0,
                 loan_max_term_days: 0,
-                collateral_weight_bps: -2, // out of [0,10000] (not the UNSET==-1 sentinel)
+                collateral_weight_bps: -2,
             };
             let cmd = BatchAddLoanCommand { global: None, symbol: Some(s), rate_curve: None };
             engine.apply_add_loan(&cmd, &mut ssp);
@@ -5587,10 +5161,8 @@ mod tests {
             let missing = unset_symbol_config(999_999, 6_000, 5_000);
             let cmd = BatchAddLoanCommand { global: None, symbol: Some(missing), rate_curve: None };
             engine.apply_add_loan(&cmd, &mut ssp);
-            assert_eq!(ssp.symbols.get(&999_999), None); // no spec created
+            assert_eq!(ssp.symbols.get(&999_999), None);
         }
-
-        // ---- rate_curve 段 ----
 
         #[test]
         fn rate_curve_section_replaces_floating_curve_and_fixed_spread() {
@@ -5618,7 +5190,7 @@ mod tests {
             let default_floating = engine.loan_service.floating_rate.clone();
             let rc = RateCurveConfig {
                 base_bps: 300,
-                kink_util_bps: 0, // must be strictly > 0
+                kink_util_bps: 0,
                 slope1_bps: 500,
                 slope2_bps: 7_000,
                 locked_rate_adjust_bps: -100,
@@ -5629,8 +5201,6 @@ mod tests {
             assert_eq!(engine.loan_service.floating_rate, default_floating);
             assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, 0);
         }
-
-        // ---- 三段独立性：一段非法只 warn-skip，不影响另外两段 ----
 
         #[test]
         fn one_invalid_section_does_not_prevent_the_other_two_from_applying() {
@@ -5648,7 +5218,7 @@ mod tests {
                 loan_margin_call_ltv_bps: 7_000,
                 loan_max_amount: 0,
                 loan_max_term_days: 0,
-                collateral_weight_bps: 50_000, // invalid, must not poison the other two sections
+                collateral_weight_bps: 50_000,
             };
             let valid_rate_curve = RateCurveConfig {
                 base_bps: 300,
@@ -5668,12 +5238,10 @@ mod tests {
             assert_eq!(engine.loan_service.global_config.cross_liquidation_ltv_bps, 9_000);
             assert_eq!(engine.loan_service.floating_rate.base_bps, 300);
             assert_eq!(engine.loan_service.fixed_rate.locked_rate_adjust_bps, 25);
-            // The invalid symbol section left the spec untouched.
             assert_eq!(ssp.symbols.get(&SYMBOL).unwrap().loan_config, Default::default());
         }
     }
 
-    // ==== REPRICE_LOAN_RATES 全管线（R1 pre_process_command → R2 handler_risk_release） ====
     mod reprice_loan_rates_tests {
         use super::*;
         use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
@@ -5695,7 +5263,7 @@ mod tests {
             let mut engine = RiskEngine::new();
             let cur = 5;
             engine.loan_service.loan_pool_borrowed.insert(cur, 8_000);
-            engine.loan_service.loan_pool_available.insert(cur, 2_000); // util = 8000 bps (80%)
+            engine.loan_service.loan_pool_available.insert(cur, 2_000);
             let expected_rate = engine.loan_service.floating_rate.curve_rate_bps(8_000);
 
             let mut cmd = reprice_cmd(1_000);
@@ -5711,16 +5279,14 @@ mod tests {
 
         #[test]
         fn advance_accumulator_runs_before_reprice_settling_the_old_interval_at_the_old_rate() {
-            // 模拟"距上次 reprice 已过一段时间"：advance_accumulator 须用旧利率结清旧区间，顺序颠倒会错按新利率结算。
             let mut engine = RiskEngine::new();
             let cur = 3;
             engine.loan_service.floating_rate.last_reprice_ts = 1_000;
-            engine.loan_service.floating_rate.current_rate_bps.insert(cur, 300); // old rate 3%
-            // util after reprice will be above kink -> new rate very different from 300.
+            engine.loan_service.floating_rate.current_rate_bps.insert(cur, 300);
             engine.loan_service.loan_pool_borrowed.insert(cur, 9_000);
             engine.loan_service.loan_pool_available.insert(cur, 1_000);
 
-            let mut cmd = reprice_cmd(2_000); // 1000ms elapsed since last_reprice_ts
+            let mut cmd = reprice_cmd(2_000);
             run_full_pipeline(&mut engine, &mut cmd);
 
             let acc = *engine.loan_service.floating_rate.acc_rate_bps_ms.get(&cur).unwrap();
@@ -5733,7 +5299,6 @@ mod tests {
         #[test]
         fn multiple_currencies_all_reprice_correctly_regardless_of_processing_order() {
             let mut engine = RiskEngine::new();
-            // 3 币种，构造成升序处理时互不影响（各自独立的池子/累加器）。
             for &(cur, borrowed, available) in &[(9, 100, 900), (2, 500, 500), (5, 9_000, 1_000)] {
                 engine.loan_service.loan_pool_borrowed.insert(cur, borrowed);
                 engine.loan_service.loan_pool_available.insert(cur, available);
@@ -5761,7 +5326,7 @@ mod tests {
         #[test]
         fn last_reprice_ts_is_set_exactly_once_after_the_loop_not_stale_from_before() {
             let mut engine = RiskEngine::new();
-            engine.loan_service.floating_rate.last_reprice_ts = 1; // pre-existing stale value
+            engine.loan_service.floating_rate.last_reprice_ts = 1;
             for &cur in &[1, 2, 3] {
                 engine.loan_service.loan_pool_borrowed.insert(cur, 100);
                 engine.loan_service.loan_pool_available.insert(cur, 100);
@@ -5773,7 +5338,6 @@ mod tests {
 
         #[test]
         fn empty_pool_does_not_advance_last_reprice_ts_mirroring_java_null_matcher_event_early_return() {
-            // 借贷池全空→build_matcher_events 无 currency 可报→R2 完全不做任何事（含不推进 ts）。
             let mut engine = RiskEngine::new();
             engine.loan_service.floating_rate.last_reprice_ts = 42;
 
@@ -5791,7 +5355,7 @@ mod tests {
             assert_eq!(engine.loan_service.floating_rate.current_rate_bps_or_base(cur), engine.loan_service.floating_rate.base_bps);
 
             engine.loan_service.loan_pool_borrowed.insert(cur, 4_000);
-            engine.loan_service.loan_pool_available.insert(cur, 4_000); // util = 5000 bps
+            engine.loan_service.loan_pool_available.insert(cur, 4_000);
             let mut cmd = reprice_cmd(500);
             run_full_pipeline(&mut engine, &mut cmd);
 
@@ -5801,7 +5365,6 @@ mod tests {
         }
     }
 
-    // ==== INTERNAL_TRANSFER 全管线（R1 pre_process_command → R2 handler_risk_release） ====
     mod internal_transfer_tests {
         use super::*;
 
@@ -5811,7 +5374,7 @@ mod tests {
             OrderCommand {
                 command: OrderCommandType::InternalTransfer,
                 uid: from_uid,
-                size: to_uid, // overloaded: carries a uid, not an amount
+                size: to_uid,
                 symbol: currency,
                 price: amount,
                 order_id,
@@ -5831,7 +5394,7 @@ mod tests {
 
         #[test]
         fn successful_transfer_debits_from_credits_to_and_conserves_total() {
-            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100); // UID balance 1000 FUT_QUOTE
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 1_000, 100);
             let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
 
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
@@ -5895,7 +5458,7 @@ mod tests {
         fn missing_from_profile_rejected_with_auth_invalid_user() {
             let mut ssp = SymbolSpecificationProvider::new();
             ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
-            let mut ups = UserProfileService::new(); // UID never registered
+            let mut ups = UserProfileService::new();
             let mut engine = RiskEngine::new();
             let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
 
@@ -5907,7 +5470,7 @@ mod tests {
 
         #[test]
         fn plain_insufficient_balance_rejected_with_nsf() {
-            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 100, 100); // only 100 available
+            let (mut engine, mut ups, ssp) = setup_futures(0, 0, 100, 100);
             let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
 
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
@@ -5919,7 +5482,6 @@ mod tests {
 
         #[test]
         fn loan_collateral_lock_makes_an_otherwise_sufficient_balance_nsf() {
-            // accounts=300 但同额被 isolated loan 抵押锁住 → withdrawable_balance=0<300，证明 NSF 复用与提现相同的锁。
             let (mut engine, mut ups, ssp) = setup_futures(0, 0, 300, 100);
             ups.get_mut(UID).unwrap().isolated_loans.insert(1, isolated_loan_with_collateral(1, FUT_QUOTE, 300));
             let mut cmd = transfer_cmd(UID, TO_UID, FUT_QUOTE, 300, 1);
@@ -5938,7 +5500,6 @@ mod tests {
             assert_eq!(cmd1.result_code, Some(CommandResultCode::Success));
             assert_eq!(ups.get(UID).unwrap().account(FUT_QUOTE), 900);
 
-            // 同 order_id 重放，余额(900)本还够再转100，隔离出 claim 检查（而非 NSF）才是真正拦截点。
             let mut cmd2 = transfer_cmd(UID, TO_UID, FUT_QUOTE, 100, 42);
             run_full_pipeline(&mut engine, &mut cmd2, &mut ups, &ssp);
 
@@ -5951,7 +5512,6 @@ mod tests {
         }
     }
 
-    // ==== SETTLE_FUNDINGFEES 全管线（R1→R2）；这里只测经 RiskEngine 两段管线的接线本身，处理器函数级测试见其自己的 #[cfg(test)] ====
     mod funding_fee_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
@@ -5981,14 +5541,12 @@ mod tests {
             engine.handler_risk_release(cmd, ups, ssp);
         }
 
-        /// setup_futures 治具全 1 恒等缩放，便于手推核对；PAYER_UID 开多头，RECEIVER_UID 开空头。
         fn setup_with_payer_and_receiver(
             mark_price: i64,
             payer_volume: i64,
             receiver_volume: i64,
         ) -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
             let (engine, mut ups, ssp) = setup_futures(0, 0, 0, mark_price);
-            // setup_futures 预注册的是 UID(=7)，非本组 PAYER_UID/RECEIVER_UID，故清空后显式重新注册两者。
             ups.users.clear();
             assert_eq!(ups.add_empty_user_profile(PAYER_UID), CommandResultCode::Success);
             assert_eq!(ups.add_empty_user_profile(RECEIVER_UID), CommandResultCode::Success);
@@ -6022,27 +5580,24 @@ mod tests {
                 .sum()
         }
 
-        // ---- R1 gates ----
-
         #[test]
         fn invalid_symbol_rejected() {
             let (mut engine, mut ups, ssp) = setup_with_payer_and_receiver(100, 100, 100);
             let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
-            cmd.symbol = 99_999; // never registered
+            cmd.symbol = 99_999;
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
             assert_eq!(cmd.result_code, Some(CommandResultCode::InvalidSymbol));
         }
 
         #[test]
         fn missing_mark_price_rejected_before_size_gate() {
-            // mark price 缺失且 size<=0 同时成立：Java 嵌套校验顺序下 RiskMarkpriceNotAvailable 胜出（外层门先于 collectInput 的 size 校验）。
             let mut ssp = SymbolSpecificationProvider::new();
             assert_eq!(ssp.add_symbol(futures_spec(0, 0)), CommandResultCode::Success);
             ssp.add_currency(CoreCurrencySpecification { currency: FUT_QUOTE, currency_scale_k: 1, ..Default::default() });
             ssp.add_currency(CoreCurrencySpecification { currency: FUT_BASE, currency_scale_k: 1, ..Default::default() });
             let mut ups = UserProfileService::new();
-            let mut engine = RiskEngine::new(); // last_price_cache empty
-            let mut cmd = funding_cmd(OrderAction::Bid, 5, 0); // size<=0 too
+            let mut engine = RiskEngine::new();
+            let mut cmd = funding_cmd(OrderAction::Bid, 5, 0);
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
             assert_eq!(cmd.result_code, Some(CommandResultCode::RiskMarkpriceNotAvailable));
         }
@@ -6055,11 +5610,8 @@ mod tests {
             assert_eq!(cmd.result_code, Some(CommandResultCode::RiskInvalidAmount));
         }
 
-        // ---- full pipeline ----
-
         #[test]
         fn full_pipeline_settles_zero_sum_and_conserves_total() {
-            // payer LONG 100@mark=10→notional=1000，rate=5/1000→fee=5；receiver SHORT 100（唯一接收方，收全部 5）。
             let (mut engine, mut ups, ssp) = setup_with_payer_and_receiver(10, 100, 100);
             let before = total_conserved(&ups);
             let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
@@ -6074,10 +5626,8 @@ mod tests {
 
         #[test]
         fn empty_receiver_pool_produces_no_event_and_no_state_change() {
-            // Only a payer, no receiver -> total_recv_notional==0 -> no event, still Success.
             let (engine0, mut ups, ssp) = setup_with_payer_and_receiver(10, 100, 100);
             let mut engine = engine0;
-            // Flatten the receiver's position so it contributes nothing to either pool.
             ups.get_mut(RECEIVER_UID).unwrap().positions.remove(&FUT_SYMBOL);
             let before = total_conserved(&ups);
             let mut cmd = funding_cmd(OrderAction::Bid, 5, 1000);
@@ -6090,7 +5640,6 @@ mod tests {
         }
     }
 
-    /// `IF_TAKEOVER` 全流程（R1+merge+R2 apply+finalize）。
     mod if_takeover_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
@@ -6121,7 +5670,6 @@ mod tests {
             }
         }
 
-        /// taker（即将被 IF 接管的破产用户）持一笔 LONG 仓位，open_volume/open_price_sum 由调用方指定成本基（制造非零 PnL）。
         fn setup_with_taker_long_position(
             mark_price: i64,
             open_volume: i64,
@@ -6144,31 +5692,26 @@ mod tests {
 
         #[test]
         fn full_cover_accepts_position_closes_taker_and_settles_pnl() {
-            // taker LONG 100 @ 成本基 9000（均价 90）；IF 以 price=100 接管全部 100 手。
             let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
-            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 100_000); // 足额覆盖
+            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 100_000);
             let taker_account_before = ups.get(TAKER_UID).unwrap().account(FUT_QUOTE);
 
-            // cmd.action == BID：对应 taker 持仓方向 LONG（IF 接管同向仓位）。
             let mut cmd = if_takeover_cmd(OrderAction::Bid, 100, 100);
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
 
-            // IF 侧：接管仓位入账，key = Long.multiplier()(1) * FUT_SYMBOL。
             let key = FUT_SYMBOL as i64;
             let if_pos = engine.liquidation_service.positions.get(&key).expect("IF position must be recorded");
             assert_eq!(if_pos.open_volume, 100);
             assert_eq!(if_pos.open_price_sum, 100 * 100, "spend = size*price = 10000");
 
-            // IF available 精确扣掉 spend；reserved 经 finalize 释放归零（跟 R1 reserve 对称）。
             assert_eq!(
                 engine.liquidation_service.notionals[&FUT_SYMBOL],
                 IfNotional { available: 100_000 - 10_000, reserved: 0 },
                 "finalize 必须释放 reserved（即使接管成功也要释放，跟 R1 对称）"
             );
 
-            // taker 侧：全平仓，PnL = (100*100 - 9000)*1(LONG multiplier) = 1000，结算进账户后仓位被移除。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL), "全平仓后仓位记录必须被移除");
             assert_eq!(
                 ups.get(TAKER_UID).unwrap().account(FUT_QUOTE),
@@ -6179,7 +5722,6 @@ mod tests {
 
         #[test]
         fn undersize_rejects_all_or_nothing_but_still_releases_preview() {
-            // IF 只有 500 可用，接管 100 手 @ price=100 需要 10000 —— 严重覆盖不足，必须全拒。
             let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
             engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 500);
 
@@ -6188,17 +5730,14 @@ mod tests {
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success), "REJECT 是 matcher-event 级别信号，命令级结果码仍是 Success（同 ADL/FundingFee 先例）");
 
-            // 全拒：IF 没有接管任何仓位。
             assert!(engine.liquidation_service.positions.is_empty(), "全拒不产生任何 IFPositionRecord");
 
-            // finalize 仍然必须释放 R1 预冻结的 reserved（跟成功路径对称，不留孤儿 reserved）。
             assert_eq!(
                 engine.liquidation_service.notionals[&FUT_SYMBOL],
                 IfNotional { available: 500, reserved: 0 },
                 "available 分毫未动（从未 accept），reserved 必须归零（finalize 全拒路径仍释放 preview）"
             );
 
-            // taker 侧：全拒时完全不动 taker 仓位（对应 Java `matcherEvent.eventType != REJECT` 门）。
             let taker_spr = ups.get(TAKER_UID).unwrap().positions.get(&FUT_SYMBOL).expect("REJECT 不应关闭 taker 仓位");
             assert_eq!(taker_spr.open_volume, 100);
             assert_eq!(taker_spr.open_price_sum, 9_000);
@@ -6210,8 +5749,8 @@ mod tests {
             use crate::core::processors::liquidation::liquidation_flow::{LiquidationFlow, LiquidationState};
 
             let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
-            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 500); // 严重不足 → 全拒
-            engine.liquidation_engine.is_running = true; // leader 门
+            engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 500);
+            engine.liquidation_engine.is_running = true;
 
             {
                 let mut flow = LiquidationFlow::new(100, 100, 1);
@@ -6241,7 +5780,7 @@ mod tests {
             let mut deposit_cmd = OrderCommand {
                 command: OrderCommandType::IfDeposit,
                 symbol: FUT_SYMBOL,
-                price: 700, // currency_amount
+                price: 700,
                 order_id: 1,
                 ..Default::default()
             };
@@ -6262,7 +5801,6 @@ mod tests {
             assert_eq!(engine.liquidation_service.notionals[&FUT_SYMBOL].available, 400);
             assert_eq!(*engine.adjustments.get(&FUT_QUOTE).unwrap(), -400, "withdraw 反向抵消一部分 deposit 的对冲");
 
-            // Σ IFNotional.available + adjustments[currency] 恒定（对冲闭环，同 balance_adjustment/loan pool 先例）。
             assert_eq!(
                 engine.liquidation_service.notionals[&FUT_SYMBOL].available + engine.adjustments[&FUT_QUOTE],
                 0,
@@ -6285,7 +5823,7 @@ mod tests {
             let mut withdraw_cmd = OrderCommand {
                 command: OrderCommandType::IfWithdraw,
                 symbol: FUT_SYMBOL,
-                price: 101, // 超过 available=100
+                price: 101,
                 order_id: 2,
                 ..Default::default()
             };
@@ -6321,7 +5859,6 @@ mod tests {
 
         #[test]
         fn taker_position_lookup_goes_through_create_positions_key_not_raw_symbol() {
-            // 按 create_positions_key 查 taker 仓（非裸 symbol）；本测试显式断言 ONEWAY 下退化为裸 symbol 且 finalize 确实经此 key 找到并关闭仓位。
             let (mut engine, mut ups, ssp) = setup_with_taker_long_position(100, 100, 9_000);
             engine.liquidation_service.deposit_to_insurance_fund(FUT_SYMBOL, 100_000);
 
@@ -6332,20 +5869,18 @@ mod tests {
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-            // 仓位在 position_key 这个 key 上被关闭（ONEWAY 下数值同裸 symbol，但查找路径须走 create_positions_key）。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&position_key));
         }
     }
 
-    /// AUTO_DELEVERAGING 全流程（R1 选候选+预占→merge→R2 apply+finalize 对称释放）；这里只测 RiskEngine 两段管线接线本身，算法级测试见 adl_command_processor.rs/liquidation_service.rs。
     mod adl_tests {
         use super::*;
         use crate::core::common::position_direction::PositionDirection;
 
         const TAKER_UID: i64 = 42;
-        const CP_A: i64 = 100; // 高分候选（高杠杆/高浮盈）
-        const CP_B: i64 = 101; // 低分候选
-        const CP_C: i64 = 102; // 预算耗尽后完全够不到的候选
+        const CP_A: i64 = 100;
+        const CP_B: i64 = 101;
+        const CP_C: i64 = 102;
 
         fn run_full_pipeline(
             engine: &mut RiskEngine,
@@ -6380,7 +5915,6 @@ mod tests {
             }
         }
 
-        /// taker LONG 100（成本基9000）+ 三个 ISOLATED SHORT 候选：CP_A(60手,score最高)>CP_B(80手)>CP_C(50手,预算耗尽摸不到)。
         fn setup_taker_and_three_candidates() -> (RiskEngine, UserProfileService, SymbolSpecificationProvider) {
             let (engine, mut ups, ssp) = setup_futures(0, 0, 0, 100);
             ups.users.clear();
@@ -6396,20 +5930,14 @@ mod tests {
                     ..SymbolPositionRecord::new(TAKER_UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1)
                 },
             );
-            // A: volume=60, avg=133.33(8000/60), margin=800 -> leverage=10, uPnl=(8000-6000)=2000, score=10*2000*100=2,000,000
             ups.get_mut(CP_A).unwrap().positions.insert(FUT_SYMBOL, short_position(CP_A, 60, 8_000, 800));
-            // B: volume=80, avg=130(10400/80), margin=2000 -> leverage=5, uPnl=(10400-8000)=2400, score=5*2400*100=1,200,000
             ups.get_mut(CP_B).unwrap().positions.insert(FUT_SYMBOL, short_position(CP_B, 80, 10_400, 2_000));
-            // C: volume=50, avg=120(6000/50), margin=6000 -> leverage=1, uPnl=(6000-5000)=1000, score=1*1000*100=100,000（垫底）
             ups.get_mut(CP_C).unwrap().positions.insert(FUT_SYMBOL, short_position(CP_C, 50, 6_000, 6_000));
             (engine, ups, ssp)
         }
 
-        // ---- risk_score 排序驱动的选取顺序 + 预算耗尽边界 ----
-
         #[test]
         fn r1_selects_by_risk_score_desc_and_stops_once_size_exhausted() {
-            // remaining=100：A(60,得分最高)先取满60，剩40 -> B 只部分取 40（剩80里的一部分），C 完全摸不到。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
 
@@ -6422,7 +5950,6 @@ mod tests {
             assert_eq!(cmd.adl_user_positions[1].uid, CP_B);
             assert_eq!(cmd.adl_user_positions[1].volume, 40, "B 只能部分取：min(available=80, remaining=40)=40");
 
-            // R1 写回：A/B 的 pending_adl_size 立即体现预占；C 完全未被触碰。
             assert_eq!(ups.get(CP_A).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 60);
             assert_eq!(ups.get(CP_B).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 40);
             assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 0, "预算耗尽前摸不到的候选，pending_adl_size 必须保持 0");
@@ -6430,11 +5957,9 @@ mod tests {
 
         #[test]
         fn merge_rewrites_cmd_size_to_actual_consumed_when_candidates_fall_short() {
-            // remaining=200 请求，但 A+B+C 总可用只有 60+80+50=190 -> 实际消费=190，cmd.size 必须改写。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
-            // R1 先经 normalize_cmd_position_size 把 cmd.size 夹到 taker open_volume；本用例把 taker 仓放大到 300，让 normalize 不夹取，隔离候选不足路径。
             ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_volume = 300;
-            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 27_000; // 300*90
+            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 27_000;
             let mut cmd = adl_cmd(OrderAction::Bid, 200, 100);
 
             engine.pre_process_command(&mut cmd, &mut ups, &ssp);
@@ -6446,8 +5971,6 @@ mod tests {
             assert_eq!(total_events, 190, "events 里每条 exec_volume 之和必须等于改写后的 cmd.size");
         }
 
-        // ---- R1 预占 / finalize 对称释放（含守恒）----
-
         #[test]
         fn finalize_releases_pending_adl_size_symmetrically_for_every_selected_candidate() {
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
@@ -6456,58 +5979,45 @@ mod tests {
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-            // A 全平仓→仓位记录被移除，无从查 pending_adl_size 残留，等价确认无孤儿预占。
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL), "A 60 手全部被吃，仓位清空后移除");
-            // B 部分平仓(40)，仓位还在，pending_adl_size 须归 0（对称释放，不管 apply 实际消费多少）。
             let b_pos = &ups.get(CP_B).unwrap().positions[&FUT_SYMBOL];
             assert_eq!(b_pos.pending_adl_size, 0, "finalize 必须把 B 的 pending_adl_size 释放回 0");
             assert_eq!(b_pos.open_volume, 40, "B 原 80 手，被吃 40，剩 40");
-            // C 完全没被选中，本就没有预占过，finalize 走它是 no-op。
             assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].pending_adl_size, 0);
             assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].open_volume, 50, "C 完全未受影响");
         }
 
         #[test]
         fn full_pipeline_closes_taker_and_settles_realized_pnl_exactly() {
-            // ADL taker 与 counterparty 非原始成交对手，局部 Σaccounts+Σprofit 不必然守恒（全局零和需整个交易所范围）；本测试改断言每账户精确期望值。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
 
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-            // taker LONG 100 手全部被 ADL 平掉 -> 仓位清空移除，PnL = (100*100-9000)*1 = 1000 结算入账户。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL));
             assert_eq!(ups.get(TAKER_UID).unwrap().account(FUT_QUOTE), 1_000);
-            // CP_A 60 手全部被吃（全平）-> PnL = (8000 - 60*100)*-1(Short) = 2000，结算入账户，仓位移除。
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL));
             assert_eq!(ups.get(CP_A).unwrap().account(FUT_QUOTE), 2_000);
-            // CP_B 只被吃 40（部分平仓）-> PnL 递延进成本基，不结算，账户不动，仓位记录还在。
             assert_eq!(ups.get(CP_B).unwrap().account(FUT_QUOTE), 0);
             assert_eq!(ups.get(CP_B).unwrap().positions[&FUT_SYMBOL].profit, 0, "部分平仓不实现盈亏");
-            // CP_C 完全未被触碰。
             assert_eq!(ups.get(CP_C).unwrap().account(FUT_QUOTE), 0);
             assert_eq!(ups.get(CP_C).unwrap().positions[&FUT_SYMBOL].open_volume, 50);
         }
-
-        // ---- counterparty 在 R1/R2 之间消失：best-effort skip，不是 error ----
 
         #[test]
         fn counterparty_profile_vanished_between_r1_and_r2_is_skipped_not_error() {
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
 
-            engine.pre_process_command(&mut cmd, &mut ups, &ssp); // R1：A、B 被选中并预占
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp);
 
-            // 模拟 R1/R2 之间 B 的 UserProfile 整个消失（用户被清号等极端时序）。
             ups.users.remove(&CP_B);
 
-            engine.handler_risk_release(&mut cmd, &mut ups, &ssp); // R2：不能 panic
+            engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success), "counterparty 消失不影响命令级结果码");
-            // A（仍存在）正常被平仓结算。
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL));
-            // taker 仍按 cmd.size 全部平仓，不受 B 消失影响（pendingADLSize 修正统一在 finalize 做，不依赖 apply 是否成功）。
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&FUT_SYMBOL));
         }
 
@@ -6516,34 +6026,27 @@ mod tests {
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             let mut cmd = adl_cmd(OrderAction::Bid, 100, 100);
 
-            engine.pre_process_command(&mut cmd, &mut ups, &ssp); // R1：A、B 被选中并预占
+            engine.pre_process_command(&mut cmd, &mut ups, &ssp);
 
-            // 模拟 R1/R2 之间 B 的仓位记录被其他路径关掉（profile 还在，仓位没了）。
             ups.get_mut(CP_B).unwrap().positions.remove(&FUT_SYMBOL);
             let b_account_before = ups.get(CP_B).unwrap().account(FUT_QUOTE);
 
-            engine.handler_risk_release(&mut cmd, &mut ups, &ssp); // R2：不能 panic
+            engine.handler_risk_release(&mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
             assert_eq!(ups.get(CP_B).unwrap().account(FUT_QUOTE), b_account_before, "仓位已消失，apply 与 finalize 释放都必须 no-op，不能凭空造账");
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&FUT_SYMBOL), "A 不受 B 消失影响，正常结算");
         }
 
-        // ---- HEDGE 模式：create_positions_key（不是裸 symbol）----
-
         #[test]
         fn hedge_mode_uses_create_positions_key_not_raw_symbol() {
-            // create_positions_key：HEDGE 下 key=±symbol，非裸 symbol。
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
             ups.get_mut(TAKER_UID).unwrap().position_mode = PositionMode::Hedge;
             ups.get_mut(CP_A).unwrap().position_mode = PositionMode::Hedge;
-            // taker open_volume 收窄到 60，恰好等于 ADL 请求量，否则只会部分平仓，测不出 key 是否用对。
             ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_volume = 60;
-            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 5_400; // 60*90
-            // taker LONG -> HEDGE key = +FUT_SYMBOL；重新按 HEDGE 规则插入（键必须与 direction 一致）。
+            ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().open_price_sum = 5_400;
             let taker_pos = ups.get_mut(TAKER_UID).unwrap().positions.remove(&FUT_SYMBOL).unwrap();
             ups.get_mut(TAKER_UID).unwrap().positions.insert(FUT_SYMBOL, taker_pos);
-            // CP_A SHORT -> HEDGE key = -FUT_SYMBOL。
             let cp_a_pos = ups.get_mut(CP_A).unwrap().positions.remove(&FUT_SYMBOL).unwrap();
             ups.get_mut(CP_A).unwrap().positions.insert(-FUT_SYMBOL, cp_a_pos);
 
@@ -6552,15 +6055,13 @@ mod tests {
             assert_eq!(taker_key, FUT_SYMBOL);
             assert_eq!(cp_a_key, -FUT_SYMBOL, "HEDGE 下 counterparty(SHORT) 的 key 必须是 -symbol");
 
-            let mut cmd = adl_cmd(OrderAction::Bid, 60, 100); // 只请求 60，恰好吃满 A 也恰好平掉 taker 全部仓位
+            let mut cmd = adl_cmd(OrderAction::Bid, 60, 100);
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
             assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
             assert!(!ups.get(TAKER_UID).unwrap().positions.contains_key(&taker_key), "taker 必须按 create_positions_key 算出的 key 被关闭，不是巧合命中裸 symbol");
             assert!(!ups.get(CP_A).unwrap().positions.contains_key(&cp_a_key), "counterparty 必须按 -symbol 这个 key 被关闭，证明查找路径确实走了 create_positions_key 而非裸 symbol");
         }
-
-        // ---- 请求量非正 / 无候选：全拒但不 panic ----
 
         #[test]
         fn non_positive_size_is_noop_success() {
@@ -6576,7 +6077,6 @@ mod tests {
         #[test]
         fn no_eligible_candidates_rejects_without_touching_taker_position() {
             let (mut engine, mut ups, ssp) = setup_taker_and_three_candidates();
-            // 把三个候选全部翻成同向（LONG），过滤条件 `!is_same_as_action` 会把它们全部排除。
             for uid in [CP_A, CP_B, CP_C] {
                 ups.get_mut(uid).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().direction = PositionDirection::Long;
             }

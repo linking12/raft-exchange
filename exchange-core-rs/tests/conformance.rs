@@ -1,22 +1,3 @@
-//! Java↔Rust 黄金向量一致性(conformance)对拍。
-//!
-//! 一份**规范命令流** `.stream`(与实现无关的 DSL),两侧各有解释器喂各自引擎;
-//! Java 侧(exchange-core `ConformanceExporter`)当 oracle 生成 `.golden`,本测试用 exchange-core-rs replay
-//! **同一** `.stream`、产**同一格式**输出,逐行断言 == `.golden`。不依赖 Java 单测是否断言(直接拿 Java 引擎实际输出当黄金)。
-//!
-//! 输出分两段:
-//!   - `R <seq> <CODE>`:每命令 result_code(v1)。
-//!   - `STATE` + `A/POS/FEE`:最终状态摘要(v1,账户/仓位/费用池,排序,跳 0 值)。
-//!   - `EVENTS` + `FE <TYPE> uid cur free locked`:**fund event 规范化多重集**(v2,全流累加含级联,排序)。
-//!
-//! **归一化(= 刻意差异清单)**:
-//!   - 事件用**全流多重集**比,不比逐命令归属——清算触发时机是刻意差异(Rust markprice 定向扫 vs
-//!     Java LIQUIDATION_SCAN),但"发了哪些 fund event"多重集可比。
-//!   - 排除 MARGIN_ALERT / LIQUIDATION_ALERT(Rust 外置 no-op 不发,两侧都排)。
-//!   - 撮合明细事件(MatcherTradeEvent)不进 v2:Java 是 SpotExecutionReport/FuturesExecutionReport 高层报告、
-//!     与 Rust raw MatcherTradeEvent 抽象不同;撮合正确性已由 IT A 类逐值对拍 Java,不是缺口。
-//!   - 清算/ADL 的 fund event 在 Java 走异步线程、捕获 flaky,v2 只对拍其**状态**(账户/仓位),fund event 层暂缓。
-
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -59,7 +40,6 @@ fn opt_i64(kv: &BTreeMap<String, String>, k: &str, d: i64) -> i64 {
     kv.get(k).map(|v| v.parse().unwrap()).unwrap_or(d)
 }
 
-/// CamelCase Debug 名 → Java SCREAMING_SNAKE(result code / fund event type 通用)。
 fn snake(camel: &str) -> String {
     let mut out = String::new();
     for (i, ch) in camel.chars().enumerate() {
@@ -71,7 +51,6 @@ fn snake(camel: &str) -> String {
     out
 }
 
-/// 期货固定档表(两侧一致,避免在 DSL 里编码 map)。
 fn mm_table() -> BTreeMap<i64, i64> {
     BTreeMap::from([(1_000, 5), (100_000, 10)])
 }
@@ -95,12 +74,6 @@ fn margin_of(s: Option<&str>) -> MarginMode {
     if s == Some("CROSS") { MarginMode::Cross } else { MarginMode::Isolated }
 }
 
-/// v2 事件白名单:只对拍**结算类** fund event(金额搬动的实质)。刻意排除:
-///   - 记账/锁类(Deposit/Withdraw/Locked/Unlocked/LockPending/UnlockPending/Transfer):粒度是刻意差异
-///     (如 balance_adjustment:Java 发、Rust 不发)。
-///   - 仓位生命周期(OpenPosition/ClosePosition):与 STATE 的 POS 冗余,且两侧粒度不同
-///     (期货开仓 Java 只对 maker 发 OPEN_POSITION、Rust 对 maker+taker 都发——钱一致、事件数不同)。
-///   - alert(MarginAlert/LiquidationAlert):Rust 外置 no-op 不发。
 fn fe_allowed(t: FundEventType) -> bool {
     use FundEventType::*;
     matches!(
@@ -121,7 +94,6 @@ fn fe_allowed(t: FundEventType) -> bool {
     )
 }
 
-/// fund event 规范化行(仅白名单结算类)。
 fn fe_line(e: &FundEvent) -> Option<String> {
     if !fe_allowed(e.event_type) {
         return None;
@@ -153,7 +125,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
         }};
     }
 
-    // MARK_AT/SCAN/IF_DEPOSIT/LIF_DEPOSIT 是触发/setup,不发 R 行(对齐 Java 把它们当 setup);其余真实命令发 R。
     let no_r = |v: &str| matches!(v, "MARK_AT" | "SCAN" | "IF_DEPOSIT" | "LIF_DEPOSIT");
     for line in stream.lines() {
         let Some((verb, kv)) = parse_line(line) else { continue };
@@ -163,8 +134,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 None
             }
             "SYM_SPOT" => {
-                // 可选 loan 配置(带 initialLtv 时启用现货借贷);5 字段与 Java SymbolLoanSpecification 逐一对齐,
-                // 未给的字段两侧默认 0(0=未启用/无上限/无期限),故向量显式给全避免默认漂移。
                 let loan_config = SymbolLoanSpecification {
                     initial_ltv_bps: opt_i64(&kv, "initialLtv", 0) as i32,
                     liquidation_ltv_bps: opt_i64(&kv, "liqLtv", 0) as i32,
@@ -275,7 +244,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
-            // 追加保证金:ISOLATED sym=symbol id、action 选腿;CROSS sym=currency id。amount 走 cmd.price(恒正)。对应 Java ApiAdjustMargin。
             "MARGIN_ADJUST" => Some(api.margin_adjustment(MarginAdjustmentRequest {
                 uid: i64_of(&kv, "uid"),
                 symbol: i32_of(&kv, "sym"),
@@ -284,9 +252,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 margin_mode: margin_of(kv.get("margin").map(String::as_str)),
                 order_id: opt_i64(&kv, "txid", 0),
             })),
-            // HEDGE:切换持仓模式(hedge=1 双向 / 0 单向),对应 Java ApiAdjustPositionMode。
             "POS_MODE" => Some(api.adjust_position_mode(i64_of(&kv, "uid"), i64_of(&kv, "hedge") != 0)),
-            // loan 池注资:cmd.symbol=loan 币种、cmd.size=金额,对应 Java ApiPoolDeposit(currency/amount)。
             "POOL_DEPOSIT" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::PoolDeposit,
                 symbol: i32_of(&kv, "cur"),
@@ -294,7 +260,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
-            // isolated loan 开仓:reserveBidPrice=loanId / size=collateral / price=principal / userCookie=rateMode。
             "LOAN_CREATE" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanCreate,
                 uid: i64_of(&kv, "uid"),
@@ -307,7 +272,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 timestamp: opt_i64(&kv, "ts", 0),
                 ..Default::default()
             })),
-            // isolated loan 还款:reserveBidPrice=loanId / price=repayAmount。
             "LOAN_REPAY" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanRepay,
                 uid: i64_of(&kv, "uid"),
@@ -317,8 +281,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 timestamp: opt_i64(&kv, "ts", 0),
                 ..Default::default()
             })),
-            // 全局 loan 运行时配置(numeraire/cross LTV 阈值等),对应 Java BatchAddLoanCommand.ofGlobal*。
-            // 直接 facade(不经命令管线,与 CUR/SYM_SPOT 同),不发 R;未给字段=0=不改(partial-update)。
             "LOAN_GLOBAL" => {
                 api.add_loan(BatchAddLoanCommand {
                     global: Some(GlobalLoanConfig {
@@ -335,8 +297,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 });
                 None
             }
-            // per-symbol loan 配置(含 collateralWeight → 落到 base 币),对应 Java BatchAddLoanCommand.ofSymbol。
-            // 直接 facade,不发 R;省略字段用 UNSET(-1)派生。cross loan 抵押估值必须先设 collateralWeight。
             "LOAN_SYMBOL" => {
                 api.add_loan(BatchAddLoanCommand {
                     global: None,
@@ -353,7 +313,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 });
                 None
             }
-            // cross loan 抵押注资:cmd.symbol=currency / size=amount,对应 Java ApiLoanCrossAddCollateral。
             "LOAN_CROSS_ADD_COLLATERAL" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanCrossAddCollateral,
                 uid: i64_of(&kv, "uid"),
@@ -363,7 +322,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 timestamp: opt_i64(&kv, "ts", 0),
                 ..Default::default()
             })),
-            // cross loan 抵押提取。
             "LOAN_CROSS_WITHDRAW_COLLATERAL" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanCrossWithdrawCollateral,
                 uid: i64_of(&kv, "uid"),
@@ -373,7 +331,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 timestamp: opt_i64(&kv, "ts", 0),
                 ..Default::default()
             })),
-            // cross loan 借款:symbol=计息 symbol / price=principal / reserveBidPrice=loanId。
             "LOAN_CROSS_BORROW" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanCrossBorrow,
                 uid: i64_of(&kv, "uid"),
@@ -384,7 +341,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 timestamp: opt_i64(&kv, "ts", 0),
                 ..Default::default()
             })),
-            // cross loan 还款:price=repayAmount / reserveBidPrice=loanId。
             "LOAN_CROSS_REPAY" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanCrossRepay,
                 uid: i64_of(&kv, "uid"),
@@ -394,7 +350,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 timestamp: opt_i64(&kv, "ts", 0),
                 ..Default::default()
             })),
-            // loan 保险基金(LIF)注资:cmd.symbol=currency / size=amount,对应 Java ApiLoanIfDeposit。运维 setup,不发 R。
             "LIF_DEPOSIT" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanIfDeposit,
                 symbol: i32_of(&kv, "cur"),
@@ -408,7 +363,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
             if !no_r(verb.as_str()) {
                 results.push(format!("R {seq} {}", snake(&format!("{rc:?}"))));
             }
-            collect_events!(); // 命令已走 run/submit(last_cmd 就位)后收集事件
+            collect_events!();
         }
         seq += 1;
     }
@@ -434,7 +389,6 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
         syms.sort_unstable();
         syms.dedup();
         for s in syms {
-            // HEDGE 同 symbol 可有 LONG/SHORT 两腿:按方向名排序,两侧口径一致(单腿向量下为 no-op)。
             let mut legs: Vec<(String, i64, i64, i64, i64)> = p
                 .positions
                 .values()
@@ -445,7 +399,6 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
                 .collect();
             legs.sort();
             for (dir, vol, sum, im, em) in legs {
-                // 含初始保证金(受杠杆决定)与追加保证金,让 leverage/margin 在状态里可观测。
                 out.push(format!("POS {uid} {s} {dir} {vol} {sum} {im} {em}"));
             }
         }
@@ -461,7 +414,6 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
     out
 }
 
-/// `.stream` 首部含 `#!events=off` 时只对拍 result+state(清算/ADL 向量用:Java fund event 走异步、捕获 flaky)。
 fn events_enabled(stream: &str) -> bool {
     !stream.lines().any(|l| l.trim_start_matches('#').trim() == "!events=off")
 }
@@ -480,7 +432,6 @@ fn rust_output(stream: &str) -> String {
 
 #[test]
 fn conformance_golden_vectors() {
-    // 默认对拍入库向量;live-diff 编排(conformance_live_diff.sh)用 CONFORMANCE_VECTORS_DIR 指向临时目录跑新鲜随机流。
     let dir = std::env::var("CONFORMANCE_VECTORS_DIR")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/conformance_vectors").to_string());
     let entries = match fs::read_dir(&dir) {

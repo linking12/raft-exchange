@@ -1,4 +1,3 @@
-//! 对应 Java `SymbolPositionRecord`：期货保证金持仓记录。`adl_eligibility`/`pending_adl_size`/`liquidation_flow` 是 leader-local 非复制 scratch，不进 `state_hash`。
 use std::collections::BTreeMap;
 
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -8,52 +7,34 @@ use crate::core::common::position_direction::PositionDirection;
 use crate::core::processors::liquidation::liquidation_flow::LiquidationFlow;
 use crate::core::utils::core_arithmetic_utils::{add_exact, calculate_taker_fee, ceil_divide, ceil_mul_div, mul_exact, sub_exact, trunc_mul_div};
 
-/// 对应 Java `SymbolPositionRecord`：期货 / 保证金交易的单 symbol、单方向持仓记录。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SymbolPositionRecord {
     pub uid: i64,
     pub symbol: i32,
     pub currency: i32,
 
-    /// 持仓方向；`EMPTY` 表示当前无持仓（`open_volume==0` 时恒为 `Empty`）。
     pub direction: PositionDirection,
-    /// 持仓量（baseScaleK，无符号，符号由 `direction` 带）。
     pub open_volume: i64,
-    /// 当前开仓量锁定的初始保证金（sizePriceScale = baseScaleK×quoteScaleK）。
     pub open_init_margin_sum: i64,
-    /// 持仓总成本（sizePriceScale）；均价 = `open_price_sum / open_volume`。
     pub open_price_sum: i64,
-    /// 已实现盈亏累加器，仅在仓位清空时入账（累加进 accounts）。
     pub profit: i64,
 
-    /// 挂单量（baseScaleK）：R1 发单前加，R2 成交/拒/减确认时减。
     pub pending_sell_size: i64,
     pub pending_buy_size: i64,
-    /// 挂单侧加权均价，最坏敞口/费用估算用。
     pub pending_sell_avg_price: i64,
     pub pending_buy_avg_price: i64,
 
-    /// 用户自选杠杆，`updateLeverage` 归一：0 -> 1。
     pub leverage: i32,
-    /// 默认逐仓（`ISOLATED`）。
     pub margin_mode: MarginMode,
-    /// 补充保证金（sizePriceScale），`MARGIN_ADJUSTMENT` 手动加，清空仓位时整额退。
     pub extra_margin: i64,
 
-    // 非复制 leader-local scratch：不进 state_hash、不序列化。
-    /// 对应 Java `pendingADLSize`：ADL R1 预留待减仓量，R2-finalize 对称释放。
     pub pending_adl_size: i64,
-    /// 对应 Java `adlEligibility`：ADL 资格因子（ISOLATED=100/CROSS=0，安全门后 clamp）。
     pub adl_eligibility: i64,
-    /// 对应 Java `liquidationFlow`：进行中的 FORCE→IF→ADL 状态机，`None`=无流程。
     pub liquidation_flow: Option<LiquidationFlow>,
 }
 
 impl SymbolPositionRecord {
-    // ===== 构造/配置 =====
 
-    /// 便捷构造器：给定 identity 字段，其余取默认零值；`leverage` 经 [`Self::update_leverage`] 归一，
-    /// `adl_eligibility` 按 `margin_mode` 归一。
     pub fn new(uid: i64, symbol: i32, currency: i32, margin_mode: MarginMode, leverage: i32) -> Self {
         let mut r = SymbolPositionRecord { uid, symbol, currency, margin_mode, ..Default::default() };
         r.update_leverage(leverage);
@@ -62,7 +43,6 @@ impl SymbolPositionRecord {
         r
     }
 
-    /// 对应 Java `initialize(...)`：池化复用入口，按 `orderAction` 推导 `direction`，持仓/成本/盈亏清零。
     pub fn initialize(
         &mut self,
         uid: i64,
@@ -88,21 +68,15 @@ impl SymbolPositionRecord {
         self.update_leverage(leverage);
         self.margin_mode = margin_mode;
         self.extra_margin = 0;
-        // ADL 资格因子按 margin_mode 归一，池复用清干净旧值。
         self.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
         self.pending_adl_size = 0;
-        // 池化复用清理纯内存强平流程状态。
         self.liquidation_flow = None;
     }
 
-    // ===== 核心行为 =====
-
-    /// 对应 Java `updateLeverage(int leverage)`：`0` 归一为 `1`（用户未选 = 默认 1 倍）。
     pub fn update_leverage(&mut self, leverage: i32) {
         self.leverage = if leverage == 0 { 1 } else { leverage };
     }
 
-    /// 对应 Java `reset()`：池复用清零，保留 identity 字段（uid/symbol/currency）不动，只清业务状态。
     pub fn reset(&mut self) {
         self.pending_buy_size = 0;
         self.pending_sell_size = 0;
@@ -117,14 +91,11 @@ impl SymbolPositionRecord {
         self.update_leverage(0);
         self.margin_mode = MarginMode::Isolated;
         self.extra_margin = 0;
-        // 无条件回落 ISOLATED 默认值，后续 `initialize()` 按真实 margin_mode 重设。
         self.adl_eligibility = 100;
         self.pending_adl_size = 0;
-        // 池化复用清理纯内存强平流程状态。
         self.liquidation_flow = None;
     }
 
-    /// 对应 Java `pendingHold`：R1 发单前调，累加挂单量并重算该侧加权均价（ceil，保守估计）。
     pub fn pending_hold(&mut self, order_action: OrderAction, size: i64, price: i64) {
         match order_action {
             OrderAction::Ask => {
@@ -140,7 +111,6 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `pendingHoldBudget`：BUDGET 单专用，`price` 即总预算 notional，累进后 ceil 除回新 avg。
     pub fn pending_hold_budget(&mut self, order_action: OrderAction, size: i64, budget_notional: i64) {
         match order_action {
             OrderAction::Ask => {
@@ -170,7 +140,6 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `pendingRelease`：R2 成交/拒/减确认时调，返回实际释放量 `min(pending, size)`；侧归零时重置 avg。
     pub fn pending_release(&mut self, order_action: OrderAction, size: i64) -> i64 {
         match order_action {
             OrderAction::Ask => {
@@ -192,40 +161,31 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `closeCurrentPositionFutures`：唯一平/翻仓原语，用一笔反向成交平当前持仓，返回平完后还需
-    /// 新开的手数（翻仓超出部分，由 [`Self::open_position_margin`] 接手）。三分支：无仓/同向 → 原样返回
-    /// `trade_size`；部分平 → **不结算盈亏**，按比例释放保证金、`open_price_sum` 按成交价扣减（被平部分盈亏
-    /// 递延进剩余成本基，总盈亏守恒），返回 0；全平/翻仓 → 结算整仓已实现盈亏进 `profit`、清零仓位，返回
-    /// `trade_size − open_volume`。
     pub fn close_current_position_futures(&mut self, action: OrderAction, trade_size: i64, trade_price: i64) -> i64 {
         if self.open_volume == 0 || self.direction == PositionDirection::of_action(action) {
-            return trade_size; // 无反向仓可平，整笔用于开仓
+            return trade_size;
         }
 
         if self.open_volume > trade_size {
-            // 部分平仓：此处不结算盈亏，而是把被平部分的盈亏递延进剩余仓位的成本基。
             let margin_release = trunc_mul_div(self.open_init_margin_sum, trade_size, self.open_volume);
             self.open_init_margin_sum = sub_exact(self.open_init_margin_sum, margin_release);
-            self.open_volume -= trade_size; // open_volume > trade_size 已保证不变负、不溢出
+            self.open_volume -= trade_size;
             self.open_price_sum = sub_exact(self.open_price_sum, mul_exact(trade_size, trade_price));
             return 0;
         }
 
-        // 全平（tradeSize ≥ openVolume）：结算整仓已实现盈亏 = 有向(平仓名义 − 成本基)，清零仓位。
         let close_notional = mul_exact(self.open_volume, trade_price);
         let pnl_raw = sub_exact(close_notional, self.open_price_sum);
         let pnl_signed = mul_exact(pnl_raw, self.direction.multiplier() as i64);
         self.profit = add_exact(self.profit, pnl_signed);
         self.open_init_margin_sum = 0;
         self.open_price_sum = 0;
-        let size_to_open = sub_exact(trade_size, self.open_volume); // 超出部分反手开新仓
+        let size_to_open = sub_exact(trade_size, self.open_volume);
         self.open_volume = 0;
 
         size_to_open
     }
 
-    /// 对应 Java `openPositionMargin`：成交开新敞口，按 `size_to_open` 累加持仓。初始保证金按【标记价】名义计
-    /// （更保守、与强平口径一致），成本基 `open_price_sum` 按【成交价】记（用于后续平仓算盈亏）。
     pub fn open_position_margin(
         &mut self,
         action: OrderAction,
@@ -243,19 +203,14 @@ impl SymbolPositionRecord {
         self.direction = PositionDirection::of_action(action);
     }
 
-    // ===== 查询/访问器 =====
-
-    /// 对应 Java `isSameLeverage(int leverage)`：按同一 `0 -> 1` 归一规则比较。
     pub fn is_same_leverage(&self, leverage: i32) -> bool {
         self.leverage == if leverage == 0 { 1 } else { leverage }
     }
 
-    /// 对应 Java `isEmpty()`：无挂单、无持仓——拆记录（从 map 移除）的触发条件。
     pub fn is_empty(&self) -> bool {
         self.open_volume == 0 && self.pending_sell_size == 0 && self.pending_buy_size == 0
     }
 
-    /// 对应 Java `stateHash()`：字段滚动折叠 hash，**不含 `uid`**（逐字对齐 Java，非遗漏）；只保证同状态可辨，不保证数值与 Java 相等。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.symbol as i64);
@@ -275,7 +230,6 @@ impl SymbolPositionRecord {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 对应 Java `calculateBankruptcyPrice`：破产价（权益归零的清算限价）；`margin_base_fn` 对应 `crossMarginBaseFn`。
     pub fn calculate_bankruptcy_price(
         &self,
         spec: &CoreSymbolSpecification,
@@ -298,19 +252,16 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `estimatePnl`：`profit`（已实现）+ 未实现盈亏（`mark_price` 估价）。
     pub fn estimate_pnl(&self, mark_price: i64) -> i64 {
         add_exact(self.profit, self.estimate_unrealized_profit(mark_price))
     }
 
-    /// 对应 Java `estimateUnrealizedProfit`：`sign × (openVolume × mark − openPriceSum)`；EMPTY 时乘数 0 天然兜底。
     pub fn estimate_unrealized_profit(&self, mark_price: i64) -> i64 {
         let notional = mul_exact(self.open_volume, mark_price);
         let delta = sub_exact(notional, self.open_price_sum);
         mul_exact(self.direction.multiplier() as i64, delta)
     }
 
-    /// 对应 Java `calculateMaintenanceMargin`：强平风险评估用，只看 `openVolume × mark`，忽略 pending；空仓返回 0。
     pub fn calculate_maintenance_margin(&self, spec: &CoreSymbolSpecification, mark_price: i64) -> i64 {
         if self.open_volume == 0 {
             return 0;
@@ -396,15 +347,10 @@ impl SymbolPositionRecord {
         mul_exact(spec.maintenance_margin_scale_k, maintenance_margin) / total_margin
     }
 
-    /// 对应 Java `calculateRequiredMarginForFutures`（单参重载）：杠杆取本仓 `self.leverage`。
     pub fn calculate_required_margin_for_futures(&self, spec: &CoreSymbolSpecification) -> i64 {
         self.calculate_required_margin_for_futures_with_leverage(spec, self.leverage)
     }
 
-    /// 对应 Java `calculateRequiredMarginForFutures`：持仓 + 挂单需锁定的总保证金。取 BID/ASK 全成两极端
-    /// 敞口最大值 `worstCaseNotional = max(|open+bid|, |open−ask|)` 减 `|open|` 得 `newExposureNotional`
-    /// （挂单只对"能扩大最坏敞口"部分收保证金，纯减仓不占额外保证金）；返回
-    /// `openInitMarginSum + calculateInitMargin(newExposure, leverage) + max(bidFee, askFee)`。
     pub fn calculate_required_margin_for_futures_with_leverage(
         &self,
         spec: &CoreSymbolSpecification,
@@ -432,9 +378,6 @@ impl SymbolPositionRecord {
         )
     }
 
-    /// 对应 Java `calculateRequiredMarginForOrder`：新单 `order_notional` 落在 `action` 侧后仓位需的总保证金
-    /// （"有此单 vs 无此单"最坏敞口差）。新单不扩大最坏敞口（纯反向或抵消现有 pending）时返回 **-1 哨兵**，
-    /// caller 回退到 `calculate_required_margin_for_futures`。
     pub fn calculate_required_margin_for_order(
         &self,
         spec: &CoreSymbolSpecification,
@@ -485,7 +428,6 @@ impl SymbolPositionRecord {
         }
     }
 
-    /// 对应 Java `estimateNotionalForOrder`：假设 pending 与新单 size 都能开出来，估算仓位名义价值（保守估计，仅 `isValidLeverage` 检查用）。
     pub fn estimate_notional_for_order(&self, action: OrderAction, size: i64, price: i64) -> i64 {
         let new_pending_buy_size =
             if action == OrderAction::Bid { add_exact(self.pending_buy_size, size) } else { self.pending_buy_size };
@@ -495,7 +437,6 @@ impl SymbolPositionRecord {
         mul_exact(estimated_size, price)
     }
 
-    /// 对应 Java `calculatePendingFeeForOrder`：加此单后较差挂单侧的 taker 费估算（仅 NSF 预检用，不实收）。
     pub fn calculate_pending_fee_for_order(
         &self,
         spec: &CoreSymbolSpecification,
@@ -525,8 +466,6 @@ impl SymbolPositionRecord {
         fee_pending_buy.max(fee_pending_sell)
     }
 
-    /// 对应 Java `calculatePendingFeeForOrderBudget`：BUDGET 单专用，同 [`Self::calculate_pending_fee_for_order`]，
-    /// 区别是用 `budget_notional`（product-scale 总预算）直接累加 notional，而非 `price × size`。
     pub fn calculate_pending_fee_for_order_budget(
         &self,
         spec: &CoreSymbolSpecification,
@@ -562,9 +501,6 @@ impl SymbolPositionRecord {
         fee_pending_buy.max(fee_pending_sell)
     }
 
-    // ===== 内部 helper =====
-
-    /// 对应 Java `calculateAvgPrice`：合计加权均价，ceil 取整；合计量 ≤0 返回 0。
     fn calculate_avg_price(current_avg: i64, current_size: i64, new_price: i64, new_size: i64) -> i64 {
         let total_size = add_exact(current_size, new_size);
         if total_size <= 0 {
@@ -575,19 +511,14 @@ impl SymbolPositionRecord {
     }
 }
 
-/// 对应 Java `positions` map 的 key（HEDGE 模式用 ±symbol 区分多空）。
 pub type PositionsMapKey = i32;
 pub type PositionsMap = BTreeMap<PositionsMapKey, SymbolPositionRecord>;
 
-
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for SymbolPositionRecord {
-    /// Java 序:symbol,currency,direction(byte=multiplier),8×long,leverage(int),marginMode(byte),extraMargin(long)。
-    /// `uid` 不序列化(由父 map key 注入),scratch 字段(pending_adl/adl_elig/liquidation_flow)非复制,读后 default。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(self.symbol);
         w.write_i32(self.currency);
@@ -639,7 +570,7 @@ mod tests {
         assert_eq!(r.symbol, 100);
         assert_eq!(r.currency, 2);
         assert_eq!(r.margin_mode, MarginMode::Cross);
-        assert_eq!(r.leverage, 1); // 0 -> 1 归一
+        assert_eq!(r.leverage, 1);
         assert_eq!(r.direction, PositionDirection::Empty);
         assert!(r.is_empty());
     }
@@ -712,14 +643,13 @@ mod tests {
 
         r.reset();
 
-        assert_eq!(r.uid, 9); // identity 保留
+        assert_eq!(r.uid, 9);
         assert_eq!(r.symbol, 100);
         assert_eq!(r.currency, 2);
 
         assert_eq!(r.open_volume, 0);
         assert_eq!(r.open_init_margin_sum, 0);
         assert_eq!(r.open_price_sum, 0);
-        // Java `reset()` 逐字不清 `profit`——已实现盈亏累加器在池复用清零时保留（非遗漏）。
         assert_eq!(r.profit, 40);
         assert_eq!(r.pending_sell_size, 0);
         assert_eq!(r.pending_buy_size, 0);
@@ -734,7 +664,7 @@ mod tests {
     #[test]
     fn state_hash_deterministic_and_excludes_uid() {
         let a = SymbolPositionRecord::new(1, 100, 2, MarginMode::Isolated, 5);
-        let b = SymbolPositionRecord::new(999, 100, 2, MarginMode::Isolated, 5); // uid 不同
+        let b = SymbolPositionRecord::new(999, 100, 2, MarginMode::Isolated, 5);
         assert_eq!(a.state_hash(), b.state_hash(), "stateHash 逐字对齐 Java：不含 uid");
     }
 
@@ -760,8 +690,6 @@ mod tests {
         assert_ne!(h0, diff_extra_margin.state_hash());
     }
 
-    // 非复制字段排除 state_hash + calculate_bankruptcy_price。
-
     #[test]
     fn state_hash_excludes_non_replicated_adl_fields() {
         let base = SymbolPositionRecord::new(1, 100, 2, MarginMode::Isolated, 5);
@@ -783,7 +711,7 @@ mod tests {
 
     fn long_position(open_volume: i64, open_init_margin_sum: i64, open_price_sum: i64, extra_margin: i64) -> SymbolPositionRecord {
         let mut p = SymbolPositionRecord::new(1, 100, 2, MarginMode::Isolated, 1);
-        p.direction = PositionDirection::Long; // sign = +1
+        p.direction = PositionDirection::Long;
         p.open_volume = open_volume;
         p.open_init_margin_sum = open_init_margin_sum;
         p.open_price_sum = open_price_sum;
@@ -793,8 +721,6 @@ mod tests {
 
     #[test]
     fn calculate_bankruptcy_price_isolated_fixed_fee() {
-        // ISOLATED Long：margin_base = 100+20 = 120；total_fee = taker(2)+liq(3) = 5；fixed(fee_scale_k=0)。
-        // max_loss = 120 - 5*10 = 70；numer = 1000 - 1*70 = 930；ceil_divide(930,10) = 93。
         let pos = long_position(10, 100, 1000, 20);
         let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 3, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 93);
@@ -802,9 +728,6 @@ mod tests {
 
     #[test]
     fn calculate_bankruptcy_price_isolated_proportional_fee() {
-        // ISOLATED Long：margin_base = 100+0 = 100；total_fee = 100+100 = 200；fee_scale_k = 1_000_000。
-        // numer = 1000 - 1*100 = 900；denom = 10*(1_000_000 - 1*200) = 9_998_000；
-        // ceil_mul_div(900, 1_000_000, 9_998_000) = ceil(900_000_000/9_998_000) = ceil(90.018) = 91。
         let pos = long_position(10, 100, 1000, 0);
         let spec = CoreSymbolSpecification { taker_fee: 100, liquidation_fee: 100, fee_scale_k: 1_000_000, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 91);
@@ -812,15 +735,12 @@ mod tests {
 
     fn short_position(open_volume: i64, open_init_margin_sum: i64, open_price_sum: i64, extra_margin: i64) -> SymbolPositionRecord {
         let mut p = long_position(open_volume, open_init_margin_sum, open_price_sum, extra_margin);
-        p.direction = PositionDirection::Short; // sign = -1
+        p.direction = PositionDirection::Short;
         p
     }
 
     #[test]
     fn calculate_bankruptcy_price_isolated_short_fixed_fee() {
-        // SHORT sign=-1：margin_base = 100+20 = 120；total_fee = 2+3 = 5；fixed。
-        // max_loss = 120 - 5*10 = 70；numer = 1000 - (-1)*70 = 1070；ceil_divide(1070,10) = 107。
-        // （空头破产价 107 > 成本均价 100：空头价涨才亏，破产价在上方，方向正确。）
         let pos = short_position(10, 100, 1000, 20);
         let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 3, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 107);
@@ -828,9 +748,6 @@ mod tests {
 
     #[test]
     fn calculate_bankruptcy_price_isolated_short_proportional_fee() {
-        // SHORT sign=-1：margin_base = 100；total_fee = 200；fee_scale_k = 1_000_000。
-        // numer = 1000 - (-1)*100 = 1100；denom = 10*(1_000_000 - (-1)*200) = 10_002_000；
-        // ceil_mul_div(1100, 1_000_000, 10_002_000) = ceil(1_100_000_000/10_002_000) = ceil(109.978) = 110。
         let pos = short_position(10, 100, 1000, 0);
         let spec = CoreSymbolSpecification { taker_fee: 100, liquidation_fee: 100, fee_scale_k: 1_000_000, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 110);
@@ -838,23 +755,14 @@ mod tests {
 
     #[test]
     fn calculate_bankruptcy_price_cross_uses_margin_base_fn() {
-        // CROSS Long：margin_base 取 margin_base_fn(=150) 而非 open_init_margin_sum+extra_margin；
-        // total_fee=5；fixed；max_loss = 150 - 5*10 = 100；numer = 1000 - 1*100 = 900；ceil_divide(900,10) = 90。
         let mut pos = long_position(10, 100, 1000, 0);
         pos.margin_mode = MarginMode::Cross;
         let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 3, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 150), 90);
     }
 
-    // ----------------------------------------------------------------
-    // 对拍 Java `LiquidationScannerTest`（破产价黄金值）。Java `createSpec` 不设 liquidation_fee
-    // → 这里恒 `liquidation_fee: 0`，其余入参与 Java 逐字对齐；CROSS 用例把 isolated 字段填垃圾值以证明被忽略。
-    // ----------------------------------------------------------------
-
     #[test]
     fn java_bp_zero_margin() {
-        // LONG openVolume=1 openPriceSum=1000 initMargin=0 extraMargin=0；fixed takerFee=1。
-        // margin_base=0；max_loss=0-1*1=-1；numer=1000-(-1)=1001；ceil(1001/1)=1001。
         let pos = long_position(1, 0, 1000, 0);
         let spec = CoreSymbolSpecification { taker_fee: 1, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 1001);
@@ -862,8 +770,6 @@ mod tests {
 
     #[test]
     fn java_bp_negative_margin_fixed_fee() {
-        // LONG initMargin=-200 extraMargin=100 → margin_base=-100；takerFee=2；max_loss=-100-20=-120；
-        // numer=10000-(-120)=10120；ceil(10120/10)=1012。
         let pos = long_position(10, -200, 10_000, 100);
         let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 1012);
@@ -871,8 +777,6 @@ mod tests {
 
     #[test]
     fn java_bp_negative_open_price_sum() {
-        // SHORT openPriceSum=-4000 initMargin=250 extraMargin=50 → margin_base=300；takerFee=3；max_loss=300-15=285；
-        // sign=-1；numer=-4000-(-1)*285=-3715；ceil(-3715/5)=-743（可为负，实现不加正值检查）。
         let pos = short_position(5, 250, -4_000, 50);
         let spec = CoreSymbolSpecification { taker_fee: 3, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), -743);
@@ -880,7 +784,6 @@ mod tests {
 
     #[test]
     fn java_bp_zero_fee() {
-        // LONG initMargin=400 extraMargin=100 → margin_base=500；takerFee=0；max_loss=500；numer=9500；ceil(9500/10)=950。
         let pos = long_position(10, 400, 10_000, 100);
         let spec = CoreSymbolSpecification { taker_fee: 0, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 950);
@@ -888,7 +791,6 @@ mod tests {
 
     #[test]
     fn java_bp_cross_fixed_fee_long_uses_allocated_margin_base() {
-        // CROSS LONG：忽略 isolated 垃圾字段，margin_base=alloc(480)；takerFee=2；max_loss=480-20=460；numer=9540；ceil/10=954。
         let mut pos = long_position(10, 999_999, 10_000, 999_999);
         pos.margin_mode = MarginMode::Cross;
         let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
@@ -897,7 +799,6 @@ mod tests {
 
     #[test]
     fn java_bp_cross_fixed_fee_short_uses_allocated_margin_base() {
-        // CROSS SHORT：margin_base=alloc(300)；takerFee=3；max_loss=300-15=285；sign=-1；numer=4000+285=4285；ceil(4285/5)=857。
         let mut pos = short_position(5, 999_999, 4_000, 999_999);
         pos.margin_mode = MarginMode::Cross;
         let spec = CoreSymbolSpecification { taker_fee: 3, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
@@ -906,8 +807,6 @@ mod tests {
 
     #[test]
     fn java_bp_cross_ratio_fee_long_uses_allocated_margin_base() {
-        // CROSS LONG 比例费：margin_base=alloc(600)；takerFee=1000 feeScaleK=1e6；numer=9600-600=9000；
-        // denom=8*(1e6-1000)=7_992_000；ceil(9000*1e6/7_992_000)=1127。
         let mut pos = long_position(8, 999_999, 9_600, 999_999);
         pos.margin_mode = MarginMode::Cross;
         let spec = CoreSymbolSpecification { taker_fee: 1_000, liquidation_fee: 0, fee_scale_k: 1_000_000, ..Default::default() };
@@ -916,12 +815,11 @@ mod tests {
 
     #[test]
     fn java_bp_cross_varies_with_allocation_monotonic() {
-        // CROSS LONG：alloc 越大 → 多头破产价越低（alloc 真正驱动结果）。
         let mut pos = long_position(10, 999_999, 10_000, 999_999);
         pos.margin_mode = MarginMode::Cross;
         let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
-        let low_margin = pos.calculate_bankruptcy_price(&spec, |_| 300); // max_loss=280 numer=9720 → 972
-        let high_margin = pos.calculate_bankruptcy_price(&spec, |_| 800); // max_loss=780 numer=9220 → 922
+        let low_margin = pos.calculate_bankruptcy_price(&spec, |_| 300);
+        let high_margin = pos.calculate_bankruptcy_price(&spec, |_| 800);
         assert_eq!(low_margin, 972);
         assert_eq!(high_margin, 922);
         assert!(high_margin < low_margin, "marginBase 越大，多头破产价越低");
@@ -931,15 +829,11 @@ mod tests {
     fn default_is_all_zero_empty() {
         let r = SymbolPositionRecord::default();
         assert_eq!(r.uid, 0);
-        assert_eq!(r.leverage, 0); // Default derive 不走 update_leverage 归一，逐字是原始零值
+        assert_eq!(r.leverage, 0);
         assert_eq!(r.margin_mode, MarginMode::Isolated);
         assert_eq!(r.direction, PositionDirection::Empty);
         assert!(r.is_empty());
     }
-
-    // ================================================================
-    // pending hold / release
-    // ================================================================
 
     #[test]
     fn pending_hold_ask_accumulates_size_and_weighted_avg_ceil() {
@@ -948,11 +842,9 @@ mod tests {
         assert_eq!(r.pending_sell_size, 10);
         assert_eq!(r.pending_sell_avg_price, 100);
 
-        // total_size=15, total_notional=10*100+5*130=1650, ceil(1650/15)=110
         r.pending_hold(OrderAction::Ask, 5, 130);
         assert_eq!(r.pending_sell_size, 15);
         assert_eq!(r.pending_sell_avg_price, 110);
-        // 未触碰 buy 侧
         assert_eq!(r.pending_buy_size, 0);
         assert_eq!(r.pending_buy_avg_price, 0);
     }
@@ -960,8 +852,8 @@ mod tests {
     #[test]
     fn pending_hold_bid_ceils_non_exact_average() {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
-        r.pending_hold(OrderAction::Bid, 3, 10); // notional=30
-        r.pending_hold(OrderAction::Bid, 2, 11); // notional+=22=52, size=5, 52/5=10.4 -> ceil 11
+        r.pending_hold(OrderAction::Bid, 3, 10);
+        r.pending_hold(OrderAction::Bid, 2, 11);
         assert_eq!(r.pending_buy_size, 5);
         assert_eq!(r.pending_buy_avg_price, 11);
     }
@@ -969,11 +861,10 @@ mod tests {
     #[test]
     fn pending_hold_budget_tracks_notional_directly_and_ceils() {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
-        r.pending_hold_budget(OrderAction::Ask, 10, 1005); // ceil(1005/10)=101
+        r.pending_hold_budget(OrderAction::Ask, 10, 1005);
         assert_eq!(r.pending_sell_size, 10);
         assert_eq!(r.pending_sell_avg_price, 101);
 
-        // pendingNotional = 101*10 + 500 = 1510, newSize=15, ceil(1510/15)=101 (100.67->101)
         r.pending_hold_budget(OrderAction::Ask, 5, 500);
         assert_eq!(r.pending_sell_size, 15);
         assert_eq!(r.pending_sell_avg_price, 101);
@@ -982,7 +873,7 @@ mod tests {
     #[test]
     fn pending_hold_budget_new_size_non_positive_is_noop() {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
-        r.pending_hold_budget(OrderAction::Bid, -5, -500); // newSize=-5<=0 -> 直接返回
+        r.pending_hold_budget(OrderAction::Bid, -5, -500);
         assert_eq!(r.pending_buy_size, 0);
         assert_eq!(r.pending_buy_avg_price, 0);
     }
@@ -993,13 +884,11 @@ mod tests {
         r.pending_sell_size = 10;
         r.pending_sell_avg_price = 100;
 
-        // 部分释放：avg 不变
         let released = r.pending_release(OrderAction::Ask, 4);
         assert_eq!(released, 4);
         assert_eq!(r.pending_sell_size, 6);
         assert_eq!(r.pending_sell_avg_price, 100);
 
-        // 侧归零：重置 avg
         let released2 = r.pending_release(OrderAction::Ask, 6);
         assert_eq!(released2, 6);
         assert_eq!(r.pending_sell_size, 0);
@@ -1012,23 +901,19 @@ mod tests {
         r.pending_buy_size = 5;
         r.pending_buy_avg_price = 200;
 
-        let released = r.pending_release(OrderAction::Bid, 8); // min(5,8)=5
+        let released = r.pending_release(OrderAction::Bid, 8);
         assert_eq!(released, 5);
         assert_eq!(r.pending_buy_size, 0);
         assert_eq!(r.pending_buy_avg_price, 0);
     }
-
-    // ================================================================
-    // estimate_unrealized_profit / estimate_pnl
-    // ================================================================
 
     #[test]
     fn estimate_unrealized_profit_long_gains_when_mark_above_cost() {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         r.direction = PositionDirection::Long;
         r.open_volume = 10;
-        r.open_price_sum = 1000; // avg cost 100
-        assert_eq!(r.estimate_unrealized_profit(120), 200); // (1200-1000)*+1
+        r.open_price_sum = 1000;
+        assert_eq!(r.estimate_unrealized_profit(120), 200);
     }
 
     #[test]
@@ -1036,8 +921,8 @@ mod tests {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         r.direction = PositionDirection::Short;
         r.open_volume = 10;
-        r.open_price_sum = 1000; // avg cost 100
-        assert_eq!(r.estimate_unrealized_profit(80), 200); // (800-1000)*-1
+        r.open_price_sum = 1000;
+        assert_eq!(r.estimate_unrealized_profit(80), 200);
     }
 
     #[test]
@@ -1047,12 +932,8 @@ mod tests {
         r.open_volume = 10;
         r.open_price_sum = 1000;
         r.profit = 50;
-        assert_eq!(r.estimate_pnl(120), 250); // 50 + 200
+        assert_eq!(r.estimate_pnl(120), 250);
     }
-
-    // ================================================================
-    // calculate_maintenance_margin
-    // ================================================================
 
     #[test]
     fn calculate_maintenance_margin_zero_when_flat() {
@@ -1065,18 +946,12 @@ mod tests {
     fn calculate_maintenance_margin_ignores_pending_uses_open_volume_at_mark() {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         r.open_volume = 10;
-        r.pending_buy_size = 999; // 挂单必须被忽略
-        // 未配置分档表：spec.calculate_maintenance_margin 按 100% 兜底返回 notional
+        r.pending_buy_size = 999;
         let spec = CoreSymbolSpecification::default();
         assert_eq!(r.calculate_maintenance_margin(&spec, 100), 1000);
     }
 
-    // ================================================================
-    // calculate_required_margin_for_futures
-    // ================================================================
-
     fn fee_spec(taker_fee: i64) -> CoreSymbolSpecification {
-        // fee_scale_k=0 -> 固定费模式：fee = size * taker_fee（避免测试里再算比例费率）
         CoreSymbolSpecification { taker_fee, fee_scale_k: 0, ..Default::default() }
     }
 
@@ -1092,15 +967,12 @@ mod tests {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         r.direction = PositionDirection::Long;
         r.open_volume = 10;
-        r.open_price_sum = 1000; // openNotional=+1000
+        r.open_price_sum = 1000;
         r.open_init_margin_sum = 100;
         r.pending_buy_size = 5;
-        r.pending_buy_avg_price = 100; // bidNotional=500
+        r.pending_buy_avg_price = 100;
 
-        let spec = fee_spec(2); // bidFee=5*2=10, askFee=0
-        // worstCase=max(|1000+500|=1500, |1000-0|=1000)=1500; newExposure=500
-        // initMargin(500, lev=1, 未配置)=500/1=500
-        // total = 100 + 500 + max(10,0) = 610
+        let spec = fee_spec(2);
         assert_eq!(r.calculate_required_margin_for_futures(&spec), 610);
     }
 
@@ -1111,18 +983,12 @@ mod tests {
         r.open_volume = 10;
         r.open_price_sum = 1000;
         r.open_init_margin_sum = 100;
-        r.pending_sell_size = 5; // 全在 openVolume 范围内，纯减仓
-        r.pending_sell_avg_price = 100; // askNotional=500
+        r.pending_sell_size = 5;
+        r.pending_sell_avg_price = 100;
 
-        let spec = fee_spec(2); // askFee=5*2=10
-        // worstCase=max(|1000|=1000, |1000-500|=500)=1000; newExposure=max(0,1000-1000)=0
-        // total = 100 + 0 + max(0,10) = 110
+        let spec = fee_spec(2);
         assert_eq!(r.calculate_required_margin_for_futures(&spec), 110);
     }
-
-    // ================================================================
-    // calculate_required_margin_for_order（-1 哨兵）
-    // ================================================================
 
     #[test]
     fn required_margin_for_order_pure_reduce_returns_sentinel_minus_one() {
@@ -1133,8 +999,6 @@ mod tests {
         r.open_init_margin_sum = 100;
 
         let spec = CoreSymbolSpecification::default();
-        // action=Ask, orderNotional=300：newAsk=300 -> worstCase=max(1000,700)=1000, newExposure=0
-        // currentExposure 也是 0 -> newTotal(100) <= currentTotal(100) -> -1
         assert_eq!(r.calculate_required_margin_for_order(&spec, OrderAction::Ask, 300), -1);
     }
 
@@ -1147,14 +1011,8 @@ mod tests {
         r.open_init_margin_sum = 100;
 
         let spec = CoreSymbolSpecification::default();
-        // action=Bid, orderNotional=500: newBid=500 -> worstCase=max(1500,1000)=1500, newExposure=500
-        // newTotal = 100 + 500/1 = 600 > currentTotal(100) -> 600
         assert_eq!(r.calculate_required_margin_for_order(&spec, OrderAction::Bid, 500), 600);
     }
-
-    // ================================================================
-    // estimate_notional_for_order / calculate_pending_fee_for_order[_budget]
-    // ================================================================
 
     #[test]
     fn estimate_notional_for_order_uses_max_pending_side_plus_open() {
@@ -1162,7 +1020,6 @@ mod tests {
         r.open_volume = 10;
         r.pending_buy_size = 5;
         r.pending_sell_size = 2;
-        // action=Bid size=3: newPendingBuy=8, newPendingSell=2, estimatedSize=10+8=18, *50=900
         assert_eq!(r.estimate_notional_for_order(OrderAction::Bid, 3, 50), 900);
     }
 
@@ -1173,9 +1030,6 @@ mod tests {
         r.pending_sell_avg_price = 200;
 
         let spec = fee_spec(10);
-        // newPendingBuy: size=5, avg=ceil((0+500)/5)=100 -> fee=5*10=50
-        // pendingSell 不变: size=3,avg=200 -> fee=3*10=30
-        // max=50
         assert_eq!(r.calculate_pending_fee_for_order(&spec, OrderAction::Bid, 5, 100), 50);
     }
 
@@ -1183,30 +1037,20 @@ mod tests {
     fn calculate_pending_fee_for_order_budget_uses_notional_directly() {
         let r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         let spec = fee_spec(10);
-        // action=Ask size=4 budget=1000: newPendingSellAvg=ceil(1000/4)=250 -> fee=4*10=40
-        // pendingBuy 仍 0 -> fee=0
         assert_eq!(r.calculate_pending_fee_for_order_budget(&spec, OrderAction::Ask, 4, 1000), 40);
     }
 
-    // ================================================================
-    // open_position_margin
-    // ================================================================
-
     #[test]
     fn open_position_margin_margin_off_mark_cost_off_trade() {
-        let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 2); // leverage=2
-        let spec = CoreSymbolSpecification::default(); // 未配置 -> initMargin = notional/leverage
+        let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 2);
+        let spec = CoreSymbolSpecification::default();
 
         r.open_position_margin(OrderAction::Bid, 10, 100, &spec, 120);
         assert_eq!(r.open_volume, 10);
-        assert_eq!(r.open_init_margin_sum, 600); // (120*10)/2
-        assert_eq!(r.open_price_sum, 1000); // 100*10（按成交价，非标记价）
+        assert_eq!(r.open_init_margin_sum, 600);
+        assert_eq!(r.open_price_sum, 1000);
         assert_eq!(r.direction, PositionDirection::Long);
     }
-
-    // ================================================================
-    // close_current_position_futures（三分支）
-    // ================================================================
 
     #[test]
     fn close_current_position_no_open_position_returns_full_trade_size_untouched() {
@@ -1225,10 +1069,8 @@ mod tests {
         r.open_price_sum = 500;
         r.open_init_margin_sum = 50;
 
-        // action=Bid 与 direction=Long 同向 -> 无可平，整笔用于开仓
         let size_to_open = r.close_current_position_futures(OrderAction::Bid, 3, 999);
         assert_eq!(size_to_open, 3);
-        // 仓位状态不变
         assert_eq!(r.open_volume, 5);
         assert_eq!(r.open_price_sum, 500);
         assert_eq!(r.open_init_margin_sum, 50);
@@ -1243,15 +1085,11 @@ mod tests {
         r.open_price_sum = 1000;
         r.open_init_margin_sum = 300;
 
-        // action=Ask（反向）trade_size=4 < open_volume=10 -> 部分平
         let size_to_open = r.close_current_position_futures(OrderAction::Ask, 4, 120);
         assert_eq!(size_to_open, 0);
         assert_eq!(r.open_volume, 6);
-        // marginRelease = truncMulDiv(300,4,10) = 120 -> 剩 180
         assert_eq!(r.open_init_margin_sum, 180);
-        // openPriceSum -= tradeSize*tradePrice = 1000 - 480 = 520（按成交价扣，非均价）
         assert_eq!(r.open_price_sum, 520);
-        // 不实现盈亏
         assert_eq!(r.profit, 0);
         assert_eq!(r.direction, PositionDirection::Long);
     }
@@ -1265,13 +1103,11 @@ mod tests {
         r.open_init_margin_sum = 180;
         r.profit = 0;
 
-        // trade_size == open_volume（边界）-> 全平分支
         let size_to_open = r.close_current_position_futures(OrderAction::Ask, 6, 150);
         assert_eq!(size_to_open, 0);
         assert_eq!(r.open_volume, 0);
         assert_eq!(r.open_init_margin_sum, 0);
         assert_eq!(r.open_price_sum, 0);
-        // pnl = (6*150 - 520) * +1 = 380
         assert_eq!(r.profit, 380);
     }
 
@@ -1280,24 +1116,20 @@ mod tests {
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         r.direction = PositionDirection::Short;
         r.open_volume = 5;
-        r.open_price_sum = 500; // avg 100
+        r.open_price_sum = 500;
         r.open_init_margin_sum = 50;
         r.profit = 0;
 
-        // action=Bid（反向于 Short）trade_size=8 > open_volume=5 -> 翻仓
         let size_to_open = r.close_current_position_futures(OrderAction::Bid, 8, 80);
-        assert_eq!(size_to_open, 3); // 8-5 反手开新仓余量
+        assert_eq!(size_to_open, 3);
         assert_eq!(r.open_volume, 0);
         assert_eq!(r.open_init_margin_sum, 0);
         assert_eq!(r.open_price_sum, 0);
-        // pnl = (5*80 - 500) * -1(Short) = (400-500)*-1 = 100
         assert_eq!(r.profit, 100);
     }
 
     #[test]
     fn close_then_open_round_trip_flip_matches_manual_open() {
-        // R2 恒 close-then-open：验证 close 返回的 sizeToOpen 喂给 open_position_margin 后
-        // 状态与"先全平再单独开仓"一致（无独立 flip 方法，靠两原语组合）。
         let mut r = SymbolPositionRecord::new(1, 1, 1, MarginMode::Isolated, 1);
         r.direction = PositionDirection::Short;
         r.open_volume = 5;
@@ -1311,21 +1143,15 @@ mod tests {
 
         assert_eq!(r.open_volume, 3);
         assert_eq!(r.direction, PositionDirection::Long);
-        assert_eq!(r.open_price_sum, 240); // 80*3
-        assert_eq!(r.open_init_margin_sum, 240); // mark=80: (80*3)/leverage(1)
-        assert_eq!(r.profit, 100); // 翻仓平腿已实现盈亏
+        assert_eq!(r.open_price_sum, 240);
+        assert_eq!(r.open_init_margin_sum, 240);
+        assert_eq!(r.profit, 100);
     }
 
-    // ================================================================
-    // Java 单测对拍：tests/unit/SymbolPositionRecordTest.java（黄金值逐条钉死）
-    // 目的：交叉验证 Rust 翻译。若某值与 Java 不同 = 候选翻译 bug，
-    // 保留 Java 期望值、标 #[ignore] 并上报，绝不改期望迁就 Rust。
-    // ================================================================
     mod java_parity {
         use super::*;
         use std::collections::BTreeMap;
 
-        /// setUp spec：FUTURES_PERP initMargin10 initMarginScaleK100 mm={1000:8} mmScaleK100。
         fn liq_spec() -> CoreSymbolSpecification {
             CoreSymbolSpecification {
                 init_margin: 10,
@@ -1336,7 +1162,6 @@ mod tests {
             }
         }
 
-        /// Java createPosition(marginMode, direction, volume)：symbol=1001, leverage=1。
         fn pos(margin_mode: MarginMode, direction: PositionDirection, open_volume: i64) -> SymbolPositionRecord {
             let mut p = SymbolPositionRecord::new(1, 1001, 2, margin_mode, 1);
             p.direction = direction;
@@ -1344,11 +1169,8 @@ mod tests {
             p
         }
 
-        // --- pendingHoldBudget（E2: futures BUDGET 单）---
-
         #[test]
         fn pending_hold_budget_empty_state_avg_price_eq_budget_over_size() {
-            // Java: pendingHoldBudget_emptyState_avgPriceEqualsBudgetOverSize
             let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
             p.pending_hold_budget(OrderAction::Bid, 10, 1000);
             assert_eq!(p.pending_buy_size, 10);
@@ -1358,19 +1180,17 @@ mod tests {
 
         #[test]
         fn pending_hold_budget_over_existing_limit_maintains_total_notional() {
-            // Java: pendingHoldBudget_overExistingLimit_maintainsTotalNotional
             let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
             p.pending_hold(OrderAction::Bid, 100, 10);
             assert_eq!(p.pending_buy_size * p.pending_buy_avg_price, 1000, "limit notional baseline");
             p.pending_hold_budget(OrderAction::Bid, 50, 600);
             assert_eq!(p.pending_buy_size, 150);
-            assert_eq!(p.pending_buy_avg_price, 11); // ceil(1600/150)=11
+            assert_eq!(p.pending_buy_avg_price, 11);
             assert_eq!(p.pending_buy_size * p.pending_buy_avg_price, 1650);
         }
 
         #[test]
         fn pending_hold_budget_ask_side_independent_from_bid() {
-            // Java: pendingHoldBudget_askSide_independentFromBid
             let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
             p.pending_hold_budget(OrderAction::Ask, 20, 400);
             assert_eq!(p.pending_sell_size, 20);
@@ -1381,7 +1201,6 @@ mod tests {
 
         #[test]
         fn pending_hold_budget_zero_size_noop() {
-            // Java: pendingHoldBudget_zeroSize_noop
             let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
             p.pending_hold_budget(OrderAction::Bid, 0, 100);
             assert_eq!(p.pending_buy_size, 0);
@@ -1390,7 +1209,6 @@ mod tests {
 
         #[test]
         fn pending_hold_budget_then_release_clears_state() {
-            // Java: pendingHoldBudget_thenRelease_clearsState
             let mut p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
             p.pending_hold_budget(OrderAction::Bid, 10, 1000);
             let released = p.pending_release(OrderAction::Bid, 10);
@@ -1399,12 +1217,8 @@ mod tests {
             assert_eq!(p.pending_buy_avg_price, 0);
         }
 
-        // --- estimateLiquidationPrice（迭代法精确解）---
-        // 全部 markPrice=50000, vol=10, openPriceSum=500000 → notional=500000, mm=calc_mm(500000)=40000。
-
         #[test]
         fn estimate_liq_price_no_position_returns_zero() {
-            // Java: shouldReturnZeroWhenNoPosition
             let spec = liq_spec();
             let p = pos(MarginMode::Isolated, PositionDirection::Empty, 0);
             assert_eq!(p.estimate_liquidation_price(&spec, 50000, 0, 0, 0), 0);
@@ -1412,7 +1226,6 @@ mod tests {
 
         #[test]
         fn estimate_liq_price_cross_long_normal() {
-            // Java: testNormalCase → 48369
             let spec = liq_spec();
             let mut p = pos(MarginMode::Cross, PositionDirection::Long, 10);
             p.open_price_sum = 500000;
@@ -1422,7 +1235,6 @@ mod tests {
 
         #[test]
         fn estimate_liq_price_cross_short() {
-            // Java: testShortCase → 55555
             let spec = liq_spec();
             let mut p = pos(MarginMode::Cross, PositionDirection::Short, 10);
             p.open_price_sum = 500000;
@@ -1433,7 +1245,6 @@ mod tests {
 
         #[test]
         fn estimate_liq_price_isolated_short() {
-            // Java: testShortCase2 → 50926（迭代法精确解，旧近似给 51000）
             let spec = liq_spec();
             let mut p = pos(MarginMode::Isolated, PositionDirection::Short, 10);
             p.open_price_sum = 500000;
@@ -1444,7 +1255,6 @@ mod tests {
 
         #[test]
         fn estimate_liq_price_cross_long_profit() {
-            // Java: testNormalCase2 → 47282
             let spec = liq_spec();
             let mut p = pos(MarginMode::Cross, PositionDirection::Long, 10);
             p.open_price_sum = 500000;
@@ -1454,7 +1264,6 @@ mod tests {
 
         #[test]
         fn estimate_liq_price_cross_long_no_liq() {
-            // Java: testNormalCase3 → -1（pnl = estimateUnrealizedProfit(mark) = 0）
             let spec = liq_spec();
             let mut p = pos(MarginMode::Cross, PositionDirection::Long, 10);
             p.open_price_sum = 500000;
@@ -1465,7 +1274,6 @@ mod tests {
 
         #[test]
         fn estimate_liq_price_isolated_long() {
-            // Java: testIsolatedNormalCase → 48913（迭代法精确解，旧近似给 49000）
             let spec = liq_spec();
             let mut p = pos(MarginMode::Isolated, PositionDirection::Long, 10);
             p.open_price_sum = 500000;
@@ -1473,9 +1281,6 @@ mod tests {
             let mm = spec.calculate_maintenance_margin(10 * 50000);
             assert_eq!(p.estimate_liquidation_price(&spec, 50000, 60000, 0, mm), 48913);
         }
-
-        // --- calculateBankruptcyPrice BP fee 集成回归（takerFee+liquidationFee 合并 + SHORT 分母 sign）---
-        // ISOLATED, openPriceSum=1000, openInitMarginSum=100, openVolume=10, margin_base_fn=|_|0。
 
         fn fixed_fee_spec(taker_fee: i64, liquidation_fee: i64) -> CoreSymbolSpecification {
             CoreSymbolSpecification { taker_fee, liquidation_fee, fee_scale_k: 0, ..Default::default() }
@@ -1492,25 +1297,21 @@ mod tests {
 
         #[test]
         fn bp_isolated_long_fixed_fee_with_liquidation_fee() {
-            // Java: bp_isolated_long_fixedFee_withLiquidationFee → 96
             assert_eq!(bp_pos(PositionDirection::Long).calculate_bankruptcy_price(&fixed_fee_spec(1, 5), |_| 0), 96);
         }
 
         #[test]
         fn bp_isolated_short_fixed_fee_with_liquidation_fee() {
-            // Java: bp_isolated_short_fixedFee_withLiquidationFee → 104
             assert_eq!(bp_pos(PositionDirection::Short).calculate_bankruptcy_price(&fixed_fee_spec(1, 5), |_| 0), 104);
         }
 
         #[test]
         fn bp_isolated_long_dynamic_fee_with_liquidation_fee() {
-            // Java: bp_isolated_long_dynamicFee_withLiquidationFee → 95
             assert_eq!(bp_pos(PositionDirection::Long).calculate_bankruptcy_price(&dynamic_fee_spec(20, 30, 1000), |_| 0), 95);
         }
 
         #[test]
         fn bp_isolated_short_dynamic_fee_with_liquidation_fee() {
-            // Java: bp_isolated_short_dynamicFee_withLiquidationFee → 105（SHORT 分母 sign 修复锁定）
             assert_eq!(bp_pos(PositionDirection::Short).calculate_bankruptcy_price(&dynamic_fee_spec(20, 30, 1000), |_| 0), 105);
         }
     }

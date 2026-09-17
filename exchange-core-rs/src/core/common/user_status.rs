@@ -1,4 +1,3 @@
-/// 对应 Java `exchange.core2.core.common.UserStatus`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserStatus {
     Active,
@@ -13,7 +12,6 @@ impl UserStatus {
         }
     }
 
-    /// code() 反向映射(快照反序列化)。
     pub fn of_code(code: i8) -> Self {
         match code {
             0 => UserStatus::Active,

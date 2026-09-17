@@ -1,16 +1,12 @@
-//! 对应 Java `exchange.core2.core.IFundEventsHandler`（资金事件回调 + 三段快照）。
-//! 移植取向：去对象池；快照按值构造。
 use crate::core::common::fund_event::{FundEvent, FundEventType};
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::utils::core_arithmetic_utils::calculate_amount_bid;
 
-/// 对应 Java `IFundEventsHandler`：资金事件回报回调。
 pub trait FundEventsHandler {
     fn fund_event_report(&mut self, report: FundEventReport);
 }
 
-/// 对应 Java `IFundEventsHandler.FundEventReport`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FundEventReport {
     pub uni_id: i64,
@@ -22,7 +18,6 @@ pub struct FundEventReport {
 }
 
 impl FundEventReport {
-    /// 对应 Java `FundEventReport.fromFundEvent`。
     pub fn from_fund_event(fund_event: &FundEvent, uni_id: i64) -> Self {
         FundEventReport {
             uni_id,
@@ -35,7 +30,6 @@ impl FundEventReport {
     }
 }
 
-/// 对应 Java `FundEventReport.BalanceSnapshot`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BalanceSnapshot {
     pub currency: i32,
@@ -50,7 +44,6 @@ impl BalanceSnapshot {
     }
 }
 
-/// 对应 Java `FundEventReport.PositionSnapshot`；`bids_*`/`asks_*` 源自 `FundEvent.pending*`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionSnapshot {
     pub symbol_id: i32,
@@ -102,7 +95,6 @@ impl PositionSnapshot {
     }
 }
 
-/// 对应 Java `FundEventReport.LoanSnapshot`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoanSnapshot {
     pub mode: i8,

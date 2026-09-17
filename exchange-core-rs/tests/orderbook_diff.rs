@@ -1,8 +1,3 @@
-//! `OrderBookDirectImpl` ↔ `OrderBookNaiveImpl` 差分对拍（proptest + 定向场景）：Direct 镜像 Naive，须逐位一致。
-//! 两簿均用 `new()`（`symbol_spec=None`），现货 BID 移价风控守卫惰性，不构成分歧源。裸 FOK 也纳入差分范围（两簿统一补齐 all-or-nothing 语义）。
-//!
-//! 数值边界 `price ∈ [1, 100_000]`、`size ∈ [1, 1_000]`、BUDGET `cmd.price ∈ [1, 20_000_000]` 均远低于 `i64::MAX/4`，避免触碰溢出饱和路径（Direct 饱和/Naive wrap，故意不等价）。
-
 use std::panic;
 
 use proptest::prelude::*;
@@ -17,12 +12,6 @@ use exchange_core_rs::core::orderbook::i_order_book::IOrderBook;
 use exchange_core_rs::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
 use exchange_core_rs::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
-// ============================================================================================
-// 命令生成器
-// ============================================================================================
-
-/// 随机命令：`Place` 覆盖 GTC/IOC/FOK/FOK_BUDGET/IOC_BUDGET；`Cancel`/`Reduce`/`Move` 的
-/// `target_idx` 按取模选取此前签发过的 GTC 订单（同 `e2e_tests.rs`）。
 #[derive(Debug, Clone, Copy)]
 enum GenCmd {
     Place { uid_idx: usize, is_bid: bool, order_type: OrderType, price: i64, size: i64, reserve_extra: i64 },
@@ -31,7 +20,6 @@ enum GenCmd {
     Move { target_idx: usize, new_price: i64 },
 }
 
-/// GTC/IOC：`price` 为逐单单价；`reserve_extra` 使 BID 非预算单 `reserve_bid_price = price + reserve_extra`，满足 §2 的 `reserve_bid_price >= price`。
 fn gen_place_unit_priced(n_users: usize, order_type: OrderType) -> impl Strategy<Value = GenCmd> {
     (0..n_users, any::<bool>(), 1i64..=100_000i64, 1i64..=1_000i64, 0i64..=1_000i64).prop_map(
         move |(uid_idx, is_bid, price, size, reserve_extra)| GenCmd::Place {
@@ -45,7 +33,6 @@ fn gen_place_unit_priced(n_users: usize, order_type: OrderType) -> impl Strategy
     )
 }
 
-/// FOK_BUDGET / IOC_BUDGET：`price` 字段编码预算总额；BID 预算单 `reserve_bid_price == price`，ASK 恒 `reserve_bid_price = 0`（见 `step_place`）。
 fn gen_place_budget(n_users: usize, order_type: OrderType) -> impl Strategy<Value = GenCmd> {
     (0..n_users, any::<bool>(), 1i64..=20_000_000i64, 1i64..=1_000i64).prop_map(
         move |(uid_idx, is_bid, budget, size)| GenCmd::Place {
@@ -84,11 +71,6 @@ fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenCmd>)> {
     })
 }
 
-// ============================================================================================
-// 差分断言 helper
-// ============================================================================================
-
-/// 逐节点逐字段走两条 `MatcherTradeEvent` 单链表，第一处分歧返回描述（含链长不一致），便于 proptest 收缩后定位"第几个事件、哪个字段"。
 fn matcher_events_diff(
     a: &Option<Box<MatcherTradeEvent>>,
     b: &Option<Box<MatcherTradeEvent>>,
@@ -180,16 +162,10 @@ fn matcher_events_diff(
     }
 }
 
-// ============================================================================================
-// 差分执行 harness：两簿并行喂同一条命令流，每步后比对全部可观测面。
-// ============================================================================================
-
-/// 两簿 + 共享的 GTC 已签发订单登记表（供 Cancel/Reduce/Move 选取目标）；两簿均不带交易对 spec（见模块头）。
 struct DiffHarness {
     naive: OrderBookNaiveImpl,
     direct: OrderBookDirectImpl,
     uids: Vec<i64>,
-    /// (order_id, uid)，仅 GTC Place 返回 `Success` 时登记；命中已消失（成交/撤销）的旧 id 时两簿同返回 `MatchingUnknownOrderId`，视为合式覆盖。
     issued: Vec<(i64, i64)>,
     next_order_id: i64,
 }
@@ -205,7 +181,6 @@ impl DiffHarness {
         }
     }
 
-    /// 应用一条命令到两簿，比对 `result_code`/`matcher_event`/`cmd.action` 与 `fill_l2`/`state_hash`，并跑 `direct.validate_internal_state()`；任何分歧返回 `Err(描述)`。
     fn step(&mut self, step_idx: usize, gen: &GenCmd) -> Result<(), String> {
         match *gen {
             GenCmd::Place { uid_idx, is_bid, order_type, price, size, reserve_extra } => {
@@ -233,7 +208,6 @@ impl DiffHarness {
     ) -> Result<(), String> {
         let uid = self.uids[uid_idx % self.uids.len()];
         let action = if is_bid { OrderAction::Bid } else { OrderAction::Ask };
-        // reserve_bid_price 约定（见生成器文档）：BID 预算单 == 预算本身，BID 非预算单 >= price，ASK 恒 0。
         let reserve_bid_price = match (is_bid, order_type) {
             (true, OrderType::FokBudget) | (true, OrderType::IocBudget) => price,
             (true, _) => price + reserve_extra,
@@ -343,7 +317,6 @@ impl DiffHarness {
         Ok(())
     }
 
-    /// 每步之后比对 `fill_l2`/`state_hash` 逐位相等，并跑 `direct.validate_internal_state()`（`catch_unwind` 转 `Result`，校验 §7 的 10 条不变式）；Naive 无等价方法，不比对。
     fn check_invariants(&self, step_idx: usize) -> Result<(), String> {
         let l2_n = self.naive.fill_l2(-1);
         let l2_d = self.direct.fill_l2(-1);
@@ -373,15 +346,9 @@ impl DiffHarness {
     }
 }
 
-// ============================================================================================
-// proptest：随机命令流差分对拍
-// ============================================================================================
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// 核心：随机命令流逐步喂两簿，`result_code`/`matcher_event`/`fill_l2`/`state_hash` 须逐位相等，
-    /// 且 Direct 的 `validate_internal_state` 全程成立；任何分歧都是真实的 Direct 移植 bug（Naive 是 source of truth）。
     #[test]
     fn direct_matches_naive_for_random_command_stream((n_users, cmds) in scenario_strategy()) {
         let uids: Vec<i64> = (1..=n_users as i64).collect();
@@ -393,10 +360,6 @@ proptest! {
         }
     }
 }
-
-// ============================================================================================
-// 定向场景测试（非 proptest，作为快速回归锚点）
-// ============================================================================================
 
 #[cfg(test)]
 mod scenario_tests {
@@ -422,113 +385,88 @@ mod scenario_tests {
         GenCmd::Place { uid_idx, is_bid, order_type, price, size, reserve_extra }
     }
 
-    /// 多桶扫单：多价位挂 ASK，一笔大 BID GTC 依次扫过若干桶（含吃穿、部分吃穿留簿），覆盖跨桶循环、`insertOrder` 情形 A/B、桶释放（§4.1(i)）与挂簿路径。
     #[test]
     fn multi_bucket_sweep_matches_naive() {
         let uids = vec![1, 2, 3, 4];
         let cmds = vec![
-            // 卖方在 100/101/101/102/105 五档挂单（101 两笔同价 FIFO，验证桶内序）。
             place(0, false, OrderType::Gtc, 100, 10, 0),
             place(1, false, OrderType::Gtc, 101, 5, 0),
             place(1, false, OrderType::Gtc, 101, 7, 0),
             place(2, false, OrderType::Gtc, 102, 20, 0),
             place(2, false, OrderType::Gtc, 105, 1, 0),
-            // 买方一笔大单扫过 100/101(x2)/102，留一部分在 105 之前（105 桶不吃，留簿新单）。
             place(3, true, OrderType::Gtc, 104, 41, 5),
-            // 再补一笔挂在更差价位，确认挂单/桶结构仍然一致。
             place(0, true, OrderType::Gtc, 90, 3, 0),
         ];
         run_scenario(uids, &cmds);
     }
 
-    /// cancel + move：撤中间一笔 BID，另一笔移到能撮合对手 ASK 的新价（move 作为 taker 重新撮合路径）。
     #[test]
     fn cancel_and_move_matches_naive() {
         let uids = vec![1, 2, 3];
         let cmds = vec![
-            place(0, true, OrderType::Gtc, 50, 10, 0),  // idx0 -> issued[0]
-            place(1, true, OrderType::Gtc, 51, 8, 0),   // idx1 -> issued[1]
-            place(2, true, OrderType::Gtc, 49, 6, 0),   // idx2 -> issued[2]
-            GenCmd::Cancel { target_idx: 1 },           // 撤 issued[1]（51@8）
-            place(1, false, OrderType::Gtc, 60, 4, 0),  // 挂一笔 ASK@60，供 move 撮合
-            GenCmd::Move { target_idx: 0, new_price: 60 }, // 把 issued[0]（50@10）移到 60，吃掉 ASK@60(4)，剩 6 挂 60
-            GenCmd::Move { target_idx: 2, new_price: 55 }, // 再把 issued[2]（49@6）移到 55（无对手，纯挂新价）
+            place(0, true, OrderType::Gtc, 50, 10, 0),
+            place(1, true, OrderType::Gtc, 51, 8, 0),
+            place(2, true, OrderType::Gtc, 49, 6, 0),
+            GenCmd::Cancel { target_idx: 1 },
+            place(1, false, OrderType::Gtc, 60, 4, 0),
+            GenCmd::Move { target_idx: 0, new_price: 60 },
+            GenCmd::Move { target_idx: 2, new_price: 55 },
         ];
         run_scenario(uids, &cmds);
     }
 
-    /// move 到能立即成交的新价：验证 move 后作为 taker 撮合，部分成交重挂新价/全部成交不重挂两条分支。
-    /// `issued` 下标：ASK 是 `issued[0]`、BID 是 `issued[1]`，`target_idx` 须用 `1` 才能让 BID 移到与 ASK 交叉。
     #[test]
     fn move_into_crossing_price_matches_naive() {
         let uids = vec![1, 2];
         let cmds = vec![
-            place(0, false, OrderType::Gtc, 200, 5, 0), // ASK@200 size5 -> issued[0]
-            place(1, true, OrderType::Gtc, 100, 10, 0), // BID@100 size10 -> issued[1]
-            // 把 BID 移到 200：正好吃满对手 5，剩 5 挂在新价 200。
+            place(0, false, OrderType::Gtc, 200, 5, 0),
+            place(1, true, OrderType::Gtc, 100, 10, 0),
             GenCmd::Move { target_idx: 1, new_price: 200 },
-            // 挂一笔 ASK@200 size3：此刻 best_bid 就在 200，GTC 下单即刻撮合（不经 move），
-            // BID 剩余 5-3=2 留在簿上。
             place(0, false, OrderType::Gtc, 200, 3, 0),
-            // 再把 BID 移到 300：无对手，纯挂新价，剩余量不变（2）。
             GenCmd::Move { target_idx: 1, new_price: 300 },
         ];
         run_scenario(uids, &cmds);
     }
 
-    /// IOC：流动性不足部分成交 + 完全无流动性整单 reject 两条路径。
     #[test]
     fn ioc_matches_naive() {
         let uids = vec![1, 2];
         let cmds = vec![
             place(0, false, OrderType::Gtc, 100, 4, 0),
-            place(1, true, OrderType::Ioc, 100, 10, 0), // 只能吃 4，剩 6 reject
-            place(1, true, OrderType::Ioc, 100, 5, 0),  // 此刻对手侧已空 -> 整单 reject
+            place(1, true, OrderType::Ioc, 100, 10, 0),
+            place(1, true, OrderType::Ioc, 100, 5, 0),
         ];
         run_scenario(uids, &cmds);
     }
 
-    /// FOK_BUDGET：满足/不满足两条路径，含小预算恰好覆盖高价 ASK（Direct 镜像 Naive、不设每单价上限）与预算不足整单 reject 的对照。
     #[test]
     fn fok_budget_matches_naive_including_ruling_p2_1_case() {
         let uids = vec![1, 2];
         let cmds = vec![
-            place(0, false, OrderType::Gtc, 480, 1, 0), // 唯一一档 ASK@480 size1
-            // 预算 500 >= 480*1，应整单成交。
+            place(0, false, OrderType::Gtc, 480, 1, 0),
             place(1, true, OrderType::FokBudget, 500, 1, 0),
-            // 重新铺一档更贵的 ASK，验证预算不足的 reject 路径。
             place(0, false, OrderType::Gtc, 1_000, 2, 0),
-            place(1, true, OrderType::FokBudget, 100, 2, 0), // 100 远不够 2*1000 -> reject
-            // ASK 方向 FOK_BUDGET 也走一遍（对手是 BID）。
+            place(1, true, OrderType::FokBudget, 100, 2, 0),
             place(0, true, OrderType::Gtc, 300, 5, 0),
-            place(1, false, OrderType::FokBudget, 1_400, 5, 0), // 5*300=1500 > 1400 收入门槛不满足(ASK 要求 calc>=limit)
-            place(1, false, OrderType::FokBudget, 1_000, 5, 0), // 1500>=1000 满足 -> 整单成交
+            place(1, false, OrderType::FokBudget, 1_400, 5, 0),
+            place(1, false, OrderType::FokBudget, 1_000, 5, 0),
         ];
         run_scenario(uids, &cmds);
     }
 
-    /// 裸 FOK：探测限价内可撮合总量，够则整单成交、否则整单 reject 不改簿。Direct 补齐后须镜像 Naive。
-    /// 覆盖：空簿 reject、限价内正好够→全成、差一手→reject（不改簿）、跨价位限价边界（限价外流动性不计入）、ASK 方向。
     #[test]
     fn fok_matches_naive() {
         let uids = vec![1, 2, 3];
         let cmds = vec![
-            // 1) 空簿：BID FOK 无对手 -> 整单 reject，不改簿。
             place(0, true, OrderType::Fok, 100, 5, 0),
-            // 2) 限价内正好够（100:3 + 101:2 = 5）：BID FOK@101 size5 -> 整单成交，扫空两档。
             place(1, false, OrderType::Gtc, 100, 3, 0),
             place(1, false, OrderType::Gtc, 101, 2, 0),
             place(0, true, OrderType::Fok, 101, 5, 0),
-            // 3) 差一手：ASK@100 只剩 4，BID FOK@100 size5 -> 整单 reject，ASK@100(4) 留簿不动。
             place(1, false, OrderType::Gtc, 100, 4, 0),
             place(0, true, OrderType::Fok, 100, 5, 0),
-            // 4) 跨价位限价边界：再挂 ASK@200 size5（簿内 ASK@100:4 + ASK@200:5）。
             place(1, false, OrderType::Gtc, 200, 5, 0),
-            //    BID FOK@100 size5：限价内只有 100 档 4 手（200 档在限价外不计入）-> reject，不改簿。
             place(0, true, OrderType::Fok, 100, 5, 0),
-            //    BID FOK@200 size9：限价内 100(4)+200(5)=9 -> 整单成交，扫空两档。
             place(0, true, OrderType::Fok, 200, 9, 0),
-            // 5) ASK 方向：挂 BID@50 size10，ASK FOK@50 size6 -> 全成（BID 剩 4）；再 size10 -> 差量 reject。
             place(1, true, OrderType::Gtc, 50, 10, 0),
             place(0, false, OrderType::Fok, 50, 6, 0),
             place(0, false, OrderType::Fok, 50, 10, 0),
@@ -536,32 +474,27 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
-    /// IOC_BUDGET：仅 BID 有意义；覆盖预算跨价位不延续的批次边界（见 `match_against_budget_ioc`），以及 ASK 整单 reject、预算不够买 1 单位的 reject。
     #[test]
     fn ioc_budget_matches_naive_across_bucket_boundary() {
         let uids = vec![1, 2];
         let cmds = vec![
-            place(0, false, OrderType::Gtc, 10, 3, 0),  // ASK@10 size3
-            place(0, false, OrderType::Gtc, 20, 100, 0), // ASK@20 size100（充足流动性但更贵）
-            // 预算 50：第一档 3*10=30，剩预算 20，第二档 20/20=1，命中"批次归零重新计算"路径（不跨桶延续）。
+            place(0, false, OrderType::Gtc, 10, 3, 0),
+            place(0, false, OrderType::Gtc, 20, 100, 0),
             place(1, true, OrderType::IocBudget, 50, 100, 0),
-            // ASK 方向：整单 reject。
             place(1, false, OrderType::IocBudget, 50, 10, 0),
-            // 预算太小买不起 1 单位（最低价 20，预算 5）。
             place(1, true, OrderType::IocBudget, 5, 10, 0),
         ];
         run_scenario(uids, &cmds);
     }
 
-    /// reduce：部分减量留簿 + 减量超过剩余量退化为整单撤销，两条路径都对拍。
     #[test]
     fn reduce_matches_naive() {
         let uids = vec![1, 2];
         let cmds = vec![
-            place(0, true, OrderType::Gtc, 70, 10, 0), // issued[0]
-            GenCmd::Reduce { target_idx: 0, reduce_size: 4 }, // 部分减量，留簿 6
-            GenCmd::Reduce { target_idx: 0, reduce_size: 100 }, // 超过剩余 -> 整单撤销
-            GenCmd::Reduce { target_idx: 0, reduce_size: 1 }, // 此刻已不存在 -> 两簿同返回 UnknownOrderId
+            place(0, true, OrderType::Gtc, 70, 10, 0),
+            GenCmd::Reduce { target_idx: 0, reduce_size: 4 },
+            GenCmd::Reduce { target_idx: 0, reduce_size: 100 },
+            GenCmd::Reduce { target_idx: 0, reduce_size: 1 },
         ];
         run_scenario(uids, &cmds);
     }

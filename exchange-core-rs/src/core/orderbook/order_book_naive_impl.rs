@@ -1,4 +1,3 @@
-//! 整簿撮合实现。对应 Java: exchange.core2.core.orderbook.OrderBookNaiveImpl
 use std::collections::BTreeMap;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -13,20 +12,16 @@ use crate::core::orderbook::orders_bucket_naive::MakerFill;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::orders_bucket_naive::OrdersBucketNaive;
-// 成交名义额 size×price 及累加的溢出守卫，统一用 CoreArithmeticUtils 的 *_exact。
 use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact};
 
-/// 整簿（naive 实现）：ask_buckets 升序、bid_buckets 用 rev() 取最高价、id_index 存 (side,price,uid) 供 O(log n) 定位+所有权校验。对应 Java OrderBookNaiveImpl。
 pub struct OrderBookNaiveImpl {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,
     id_index: BTreeMap<i64, (OrderAction, i64, i64)>,
-    /// 对应 Java OrderBookNaiveImpl.symbolSpec：move_order 现货 BID 风控读取；None = 跳过守卫。
     symbol_spec: Option<CoreSymbolSpecification>,
 }
 
 impl OrderBookNaiveImpl {
-    // ===== 构造/配置 =====
     pub fn new() -> Self {
         Self {
             ask_buckets: BTreeMap::new(),
@@ -36,13 +31,10 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// 带 symbol spec 构造，令 move_order 现货 BID 风控生效；对应 Java OrderBookNaiveImpl(CoreSymbolSpecification)。
     pub fn with_symbol_spec(symbol_spec: CoreSymbolSpecification) -> Self {
         Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
 
-    // ===== 核心行为 =====
-    /// GTC 下单：先即时撮合，剩余量挂入本方桶。对应 Java newOrderPlaceGtc。
     fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("GTC order requires action");
         let price = cmd.price;
@@ -50,13 +42,11 @@ impl OrderBookNaiveImpl {
 
         let (filled, filled_notional) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
         if filled == size {
-            // 完全成交，无需挂单（对应 Java: filledSize == size -> return）
             return;
         }
 
         let order_id = cmd.order_id;
         if self.id_index.contains_key(&order_id) {
-            // 重复 order id：能撮合但不能挂单，剩余量 reject。对应 Java newOrderPlaceGtc dup-id 分支。
             Self::attach_reject_event(cmd, size - filled);
             return;
         }
@@ -83,8 +73,6 @@ impl OrderBookNaiveImpl {
         self.id_index.insert(order_id, (action, price, cmd.uid));
     }
 
-    /// 即时撮合 taker（GTC/IOC/FOK/move 共用，价格受限）：Bid 吃 ask_buckets 升序，Ask 吃 bid_buckets 降序。对应 Java tryMatchInstantly。
-    /// taker_reserve_bid_price 须显式传 taker 自己的值，不可用 cmd.reserve_bid_price（move 场景两者不等，bug，2026-09-01 修复）。
     fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
@@ -94,7 +82,6 @@ impl OrderBookNaiveImpl {
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
         match taker_action {
-            // Bid taker 撮 asks：升序遍历（BTreeMap 天然升序）。
             OrderAction::Bid => Self::match_against(
                 &mut self.ask_buckets,
                 &mut self.id_index,
@@ -105,7 +92,6 @@ impl OrderBookNaiveImpl {
                 true,
                 cmd,
             ),
-            // Ask taker 撮 bids：降序遍历（先取 >= taker_price 的升序 range，再 .rev()）。
             OrderAction::Ask => Self::match_against(
                 &mut self.bid_buckets,
                 &mut self.id_index,
@@ -119,7 +105,6 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// 无价格上限全量撮合（FOK_BUDGET 路径，预算已由调用方校验足够）。对应 Java 对应逻辑；taker_reserve_bid_price 语义同 try_match_instantly。
     fn try_match_full(
         &mut self,
         taker_action: OrderAction,
@@ -151,8 +136,6 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// 撮合主循环实体：对手侧 buckets 按价格优先级逐桶吃单（静态方法以便同时可变借用 buckets/id_index）。
-    /// taker_price_limit=None 表示不限价（FOK_BUDGET）；taker_reserve_bid_price 由调用方显式传入 taker 自己的值。
     #[allow(clippy::too_many_arguments)]
     fn match_against(
         buckets: &mut BTreeMap<i64, OrdersBucketNaive>,
@@ -164,7 +147,6 @@ impl OrderBookNaiveImpl {
         ascending: bool,
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
-        // 对手侧价格优先级序列：bid taker 升序 (..=price)，ask taker 降序 [price..).rev()；无上限则取全部。
         let prices: Vec<i64> = match (ascending, taker_price_limit) {
             (true, Some(limit)) => buckets.range(..=limit).map(|(p, _)| *p).collect(),
             (true, None) => buckets.keys().copied().collect(),
@@ -185,14 +167,12 @@ impl OrderBookNaiveImpl {
             let size_left = taker_size - filled;
             let bucket = buckets.get_mut(&p).expect("bucket must exist for collected price");
 
-            // remaining_in_call 从 size_left 递减，归零即 taker 本轮成交完毕（对应 Java volumeToCollect==0）。
             let mut remaining_in_call = size_left;
             bucket.match_forward(size_left, &mut |f: MakerFill| {
                 remaining_in_call -= f.trade;
                 let active_order_completed = remaining_in_call == 0;
                 taker_filled += f.trade;
                 taker_filled_notional = add_exact(taker_filled_notional, mul_exact(f.trade, p));
-                // bidder_hold_price = 成交双方中 BID 一方的 reserve_bid_price（对应 Java OrdersBucketNaive.match）。
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
                 } else {
@@ -203,12 +183,11 @@ impl OrderBookNaiveImpl {
                     active_order_completed,
                     maker_order_id: f.order_id,
                     maker_order_completed: f.completed,
-                    price: p, // 成交价 = maker 挂单价（对照 Java: event.price = matchingOrder.getPrice()）
+                    price: p,
                     size: f.trade,
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
                     matched_order_uid: f.uid,
-                    // maker 自己的原命令类型，非 taker 命令。对应 Java OrderBookEventsHelper。
                     matched_order_command_type: f.command,
                     filled: taker_filled,
                     filled_notional: taker_filled_notional,
@@ -237,7 +216,6 @@ impl OrderBookNaiveImpl {
             buckets.remove(&p);
         }
 
-        // 按撮合发生顺序拼接单链表（对应 Java 逐桶把 eventsChainHead/Tail 接到 triggerCmd.matcherEvent 上）。
         let mut chain: Option<Box<MatcherTradeEvent>> = None;
         for mut ev in events.into_iter().rev() {
             ev.next = chain.take();
@@ -248,7 +226,6 @@ impl OrderBookNaiveImpl {
         (filled, taker_filled_notional)
     }
 
-    /// 预算受限撮合（IOC_BUDGET 专用）：逐桶吃单，每桶购量被 remaining_budget/price 封顶，预算耗尽即停。对应 Java tryMatchInstantlyWithBudget。
     fn match_against_budget(
         buckets: &mut BTreeMap<i64, OrdersBucketNaive>,
         id_index: &mut BTreeMap<i64, (OrderAction, i64, i64)>,
@@ -265,7 +242,6 @@ impl OrderBookNaiveImpl {
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut emptied: Vec<i64> = Vec::new();
 
-        // 同 match_against：先取出 taker 的 reserve_bid_price，避免与结尾的 `cmd.matcher_event` 借用冲突。
         let taker_reserve_bid_price = cmd.reserve_bid_price;
 
         for p in prices {
@@ -276,7 +252,6 @@ impl OrderBookNaiveImpl {
             let affordable = if p == 0 { i64::MAX } else { remaining_budget / p };
             let size_cap = size_left.min(affordable);
             if size_cap <= 0 {
-                // 预算已不足以再吃一个最小成交单位
                 break;
             }
             let bucket = buckets.get_mut(&p).expect("bucket must exist for collected price");
@@ -287,7 +262,6 @@ impl OrderBookNaiveImpl {
                 let active_order_completed = remaining_in_call == 0;
                 taker_filled += f.trade;
                 taker_filled_notional = add_exact(taker_filled_notional, mul_exact(f.trade, p));
-                // 同 match_against 的 bidderHoldPrice 语义（见该处注释）。
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
                 } else {
@@ -303,7 +277,6 @@ impl OrderBookNaiveImpl {
                     bid_gt_ask: taker_action == OrderAction::Bid,
                     bidder_hold_price,
                     matched_order_uid: f.uid,
-                    // 同 match_against：maker 自己的原命令类型。
                     matched_order_command_type: f.command,
                     filled: taker_filled,
                     filled_notional: taker_filled_notional,
@@ -343,7 +316,6 @@ impl OrderBookNaiveImpl {
         filled
     }
 
-    /// IOC：即时撮合，剩余量丢弃不挂单，未成交部分发 REJECT。对应 Java newOrderMatchIoc。
     fn new_order_match_ioc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC order requires action");
         let price = cmd.price;
@@ -356,11 +328,9 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// IOC_BUDGET：仅支持 BID，按预算上限逐档吃单直到预算或量耗尽，剩余丢弃。对应 Java newOrderMatchIocBudget（cmd.price=预算）。
     fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC_BUDGET order requires action");
         if action != OrderAction::Bid {
-            // ASK IOC_BUDGET 语义模糊，不支持：整单拒绝
             Self::attach_reject_event(cmd, cmd.size);
             return;
         }
@@ -380,7 +350,6 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// FOK：先探测可撮合总量，够则整单成交否则整单拒绝（不改簿）。对应 Java newOrderMatchFok（Java 未落地，此处补齐）。
     fn new_order_match_fok(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("FOK order requires action");
         let price = cmd.price;
@@ -394,7 +363,6 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// FOK_BUDGET：探测吃满 size 所需总预算，满足 isBudgetLimitSatisfied 才整单成交，否则拒绝。对应 Java newOrderMatchFokBudget。
     fn new_order_match_fok_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("FOK_BUDGET order requires action");
         let size = cmd.size;
@@ -419,7 +387,6 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    // ===== 内部 helper =====
     fn buckets_by_action_mut(&mut self, action: OrderAction) -> &mut BTreeMap<i64, OrdersBucketNaive> {
         match action {
             OrderAction::Ask => &mut self.ask_buckets,
@@ -434,14 +401,12 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// 生成 REJECT 事件插入 cmd.matcher_event 链头，不改簿。对应 Java attachRejectEvent。
     fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
         let event = MatcherTradeEvent {
             event_type: MatcherEventType::Reject,
             active_order_completed: true,
             price: cmd.price,
             size: rejected_size,
-            // 对应 Java attachRejectEvent: bidderHoldPrice = cmd.reserveBidPrice。REJECT 无 maker，其余字段取默认。
             bidder_hold_price: cmd.reserve_bid_price,
             next: cmd.matcher_event.take(),
             ..Default::default()
@@ -449,7 +414,6 @@ impl OrderBookNaiveImpl {
         cmd.matcher_event = Some(Box::new(event));
     }
 
-    /// 无副作用统计对手侧价格范围内可撮合总量（FOK 探测用）。对应 Java subtreeForMatching 价格过滤范围。
     fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64) -> i64 {
         match taker_action {
             OrderAction::Bid => self
@@ -465,7 +429,6 @@ impl OrderBookNaiveImpl {
         }
     }
 
-    /// 探测吃满 size 所需总预算，纯函数；None 表示流动性不足。对应 Java checkBudgetToFill。
     fn check_budget_to_fill(iter: impl Iterator<Item = (i64, i64)>, mut size: i64) -> Option<i64> {
         let mut budget: i64 = 0;
         for (price, available_size) in iter {
@@ -479,7 +442,6 @@ impl OrderBookNaiveImpl {
         None
     }
 
-    /// 对应 Java `isBudgetLimitSatisfied`：BID 要求成本 <= limit（预算上限），ASK 要求收入 >= limit（最低收入）。
     fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
         calculated == limit || ((action == OrderAction::Bid) != (calculated > limit))
     }
@@ -500,7 +462,6 @@ impl IOrderBook for OrderBookNaiveImpl {
             Some(OrderType::Fok) => self.new_order_match_fok(cmd),
             Some(OrderType::FokBudget) => self.new_order_match_fok_budget(cmd),
             None => {
-                // 未设置 order_type：不 panic，整单拒绝（对应 Java MatchingEngineRouter 未知类型语义）。
                 cmd.result_code = Some(CommandResultCode::MatchingUnsupportedCommand);
                 return CommandResultCode::MatchingUnsupportedCommand;
             }
@@ -509,7 +470,6 @@ impl IOrderBook for OrderBookNaiveImpl {
         CommandResultCode::Success
     }
 
-    /// 撤单：定位桶移除、空桶删除、摘除 id_index，发 REDUCE 事件；未知 id 或非本人订单均返回 MatchingUnknownOrderId。对应 Java cancelOrder。
     fn cancel_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let (action, price, uid) = match self.id_index.get(&order_id) {
@@ -547,7 +507,6 @@ impl IOrderBook for OrderBookNaiveImpl {
         CommandResultCode::Success
     }
 
-    /// 部分撤销：剩余量减 cmd.size（超量则整单撤销），发 REDUCE 事件。size<=0 → MatchingReduceFailedWrongSize；未知/非本人 → MatchingUnknownOrderId（顺序对齐 Java 先判 size）。对应 Java reduceOrder。
     fn reduce_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let requested = cmd.size;
@@ -603,8 +562,6 @@ impl IOrderBook for OrderBookNaiveImpl {
         CommandResultCode::Success
     }
 
-    /// 移价：撤旧价重新即时撮合，可能成交或挂新价；未知/非本人 → MatchingUnknownOrderId。对应 Java moveOrder。
-    /// 注意 taker_reserve_bid_price 须传 order 自己的值而非 cmd 的（差分对拍发现的 bug）。
     fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let new_price = cmd.price;
@@ -617,11 +574,8 @@ impl IOrderBook for OrderBookNaiveImpl {
             return CommandResultCode::MatchingUnknownOrderId;
         }
 
-        // cmd.action 在风控守卫之前回填（Naive 与 Direct 的既有差异：Direct 在守卫后设）。对应 Java OrderBookNaiveImpl.java。
         cmd.action = Some(action);
 
-        // 现货 BID 风控守卫：move 目标价不得超过挂单自身 reserve_bid_price，否则
-        // MatchingMoveFailedPriceOverRiskLimit 且不改簿；symbol_spec=None 时跳过。
         if let Some(spec) = &self.symbol_spec {
             if spec.symbol_type == SymbolType::CurrencyExchangePair && action == OrderAction::Bid {
                 let reserve = self
@@ -650,14 +604,12 @@ impl IOrderBook for OrderBookNaiveImpl {
         cmd.action = Some(order.action);
         order.price = new_price;
 
-        // 重新走撮合主路径，taker_size=订单剩余量，返回值叠加到既有 filled 上（等价 Java tryMatchInstantly）。
         let remaining = order.size - order.filled;
         let (matched_now, matched_notional_now) =
             self.try_match_instantly(action, new_price, remaining, order.reserve_bid_price, cmd);
         let total_filled = order.filled + matched_now;
 
         if total_filled == order.size {
-            // 完全成交（100% marketable）：无需挂单
             self.id_index.remove(&order_id);
             return CommandResultCode::Success;
         }
@@ -673,7 +625,6 @@ impl IOrderBook for OrderBookNaiveImpl {
         CommandResultCode::Success
     }
 
-    /// L2 快照：ask 升序、bid 降序各取前 size 档；size==0 → 空；size<0 → 全部档位。对应 Java fillAsks/fillBids。
     fn fill_l2(&self, size: i32) -> L2MarketData {
         let take: usize = match size {
             0 => 0,
@@ -708,7 +659,6 @@ impl IOrderBook for OrderBookNaiveImpl {
         L2MarketData { ask_prices, ask_volumes, ask_orders, bid_prices, bid_volumes, bid_orders }
     }
 
-    /// 确定性状态 hash：ask 升序/bid 降序遍历挂单，h=h*31+orderHash 滚动折叠。对应 Java IOrderBook.stateHash 整体形状，但省略 symbolSpec/orderType 等字段，不保证数值相等，只保证同状态同 hash。
     fn state_hash(&self) -> i32 {
         fn order_hash(o: &Order) -> i64 {
             let mut h: i64 = 17;
@@ -723,19 +673,16 @@ impl IOrderBook for OrderBookNaiveImpl {
         }
 
         let mut h: i64 = 0;
-        // ask 侧：BTreeMap 天然升序 == 最优价（最低价）优先。
         for bucket in self.ask_buckets.values() {
             for order in bucket.iter_orders() {
                 h = h.wrapping_mul(31).wrapping_add(order_hash(order));
             }
         }
-        // bid 侧：按买方最优价（最高价）优先，即降序遍历。
         for bucket in self.bid_buckets.values().rev() {
             for order in bucket.iter_orders() {
                 h = h.wrapping_mul(31).wrapping_add(order_hash(order));
             }
         }
-        // 折叠 i64 -> i32（对应 Java `Long.hashCode`: high ^ low 32 位）。
         ((h >> 32) as i32) ^ (h as i32)
     }
 
@@ -753,14 +700,11 @@ impl IOrderBook for OrderBookNaiveImpl {
     }
 }
 
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java OrderBookNaiveImpl.writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::{to_btree_i64, ChronicleMarshallable};
 
 impl OrderBookNaiveImpl {
-    /// 快照恢复辅助:按 Java 序抽出全部挂单——asks 价升序、bids 价降序,桶内 FIFO。
-    /// 供 router 读到 NAIVE 订单簿时转成 Direct 承载(Rust 撮合热路径恒 Direct)。
     pub fn chronicle_orders(&self) -> (Vec<Order>, Vec<Order>) {
         let asks = self.ask_buckets.values().flat_map(|b| b.iter_orders().cloned()).collect();
         let bids = self.bid_buckets.values().rev().flat_map(|b| b.iter_orders().cloned()).collect();
@@ -769,7 +713,6 @@ impl OrderBookNaiveImpl {
     pub fn chronicle_symbol_spec(&self) -> Option<CoreSymbolSpecification> {
         self.symbol_spec.clone()
     }
-    /// 读 body(implType 字节已由调用方消费):symbolSpec + askBuckets(升序)+ bidBuckets(降序);读毕重建派生 id_index。
     pub fn chronicle_read_body(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let symbol_spec = CoreSymbolSpecification::chronicle_read(r)?;
         let ask_buckets = to_btree_i64(r.read_long_keyed_map(OrdersBucketNaive::chronicle_read)?);
@@ -778,7 +721,6 @@ impl OrderBookNaiveImpl {
         book.rebuild_id_index();
         Ok(book)
     }
-    /// 从 ask/bid 桶重建 `id_index`(order_id → (side, price, uid));对应 Java 读构造器里 idMap 的重建。
     fn rebuild_id_index(&mut self) {
         self.id_index.clear();
         for (&price, bucket) in &self.ask_buckets {
@@ -795,19 +737,15 @@ impl OrderBookNaiveImpl {
 }
 
 impl ChronicleMarshallable for OrderBookNaiveImpl {
-    /// 对应 Java `OrderBookNaiveImpl.writeMarshallable`:implType(byte=NAIVE=0) + symbolSpec + askBuckets(LongMap,价升序)
-    /// + bidBuckets(LongMap,价降序=Java reverseOrder TreeMap 迭代序)。每桶再重写一遍 symbolSpec(Java 格式)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
-        w.write_u8(0); // OrderBookImplType.NAIVE
+        w.write_u8(0);
         let spec = self.symbol_spec.as_ref().expect("naive 订单簿缺 symbol_spec");
         spec.chronicle_write(w);
-        // askBuckets:价升序
         w.write_i32(self.ask_buckets.len() as i32);
         for (&price, bucket) in &self.ask_buckets {
             w.write_i64(price);
             bucket.chronicle_write(w, spec);
         }
-        // bidBuckets:价降序(对齐 Java reverseOrder TreeMap 迭代序)
         w.write_i32(self.bid_buckets.len() as i32);
         for (&price, bucket) in self.bid_buckets.iter().rev() {
             w.write_i64(price);
@@ -826,8 +764,6 @@ mod ob_tests {
     use super::*;
     use crate::core::common::cmd::order_command_type::OrderCommandType;
 
-    
-
     fn place(book: &mut OrderBookNaiveImpl, id: i64, act: OrderAction, price: i64, size: i64) -> OrderCommand {
         let mut cmd = OrderCommand { order_id: id, symbol: 1, price, size,
             action: Some(act), order_type: Some(OrderType::Gtc), uid: id, ..Default::default() };
@@ -841,13 +777,11 @@ mod ob_tests {
         use crate::core::snapshot::chronicle_writer::ChronicleWriter;
         let spec = CoreSymbolSpecification { symbol_id: 1, ..Default::default() };
         let mut book = OrderBookNaiveImpl::with_symbol_spec(spec);
-        // 不交叉的多档 ask/bid（GTC 静止挂簿）；110 档两单验证同价位 FIFO。
         place(&mut book, 1, OrderAction::Ask, 110, 5);
         place(&mut book, 2, OrderAction::Ask, 110, 3);
         place(&mut book, 3, OrderAction::Ask, 120, 7);
         place(&mut book, 4, OrderAction::Bid, 100, 4);
         place(&mut book, 5, OrderAction::Bid, 90, 6);
-        // write → read → write 字节稳定（含 implType 字节、每桶 symbolSpec、bid 降序、桶内 FIFO）。
         let mut w1 = ChronicleWriter::new();
         book.chronicle_write(&mut w1);
         let bytes1 = w1.into_bytes();
@@ -868,7 +802,6 @@ mod ob_tests {
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 10,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Ioc), uid: 2, ..Default::default() };
         book.new_order(&mut cmd);
-        // 成交 5，剩 5 丢弃、不挂簿
         assert_eq!(book.fill_l2(10).bid_prices.len(), 0);
         assert_eq!(book.fill_l2(10).ask_prices.len(), 0);
     }
@@ -880,7 +813,6 @@ mod ob_tests {
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 10,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Fok), uid: 2, ..Default::default() };
         book.new_order(&mut cmd);
-        // 不足量 → 整单拒绝：无成交、卖单仍在
         let ev = cmd.matcher_event.as_ref().unwrap();
         assert_eq!(ev.event_type, crate::core::common::matcher_event_type::MatcherEventType::Reject);
         assert_eq!(book.fill_l2(10).ask_volumes, vec![5]);
@@ -893,7 +825,6 @@ mod ob_tests {
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 6,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Ioc), uid: 2, ..Default::default() };
         book.new_order(&mut cmd);
-        // 全部成交，无 reject 事件
         let ev = cmd.matcher_event.as_ref().expect("应有成交事件");
         assert_eq!(ev.event_type, crate::core::common::matcher_event_type::MatcherEventType::Trade);
         assert!(ev.next.is_none());
@@ -915,12 +846,10 @@ mod ob_tests {
     #[test]
     fn ioc_budget_caps_by_notional_and_discards_rest() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Ask, 100, 10); // 10 @ 100 = notional 1000 max
-        // 预算 250 只够买 2 个单位（2*100=200 <= 250 < 300）
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 250, size: 10,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::IocBudget), uid: 2, ..Default::default() };
         book.new_order(&mut cmd);
-        // 未吃满部分（8）走 reject，插在链头；已成交部分（2）紧随其后（对应 Java attachRejectEvent 语义）。
         let head = cmd.matcher_event.as_ref().expect("应有事件链");
         assert_eq!(head.event_type, crate::core::common::matcher_event_type::MatcherEventType::Reject);
         assert_eq!(head.size, 8);
@@ -933,13 +862,13 @@ mod ob_tests {
     #[test]
     fn fok_budget_rejects_when_budget_insufficient() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Ask, 100, 10); // 需要 10*100=1000 才能吃满 10
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 500, size: 10,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::FokBudget), uid: 2, ..Default::default() };
         book.new_order(&mut cmd);
         let ev = cmd.matcher_event.as_ref().unwrap();
         assert_eq!(ev.event_type, crate::core::common::matcher_event_type::MatcherEventType::Reject);
-        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]); // 簿未改变
+        assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
     }
 
     #[test]
@@ -958,27 +887,22 @@ mod ob_tests {
     #[test]
     fn two_orders_cross_into_one_trade() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Ask, 100, 10); // 挂卖
-        let taker = place(&mut book, 2, OrderAction::Bid, 100, 6); // 吃 6
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+        let taker = place(&mut book, 2, OrderAction::Bid, 100, 6);
         let ev = taker.matcher_event.as_ref().expect("应有成交事件");
         assert_eq!(ev.event_type, crate::core::common::matcher_event_type::MatcherEventType::Trade);
         assert_eq!(ev.maker_order_id, 1);
         assert_eq!(ev.price, 100);
         assert_eq!(ev.size, 6);
-        assert!(ev.next.is_none()); // 只撮一笔
-        // 卖单剩 4 仍在簿上
+        assert!(ev.next.is_none());
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![4]);
     }
 
-    // ---- matched_order_command_type 取 maker 命令类型，与 taker 无关（对应 Java OrderBookEventsHelper）----
-
-    /// matched_order_command_type 取 maker 的 PlaceOrder，非 taker 的 ForceLiquidation。
     #[test]
     fn trade_event_matched_order_command_type_is_makers_command_not_takers() {
         let mut book = OrderBookNaiveImpl::new();
-        // maker：普通 PlaceOrder 挂卖单。
         let mut maker_cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 1, symbol: 1, price: 100, size: 10,
@@ -987,7 +911,6 @@ mod ob_tests {
         };
         book.new_order(&mut maker_cmd);
 
-        // taker：ForceLiquidation 买单吃进。
         let mut taker_cmd = OrderCommand {
             command: OrderCommandType::ForceLiquidation,
             order_id: 2, symbol: 1, price: 100, size: 4,
@@ -1005,7 +928,6 @@ mod ob_tests {
         );
     }
 
-    /// 反向场景：maker 原命令是 ForceLiquidation，matched_order_command_type 应跟随翻转，证明取自 maker.command。
     #[test]
     fn trade_event_matched_order_command_type_follows_maker_even_when_maker_is_force_liquidation() {
         let mut book = OrderBookNaiveImpl::new();
@@ -1030,13 +952,9 @@ mod ob_tests {
         assert_eq!(ev.matched_order_command_type, OrderCommandType::ForceLiquidation);
     }
 
-    // ---- bidder_hold_price/matched_order_uid，对应 Java OrdersBucketNaive.match（BID 一方的 reserve_bid_price；uid 恒为 maker）----
-
-    /// maker 是 BID：bidder_hold_price 应取 maker 的 reserve_bid_price（taker 值为哨兵，读错即失败）。
     #[test]
     fn trade_event_bidder_hold_price_when_maker_is_bid() {
         let mut book = OrderBookNaiveImpl::new();
-        // 挂买单：uid=501，reserve_bid_price=12345（> price，模拟风控预留的保守价）
         let mut maker_cmd = OrderCommand {
             order_id: 1, symbol: 1, price: 100, size: 10, reserve_bid_price: 12345,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 501,
@@ -1044,7 +962,6 @@ mod ob_tests {
         };
         book.new_order(&mut maker_cmd);
 
-        // taker 卖单吃进：uid=777，reserve_bid_price 设一个哨兵值（ASK 单本不应被读取）。
         let mut taker_cmd = OrderCommand {
             order_id: 2, symbol: 1, price: 100, size: 4, reserve_bid_price: 999_999,
             action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), uid: 777,
@@ -1054,15 +971,13 @@ mod ob_tests {
 
         let ev = taker_cmd.matcher_event.as_ref().expect("应有成交事件");
         assert_eq!(ev.event_type, MatcherEventType::Trade);
-        assert_eq!(ev.matched_order_uid, 501); // maker 的 uid
-        assert_eq!(ev.bidder_hold_price, 12345); // maker（BID 方）自己的 reserve_bid_price
+        assert_eq!(ev.matched_order_uid, 501);
+        assert_eq!(ev.bidder_hold_price, 12345);
     }
 
-    /// taker 是 BID：bidder_hold_price 应取 taker 的 reserve_bid_price（maker 值为哨兵）。
     #[test]
     fn trade_event_bidder_hold_price_when_taker_is_bid() {
         let mut book = OrderBookNaiveImpl::new();
-        // 挂卖单：uid=502。ASK 单的 reserve_bid_price 语义上不冻结价格，设哨兵值证明未被读取。
         let mut maker_cmd = OrderCommand {
             order_id: 1, symbol: 1, price: 200, size: 10, reserve_bid_price: 999_999,
             action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), uid: 502,
@@ -1070,7 +985,6 @@ mod ob_tests {
         };
         book.new_order(&mut maker_cmd);
 
-        // taker 买单吃进：uid=888，reserve_bid_price=20000（风控预留的保守价）。
         let mut taker_cmd = OrderCommand {
             order_id: 2, symbol: 1, price: 200, size: 4, reserve_bid_price: 20000,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 888,
@@ -1080,32 +994,27 @@ mod ob_tests {
 
         let ev = taker_cmd.matcher_event.as_ref().expect("应有成交事件");
         assert_eq!(ev.event_type, MatcherEventType::Trade);
-        assert_eq!(ev.matched_order_uid, 502); // maker 的 uid
-        assert_eq!(ev.bidder_hold_price, 20000); // taker（BID 方）自己的 reserve_bid_price
+        assert_eq!(ev.matched_order_uid, 502);
+        assert_eq!(ev.bidder_hold_price, 20000);
     }
 
     #[test]
     fn new_order_reports_result_code() {
         let mut book = OrderBookNaiveImpl::new();
-        // 正常路径（挂单成交/挂簿）：result_code 置 Success，返回值同步。
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 100, size: 10,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 1, ..Default::default() };
         let rc = book.new_order(&mut cmd);
         assert_eq!(rc, CommandResultCode::Success);
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-        assert_eq!(book.fill_l2(10).bid_volumes, vec![10]); // 确实挂上了簿
+        assert_eq!(book.fill_l2(10).bid_volumes, vec![10]);
 
-        // 不支持的 order_type（None）：不 panic，result_code 报 MatchingUnsupportedCommand，且不改簿。
         let mut unsupported = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 5,
             action: Some(OrderAction::Bid), order_type: None, uid: 2, ..Default::default() };
         let rc2 = book.new_order(&mut unsupported);
         assert_eq!(rc2, CommandResultCode::MatchingUnsupportedCommand);
         assert_eq!(unsupported.result_code, Some(CommandResultCode::MatchingUnsupportedCommand));
-        // 簿未受影响：仍只有 order_id=1 那笔挂单。
         assert_eq!(book.fill_l2(10).bid_volumes, vec![10]);
     }
-
-    // ---- cancel / reduce / move + fill_l2(0) ----
 
     #[test]
     fn cancel_unknown_returns_error() {
@@ -1121,7 +1030,7 @@ mod ob_tests {
         place(&mut book, 2, OrderAction::Ask, 100, 1);
         place(&mut book, 3, OrderAction::Ask, 101, 1);
         let l2 = book.fill_l2(10);
-        assert_eq!(l2.ask_prices, vec![100, 101, 102]); // 卖侧升序
+        assert_eq!(l2.ask_prices, vec![100, 101, 102]);
     }
 
     #[test]
@@ -1139,11 +1048,9 @@ mod ob_tests {
         assert!(ev.active_order_completed);
         assert!(ev.next.is_none());
 
-        // 订单和空桶都已从簿上移除
         let l2 = book.fill_l2(10);
         assert!(l2.ask_prices.is_empty());
 
-        // 二次撤销 → 未知订单
         let mut again = OrderCommand { order_id: 1, symbol: 1, uid: 1, ..Default::default() };
         assert_eq!(book.cancel_order(&mut again), CommandResultCode::MatchingUnknownOrderId);
     }
@@ -1157,7 +1064,6 @@ mod ob_tests {
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, uid: 1, ..Default::default() };
         assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::Success);
 
-        // 桶未空（order 2 还在），价位仍在
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![5]);
@@ -1200,7 +1106,6 @@ mod ob_tests {
         let mut book = OrderBookNaiveImpl::new();
         place(&mut book, 1, OrderAction::Ask, 100, 10);
 
-        // 请求减 100，但剩余只有 10 → clamp 到 10，整单移除
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, size: 100, uid: 1, ..Default::default() };
         let rc = book.reduce_order(&mut cmd);
         assert_eq!(rc, CommandResultCode::Success);
@@ -1212,16 +1117,13 @@ mod ob_tests {
         assert!(book.fill_l2(10).ask_prices.is_empty());
     }
 
-    // ---- uid 所有权校验 ----
-
     #[test]
     fn cancel_other_users_order_returns_unknown() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Ask, 100, 10); // uid=1（place() 用 order_id 当 uid）
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
 
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, uid: 999, ..Default::default() };
         assert_eq!(book.cancel_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
-        // 订单未被撤销，仍在簿上
         assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
     }
 
@@ -1242,7 +1144,6 @@ mod ob_tests {
 
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 105, uid: 999, ..Default::default() };
         assert_eq!(book.move_order(&mut cmd), CommandResultCode::MatchingUnknownOrderId);
-        // 未被移价
         assert_eq!(book.fill_l2(10).ask_prices, vec![100]);
     }
 
@@ -1258,14 +1159,13 @@ mod ob_tests {
         let mut book = OrderBookNaiveImpl::new();
         place(&mut book, 1, OrderAction::Ask, 100, 10);
 
-        // 移到 105，不与任何对手方交叉，应原样搬到新价位挂单
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 105, uid: 1, ..Default::default() };
         let rc = book.move_order(&mut cmd);
         assert_eq!(rc, CommandResultCode::Success);
-        assert!(cmd.matcher_event.is_none()); // 未成交，无事件
+        assert!(cmd.matcher_event.is_none());
 
         let l2 = book.fill_l2(10);
-        assert!(l2.ask_prices.iter().all(|&p| p != 100)); // 旧价已清空
+        assert!(l2.ask_prices.iter().all(|&p| p != 100));
         assert_eq!(l2.ask_prices, vec![105]);
         assert_eq!(l2.ask_volumes, vec![10]);
     }
@@ -1273,8 +1173,8 @@ mod ob_tests {
     #[test]
     fn move_crosses_and_trades_immediately() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Bid, 90, 10); // 挂买 @90
-        place(&mut book, 2, OrderAction::Ask, 100, 5); // 挂卖 @100，稍后移到 80 应与买单立即成交
+        place(&mut book, 1, OrderAction::Bid, 90, 10);
+        place(&mut book, 2, OrderAction::Ask, 100, 5);
 
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 80, uid: 2, ..Default::default() };
         let rc = book.move_order(&mut cmd);
@@ -1285,7 +1185,6 @@ mod ob_tests {
         assert_eq!(ev.maker_order_id, 1);
         assert_eq!(ev.size, 5);
 
-        // 卖单 5 全部成交，不再挂簿；买单剩 5
         assert!(book.fill_l2(10).ask_prices.is_empty());
         assert_eq!(book.fill_l2(10).bid_volumes, vec![5]);
     }
@@ -1304,16 +1203,13 @@ mod ob_tests {
 
     #[test]
     fn move_bid_over_reserve_price_rejected_on_exchange_pair_spec() {
-        // 现货 BID move 目标价不得超过 reserve_bid_price。
         let mut book = OrderBookNaiveImpl::with_symbol_spec(exchange_pair_spec());
-        // GTC BID @90，reserve_bid_price=95（挂单时冻结价）。
         let mut place = OrderCommand {
             order_id: 1, symbol: 1, price: 90, size: 5, reserve_bid_price: 95,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 1, ..Default::default()
         };
         book.new_order(&mut place);
 
-        // move 到 96 > reserve 95 -> 越限拒绝，簿状态完全不变。
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 96, uid: 1, ..Default::default() };
         let rc = book.move_order(&mut cmd);
         assert_eq!(rc, CommandResultCode::MatchingMoveFailedPriceOverRiskLimit);
@@ -1323,7 +1219,6 @@ mod ob_tests {
         assert_eq!(l2.bid_prices, vec![90], "拒绝后订单仍在原价 90，FIFO/状态不变");
         assert_eq!(l2.bid_volumes, vec![5]);
 
-        // move 到 95（== reserve）允许；到 94（< reserve）也允许。
         let mut ok = OrderCommand { order_id: 1, symbol: 1, price: 95, uid: 1, ..Default::default() };
         assert_eq!(book.move_order(&mut ok), CommandResultCode::Success, "== reserve 边界允许");
         assert_eq!(book.fill_l2(10).bid_prices, vec![95]);
@@ -1331,7 +1226,6 @@ mod ob_tests {
 
     #[test]
     fn move_bid_guard_skipped_when_symbol_spec_absent() {
-        // new()（symbol_spec=None，差分对拍口径）时 guard 不生效——move BID 到任意高价都放行。
         let mut book = OrderBookNaiveImpl::new();
         let mut place = OrderCommand {
             order_id: 1, symbol: 1, price: 90, size: 5, reserve_bid_price: 95,
@@ -1348,11 +1242,9 @@ mod ob_tests {
         place(&mut book, 1, OrderAction::Bid, 90, 5);
         place(&mut book, 2, OrderAction::Ask, 100, 5);
 
-        // 移到 80，恰好与买单 5 全部成交
         let mut cmd = OrderCommand { order_id: 2, symbol: 1, price: 80, uid: 2, ..Default::default() };
         assert_eq!(book.move_order(&mut cmd), CommandResultCode::Success);
 
-        // 完全成交的订单不该再能被撤销
         let mut cancel = OrderCommand { order_id: 2, symbol: 1, uid: 2, ..Default::default() };
         assert_eq!(book.cancel_order(&mut cancel), CommandResultCode::MatchingUnknownOrderId);
     }
@@ -1370,42 +1262,35 @@ mod ob_tests {
         assert!(l2.bid_volumes.is_empty());
     }
 
-    // ---- dup-id reject + state_hash ----
-
-    /// 覆盖"先撮合、再因重复 id 拒绝剩余"分支（dup-id 检查发生在 try_match_instantly 之后）。对应 Java newOrderPlaceGtc dup-id 分支。
     #[test]
     fn duplicate_order_id_matches_then_rejects_remainder_and_does_not_place() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Ask, 100, 10); // 占用 order_id=1，价格 100（本次撮合吃不到）
-        place(&mut book, 2, OrderAction::Ask, 90, 6);   // 会被撮合掉的另一张挂单
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
+        place(&mut book, 2, OrderAction::Ask, 90, 6);
 
-        // 复用 order_id=1（重复 id）下买单：价格 95 只能吃到 90 这一档（6），吃不到 100 那档
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 95, size: 10,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 99, ..Default::default() };
         book.new_order(&mut cmd);
 
         let head = cmd.matcher_event.as_ref().expect("应有事件链：先撮合，再 reject 剩余");
         assert_eq!(head.event_type, MatcherEventType::Reject);
-        assert_eq!(head.size, 4); // 10 - 6 撮合 = 4 被拒绝
+        assert_eq!(head.size, 4);
         let trade = head.next.as_ref().expect("reject 之后应有先前的成交事件");
         assert_eq!(trade.event_type, MatcherEventType::Trade);
         assert_eq!(trade.maker_order_id, 2);
         assert_eq!(trade.size, 6);
 
-        // 原 order_id=1 的挂单（100@10）完好未变；被吃掉的 order_id=2 已消失；新买单未挂簿
         let l2 = book.fill_l2(10);
         assert_eq!(l2.ask_prices, vec![100]);
         assert_eq!(l2.ask_volumes, vec![10]);
         assert!(l2.bid_prices.is_empty());
     }
 
-    /// 未匹配到任何对手单时，重复 id 同样被 reject 整个剩余量（未成交部分即整单）。
     #[test]
     fn duplicate_order_id_full_reject_when_no_match() {
         let mut book = OrderBookNaiveImpl::new();
-        place(&mut book, 1, OrderAction::Ask, 100, 10); // 挂卖 10 @100，占用 order_id=1
+        place(&mut book, 1, OrderAction::Ask, 100, 10);
 
-        // 再次用 order_id=1 挂买单，价格不交叉（不会撮合到 order_id=1 自己，因为买价<卖价）
         let mut cmd = OrderCommand { order_id: 1, symbol: 1, price: 50, size: 7,
             action: Some(OrderAction::Bid), order_type: Some(OrderType::Gtc), uid: 99, ..Default::default() };
         book.new_order(&mut cmd);
@@ -1415,7 +1300,6 @@ mod ob_tests {
         assert_eq!(ev.size, 7);
         assert!(ev.next.is_none());
 
-        // 原挂单（卖 10 @100）未受影响
         assert_eq!(book.fill_l2(10).ask_volumes, vec![10]);
     }
 
@@ -1439,23 +1323,19 @@ mod ob_tests {
         place(&mut base, 1, OrderAction::Ask, 100, 10);
         let h1 = base.state_hash();
 
-        // 不同价格
         let mut diff_price = OrderBookNaiveImpl::new();
         place(&mut diff_price, 1, OrderAction::Ask, 101, 10);
         assert_ne!(h1, diff_price.state_hash());
 
-        // 不同 size
         let mut diff_size = OrderBookNaiveImpl::new();
         place(&mut diff_size, 1, OrderAction::Ask, 100, 11);
         assert_ne!(h1, diff_size.state_hash());
 
-        // 多一张挂单
         let mut diff_extra = OrderBookNaiveImpl::new();
         place(&mut diff_extra, 1, OrderAction::Ask, 100, 10);
         place(&mut diff_extra, 2, OrderAction::Bid, 90, 3);
         assert_ne!(h1, diff_extra.state_hash());
 
-        // 部分撮合后剩余量变化也应改变 hash
         let mut partially_filled = OrderBookNaiveImpl::new();
         place(&mut partially_filled, 1, OrderAction::Ask, 100, 10);
         let mut taker = OrderCommand { order_id: 2, symbol: 1, price: 100, size: 3,
@@ -1476,11 +1356,6 @@ mod ob_tests {
     }
 }
 
-
-// =======================================================================================
-// 翻译自 Java OrderBookBaseTest（L2/GTC/IOC/FOK(_BUDGET)/cancel/reduce/move 等子集；
-// 跳过 getOrderById/validateInternalState 相关断言与 bidderHoldPrice 参数比对）。
-// =======================================================================================
 #[cfg(test)]
 mod ob_base_tests {
     use super::*;
@@ -1489,8 +1364,6 @@ mod ob_base_tests {
     const UID_2: i64 = 413;
     const INITIAL_PRICE: i64 = 81600;
     const MAX_PRICE: i64 = 400000;
-
-    // ---------------- 测试专用最小 harness（对应 Java OrderCommandFactory / L2MarketDataHelper）----------------
 
     fn place_order(
         book: &mut OrderBookNaiveImpl,
@@ -1535,7 +1408,6 @@ mod ob_base_tests {
         (rc, cmd)
     }
 
-    /// 把 `cmd.matcher_event` 单链表展开成 `Vec`，方便按下标断言（对应 Java `cmd.extractEvents()`）。
     fn events_list(cmd: &OrderCommand) -> Vec<&MatcherTradeEvent> {
         let mut v = Vec::new();
         let mut cur = cmd.matcher_event.as_deref();
@@ -1553,7 +1425,6 @@ mod ob_base_tests {
         assert_eq!(ev.size, size);
     }
 
-    /// 对应 Java `checkEventRejection`，略去 bidderHoldPrice 比对（见模块头注释）。
     fn check_reject(ev: &MatcherTradeEvent, size: i64, price: i64) {
         assert_eq!(ev.event_type, MatcherEventType::Reject);
         assert_eq!(ev.size, size);
@@ -1561,7 +1432,6 @@ mod ob_base_tests {
         assert!(ev.active_order_completed);
     }
 
-    /// 对应 Java `checkEventReduce`，略去 bidderHoldPrice 比对（Java 该套用例里这个参数其实也一直传 null）。
     fn check_reduce(ev: &MatcherTradeEvent, reduce_size: i64, price: i64, completed: bool) {
         assert_eq!(ev.event_type, MatcherEventType::Reduce);
         assert_eq!(ev.size, reduce_size);
@@ -1570,7 +1440,6 @@ mod ob_base_tests {
         assert!(ev.next.is_none());
     }
 
-    /// 对应 Java L2MarketDataHelper，仅维护 prices/volumes（不含 order 计数，L2MarketData 精简形状不变）。
     #[derive(Debug, Clone, PartialEq)]
     struct ExpectedL2 {
         ask_prices: Vec<i64>,
@@ -1584,7 +1453,6 @@ mod ob_base_tests {
             Self { ask_prices, ask_volumes, bid_prices, bid_volumes }
         }
 
-        /// 只比对价/量档位（本 helper 不建模逐档挂单数；`ask_orders`/`bid_orders` 的跨簿一致由差分测试保证）。
         fn assert_matches(&self, actual: &L2MarketData) {
             assert_eq!(actual.ask_prices, self.ask_prices);
             assert_eq!(actual.ask_volumes, self.ask_volumes);
@@ -1630,7 +1498,6 @@ mod ob_base_tests {
             self
         }
 
-        /// 对应 Java `L2MarketDataHelper.aggregateBuyBudget`：沿 ask 侧升序累加至吃满 `size`。
         fn aggregate_buy_budget(&self, mut size: i64) -> i64 {
             let mut budget = 0i64;
             for i in 0..self.ask_prices.len() {
@@ -1646,7 +1513,6 @@ mod ob_base_tests {
             panic!("Can not collect size {size}");
         }
 
-        /// 对应 Java `L2MarketDataHelper.aggregateSellExpectation`：沿 bid 侧（降序存储）累加至吃满 `size`。
         fn aggregate_sell_expectation(&self, mut size: i64) -> i64 {
             let mut expectation = 0i64;
             for i in 0..self.bid_prices.len() {
@@ -1663,7 +1529,6 @@ mod ob_base_tests {
         }
     }
 
-    /// 对应 Java `OrderBookBaseTest.before()`：搭好共享初始簿状态 + 校验初始 L2 快照。
     fn setup_book() -> (OrderBookNaiveImpl, ExpectedL2) {
         let mut book = OrderBookNaiveImpl::new();
 
@@ -1697,7 +1562,6 @@ mod ob_base_tests {
         (book, expected)
     }
 
-    /// 对应 Java `@AfterEach clearOrderBook`：用两笔吃光全部流动性的 IOC 单把簿清空，验证不留残余状态。
     fn clear_order_book(book: &mut OrderBookNaiveImpl) {
         let snap = book.fill_l2(i32::MAX);
         let ask_sum: i64 = snap.ask_volumes.iter().sum();
@@ -1716,8 +1580,6 @@ mod ob_base_tests {
         assert!(snap.bid_prices.is_empty());
     }
 
-    // ------------------------ TESTS WITHOUT MATCHING -----------------------
-
     #[test]
     fn should_initialize_without_errors() {
         let (mut book, expected) = setup_book();
@@ -1725,7 +1587,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// fill_l2 逐档挂单数：setup_book 里 81599(id2,id3)/201000(id8,id9)/81590(id5,id6)/10000(id11,id12) 各 2 单，其余 1 单。
     #[test]
     fn fill_l2_reports_per_level_order_counts() {
         let (book, _) = setup_book();
@@ -1734,7 +1595,6 @@ mod ob_base_tests {
         assert_eq!(l2.bid_orders, vec![1, 2, 1, 2, 1]);
     }
 
-    /// Java `shouldAddGtcOrders`
     #[test]
     fn should_add_gtc_orders() {
         let (mut book, mut expected) = setup_book();
@@ -1757,7 +1617,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldIgnoredDuplicateOrder`：非交叉重复 id，整单 reject（不撮合、不挂簿）。
     #[test]
     fn should_ignored_duplicate_order() {
         let (mut book, expected) = setup_book();
@@ -1767,12 +1626,10 @@ mod ob_base_tests {
         assert_eq!(events.len(), 1);
         check_reject(events[0], 100, 81600);
 
-        // 簿完全未变
         expected.assert_matches(&book.fill_l2(25));
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldRemoveBidOrder`
     #[test]
     fn should_remove_bid_order() {
         let (mut book, mut expected) = setup_book();
@@ -1791,7 +1648,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldRemoveAskOrder`
     #[test]
     fn should_remove_ask_order() {
         let (mut book, mut expected) = setup_book();
@@ -1810,7 +1666,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReduceBidOrder`
     #[test]
     fn should_reduce_bid_order() {
         let (mut book, mut expected) = setup_book();
@@ -1829,7 +1684,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReduceAskOrder`（减量超过剩余量 -> 等价整单撤销）
     #[test]
     fn should_reduce_ask_order() {
         let (mut book, mut expected) = setup_book();
@@ -1848,7 +1702,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldRemoveOrderAndEmptyBucket`
     #[test]
     fn should_remove_order_and_empty_bucket() {
         let (mut book, mut expected) = setup_book();
@@ -1874,7 +1727,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenDeletingUnknownOrder`
     #[test]
     fn should_return_error_when_deleting_unknown_order() {
         let (mut book, expected) = setup_book();
@@ -1885,7 +1737,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenDeletingOtherUserOrder`
     #[test]
     fn should_return_error_when_deleting_other_user_order() {
         let (mut book, expected) = setup_book();
@@ -1896,7 +1747,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenUpdatingOtherUserOrder`
     #[test]
     fn should_return_error_when_updating_other_user_order() {
         let (mut book, expected) = setup_book();
@@ -1913,7 +1763,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenUpdatingUnknownOrder`
     #[test]
     fn should_return_error_when_updating_unknown_order() {
         let (mut book, expected) = setup_book();
@@ -1924,7 +1773,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenReducingUnknownOrder`
     #[test]
     fn should_return_error_when_reducing_unknown_order() {
         let (mut book, expected) = setup_book();
@@ -1935,7 +1783,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenReducingByZeroOrNegativeSize`
     #[test]
     fn should_return_error_when_reducing_by_zero_or_negative_size() {
         let (mut book, expected) = setup_book();
@@ -1956,7 +1803,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldReturnErrorWhenReducingOtherUserOrder`
     #[test]
     fn should_return_error_when_reducing_other_user_order() {
         let (mut book, expected) = setup_book();
@@ -1967,7 +1813,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMoveOrderExistingBucket`
     #[test]
     fn should_move_order_existing_bucket() {
         let (mut book, mut expected) = setup_book();
@@ -1981,7 +1826,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMoveOrderNewBucket`
     #[test]
     fn should_move_order_new_bucket() {
         let (mut book, mut expected) = setup_book();
@@ -1995,9 +1839,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // ------------------------ MATCHING TESTS -----------------------
-
-    /// Java `shouldMatchIocOrderPartialBBO`
     #[test]
     fn should_match_ioc_order_partial_bbo() {
         let (mut book, mut expected) = setup_book();
@@ -2013,7 +1854,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchIocOrderFullBBO`
     #[test]
     fn should_match_ioc_order_full_bbo() {
         let (mut book, mut expected) = setup_book();
@@ -2029,7 +1869,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchIocOrderWithTwoLimitOrdersPartial`（略过 `getOrderById` 断言，见模块头注释）
     #[test]
     fn should_match_ioc_order_with_two_limit_orders_partial() {
         let (mut book, mut expected) = setup_book();
@@ -2046,7 +1885,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java shouldMatchIocOrderFullLiquidity —— 跨 2 桶 3 笔成交，验证跨桶事件链+active_order_completed 时序。
     #[test]
     fn should_match_ioc_order_full_liquidity_crosses_multiple_buckets() {
         let (mut book, mut expected) = setup_book();
@@ -2060,7 +1898,6 @@ mod ob_base_tests {
         check_trade(events[0], 2, 81599, 50);
         check_trade(events[1], 3, 81599, 25);
         check_trade(events[2], 1, 81600, 100);
-        // 只有最后一笔（跨到第二个价位桶 81600 之后）taker 才完全成交
         assert!(!events[0].active_order_completed);
         assert!(!events[1].active_order_completed);
         assert!(events[2].active_order_completed);
@@ -2068,7 +1905,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchIocOrderWithRejection`
     #[test]
     fn should_match_ioc_order_with_rejection() {
         let (mut book, mut expected) = setup_book();
@@ -2084,9 +1920,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // ---------------------- FOK BUDGET ORDERS ---------------------------
-
-    /// Java `shouldRejectFokBidOrderOutOfBudget`
     #[test]
     fn should_reject_fok_bid_order_out_of_budget() {
         let (mut book, expected) = setup_book();
@@ -2105,7 +1938,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchFokBidOrderExactBudget` —— 跨 3 个价位桶（81599/81600/200954）。
     #[test]
     fn should_match_fok_bid_order_exact_budget_crosses_multiple_buckets() {
         let (mut book, mut expected) = setup_book();
@@ -2128,7 +1960,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchFokBidOrderExtraBudget`
     #[test]
     fn should_match_fok_bid_order_extra_budget() {
         let (mut book, mut expected) = setup_book();
@@ -2151,7 +1982,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldRejectFokAskOrderBelowExpectation`
     #[test]
     fn should_reject_fok_ask_order_below_expectation() {
         let (mut book, expected) = setup_book();
@@ -2170,7 +2000,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchFokAskOrderExactExpectation`
     #[test]
     fn should_match_fok_ask_order_exact_expectation() {
         let (mut book, mut expected) = setup_book();
@@ -2191,7 +2020,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMatchFokAskOrderExtraBudget`
     #[test]
     fn should_match_fok_ask_order_extra_budget() {
         let (mut book, mut expected) = setup_book();
@@ -2213,9 +2041,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // ---------------------- IOC_BUDGET ORDERS ---------------------------
-
-    /// Java `shouldFullyMatchIocBudgetWithSufficientBudget`
     #[test]
     fn should_fully_match_ioc_budget_with_sufficient_budget() {
         let (mut book, mut expected) = setup_book();
@@ -2237,7 +2062,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldPartiallyMatchIocBudgetWhenBudgetRunsOut`
     #[test]
     fn should_partially_match_ioc_budget_when_budget_runs_out() {
         let (mut book, mut expected) = setup_book();
@@ -2258,7 +2082,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldRejectIocBudgetWhenBudgetTooSmallForOneUnit`
     #[test]
     fn should_reject_ioc_budget_when_budget_too_small_for_one_unit() {
         let (mut book, expected) = setup_book();
@@ -2276,7 +2099,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldRejectAskIocBudget`
     #[test]
     fn should_reject_ask_ioc_budget() {
         let (mut book, expected) = setup_book();
@@ -2294,9 +2116,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // MARKETABLE GTC ORDERS
-
-    /// Java `shouldFullyMatchMarketableGtcOrder`
     #[test]
     fn should_fully_match_marketable_gtc_order() {
         let (mut book, mut expected) = setup_book();
@@ -2312,7 +2131,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldPartiallyMatchMarketableGtcOrderAndPlace`
     #[test]
     fn should_partially_match_marketable_gtc_order_and_place() {
         let (mut book, mut expected) = setup_book();
@@ -2329,7 +2147,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldFullyMatchMarketableGtcOrder2Prices`
     #[test]
     fn should_fully_match_marketable_gtc_order_2_prices() {
         let (mut book, mut expected) = setup_book();
@@ -2347,7 +2164,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java shouldFullyMatchMarketableGtcOrderWithAllLiquidity —— 跨全部 4 桶 6 笔成交，多桶多单事件链主力用例。
     #[test]
     fn should_fully_match_marketable_gtc_order_with_all_liquidity_crosses_four_buckets() {
         let (mut book, mut expected) = setup_book();
@@ -2364,7 +2180,6 @@ mod ob_base_tests {
         check_trade(events[3], 10, 200954, 10);
         check_trade(events[4], 8, 201000, 28);
         check_trade(events[5], 9, 201000, 32);
-        // taker size=1000 远超总流动性 245，全程未完全成交（剩余 755 转挂单），故全部事件 active_order_completed=false。
         for ev in &events {
             assert!(!ev.active_order_completed);
         }
@@ -2372,9 +2187,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // Move GTC order to marketable price
-
-    /// Java `shouldMoveOrderFullyMatchAsMarketable`
     #[test]
     fn should_move_order_fully_match_as_marketable() {
         let (mut book, mut expected) = setup_book();
@@ -2397,7 +2209,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMoveOrderFullyMatchAsMarketable2Prices`
     #[test]
     fn should_move_order_fully_match_as_marketable_2_prices() {
         let (mut book, mut expected) = setup_book();
@@ -2419,7 +2230,6 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    /// Java `shouldMoveOrderMatchesAllLiquidity` —— move 触发的撮合同样跨全部 4 个价位桶。
     #[test]
     fn should_move_order_matches_all_liquidity_crosses_four_buckets() {
         let (mut book, mut expected) = setup_book();
@@ -2443,6 +2253,4 @@ mod ob_base_tests {
         clear_order_book(&mut book);
     }
 
-    // `multipleCommandsKeepInternalStateTest` 跳过：需要 Java 侧 `TestOrdersGenerator`（带种子的随机命令生成器）+
-    // `IOrderBook.validateInternalState()`——两者都是测试基础设施而非核心撮合逻辑，未复刻该 harness。
 }

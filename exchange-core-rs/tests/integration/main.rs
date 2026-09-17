@@ -1,6 +1,3 @@
-//! Java IT 集成测试的 Rust 翻译对拍(从 src/core 迁入,作为 tests/ 集成测试跑,只用公开 API)。
-//! 每个子模块对应一个 Java IT 文件;详见 memory it-translation-parity。
-
 mod it_custom_leverage_tests;
 mod it_exchange_core_integration_rejection_tests;
 mod it_exchange_core_integration_tests;

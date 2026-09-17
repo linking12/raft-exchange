@@ -1,4 +1,3 @@
-/// 对应 Java `exchange.core2.core.common.BalanceAdjustmentType`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BalanceAdjustmentType {
     Adjustment,
@@ -13,7 +12,6 @@ impl BalanceAdjustmentType {
         }
     }
 
-    /// 对应 Java `BalanceAdjustmentType.of(code)`：由 code 反查类型；未知码回落 `Adjustment`。
     pub fn of(code: i8) -> Self {
         match code {
             1 => BalanceAdjustmentType::Suspend,

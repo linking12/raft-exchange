@@ -1,18 +1,3 @@
-//! 翻译自 Java `exchange.core2.tests.integration.ITLoanTargetedLiquidation`（1 个 @Test）——
-//! loan 强平的 targeted 事件驱动端到端：纯 loan 用户（无期货持仓），抵押 spot 对 MARKPRICE 暴跌即时触发强平，
-//! 全程不发 LIQUIDATION_SCAN。证明 loan targeted 索引把价格驱动强平覆盖到 loan-only 用户（整链
-//! MARKPRICE → check_positions → check_loans → force-sell → 撮合结算）。
-//!
-//! 通过 `ExchangeApi` 复刻：`enable_liquidation()` 置 leader 门（对齐 Java `enableLiquidationEngines()`），
-//! `set_mark_price_at(sym, price, ts)` 提交 MARKPRICE_ADJUSTMENT —— 其 R1 触发 targeted 扫描，产出的
-//! LOAN_FORCE_LIQUIDATE 入 pending 队列并在同一 `process_command` 内自动 drain（对齐 Java force-sell 级联，
-//! 无需 Java 里的 groupingControl 轮询）。LOAN_CREATE 经 dispatch 时 reconcile 出 isolated targeted 索引，
-//! 故 loan-only 用户会被 markprice 命中。
-//!
-//! 货币/符号对齐 Java `TestConstants`：ETH=3928 XBT=3762 SYMBOL_EXCHANGE=9269，`SYMBOLSPEC_ETH_XBT` 零费；
-//! loan 配置 `ofSymbol(6000/8000/7000/MAX/365)`。开仓 mark=1000 → LTV 50% < 60% initial；暴跌 mark=500 →
-//! LTV = 50000/(100·500) = 100% ≥ 80% liquidation → 触发。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -89,7 +74,6 @@ mod tests {
             CommandResultCode::Success
         );
 
-        // LP 在暴跌价挂 BID，接强平的 ASK IOC 卖单。
         assert_eq!(
             api.place_order(PlaceOrderRequest {
                 order_id: 1000,
@@ -104,12 +88,10 @@ mod tests {
             CommandResultCode::Success
         );
 
-        api.enable_liquidation(); // is_running=true，但不主动发 scan
+        api.enable_liquidation();
 
-        // 关键：仅抵押 spot 对 MARKPRICE 暴跌 → targeted 触发 + 同步 drain 出的 force-sell 撮合掉抵押。
         assert_eq!(api.set_mark_price(SYMBOL, CRASH_MARK), CommandResultCode::Success);
 
-        // 抵押被 targeted 强平消费：loan 全平后从 map 移除（或残留 < 初始）。
         let collateral_now = api
             .ups()
             .get(BORROWER)

@@ -1,4 +1,3 @@
-//! 对应 Java `PositionDirection`：`LONG(1)`/`SHORT(-1)`/`EMPTY(0)`，`code()`/`multiplier()` 共用同一映射避免不一致。
 use crate::core::common::order_action::OrderAction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,9 +8,7 @@ pub enum PositionDirection {
 }
 
 impl PositionDirection {
-    // ===== 构造/配置 =====
 
-    /// 对应 Java `PositionDirection.of(byte code)`：未知码值 panic（对应 Java `IllegalArgumentException`）。
     pub fn of_code(code: i8) -> Self {
         match code {
             1 => PositionDirection::Long,
@@ -21,7 +18,6 @@ impl PositionDirection {
         }
     }
 
-    /// 对应 Java `PositionDirection.of(OrderAction action)`：`BID -> LONG`，其余 `-> SHORT`。
     pub fn of_action(action: OrderAction) -> Self {
         if action == OrderAction::Bid {
             PositionDirection::Long
@@ -30,9 +26,6 @@ impl PositionDirection {
         }
     }
 
-    // ===== 查询/访问器 =====
-
-    /// 对应 Java `PositionDirection.getMultiplier()`：`LONG=1, SHORT=-1, EMPTY=0`。
     pub fn multiplier(self) -> i32 {
         match self {
             PositionDirection::Long => 1,
@@ -41,18 +34,15 @@ impl PositionDirection {
         }
     }
 
-    /// 对应 Java `PositionDirection.of(byte code)`：`code` 与 `multiplier` 共用同一取值域。
     pub fn code(self) -> i8 {
         self.multiplier() as i8
     }
 
-    /// 对应 Java `isOppositeToAction`：`LONG` 与 `ASK` 相对，`SHORT` 与 `BID` 相对（`EMPTY` 恒不相对）。
     pub fn is_opposite_to_action(self, action: OrderAction) -> bool {
         (self == PositionDirection::Long && action == OrderAction::Ask)
             || (self == PositionDirection::Short && action == OrderAction::Bid)
     }
 
-    /// 对应 Java `PositionDirection.isSameAsAction(OrderAction)`。
     pub fn is_same_as_action(self, action: OrderAction) -> bool {
         (self == PositionDirection::Long && action == OrderAction::Bid)
             || (self == PositionDirection::Short && action == OrderAction::Ask)
@@ -60,7 +50,6 @@ impl PositionDirection {
 }
 
 impl Default for PositionDirection {
-    /// 对应 Java `SymbolPositionRecord.direction` 的字段初始值 `PositionDirection.EMPTY`。
     fn default() -> Self {
         PositionDirection::Empty
     }

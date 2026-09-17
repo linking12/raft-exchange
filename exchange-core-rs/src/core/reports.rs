@@ -90,14 +90,10 @@ pub struct SingleUserReport {
     pub accounts: BTreeMap<i32, i64>,
     pub exchange_locked: BTreeMap<i32, i64>,
     pub positions: Vec<PositionView>,
-    /// 账户级 Cross 加权 LTV（bps），对应 Java `SingleUserReportResult.crossAccountLtvBps`。
     pub cross_account_ltv_bps: i64,
-    /// (loan_id, symbol_id, loan_currency, collateral_currency, collateral_amount, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts, display_interest, ltv_bps, mark_price)。
     pub isolated_loans: Vec<(i64, i32, i32, i32, i64, i64, i64, i32, i64, i64, i64, i64)>,
-    /// (loan_id, symbol_id, loan_currency, outstanding_principal, accumulated_interest, rate_bps, opened_at_ts, display_interest)。
     pub cross_loans: Vec<(i64, i32, i32, i64, i64, i32, i64, i64)>,
     pub cross_loan_collateral: BTreeMap<i32, i64>,
-    /// 该用户在各簿的挂单快照 `(symbol, Order)`，对应 Java `SingleUserReportResult.orders`（按需扫簿，symbol/order_id 升序）。
     pub orders: Vec<(i32, Order)>,
 }
 
@@ -158,7 +154,6 @@ impl StateHashReport {
 }
 
 impl ExchangeCore {
-    // ===== 核心行为 =====
     pub fn query_total_balance(&self) -> TotalCurrencyBalanceReport {
         let mut r = TotalCurrencyBalanceReport::default();
         let mut pnl_by_symbol: BTreeMap<i32, i64> = BTreeMap::new();
@@ -321,7 +316,6 @@ impl ExchangeCore {
                  l.accumulated_interest, l.rate_bps, l.opened_at_ts, display_interest)
             })
             .collect();
-        // 账户级 Cross 加权 LTV（fail-open：缺价按 0）。
         let cross_account_ltv_bps = self.risk.loan_service.calculate_cross_account_ltv_bps(
             up,
             now_ms,
@@ -417,7 +411,6 @@ impl ExchangeCore {
         components.insert("risk_fees".to_string(), hash_bucket(&self.risk.fees));
         components.insert("risk_adjustments".to_string(), hash_bucket(&self.risk.adjustments));
         components.insert("risk_suspends".to_string(), hash_bucket(&self.risk.suspends));
-        // 折入每个 symbol 的完整 config hash（费率/保证金/杠杆/loan_config），否则费率等业务字段分歧不被 raft 探测。
         let mut symbols_h: i64 = 17;
         for (&id, s) in &self.ssp.symbols {
             symbols_h = symbols_h.wrapping_mul(31).wrapping_add(id as i64);
@@ -428,7 +421,6 @@ impl ExchangeCore {
         for (&id, c) in &self.ssp.currencies {
             ccy_h = ccy_h.wrapping_mul(31).wrapping_add(id as i64);
             ccy_h = ccy_h.wrapping_mul(31).wrapping_add(c.currency_scale_k);
-            // collateral_weight_bps 被 ADD_LOAN 改，须折入否则跨节点抵押权重分歧漏检。
             ccy_h = ccy_h.wrapping_mul(31).wrapping_add(c.collateral_weight_bps as i64);
         }
         components.insert("currency_specs".to_string(), ccy_h);
@@ -438,10 +430,6 @@ impl ExchangeCore {
             users_h = users_h.wrapping_mul(31).wrapping_add(up.state_hash() as i64);
         }
         components.insert("user_profiles".to_string(), users_h);
-        // 对应 Java StateHashReport 的 MATCHING_ORDER_BOOKS + RISK_LAST_PRICE_CACHE 子模块哈希：撮合簿与价格缓存
-        // 也须折入，否则两节点仅在这两块子状态分歧时算出相同 hash，raft 跨节点分叉探测漏检。
-        // mark_price_ts 是复制态（随现货成交/MARKPRICE_ADJUSTMENT 确定性更新），须折入否则跨节点分歧漏检。
-        // last_price_cache 现为 record map；分别折入 mark_price 与 mark_price_ts 两块（两者都是复制态，缺一则跨节点分歧漏检）。
         let mark_prices: BTreeMap<i32, i64> = self.risk.last_price_cache.iter().map(|(&k, v)| (k, v.mark_price)).collect();
         let mark_price_ts: BTreeMap<i32, i64> = self.risk.last_price_cache.iter().map(|(&k, v)| (k, v.mark_price_ts)).collect();
         components.insert("risk_mark_price_ts".to_string(), hash_bucket(&mark_price_ts));
@@ -450,7 +438,6 @@ impl ExchangeCore {
         StateHashReport { components }
     }
 
-    // ===== 内部 helper =====
     fn size_price_to_currency(&self, amount: i64, symbol: i32) -> Option<(i32, i64)> {
         let spec = self.ssp.get_symbol(symbol)?;
         let cspec = self.ssp.get_currency(spec.quote_currency)?;
@@ -734,7 +721,6 @@ mod tests {
                 ..Default::default()
             });
         }
-        // 现货本无 markPrice；成交价应回写进 last_price_cache（供 loan 抵押估值）。首次成交 → EMA 直接取成交价。
         core.process_command(&mut OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 10,
@@ -778,7 +764,6 @@ mod tests {
             order_id: SELLER,
             ..Default::default()
         });
-        // 挂两个不成交的 GTC ASK（无对手价），应静止在簿上。
         for (oid, price) in [(101i64, 55i64), (102, 60)] {
             core.process_command(&mut OrderCommand {
                 command: OrderCommandType::PlaceOrder,
@@ -794,12 +779,10 @@ mod tests {
         }
         let r = core.query_single_user(SELLER, 0);
         assert_eq!(r.orders.len(), 2, "报表应含 2 个挂单: {:?}", r.orders);
-        // 按 (symbol, order_id) 升序。
         assert_eq!(r.orders[0].1.order_id, 101);
         assert_eq!(r.orders[0].0, SYMBOL);
         assert_eq!(r.orders[1].1.order_id, 102);
         assert!(r.orders.iter().all(|(_, o)| o.uid == SELLER));
-        // 别的用户查不到 SELLER 的单。
         assert!(core.query_single_user(999, 0).orders.is_empty());
     }
 

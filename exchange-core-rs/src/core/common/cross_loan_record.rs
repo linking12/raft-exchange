@@ -1,49 +1,30 @@
-//! 对应 Java `CrossLoanRecord`：Cross 单笔债务凭证，挂 `UserProfile::cross_loans`；无抵押字段（抵押是账户级共享池）。
 use crate::core::common::loan_record::LoanRecord;
 
-/// 对应 Java `CrossLoanRecord`。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CrossLoanRecord {
-    // ── 身份
-    /// 所属用户（上下文注入，不参与序列化，只进 state_hash）。
     pub uid: i64,
-    /// 客户端提供，per-user 唯一，创建时锁死（与 Isolated `loan_id` 是独立命名空间）。
     pub loan_id: i64,
 
-    // ── 开仓条款：存续期不变
-    /// 匹配的现货 pair，scanner 据此取 spec。
     pub symbol_id: i32,
-    /// = 该 pair 的 quoteCurrency。
     pub loan_currency: i32,
-    /// 借入时锁定的年化利率（bps）。
     pub rate_bps: i32,
-    /// 开仓时间戳（ms），期限校验用。
     pub opened_at_ts: i64,
 
-    // ── 债务：随借还、计息、强平变动。抵押不在此处——见 UserProfile::cross_loan_collateral
-    /// 剩余未偿本金（loanCurrency）。
     pub outstanding_principal: i64,
-    /// 已计提未付利息（loanCurrency），结算时进 interestRevenue。
     pub accumulated_interest: i64,
-    /// 上次计息时间戳（ms），初始 = opened_at_ts；Cross 恒 FLOATING，此游标不参与计息。
     pub last_accrue_ts: i64,
-    /// FLOATING 计息游标：上次 accrue 的 liveAcc 快照（bps·ms）。
     pub acc_snapshot: i64,
 
-    // ── 累计量：FundEvent 只发快照，本次量由下游相邻两条相减得出
-    /// 累计已付利息（loanCurrency）。
     pub cum_interest_paid: i64,
 }
 
 impl CrossLoanRecord {
-    /// 对应 Java `CrossLoanRecord(...)` 构造器：直接调用 `initialize`。
     pub fn new(uid: i64, loan_id: i64, symbol_id: i32, loan_currency: i32, rate_bps: i32, opened_at_ts: i64) -> Self {
         let mut r = CrossLoanRecord::default();
         r.initialize(uid, loan_id, symbol_id, loan_currency, rate_bps, opened_at_ts);
         r
     }
 
-    /// 对应 Java `initialize(...)`：复用一条记录前必须先重置 identity + 可变状态。
     pub fn initialize(&mut self, uid: i64, loan_id: i64, symbol_id: i32, loan_currency: i32, rate_bps: i32, opened_at_ts: i64) {
         self.uid = uid;
         self.loan_id = loan_id;
@@ -58,12 +39,10 @@ impl CrossLoanRecord {
         self.cum_interest_paid = 0;
     }
 
-    /// 对应 Java `isEmpty()`：无抵押字段，仅本金+利息全 0 才算空。
     pub fn is_empty(&self) -> bool {
         self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `stateHash()`，风格对齐 `IsolatedLoanRecord::state_hash`。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
@@ -122,7 +101,6 @@ impl LoanRecord for CrossLoanRecord {
         self.acc_snapshot = value;
     }
 
-    /// Cross 恒 Floating。
     fn is_fixed_rate(&self) -> bool {
         false
     }
@@ -136,8 +114,6 @@ impl LoanRecord for CrossLoanRecord {
     }
 }
 
-
-// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;

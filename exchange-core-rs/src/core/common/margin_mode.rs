@@ -1,6 +1,3 @@
-//! 对应 Java: exchange.core2.core.common.MarginMode。
-//! `ISOLATED(0)` 默认（逐仓，自筹保证金，PnL 不外借）；`CROSS(1)`（全仓，按币种进账户级池）。
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarginMode {
     Isolated,
@@ -15,7 +12,6 @@ impl MarginMode {
         }
     }
 
-    /// 对应 Java `MarginMode.of(byte code)`：未知码值 panic（对应 Java `IllegalArgumentException`）。
     pub fn of_code(code: i8) -> Self {
         match code {
             0 => MarginMode::Isolated,
@@ -26,7 +22,6 @@ impl MarginMode {
 }
 
 impl Default for MarginMode {
-    /// 对应 Java `marginMode` 字段初始值 `MarginMode.ISOLATED`。
     fn default() -> Self {
         MarginMode::Isolated
     }

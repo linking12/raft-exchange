@@ -1,16 +1,3 @@
-//! Java↔Rust 组件级黄金对拍（防线 ①b，见 CONSISTENCY.md）：把 Java `OrderBookBaseTest` 的固定
-//! 黄金盘口 fixture + 全部确定性 @Test 逐一移植为 Rust pinned 断言，Java 是 oracle。
-//!
-//! 与 Java 一致，每个场景都跑两套实现（`OrderBookNaiveImpl` + `OrderBookDirectImpl`），对应 Java 的
-//! Naive / Direct leaf 类。这里用一条 `parity!` 宏为每个场景生成 `::naive` / `::direct` 两个 #[test]。
-//!
-//! 唯一跳过的是 `multipleCommandsKeepInternalStateTest`（25000 随机命令 fuzz）——该意图已被
-//! `tests/orderbook_diff.rs` 的 proptest 差分覆盖。
-//!
-//! 两套簿均用 `new()`（`symbol_spec=None`）：现货 BID 移价风控守卫惰性，且 fixture 内所有 reserve 均满足
-//! `reserve >= price`，故与 Java 用 spec 构造的簿在这些断言上等价（spec 仅影响费用/风控，不进 L2/matcher 事件）。
-//! Naive 无 `validate_internal_state`（仅 Direct 有），故不逐步校验内部不变式——L2 快照 + 事件链才是对拍面。
-
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
 use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
@@ -30,10 +17,6 @@ const INITIAL_PRICE: i64 = 81600;
 const MAX_PRICE: i64 = 400000;
 const UID_1: i64 = 412;
 const UID_2: i64 = 413;
-
-// ============================================================================================
-// L2MarketDataHelper 的 Rust 移植（对应 Java tests/util/L2MarketDataHelper）
-// ============================================================================================
 
 #[derive(Clone)]
 struct L2Helper {
@@ -143,10 +126,6 @@ impl L2Helper {
     }
 }
 
-// ============================================================================================
-// Fixture：持有一套簿 + 期望盘口 helper
-// ============================================================================================
-
 struct Fixture {
     ob: Box<dyn IOrderBook>,
     exp: L2Helper,
@@ -160,7 +139,6 @@ impl Fixture {
         Self::build(Box::new(OrderBookDirectImpl::new()))
     }
 
-    /// 构建 Java `@BeforeEach before()` 的固定黄金盘口，并断言初始 L2 与 Java 黄金值逐位一致。
     fn build(ob: Box<dyn IOrderBook>) -> Self {
         let mut fx = Fixture {
             ob,
@@ -271,7 +249,6 @@ impl Fixture {
         cmd
     }
 
-    /// 对应 Java `@AfterEach after()` -> clearOrderBook：用市价 IOC 扫空两侧，校验空簿。
     fn clear(&mut self) {
         let snap = self.snapshot();
         let ask_sum: i64 = snap.ask_volumes.iter().sum();
@@ -312,10 +289,6 @@ impl Fixture {
     }
 }
 
-// ============================================================================================
-// 事件链断言 helper（对应 Java checkEventTrade / checkEventRejection / checkEventReduce）
-// ============================================================================================
-
 fn events(cmd: &OrderCommand) -> Vec<&MatcherTradeEvent> {
     let mut out = Vec::new();
     let mut cur = cmd.matcher_event.as_deref();
@@ -349,12 +322,7 @@ fn check_reduce(ev: &MatcherTradeEvent, reduce_size: i64, price: i64, completed:
     assert!(ev.next.is_none(), "reduce 应无后继事件");
 }
 
-// ============================================================================================
-// 场景函数（逐一对应 Java @Test）
-// ============================================================================================
-
 fn scn_should_initialize_without_errors(_fx: &mut Fixture) {
-    // fixture 构建即校验初始黄金盘口；空场景。
 }
 
 fn scn_should_add_gtc_orders(fx: &mut Fixture) {
@@ -372,7 +340,6 @@ fn scn_should_add_gtc_orders(fx: &mut Fixture) {
 }
 
 fn scn_should_ignored_duplicate_order(fx: &mut Fixture) {
-    // 重复 order id=1（ASK 81600 size100，best bid 81593 < 81600 无法撮合）→ 剩余量 REJECT，1 个事件。
     let cmd = fx.newo(Gtc, 1, UID_1, 81600, 0, 100, Ask, CommandResultCode::Success);
     assert_eq!(events(&cmd).len(), 1);
 }
@@ -521,7 +488,6 @@ fn scn_should_match_ioc_order_with_two_limit_orders_partial(fx: &mut Fixture) {
     assert_eq!(ev.len(), 2);
     check_trade(ev[0], 4, 81593, 40);
     check_trade(ev[1], 5, 81590, 1);
-    // order 4 已成交移除、order 5 仍在（都属 UID_1）。
     let orders = fx.ob.find_user_orders(UID_1);
     assert!(!orders.iter().any(|o| o.order_id == 4), "order 4 应已移除");
     assert!(orders.iter().any(|o| o.order_id == 5), "order 5 应仍在");
@@ -548,7 +514,6 @@ fn scn_should_match_ioc_order_with_rejection(fx: &mut Fixture) {
     fx.assert_l2();
     let ev = events(&cmd);
     assert_eq!(ev.len(), 7);
-    // 6 笔成交 + 头部 REJECT（剩 25 未成交）。
     check_reject(ev[0], 25, MAX_PRICE, MAX_PRICE + 1);
 }
 
@@ -647,12 +612,12 @@ fn scn_should_fully_match_ioc_budget_with_sufficient_budget(fx: &mut Fixture) {
 
 fn scn_should_partially_match_ioc_budget_when_budget_runs_out(fx: &mut Fixture) {
     let size = 180;
-    let buy_budget = 81599 * 75; // 恰好第一价位 75 单位
+    let buy_budget = 81599 * 75;
     let cmd = fx.newo(IocBudget, 123, UID_2, buy_budget, buy_budget, size, Bid, CommandResultCode::Success);
     fx.exp.remove_ask(0);
     fx.assert_l2();
     let ev = events(&cmd);
-    assert_eq!(ev.len(), 3); // 头部 reject + 2 trade
+    assert_eq!(ev.len(), 3);
     check_reject(ev[0], 105, buy_budget, buy_budget);
     check_trade(ev[1], 2, 81599, 50);
     check_trade(ev[2], 3, 81599, 25);
@@ -660,7 +625,7 @@ fn scn_should_partially_match_ioc_budget_when_budget_runs_out(fx: &mut Fixture) 
 
 fn scn_should_reject_ioc_budget_when_budget_too_small_for_one_unit(fx: &mut Fixture) {
     let size = 100;
-    let buy_budget = 81598; // < 第一档单价 81599
+    let buy_budget = 81598;
     let cmd = fx.newo(IocBudget, 123, UID_2, buy_budget, buy_budget, size, Bid, CommandResultCode::Success);
     fx.assert_l2();
     let ev = events(&cmd);
@@ -766,10 +731,6 @@ fn scn_should_move_order_matches_all_liquidity(fx: &mut Fixture) {
     check_trade(ev[4], 8, 201000, 28);
     check_trade(ev[5], 9, 201000, 32);
 }
-
-// ============================================================================================
-// 宏：每个场景生成 naive / direct 两个 #[test]
-// ============================================================================================
 
 macro_rules! parity {
     ( $( $name:ident => $scn:path ),+ $(,)? ) => {

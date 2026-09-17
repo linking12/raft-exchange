@@ -1,5 +1,3 @@
-//! 对应 Java `exchange.core2.core.ExchangeCore`（Disruptor 五段编排入口），本移植塌缩为单线程确定性顺序管线：R1→ME→R2。
-//! `risk`/`matching`/`ups`/`ssp` 作为平级字段直接持有，靠字段级借用过借用检查，故 `process_command` 不拆分成私有 r1/r2 辅助方法。
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 #[cfg(test)]
@@ -9,24 +7,17 @@ use crate::core::common::margin_mode::MarginMode;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
 
-/// 对应 Java `ExchangeCore`（现货子集，单 shard）。
 #[derive(Default)]
 pub struct ExchangeCore {
     pub risk: RiskEngine,
     pub matching: MatchingEngineRouter,
     pub ups: UserProfileService,
     pub ssp: SymbolSpecificationProvider,
-    /// 测试可观测缓冲(非复制态,不进快照/state_hash):`run_liquidation_cascade` 排空的每条次级命令(FORCE/IF/ADL/loan 强平)
-    /// 的 `fund_events` 累加于此,供测试对拍级联事件流(`last_fund_events()` 只含本条命令、抓不到排空命令)。每次 `process_command` 开头清空。
     pub last_cascade_events: Vec<crate::core::common::fund_event::FundEvent>,
-    /// 同上(非复制态):`run_liquidation_cascade` 排空命令产生的撮合事件(展平链),供事件级对拍(强平 FORCE 成交)。
     pub last_cascade_matcher_events: Vec<crate::core::common::matcher_trade_event::MatcherTradeEvent>,
 }
 
 impl ExchangeCore {
-    // ==========================================================================================
-    // 构造
-    // ==========================================================================================
 
     pub fn new() -> Self {
         ExchangeCore {
@@ -39,26 +30,7 @@ impl ExchangeCore {
         }
     }
 
-    // ==========================================================================================
-    // 核心行为:命令管线 / RESET / 强平级联 / 快照
-    // ==========================================================================================
-
-    /// 确定性顺序管线 —— 把 Java Disruptor 的多段并行流水塌缩成**单线程一次同步调用**。
-    ///
-    /// 每条命令严格依次流过三段(所有命令走统一入口,非交易命令靠 ME/R2 的 no-op 守卫短路):
-    ///
-    /// ```text
-    ///   R1  pre_process_command    校验 / 冻结 / 仓位预处理 / 两步命令 collect / 强平扫描判定
-    ///   ME  process_order          撮合(下单/撤单/改单/减量/强平吃单);非交易命令 no-op(保留 R1 结果码)
-    ///   R2  handler_risk_release    成交结算 / 释放 / PnL / 费用入池 / 两步命令 apply / 事件产出
-    /// ```
-    ///
-    /// R2 之后 `run_liquidation_cascade` 把 R1/扫描生成的次级强平命令(FORCE→IF→ADL / loan 强平)
-    /// 逐条**回流过同一三段**,闭合在同一次 `process_command` 内。整条链确定、可复制。
-    ///
-    /// 例外:`RESET` 不过三段(直接清空全引擎态);纯查询(`ORDER_BOOK_REQUEST`)在 ME 内取数即返回。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
-        // 每条命令重置级联事件观测缓冲(仅测试可观测、非复制态)。
         self.last_cascade_events.clear();
         self.last_cascade_matcher_events.clear();
 
@@ -67,7 +39,6 @@ impl ExchangeCore {
             cmd.command, cmd.uid, cmd.symbol, cmd.order_id
         );
 
-        // 例外:RESET 不过 R1→ME→R2,直接清空全引擎业务态并回 SUCCESS(对齐 Java RiskEngine `case RESET`)。
         if cmd.command == crate::core::common::cmd::order_command_type::OrderCommandType::Reset {
             self.reset();
             cmd.result_code = Some(crate::core::common::cmd::command_result_code::CommandResultCode::Success);
@@ -75,11 +46,8 @@ impl ExchangeCore {
             return;
         }
 
-        // R1（职责见上方 doc 表）
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
-        // ME（非交易命令在此 no-op，保留 R1 结果码）
         self.matching.process_order(cmd);
-        // R2：结算/释放/PnL/费用入池 + 尾部现货成交回写 markPrice；只读遍历事件链、不消费，`matcher_event` 留在 cmd 上供下游读取。
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
 
         log::trace!(
@@ -87,11 +55,9 @@ impl ExchangeCore {
             cmd.command, cmd.result_code
         );
 
-        // ---- 排空强平级联:R1/扫描生成的次级命令逐条回流过同一三段直至收敛 ----
         self.run_liquidation_cascade();
     }
 
-    /// 对应 Java `RiskEngine.reset()` + 各 provider `reset()`：RESET 清空全引擎业务态（用户/仓位/费用/specs/价格缓存/loan+IF 服务/撮合簿）。保留 leader-local 的 `liquidation_engine`。
     fn reset(&mut self) {
         self.risk.reset();
         self.ups.users.clear();
@@ -101,10 +67,7 @@ impl ExchangeCore {
         self.matching.reset();
     }
 
-    /// 驱动强平级联：把强平引擎生成的次级命令(FORCE_LIQUIDATION/IF_TAKEOVER/AUTO_DELEVERAGING/loan 强平)
-    /// 逐条回流过 R1→ME→R2;过程中新生成的命令继续入队,FIFO 保序直至排空(FORCE→IF→ADL 级联,链深≤3/仓位必然收敛)。
     fn run_liquidation_cascade(&mut self) {
-        // 绝大多数命令不触发强平,队列为空时整段 no-op;仅在真有次级命令时打点(避免热路径噪声)。
         if !self.risk.liquidation_engine.pending_commands.is_empty() {
             log::debug!(
                 "run_liquidation_cascade start: {} pending secondary commands to drain",
@@ -122,7 +85,6 @@ impl ExchangeCore {
             self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
             self.matching.process_order(&mut generated);
             self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
-            // 累加该次级命令的 fund/matcher event 到观测缓冲（供测试对拍级联事件流）。
             self.last_cascade_events.extend(generated.fund_events.iter().cloned());
             let mut node = generated.matcher_event.as_deref();
             while let Some(ev) = node {
@@ -137,17 +99,6 @@ impl ExchangeCore {
         }
     }
 
-    // Snapshot：**Chronicle Wire RAW**(与 Java `MemorySerializationProcessor` 同格式),混合集群下 Rust 与 Java
-    // 共用快照。分 RISK_ENGINE("RE")+ MATCHING_ENGINE_ROUTER("ME")两模块(各一个 `.ecs`),每模块 = 帧 + payload。
-    // 非复制 leader-local 状态(liquidation_engine / SPR 的 liquidation_flow/adl_eligibility/pending_adl_size)不序列化,
-    // 反序列化后经 `restore_non_replicated_state` 复原为"换届后新 leader"语义。见 memory `snapshot-chronicle-format`。
-
-    /// 打快照的**唯一入口**:一次产出 RE + ME 两个模块的 `.ecs` 字节(Java 可读,各自独立文档)。返回 `(re, me)`。
-    /// - RE:符号/币种/用户/仓位/借贷/IF/loan/费用(`risk_engine::write_risk_engine_payload`,对应 Java `RiskEngine.writeMarshallable`)。
-    /// - ME:订单簿(`impl ChronicleMarshallable for MatchingEngineRouter`)。
-    ///
-    /// 保持两个独立 payload 是 Java 快照格式的硬要求:Java 按 `SerializedModuleType`(RISK_ENGINE / MATCHING_ENGINE_ROUTER)
-    /// 分模块各存一份,不能合成单块;上层按需把 `re`/`me` 各自落到对应模块文件。
     pub fn to_snapshot_bytes(&self) -> (Vec<u8>, Vec<u8>) {
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
         use crate::core::snapshot::module_frame::encode_module_payload;
@@ -158,7 +109,6 @@ impl ExchangeCore {
         (re, me)
     }
 
-    /// 读快照的**唯一入口**:从 RE + ME 两模块 `.ecs` 字节(Java 或 Rust 产出)恢复 `ExchangeCore`;末尾 `restore_non_replicated_state`。
     pub fn from_snapshot_bytes(re_ecs: &[u8], me_ecs: &[u8]) -> Self {
         use crate::core::snapshot::chronicle_reader::ChronicleReader;
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
@@ -172,15 +122,8 @@ impl ExchangeCore {
         core
     }
 
-    // ==========================================================================================
-    // 内部 helper
-    // ==========================================================================================
-
-    /// 复原非复制 leader-local 状态到"换届后新 leader"语义（对应 Java `updateProvider`）：0. 重建 `ssp` 现货对派生索引；1. 仓位 `adl_eligibility` 按 margin_mode 归一（ISOLATED=100/CROSS=0）；2. 重建 `liquidation_engine` 的 targeted 索引（futures symbol_to_users + loan 扫描器双索引）。
     fn restore_non_replicated_state(&mut self) {
-        // 0. 重建现货对派生索引（不序列化，从 symbols 复原，对齐 Java `rebuildSpotPairIndex`）。
         self.ssp.rebuild_spot_pair_index();
-        // 1. 仓位非复制 scratch 字段归一。
         for up in self.ups.users.values_mut() {
             for pos in up.positions.values_mut() {
                 pos.adl_eligibility = if pos.margin_mode == MarginMode::Isolated { 100 } else { 0 };
@@ -188,7 +131,6 @@ impl ExchangeCore {
                 pos.liquidation_flow = None;
             }
         }
-        // 2. 重建 liquidation_engine 索引（futures symbol_to_users）。
         let le = &mut self.risk.liquidation_engine;
         for up in self.ups.users.values() {
             for pos in up.positions.values() {
@@ -202,7 +144,6 @@ impl ExchangeCore {
                 }
             }
         }
-        // loan 扫描器双索引重建。
         le.loan_liquidation_engine.rebuild_indices(&self.ups);
     }
 }
@@ -257,7 +198,6 @@ mod tests {
 
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         assert!(core.ups.get(1).is_some());
-        // 非交易命令不进 ME：cmd.market_data/matcher_event 均未被触碰。
         assert!(cmd.matcher_event.is_none());
         assert!(cmd.market_data.is_none());
     }
@@ -269,7 +209,6 @@ mod tests {
         core.risk.set_mark_price(spot_spec().symbol_id, 100);
         core.ups.get_mut(1).unwrap().add_to_account(QUOTE, 5_000);
         *core.risk.fees.entry(QUOTE).or_insert(0) += 7;
-        // 挂一笔 GTC 进簿。
         let mut place = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 10,
@@ -320,7 +259,6 @@ mod tests {
     fn trading_place_order_risk_rejected_never_reaches_book() {
         let mut core = seeded_core();
         core.ups.add_empty_user_profile(1);
-        // 无余额充值：BID 下单必 NSF。
         let mut cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 1,
@@ -337,10 +275,8 @@ mod tests {
         core.process_command(&mut cmd);
 
         assert_eq!(cmd.result_code, Some(CommandResultCode::RiskNsf));
-        // R2 应为 no-op（无 matcher_event）；locked 应保持 0（R1 拒绝，未冻结）。
         assert_eq!(core.ups.get(1).unwrap().locked(QUOTE), 0);
 
-        // 用 OrderBookRequest 确认簿仍为空（ME 没有把这笔拒绝单挂上去）。
         let mut req = OrderCommand {
             command: OrderCommandType::OrderBookRequest,
             symbol: SYMBOL,
@@ -373,7 +309,6 @@ mod tests {
         core.process_command(&mut cmd);
 
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
-        // 无对手盘：resting on book，全额冻结（taker_fee=0 → 冻结额=notional=50000）。
         assert_eq!(core.ups.get(1).unwrap().locked(QUOTE), 50_000);
 
         let mut req = OrderCommand {
@@ -422,7 +357,6 @@ mod tests {
     }
 }
 
-// LOAN_FORCE_LIQUIDATE / LOAN_CROSS_FORCE_LIQUIDATE 全链路（R1 pre-move→ME→R2/LIF 接管）集成测试，独立 mod 因需专属借贷治具。
 #[cfg(test)]
 mod loan_force_liquidate_tests {
     use super::*;
@@ -436,9 +370,9 @@ mod loan_force_liquidate_tests {
     use crate::core::common::order_type::OrderType;
     use crate::core::common::symbol_type::SymbolType;
 
-    const BASE: i32 = 1; // collateral / Cross selling currency
-    const QUOTE: i32 = 2; // loan currency (Isolated + Cross target)
-    const SYMBOL: i32 = 100; // base=BASE/quote=QUOTE
+    const BASE: i32 = 1;
+    const QUOTE: i32 = 2;
+    const SYMBOL: i32 = 100;
     const BORROWER: i64 = 10;
     const MAKER: i64 = 20;
     const LOAN_ID: i64 = 42;
@@ -469,7 +403,6 @@ mod loan_force_liquidate_tests {
         core
     }
 
-    /// 借出 principal QUOTE、锁 collateral BASE 抵押，登记 isolated_loans 并同步走 disburse 记账（跳过 LTV/pool-capacity 校验，聚焦强平结算逻辑）。
     fn open_isolated_loan(core: &mut ExchangeCore, loan_id: i64, collateral: i64, principal: i64, rate_bps: i32, opened_at_ts: i64) {
         core.risk.loan_service.add_to_loan_pool_available(QUOTE, 1_000_000);
         {
@@ -517,7 +450,6 @@ mod loan_force_liquidate_tests {
         }
     }
 
-    /// 全局守恒：Σaccounts + loanPoolAvailable + interestRevenue + loanInsuranceFund + fees + adjustments 操作前后不变（loanPoolBorrowed 是 tracker 明确排除）。
     fn conserved_total(core: &ExchangeCore, currency: i32) -> i64 {
         let accounts_sum: i64 = core.ups.users.values().map(|u| u.account(currency)).sum();
         accounts_sum
@@ -527,10 +459,6 @@ mod loan_force_liquidate_tests {
             + *core.risk.fees.get(&currency).unwrap_or(&0)
             + *core.risk.adjustments.get(&currency).unwrap_or(&0)
     }
-
-    // ================================================================
-    // Isolated
-    // ================================================================
 
     #[test]
     fn isolated_force_liquidate_full_fill_removes_loan_and_conserves() {
@@ -544,15 +472,14 @@ mod loan_force_liquidate_tests {
         let mut cmd = force_liquidate_cmd(2, LOAN_ID, 1, 1_000, 2_000);
         core.process_command(&mut cmd);
 
-        assert_eq!(cmd.result_code, Some(CommandResultCode::Success)); // ME 一旦路由恒 Success
+        assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         let borrower = core.ups.get(BORROWER).unwrap();
         assert!(!borrower.isolated_loans.contains_key(&LOAN_ID), "fully repaid loan removed");
-        assert_eq!(borrower.account(BASE), 0); // 抵押全卖
+        assert_eq!(borrower.account(BASE), 0);
         assert_eq!(borrower.locked(BASE), 0);
-        // received_quote=1000, liqFee=ceil(1000*200/10000)=20 -> LIF，principal=500 全额还清，480 溢价归借款人。
         assert_eq!(borrower.account(QUOTE), 500 + 480);
         assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 20);
-        assert_eq!(core.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000); // 999_500 + 500 还款
+        assert_eq!(core.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000);
         assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
         assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 0);
 
@@ -564,7 +491,7 @@ mod loan_force_liquidate_tests {
     fn isolated_force_liquidate_partial_fill_keeps_loan_with_updated_snapshot() {
         let mut core = seeded_loan_core();
         open_isolated_loan(&mut core, LOAN_ID, 1_000, 500, 0, 1_000);
-        fund_maker_and_rest_bid(&mut core, 1, 1, 400); // maker 只能吃下 400/1000
+        fund_maker_and_rest_bid(&mut core, 1, 1, 400);
 
         let before_base = conserved_total(&core, BASE);
         let before_quote = conserved_total(&core, QUOTE);
@@ -575,27 +502,23 @@ mod loan_force_liquidate_tests {
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         let borrower = core.ups.get(BORROWER).unwrap();
         let loan = borrower.isolated_loans.get(&LOAN_ID).expect("partial fill keeps the loan open");
-        // received_quote=400, liqFee=ceil(400*200/10000)=8, principal_part=min(392,500)=392。
         assert_eq!(loan.outstanding_principal, 500 - 392);
         assert_eq!(loan.accumulated_interest, 0);
-        assert_eq!(loan.collateral_amount, 600); // 600 lots 被拒，退回 loan
-        assert_eq!(borrower.account(BASE), 600); // 1000 - 400 卖出，与仍锁定的抵押一致
-        assert_eq!(borrower.locked(BASE), 0); // reject + trade 共同释放了 R1 pre-move lock
-        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 8); // 仅收手续费，未接管
+        assert_eq!(loan.collateral_amount, 600);
+        assert_eq!(borrower.account(BASE), 600);
+        assert_eq!(borrower.locked(BASE), 0);
+        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 8);
         assert_eq!(core.risk.loan_service.get_loan_pool_available(QUOTE), 999_500 + 392);
 
         assert_eq!(conserved_total(&core, BASE), before_base);
         assert_eq!(conserved_total(&core, QUOTE), before_quote);
     }
 
-    /// 全 REJECT（无对手盘）：collateral 全额退回后 `accrue_to` 补计满 1 年利息纳入 remainDebt，`tradedSize==0 && remainDebt>0` 触发 LIF 接管，守恒仍为零。
     #[test]
     fn isolated_force_liquidate_all_reject_refunds_collateral_accrues_interest_then_takes_over() {
         let mut core = seeded_loan_core();
-        // 10% annual rate, opened exactly one YEAR_MS before the liquidation timestamp.
         const YEAR_MS: i64 = 365 * 24 * 3600 * 1_000;
         open_isolated_loan(&mut core, LOAN_ID, 1_000, 500, 1_000, 1_000);
-        // 无 maker 挂单：book 为空，IOC ASK 全额 reject。
 
         let before_base = conserved_total(&core, BASE);
         let before_quote = conserved_total(&core, QUOTE);
@@ -606,13 +529,12 @@ mod loan_force_liquidate_tests {
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         let borrower = core.ups.get(BORROWER).unwrap();
         assert!(!borrower.isolated_loans.contains_key(&LOAN_ID), "taken over -> removed");
-        assert_eq!(borrower.locked(BASE), 0); // reject 释放了 R1 pre-move lock
-        assert_eq!(borrower.account(BASE), 0); // LIF 随后物理扣除了退回的抵押
-        assert_eq!(borrower.account(QUOTE), 500); // 无成交无还款，不变
+        assert_eq!(borrower.locked(BASE), 0);
+        assert_eq!(borrower.account(BASE), 0);
+        assert_eq!(borrower.account(QUOTE), 500);
 
-        // remainDebt = principal(500) + 应计利息(10%*1yr*500=50) = 550。
         assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), -550);
-        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(BASE), 1_000); // 抵押全部收走
+        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(BASE), 1_000);
         assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 50);
         assert_eq!(core.risk.loan_service.get_loan_pool_available(QUOTE), 999_500 + 500);
         assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
@@ -621,7 +543,6 @@ mod loan_force_liquidate_tests {
         assert_eq!(conserved_total(&core, QUOTE), before_quote);
     }
 
-    /// 卖不动（sub-lot 尘埃）+ remainDebt>0 → LIF 接管，走 `sellableLots==0` 分支（非 `tradedSize==0`，本例确实成交）：残留 50 单位死尘埃永远卖不动。
     #[test]
     fn isolated_force_liquidate_dust_after_partial_debt_coverage_triggers_takeover_via_sellable_lots_zero() {
         let mut core = ExchangeCore::new();
@@ -632,7 +553,7 @@ mod loan_force_liquidate_tests {
             symbol_type: SymbolType::CurrencyExchangePair,
             base_currency: BASE,
             quote_currency: QUOTE,
-            base_scale_k: 1, // 1 lot = 100 currency units of BASE (100/1)
+            base_scale_k: 1,
             quote_scale_k: 1,
             taker_fee: 0,
             maker_fee: 0,
@@ -644,27 +565,22 @@ mod loan_force_liquidate_tests {
         core.ups.add_empty_user_profile(BORROWER);
         core.ups.add_empty_user_profile(MAKER);
 
-        // principal=2000 远超单笔成交可覆盖范围，settlement 后 remainDebt>0。
         open_isolated_loan(&mut core, LOAN_ID, 1_050, 2_000, 0, 1_000);
-        // maker 挂 price=100，使 notional 相对 2000 principal 有意义。
         fund_maker_and_rest_bid(&mut core, 1, 100, 20);
 
         let before_base = conserved_total(&core, BASE);
         let before_quote = conserved_total(&core, QUOTE);
 
-        // 恰好申请 10 个可卖 lots（1050/100 截断）-> sellAmount=1000，留 50 尘埃。
         let mut cmd = force_liquidate_cmd(2, LOAN_ID, 100, 10, 2_000);
         core.process_command(&mut cmd);
 
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         let borrower = core.ups.get(BORROWER).unwrap();
         assert!(!borrower.isolated_loans.contains_key(&LOAN_ID), "taken over -> removed");
-        // 成交10 lots@100->notional=1000->receivedQuote=1000->liqFee=20->principal_part=min(980,2000)=980->剩余1020全由LIF吸收。
         assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 20 - 1_020);
-        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(BASE), 50); // 仅 sub-lot 尘埃
+        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(BASE), 50);
         assert_eq!(core.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000 - 2_000 + 980 + 1_020);
         assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
-        // 初始1050 - 成交扣除1000 - LIF收走尘埃50 = 0。
         assert_eq!(borrower.account(BASE), 0);
         assert_eq!(borrower.locked(BASE), 0);
 
@@ -672,11 +588,7 @@ mod loan_force_liquidate_tests {
         assert_eq!(conserved_total(&core, QUOTE), before_quote);
     }
 
-    // ================================================================
-    // Cross
-    // ================================================================
-
-    const SELL_CUR: i32 = 3; // Cross 抵押/卖出币种（区别于 Isolated 的 BASE=1）
+    const SELL_CUR: i32 = 3;
 
     fn cross_seeded_core() -> ExchangeCore {
         let mut core = ExchangeCore::new();
@@ -699,11 +611,10 @@ mod loan_force_liquidate_tests {
         core.ups.add_empty_user_profile(BORROWER);
         core.ups.add_empty_user_profile(MAKER);
         core.risk.loan_service.global_config.numeraire_currency = QUOTE;
-        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1)); // markPrice=1, scale-identity valueInNumeraire
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
         core
     }
 
-    /// 开一笔 Cross 债务（loanCurrency=QUOTE），把 collateral SELL_CUR 记进 crossLoanCollateral 并同步 disburse 记账；collateral_weight_bps 由调用方自行设置。
     fn open_cross_loan(core: &mut ExchangeCore, loan_id: i64, collateral: i64, principal: i64) {
         core.risk.loan_service.add_to_loan_pool_available(QUOTE, 1_000_000);
         {
@@ -732,12 +643,11 @@ mod loan_force_liquidate_tests {
         }
     }
 
-    /// 结构性不可卖（collateralWeightBps==0）→ 目标 loan 被 LIF 接管，即便本次确实成交（走 `allCollateralExhausted` 分支而非 `tradedSize==0`）。
     #[test]
     fn cross_force_liquidate_structurally_unsellable_triggers_target_takeover() {
         let mut core = cross_seeded_core();
-        core.ssp.currencies.get_mut(&SELL_CUR).unwrap().collateral_weight_bps = 0; // 结构性不合格
-        open_cross_loan(&mut core, LOAN_ID, 2_000, 2_000); // principal 远超本次成交可覆盖
+        core.ssp.currencies.get_mut(&SELL_CUR).unwrap().collateral_weight_bps = 0;
+        open_cross_loan(&mut core, LOAN_ID, 2_000, 2_000);
         fund_maker_and_rest_bid(&mut core, 1, 1, 2_000);
 
         let before_quote = conserved_total(&core, QUOTE);
@@ -749,9 +659,7 @@ mod loan_force_liquidate_tests {
         assert_eq!(cmd.result_code, Some(CommandResultCode::Success));
         let borrower = core.ups.get(BORROWER).unwrap();
         assert!(!borrower.cross_loans.contains_key(&LOAN_ID), "taken over -> removed");
-        // weight=0 意味着这部分从未算合格抵押，LIF 分毫不取，剩余 1000 原样保留。
         assert_eq!(borrower.cross_loan_collateral(SELL_CUR), 1_000);
-        // received_quote=1000, liqFee=20, principal_part=min(980,2000)=980 -> 剩余债务1020全由LIF吸收，收不到抵押（weight=0）。
         assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 20 - 1_020);
         assert_eq!(core.risk.loan_service.get_loan_insurance_fund(SELL_CUR), 0);
         assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
@@ -760,13 +668,11 @@ mod loan_force_liquidate_tests {
         assert_eq!(conserved_total(&core, SELL_CUR), before_sell);
     }
 
-    /// 全抵押结构性耗尽 → 目标 loan 之外账户其余未偿 Cross 债务（loanId 50、90）也按升序一并交给 LIF（`BTreeMap` 天然升序对齐 Java `Arrays.sort`）。
     #[test]
     fn cross_force_liquidate_all_exhausted_sweeps_remaining_loans_in_ascending_order() {
         let mut core = cross_seeded_core();
         core.ssp.currencies.get_mut(&SELL_CUR).unwrap().collateral_weight_bps = 0;
-        open_cross_loan(&mut core, LOAN_ID, 2_000, 2_000); // target loan
-        // 同账户另两笔未触及的 Cross 债务，故意乱序插入以证明 sweep 按 loanId 升序而非插入序。
+        open_cross_loan(&mut core, LOAN_ID, 2_000, 2_000);
         {
             let borrower = core.ups.get_mut(BORROWER).unwrap();
             let mut loan90 = CrossLoanRecord::new(BORROWER, 90, SYMBOL, QUOTE, 0, 1_000);
@@ -788,7 +694,6 @@ mod loan_force_liquidate_tests {
         let borrower = core.ups.get(BORROWER).unwrap();
         assert!(borrower.cross_loans.is_empty(), "target + both remaining loans all swept");
 
-        // target: 2000 principal, 980 由成交所得还清 -> 1020 被接管；loan 50/90 各自整笔被接管（rate=0 无应计）。
         assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 20 - 1_020 - 300 - 700);
         assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
         assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 0);
@@ -797,7 +702,6 @@ mod loan_force_liquidate_tests {
     }
 }
 
-// 期货强平全链路 e2e（markprice 触发→FORCE→IF→ADL 状态机→队列排空重喂→结算）。直接写 `ExchangeCore`（而非 `ExchangeApi`）因需 liquidation_engine/liquidation_service 内部访问。
 #[cfg(test)]
 mod liquidation_engine_e2e_tests {
     use super::*;
@@ -815,11 +719,10 @@ mod liquidation_engine_e2e_tests {
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;
     const FUT: i32 = 400;
-    const BORROWER: i64 = 10; // 被强平者
-    const M1: i64 = 20; // 开仓对手（maker SHORT）
-    const M2: i64 = 30; // 强平吸单方（BID 对手）
+    const BORROWER: i64 = 10;
+    const M1: i64 = 20;
+    const M2: i64 = 30;
 
-    /// 期货 spec：MM 单档 5%，base/quote scale=1（恒等缩放）。
     fn fut_spec() -> CoreSymbolSpecification {
         let mut mm = BTreeMap::new();
         mm.insert(i64::MAX, 500);
@@ -835,7 +738,7 @@ mod liquidation_engine_e2e_tests {
             fee_scale_k: 0,
             maintenance_margin: mm,
             maintenance_margin_scale_k: 10_000,
-            liquidation_fee: 200, // 2%（proportional，fee_scale_k=10000）
+            liquidation_fee: 200,
             ..Default::default()
         }
     }
@@ -851,7 +754,7 @@ mod liquidation_engine_e2e_tests {
             core.ups.add_empty_user_profile(uid);
             core.ups.get_mut(uid).unwrap().add_to_account(QUOTE, 10_000_000);
         }
-        core.risk.liquidation_engine.is_running = true; // leader
+        core.risk.liquidation_engine.is_running = true;
         core
     }
 
@@ -877,7 +780,6 @@ mod liquidation_engine_e2e_tests {
         OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price, timestamp: ts, ..Default::default() }
     }
 
-    /// 守恒（含 IF）：Σaccounts + fees + adjustments + Σ仓位(pnl+extra_margin) + ΣIFNotional.available + ΣIF接管仓pnl，scale 全 1 可直接相加。
     fn conserved(core: &ExchangeCore) -> i64 {
         let cur = QUOTE;
         let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.mark_price).unwrap_or(0);
@@ -901,7 +803,6 @@ mod liquidation_engine_e2e_tests {
         total
     }
 
-    /// 开借款人 LONG 10@100、leverage 10（margin=100）：M1 挂 ASK@100（开 SHORT），借款人 BID@100 吃单。
     fn open_borrower_long(core: &mut ExchangeCore) {
         let mut m1 = fut_order(1, M1, 100, 10, OrderAction::Ask, OrderType::Gtc, 10);
         core.process_command(&mut m1);
@@ -916,9 +817,8 @@ mod liquidation_engine_e2e_tests {
     #[test]
     fn on_position_opened_indexes_borrower_and_makers() {
         let mut core = seeded();
-        core.process_command(&mut markprice(100, 1_000)); // 健康，无触发
+        core.process_command(&mut markprice(100, 1_000));
         open_borrower_long(&mut core);
-        // 借款人 LONG + M1 SHORT 都应进 symbol_to_users 索引（新仓 commit 时登记）。
         let holders = core.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("索引应有该 symbol");
         assert!(holders.contains(&BORROWER));
         assert!(holders.contains(&M1));
@@ -929,16 +829,13 @@ mod liquidation_engine_e2e_tests {
         let mut core = seeded();
         core.process_command(&mut markprice(100, 1_000));
         open_borrower_long(&mut core);
-        // 破产价=ceil_mul_div(900,10000,10*9800)=92；M2 挂 BID@92 size10 恰好吸收 FORCE ASK@92。
         let mut m2 = fut_order(3, M2, 92, 10, OrderAction::Bid, OrderType::Gtc, 10);
         core.process_command(&mut m2);
         assert_eq!(m2.result_code, Some(CommandResultCode::Success));
 
-        // mark 跌到 94：借款人 LONG（avg100/lev10/margin100）equity=100-60=40 < MM=47 -> 触发强平。
         let before = conserved(&core);
         core.process_command(&mut markprice(94, 2_000));
 
-        // FORCE 已由 markprice 钩子生成并被 run_liquidation_cascade 排空重喂、成交平仓。
         assert!(
             core.risk.liquidation_engine.pending_commands.is_empty(),
             "队列必须被排空（生成的 FORCE 已处理）"
@@ -947,7 +844,6 @@ mod liquidation_engine_e2e_tests {
             !core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT),
             "借款人 LONG 被 FORCE 全平，仓位移除"
         );
-        // 清算费进 IFNotional.available（精确公式另有覆盖，这里只验证费用确实计入 IF）。
         let if_available: i64 = core.risk.liquidation_service.notionals.values().map(|n| n.available).sum();
         assert!(if_available > 0, "清算费必须计入 IFNotional.available");
         assert_eq!(conserved(&core), before, "强平（含清算费转入 IF）全局守恒");
@@ -955,15 +851,13 @@ mod liquidation_engine_e2e_tests {
 
     #[test]
     fn direct_force_size_clamped_by_normalize() {
-        // 直接投递 size 远超 open_volume 的 FORCE（模拟陈旧/换届命令）——normalize 必须夹到 open_volume 绝不超平；走 advance_liquidation 的 flow=None + FORCE recovery 路径。
         let mut core = seeded();
         core.process_command(&mut markprice(100, 1_000));
-        open_borrower_long(&mut core); // 借款人 LONG 10
-        let mut m2 = fut_order(3, M2, 90, 100, OrderAction::Bid, OrderType::Gtc, 10); // 充足 BID 流动性
+        open_borrower_long(&mut core);
+        let mut m2 = fut_order(3, M2, 90, 100, OrderAction::Bid, OrderType::Gtc, 10);
         core.process_command(&mut m2);
 
         let before = conserved(&core);
-        // FORCE ASK size=999（>> 10），限价 90。normalize 夹到 10。
         let mut force = OrderCommand {
             command: OrderCommandType::ForceLiquidation,
             order_id: 42,
@@ -984,25 +878,18 @@ mod liquidation_engine_e2e_tests {
 
     #[test]
     fn force_with_no_liquidity_cascades_force_if_adl_without_panic_and_conserves() {
-        // 无吸单流动性：FORCE 全 REJECT → WAIT_IF 入队 IF → IF 池空 REJECT → WAIT_ADL 入队 ADL → 无 ADL 候选 → 终态。整条级联经队列排空自动跑完，不 panic，守恒。
         let mut core = seeded();
         core.process_command(&mut markprice(100, 1_000));
-        open_borrower_long(&mut core); // 借款人 LONG 10；M1 SHORT 10（唯一对手，不挂 BID）
+        open_borrower_long(&mut core);
 
         let before = conserved(&core);
-        core.process_command(&mut markprice(94, 2_000)); // 触发，但无 BID 吸单
+        core.process_command(&mut markprice(94, 2_000));
 
-        // 级联跑完、队列排空、不 panic。
         assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "FORCE→IF→ADL 级联后队列排空");
-        // 无任何流动性/IF 池/ADL 候选 -> 借款人仓位仍在（没被平掉），但流程已推进到终态或等待。关键断言：全程不 panic 且守恒（无凭空造钱）。
         assert_eq!(conserved(&core), before, "无成交的级联不改变任何余额，守恒");
     }
 }
 
-// ============================================================================
-// loan 清算扫描器全链路 e2e——LIQUIDATION_SCAN → check_positions 尾部委托 checkLoans → 检出越线
-// isolated loan → 提交 LOAN_FORCE_LIQUIDATE → 队列排空 → handler 结算 → 守恒。
-// ============================================================================
 #[cfg(test)]
 mod loan_scanner_e2e_tests {
     use super::*;
@@ -1016,8 +903,8 @@ mod loan_scanner_e2e_tests {
     use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
     use crate::core::common::symbol_type::SymbolType;
 
-    const COLL: i32 = 1; // 抵押币 = spot base
-    const LOANC: i32 = 2; // 借款币 = spot quote
+    const COLL: i32 = 1;
+    const LOANC: i32 = 2;
     const SYMBOL: i32 = 100;
     const BORROWER: i64 = 10;
     const MAKER: i64 = 20;
@@ -1033,7 +920,7 @@ mod loan_scanner_e2e_tests {
             quote_scale_k: 1,
             loan_config: SymbolLoanSpecification {
                 initial_ltv_bps: 5000,
-                liquidation_ltv_bps: 8000, // 80%
+                liquidation_ltv_bps: 8000,
                 margin_call_ltv_bps: 7000,
                 max_amount: 0,
                 max_term_days: 0,
@@ -1061,10 +948,9 @@ mod loan_scanner_e2e_tests {
         core.matching.add_symbol(&loan_spot_spec());
         core.ups.add_empty_user_profile(BORROWER);
         core.ups.add_empty_user_profile(MAKER);
-        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1)); // markPrice 1
-        core.risk.liquidation_engine.is_running = true; // leader
+        core.risk.last_price_cache.insert(SYMBOL, LastPriceCacheRecord::with_mark(1));
+        core.risk.liquidation_engine.is_running = true;
 
-        // 直接建一笔越线 isolated loan：抵押 1000 COLL、本金 900 LOANC（LTV 90% >= 80%）。
         core.risk.loan_service.add_to_loan_pool_available(LOANC, 1_000_000);
         {
             let b = core.ups.get_mut(BORROWER).unwrap();
@@ -1077,7 +963,6 @@ mod loan_scanner_e2e_tests {
         let b = core.ups.get_mut(BORROWER).unwrap();
         core.risk.loan_service.disburse_loan(b, LOANC, 900);
 
-        // maker 挂 BID@1 size2000（吸收 force-sell ASK@破产价1）。
         core.ups.get_mut(MAKER).unwrap().add_to_account(LOANC, 1_000_000_000);
         let mut mk = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -1098,13 +983,11 @@ mod loan_scanner_e2e_tests {
         let before_coll = conserved(&core, COLL);
         let before_loanc = conserved(&core, LOANC);
 
-        // LIQUIDATION_SCAN（symbol=-1、全扫）→ check_positions 尾部委托 checkLoans → 检出越线 loan →
-        // 提交 LOAN_FORCE_LIQUIDATE → drain 排空重喂 → handler 结算。
         let mut scan = OrderCommand {
             command: OrderCommandType::LiquidationScan,
             symbol: -1,
             uid: 0,
-            size: 0, // sliceCount<=0 = 全扫
+            size: 0,
             timestamp: 2_000,
             ..Default::default()
         };
@@ -1115,17 +998,11 @@ mod loan_scanner_e2e_tests {
             !core.ups.get(BORROWER).unwrap().isolated_loans.contains_key(&LOAN_ID),
             "越线 loan 被强平（1000 抵押全卖、900 本金还清、loan 移除）"
         );
-        // 守恒（借贷全局恒等式，含 pool/interest/LIF/fee/adjustment）。
         assert_eq!(conserved(&core, COLL), before_coll, "COLL 守恒");
         assert_eq!(conserved(&core, LOANC), before_loanc, "LOANC 守恒");
     }
 }
 
-// ============================================================================
-// Snapshot round-trip 测试（对应 Java writeMarshallable/BytesIn + updateProvider 重建）。构建富复制态
-// （期货持仓 + 挂单簿 + isolated loan + 池子 + fees/adjustments），快照→恢复，验证：①复制态 round-trip
-// 字节等价 ②非复制态复原（adl_eligibility 归一 + 索引重建）③恢复后功能正常（markprice 触发强平走 targeted 索引）。
-// ============================================================================
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
@@ -1143,7 +1020,7 @@ mod snapshot_tests {
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;
     const FUT: i32 = 700;
-    const SPOT: i32 = 100; // BASE/QUOTE 现货（供 isolated loan）
+    const SPOT: i32 = 100;
     const U_LONG: i64 = 10;
     const U_SHORT: i64 = 11;
     const U_MAKER: i64 = 12;
@@ -1186,7 +1063,6 @@ mod snapshot_tests {
         }
     }
 
-    /// 构建一个覆盖所有序列化组件的富复制态。
     fn build_rich_core() -> ExchangeCore {
         let mut core = ExchangeCore::new();
         core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, collateral_weight_bps: 8000, ..Default::default() });
@@ -1201,18 +1077,15 @@ mod snapshot_tests {
         }
         core.risk.liquidation_engine.is_running = true;
 
-        // markprice + 期货持仓（U_SHORT ASK@100 开空，U_LONG BID@100 吃单开多）。
         let mut mp = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price: 100, timestamp: 1_000, ..Default::default() };
         core.process_command(&mut mp);
         let mut a = fut_order(1, U_SHORT, 100, 10, false, 10);
         core.process_command(&mut a);
         let mut b = fut_order(2, U_LONG, 100, 10, true, 10);
         core.process_command(&mut b);
-        // 一张 resting 期货挂单（未成交，制造 order book state）。
         let mut resting = fut_order(3, U_MAKER, 80, 5, true, 10);
         core.process_command(&mut resting);
 
-        // isolated loan（现货，制造 loan + 池子 state + loan 索引）。
         core.risk.loan_service.add_to_loan_pool_available(QUOTE, 1_000_000);
         {
             let bp = core.ups.get_mut(BORROWER).unwrap();
@@ -1224,10 +1097,8 @@ mod snapshot_tests {
         }
         let bp = core.ups.get_mut(BORROWER).unwrap();
         core.risk.loan_service.disburse_loan(bp, QUOTE, 300);
-        // 索引维护（模拟 dispatcher 的 reconcile）。
         core.risk.liquidation_engine.loan_liquidation_engine.on_isolated_loan_opened(BORROWER, SPOT);
 
-        // IF 池子 state。
         core.risk.liquidation_service.credit_liquidation_fee(FUT, 500);
         core
     }
@@ -1256,32 +1127,25 @@ mod snapshot_tests {
         let (re, me) = core.to_snapshot_bytes();
         let restored = ExchangeCore::from_snapshot_bytes(&re, &me);
 
-        // ① 复制态 round-trip 字节等价（Chronicle：RE+ME 两模块各自 serialize(deserialize(x)) == serialize(x)）。
         let (re2, me2) = restored.to_snapshot_bytes();
         assert_eq!(re2, re, "RE 模块快照 round-trip 必须字节等价");
         assert_eq!(me2, me, "ME 模块快照 round-trip 必须字节等价");
 
-        // 抽查关键复制态被复原。
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].open_volume, 10);
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].direction, PositionDirection::Long);
         assert_eq!(restored.ups.get(BORROWER).unwrap().isolated_loans[&99].outstanding_principal, 300);
         assert_eq!(restored.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000 - 300);
         assert_eq!(restored.risk.liquidation_service.notionals[&FUT].available, 500);
-        // order book：U_MAKER 的 resting BID@80 仍在。
         let mut ob = OrderCommand { command: OrderCommandType::OrderBookRequest, symbol: FUT, size: 10, ..Default::default() };
         let mut restored2 = ExchangeCore::from_snapshot_bytes(&re, &me);
         restored2.process_command(&mut ob);
         let md = ob.market_data.unwrap();
         assert!(md.bid_prices.contains(&80), "resting 挂单簿状态必须随快照复原");
 
-        // ② 非复制态复原：adl_eligibility 按 margin_mode 归一（ISOLATED 期货仓 = 100）。
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].adl_eligibility, 100, "ISOLATED 仓 adl_eligibility 复原为 100");
         assert!(restored.ups.get(U_LONG).unwrap().positions[&FUT].liquidation_flow.is_none());
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].pending_adl_size, 0);
 
-        // ② 索引重建：futures symbol_to_users 含开仓的 U_LONG/U_SHORT。U_MAKER 只挂单未开仓（open_volume==0），
-        // rebuild 按 open_volume>0 过滤跳过它——**与 Java updateProvider 的 `openVolume==0 return` 过滤一致**
-        // （在线维护 on_position_opened 下单时就登记是 superset，rebuild 是 open-position-only 子集；resting-only 用户无仓可强平，scan-slice 兜底）。
         let holders = restored.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("futures 索引重建");
         assert!(holders.contains(&U_LONG) && holders.contains(&U_SHORT));
         assert!(!holders.contains(&U_MAKER), "只挂单未开仓的用户按 open_volume>0 过滤，不入重建索引（对齐 Java）");
@@ -1289,19 +1153,16 @@ mod snapshot_tests {
             restored.risk.liquidation_engine.loan_liquidation_engine.isolated_loan_symbol_to_users.get(&SPOT).unwrap().contains(&BORROWER),
             "loan 索引重建"
         );
-        // is_running 复原为 follower（false）——leader 门由 server 侧 raft 重新置位。
         assert!(!restored.risk.liquidation_engine.is_running);
     }
 
     #[test]
     fn restored_core_liquidation_works_via_rebuilt_index() {
-        // 恢复后功能验证：markprice 暴跌触发 U_LONG（ISOLATED 期货多头）强平——依赖重建的 symbol_to_users targeted 索引 + 归一的 adl_eligibility。
         let core = build_rich_core();
         let (re, me) = core.to_snapshot_bytes();
         let mut restored = ExchangeCore::from_snapshot_bytes(&re, &me);
-        restored.risk.liquidation_engine.is_running = true; // server 侧重新成为 leader
+        restored.risk.liquidation_engine.is_running = true;
 
-        // 给强平 FORCE ASK 备好吸单 BID（U_MAKER 已有 BID@80，破产价≈92>80 不够，另挂 BID@92）。
         let mut mk = fut_order(50, U_MAKER, 92, 10, true, 10);
         restored.process_command(&mut mk);
 
@@ -1316,9 +1177,6 @@ mod snapshot_tests {
     }
 }
 
-// ============================================================================
-// SETTLE_PNL（交割合约到期结算）e2e——对应 Java RiskEngine.settlePnl。
-// ============================================================================
 #[cfg(test)]
 mod settle_pnl_tests {
     use super::*;
@@ -1333,8 +1191,8 @@ mod settle_pnl_tests {
 
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;
-    const DELIV: i32 = 800; // 交割合约
-    const PERP: i32 = 801; // 永续（用于"非交割 -> InvalidSymbol"负例）
+    const DELIV: i32 = 800;
+    const PERP: i32 = 801;
     const U_LONG: i64 = 10;
     const U_SHORT: i64 = 11;
 
@@ -1404,7 +1262,6 @@ mod settle_pnl_tests {
     #[test]
     fn settle_pnl_closes_all_positions_at_delivery_price_and_conserves() {
         let mut core = seeded();
-        // mark=100，U_SHORT ASK@100 开空，U_LONG BID@100 吃单开多。
         core.process_command(&mut OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: DELIV, price: 100, timestamp: 1_000, ..Default::default() });
         core.process_command(&mut order(1, U_SHORT, DELIV, 100, 10, false));
         core.process_command(&mut order(2, U_LONG, DELIV, 100, 10, true));
@@ -1415,25 +1272,20 @@ mod settle_pnl_tests {
         let short_acct0 = core.ups.get(U_SHORT).unwrap().account(QUOTE);
         let before = conserved(&core);
 
-        // 到期按交割价 105 结算：LONG 实现 +50、SHORT 实现 -50。
         let mut settle = OrderCommand { command: OrderCommandType::SettlePnl, symbol: DELIV, price: 105, timestamp: 2_000, ..Default::default() };
         core.process_command(&mut settle);
         assert_eq!(settle.result_code, Some(CommandResultCode::Success));
 
-        // 两个持仓都被整仓平掉、记录移除。
         assert!(!core.ups.get(U_LONG).unwrap().positions.contains_key(&DELIV), "LONG 交割平仓移除");
         assert!(!core.ups.get(U_SHORT).unwrap().positions.contains_key(&DELIV), "SHORT 交割平仓移除");
-        // PnL 实现入账户：LONG +50、SHORT -50（相对开仓后余额）。
         assert_eq!(core.ups.get(U_LONG).unwrap().account(QUOTE) - long_acct0, 50, "LONG 交割盈利 (105-100)*10=+50");
         assert_eq!(core.ups.get(U_SHORT).unwrap().account(QUOTE) - short_acct0, -50, "SHORT 交割亏损 (100-105)*10=-50");
-        // 全局守恒（持仓清空后 estimate_pnl 归 0，PnL 已入账户，零和）。
         assert_eq!(conserved(&core), before, "交割结算全局守恒");
     }
 
     #[test]
     fn settle_pnl_on_non_delivery_symbol_is_invalid() {
         let mut core = seeded();
-        // 注册一个永续合约（非交割）。
         let perp = CoreSymbolSpecification { symbol_id: PERP, symbol_type: SymbolType::FuturesContractPerpetual, ..deliv_spec() };
         assert_eq!(core.ssp.add_symbol(perp.clone()), CommandResultCode::Success);
         core.matching.add_symbol(&perp);
