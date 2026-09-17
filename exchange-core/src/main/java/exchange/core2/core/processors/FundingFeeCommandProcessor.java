@@ -1,6 +1,5 @@
 package exchange.core2.core.processors;
 
-import org.eclipse.collections.api.iterator.LongIterator;
 import org.eclipse.collections.impl.map.mutable.primitive.LongLongHashMap;
 
 import exchange.core2.core.common.CoreCurrencySpecification;
@@ -15,7 +14,6 @@ import exchange.core2.core.common.UserStatus;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.LastPriceCacheRecord;
 import exchange.core2.core.utils.CoreArithmeticUtils;
 import lombok.extern.slf4j.Slf4j;
 
@@ -126,8 +124,7 @@ public final class FundingFeeCommandProcessor extends TwoStepCommandProcessor {
     }
 
     @Override
-    public void applyEvent(OrderCommand cmd, MatcherTradeEvent ev, CoreSymbolSpecification spec,
-        CoreCurrencySpecification currencySpec) {
+    public void applyEvent(OrderCommand cmd, MatcherTradeEvent ev, CoreSymbolSpecification spec, CoreCurrencySpecification currencySpec) {
         super.applyEvent(cmd, ev, spec, currencySpec);
         if (ev.eventType != MatcherEventType.FUNDING_EVENT) {
             return;
@@ -149,13 +146,13 @@ public final class FundingFeeCommandProcessor extends TwoStepCommandProcessor {
         }
         final long shardRecvNotional = receiverNotionals.sum();
         LongLongHashMap receiverFees = new LongLongHashMap(receiverNotionals.size());
-        receiverNotionals.forEachKeyValue((uid, notional) -> receiverFees.put(uid,
-            CoreArithmeticUtils.truncMulDiv(shardRecvAmount, notional, shardRecvNotional)));
+        receiverNotionals.forEachKeyValue(
+            (uid, notional) -> receiverFees.put(uid, CoreArithmeticUtils.truncMulDiv(shardRecvAmount, notional, shardRecvNotional)));
         long remain = shardRecvAmount - receiverFees.sum();
         if (remain > 0) {
-            LongIterator it = receiverNotionals.keySet().longIterator();
-            while (it.hasNext() && remain > 0) {
-                receiverFees.addToValue(it.next(), 1);
+            long[] sortedKeys = receiverNotionals.keySet().toSortedArray();
+            for (int i = 0; i < sortedKeys.length && remain > 0; i++) {
+                receiverFees.addToValue(sortedKeys[i], 1);
                 remain--;
             }
         }
@@ -166,8 +163,8 @@ public final class FundingFeeCommandProcessor extends TwoStepCommandProcessor {
         });
     }
 
-    private void settleFundingFee(OrderCommand cmd, int symbol, long uid, long fee, boolean isPayer,
-        CoreSymbolSpecification spec, CoreCurrencySpecification currencySpec) {
+    private void settleFundingFee(OrderCommand cmd, int symbol, long uid, long fee, boolean isPayer, CoreSymbolSpecification spec,
+        CoreCurrencySpecification currencySpec) {
         UserProfile user = riskEngine.getUserProfileService().getUserProfile(uid);
         if (user == null || user.userStatus != UserStatus.ACTIVE) {
             return;
@@ -178,8 +175,7 @@ public final class FundingFeeCommandProcessor extends TwoStepCommandProcessor {
         if (position == null || !position.direction.isSameAsAction(positionSide)) {
             position = user.positions.get(-symbol);
         }
-        boolean hasActivePosition =
-            position != null && position.openVolume > 0 && position.direction.isSameAsAction(positionSide);
+        boolean hasActivePosition = position != null && position.openVolume > 0 && position.direction.isSameAsAction(positionSide);
         if (hasActivePosition) {
             position.profit += signedFee;
             long balance = user.accounts.get(position.currency);
@@ -189,8 +185,8 @@ public final class FundingFeeCommandProcessor extends TwoStepCommandProcessor {
             long scaledFee = CoreArithmeticUtils.sizePriceToCurrencyScale(signedFee, spec, currencySpec);
             long balance = user.accounts.addToValue(spec.quoteCurrency, scaledFee);
             long locked = riskEngine.calculateLocked(user, spec.quoteCurrency);
-            riskEngine.getEventsHelper().sendFundingFeeEventForClosedPosition(cmd, uid, symbol, spec.quoteCurrency,
-                balance - locked, locked);
+            riskEngine.getEventsHelper().sendFundingFeeEventForClosedPosition(cmd, uid, symbol, spec.quoteCurrency, balance - locked,
+                locked);
         }
     }
 }

@@ -1,0 +1,17 @@
+# 资金费零分摊 receiver：payer(LONG11)对 uid2 SHORT10 + uid3 SHORT1。
+# payer fee=trunc(11000*1/1100)=10；uid2 pro-rata=trunc(10*10000/11000)=9，uid3=trunc(10*1000/11000)=0，Σ=9，余数 1 按 uid 升序 → uid2=10，uid3=0。
+# 验证：零分摊 receiver(uid3)不发 FUNDINGFEE_SETTLEMENT 事件；dust 落最小 uid(uid2)。曾因 Java hash 序 dust 归属分歧被删，Q1 改后重新加回。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10000 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+MARK sym=10000 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=10000 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=3 sym=10000 price=1000 size=1 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=1 sym=10000 price=1000 size=11 action=BID margin=CROSS leverage=1
+SETTLE_FUNDING sym=10000 action=BID rate=1 rateScaleK=1100 txid=1345
