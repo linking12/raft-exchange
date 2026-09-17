@@ -364,7 +364,7 @@ public class ConformanceExporter {
                         for (SingleUserReportResult.Position pos : plist) {
                             if (pos.openVolume != 0) {
                                 dirs.add(pos.direction.name());
-                                legs.add(new long[]{sym, dirs.size() - 1, pos.openVolume, pos.openPriceSum});
+                                legs.add(new long[]{sym, dirs.size() - 1, pos.openVolume, pos.openPriceSum, pos.openInitMarginSum, pos.extraMargin});
                             }
                         }
                     });
@@ -376,8 +376,10 @@ public class ConformanceExporter {
                         return Long.compare(a[3], b[3]);
                     });
                     for (long[] leg : legs) {
+                        // 含初始保证金(受杠杆决定)+ 追加保证金,让 leverage/margin 在状态里可观测。
                         out.append("POS ").append(uid).append(' ').append(leg[0]).append(' ')
-                                .append(dirs.get((int) leg[1])).append(' ').append(leg[2]).append(' ').append(leg[3]).append('\n');
+                                .append(dirs.get((int) leg[1])).append(' ').append(leg[2]).append(' ').append(leg[3])
+                                .append(' ').append(leg[4]).append(' ').append(leg[5]).append('\n');
                     }
                 }
             }

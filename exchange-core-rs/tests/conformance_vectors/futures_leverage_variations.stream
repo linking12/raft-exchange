@@ -1,0 +1,25 @@
+# 期货杠杆档:同名义额(size10@1000)在 leverage 1/2/5 下开 ISOLATED 多头,初始保证金随杠杆递减。
+# POS 行现含 initMargin 字段 → 三个多头的 open_init_margin_sum 应不同(lev 越高越小),验证 leverage→保证金映射两侧一致。
+# 杠杆表 {2000:5,100000:10} → notional 10000 落 100000 档,max lev 10,1/2/5 均合法。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8011 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8011 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+USER uid=4
+USER uid=5
+USER uid=6
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+BAL uid=4 cur=2 amount=1000000 txid=4
+BAL uid=5 cur=2 amount=1000000 txid=5
+BAL uid=6 cur=2 amount=1000000 txid=6
+PLACE_FUT oid=1 uid=2 sym=8011 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=8011 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=3 uid=4 sym=8011 price=1000 size=10 action=ASK margin=ISOLATED leverage=2
+PLACE_FUT oid=4 uid=3 sym=8011 price=1000 size=10 action=BID margin=ISOLATED leverage=2
+PLACE_FUT oid=5 uid=6 sym=8011 price=1000 size=10 action=ASK margin=ISOLATED leverage=5
+PLACE_FUT oid=6 uid=5 sym=8011 price=1000 size=10 action=BID margin=ISOLATED leverage=5
