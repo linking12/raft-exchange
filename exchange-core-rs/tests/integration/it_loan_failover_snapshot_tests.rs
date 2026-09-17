@@ -157,13 +157,13 @@ mod tests {
         assert_eq!(submit(&mut core, cmd_loan_cross_borrow(1_000_004, BORROWER, SYMBOL, 2, 60_000, 1_000)), CommandResultCode::Success);
 
         assert!(core.query_total_balance().is_global_zero(), "快照前应守恒");
-        let snapshot = core.to_snapshot_bytes();
+        let (re, me) = core.to_snapshot_bytes();
 
         // ===== 新 leader：从快照恢复，比对逐字节一致 + 守恒 =====
-        let recovered = ExchangeCore::from_snapshot_bytes(&snapshot);
+        let recovered = ExchangeCore::from_snapshot_bytes(&re, &me);
         assert_eq!(
-            snapshot,
             recovered.to_snapshot_bytes(),
+            (re.clone(), me.clone()),
             "恢复后复制态必须与原 leader 逐字节一致（loan records + 池子/LIF 桶都在快照里）"
         );
         assert!(recovered.query_total_balance().is_global_zero(), "恢复后应守恒");
@@ -236,13 +236,13 @@ mod tests {
         assert_eq!(floating_loan_rate_bps(&core, 2), RC_EXPECTED, "快照前：reprice 后新 FLOATING 率 = curve(util) = 240");
 
         assert!(core.query_total_balance().is_global_zero(), "快照前应守恒");
-        let snapshot = core.to_snapshot_bytes();
+        let (re, me) = core.to_snapshot_bytes();
 
         // ===== 新 leader：从快照恢复，比对逐字节一致 + 用恢复后新贷款率验证 currentRateBps 存活 =====
-        let mut r = ExchangeCore::from_snapshot_bytes(&snapshot);
+        let mut r = ExchangeCore::from_snapshot_bytes(&re, &me);
         assert_eq!(
-            snapshot,
             r.to_snapshot_bytes(),
+            (re.clone(), me.clone()),
             "恢复后复制态必须逐字节一致（currentRateBps / lastRepriceTs 都在快照里）"
         );
 

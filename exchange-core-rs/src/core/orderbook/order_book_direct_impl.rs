@@ -84,7 +84,6 @@ pub struct OrderBookDirectImpl {
 // FIFO，同 `state_hash` 遍历）序列化，反序列化按同序 `insert_order` 重建 slab，保证逻辑相同→字节相同→跨节点一致。
 
 /// 快照里的单笔挂单：仅逻辑字段，无 slab 索引/指针。
-#[derive(serde::Serialize, serde::Deserialize)]
 struct SnapOrder {
     order_id: i64,
     price: i64,
@@ -98,14 +97,6 @@ struct SnapOrder {
     uid: i64,
     timestamp: i64,
     user_cookie: i32,
-}
-
-/// Direct 簿的规范化快照表示：symbol_spec + 按撮合序的 ask/bid 订单流。
-#[derive(serde::Serialize, serde::Deserialize)]
-struct DirectSnapshot {
-    symbol_spec: Option<CoreSymbolSpecification>,
-    asks: Vec<SnapOrder>,
-    bids: Vec<SnapOrder>,
 }
 
 impl OrderBookDirectImpl {
@@ -157,31 +148,62 @@ impl OrderBookDirectImpl {
         self.order_id_index.insert(so.order_id, idx);
         self.insert_order(idx, None);
     }
-}
 
-impl serde::Serialize for OrderBookDirectImpl {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        DirectSnapshot {
-            symbol_spec: self.symbol_spec.clone(),
-            asks: self.chain_snapshot(self.best_ask),
-            bids: self.chain_snapshot(self.best_bid),
-        }
-        .serialize(serializer)
+    /// Chronicle 快照:symbol_spec(克隆)。
+    pub fn chronicle_symbol_spec(&self) -> Option<CoreSymbolSpecification> {
+        self.symbol_spec.clone()
     }
-}
 
-impl<'de> serde::Deserialize<'de> for OrderBookDirectImpl {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let snap = DirectSnapshot::deserialize(deserializer)?;
-        let mut book = OrderBookDirectImpl::new();
-        book.symbol_spec = snap.symbol_spec;
-        for so in snap.asks {
-            book.rebuild_insert(so);
+    /// Chronicle 快照:撮合序的 (ask 订单, bid 订单),转为 [`Order`]。
+    pub fn chronicle_orders(&self) -> (Vec<Order>, Vec<Order>) {
+        fn conv(so: SnapOrder) -> Order {
+            Order {
+                order_id: so.order_id,
+                price: so.price,
+                size: so.size,
+                filled: so.filled,
+                filled_notional: so.filled_notional,
+                reserve_bid_price: so.reserve_bid_price,
+                action: so.action,
+                order_type: so.order_type,
+                uid: so.uid,
+                timestamp: so.timestamp,
+                user_cookie: so.user_cookie,
+                command: so.command,
+            }
         }
-        for so in snap.bids {
-            book.rebuild_insert(so);
+        let asks = self.chain_snapshot(self.best_ask).into_iter().map(conv).collect();
+        let bids = self.chain_snapshot(self.best_bid).into_iter().map(conv).collect();
+        (asks, bids)
+    }
+
+    /// Chronicle 快照:从 symbol_spec + 有序 ask/bid 订单重建簿(先 ask 后 bid,保留 filled、不撮合)。
+    pub fn restore_chronicle(symbol_spec: CoreSymbolSpecification, asks: Vec<Order>, bids: Vec<Order>) -> Self {
+        fn conv(o: Order) -> SnapOrder {
+            SnapOrder {
+                order_id: o.order_id,
+                price: o.price,
+                size: o.size,
+                filled: o.filled,
+                filled_notional: o.filled_notional,
+                reserve_bid_price: o.reserve_bid_price,
+                action: o.action,
+                order_type: o.order_type,
+                command: o.command,
+                uid: o.uid,
+                timestamp: o.timestamp,
+                user_cookie: o.user_cookie,
+            }
         }
-        Ok(book)
+        let mut b = Self::new();
+        b.symbol_spec = Some(symbol_spec);
+        for o in asks {
+            b.rebuild_insert(conv(o));
+        }
+        for o in bids {
+            b.rebuild_insert(conv(o));
+        }
+        b
     }
 }
 
@@ -1370,6 +1392,54 @@ impl IOrderBook for OrderBookDirectImpl {
                 command: o.command,
             })
             .collect()
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for OrderBookDirectImpl {
+    /// Java `OrderBookDirectImpl.writeMarshallable`:implType(byte=DIRECT=2) + symbolSpec + orderCount(int) +
+    /// ask 订单流 + bid 订单流(flat,每单自带 action)。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_u8(2); // OrderBookImplType.DIRECT
+        self.chronicle_symbol_spec().expect("订单簿缺 symbol_spec").chronicle_write(w);
+        let (asks, bids) = self.chronicle_orders();
+        w.write_i32((asks.len() + bids.len()) as i32);
+        for o in &asks {
+            o.chronicle_write(w);
+        }
+        for o in &bids {
+            o.chronicle_write(w);
+        }
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let impl_type = r.read_u8()?;
+        assert_eq!(impl_type, 2, "非 Direct 订单簿(code {impl_type});Java 生产订单簿实现须与 Rust(Direct)一致");
+        Self::chronicle_read_body(r)
+    }
+}
+
+impl OrderBookDirectImpl {
+    /// 读 body(implType 字节已由调用方消费):symbolSpec + orderCount(int) + flat 订单流(按 action 分 ask/bid)。
+    /// 抽成独立方法供 `MatchingEngineRouter` 按 implType 分发(Direct 直接读,Naive 读后转 Direct)。
+    pub fn chronicle_read_body(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let symbol_spec = CoreSymbolSpecification::chronicle_read(r)?;
+        let count = r.read_i32()?;
+        let mut asks = Vec::new();
+        let mut bids = Vec::new();
+        for _ in 0..count {
+            let o = Order::chronicle_read(r)?;
+            if o.action == OrderAction::Ask {
+                asks.push(o);
+            } else {
+                bids.push(o);
+            }
+        }
+        Ok(OrderBookDirectImpl::restore_chronicle(symbol_spec, asks, bids))
     }
 }
 
@@ -3061,35 +3131,35 @@ mod tests {
     #[test]
     fn snapshot_roundtrip_preserves_state_and_is_deterministic() {
         // 混合簿：同价 FIFO（1&2 @100，4&5 @90）+ 部分成交（order 1 被吃 4）。
-        let mut a = OrderBookDirectImpl::new();
+        let mut a = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
         seed_mixed_book(&mut a);
         a.validate_internal_state();
 
-        // 序列化 → 反序列化（重建 slab）。
-        let bytes = bincode::serialize(&a).expect("serialize");
-        let restored: OrderBookDirectImpl = bincode::deserialize(&bytes).expect("deserialize");
+        // Chronicle 序列化 → 反序列化（重建 slab）。
+        let mut w = ChronicleWriter::new();
+        a.chronicle_write(&mut w);
+        let bytes = w.into_bytes();
+        let restored = OrderBookDirectImpl::chronicle_read(&mut ChronicleReader::new(&bytes)).expect("chronicle_read");
         restored.validate_internal_state();
 
         // 逻辑状态逐位一致。
         assert_eq!(a.state_hash(), restored.state_hash(), "round-trip state_hash 必须一致");
         assert_eq!(a.fill_l2(-1), restored.fill_l2(-1), "round-trip fill_l2（价/量）必须一致");
         // 重复序列化字节等价（确定性）。
-        assert_eq!(
-            bincode::serialize(&restored).expect("re-serialize"),
-            bytes,
-            "对同一逻辑状态重复序列化必须字节等价"
-        );
+        let mut w2 = ChronicleWriter::new();
+        restored.chronicle_write(&mut w2);
+        assert_eq!(w2.into_bytes(), bytes, "对同一逻辑状态重复序列化必须字节等价");
     }
 
     #[test]
     fn snapshot_is_canonical_across_operation_history() {
         // A：直接建混合簿。
-        let mut a = OrderBookDirectImpl::new();
+        let mut a = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
         seed_mixed_book(&mut a);
 
         // B：先挂 4 笔再全撤，制造 free-list/槽位错位，使随后 seed 的 order 1..7 落进被回收的槽位
         //    （物理 slab 布局与 A 不同），但最终逻辑状态与 A 完全相同。
-        let mut b = OrderBookDirectImpl::new();
+        let mut b = OrderBookDirectImpl::with_symbol_spec(exchange_pair_spec());
         for id in [900i64, 901, 902, 903] {
             b.new_order(&mut gtc_cmd(id, OrderAction::Ask, 2_000 + id, 3)); // 高价，不与混合簿撮合
         }
@@ -3099,11 +3169,13 @@ mod tests {
         }
         seed_mixed_book(&mut b);
 
-        // 逻辑状态相同 → 序列化字节必须相同（规范化：不含物理 slab 布局），否则 raft 会误判节点分叉。
+        // 逻辑状态相同 → Chronicle 序列化字节必须相同（按撮合序遍历，不含物理 slab 布局），否则 raft 会误判节点分叉。
         assert_eq!(a.state_hash(), b.state_hash(), "两种操作历史应达到相同逻辑状态");
+        let (mut wa, mut wb) = (ChronicleWriter::new(), ChronicleWriter::new());
+        a.chronicle_write(&mut wa);
+        b.chronicle_write(&mut wb);
         assert_eq!(
-            bincode::serialize(&a).expect("serialize a"),
-            bincode::serialize(&b).expect("serialize b"),
+            wa.into_bytes(), wb.into_bytes(),
             "逻辑相同、物理 slab 布局不同的两个簿必须序列化出相同字节（规范化，防 raft 假分叉）"
         );
     }

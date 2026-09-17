@@ -3,7 +3,7 @@ use crate::core::common::position_direction::PositionDirection;
 
 pub const SYSTEM_TRIGGERED_ORDER_ID: i64 = -1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FundEventType {
     #[default]
     Deposit,
@@ -69,7 +69,7 @@ impl FundEventType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FundEvent {
     pub event_type: FundEventType,
     pub order_id: i64,

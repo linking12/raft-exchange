@@ -1,0 +1,2 @@
+exchangeId=SNAPFIX0001
+dumpId=777

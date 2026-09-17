@@ -11,7 +11,7 @@ pub const DEFAULT_SLOPE1_BPS: i32 = 400; // 0→kink 增幅
 pub const DEFAULT_SLOPE2_BPS: i32 = 6000; // kink→100% 陡增幅
 
 /// current_rate_bps/acc_rate_bps_ms 用 BTreeMap 保持确定性迭代序（禁 HashMap）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatingRateModel {
     /// 零利用率基础利率。
     pub base_bps: i32,
@@ -356,6 +356,35 @@ mod tests {
 /// 期望值即 Java `assertEquals` 的字面量；若 Rust 算出不同值那是翻译 bug，不得改期望。
 /// 注意 Java `curveRateBps(util, base, kink, s1, s2)` 是静态显式传参，Rust 是读 self 字段的方法，
 /// 故变参用例先构造对应参数的 FloatingRateModel。
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for FloatingRateModel {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.base_bps);
+        w.write_i32(self.kink_util_bps);
+        w.write_i32(self.slope1_bps);
+        w.write_i32(self.slope2_bps);
+        w.write_int_long_map(&self.current_rate_bps.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.acc_rate_bps_ms.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_i64(self.last_reprice_ts);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(FloatingRateModel {
+            base_bps: r.read_i32()?,
+            kink_util_bps: r.read_i32()?,
+            slope1_bps: r.read_i32()?,
+            slope2_bps: r.read_i32()?,
+            current_rate_bps: crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?),
+            acc_rate_bps_ms: crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?),
+            last_reprice_ts: r.read_i64()?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod java_parity {
     use super::*;

@@ -9,7 +9,7 @@ use crate::core::processors::liquidation::liquidation_flow::LiquidationFlow;
 use crate::core::utils::core_arithmetic_utils::{add_exact, calculate_taker_fee, ceil_divide, ceil_mul_div, mul_exact, sub_exact, trunc_mul_div};
 
 /// 对应 Java `SymbolPositionRecord`：期货 / 保证金交易的单 symbol、单方向持仓记录。
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SymbolPositionRecord {
     pub uid: i64,
     pub symbol: i32,
@@ -42,13 +42,10 @@ pub struct SymbolPositionRecord {
 
     // 非复制 leader-local scratch：不进 state_hash、不序列化。
     /// 对应 Java `pendingADLSize`：ADL R1 预留待减仓量，R2-finalize 对称释放。
-    #[serde(skip)]
     pub pending_adl_size: i64,
     /// 对应 Java `adlEligibility`：ADL 资格因子（ISOLATED=100/CROSS=0，安全门后 clamp）。
-    #[serde(skip)]
     pub adl_eligibility: i64,
     /// 对应 Java `liquidationFlow`：进行中的 FORCE→IF→ADL 状态机，`None`=无流程。
-    #[serde(skip)]
     pub liquidation_flow: Option<LiquidationFlow>,
 }
 
@@ -581,6 +578,55 @@ impl SymbolPositionRecord {
 /// 对应 Java `positions` map 的 key（HEDGE 模式用 ±symbol 区分多空）。
 pub type PositionsMapKey = i32;
 pub type PositionsMap = BTreeMap<PositionsMapKey, SymbolPositionRecord>;
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for SymbolPositionRecord {
+    /// Java 序:symbol,currency,direction(byte=multiplier),8×long,leverage(int),marginMode(byte),extraMargin(long)。
+    /// `uid` 不序列化(由父 map key 注入),scratch 字段(pending_adl/adl_elig/liquidation_flow)非复制,读后 default。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.symbol);
+        w.write_i32(self.currency);
+        w.write_u8(self.direction.code() as u8);
+        w.write_i64(self.open_volume);
+        w.write_i64(self.open_init_margin_sum);
+        w.write_i64(self.open_price_sum);
+        w.write_i64(self.profit);
+        w.write_i64(self.pending_sell_size);
+        w.write_i64(self.pending_buy_size);
+        w.write_i64(self.pending_sell_avg_price);
+        w.write_i64(self.pending_buy_avg_price);
+        w.write_i32(self.leverage);
+        w.write_u8(self.margin_mode.code() as u8);
+        w.write_i64(self.extra_margin);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let symbol = r.read_i32()?;
+        let currency = r.read_i32()?;
+        let direction = PositionDirection::of_code(r.read_u8()? as i8);
+        let open_volume = r.read_i64()?;
+        let open_init_margin_sum = r.read_i64()?;
+        let open_price_sum = r.read_i64()?;
+        let profit = r.read_i64()?;
+        let pending_sell_size = r.read_i64()?;
+        let pending_buy_size = r.read_i64()?;
+        let pending_sell_avg_price = r.read_i64()?;
+        let pending_buy_avg_price = r.read_i64()?;
+        let leverage = r.read_i32()?;
+        let margin_mode = MarginMode::of_code(r.read_u8()? as i8);
+        let extra_margin = r.read_i64()?;
+        Ok(SymbolPositionRecord {
+            symbol, currency, direction, open_volume, open_init_margin_sum, open_price_sum, profit,
+            pending_sell_size, pending_buy_size, pending_sell_avg_price, pending_buy_avg_price,
+            leverage, margin_mode, extra_margin,
+            ..Default::default()
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

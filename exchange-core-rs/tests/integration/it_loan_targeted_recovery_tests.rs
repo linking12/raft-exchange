@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn loan_index_rebuilds_after_snapshot_recovery_targeted_still_triggers_force_sell() {
         // ===== 原 leader：建仓，落盘快照 =====
-        let snapshot = {
+        let (re, me) = {
             let mut core = ExchangeCore::new();
             core.ssp.add_currency(CoreCurrencySpecification { currency: ETH, currency_scale_k: 1, ..Default::default() });
             core.ssp.add_currency(CoreCurrencySpecification { currency: XBT, currency_scale_k: 1, ..Default::default() });
@@ -129,7 +129,7 @@ mod tests {
         };
 
         // ===== 全新实例：从快照恢复（驱动 rebuild_indices 重建 targeted 索引） =====
-        let mut r = ExchangeCore::from_snapshot_bytes(&snapshot);
+        let mut r = ExchangeCore::from_snapshot_bytes(&re, &me);
 
         // 恢复后 targeted 索引已重建：isolated loan symbol 索引里应有 BORROWER。
         assert!(

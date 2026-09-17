@@ -1,5 +1,5 @@
 /// 对应 Java `SymbolType`。现货移植只用 `CurrencyExchangePair`，其余变体仅保留码值。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolType {
     CurrencyExchangePair,
     FuturesContractPerpetual,
@@ -14,6 +14,17 @@ impl SymbolType {
             SymbolType::FuturesContractPerpetual => 1,
             SymbolType::FuturesContractDelivery => 2,
             SymbolType::Option => 3,
+        }
+    }
+
+    /// code() 反向映射(快照反序列化)。
+    pub fn of_code(code: i8) -> Self {
+        match code {
+            0 => SymbolType::CurrencyExchangePair,
+            1 => SymbolType::FuturesContractPerpetual,
+            2 => SymbolType::FuturesContractDelivery,
+            3 => SymbolType::Option,
+            c => panic!("未知 SymbolType code {c}"),
         }
     }
 

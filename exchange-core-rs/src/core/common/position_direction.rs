@@ -1,7 +1,7 @@
 //! 对应 Java `PositionDirection`：`LONG(1)`/`SHORT(-1)`/`EMPTY(0)`，`code()`/`multiplier()` 共用同一映射避免不一致。
 use crate::core::common::order_action::OrderAction;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PositionDirection {
     Long,
     Short,

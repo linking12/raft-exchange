@@ -17,7 +17,7 @@ fn add(map: &mut BTreeMap<i32, i64>, k: i32, v: i64) {
     *map.entry(k).or_insert(0) += v;
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TotalCurrencyBalanceReport {
     pub currency_balances: BTreeMap<i32, i64>,
     pub extra_margin: BTreeMap<i32, i64>,
@@ -60,7 +60,7 @@ impl TotalCurrencyBalanceReport {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionView {
     pub symbol: i32,
     pub direction: PositionDirection,
@@ -82,7 +82,7 @@ pub struct PositionView {
     pub maintenance_margin_scale_k: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SingleUserReport {
     pub uid: i64,
     pub found: bool,
@@ -101,26 +101,26 @@ pub struct SingleUserReport {
     pub orders: Vec<(i32, Order)>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeeReport {
     pub fees: BTreeMap<i32, i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuturesIfEntry {
     pub available: i64,
     pub reserved: i64,
     pub position_value: i64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InsuranceFundReport {
     pub futures: BTreeMap<i32, FuturesIfEntry>,
     pub loan_insurance_fund: BTreeMap<i32, i64>,
     pub mark_price: BTreeMap<i32, i64>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoanPlatformEntry {
     pub interest_revenue: i64,
     pub loan_insurance_fund: i64,
@@ -128,18 +128,18 @@ pub struct LoanPlatformEntry {
     pub pool_borrowed: i64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoanPlatformReport {
     pub per_currency: BTreeMap<i32, LoanPlatformEntry>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SymbolCurrencyReport {
     pub symbols: Vec<CoreSymbolSpecification>,
     pub currencies: Vec<CoreCurrencySpecification>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StateHashReport {
     pub components: BTreeMap<String, i64>,
 }

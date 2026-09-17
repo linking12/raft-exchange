@@ -23,7 +23,6 @@ pub struct MakerFill {
     pub filled_notional: i64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct OrdersBucketNaive {
     price: i64,
     total_volume: i64,
@@ -139,6 +138,43 @@ impl OrdersBucketNaive {
     /// 按 FIFO 只读遍历桶内订单（供 state_hash 确定性折叠用）。对应 Java `OrdersBucketNaive.forEachOrder`/`getAllOrders`。
     pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
         self.entries.values()
+    }
+}
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java OrdersBucketNaive.writeMarshallable)----
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl OrdersBucketNaive {
+    /// 对应 Java `OrdersBucketNaive.writeMarshallable`:symbolSpec + price(long) + entries(LongMap:orderId→Order,FIFO)
+    /// + totalVolume(long)。Rust 桶不持有 symbolSpec(Java 持有并每桶重写),故由订单簿写时传入。
+    /// 非 `ChronicleMarshallable` 成员:trait 的 `chronicle_write(&self, w)` 无法接收额外 symbolSpec 参数。
+    pub fn chronicle_write(&self, w: &mut ChronicleWriter, symbol_spec: &CoreSymbolSpecification) {
+        symbol_spec.chronicle_write(w);
+        w.write_i64(self.price);
+        w.write_i32(self.entries.len() as i32);
+        for order in self.entries.values() {
+            w.write_i64(order.order_id);
+            order.chronicle_write(w);
+        }
+        w.write_i64(self.total_volume);
+    }
+    /// 对应 Java `OrdersBucketNaive(BytesIn)`:读 symbolSpec(丢弃,订单簿层已持有)+ price + entries(FIFO)+ totalVolume。
+    pub fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let _spec = CoreSymbolSpecification::chronicle_read(r)?;
+        let price = r.read_i64()?;
+        let count = r.read_i32()?;
+        let mut bucket = OrdersBucketNaive::new(price);
+        for _ in 0..count {
+            let _order_id = r.read_i64()?; // == order.order_id;put() 以 order.order_id 建 id_to_seq 索引
+            let order = Order::chronicle_read(r)?;
+            bucket.put(order);
+        }
+        // put() 已把 total_volume 累加为各单 remaining 之和(与 Java 存量一致);取存量严格对齐字节。
+        bucket.total_volume = r.read_i64()?;
+        Ok(bucket)
     }
 }
 

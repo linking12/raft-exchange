@@ -1,7 +1,7 @@
 //! 对应 Java `SymbolLoanSpecification`：per-symbol 现货借贷配置，挂 `CoreSymbolSpecification::loan_config`，全 0=未启用，仅 `ADD_LOAN` 经 `update` 改写。
 
 /// 对应 Java `SymbolLoanSpecification`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SymbolLoanSpecification {
     /// 开仓 LTV 上限；`0` = 借贷未启用。
     pub initial_ltv_bps: i32,
@@ -46,6 +46,31 @@ impl SymbolLoanSpecification {
         h = h.wrapping_mul(31).wrapping_add(self.max_amount);
         h = h.wrapping_mul(31).wrapping_add(self.max_term_days as i64);
         ((h >> 32) as i32) ^ (h as i32)
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for SymbolLoanSpecification {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.initial_ltv_bps);
+        w.write_i32(self.liquidation_ltv_bps);
+        w.write_i32(self.margin_call_ltv_bps);
+        w.write_i64(self.max_amount);
+        w.write_i32(self.max_term_days);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(SymbolLoanSpecification {
+            initial_ltv_bps: r.read_i32()?,
+            liquidation_ltv_bps: r.read_i32()?,
+            margin_call_ltv_bps: r.read_i32()?,
+            max_amount: r.read_i64()?,
+            max_term_days: r.read_i32()?,
+        })
     }
 }
 

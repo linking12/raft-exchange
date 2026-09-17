@@ -1,7 +1,7 @@
 /// 对应 Java `OrderCommandType`（现货/期货/loan/清算全码子集）。`is_non_trading()`/`is_loan()` 对照
 /// Java 二级 dispatch 门守分类。独立 crate，新码只需枚举内互异，不必逐位对齐 Java 字节
 /// （`LiquidationScan` 选 44 规避 Java 自身 64 与 `LoanIfDeposit` 的重复码）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
     PlaceOrder,
     CancelOrder,
@@ -139,6 +139,56 @@ impl OrderCommandType {
             OrderCommandType::ResumeUser => 13,
             OrderCommandType::PositionModeAdjustment => 22,
             OrderCommandType::ResetFee => 27,
+        }
+    }
+
+    /// `code()` 的反向映射(Java `OrderCommandType.fromCode`)。用于快照反序列化。
+    pub fn from_code(c: i8) -> Self {
+        match c {
+            1 => OrderCommandType::PlaceOrder,
+            2 => OrderCommandType::CancelOrder,
+            3 => OrderCommandType::MoveOrder,
+            4 => OrderCommandType::ReduceOrder,
+            5 => OrderCommandType::ClosePosition,
+            6 => OrderCommandType::OrderBookRequest,
+            10 => OrderCommandType::AddUser,
+            11 => OrderCommandType::BalanceAdjustment,
+            12 => OrderCommandType::SuspendUser,
+            13 => OrderCommandType::ResumeUser,
+            14 => OrderCommandType::InternalTransfer,
+            20 => OrderCommandType::ForceLiquidation,
+            21 => OrderCommandType::LeverageAdjustment,
+            22 => OrderCommandType::PositionModeAdjustment,
+            23 => OrderCommandType::MarginAdjustment,
+            24 => OrderCommandType::MarkpriceAdjustment,
+            25 => OrderCommandType::SettleFundingfees,
+            26 => OrderCommandType::SettlePnl,
+            27 => OrderCommandType::ResetFee,
+            31 => OrderCommandType::SystemLiquidationNotify,
+            40 => OrderCommandType::IfTakeover,
+            41 => OrderCommandType::AutoDeleveraging,
+            42 => OrderCommandType::IfDeposit,
+            43 => OrderCommandType::IfWithdraw,
+            44 => OrderCommandType::LiquidationScan,
+            50 => OrderCommandType::LoanCreate,
+            51 => OrderCommandType::LoanRepay,
+            52 => OrderCommandType::LoanAddCollateral,
+            53 => OrderCommandType::LoanReleaseCollateral,
+            54 => OrderCommandType::LoanForceLiquidate,
+            55 => OrderCommandType::LoanCrossAddCollateral,
+            56 => OrderCommandType::LoanCrossWithdrawCollateral,
+            57 => OrderCommandType::LoanCrossBorrow,
+            58 => OrderCommandType::LoanCrossRepay,
+            59 => OrderCommandType::LoanCrossForceLiquidate,
+            60 => OrderCommandType::PoolDeposit,
+            61 => OrderCommandType::PoolWithdraw,
+            63 => OrderCommandType::RepriceLoanRates,
+            64 => OrderCommandType::LoanIfDeposit,
+            65 => OrderCommandType::LoanIfWithdraw,
+            91 => OrderCommandType::BinaryDataCommand,
+            120 => OrderCommandType::Nop,
+            124 => OrderCommandType::Reset,
+            other => panic!("未知 OrderCommandType code {other}"),
         }
     }
 

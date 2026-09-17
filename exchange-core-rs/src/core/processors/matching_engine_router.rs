@@ -9,11 +9,12 @@ use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::order::Order;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
+use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
 /// 对应 Java `MatchingEngineRouter`（现货子集，只保留 symbol→book 路由 + 撮合分派）。
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub struct MatchingEngineRouter {
-    books: BTreeMap<i32, OrderBookDirectImpl>,
+    pub books: BTreeMap<i32, OrderBookDirectImpl>,
 }
 
 impl MatchingEngineRouter {
@@ -119,6 +120,56 @@ impl MatchingEngineRouter {
     }
 }
 
+
+// ---- Chronicle 快照读写(对应 Java MatchingEngineRouter.writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for MatchingEngineRouter {
+    /// Java `MatchingEngineRouter.writeMarshallable`:shardId(int)+shardMask(long)+binaryCommandsProcessor(空 map)+orderBooks。
+    /// 单片塌缩:shardId/shardMask 写常量 0、读丢弃;binaryCommandsProcessor 未移植 → 写空 map、读要求空。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(0);
+        w.write_i64(0);
+        w.write_i32(0);
+        w.write_int_keyed_map(
+            &self.books.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(),
+            |vw, v| v.chronicle_write(vw),
+        );
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let _shard_id = r.read_i32()?;
+        let _shard_mask = r.read_i64()?;
+        let bin_size = r.read_i32()?;
+        assert_eq!(bin_size, 0, "binaryCommandsProcessor 非空:Rust 未移植大二进制命令重组缓冲");
+        let books = crate::core::snapshot::marshalling::to_btree_i32(
+            r.read_int_keyed_map(read_order_book_dispatch)?,
+        );
+        Ok(MatchingEngineRouter { books })
+    }
+}
+
+/// 按订单簿首字节 `implType` 分发读取,统一承载为 `OrderBookDirectImpl`(Rust 撮合热路径恒 Direct):
+/// - DIRECT(2):直接读 body;
+/// - NAIVE(0):读 body 为 `OrderBookNaiveImpl`,再抽出挂单转成 Direct(混合集群里 Java 若用 Naive 撮合簿也能加载)。
+///
+/// 代价:读入的 Naive 订单簿在 Rust 内部及后续写出都会变成 Direct(implType=2)。因 implType 自描述,
+/// Java 侧读回 Direct 亦可正常建簿;状态哈希是撮合实现无关的逻辑序,故不影响一致性。
+fn read_order_book_dispatch(r: &mut ChronicleReader) -> Result<OrderBookDirectImpl, ChronicleError> {
+    let impl_type = r.read_u8()?;
+    match impl_type {
+        2 => OrderBookDirectImpl::chronicle_read_body(r),
+        0 => {
+            let naive = OrderBookNaiveImpl::chronicle_read_body(r)?;
+            let spec = naive.chronicle_symbol_spec().expect("naive 订单簿缺 symbol_spec");
+            let (asks, bids) = naive.chronicle_orders();
+            Ok(OrderBookDirectImpl::restore_chronicle(spec, asks, bids))
+        }
+        other => panic!("未知 OrderBookImplType code {other}(仅支持 NAIVE=0 / DIRECT=2)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +205,39 @@ mod tests {
             result_code: Some(result_code),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn chronicle_read_dispatches_naive_book_to_direct() {
+        // Java 若用 NAIVE 撮合簿打快照,Rust 读到 implType=0 应能加载(转成 Direct 承载),挂单无损。
+        let mut naive = OrderBookNaiveImpl::with_symbol_spec(spec(7));
+        for (id, act, price, size) in [
+            (1i64, OrderAction::Ask, 110i64, 5i64),
+            (2, OrderAction::Ask, 120, 7),
+            (3, OrderAction::Bid, 100, 4),
+            (4, OrderAction::Bid, 90, 6),
+        ] {
+            let mut cmd = OrderCommand { order_id: id, symbol: 7, price, size,
+                action: Some(act), order_type: Some(OrderType::Gtc), uid: id, ..Default::default() };
+            naive.new_order(&mut cmd);
+        }
+        // 手工拼 ME payload:shardId/shardMask/binaryCmd(空)/orderBooks(1 项,值=NAIVE 书 implType=0)。
+        let mut w = ChronicleWriter::new();
+        w.write_i32(0);
+        w.write_i64(0);
+        w.write_i32(0);
+        w.write_i32(1); // orderBooks map size
+        w.write_i32(7); // symbol key
+        naive.chronicle_write(&mut w);
+        let bytes = w.into_bytes();
+        let router = MatchingEngineRouter::chronicle_read(&mut ChronicleReader::new(&bytes)).unwrap();
+        assert_eq!(router.books.len(), 1);
+        let direct = router.books.get(&7).expect("symbol 7 book");
+        // 转 Direct 后 L2 与原 Naive 完全一致(价位/量/档序无损)。
+        assert_eq!(direct.fill_l2(100).ask_prices, naive.fill_l2(100).ask_prices);
+        assert_eq!(direct.fill_l2(100).ask_volumes, naive.fill_l2(100).ask_volumes);
+        assert_eq!(direct.fill_l2(100).bid_prices, naive.fill_l2(100).bid_prices);
+        assert_eq!(direct.fill_l2(100).bid_volumes, naive.fill_l2(100).bid_volumes);
     }
 
     #[test]
