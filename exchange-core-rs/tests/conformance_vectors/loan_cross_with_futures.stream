@@ -1,0 +1,23 @@
+# loan × 期货交叉边界:同一 uid(shard0)既有 cross 借贷(base 抵押 + 借 numeraire quote)又有 CROSS 期货多头。
+# 验证两子系统共存 —— calculate_locked 同时含 loan cross 抵押(cur1)与期货保证金(cur2),状态导出两侧一致。
+# 借款人 uid=2 与借贷池 shard 0 同片(偶数 uid,分片本地性见 loan_isolated_cycle);对手方 uid=4。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=600 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 initialLtv=0 liqLtv=0 marginCallLtv=0 maxAmount=0 maxTermDays=0
+SYM_FUT id=6001 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=600 price=1000
+MARK sym=6001 price=1000
+LOAN_SYMBOL sym=600 initialLtv=6000 liqLtv=8500 marginCallLtv=7500 maxAmount=0 maxTermDays=365 collateralWeight=10000
+LOAN_GLOBAL numeraire=2 crossLiqLtv=8500 crossMcLtv=7500
+POOL_DEPOSIT cur=2 amount=1000000 txid=9
+USER uid=2
+USER uid=4
+BAL uid=2 cur=1 amount=300 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=4 cur=2 amount=1000000 txid=3
+# cross 借贷:抵押 300 base,借 50000 numeraire(LTV=50000/300000=1667bps < 8500 ✓)
+LOAN_CROSS_ADD_COLLATERAL uid=2 cur=1 amount=300 txid=10
+LOAN_CROSS_BORROW uid=2 sym=600 loanId=9 principal=50000 txid=11
+# CROSS 期货:uid4 挂卖,uid2 吃单开 LONG10(保证金从 cur2 free 扣,与 loan 抵押 cur1 各自计入 locked)
+PLACE_FUT oid=1 uid=4 sym=6001 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=2 sym=6001 price=1000 size=10 action=BID margin=CROSS leverage=1

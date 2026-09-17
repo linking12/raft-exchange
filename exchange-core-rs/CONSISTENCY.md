@@ -181,7 +181,8 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
 | **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |
 | **借贷池分片本地性** | `loanPoolAvailable` 每 risk 分片各一份;`POOL_DEPOSIT` 只在 `cmd.uid==shardId` 的片记账,贷款只见**本片**流动性(exporter DEFAULT=2 risk 片) | 单片塌缩,全局共池 | 向量令借款人 uid 与注资 shard 同片(偶数 uid→shard 0),两侧口径一致(见 §7.3) |
-| **funding 余数 dust 归属** | receiver pro-rata 截断后剩的 `+1` dust 按 `LongLongHashMap` **hash 迭代序**分给前几个 receiver(`FundingFeeCommandProcessor.java`) | 按 `BTreeMap` **升序**分(确定性铁律禁 HashMap 迭代序) | 等权重多 receiver 且有 dust 时,dust 落到不同 receiver(其 profit + 是否发 FUNDINGFEE_SETTLEMENT 随之不同)。Rust 内部自洽、跨节点确定;不改 Rust 迁就 Java hash 序。故此类"零分摊 receiver"角落不作对拍向量 |
+
+> **已消除的差异**:funding receiver 余数 dust 归属曾是刻意差异(Java 按 `LongLongHashMap` hash 序、Rust 按 `BTreeMap` 升序)。2026-09-17 已把 Java `FundingFeeCommandProcessor` 余数分配改为 **uid 升序**(`keySet().toSortedArray()`)= Rust,两侧一致且 Java oracle 更确定。现由 `funding_multi_receiver_dust` / `funding_zero_share_receiver` / `funding_multi_payer_multi_receiver` 三个 events-on 向量对拍。
 
 **结算类事件白名单**(进 `EVENTS` 多重集的):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`。两侧白名单必须同步维护。
 
