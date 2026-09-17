@@ -9,12 +9,11 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 use crate::core::processors::user_profile_service::UserProfileService;
 
-/// 无状态处理器——零大小类型，不持有字段。
+/// 无状态处理器——参见模块文档。
 pub struct InternalTransferCommandProcessor;
 
 impl TwoStepCommandProcessor for InternalTransferCommandProcessor {
-    /// R1：字段映射 `cmd.uid=from / cmd.size=to / cmd.symbol=currency / cmd.price=amount`;R1 失败直接返回拒绝码,
-    /// 成功则立即扣付款方 + 写 `cmd.internal_transfer_event` 供 R2,并发付款方 INTERNAL_TRANSFER 事件。
+    /// R1：失败直接返回拒绝码,成功则立即扣付款方 + 写 `cmd.internal_transfer_event` 供 R2,并发付款方 INTERNAL_TRANSFER 事件。（字段 overload 映射见模块 doc）
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         let from_uid = cmd.uid;
         let to_uid = cmd.size;

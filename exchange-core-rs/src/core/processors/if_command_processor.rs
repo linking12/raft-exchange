@@ -10,7 +10,7 @@ use crate::core::processors::liquidation::liquidation_service::LiquidationServic
 use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 
-/// 无状态处理器——不持有字段。
+/// 无状态处理器——参见模块文档。
 pub struct IfCommandProcessor;
 
 impl TwoStepCommandProcessor for IfCommandProcessor {
