@@ -6,7 +6,7 @@ use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{add_exact, ceil_mul_div, trunc_mul_div};
 
 /// 对应 Java `CoreSymbolSpecification`（现货子集 + 期货保证金字段）。`#[derive(Default)]` 零值兜底 = 未配置期货保证金（100%初始/维持保证金率、不限杠杆）。
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CoreSymbolSpecification {
     pub symbol_id: i32,
     pub symbol_type: SymbolType,
@@ -132,6 +132,59 @@ impl CoreSymbolSpecification {
             Some((_, &v)) => Some(v),
             None => map.iter().next().map(|(_, &v)| v),
         }
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for CoreSymbolSpecification {
+    /// Java 序：symbolId,type(byte),base,quote,baseScale,quoteScale,taker,maker,**liq,feeScale**,initMargin,
+    /// initMarginScaleK,maintenanceMargin(treemap),maintenanceMarginScaleK,maxLeverage(treemap),loanConfig。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.symbol_id);
+        w.write_u8(self.symbol_type.code() as u8);
+        w.write_i32(self.base_currency);
+        w.write_i32(self.quote_currency);
+        w.write_i64(self.base_scale_k);
+        w.write_i64(self.quote_scale_k);
+        w.write_i64(self.taker_fee);
+        w.write_i64(self.maker_fee);
+        w.write_i64(self.liquidation_fee);
+        w.write_i64(self.fee_scale_k);
+        w.write_i64(self.init_margin);
+        w.write_i64(self.init_margin_scale_k);
+        w.write_long_long_treemap(&self.maintenance_margin.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_i64(self.maintenance_margin_scale_k);
+        w.write_long_long_treemap(&self.max_leverage.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        self.loan_config.chronicle_write(w);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let symbol_id = r.read_i32()?;
+        let symbol_type = SymbolType::of_code(r.read_u8()? as i8);
+        let base_currency = r.read_i32()?;
+        let quote_currency = r.read_i32()?;
+        let base_scale_k = r.read_i64()?;
+        let quote_scale_k = r.read_i64()?;
+        let taker_fee = r.read_i64()?;
+        let maker_fee = r.read_i64()?;
+        let liquidation_fee = r.read_i64()?;
+        let fee_scale_k = r.read_i64()?;
+        let init_margin = r.read_i64()?;
+        let init_margin_scale_k = r.read_i64()?;
+        let maintenance_margin = crate::core::snapshot::marshalling::to_btree_i64(r.read_long_long_treemap()?);
+        let maintenance_margin_scale_k = r.read_i64()?;
+        let max_leverage = crate::core::snapshot::marshalling::to_btree_i64(r.read_long_long_treemap()?);
+        let loan_config = SymbolLoanSpecification::chronicle_read(r)?;
+        Ok(CoreSymbolSpecification {
+            symbol_id, symbol_type, base_currency, quote_currency, base_scale_k, quote_scale_k,
+            taker_fee, maker_fee, fee_scale_k, liquidation_fee, init_margin, init_margin_scale_k,
+            maintenance_margin, maintenance_margin_scale_k, max_leverage, loan_config,
+            ..Default::default()
+        })
     }
 }
 

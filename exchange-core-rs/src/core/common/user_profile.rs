@@ -16,7 +16,7 @@ use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_status::UserStatus;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserProfile {
     pub uid: i64,
     pub user_status: UserStatus,
@@ -338,6 +338,84 @@ impl UserProfile {
             h = h.wrapping_mul(31).wrapping_add(loan.state_hash() as i64);
         }
         ((h >> 32) as i32) ^ (h as i32)
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for UserProfile {
+    /// Java 序:uid,userStatus(byte),processedTransactionIds,accounts(int-long),exchangeLocked(int-long),
+    /// positionMode(byte),positions(int-key SPR),isolatedLoans(long-key),crossLoanCollateral(int-long),crossLoans(long-key)。
+    /// SPR/loan 的 `uid` 不序列化,读后由本 UserProfile 的 uid 注入。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i64(self.uid);
+        w.write_u8(self.user_status.code() as u8);
+        self.processed_tx_ids.chronicle_write(w);
+        w.write_int_long_map(&self.accounts.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.exchange_locked.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_u8(self.position_mode.code() as u8);
+        w.write_int_keyed_map(
+            &self.positions.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            |vw, v| v.chronicle_write(vw),
+        );
+        w.write_long_keyed_map(
+            &self.isolated_loans.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            |vw, v| v.chronicle_write(vw),
+        );
+        w.write_int_long_map(&self.cross_loan_collateral.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_long_keyed_map(
+            &self.cross_loans.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            |vw, v| v.chronicle_write(vw),
+        );
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let uid = r.read_i64()?;
+        let user_status = UserStatus::of_code(r.read_u8()? as i8);
+        let processed_tx_ids = TimeWindowDedupSet::chronicle_read(r)?;
+        let accounts = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?);
+        let exchange_locked = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?);
+        let position_mode = PositionMode::of_code(r.read_u8()? as i8);
+        let positions: BTreeMap<i32, SymbolPositionRecord> = r
+            .read_int_keyed_map(SymbolPositionRecord::chronicle_read)?
+            .into_iter()
+            .map(|(k, mut spr)| {
+                spr.uid = uid;
+                (k, spr)
+            })
+            .collect();
+        let isolated_loans: BTreeMap<i64, IsolatedLoanRecord> = r
+            .read_long_keyed_map(IsolatedLoanRecord::chronicle_read)?
+            .into_iter()
+            .map(|(k, mut lr)| {
+                lr.uid = uid;
+                (k, lr)
+            })
+            .collect();
+        let cross_loan_collateral = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?);
+        let cross_loans: BTreeMap<i64, CrossLoanRecord> = r
+            .read_long_keyed_map(CrossLoanRecord::chronicle_read)?
+            .into_iter()
+            .map(|(k, mut lr)| {
+                lr.uid = uid;
+                (k, lr)
+            })
+            .collect();
+        Ok(UserProfile {
+            uid,
+            user_status,
+            accounts,
+            exchange_locked,
+            processed_tx_ids,
+            position_mode,
+            positions,
+            isolated_loans,
+            cross_loan_collateral,
+            cross_loans,
+        })
     }
 }
 

@@ -17,7 +17,6 @@ use crate::core::orderbook::orders_bucket_naive::OrdersBucketNaive;
 use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact};
 
 /// 整簿（naive 实现）：ask_buckets 升序、bid_buckets 用 rev() 取最高价、id_index 存 (side,price,uid) 供 O(log n) 定位+所有权校验。对应 Java OrderBookNaiveImpl。
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct OrderBookNaiveImpl {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,
@@ -754,6 +753,86 @@ impl IOrderBook for OrderBookNaiveImpl {
     }
 }
 
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java OrderBookNaiveImpl.writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+/// 读一段 LongMap<price, OrdersBucketNaive>(对应 Java `SerializationUtils.readLongMap`):int size + size×(price long + bucket)。
+fn read_price_buckets(r: &mut ChronicleReader) -> Result<BTreeMap<i64, OrdersBucketNaive>, ChronicleError> {
+    let count = r.read_i32()?;
+    let mut map = BTreeMap::new();
+    for _ in 0..count {
+        let price = r.read_i64()?;
+        let bucket = OrdersBucketNaive::chronicle_read(r)?;
+        map.insert(price, bucket);
+    }
+    Ok(map)
+}
+
+impl OrderBookNaiveImpl {
+    /// 快照恢复辅助:按 Java 序抽出全部挂单——asks 价升序、bids 价降序,桶内 FIFO。
+    /// 供 router 读到 NAIVE 订单簿时转成 Direct 承载(Rust 撮合热路径恒 Direct)。
+    pub fn chronicle_orders(&self) -> (Vec<Order>, Vec<Order>) {
+        let asks = self.ask_buckets.values().flat_map(|b| b.iter_orders().cloned()).collect();
+        let bids = self.bid_buckets.values().rev().flat_map(|b| b.iter_orders().cloned()).collect();
+        (asks, bids)
+    }
+    pub fn chronicle_symbol_spec(&self) -> Option<CoreSymbolSpecification> {
+        self.symbol_spec.clone()
+    }
+    /// 读 body(implType 字节已由调用方消费):symbolSpec + askBuckets(升序)+ bidBuckets(降序);读毕重建派生 id_index。
+    pub fn chronicle_read_body(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let symbol_spec = CoreSymbolSpecification::chronicle_read(r)?;
+        let ask_buckets = read_price_buckets(r)?;
+        let bid_buckets = read_price_buckets(r)?;
+        let mut book = OrderBookNaiveImpl { ask_buckets, bid_buckets, id_index: BTreeMap::new(), symbol_spec: Some(symbol_spec) };
+        book.rebuild_id_index();
+        Ok(book)
+    }
+    /// 从 ask/bid 桶重建 `id_index`(order_id → (side, price, uid));对应 Java 读构造器里 idMap 的重建。
+    fn rebuild_id_index(&mut self) {
+        self.id_index.clear();
+        for (&price, bucket) in &self.ask_buckets {
+            for order in bucket.iter_orders() {
+                self.id_index.insert(order.order_id, (OrderAction::Ask, price, order.uid));
+            }
+        }
+        for (&price, bucket) in &self.bid_buckets {
+            for order in bucket.iter_orders() {
+                self.id_index.insert(order.order_id, (OrderAction::Bid, price, order.uid));
+            }
+        }
+    }
+}
+
+impl ChronicleMarshallable for OrderBookNaiveImpl {
+    /// 对应 Java `OrderBookNaiveImpl.writeMarshallable`:implType(byte=NAIVE=0) + symbolSpec + askBuckets(LongMap,价升序)
+    /// + bidBuckets(LongMap,价降序=Java reverseOrder TreeMap 迭代序)。每桶再重写一遍 symbolSpec(Java 格式)。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_u8(0); // OrderBookImplType.NAIVE
+        let spec = self.symbol_spec.as_ref().expect("naive 订单簿缺 symbol_spec");
+        spec.chronicle_write(w);
+        // askBuckets:价升序
+        w.write_i32(self.ask_buckets.len() as i32);
+        for (&price, bucket) in &self.ask_buckets {
+            w.write_i64(price);
+            bucket.chronicle_write(w, spec);
+        }
+        // bidBuckets:价降序(对齐 Java reverseOrder TreeMap 迭代序)
+        w.write_i32(self.bid_buckets.len() as i32);
+        for (&price, bucket) in self.bid_buckets.iter().rev() {
+            w.write_i64(price);
+            bucket.chronicle_write(w, spec);
+        }
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let impl_type = r.read_u8()?;
+        assert_eq!(impl_type, 0, "非 Naive 订单簿(code {impl_type});应为 OrderBookImplType.NAIVE=0");
+        Self::chronicle_read_body(r)
+    }
+}
+
 #[cfg(test)]
 mod ob_tests {
     use super::*;
@@ -766,6 +845,32 @@ mod ob_tests {
             action: Some(act), order_type: Some(OrderType::Gtc), uid: id, ..Default::default() };
         book.new_order(&mut cmd);
         cmd
+    }
+
+    #[test]
+    fn chronicle_naive_roundtrip_bytes() {
+        use crate::core::snapshot::chronicle_reader::ChronicleReader;
+        use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+        let spec = CoreSymbolSpecification { symbol_id: 1, ..Default::default() };
+        let mut book = OrderBookNaiveImpl::with_symbol_spec(spec);
+        // 不交叉的多档 ask/bid（GTC 静止挂簿）；110 档两单验证同价位 FIFO。
+        place(&mut book, 1, OrderAction::Ask, 110, 5);
+        place(&mut book, 2, OrderAction::Ask, 110, 3);
+        place(&mut book, 3, OrderAction::Ask, 120, 7);
+        place(&mut book, 4, OrderAction::Bid, 100, 4);
+        place(&mut book, 5, OrderAction::Bid, 90, 6);
+        // write → read → write 字节稳定（含 implType 字节、每桶 symbolSpec、bid 降序、桶内 FIFO）。
+        let mut w1 = ChronicleWriter::new();
+        book.chronicle_write(&mut w1);
+        let bytes1 = w1.into_bytes();
+        let mut r = ChronicleReader::new(&bytes1);
+        let back = OrderBookNaiveImpl::chronicle_read(&mut r).unwrap();
+        assert!(r.is_empty(), "read 未消费全部字节");
+        assert_eq!(back.fill_l2(100).ask_volumes, book.fill_l2(100).ask_volumes);
+        assert_eq!(back.fill_l2(100).bid_volumes, book.fill_l2(100).bid_volumes);
+        let mut w2 = ChronicleWriter::new();
+        back.chronicle_write(&mut w2);
+        assert_eq!(w2.into_bytes(), bytes1, "Naive write→read→write 字节不一致");
     }
 
     #[test]

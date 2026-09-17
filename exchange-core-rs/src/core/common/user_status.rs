@@ -1,5 +1,5 @@
 /// 对应 Java `exchange.core2.core.common.UserStatus`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserStatus {
     Active,
     Suspended,
@@ -10,6 +10,15 @@ impl UserStatus {
         match self {
             UserStatus::Active => 0,
             UserStatus::Suspended => 1,
+        }
+    }
+
+    /// code() 反向映射(快照反序列化)。
+    pub fn of_code(code: i8) -> Self {
+        match code {
+            0 => UserStatus::Active,
+            1 => UserStatus::Suspended,
+            c => panic!("未知 UserStatus code {c}"),
         }
     }
 }

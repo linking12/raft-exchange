@@ -10,19 +10,16 @@ use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
 
 /// 对应 Java `ExchangeCore`（现货子集，单 shard）。
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub struct ExchangeCore {
     pub risk: RiskEngine,
     pub matching: MatchingEngineRouter,
     pub ups: UserProfileService,
     pub ssp: SymbolSpecificationProvider,
-    /// 测试可观测缓冲(非复制):`run_liquidation_cascade` 排空的每条次级命令(FORCE/IF/ADL/loan 强平)
-    /// 的 `fund_events` 累加于此,供测试对拍级联事件流(`last_fund_events()` 只含本条命令、抓不到排空命令)。
-    /// 每次 `process_command` 开头清空;`#[serde(skip)]` 不进快照/state_hash。
-    #[serde(skip)]
+    /// 测试可观测缓冲(非复制态,不进快照/state_hash):`run_liquidation_cascade` 排空的每条次级命令(FORCE/IF/ADL/loan 强平)
+    /// 的 `fund_events` 累加于此,供测试对拍级联事件流(`last_fund_events()` 只含本条命令、抓不到排空命令)。每次 `process_command` 开头清空。
     pub last_cascade_events: Vec<crate::core::common::fund_event::FundEvent>,
-    /// 同上(非复制):`run_liquidation_cascade` 排空命令产生的撮合事件(展平链),供事件级对拍(强平 FORCE 成交)。
-    #[serde(skip)]
+    /// 同上(非复制态):`run_liquidation_cascade` 排空命令产生的撮合事件(展平链),供事件级对拍(强平 FORCE 成交)。
     pub last_cascade_matcher_events: Vec<crate::core::common::matcher_trade_event::MatcherTradeEvent>,
 }
 
@@ -66,7 +63,7 @@ impl ExchangeCore {
         self.last_cascade_matcher_events.clear();
 
         log::trace!(
-            "process_command 进入: cmd={:?} uid={} symbol={} order_id={}",
+            "process_command enter: cmd={:?} uid={} symbol={} order_id={}",
             cmd.command, cmd.uid, cmd.symbol, cmd.order_id
         );
 
@@ -74,7 +71,7 @@ impl ExchangeCore {
         if cmd.command == crate::core::common::cmd::order_command_type::OrderCommandType::Reset {
             self.reset();
             cmd.result_code = Some(crate::core::common::cmd::command_result_code::CommandResultCode::Success);
-            log::debug!("process_command: RESET 已清空全引擎业务态");
+            log::debug!("process_command: RESET cleared all engine business state");
             return;
         }
 
@@ -86,7 +83,7 @@ impl ExchangeCore {
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
 
         log::trace!(
-            "process_command: R1→ME→R2 完成 cmd={:?} result={:?}",
+            "process_command: R1->ME->R2 done cmd={:?} result={:?}",
             cmd.command, cmd.result_code
         );
 
@@ -110,7 +107,7 @@ impl ExchangeCore {
         // 绝大多数命令不触发强平,队列为空时整段 no-op;仅在真有次级命令时打点(避免热路径噪声)。
         if !self.risk.liquidation_engine.pending_commands.is_empty() {
             log::debug!(
-                "run_liquidation_cascade 开始: 待排空次级命令 {} 条",
+                "run_liquidation_cascade start: {} pending secondary commands to drain",
                 self.risk.liquidation_engine.pending_commands.len()
             );
         }
@@ -119,7 +116,7 @@ impl ExchangeCore {
             let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
             cascade_steps += 1;
             log::trace!(
-                "  级联步 {}: 回流次级命令 cmd={:?} uid={} symbol={} size={}",
+                "  cascade step {}: replay secondary command cmd={:?} uid={} symbol={} size={}",
                 cascade_steps, generated.command, generated.uid, generated.symbol, generated.size
             );
             self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
@@ -136,22 +133,41 @@ impl ExchangeCore {
             }
         }
         if cascade_steps > 0 {
-            log::debug!("run_liquidation_cascade 完成: 共排空 {} 条次级命令", cascade_steps);
+            log::debug!("run_liquidation_cascade done: drained {} secondary commands", cascade_steps);
         }
     }
 
-    // Snapshot：serde derive + bincode 整体序列化复制态，只需 round-trip 保真。
-    // `liquidation_engine` 与 SPR 的 liquidation_flow/adl_eligibility/pending_adl_size 三个 scratch 字段 `#[serde(skip)]`，反序列化后经 `restore_non_replicated_state` 复原为"换届后新 leader"语义。
+    // Snapshot：**Chronicle Wire RAW**(与 Java `MemorySerializationProcessor` 同格式),混合集群下 Rust 与 Java
+    // 共用快照。分 RISK_ENGINE("RE")+ MATCHING_ENGINE_ROUTER("ME")两模块(各一个 `.ecs`),每模块 = 帧 + payload。
+    // 非复制 leader-local 状态(liquidation_engine / SPR 的 liquidation_flow/adl_eligibility/pending_adl_size)不序列化,
+    // 反序列化后经 `restore_non_replicated_state` 复原为"换届后新 leader"语义。见 memory `snapshot-chronicle-format`。
 
-    /// 把整个复制态序列化成快照字节（bincode）；非复制 leader-local 状态经 `#[serde(skip)]` 自动排除。
-    pub fn to_snapshot_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("snapshot serialize must not fail on in-memory state")
+    /// 打快照的**唯一入口**:一次产出 RE + ME 两个模块的 `.ecs` 字节(Java 可读,各自独立文档)。返回 `(re, me)`。
+    /// - RE:符号/币种/用户/仓位/借贷/IF/loan/费用(`risk_engine::write_risk_engine_payload`,对应 Java `RiskEngine.writeMarshallable`)。
+    /// - ME:订单簿(`impl ChronicleMarshallable for MatchingEngineRouter`)。
+    ///
+    /// 保持两个独立 payload 是 Java 快照格式的硬要求:Java 按 `SerializedModuleType`(RISK_ENGINE / MATCHING_ENGINE_ROUTER)
+    /// 分模块各存一份,不能合成单块;上层按需把 `re`/`me` 各自落到对应模块文件。
+    pub fn to_snapshot_bytes(&self) -> (Vec<u8>, Vec<u8>) {
+        use crate::core::snapshot::marshalling::ChronicleMarshallable;
+        use crate::core::snapshot::module_frame::encode_module_payload;
+        let re = encode_module_payload(&crate::core::processors::risk_engine::write_risk_engine_payload(self));
+        let mut w = crate::core::snapshot::chronicle_writer::ChronicleWriter::new();
+        self.matching.chronicle_write(&mut w);
+        let me = encode_module_payload(&w.into_bytes());
+        (re, me)
     }
 
-    /// 从快照字节恢复 `ExchangeCore`，反序列化后调用 `restore_non_replicated_state` 复原非复制状态（等价 Java `updateProvider`）。
-    pub fn from_snapshot_bytes(bytes: &[u8]) -> Self {
-        let mut core: ExchangeCore =
-            bincode::deserialize(bytes).expect("snapshot deserialize must not fail on trusted snapshot");
+    /// 读快照的**唯一入口**:从 RE + ME 两模块 `.ecs` 字节(Java 或 Rust 产出)恢复 `ExchangeCore`;末尾 `restore_non_replicated_state`。
+    pub fn from_snapshot_bytes(re_ecs: &[u8], me_ecs: &[u8]) -> Self {
+        use crate::core::snapshot::chronicle_reader::ChronicleReader;
+        use crate::core::snapshot::marshalling::ChronicleMarshallable;
+        use crate::core::snapshot::module_frame::decode_module_payload;
+        let mut core = ExchangeCore::default();
+        let re = decode_module_payload(re_ecs).expect("RE 模块帧解码失败");
+        crate::core::processors::risk_engine::read_risk_engine_payload(&re, &mut core).expect("RE payload 解析失败");
+        let me = decode_module_payload(me_ecs).expect("ME 模块帧解码失败");
+        core.matching = MatchingEngineRouter::chronicle_read(&mut ChronicleReader::new(&me)).expect("ME payload 解析失败");
         core.restore_non_replicated_state();
         core
     }
@@ -1237,11 +1253,13 @@ mod snapshot_tests {
     #[test]
     fn snapshot_roundtrip_preserves_replicated_state_and_rebuilds_non_replicated() {
         let core = build_rich_core();
-        let bytes = core.to_snapshot_bytes();
-        let restored = ExchangeCore::from_snapshot_bytes(&bytes);
+        let (re, me) = core.to_snapshot_bytes();
+        let restored = ExchangeCore::from_snapshot_bytes(&re, &me);
 
-        // ① 复制态 round-trip 字节等价（serialize(deserialize(x)) == serialize(x)）。
-        assert_eq!(restored.to_snapshot_bytes(), bytes, "复制态快照 round-trip 必须字节等价");
+        // ① 复制态 round-trip 字节等价（Chronicle：RE+ME 两模块各自 serialize(deserialize(x)) == serialize(x)）。
+        let (re2, me2) = restored.to_snapshot_bytes();
+        assert_eq!(re2, re, "RE 模块快照 round-trip 必须字节等价");
+        assert_eq!(me2, me, "ME 模块快照 round-trip 必须字节等价");
 
         // 抽查关键复制态被复原。
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].open_volume, 10);
@@ -1251,7 +1269,7 @@ mod snapshot_tests {
         assert_eq!(restored.risk.liquidation_service.notionals[&FUT].available, 500);
         // order book：U_MAKER 的 resting BID@80 仍在。
         let mut ob = OrderCommand { command: OrderCommandType::OrderBookRequest, symbol: FUT, size: 10, ..Default::default() };
-        let mut restored2 = ExchangeCore::from_snapshot_bytes(&bytes);
+        let mut restored2 = ExchangeCore::from_snapshot_bytes(&re, &me);
         restored2.process_command(&mut ob);
         let md = ob.market_data.unwrap();
         assert!(md.bid_prices.contains(&80), "resting 挂单簿状态必须随快照复原");
@@ -1279,8 +1297,8 @@ mod snapshot_tests {
     fn restored_core_liquidation_works_via_rebuilt_index() {
         // 恢复后功能验证：markprice 暴跌触发 U_LONG（ISOLATED 期货多头）强平——依赖重建的 symbol_to_users targeted 索引 + 归一的 adl_eligibility。
         let core = build_rich_core();
-        let bytes = core.to_snapshot_bytes();
-        let mut restored = ExchangeCore::from_snapshot_bytes(&bytes);
+        let (re, me) = core.to_snapshot_bytes();
+        let mut restored = ExchangeCore::from_snapshot_bytes(&re, &me);
         restored.risk.liquidation_engine.is_running = true; // server 侧重新成为 leader
 
         // 给强平 FORCE ASK 备好吸单 BID（U_MAKER 已有 BID@80，破产价≈92>80 不够，另挂 BID@92）。

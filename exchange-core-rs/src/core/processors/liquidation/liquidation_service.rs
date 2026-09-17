@@ -12,7 +12,7 @@ use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::{mul_exact, size_price_to_currency_scale};
 
 /// 对应 Java `LiquidationService.IFNotional`：IF 单 symbol 名义资金——`available` 可动用，`reserved` 为强平预冻结（R1/R2 独立记账线）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IfNotional {
     pub available: i64,
     pub reserved: i64,
@@ -27,7 +27,7 @@ impl IfNotional {
 }
 
 /// 对应 Java `LiquidationService.IFPositionRecord`：IF 自身接管仓位——某 symbol+方向累计持仓量与开仓成本（反向出清估值用）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IfPositionRecord {
     pub symbol: i32,
     pub direction: PositionDirection,
@@ -54,7 +54,7 @@ impl IfPositionRecord {
 }
 
 /// IF 状态子集：`notionals: symbol -> IFNotional`；`positions: (direction.multiplier()*symbol) -> IFPositionRecord`（符号编码 key 区分多空）。
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct LiquidationService {
     pub notionals: BTreeMap<i32, IfNotional>,
     pub positions: BTreeMap<i64, IfPositionRecord>,
@@ -323,6 +323,61 @@ fn saturating_multiply(a: i64, b: i64) -> i64 {
                 i64::MAX
             }
         }
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for IfNotional {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i64(self.available);
+        w.write_i64(self.reserved);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(IfNotional { available: r.read_i64()?, reserved: r.read_i64()? })
+    }
+}
+
+impl ChronicleMarshallable for IfPositionRecord {
+    /// Java 序:symbol(int),direction(byte=multiplier),openVolume(long),openPriceSum(long)。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.symbol);
+        w.write_u8(self.direction.code() as u8);
+        w.write_i64(self.open_volume);
+        w.write_i64(self.open_price_sum);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(IfPositionRecord {
+            symbol: r.read_i32()?,
+            direction: PositionDirection::of_code(r.read_u8()? as i8),
+            open_volume: r.read_i64()?,
+            open_price_sum: r.read_i64()?,
+        })
+    }
+}
+
+impl ChronicleMarshallable for LiquidationService {
+    /// Java 序:marshallIntHashMap(notionals) + marshallIntHashMap(positions)。
+    /// Java positions key 为 int(symbol),Rust 存 i64(见字段审计),读写时窄化/扩展。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_int_keyed_map(
+            &self.notionals.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            |vw, v| v.chronicle_write(vw),
+        );
+        w.write_int_keyed_map(
+            &self.positions.iter().map(|(&k, v)| (k as i32, v.clone())).collect::<Vec<_>>(),
+            |vw, v| v.chronicle_write(vw),
+        );
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let notionals = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_keyed_map(IfNotional::chronicle_read)?);
+        let positions_i32 = r.read_int_keyed_map(IfPositionRecord::chronicle_read)?;
+        let positions = positions_i32.into_iter().map(|(k, v)| (k as i64, v)).collect();
+        Ok(LiquidationService { notionals, positions })
     }
 }
 

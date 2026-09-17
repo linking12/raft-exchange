@@ -37,7 +37,7 @@ use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::{mul_exact, sub_exact};
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
     pub fees: BTreeMap<i32, i64>,
@@ -49,8 +49,7 @@ pub struct RiskEngine {
     pub loan_service: LoanService,
     /// per-shard 期货保险基金（IF）状态，notionals/positions 都进 state_hash，与 loan LIF 独立。
     pub liquidation_service: LiquidationService,
-    /// per-shard 期货强平引擎，仅 leader-local 不进 state_hash/snapshot；`#[serde(skip)]` 换届后 from_snapshot_bytes 重建索引。
-    #[serde(skip)]
+    /// per-shard 期货强平引擎，仅 leader-local，不进 state_hash/snapshot（快照不含此字段）；换届后 from_snapshot_bytes 经 restore_non_replicated_state 重建索引。
     pub liquidation_engine: LiquidationEngine,
 }
 
@@ -1979,6 +1978,55 @@ impl RiskEngine {
         }
     }
 
+}
+
+
+// ---- Chronicle 快照:RiskEngine 自身状态 + RE 模块组装 ----
+// RE 模块的快照读写(对应 Java `RiskEngine.writeMarshallable`)。Rust 的 `ssp`/`ups`/`risk` 是 ExchangeCore 的兄弟字段
+// (不能塞进 RiskEngine,否则 `risk.pre_process_command(cmd,&mut ups,&ssp)` 会同时借 receiver 与其字段;且 Rust 无方法
+// 重载,`chronicle_write` 也无法既 `(&self,w)` 又收 ups/ssp),故用一对自由函数直接取 `&ExchangeCore` 组装——这类跨字段
+// 组合最地道的写法。字段序:shardId+shardMask+symbolSpec+currencySpec(=ssp)+userProfiles(=ups)+risk 尾段。
+use crate::core::exchange_core::ExchangeCore;
+use crate::core::snapshot::chronicle_reader::{ChronicleError as SnapChronicleError, ChronicleReader as SnapChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter as SnapChronicleWriter;
+use crate::core::snapshot::marshalling::{to_btree_i32 as snap_to_btree_i32, ChronicleMarshallable};
+
+/// 写出 RE 模块 payload(单片塌缩:shardId/shardMask 写常量 0;binaryCommandsProcessor 写空 map)。
+pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
+    let mut w = SnapChronicleWriter::new();
+    w.write_i32(0);
+    w.write_i64(0);
+    core.ssp.chronicle_write(&mut w);
+    core.ups.chronicle_write(&mut w);
+    let risk = &core.risk;
+    risk.liquidation_service.chronicle_write(&mut w);
+    risk.loan_service.chronicle_write(&mut w);
+    w.write_i32(0); // binaryCommandsProcessor 空(未移植大二进制命令重组缓冲)
+    w.write_int_keyed_map(&risk.last_price_cache.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
+    w.write_int_long_map(&risk.fees.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+    w.write_int_long_map(&risk.adjustments.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+    w.write_int_long_map(&risk.suspends.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+    w.into_bytes()
+}
+
+/// 从 RE 模块 payload 读入并填充 `core`:ssp/ups 整体替换(SSP 读后自 rebuild_spot_pair_index),risk 尾段字段逐个搬运——
+/// 从而**保留** `core.risk` 现有的 cfg_margin_trading_enabled(配置)与 liquidation_engine(leader-local,不进快照)。消费须精确到底。
+pub fn read_risk_engine_payload(payload: &[u8], core: &mut ExchangeCore) -> Result<(), SnapChronicleError> {
+    let mut r = SnapChronicleReader::new(payload);
+    let _shard_id = r.read_i32()?;
+    let _shard_mask = r.read_i64()?;
+    core.ssp = SymbolSpecificationProvider::chronicle_read(&mut r)?;
+    core.ups = UserProfileService::chronicle_read(&mut r)?;
+    core.risk.liquidation_service = LiquidationService::chronicle_read(&mut r)?;
+    core.risk.loan_service = LoanService::chronicle_read(&mut r)?;
+    let bin_size = r.read_i32()?;
+    assert_eq!(bin_size, 0, "binaryCommandsProcessor 非空:Rust 未移植大二进制命令重组缓冲");
+    core.risk.last_price_cache = snap_to_btree_i32(r.read_int_keyed_map(LastPriceCacheRecord::chronicle_read)?);
+    core.risk.fees = snap_to_btree_i32(r.read_int_long_map()?);
+    core.risk.adjustments = snap_to_btree_i32(r.read_int_long_map()?);
+    core.risk.suspends = snap_to_btree_i32(r.read_int_long_map()?);
+    debug_assert!(r.is_empty(), "RE payload 未被完全消费,字段布局可能漂移");
+    Ok(())
 }
 
 #[cfg(test)]

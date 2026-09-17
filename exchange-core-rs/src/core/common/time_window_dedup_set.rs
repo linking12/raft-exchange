@@ -1,7 +1,7 @@
 //! 对应 Java `common/TimeWindowDedupSet`：外部触发命令（BALANCE_ADJUSTMENT / MARGIN_ADJUSTMENT / 借贷 /
 //! POOL_* / INTERNAL_TRANSFER 等）的幂等门。FIFO 保留最近 `window_ms`（默认 3 天）内的 (id, time)；超窗淘汰、
 //! `hard_cap` 硬上限兜底防无界增长。淘汰只由确定性命令时间 `now_ms` 驱动（随 raft 复制，非本地钟），插入时 clamp
-//! 成 `max(now_ms, 队尾时间)` 保容器内时间单调不减。`state_hash`/serde 按 FIFO 逻辑序遍历 (id, time)，物理布局不进 hash。
+//! 成 `max(now_ms, 队尾时间)` 保容器内时间单调不减。`state_hash`/快照 按 FIFO 逻辑序遍历 (id, time)，物理布局不进 hash。
 use std::collections::{HashSet, VecDeque};
 
 /// 默认保留窗口：3 天。
@@ -9,8 +9,7 @@ pub const DEFAULT_WINDOW_MS: i64 = 3 * 24 * 3600 * 1000;
 /// 默认硬上限：单用户最多保留的 id 条数（安全阀）。
 pub const DEFAULT_HARD_CAP: usize = 1 << 16;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(from = "DedupData", into = "DedupData")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeWindowDedupSet {
     window_ms: i64,
     hard_cap: usize,
@@ -20,30 +19,21 @@ pub struct TimeWindowDedupSet {
     ids: HashSet<i64>,
 }
 
-/// 序列化投影：只存 window_ms/hard_cap/entries（FIFO 顺序），`ids` 从 entries 重建。
-#[derive(serde::Serialize, serde::Deserialize)]
-struct DedupData {
-    window_ms: i64,
-    hard_cap: usize,
-    entries: Vec<(i64, i64)>,
-}
-
-impl From<DedupData> for TimeWindowDedupSet {
-    fn from(d: DedupData) -> Self {
-        let ids = d.entries.iter().map(|&(id, _)| id).collect();
-        TimeWindowDedupSet { window_ms: d.window_ms, hard_cap: d.hard_cap, entries: d.entries.into(), ids }
-    }
-}
-
-impl From<TimeWindowDedupSet> for DedupData {
-    fn from(s: TimeWindowDedupSet) -> Self {
-        DedupData { window_ms: s.window_ms, hard_cap: s.hard_cap, entries: s.entries.into() }
-    }
-}
-
 impl TimeWindowDedupSet {
     pub fn new() -> Self {
         Self { window_ms: DEFAULT_WINDOW_MS, hard_cap: DEFAULT_HARD_CAP, entries: VecDeque::new(), ids: HashSet::new() }
+    }
+
+    /// 快照读取:从 (window_ms, hard_cap, entries FIFO) 重建(`ids` 由 entries 派生);对应 Java
+    /// `TimeWindowDedupSet.readMarshallable` 与本地 `From<DedupData>`。
+    pub fn from_snapshot_parts(window_ms: i64, hard_cap: usize, entries: Vec<(i64, i64)>) -> Self {
+        let ids = entries.iter().map(|&(id, _)| id).collect();
+        Self { window_ms, hard_cap, entries: entries.into(), ids }
+    }
+
+    /// 快照写出:`(window_ms, hard_cap, entries FIFO 顺序)`,对应 Java `writeMarshallable`。
+    pub fn snapshot_parts(&self) -> (i64, usize, Vec<(i64, i64)>) {
+        (self.window_ms, self.hard_cap, self.entries.iter().copied().collect())
     }
 
     /// 对应 Java `tryClaim(id, nowMs)`：以命令时间 `now_ms` 清超窗老条目后，首次见到 `id` → 记录返回 `true`；
@@ -109,6 +99,38 @@ impl Default for TimeWindowDedupSet {
     }
 }
 
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for TimeWindowDedupSet {
+    /// Java 序:windowMs(long) + hardCap(int) + size(int) + size×(id long, time long)(FIFO)。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        let (window_ms, hard_cap, entries) = self.snapshot_parts();
+        w.write_i64(window_ms);
+        w.write_i32(hard_cap as i32);
+        w.write_i32(entries.len() as i32);
+        for (id, time) in entries {
+            w.write_i64(id);
+            w.write_i64(time);
+        }
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let window_ms = r.read_i64()?;
+        let hard_cap = r.read_i32()? as usize;
+        let size = r.read_i32()?;
+        let mut entries = Vec::with_capacity(size.max(0) as usize);
+        for _ in 0..size {
+            let id = r.read_i64()?;
+            let time = r.read_i64()?;
+            entries.push((id, time));
+        }
+        Ok(TimeWindowDedupSet::from_snapshot_parts(window_ms, hard_cap, entries))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,14 +164,16 @@ mod tests {
     }
 
     #[test]
-    fn serde_roundtrip_rebuilds_id_index() {
+    fn chronicle_roundtrip_rebuilds_id_index() {
         let mut s = TimeWindowDedupSet::new();
         s.try_claim(7, 100);
         s.try_claim(9, 200);
-        let bytes = bincode::serialize(&s).unwrap();
-        let mut back: TimeWindowDedupSet = bincode::deserialize(&bytes).unwrap();
+        let mut w = ChronicleWriter::new();
+        s.chronicle_write(&mut w);
+        let bytes = w.into_bytes();
+        let mut back = TimeWindowDedupSet::chronicle_read(&mut ChronicleReader::new(&bytes)).unwrap();
         assert_eq!(s, back);
-        assert!(!back.try_claim(7, 200), "反序列化后 id 索引应已重建");
+        assert!(!back.try_claim(7, 200), "读回后 id 索引应已从 entries 重建");
         assert!(back.try_claim(8, 200));
     }
 }

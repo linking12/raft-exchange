@@ -5,7 +5,7 @@ use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::user_profile::UserProfile;
 use crate::core::common::user_status::UserStatus;
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct UserProfileService {
     pub users: BTreeMap<i64, UserProfile>,
 }
@@ -77,6 +77,22 @@ impl UserProfileService {
 
     pub fn get_mut(&mut self, uid: i64) -> Option<&mut UserProfile> {
         self.users.get_mut(&uid)
+    }
+}
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::{to_btree_i64, ChronicleMarshallable};
+
+impl ChronicleMarshallable for UserProfileService {
+    /// 对应 Java `UserProfileService.writeMarshallable`:userProfiles(LongObject:uid→UserProfile)。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_long_keyed_map(&self.users.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let users = to_btree_i64(r.read_long_keyed_map(UserProfile::chronicle_read)?);
+        Ok(UserProfileService { users })
     }
 }
 

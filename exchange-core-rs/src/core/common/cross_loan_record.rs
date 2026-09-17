@@ -2,7 +2,7 @@
 use crate::core::common::loan_record::LoanRecord;
 
 /// 对应 Java `CrossLoanRecord`。
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CrossLoanRecord {
     // ── 身份
     /// 所属用户（上下文注入，不参与序列化，只进 state_hash）。
@@ -133,6 +133,42 @@ impl LoanRecord for CrossLoanRecord {
 
     fn set_cum_interest_paid(&mut self, value: i64) {
         self.cum_interest_paid = value;
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for CrossLoanRecord {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i64(self.loan_id);
+        w.write_i32(self.symbol_id);
+        w.write_i32(self.loan_currency);
+        w.write_i32(self.rate_bps);
+        w.write_i64(self.opened_at_ts);
+        w.write_i64(self.outstanding_principal);
+        w.write_i64(self.accumulated_interest);
+        w.write_i64(self.last_accrue_ts);
+        w.write_i64(self.acc_snapshot);
+        w.write_i64(self.cum_interest_paid);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(CrossLoanRecord {
+            uid: 0,
+            loan_id: r.read_i64()?,
+            symbol_id: r.read_i32()?,
+            loan_currency: r.read_i32()?,
+            rate_bps: r.read_i32()?,
+            opened_at_ts: r.read_i64()?,
+            outstanding_principal: r.read_i64()?,
+            accumulated_interest: r.read_i64()?,
+            last_accrue_ts: r.read_i64()?,
+            acc_snapshot: r.read_i64()?,
+            cum_interest_paid: r.read_i64()?,
+        })
     }
 }
 

@@ -10,7 +10,7 @@ pub const DEFAULT_LTV_MARGIN_CALL_BUFFER_BPS: i32 = 1000; // 10%，liquidation�
 pub const NUMERAIRE_UNSET: i32 = 0;
 
 /// 对应 Java `LoanGlobalConfig`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoanGlobalConfig {
     /// Cross 估值基准币；未配（`NUMERAIRE_UNSET`）时 Cross BORROW/WITHDRAW fail-close、scanner 跳过。
     pub numeraire_currency: i32,
@@ -65,6 +65,35 @@ impl Default for LoanGlobalConfig {
             ltv_liquidation_buffer_bps: DEFAULT_LTV_LIQUIDATION_BUFFER_BPS,
             ltv_margin_call_buffer_bps: DEFAULT_LTV_MARGIN_CALL_BUFFER_BPS,
         }
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for LoanGlobalConfig {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.numeraire_currency);
+        w.write_i32(self.cross_liquidation_ltv_bps);
+        w.write_i32(self.cross_margin_call_ltv_bps);
+        w.write_i32(self.loan_pool_utilization_cap_bps);
+        w.write_i32(self.loan_liquidation_fee_bps);
+        w.write_i32(self.ltv_liquidation_buffer_bps);
+        w.write_i32(self.ltv_margin_call_buffer_bps);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(LoanGlobalConfig {
+            numeraire_currency: r.read_i32()?,
+            cross_liquidation_ltv_bps: r.read_i32()?,
+            cross_margin_call_ltv_bps: r.read_i32()?,
+            loan_pool_utilization_cap_bps: r.read_i32()?,
+            loan_liquidation_fee_bps: r.read_i32()?,
+            ltv_liquidation_buffer_bps: r.read_i32()?,
+            ltv_margin_call_buffer_bps: r.read_i32()?,
+        })
     }
 }
 

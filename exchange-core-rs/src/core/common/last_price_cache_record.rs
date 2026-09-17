@@ -5,7 +5,7 @@
 /// 对应 Java `LastPriceCacheRecord.WINDOW_MS`：15 秒滑动混合窗口。
 pub const WINDOW_MS: i64 = 15_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LastPriceCacheRecord {
     /// 对应 Java `askPrice`（默认 `Long.MAX_VALUE`）。
     pub ask_price: i64,
@@ -58,6 +58,29 @@ impl LastPriceCacheRecord {
 impl Default for LastPriceCacheRecord {
     fn default() -> Self {
         LastPriceCacheRecord::new()
+    }
+}
+
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for crate::core::common::last_price_cache_record::LastPriceCacheRecord {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i64(self.ask_price);
+        w.write_i64(self.bid_price);
+        w.write_i64(self.mark_price);
+        w.write_i64(self.mark_price_ts);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(crate::core::common::last_price_cache_record::LastPriceCacheRecord {
+            ask_price: r.read_i64()?,
+            bid_price: r.read_i64()?,
+            mark_price: r.read_i64()?,
+            mark_price_ts: r.read_i64()?,
+        })
     }
 }
 

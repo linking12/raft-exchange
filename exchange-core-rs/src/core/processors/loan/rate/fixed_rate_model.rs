@@ -5,7 +5,7 @@ use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::utils::core_arithmetic_utils::{add_exact, trunc_mul_div};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedRateModel {
     /// 相对 floating 曲线的加/减价（bps），默认 `0` = 与 floating 同价。
     pub locked_rate_adjust_bps: i32,
@@ -198,6 +198,21 @@ mod tests {
 
 /// Java 黄金值对拍：镜像 `LoanRateCurveTest.fixedModel_openRate_appliesAdjustWithFloor`。
 /// 期望值即 Java `assertEquals` 字面量；不同则为翻译 bug，不得改期望。
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for FixedRateModel {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_i32(self.locked_rate_adjust_bps);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(FixedRateModel { locked_rate_adjust_bps: r.read_i32()? })
+    }
+}
+
 #[cfg(test)]
 mod java_parity {
     use super::*;

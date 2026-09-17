@@ -7,12 +7,11 @@ use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
 use crate::core::common::symbol_type::SymbolType;
 
 /// 对应 Java `SymbolSpecificationProvider`；`spot_pair_index` 对应派生索引 `spotPairIndex`（不进 stateHash/序列化，
-/// `#[serde(skip)]` 排除，快照恢复后由 `rebuild_spot_pair_index` 从 `symbols` 重建，对齐 Java `rebuildSpotPairIndex`）。
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+/// 派生态，不进快照/stateHash；快照恢复后由 `rebuild_spot_pair_index` 从 `symbols` 重建，对齐 Java `rebuildSpotPairIndex`）。
+#[derive(Debug, Clone, Default)]
 pub struct SymbolSpecificationProvider {
     pub symbols: BTreeMap<i32, CoreSymbolSpecification>,
     pub currencies: BTreeMap<i32, CoreCurrencySpecification>,
-    #[serde(skip)]
     pub spot_pair_index: BTreeSet<(i32, i32)>,
 }
 
@@ -74,6 +73,28 @@ impl SymbolSpecificationProvider {
                 && s.base_currency == base_currency
                 && s.quote_currency == quote_currency
         })
+    }
+}
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::{to_btree_i32, ChronicleMarshallable};
+
+impl ChronicleMarshallable for SymbolSpecificationProvider {
+    /// 对应 Java `RiskEngine.writeMarshallable` 内相邻两段:`symbolSpecificationProvider`(symbols, IntObject)
+    /// 后接 `currencySpecificationProvider`(currencies, IntObject)。Rust 把 Java 两个 provider 合并进本类,
+    /// 故一并读写;`spot_pair_index` 派生态读后重建(对齐 `rebuildSpotPairIndex`)。
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_int_keyed_map(&self.symbols.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
+        w.write_int_keyed_map(&self.currencies.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        let symbols = to_btree_i32(r.read_int_keyed_map(CoreSymbolSpecification::chronicle_read)?);
+        let currencies = to_btree_i32(r.read_int_keyed_map(CoreCurrencySpecification::chronicle_read)?);
+        let mut ssp = SymbolSpecificationProvider { symbols, currencies, spot_pair_index: BTreeSet::new() };
+        ssp.rebuild_spot_pair_index();
+        Ok(ssp)
     }
 }
 

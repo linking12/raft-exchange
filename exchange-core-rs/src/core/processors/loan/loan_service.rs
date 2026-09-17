@@ -34,7 +34,7 @@ fn checked_add_i64(a: i64, b: i64) -> Option<i64> {
 }
 
 /// 4 个资金桶进 raft snapshot 参与全局守恒对账，loan_pool_borrowed 是 tracker 不参与守恒；BTreeMap 保确定序（禁 HashMap）。
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LoanService {
     pub loan_pool_available: BTreeMap<i32, i64>,
     pub loan_pool_borrowed: BTreeMap<i32, i64>,
@@ -870,6 +870,7 @@ mod tests {
             currency: COLLATERAL_CUR,
             currency_scale_k: 1,
             collateral_weight_bps: weight_bps,
+            ..Default::default()
         });
         ssp.add_currency(CoreCurrencySpecification { currency: NUMERAIRE_CUR, currency_scale_k: 1, ..Default::default() });
         let mut price_cache = std::collections::BTreeMap::new();
@@ -1200,8 +1201,37 @@ mod tests {
 
 /// Java 黄金值对拍：镜像 `LoanRateCurveTest` 中经由 `LoanService` 的 openRate 派发
 /// （`floatingModel_openRate_fallsBackToBaseWhenUnpriced` / `fixedModel_openRate_appliesAdjustWithFloor`）
-/// 与利率子系统序列化 round-trip（`serialization_roundTrips_rateSubsystem`，Java 用 Chronicle Bytes，
-/// 此处等价用 bincode）。期望值即 Java 字面量；不同则为翻译 bug，不得改期望。
+/// 与利率子系统序列化 round-trip（`serialization_roundTrips_rateSubsystem`，Java 与 Rust 同走 Chronicle）。
+/// 期望值即 Java 字面量；不同则为翻译 bug，不得改期望。
+
+// ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java writeMarshallable)----
+use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
+use crate::core::snapshot::chronicle_writer::ChronicleWriter;
+use crate::core::snapshot::marshalling::ChronicleMarshallable;
+
+impl ChronicleMarshallable for LoanService {
+    fn chronicle_write(&self, w: &mut ChronicleWriter) {
+        w.write_int_long_map(&self.loan_pool_available.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.loan_pool_borrowed.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.interest_revenue.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.loan_insurance_fund.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        self.global_config.chronicle_write(w);
+        self.floating_rate.chronicle_write(w);
+        self.fixed_rate.chronicle_write(w);
+    }
+    fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
+        Ok(LoanService {
+            loan_pool_available: crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?),
+            loan_pool_borrowed: crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?),
+            interest_revenue: crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?),
+            loan_insurance_fund: crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?),
+            global_config: LoanGlobalConfig::chronicle_read(r)?,
+            floating_rate: FloatingRateModel::chronicle_read(r)?,
+            fixed_rate: FixedRateModel::chronicle_read(r)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod java_parity {
     use super::*;
@@ -1229,7 +1259,7 @@ mod java_parity {
 
     #[test]
     fn serialization_round_trips_rate_subsystem() {
-        // LoanRateCurveTest.serialization_roundTrips_rateSubsystem —— Java Chronicle Bytes → 此处 bincode。
+        // LoanRateCurveTest.serialization_roundTrips_rateSubsystem —— 走 Chronicle round-trip。
         let mut orig = LoanService::new();
         orig.floating_rate.current_rate_bps.insert(2, 480);
         orig.floating_rate.current_rate_bps.insert(5, 3600);
@@ -1241,8 +1271,10 @@ mod java_parity {
         orig.floating_rate.last_reprice_ts = 1_700_000_000_000;
         orig.floating_rate.acc_rate_bps_ms.insert(2, 987_654);
 
-        let bytes = bincode::serialize(&orig).expect("serialize");
-        let parsed: LoanService = bincode::deserialize(&bytes).expect("deserialize");
+        let mut w = ChronicleWriter::new();
+        orig.chronicle_write(&mut w);
+        let bytes = w.into_bytes();
+        let parsed = LoanService::chronicle_read(&mut ChronicleReader::new(&bytes)).expect("chronicle_read");
 
         assert_eq!(parsed.floating_rate.current_rate_bps.get(&2), Some(&480));
         assert_eq!(parsed.floating_rate.current_rate_bps.get(&5), Some(&3600));
