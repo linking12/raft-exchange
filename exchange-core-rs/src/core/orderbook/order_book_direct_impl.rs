@@ -83,30 +83,14 @@ pub struct OrderBookDirectImpl {
 // 而序列化出不同字节，触发 raft 假分叉。故只 dump 纯逻辑订单流：沿 best 的 `.prev` 链按撮合序（价格优先 + 桶内
 // FIFO，同 `state_hash` 遍历）序列化，反序列化按同序 `insert_order` 重建 slab，保证逻辑相同→字节相同→跨节点一致。
 
-/// 快照里的单笔挂单：仅逻辑字段，无 slab 索引/指针。
-struct SnapOrder {
-    order_id: i64,
-    price: i64,
-    size: i64,
-    filled: i64,
-    filled_notional: i64,
-    reserve_bid_price: i64,
-    action: OrderAction,
-    order_type: OrderType,
-    command: OrderCommandType,
-    uid: i64,
-    timestamp: i64,
-    user_cookie: i32,
-}
-
 impl OrderBookDirectImpl {
-    /// 沿 `start`(best) 的 `.prev` 链收集逻辑订单流（最优→最差、桶内最老→最新）。与 `state_hash` 同一遍历。
-    fn chain_snapshot(&self, start: Option<usize>) -> Vec<SnapOrder> {
+    /// 沿 `start`(best) 的 `.prev` 链收集逻辑订单流（最优→最差、桶内最老→最新）为 [`Order`]。与 `state_hash` 同一遍历。
+    fn chain_snapshot(&self, start: Option<usize>) -> Vec<Order> {
         let mut out = Vec::new();
         let mut cur = start;
         while let Some(idx) = cur {
             let o = self.order(idx);
-            out.push(SnapOrder {
+            out.push(Order {
                 order_id: o.order_id,
                 price: o.price,
                 size: o.size,
@@ -115,10 +99,10 @@ impl OrderBookDirectImpl {
                 reserve_bid_price: o.reserve_bid_price,
                 action: o.action,
                 order_type: o.order_type,
-                command: o.command,
                 uid: o.uid,
                 timestamp: o.timestamp,
                 user_cookie: o.user_cookie,
+                command: o.command,
             });
             cur = o.prev;
         }
@@ -126,26 +110,26 @@ impl OrderBookDirectImpl {
     }
 
     /// 把快照订单原样重挂进 slab（保留 filled，不撮合）。按 `chain_snapshot` 同序调用即复现链序与 best 指针。
-    fn rebuild_insert(&mut self, so: SnapOrder) {
+    fn rebuild_insert(&mut self, o: Order) {
         let order = DirectOrder {
-            order_id: so.order_id,
-            price: so.price,
-            size: so.size,
-            filled: so.filled,
-            filled_notional: so.filled_notional,
-            reserve_bid_price: so.reserve_bid_price,
-            action: so.action,
-            order_type: so.order_type,
-            command: so.command,
-            uid: so.uid,
-            timestamp: so.timestamp,
-            user_cookie: so.user_cookie,
+            order_id: o.order_id,
+            price: o.price,
+            size: o.size,
+            filled: o.filled,
+            filled_notional: o.filled_notional,
+            reserve_bid_price: o.reserve_bid_price,
+            action: o.action,
+            order_type: o.order_type,
+            command: o.command,
+            uid: o.uid,
+            timestamp: o.timestamp,
+            user_cookie: o.user_cookie,
             parent: None,
             next: None,
             prev: None,
         };
         let idx = self.alloc_order(order);
-        self.order_id_index.insert(so.order_id, idx);
+        self.order_id_index.insert(o.order_id, idx);
         self.insert_order(idx, None);
     }
 
@@ -154,54 +138,20 @@ impl OrderBookDirectImpl {
         self.symbol_spec.clone()
     }
 
-    /// Chronicle 快照:撮合序的 (ask 订单, bid 订单),转为 [`Order`]。
+    /// Chronicle 快照:撮合序的 (ask 订单, bid 订单)。
     pub fn chronicle_orders(&self) -> (Vec<Order>, Vec<Order>) {
-        fn conv(so: SnapOrder) -> Order {
-            Order {
-                order_id: so.order_id,
-                price: so.price,
-                size: so.size,
-                filled: so.filled,
-                filled_notional: so.filled_notional,
-                reserve_bid_price: so.reserve_bid_price,
-                action: so.action,
-                order_type: so.order_type,
-                uid: so.uid,
-                timestamp: so.timestamp,
-                user_cookie: so.user_cookie,
-                command: so.command,
-            }
-        }
-        let asks = self.chain_snapshot(self.best_ask).into_iter().map(conv).collect();
-        let bids = self.chain_snapshot(self.best_bid).into_iter().map(conv).collect();
-        (asks, bids)
+        (self.chain_snapshot(self.best_ask), self.chain_snapshot(self.best_bid))
     }
 
     /// Chronicle 快照:从 symbol_spec + 有序 ask/bid 订单重建簿(先 ask 后 bid,保留 filled、不撮合)。
     pub fn restore_chronicle(symbol_spec: CoreSymbolSpecification, asks: Vec<Order>, bids: Vec<Order>) -> Self {
-        fn conv(o: Order) -> SnapOrder {
-            SnapOrder {
-                order_id: o.order_id,
-                price: o.price,
-                size: o.size,
-                filled: o.filled,
-                filled_notional: o.filled_notional,
-                reserve_bid_price: o.reserve_bid_price,
-                action: o.action,
-                order_type: o.order_type,
-                command: o.command,
-                uid: o.uid,
-                timestamp: o.timestamp,
-                user_cookie: o.user_cookie,
-            }
-        }
         let mut b = Self::new();
         b.symbol_spec = Some(symbol_spec);
         for o in asks {
-            b.rebuild_insert(conv(o));
+            b.rebuild_insert(o);
         }
         for o in bids {
-            b.rebuild_insert(conv(o));
+            b.rebuild_insert(o);
         }
         b
     }
@@ -1406,7 +1356,7 @@ impl ChronicleMarshallable for OrderBookDirectImpl {
     /// ask 订单流 + bid 订单流(flat,每单自带 action)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_u8(2); // OrderBookImplType.DIRECT
-        self.chronicle_symbol_spec().expect("订单簿缺 symbol_spec").chronicle_write(w);
+        self.symbol_spec.as_ref().expect("订单簿缺 symbol_spec").chronicle_write(w);
         let (asks, bids) = self.chronicle_orders();
         w.write_i32((asks.len() + bids.len()) as i32);
         for o in &asks {

@@ -25,15 +25,10 @@ impl TimeWindowDedupSet {
     }
 
     /// 快照读取:从 (window_ms, hard_cap, entries FIFO) 重建(`ids` 由 entries 派生);对应 Java
-    /// `TimeWindowDedupSet.readMarshallable` 与本地 `From<DedupData>`。
+    /// `TimeWindowDedupSet.readMarshallable`(见本类的 `chronicle_read`)。
     pub fn from_snapshot_parts(window_ms: i64, hard_cap: usize, entries: Vec<(i64, i64)>) -> Self {
         let ids = entries.iter().map(|&(id, _)| id).collect();
         Self { window_ms, hard_cap, entries: entries.into(), ids }
-    }
-
-    /// 快照写出:`(window_ms, hard_cap, entries FIFO 顺序)`,对应 Java `writeMarshallable`。
-    pub fn snapshot_parts(&self) -> (i64, usize, Vec<(i64, i64)>) {
-        (self.window_ms, self.hard_cap, self.entries.iter().copied().collect())
     }
 
     /// 对应 Java `tryClaim(id, nowMs)`：以命令时间 `now_ms` 清超窗老条目后，首次见到 `id` → 记录返回 `true`；
@@ -108,11 +103,10 @@ use crate::core::snapshot::marshalling::ChronicleMarshallable;
 impl ChronicleMarshallable for TimeWindowDedupSet {
     /// Java 序:windowMs(long) + hardCap(int) + size(int) + size×(id long, time long)(FIFO)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
-        let (window_ms, hard_cap, entries) = self.snapshot_parts();
-        w.write_i64(window_ms);
-        w.write_i32(hard_cap as i32);
-        w.write_i32(entries.len() as i32);
-        for (id, time) in entries {
+        w.write_i64(self.window_ms);
+        w.write_i32(self.hard_cap as i32);
+        w.write_i32(self.entries.len() as i32);
+        for &(id, time) in &self.entries {
             w.write_i64(id);
             w.write_i64(time);
         }

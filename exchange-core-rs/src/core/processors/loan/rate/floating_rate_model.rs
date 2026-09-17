@@ -368,8 +368,8 @@ impl ChronicleMarshallable for FloatingRateModel {
         w.write_i32(self.kink_util_bps);
         w.write_i32(self.slope1_bps);
         w.write_i32(self.slope2_bps);
-        w.write_int_long_map(&self.current_rate_bps.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-        w.write_int_long_map(&self.acc_rate_bps_ms.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.current_rate_bps);
+        w.write_int_long_map(&self.acc_rate_bps_ms);
         w.write_i64(self.last_reprice_ts);
     }
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {

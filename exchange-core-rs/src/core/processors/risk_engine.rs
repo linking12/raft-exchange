@@ -29,6 +29,7 @@ use crate::core::processors::fundingfee_command_processor::FundingFeeCommandProc
 use crate::core::processors::if_command_processor::IfCommandProcessor;
 use crate::core::processors::internaltransfer_command_processor::InternalTransferCommandProcessor;
 use crate::core::processors::loanratepricing_command_processor::LoanRatePricingCommandProcessor;
+use crate::core::processors::binary_commands_processor::BinaryCommandsProcessor;
 use crate::core::processors::liquidation::liquidation_engine::LiquidationEngine;
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
@@ -51,6 +52,8 @@ pub struct RiskEngine {
     pub liquidation_service: LiquidationService,
     /// per-shard 期货强平引擎，仅 leader-local，不进 state_hash/snapshot（快照不含此字段）；换届后 from_snapshot_bytes 经 restore_non_replicated_state 重建索引。
     pub liquidation_engine: LiquidationEngine,
+    /// RE 模块的 `binaryCommandsProcessor` 快照分片(仅字节兼容,Rust 恒空,忠实透传 Java 中途快照;不进 state_hash)。见 [`BinaryCommandsProcessor`]。
+    pub binary_cmd: BinaryCommandsProcessor,
 }
 
 impl RiskEngine {
@@ -67,6 +70,7 @@ impl RiskEngine {
             loan_service: LoanService::new(),
             liquidation_service: LiquidationService::new(),
             liquidation_engine: LiquidationEngine::new(),
+            binary_cmd: BinaryCommandsProcessor::new(),
         }
     }
 
@@ -1991,7 +1995,7 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError as SnapChronicleErr
 use crate::core::snapshot::chronicle_writer::ChronicleWriter as SnapChronicleWriter;
 use crate::core::snapshot::marshalling::{to_btree_i32 as snap_to_btree_i32, ChronicleMarshallable};
 
-/// 写出 RE 模块 payload(单片塌缩:shardId/shardMask 写常量 0;binaryCommandsProcessor 写空 map)。
+/// 写出 RE 模块 payload(单片塌缩:shardId/shardMask 写常量 0;binaryCommandsProcessor 忠实透传,Rust 恒空)。
 pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
     let mut w = SnapChronicleWriter::new();
     w.write_i32(0);
@@ -2001,11 +2005,11 @@ pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
     let risk = &core.risk;
     risk.liquidation_service.chronicle_write(&mut w);
     risk.loan_service.chronicle_write(&mut w);
-    w.write_i32(0); // binaryCommandsProcessor 空(未移植大二进制命令重组缓冲)
-    w.write_int_keyed_map(&risk.last_price_cache.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
-    w.write_int_long_map(&risk.fees.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-    w.write_int_long_map(&risk.adjustments.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-    w.write_int_long_map(&risk.suspends.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+    risk.binary_cmd.chronicle_write(&mut w);
+    w.write_int_keyed_map(&risk.last_price_cache, |vw, v| v.chronicle_write(vw));
+    w.write_int_long_map(&risk.fees);
+    w.write_int_long_map(&risk.adjustments);
+    w.write_int_long_map(&risk.suspends);
     w.into_bytes()
 }
 
@@ -2019,8 +2023,7 @@ pub fn read_risk_engine_payload(payload: &[u8], core: &mut ExchangeCore) -> Resu
     core.ups = UserProfileService::chronicle_read(&mut r)?;
     core.risk.liquidation_service = LiquidationService::chronicle_read(&mut r)?;
     core.risk.loan_service = LoanService::chronicle_read(&mut r)?;
-    let bin_size = r.read_i32()?;
-    assert_eq!(bin_size, 0, "binaryCommandsProcessor 非空:Rust 未移植大二进制命令重组缓冲");
+    core.risk.binary_cmd = BinaryCommandsProcessor::chronicle_read(&mut r)?;
     core.risk.last_price_cache = snap_to_btree_i32(r.read_int_keyed_map(LastPriceCacheRecord::chronicle_read)?);
     core.risk.fees = snap_to_btree_i32(r.read_int_long_map()?);
     core.risk.adjustments = snap_to_btree_i32(r.read_int_long_map()?);

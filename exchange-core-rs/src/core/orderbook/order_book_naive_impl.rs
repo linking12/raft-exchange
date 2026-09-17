@@ -756,19 +756,7 @@ impl IOrderBook for OrderBookNaiveImpl {
 // ---- Chronicle 快照读写(见 crate::core::snapshot;字段序照 Java OrderBookNaiveImpl.writeMarshallable)----
 use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
-use crate::core::snapshot::marshalling::ChronicleMarshallable;
-
-/// 读一段 LongMap<price, OrdersBucketNaive>(对应 Java `SerializationUtils.readLongMap`):int size + size×(price long + bucket)。
-fn read_price_buckets(r: &mut ChronicleReader) -> Result<BTreeMap<i64, OrdersBucketNaive>, ChronicleError> {
-    let count = r.read_i32()?;
-    let mut map = BTreeMap::new();
-    for _ in 0..count {
-        let price = r.read_i64()?;
-        let bucket = OrdersBucketNaive::chronicle_read(r)?;
-        map.insert(price, bucket);
-    }
-    Ok(map)
-}
+use crate::core::snapshot::marshalling::{to_btree_i64, ChronicleMarshallable};
 
 impl OrderBookNaiveImpl {
     /// 快照恢复辅助:按 Java 序抽出全部挂单——asks 价升序、bids 价降序,桶内 FIFO。
@@ -784,8 +772,8 @@ impl OrderBookNaiveImpl {
     /// 读 body(implType 字节已由调用方消费):symbolSpec + askBuckets(升序)+ bidBuckets(降序);读毕重建派生 id_index。
     pub fn chronicle_read_body(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let symbol_spec = CoreSymbolSpecification::chronicle_read(r)?;
-        let ask_buckets = read_price_buckets(r)?;
-        let bid_buckets = read_price_buckets(r)?;
+        let ask_buckets = to_btree_i64(r.read_long_keyed_map(OrdersBucketNaive::chronicle_read)?);
+        let bid_buckets = to_btree_i64(r.read_long_keyed_map(OrdersBucketNaive::chronicle_read)?);
         let mut book = OrderBookNaiveImpl { ask_buckets, bid_buckets, id_index: BTreeMap::new(), symbol_spec: Some(symbol_spec) };
         book.rebuild_id_index();
         Ok(book)

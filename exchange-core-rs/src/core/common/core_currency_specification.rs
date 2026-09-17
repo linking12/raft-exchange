@@ -27,7 +27,7 @@ fn scale_k_to_digit(scale_k: i64) -> i32 {
     }
 }
 fn digit_to_scale_k(digit: i32) -> i64 {
-    (0..digit.max(0)).fold(1i64, |acc, _| acc * 10)
+    10i64.pow(digit.max(0) as u32)
 }
 
 impl ChronicleMarshallable for CoreCurrencySpecification {

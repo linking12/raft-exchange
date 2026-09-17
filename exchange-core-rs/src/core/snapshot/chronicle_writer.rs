@@ -1,6 +1,7 @@
 //! Chronicle Wire RAW 二进制写入器:产出 Java(`MemorySerializationProcessor`)可加载的快照。
 //! 与 [`super::chronicle_reader::ChronicleReader`] 严格对称(同一编码规范),每个类型的 read/write 应放同一
 //! impl 并配 round-trip 测试防漂移。编码见 memory `snapshot-chronicle-format`。
+use std::collections::BTreeMap;
 
 /// 追加式写入器,产出裸 Chronicle RAW 字节。
 #[derive(Default)]
@@ -70,54 +71,46 @@ impl ChronicleWriter {
         self.buf.extend_from_slice(&payload);
     }
 
-    /// `marshallLongHashMap`:int(size) + 逐项(long key + value)。为稳定输出按 key 升序写
-    /// (读取与序无关;升序确保 Rust 侧快照字节确定,便于对拍/去 flaky)。
-    pub fn write_long_keyed_map<V, F>(&mut self, entries: &[(i64, V)], mut write_value: F)
+    /// `marshallLongHashMap`:int(size) + 逐项(long key + value)。直接吃 `BTreeMap`(天然按 key 升序,
+    /// 读取与序无关;升序确保 Rust 侧快照字节确定,便于对拍/去 flaky),免去调用方的中间 Vec 与重复排序。
+    pub fn write_long_keyed_map<V, F>(&mut self, map: &BTreeMap<i64, V>, mut write_value: F)
     where
         F: FnMut(&mut ChronicleWriter, &V),
     {
-        self.write_i32(entries.len() as i32);
-        let mut idx: Vec<usize> = (0..entries.len()).collect();
-        idx.sort_by_key(|&i| entries[i].0);
-        for i in idx {
-            self.write_i64(entries[i].0);
-            write_value(self, &entries[i].1);
+        self.write_i32(map.len() as i32);
+        for (k, v) in map {
+            self.write_i64(*k);
+            write_value(self, v);
         }
     }
 
-    /// `marshallIntHashMap`:int(size) + 逐项(int key + value),按 key 升序。
-    pub fn write_int_keyed_map<V, F>(&mut self, entries: &[(i32, V)], mut write_value: F)
+    /// `marshallIntHashMap`:int(size) + 逐项(int key + value)。`BTreeMap` 天然升序。
+    pub fn write_int_keyed_map<V, F>(&mut self, map: &BTreeMap<i32, V>, mut write_value: F)
     where
         F: FnMut(&mut ChronicleWriter, &V),
     {
-        self.write_i32(entries.len() as i32);
-        let mut idx: Vec<usize> = (0..entries.len()).collect();
-        idx.sort_by_key(|&i| entries[i].0);
-        for i in idx {
-            self.write_i32(entries[i].0);
-            write_value(self, &entries[i].1);
+        self.write_i32(map.len() as i32);
+        for (k, v) in map {
+            self.write_i32(*k);
+            write_value(self, v);
         }
     }
 
-    /// `CoreSymbolSpecification.writeTreeMapToBytes`:**stop-bit** size + 逐项(long key + long value),按 key 升序。
-    pub fn write_long_long_treemap(&mut self, entries: &[(i64, i64)]) {
-        self.write_stop_bit(entries.len() as u64);
-        let mut sorted: Vec<(i64, i64)> = entries.to_vec();
-        sorted.sort_by_key(|&(k, _)| k);
-        for (k, v) in sorted {
-            self.write_i64(k);
-            self.write_i64(v);
+    /// `CoreSymbolSpecification.writeTreeMapToBytes`:**stop-bit** size + 逐项(long key + long value)。`BTreeMap` 天然升序。
+    pub fn write_long_long_treemap(&mut self, map: &BTreeMap<i64, i64>) {
+        self.write_stop_bit(map.len() as u64);
+        for (k, v) in map {
+            self.write_i64(*k);
+            self.write_i64(*v);
         }
     }
 
-    /// `marshallIntLongHashMap`:int(size) + 逐项(int key + long value),按 key 升序。
-    pub fn write_int_long_map(&mut self, entries: &[(i32, i64)]) {
-        self.write_i32(entries.len() as i32);
-        let mut sorted: Vec<(i32, i64)> = entries.to_vec();
-        sorted.sort_by_key(|&(k, _)| k);
-        for (k, v) in sorted {
-            self.write_i32(k);
-            self.write_i64(v);
+    /// `marshallIntLongHashMap`:int(size) + 逐项(int key + long value)。`BTreeMap` 天然升序。
+    pub fn write_int_long_map(&mut self, map: &BTreeMap<i32, i64>) {
+        self.write_i32(map.len() as i32);
+        for (k, v) in map {
+            self.write_i32(*k);
+            self.write_i64(*v);
         }
     }
 }
@@ -196,7 +189,7 @@ mod tests {
         w.write_i32(-42);
         w.write_i64(1 << 40);
         w.write_utf8("hello-世界");
-        w.write_int_long_map(&[(3, 300), (1, 100), (2, 200)]);
+        w.write_int_long_map(&BTreeMap::from([(3, 300), (1, 100), (2, 200)]));
         let bytes = w.into_bytes();
 
         let mut r = ChronicleReader::new(&bytes);
@@ -212,7 +205,7 @@ mod tests {
     fn roundtrip_document_and_nested_map() {
         let mut w = ChronicleWriter::new();
         w.write_document(|inner| {
-            inner.write_long_keyed_map(&[(5i64, (1i64, 2i64))], |vw, v| {
+            inner.write_long_keyed_map(&BTreeMap::from([(5i64, (1i64, 2i64))]), |vw, v| {
                 vw.write_i64(v.0);
                 vw.write_i64(v.1);
             });

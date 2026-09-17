@@ -157,9 +157,9 @@ impl ChronicleMarshallable for CoreSymbolSpecification {
         w.write_i64(self.fee_scale_k);
         w.write_i64(self.init_margin);
         w.write_i64(self.init_margin_scale_k);
-        w.write_long_long_treemap(&self.maintenance_margin.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_long_long_treemap(&self.maintenance_margin);
         w.write_i64(self.maintenance_margin_scale_k);
-        w.write_long_long_treemap(&self.max_leverage.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_long_long_treemap(&self.max_leverage);
         self.loan_config.chronicle_write(w);
     }
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {

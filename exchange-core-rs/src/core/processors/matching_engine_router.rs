@@ -10,18 +10,21 @@ use crate::core::common::order::Order;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
 use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
+use crate::core::processors::binary_commands_processor::BinaryCommandsProcessor;
 
 /// 对应 Java `MatchingEngineRouter`（现货子集，只保留 symbol→book 路由 + 撮合分派）。
 #[derive(Default)]
 pub struct MatchingEngineRouter {
-    pub books: BTreeMap<i32, OrderBookDirectImpl>,
+    pub(crate) books: BTreeMap<i32, OrderBookDirectImpl>,
+    /// ME 模块的 `binaryCommandsProcessor` 快照分片(仅字节兼容,Rust 恒空,忠实透传 Java 中途快照)。见 [`BinaryCommandsProcessor`]。
+    pub(crate) binary_cmd: BinaryCommandsProcessor,
 }
 
 impl MatchingEngineRouter {
     // ===== 构造/配置 =====
 
     pub fn new() -> Self {
-        MatchingEngineRouter { books: BTreeMap::new() }
+        MatchingEngineRouter { books: BTreeMap::new(), binary_cmd: BinaryCommandsProcessor::new() }
     }
 
     // ===== 核心行为 =====
@@ -127,26 +130,25 @@ use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for MatchingEngineRouter {
-    /// Java `MatchingEngineRouter.writeMarshallable`:shardId(int)+shardMask(long)+binaryCommandsProcessor(空 map)+orderBooks。
-    /// 单片塌缩:shardId/shardMask 写常量 0、读丢弃;binaryCommandsProcessor 未移植 → 写空 map、读要求空。
+    /// Java `MatchingEngineRouter.writeMarshallable`:shardId(int)+shardMask(long)+binaryCommandsProcessor+orderBooks。
+    /// 单片塌缩:shardId/shardMask 写常量 0、读丢弃;binaryCommandsProcessor 忠实透传(Rust 恒空)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(0);
         w.write_i64(0);
-        w.write_i32(0);
+        self.binary_cmd.chronicle_write(w);
         w.write_int_keyed_map(
-            &self.books.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(),
+            &self.books,
             |vw, v| v.chronicle_write(vw),
         );
     }
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let _shard_id = r.read_i32()?;
         let _shard_mask = r.read_i64()?;
-        let bin_size = r.read_i32()?;
-        assert_eq!(bin_size, 0, "binaryCommandsProcessor 非空:Rust 未移植大二进制命令重组缓冲");
+        let binary_cmd = BinaryCommandsProcessor::chronicle_read(r)?;
         let books = crate::core::snapshot::marshalling::to_btree_i32(
             r.read_int_keyed_map(read_order_book_dispatch)?,
         );
-        Ok(MatchingEngineRouter { books })
+        Ok(MatchingEngineRouter { books, binary_cmd })
     }
 }
 

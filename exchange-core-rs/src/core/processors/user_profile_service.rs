@@ -88,7 +88,7 @@ use crate::core::snapshot::marshalling::{to_btree_i64, ChronicleMarshallable};
 impl ChronicleMarshallable for UserProfileService {
     /// 对应 Java `UserProfileService.writeMarshallable`:userProfiles(LongObject:uid→UserProfile)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
-        w.write_long_keyed_map(&self.users.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
+        w.write_long_keyed_map(&self.users, |vw, v| v.chronicle_write(vw));
     }
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let users = to_btree_i64(r.read_long_keyed_map(UserProfile::chronicle_read)?);

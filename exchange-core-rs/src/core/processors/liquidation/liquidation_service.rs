@@ -365,13 +365,12 @@ impl ChronicleMarshallable for LiquidationService {
     /// Java positions key 为 int(symbol),Rust 存 i64(见字段审计),读写时窄化/扩展。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_int_keyed_map(
-            &self.notionals.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            &self.notionals,
             |vw, v| v.chronicle_write(vw),
         );
-        w.write_int_keyed_map(
-            &self.positions.iter().map(|(&k, v)| (k as i32, v.clone())).collect::<Vec<_>>(),
-            |vw, v| v.chronicle_write(vw),
-        );
+        // positions 存 i64 key(见字段审计),Java 写 int:窄化成 i32 键的临时 BTreeMap(仅持引用,不 clone 记录)。
+        let positions_i32: BTreeMap<i32, &IfPositionRecord> = self.positions.iter().map(|(&k, v)| (k as i32, v)).collect();
+        w.write_int_keyed_map(&positions_i32, |vw, v| v.chronicle_write(vw));
     }
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let notionals = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_keyed_map(IfNotional::chronicle_read)?);

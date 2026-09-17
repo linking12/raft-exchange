@@ -1211,10 +1211,10 @@ use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for LoanService {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
-        w.write_int_long_map(&self.loan_pool_available.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-        w.write_int_long_map(&self.loan_pool_borrowed.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-        w.write_int_long_map(&self.interest_revenue.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-        w.write_int_long_map(&self.loan_insurance_fund.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.loan_pool_available);
+        w.write_int_long_map(&self.loan_pool_borrowed);
+        w.write_int_long_map(&self.interest_revenue);
+        w.write_int_long_map(&self.loan_insurance_fund);
         self.global_config.chronicle_write(w);
         self.floating_rate.chronicle_write(w);
         self.fixed_rate.chronicle_write(w);
