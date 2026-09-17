@@ -1,3 +1,7 @@
+//! 移植自 Java 测试类 ITSpotFuturesMixedIntegration.java：混合现货/期货场景，验证 exchangeLocked（现货挂单
+//! 冻结）在下单/取消/部分成交、资金费率结算、交割结算等各类事件后行为正确且全局资金守恒。
+//! 注：本文件只翻译了 ITSpotFuturesMixedIntegration.java 中与 exchangeLocked 记账相关的一部分场景
+//! （cancel/累加/提现/ASK锁定/成交释放/资金费/交割），未覆盖强平及 fund event 字段级校验等场景。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -187,10 +191,11 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // 对应 Java testSpotCancelReleasesLock()：现货挂单取消后 exchangeLocked 必须归零，accounts 全程不变。
     #[test]
     fn spot_cancel_releases_lock() {
         let mut api = setup_spot();
@@ -198,18 +203,20 @@ mod tests {
 
         let lock = 5 * (100 + SPOT_TAKER_FEE);
         assert_eq!(api.place_order(spot_bid(40001, UID_1, 100, 100, 5)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock, "挂单后 exchangeLocked=510");
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "accounts 不变");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock, "exchangeLocked=510 after placing the order");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "accounts unchanged");
 
         assert_eq!(
             api.cancel_order(CancelOrderRequest { order_id: 40001, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "取消后 exchangeLocked=0");
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "accounts 仍不变");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "exchangeLocked=0 after cancel");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "accounts still unchanged");
         assert_conserved(&api);
     }
 
+    // 对应 Java testMultipleSpotOrdersLockAccumulates()：同一 currency 多笔挂单 exchangeLocked 累加，
+    // 取消单笔只释放对应额度。
     #[test]
     fn multiple_spot_orders_lock_accumulates() {
         let mut api = setup_spot();
@@ -222,13 +229,13 @@ mod tests {
         assert_eq!(api.place_order(spot_bid(50001, UID_1, 100, 100, 3)), CommandResultCode::Success);
         assert_eq!(api.place_order(spot_bid(50002, UID_1, 50, 50, 4)), CommandResultCode::Success);
         assert_eq!(api.place_order(spot_bid(50003, UID_1, 80, 80, 2)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock1 + lock2 + lock3, "三笔累加 678");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock1 + lock2 + lock3, "sum of three orders = 678");
 
         assert_eq!(
             api.cancel_order(CancelOrderRequest { order_id: 50001, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock2 + lock3, "取消 o1 后 372");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock2 + lock3, "372 after cancelling o1");
 
         assert_eq!(
             api.cancel_order(CancelOrderRequest { order_id: 50002, uid: UID_1, symbol: SPOT_SYMBOL }),
@@ -238,10 +245,12 @@ mod tests {
             api.cancel_order(CancelOrderRequest { order_id: 50003, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "全部取消后 0");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "0 after cancelling all");
         assert_conserved(&api);
     }
 
+    // 对应 Java testWithdrawalBlockedBySpotLock()：exchangeLocked 阻止超额提现，可提现上限严格等于
+    // (accounts - exchangeLocked)。
     #[test]
     fn withdrawal_blocked_by_spot_lock() {
         let mut api = setup_spot();
@@ -254,30 +263,33 @@ mod tests {
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -(free + 1), 60002), CommandResultCode::RiskNsf);
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -free, 60003), CommandResultCode::Success);
 
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000 - free, "提现后 accounts=510");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock, "exchangeLocked 不受提现影响");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000 - free, "accounts=510 after withdrawal");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), lock, "exchangeLocked unaffected by withdrawal");
         assert_conserved(&api);
     }
 
+    // 对应 Java testSpotAskLockBaseCurrency()：现货 ASK 挂单冻结 base 货币（与 quote 无关），取消后释放。
     #[test]
     fn spot_ask_lock_base_currency() {
         let mut api = setup_spot();
         fund(&mut api, UID_1, BASE_ID, 10, 1);
 
         assert_eq!(api.place_order(spot_ask(70001, UID_1, 100, 5)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, BASE_ID), 5, "ASK 冻结 BASE=5");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "QUOTE lock 为 0");
-        assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts 不变");
+        assert_eq!(api.user_locked(UID_1, BASE_ID), 5, "ASK locks BASE=5");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "QUOTE lock is 0");
+        assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts unchanged");
 
         assert_eq!(
             api.cancel_order(CancelOrderRequest { order_id: 70001, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, BASE_ID), 0, "取消后 BASE lock=0");
-        assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts 仍不变");
+        assert_eq!(api.user_locked(UID_1, BASE_ID), 0, "BASE lock=0 after cancel");
+        assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts still unchanged");
         assert_conserved(&api);
     }
 
+    // 对应 Java testSpotFillReleasesLock()：现货成交后双方 exchangeLocked 归零，accounts 精确更新，
+    // fees 正确入账。
     #[test]
     fn spot_fill_releases_lock() {
         let mut api = setup_spot();
@@ -286,20 +298,22 @@ mod tests {
 
         let bid_lock = 5 * (100 + SPOT_TAKER_FEE);
         assert_eq!(api.place_order(spot_bid(80001, UID_1, 100, 100, 5)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), bid_lock, "成交前 QUOTE lock=510");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), bid_lock, "QUOTE lock=510 before the fill");
 
         assert_eq!(api.place_order(spot_ask(80002, UID_2, 100, 5)), CommandResultCode::Success);
 
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "成交后 QUOTE lock=0");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "QUOTE lock=0 after the fill");
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 495, "UID_1 QUOTE accounts=1000-505");
         assert_eq!(api.user_account(UID_1, BASE_ID), 5, "UID_1 BASE accounts=5");
-        assert_eq!(api.user_locked(UID_2, BASE_ID), 0, "成交后 BASE lock=0");
+        assert_eq!(api.user_locked(UID_2, BASE_ID), 0, "BASE lock=0 after the fill");
         assert_eq!(api.user_account(UID_2, QUOTE_ID), 490, "UID_2 QUOTE accounts=500-10");
         assert_eq!(api.user_account(UID_2, BASE_ID), 5, "UID_2 BASE accounts=5");
         assert_eq!(api.fees(QUOTE_ID), 15, "fees=makerFee(5)+takerFee(10)");
         assert_conserved(&api);
     }
 
+    // 对应 Java testSpotLockAndFuturesMarginBothConstrainWithdrawal()：现货挂单冻结 + 期货保证金共同
+    //约束提现上限，两者都必须扣减才是真实可支配额度。
     #[test]
     fn spot_lock_and_futures_margin_both_constrain_withdrawal() {
         let mut api = setup_spot();
@@ -338,11 +352,13 @@ mod tests {
         );
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -max_withdraw, 90005), CommandResultCode::Success);
 
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 4_900 - max_withdraw, "提现后 accounts=610");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "现货 exchangeLocked 不受提现影响");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 4_900 - max_withdraw, "accounts=610 after withdrawal");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "spot exchangeLocked unaffected by withdrawal");
         assert_conserved(&api);
     }
 
+    // 对应 Java testPartialFillReleasesPartialLock()：部分成交只释放已成交部分的 exchangeLocked，
+    // 取消余量后彻底清零。
     #[test]
     fn partial_fill_releases_partial_lock() {
         let mut api = setup_spot();
@@ -353,10 +369,10 @@ mod tests {
         let remain_lock = 6 * (100 + SPOT_TAKER_FEE);
 
         assert_eq!(api.place_order(spot_bid(100001, UID_1, 100, 100, 10)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), full_lock, "挂单后 lock=1020");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), full_lock, "lock=1020 after placing the order");
 
         assert_eq!(api.place_order(spot_ask(100002, UID_2, 100, 4)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), remain_lock, "部分成交后 lock=612");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), remain_lock, "lock=612 after the partial fill");
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_500 - 404, "UID_1 QUOTE=1096");
         assert_eq!(api.user_account(UID_1, BASE_ID), 4, "UID_1 BASE=4");
 
@@ -364,21 +380,25 @@ mod tests {
             api.cancel_order(CancelOrderRequest { order_id: 100001, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "取消余量后 lock=0");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "lock=0 after cancelling the remainder");
         assert_conserved(&api);
     }
 
+    // 对应 Java testRejectedOrderDoesNotModifyLock()：被 RISK_NSF 拒绝的下单不应留下任何 exchangeLocked
+    // 或 accounts 变化。
     #[test]
     fn rejected_order_does_not_modify_lock() {
         let mut api = setup_spot();
         fund(&mut api, UID_1, QUOTE_ID, 100, 1);
 
         assert_eq!(api.place_order(spot_bid(110001, UID_1, 100, 100, 5)), CommandResultCode::RiskNsf);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "被拒后 exchangeLocked 仍为 0");
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 100, "accounts 不变");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "exchangeLocked remains 0 after rejection");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 100, "accounts unchanged");
         assert_conserved(&api);
     }
 
+    // 对应 Java testBidAndAskLocksAreCurrencyIndependent()：BID 与 ASK 挂单分别独立维护 QUOTE 和 BASE
+    // 两个 exchangeLocked，互不影响。
     #[test]
     fn bid_and_ask_locks_are_currency_independent() {
         let mut api = setup_spot();
@@ -398,19 +418,21 @@ mod tests {
             api.cancel_order(CancelOrderRequest { order_id: 120001, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "取消 BID 后 QUOTE lock=0");
-        assert_eq!(api.user_locked(UID_1, BASE_ID), base_lock, "BASE lock 不变");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 0, "QUOTE lock=0 after cancelling the BID");
+        assert_eq!(api.user_locked(UID_1, BASE_ID), base_lock, "BASE lock unchanged");
 
         assert_eq!(
             api.cancel_order(CancelOrderRequest { order_id: 120002, uid: UID_1, symbol: SPOT_SYMBOL }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_locked(UID_1, BASE_ID), 0, "取消 ASK 后 BASE lock=0");
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "QUOTE accounts 不变");
-        assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts 不变");
+        assert_eq!(api.user_locked(UID_1, BASE_ID), 0, "BASE lock=0 after cancelling the ASK");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 1_000, "QUOTE accounts unchanged");
+        assert_eq!(api.user_account(UID_1, BASE_ID), 10, "BASE accounts unchanged");
         assert_conserved(&api);
     }
 
+    // 对应 Java testSpotLockUnchangedAfterFundingFeeSettlement()：永续合约资金费率结算不应影响用户的
+    // 现货 exchangeLocked；资金费落到 position.profit，不直接扣减 accounts。
     #[test]
     fn spot_lock_unchanged_after_funding_fee_settlement() {
         let mut api = ExchangeApi::new();
@@ -436,7 +458,7 @@ mod tests {
 
         let spot_lock = 5 * (1_000 + SPOT_TAKER_FEE);
         assert_eq!(api.place_order(spot_bid(20003, UID_1, 1_000, 1_000, 5)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "下现货单后 exchangeLocked=5010");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "exchangeLocked=5010 after placing the spot order");
 
         let expected_fee = 10 * 1_000 / 100;
         assert_eq!(
@@ -444,16 +466,18 @@ mod tests {
             CommandResultCode::Success
         );
 
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 19_900, "accounts 不变（funding 落进 position.profit）");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "exchangeLocked 不受资金费影响");
-        assert_eq!(api.user_position(UID_1, PERP_SYMBOL).unwrap().profit, -expected_fee, "多头 profit=-fee");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 19_900, "accounts unchanged (funding lands in position.profit)");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "exchangeLocked unaffected by funding fee");
+        assert_eq!(api.user_position(UID_1, PERP_SYMBOL).unwrap().profit, -expected_fee, "long profit=-fee");
 
-        assert_eq!(api.user_account(UID_2, QUOTE_ID), 19_800, "UID_2 accounts 不变");
-        assert_eq!(api.user_locked(UID_2, QUOTE_ID), 0, "UID_2 无现货挂单");
-        assert_eq!(api.user_position(UID_2, PERP_SYMBOL).unwrap().profit, expected_fee, "空头 profit=+fee");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), 19_800, "UID_2 accounts unchanged");
+        assert_eq!(api.user_locked(UID_2, QUOTE_ID), 0, "UID_2 has no spot order");
+        assert_eq!(api.user_position(UID_2, PERP_SYMBOL).unwrap().profit, expected_fee, "short profit=+fee");
         assert_conserved(&api);
     }
 
+    // 对应 Java testSpotLockSurvivesDelivery()：交割结算清空仓位并按 PnL 更新 accounts，但不应影响
+    // 用户的现货 exchangeLocked。
     #[test]
     fn spot_lock_survives_delivery() {
         let mut api = ExchangeApi::new();
@@ -479,18 +503,18 @@ mod tests {
 
         let spot_lock = 3 * (500 + SPOT_TAKER_FEE);
         assert_eq!(api.place_order(spot_bid(30003, UID_1, 500, 500, 3)), CommandResultCode::Success);
-        assert!(api.user_position(UID_1, DELIVERY_SYMBOL).is_some(), "交割仓位在");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "下现货单后 exchangeLocked=1506");
+        assert!(api.user_position(UID_1, DELIVERY_SYMBOL).is_some(), "delivery position should exist");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "exchangeLocked=1506 after placing the spot order");
 
         assert_eq!(settle_pnl(&mut api, DELIVERY_SYMBOL, 1_500, 30004), CommandResultCode::Success);
 
-        assert!(api.user_position(UID_1, DELIVERY_SYMBOL).is_none(), "交割后 UID_1 仓位清空");
+        assert!(api.user_position(UID_1, DELIVERY_SYMBOL).is_none(), "UID_1 position cleared after delivery");
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 14_950, "UID_1 = 9950 + pnl(5000)");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "现货 exchangeLocked 不受交割影响");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "spot exchangeLocked unaffected by delivery");
 
-        assert!(api.user_position(UID_2, DELIVERY_SYMBOL).is_none(), "交割后 UID_2 仓位清空");
+        assert!(api.user_position(UID_2, DELIVERY_SYMBOL).is_none(), "UID_2 position cleared after delivery");
         assert_eq!(api.user_account(UID_2, QUOTE_ID), 4_900, "UID_2 = 9900 - pnl(5000)");
-        assert_eq!(api.user_locked(UID_2, QUOTE_ID), 0, "UID_2 无现货挂单");
+        assert_eq!(api.user_locked(UID_2, QUOTE_ID), 0, "UID_2 has no spot order");
         assert_conserved(&api);
     }
 }

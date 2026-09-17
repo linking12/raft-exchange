@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITFutureCross`（继承 `ITFutureBase`）
+// 验证期货 cross/isolated 保证金模式切换、cross 全仓提现校验、开平仓损益结算与 cross 全仓强平/预警场景
 mod tests {
     use std::collections::BTreeMap;
 
@@ -161,10 +163,11 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "期货全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "futures global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // 对应 Java testCancelSuccess：isolated/cross 保证金模式不能混用，撤单后可切换模式重新挂单
     #[test]
     fn cancel_success_margin_mode_mismatch_guard() {
         let deposit = 2_000;
@@ -175,7 +178,7 @@ mod tests {
 
         assert_eq!(place(&mut api, order1, UID_1, SYMBOL_ID, MARK, 1, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         {
-            let pos = api.user_position(UID_1, SYMBOL_ID).expect("ISOLATED 挂单后应有仓位记录");
+            let pos = api.user_position(UID_1, SYMBOL_ID).expect("should have a position record after placing an ISOLATED order");
             assert_eq!(pos.pending_buy_size, 1);
             assert_eq!(pos.margin_mode, MarginMode::Isolated);
         }
@@ -186,7 +189,7 @@ mod tests {
 
         assert_eq!(place(&mut api, order2, UID_1, SYMBOL_ID, MARK, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         {
-            let pos = api.user_position(UID_1, SYMBOL_ID).expect("CROSS 挂单后应有仓位记录");
+            let pos = api.user_position(UID_1, SYMBOL_ID).expect("should have a position record after placing a CROSS order");
             assert_eq!(pos.pending_buy_size, 1);
             assert_eq!(pos.margin_mode, MarginMode::Cross);
         }
@@ -203,6 +206,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testDefaultMargin：不指定 margin mode 时默认为 ISOLATED
     #[test]
     fn default_margin_is_isolated() {
         let deposit = 20_000;
@@ -213,6 +217,7 @@ mod tests {
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().margin_mode, MarginMode::Isolated);
     }
 
+    // 对应 Java tesCloseMarginThenChangeMode：仓位全平后允许更改保证金模式
     #[test]
     fn close_margin_then_change_mode() {
         let mut api = setup_single();
@@ -225,13 +230,14 @@ mod tests {
 
         assert_eq!(place(&mut api, 1007, UID_1, SYMBOL_ID, 10_500, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1008, UID_2, SYMBOL_ID, 10_500, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
-        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "全平后仓位拆除，可改模式");
+        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "position torn down after full close, margin mode can now be changed");
 
         assert_eq!(place(&mut api, 1009, UID_1, SYMBOL_ID, 11_000, 1, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1010, UID_2, SYMBOL_ID, 11_000, 1, OrderAction::Ask, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().margin_mode, MarginMode::Isolated);
     }
 
+    // 对应 Java testPendingAvgPrice：验证 pendingBuyAvgPrice/pendingSellAvgPrice 的加权均价计算
     #[test]
     fn pending_avg_price() {
         let price1 = 10_000;
@@ -252,6 +258,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testCrossMarginWithdraw：cross 保证金提现须扣除该币种下所有期货持仓占用的保证金（空仓场景）
     #[test]
     fn cross_margin_withdraw() {
         let deposit = 10_000;
@@ -262,7 +269,7 @@ mod tests {
 
         assert_eq!(place(&mut api, 1005, UID_1, BTC_SYM, price1, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1007, UID_1, ETH_SYM, price2, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit, "期货挂单不扣 accounts");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit, "placing a futures order does not deduct accounts");
 
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -deposit, 100), CommandResultCode::RiskNsf);
 
@@ -271,10 +278,11 @@ mod tests {
 
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, 1, 103), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -deposit, 104), CommandResultCode::Success);
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 570, "提现后仅余 570 保证金对应额");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 570, "only 570 (the margin-locked amount) remains after withdrawal");
         assert_conserved(&api);
     }
 
+    // 对应 Java testCrossMarginWithdraw2：cross 保证金提现须扣除该币种下所有期货持仓占用的保证金（持仓场景）
     #[test]
     fn cross_margin_withdraw2() {
         let deposit = 10_000;
@@ -301,7 +309,7 @@ mod tests {
 
         assert_eq!(place(&mut api, 1009, UID_1, BTC_SYM, 15_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1010, UID_3, BTC_SYM, 15_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
-        assert!(api.user_position(UID_1, BTC_SYM).is_none(), "BTC 平掉，剩 ETH 一腿");
+        assert!(api.user_position(UID_1, BTC_SYM).is_none(), "BTC leg closed, only the ETH leg remains");
         assert_eq!(api.user_position(UID_1, ETH_SYM).unwrap().open_volume, 1);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - 10 - 150 - 10 + 5_000);
 
@@ -309,6 +317,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testOpenPosition4Bid：maker Bid + taker Ask 全部成交开仓，验证方向与手续费扣减
     #[test]
     fn open_position_taker_ask() {
         let deposit = 1_000;
@@ -326,6 +335,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testOpenPosition4Ask：maker Ask + taker Bid 全部成交开仓，验证方向与手续费扣减
     #[test]
     fn open_position_taker_bid() {
         let deposit = 1_000;
@@ -343,6 +353,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testOpenMultiplePosition4Bid：maker Bid 挂大单，taker Ask 部分成交，验证剩余挂量与已开仓量
     #[test]
     fn open_multiple_partial_taker_ask() {
         let size = 10;
@@ -362,6 +373,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testOpenMultiplePosition4Ask：maker Ask 挂大单，taker Bid 部分成交，验证剩余挂量与已开仓量
     #[test]
     fn open_multiple_partial_taker_bid() {
         let size = 10;
@@ -381,6 +393,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testClosePosition：反向单全平仓位，已实现盈亏结算入账户
     #[test]
     fn close_full_position_settles_pnl() {
         let deposit = 1_000;
@@ -396,11 +409,12 @@ mod tests {
 
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - 10 - 10 + 500);
         assert_eq!(api.user_account(UID_2, QUOTE_ID), MAX_VALUE - 20 - 20 - 500);
-        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "全平后仓位拆除");
+        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "position torn down after full close");
         assert!(api.user_position(UID_2, SYMBOL_ID).is_none());
         assert_conserved(&api);
     }
 
+    // 对应 Java testPartialClosePosition：反向单部分平仓，盈亏递延不立即计入 profit
     #[test]
     fn partial_close_position_defers_pnl() {
         let deposit = 10_000;
@@ -416,15 +430,16 @@ mod tests {
 
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - 10 * 10 - 10 * 1);
         assert_eq!(api.user_account(UID_2, QUOTE_ID), MAX_VALUE - 20 * 10 - 20 * 1);
-        let pos = api.user_position(UID_1, SYMBOL_ID).expect("部分平后仍持仓");
+        let pos = api.user_position(UID_1, SYMBOL_ID).expect("still holding a position after partial close");
         assert_eq!(pos.open_volume, 9);
         assert_eq!(pos.direction, PositionDirection::Long);
-        assert_eq!(pos.profit, 0, "部分平递延盈亏，不入 profit");
+        assert_eq!(pos.profit, 0, "partial close defers PnL, not booked into profit");
         assert_eq!(api.user_position(UID_2, SYMBOL_ID).unwrap().open_volume, 9);
         assert_eq!(api.user_position(UID_2, SYMBOL_ID).unwrap().direction, PositionDirection::Short);
         assert_conserved(&api);
     }
 
+    // 对应 Java testCrossMarginLiquidation（简化版）：cross 全仓强平触发后，总持仓量应减少
     #[test]
     fn cross_margin_liquidation_reduces_positions() {
         let mut api = setup_two();
@@ -448,10 +463,11 @@ mod tests {
 
         let remaining = api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume).unwrap_or(0)
             + api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume).unwrap_or(0);
-        assert!(remaining < initial, "全仓强平后总仓位应减少（至少一腿被强平）");
+        assert!(remaining < initial, "total position should decrease after cross-margin liquidation (at least one leg liquidated)");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testCrossMarginLiquidationWarning：亏损触发保证金预警但未达强平线，账户/仓位不变，校验 upnl/强平价/保证金率
     #[test]
     fn cross_margin_liquidation_warning_no_liquidation() {
         let deposit = 10_000i64;
@@ -471,8 +487,8 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, 5_300), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(ETH_SYM, 20_000), CommandResultCode::Success);
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840, "预警不改账户");
-        assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "预警不强平");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840, "a warning does not alter the account");
+        assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "a warning does not trigger liquidation");
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         let eth = api.single_user(UID_1, 0).positions.into_iter().find(|p| p.symbol == ETH_SYM).unwrap();
         assert_eq!(eth.unrealized_pnl, -5_000);

@@ -1,3 +1,6 @@
+//! Rust 内建端到端测试：直接驱动 ExchangeApi 跑真实撮合场景（多档部分/全部成交、IOC/FOK、
+//! reduce、自成交），每步后校验全局资金守恒与非负余额。随机命令流回归测试对应 Java 的
+//! ITConservationFuzz；其余场景为 Rust 侧自建，无一一对应的 Java 用例。
 use proptest::prelude::*;
 
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -12,6 +15,7 @@ const BASE: i32 = 1;
 const QUOTE: i32 = 2;
 const SYMBOL: i32 = 100;
 
+// 校验每种币种下 用户余额之和 + adjustments + fees == 0（资金零和守恒）
 fn assert_global_conservation(api: &ExchangeApi) {
     for &cur in api.ssp().currencies.keys() {
         let user_sum: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -20,23 +24,25 @@ fn assert_global_conservation(api: &ExchangeApi) {
         let total = user_sum + adjustments + fees;
         assert_eq!(
             total, 0,
-            "全局守恒被打破：currency={cur} users_sum={user_sum} adjustments={adjustments} fees={fees}"
+            "Global conservation broken: currency={cur} users_sum={user_sum} adjustments={adjustments} fees={fees}"
         );
     }
 }
 
+// 校验所有用户的可用余额（accounts）非负
 fn assert_accounts_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &bal) in &p.accounts {
-            assert!(bal >= 0, "用户 {} 的 accounts[{cur}] 为负: {bal}", p.uid);
+            assert!(bal >= 0, "user {}'s accounts[{cur}] is negative: {bal}", p.uid);
         }
     }
 }
 
+// 校验所有用户的冻结余额（exchange_locked）非负
 fn assert_locked_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &locked) in &p.exchange_locked {
-            assert!(locked >= 0, "用户 {} 的 exchange_locked[{cur}] 为负: {locked}", p.uid);
+            assert!(locked >= 0, "user {}'s exchange_locked[{cur}] is negative: {locked}", p.uid);
         }
     }
 }
@@ -51,6 +57,7 @@ fn assert_invariants(api: &ExchangeApi) {
     assert_no_negative_balances(api);
 }
 
+// 比例费场景下 ceiling 超可加性会让 exchange_locked 短暂为负（见 characterization 用例），故按需放行 locked 校验
 fn assert_invariants_gated(api: &ExchangeApi, fixed_fee: bool) {
     assert_global_conservation(api);
     assert_accounts_non_negative(api);
@@ -97,6 +104,7 @@ fn new_seeded_api(spec: CoreSymbolSpecification) -> ExchangeApi {
     api
 }
 
+// 两档 maker 挂单被一笔 taker 买单多档部分/全部吃完，随后撤单释放冻结（固定手续费）
 #[test]
 fn scenario_multi_level_partial_and_full_fill_fixed_fee() {
     const SELLER_A: i64 = 1;
@@ -182,6 +190,7 @@ fn scenario_multi_level_partial_and_full_fill_fixed_fee() {
     assert!(l2_after_cancel.ask_prices.is_empty());
 }
 
+// reduce_order 先缩减挂单量再被全部吃完，校验比例手续费入账（比例手续费）
 #[test]
 fn scenario_reduce_order_then_full_fill_proportional_fee() {
     const MAKER: i64 = 1;
@@ -224,7 +233,7 @@ fn scenario_reduce_order_then_full_fill_proportional_fee() {
     );
     assert_invariants(&api);
     assert_eq!(api.user_locked(MAKER, BASE), 700);
-    assert_eq!(api.user_account(MAKER, BASE), 1_000, "reduce 只释放冻结，accounts 不动");
+    assert_eq!(api.user_account(MAKER, BASE), 1_000, "reduce only releases the lock; accounts is unchanged");
 
     assert_eq!(
         api.place_order(PlaceOrderRequest {
@@ -242,11 +251,12 @@ fn scenario_reduce_order_then_full_fill_proportional_fee() {
     assert_invariants(&api);
 
     assert_eq!(api.user_locked(MAKER, BASE), 0);
-    assert_eq!(api.user_account(MAKER, BASE), 300, "剩余 300 未卖出的 base 还留在账上");
+    assert_eq!(api.user_account(MAKER, BASE), 300, "the remaining 300 unsold base stays in the account");
     assert_eq!(api.user_locked(TAKER, QUOTE), 0);
-    assert!(api.fees(QUOTE) > 0, "比例费应有非零手续费入账");
+    assert!(api.fees(QUOTE) > 0, "proportional fee should record a non-zero fee");
 }
 
+// IOC 部分成交立即释放剩余冻结，IOC 打在空盘口上应全额释放（订单立即成交或取消）
 #[test]
 fn scenario_ioc_partial_fill_and_full_reject() {
     const MAKER: i64 = 1;
@@ -296,10 +306,10 @@ fn scenario_ioc_partial_fill_and_full_reject() {
     );
     assert_invariants(&api);
     assert_eq!(api.user_account(TAKER1, BASE), 200);
-    assert_eq!(api.user_locked(TAKER1, QUOTE), 0, "IOC 未成交部分应全额释放冻结");
+    assert_eq!(api.user_locked(TAKER1, QUOTE), 0, "IOC's unfilled portion should fully release the lock");
 
     let l2 = api.request_l2(SYMBOL, 10);
-    assert!(l2.ask_prices.is_empty(), "maker 卖单已被吃完");
+    assert!(l2.ask_prices.is_empty(), "maker's ask order has been fully consumed");
 
     assert_eq!(
         api.place_order(PlaceOrderRequest {
@@ -319,6 +329,7 @@ fn scenario_ioc_partial_fill_and_full_reject() {
     assert_eq!(api.user_locked(TAKER2, QUOTE), 0);
 }
 
+// FOK 数量足够时正常全部成交，数量不足时整单拒绝、不部分成交也不影响 maker 挂单（订单全部成交或取消）
 #[test]
 fn scenario_fok_full_fill_and_full_reject() {
     const MAKER1: i64 = 1;
@@ -402,13 +413,14 @@ fn scenario_fok_full_fill_and_full_reject() {
         CommandResultCode::Success
     );
     assert_invariants(&api);
-    assert_eq!(api.user_account(TAKER2, BASE), 0, "FOK 不足量应整单拒绝，无部分成交");
-    assert_eq!(api.user_locked(TAKER2, QUOTE), 0, "FOK 拒绝应全额释放冻结");
+    assert_eq!(api.user_account(TAKER2, BASE), 0, "FOK with insufficient quantity should reject the whole order, no partial fill");
+    assert_eq!(api.user_locked(TAKER2, QUOTE), 0, "FOK rejection should fully release the lock");
 
     let l2 = api.request_l2(SYMBOL, 10);
-    assert_eq!(l2.ask_volumes, vec![100], "MAKER2 的挂单应原封不动");
+    assert_eq!(l2.ask_volumes, vec![100], "MAKER2's resting order should remain untouched");
 }
 
+// 用户自己的买单吃自己的卖单（自成交），验证净持仓不变、手续费照常收取、全局资金仍守恒
 #[test]
 fn scenario_self_trade_conserves_globally() {
     const USER: i64 = 1;
@@ -455,14 +467,14 @@ fn scenario_self_trade_conserves_globally() {
     );
     assert_invariants(&api);
 
-    assert_eq!(api.user_account(USER, BASE), 1_000, "自成交后 base 净不变");
+    assert_eq!(api.user_account(USER, BASE), 1_000, "base net unchanged after self-trade");
     assert_eq!(api.user_locked(USER, BASE), 0);
     assert_eq!(api.user_locked(USER, QUOTE), 0);
 
     let fees_delta = api.fees(QUOTE) - fees_before;
-    assert!(fees_delta > 0, "自成交仍应正常收取 taker+maker 费");
+    assert!(fees_delta > 0, "self-trade should still normally charge taker+maker fees");
     let quote_delta = api.user_account(USER, QUOTE) - quote_before;
-    assert_eq!(quote_delta, -fees_delta, "自成交唯一净损耗就是被扣去 fees 桶的手续费");
+    assert_eq!(quote_delta, -fees_delta, "the only net loss from self-trade is the fee deducted into the fees bucket");
 }
 
 #[derive(Debug, Clone)]
@@ -511,6 +523,7 @@ fn scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<(i64, i64)>, V
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    // 随机生成下单/撤单/reduce 命令流，每步后校验资金守恒与非负余额；对应 Java 的 ITConservationFuzz
     #[test]
     fn conservation_holds_for_random_command_stream(
         (fixed_fee, n_users, balances, cmds) in scenario_strategy()
@@ -593,6 +606,8 @@ proptest! {
     }
 }
 
+// 刻画性测试：比例手续费下 bid 挂单被多笔 ask 分批吃完时，ceiling 取整的超可加性会让
+// exchange_locked 最终变为 -1（而非钉在 0），此行为与 Java 一致，属已知/保留差异，非 bug
 #[test]
 fn characterization_proportional_fee_bid_multi_release_matches_java_negative_lock() {
     const MAKER: i64 = 1;
@@ -655,7 +670,7 @@ fn characterization_proportional_fee_bid_multi_release_matches_java_negative_loc
     assert_eq!(
         api.user_locked(MAKER, QUOTE),
         -1,
-        "Java parity：ceiling 超可加性应让 exchange_locked 变成 -1，而不是释放到 0"
+        "Java parity: ceiling super-additivity should make exchange_locked become -1, not release to 0"
     );
 
     assert_global_conservation(&api);

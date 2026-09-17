@@ -1,3 +1,5 @@
+//! 对应 Java 测试类 `ITMixedIntegration.java` 的部分场景移植：验证现货与期货混合持仓下
+//! 资金校验/账户守恒是否正确，以及保险基金（Insurance Fund）充值/提现在全局对账下的闭环。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -54,6 +56,7 @@ mod tests {
         }
     }
 
+    // 遍历所有币种，校验账户余额 + adjustments + fees + 持仓 PnL/extra_margin 的总和为零（全局资金守恒）。
     fn assert_conserved(api: &ExchangeApi) {
         for &cur in api.ssp().currencies.keys() {
             let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -72,10 +75,12 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // 对应 Java testMixedExchangeAndMargin() 场景：用户同时持有现货挂单资金占用和期货 pending 仓位，
+    // 验证现货下单的资金不足（RISK_NSF）校验、逐步补足资金后成功下单，以及最终 accounts/locked 的正确性。
     #[test]
     fn mixed_exchange_and_margin() {
         let mut api = ExchangeApi::new();
@@ -96,8 +101,8 @@ mod tests {
             }),
             CommandResultCode::Success
         );
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 10_000, "期货挂单不动 accounts");
-        assert!(api.user_position(UID_1, PERP_SYMBOL).is_some(), "pending 仓已建");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 10_000, "futures pending order must not touch accounts");
+        assert!(api.user_position(UID_1, PERP_SYMBOL).is_some(), "pending position should have been created");
 
         let spot_order = PlaceOrderRequest {
             order_id: 112233, uid: UID_1, symbol: EXCHANGE_SYMBOL, price: 10_000, size: 1,
@@ -113,9 +118,9 @@ mod tests {
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, 1, 3), CommandResultCode::Success);
         assert_eq!(api.place_order(spot_order), CommandResultCode::Success);
 
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), 10_140, "accounts=真实持有=10140");
-        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 10_020, "现货挂单冻结=10020");
-        assert!(api.user_position(UID_1, PERP_SYMBOL).is_some(), "期货 pending 仓仍在");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), 10_140, "accounts = actual holdings = 10140");
+        assert_eq!(api.user_locked(UID_1, QUOTE_ID), 10_020, "spot order lock = 10020");
+        assert!(api.user_position(UID_1, PERP_SYMBOL).is_some(), "futures pending position should still be present");
         assert_conserved(&api);
     }
 
@@ -143,6 +148,7 @@ mod tests {
         api.insurance_fund().futures.get(&symbol).map(|e| e.available).unwrap_or(0)
     }
 
+    // 构造一个已初始化好永续合约 symbol 及 mark price、但未做任何充值/提现操作的 ExchangeApi，供 IF 测试复用。
     fn setup_futures_if() -> ExchangeApi {
         let mut api = ExchangeApi::new();
         api.add_currency(BASE_ID, 1);
@@ -152,6 +158,8 @@ mod tests {
         api
     }
 
+    // 对应 Java testInsuranceFundDepositKeepsGlobalReconciliation() 场景：保险基金（IF）充值成功后
+    // 余额累加、adjustments 反向对冲，非法入参（负数/零/未知 symbol）不改动账本，全局对账始终闭环。
     #[test]
     fn insurance_fund_deposit_keeps_global_reconciliation() {
         let first_deposit = 1_000_000i64;
@@ -164,7 +172,7 @@ mod tests {
 
         assert_eq!(if_deposit(&mut api, PERP_SYMBOL, first_deposit, 1), CommandResultCode::Success);
         assert_eq!(if_balance(&api, PERP_SYMBOL), first_deposit);
-        assert_eq!(api.adjustments(QUOTE_ID), -first_deposit, "充值 → adjustments 记负对冲");
+        assert_eq!(api.adjustments(QUOTE_ID), -first_deposit, "deposit -> adjustments records a negative offset");
         assert!(api.total_balance().is_global_zero());
 
         assert_eq!(if_deposit(&mut api, PERP_SYMBOL, -1, 2), CommandResultCode::RiskInvalidAmount);
@@ -180,6 +188,8 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testInsuranceFundWithdrawKeepsGlobalReconciliation() 场景：IF 为空时提现立即返回
+    // RISK_IF_INSUFFICIENT，充值后正常提现成功、超额提现被拒、非法入参不改动账本，全局对账始终闭环。
     #[test]
     fn insurance_fund_withdraw_keeps_global_reconciliation() {
         let deposit = 1_000_000i64;

@@ -1,5 +1,8 @@
 #[cfg(test)]
 mod tests {
+    // 翻译自 Java `ITExchangeCoreIntegration`（现货/交易对场景，含 basicFullCycleTestExchange / exchangeRiskBasicTest /
+    // exchangeCancelBid / exchangeRiskMoveTest；ITExchangeCoreIntegrationBasic 仅是提供 PerformanceConfiguration 的空壳子类）
+    // 验证现货撮合的完整下单-成交-移价-撤单周期，以及 BID/ASK 风控冻结、NSF 拒绝、全局资金守恒
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
     use exchange_core_rs::core::common::matcher_event_type::MatcherEventType;
@@ -91,26 +94,28 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.risk().fees.get(&cur).copied().unwrap_or(0)
     }
 
+    // 对应 Java basicFullCycleTestExchange（共享 basicFullCycleTest 逻辑，SYMBOLSPEC_ETH_XBT 场景）：
+    // 挂单 -> IOC 部分成交 -> 挂新限价单 -> 移价触发撮合，全程校验 L2 盘口与全局资金守恒
     #[test]
     fn basic_full_cycle_exchange() {
         let mut api = setup();
         let (base0, quote0) = (total(&api, BASE), total(&api, QUOTE));
 
         assert_eq!(api.place_order(ask(101, UID_1, 1600, 7, OrderType::Gtc)), CommandResultCode::Success);
-        assert!(api.last_matcher_event().is_none(), "101 挂单不撮合");
+        assert!(api.last_matcher_event().is_none(), "order 101 resting, no match");
         assert_eq!(api.place_order(bid(102, UID_1, 1550, 1561, 4, OrderType::Gtc)), CommandResultCode::Success);
-        assert!(api.last_matcher_event().is_none(), "102 挂单不撮合");
+        assert!(api.last_matcher_event().is_none(), "order 102 resting, no match");
         assert_l2(&mut api, &[(1600, 7)], &[(1550, 4)]);
 
         assert_eq!(api.place_order(bid(201, UID_2, 1700, 1800, 2, OrderType::Ioc)), CommandResultCode::Success);
         {
-            let ev = api.last_matcher_event().expect("201 应有 1 条 TRADE");
-            assert!(ev.next.is_none(), "仅 1 条撮合事件");
+            let ev = api.last_matcher_event().expect("order 201 should produce exactly 1 TRADE event");
+            assert!(ev.next.is_none(), "only 1 matching event");
             assert_eq!(ev.event_type, MatcherEventType::Trade);
-            assert!(ev.active_order_completed, "taker 201 全成交(2/2)");
-            assert_eq!(ev.maker_order_id, 101, "对手 = 101");
+            assert!(ev.active_order_completed, "taker 201 fully filled (2/2)");
+            assert_eq!(ev.maker_order_id, 101, "counterparty = 101");
             assert_eq!(ev.matched_order_uid, UID_1);
-            assert!(!ev.maker_order_completed, "maker 101 未全成交(剩 5)");
+            assert!(!ev.maker_order_completed, "maker 101 not fully filled (5 remaining)");
             assert_eq!(ev.size, 2);
             assert_eq!(ev.price, 1600);
         }
@@ -122,22 +127,23 @@ mod tests {
 
         assert_eq!(api.move_order(MoveOrderRequest { order_id: 101, uid: UID_1, symbol: SYMBOL, new_price: 1580 }), CommandResultCode::Success);
         {
-            let ev = api.last_matcher_event().expect("移价应有 1 条 TRADE");
+            let ev = api.last_matcher_event().expect("move-order should produce 1 TRADE event");
             assert!(ev.next.is_none());
             assert_eq!(ev.event_type, MatcherEventType::Trade);
-            assert!(!ev.active_order_completed, "101 未全成交(剩 1)");
+            assert!(!ev.active_order_completed, "101 not fully filled (1 remaining)");
             assert_eq!(ev.maker_order_id, 202);
             assert_eq!(ev.matched_order_uid, UID_2);
-            assert!(ev.maker_order_completed, "maker 202 全成交");
+            assert!(ev.maker_order_completed, "maker 202 fully filled");
             assert_eq!(ev.size, 4);
             assert_eq!(ev.price, 1583);
         }
         assert_l2(&mut api, &[(1580, 1)], &[(1550, 4)]);
 
-        assert_eq!(total(&api, BASE), base0, "BASE 守恒");
-        assert_eq!(total(&api, QUOTE), quote0, "QUOTE 守恒");
+        assert_eq!(total(&api, BASE), base0, "BASE conserved");
+        assert_eq!(total(&api, QUOTE), quote0, "QUOTE conserved");
     }
 
+    // 对应 Java exchangeRiskBasicTest：余额不足时下单应被 RISK_NSF 拒绝，充值后同一订单方可成功
     #[test]
     fn exchange_risk_basic_nsf_then_accept() {
         let mut api = ExchangeApi::new();
@@ -150,18 +156,19 @@ mod tests {
         assert_eq!(
             api.place_order(bid(101, UID_1, 30_000, 30_000, 7, OrderType::Gtc)),
             CommandResultCode::RiskNsf,
-            "余额不足应 RISK_NSF"
+            "insufficient balance should yield RISK_NSF"
         );
-        assert_eq!(api.ups().get(UID_1).unwrap().account(QUOTE), 200_000, "拒单后余额不变");
-        assert_eq!(api.ups().get(UID_1).unwrap().locked(QUOTE), 0, "拒单后无冻结");
+        assert_eq!(api.ups().get(UID_1).unwrap().account(QUOTE), 200_000, "account balance unchanged after rejection");
+        assert_eq!(api.ups().get(UID_1).unwrap().locked(QUOTE), 0, "no funds locked after rejection");
 
         assert_eq!(api.balance_adjustment(UID_1, QUOTE, 100_000, 2), CommandResultCode::Success);
         assert_eq!(api.place_order(bid(101, UID_1, 30_000, 30_000, 7, OrderType::Gtc)), CommandResultCode::Success);
         assert!(api.last_matcher_event().is_none());
-        assert_eq!(api.ups().get(UID_1).unwrap().account(QUOTE), 300_000, "accounts 不变");
-        assert_eq!(api.ups().get(UID_1).unwrap().locked(QUOTE), 210_000, "冻结 = 7×30000");
+        assert_eq!(api.ups().get(UID_1).unwrap().account(QUOTE), 300_000, "accounts unchanged");
+        assert_eq!(api.ups().get(UID_1).unwrap().locked(QUOTE), 210_000, "locked = 7×30000");
     }
 
+    // 对应 Java exchangeCancelBid：BID 挂单冻结资金，撤单后应全额释放
     #[test]
     fn exchange_cancel_bid() {
         let mut api = setup_exchange();
@@ -170,21 +177,22 @@ mod tests {
 
         assert_eq!(api.place_order(ex_bid(203, UID_2, 18_000, 18_500, 500, OrderType::Gtc)), CommandResultCode::Success);
         let xbt_lock = 10 * 18_500 * 500;
-        assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000, "accounts 不变");
-        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), xbt_lock, "BID 冻结");
+        assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000, "accounts unchanged");
+        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), xbt_lock, "BID locks funds");
 
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 203, uid: UID_2, symbol: SYMBOL_EX }), CommandResultCode::Success);
         {
-            let ev = api.last_matcher_event().expect("撤单应有 REDUCE 事件");
+            let ev = api.last_matcher_event().expect("cancel should produce a REDUCE event");
             assert_eq!(ev.event_type, MatcherEventType::Reduce);
             assert_eq!(ev.bidder_hold_price, 18_500);
             assert_eq!(ev.size, 500);
         }
-        assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000, "撤单后 94M 全回");
-        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), 0, "撤单全额释放冻结");
+        assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000, "full 94M refunded after cancel");
+        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), 0, "cancel fully releases locked funds");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java exchangeRiskMoveTest：ASK/BID 移价的风控边界（reserveBidPrice 限制），以及移价触发撮合后的资金结算
     #[test]
     fn exchange_risk_move() {
         let mut api = setup_exchange();
@@ -193,11 +201,11 @@ mod tests {
 
         assert_eq!(api.place_order(ex_ask(202, UID_1, 30_000, 1000, OrderType::Gtc)), CommandResultCode::Success);
         assert!(api.last_matcher_event().is_none());
-        assert_eq!(api.ups().get(UID_1).unwrap().account(ETH), 100_000_000, "ASK 不扣 accounts");
-        assert_eq!(api.ups().get(UID_1).unwrap().locked(ETH), 1000, "ASK 冻结 base = size");
+        assert_eq!(api.ups().get(UID_1).unwrap().account(ETH), 100_000_000, "ASK does not deduct accounts");
+        assert_eq!(api.ups().get(UID_1).unwrap().locked(ETH), 1000, "ASK locks base = size");
 
         assert_eq!(api.move_order(MoveOrderRequest { order_id: 202, uid: UID_1, symbol: SYMBOL_EX, new_price: 40_000 }), CommandResultCode::Success);
-        assert!(api.last_matcher_event().is_none(), "移价不撮合");
+        assert!(api.last_matcher_event().is_none(), "move-order does not match");
         assert_eq!(api.move_order(MoveOrderRequest { order_id: 202, uid: UID_1, symbol: SYMBOL_EX, new_price: 20_000 }), CommandResultCode::Success);
         assert!(api.last_matcher_event().is_none());
         assert_eq!(api.ups().get(UID_1).unwrap().account(ETH), 100_000_000);
@@ -208,16 +216,16 @@ mod tests {
         assert_eq!(
             api.place_order(ex_bid(203, UID_2, 18_000, 19_000, 500, OrderType::Gtc)),
             CommandResultCode::RiskNsf,
-            "reserve 越资金上限应 RISK_NSF"
+            "reserve exceeding funds limit should yield RISK_NSF"
         );
         assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000);
-        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), 0, "拒单无冻结");
+        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), 0, "no lock after rejection");
 
         assert_eq!(api.place_order(ex_bid(203, UID_2, 18_000, 18_500, 500, OrderType::Gtc)), CommandResultCode::Success);
         assert!(api.last_matcher_event().is_none());
         let xbt_lock = 10 * 18_500 * 500;
-        assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000, "BID 不扣 accounts");
-        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), xbt_lock, "BID 冻结 92.5M");
+        assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000, "BID does not deduct accounts");
+        assert_eq!(api.ups().get(UID_2).unwrap().locked(XBT), xbt_lock, "BID locks 92.5M");
 
         assert_eq!(api.move_order(MoveOrderRequest { order_id: 203, uid: UID_2, symbol: SYMBOL_EX, new_price: 15_000 }), CommandResultCode::Success);
         assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 94_000_000);
@@ -225,7 +233,7 @@ mod tests {
         assert_eq!(
             api.move_order(MoveOrderRequest { order_id: 203, uid: UID_2, symbol: SYMBOL_EX, new_price: 18_501 }),
             CommandResultCode::MatchingMoveFailedPriceOverRiskLimit,
-            "越 reserveBidPrice 改价应被风控拒"
+            "moving price beyond reserveBidPrice should be rejected by risk check"
         );
 
         assert_eq!(api.move_order(MoveOrderRequest { order_id: 203, uid: UID_2, symbol: SYMBOL_EX, new_price: 18_500 }), CommandResultCode::Success);
@@ -234,31 +242,31 @@ mod tests {
 
         assert_eq!(api.move_order(MoveOrderRequest { order_id: 202, uid: UID_1, symbol: SYMBOL_EX, new_price: 16_900 }), CommandResultCode::Success);
         {
-            let ev = api.last_matcher_event().expect("移价触发撮合应有 TRADE");
+            let ev = api.last_matcher_event().expect("move-order triggering a match should produce a TRADE event");
             assert_eq!(ev.event_type, MatcherEventType::Trade);
-            assert!(!ev.active_order_completed, "taker 202 未全成交（剩 500）");
-            assert_eq!(ev.maker_order_id, 203, "对手 = 203");
+            assert!(!ev.active_order_completed, "taker 202 not fully filled (500 remaining)");
+            assert_eq!(ev.maker_order_id, 203, "counterparty = 203");
             assert_eq!(ev.matched_order_uid, UID_2);
-            assert!(ev.maker_order_completed, "maker 203 全成交");
-            assert_eq!(ev.price, 17_500, "成交价 = maker 挂单价");
-            assert_eq!(ev.bidder_hold_price, 18_500, "bidder 原始 reserve 价");
+            assert!(ev.maker_order_completed, "maker 203 fully filled");
+            assert_eq!(ev.price, 17_500, "trade price = maker's resting price");
+            assert_eq!(ev.bidder_hold_price, 18_500, "bidder's original reserve price");
             assert_eq!(ev.size, 500);
         }
         assert_eq!(api.ups().get(UID_1).unwrap().account(XBT), 87_500_000);
         assert_eq!(api.ups().get(UID_1).unwrap().account(ETH), 99_999_500);
-        assert_eq!(api.ups().get(UID_1).unwrap().locked(ETH), 500, "剩余 500 待撤/撮合");
+        assert_eq!(api.ups().get(UID_1).unwrap().locked(ETH), 500, "500 remaining, pending cancel/match");
         assert_eq!(api.ups().get(UID_2).unwrap().account(XBT), 6_500_000);
         assert_eq!(api.ups().get(UID_2).unwrap().account(ETH), 500);
 
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 202, uid: UID_1, symbol: SYMBOL_EX }), CommandResultCode::Success);
         {
-            let ev = api.last_matcher_event().expect("撤单应有 REDUCE");
+            let ev = api.last_matcher_event().expect("cancel should produce REDUCE");
             assert_eq!(ev.event_type, MatcherEventType::Reduce);
             assert_eq!(ev.size, 500);
         }
         assert_eq!(api.ups().get(UID_1).unwrap().account(XBT), 87_500_000);
         assert_eq!(api.ups().get(UID_1).unwrap().account(ETH), 99_999_500);
-        assert_eq!(api.ups().get(UID_1).unwrap().locked(ETH), 0, "撤单释放剩余冻结");
+        assert_eq!(api.ups().get(UID_1).unwrap().locked(ETH), 0, "cancel releases remaining locked funds");
         assert!(api.total_balance().is_global_zero());
     }
 }

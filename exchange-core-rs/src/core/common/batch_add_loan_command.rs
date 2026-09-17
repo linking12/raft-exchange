@@ -1,5 +1,11 @@
+//! 对应 Java `exchange.core2.core.common.api.binary.BatchAddLoanCommand`(及其内嵌
+//! `GlobalLoanConfig`/`SymbolLoanConfig`/`SymbolLoanConfig.Resolved`/`RateCurveConfig`)。
+//! ADD_LOAN 二进制命令的三段可选配置(global/symbol/rateCurve 至少一段非空,Java 侧构造时校验)。
+
+/// 对应 Java `BatchAddLoanCommand.BPS_FULL`,万分位满值(100%)。
 pub const BPS_FULL: i32 = 10_000;
 
+/// 对应 Java `BatchAddLoanCommand`;三段 payload 均可选,dispatch 侧按字段是否为 `None` 决定生效范围。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BatchAddLoanCommand {
     pub global: Option<GlobalLoanConfig>,
@@ -7,18 +13,27 @@ pub struct BatchAddLoanCommand {
     pub rate_curve: Option<RateCurveConfig>,
 }
 
+/// 对应 Java 内嵌类 `BatchAddLoanCommand.GlobalLoanConfig`;Cross 借贷的账户级/池级参数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlobalLoanConfig {
+    /// 对应 Java `numeraireCurrency`:Cross 估值基准币(需 currencySpec 存在,RiskEngine 另行校验)。
     pub numeraire_currency: i32,
+    /// 对应 Java `crossLiquidationLtvBps`:Cross 账户级强平线(bps)。
     pub cross_liquidation_ltv_bps: i32,
+    /// 对应 Java `crossMarginCallLtvBps`:Cross 账户级预警线(bps)。
     pub cross_margin_call_ltv_bps: i32,
+    /// 对应 Java `loanPoolUtilizationCapBps`:借贷池利用率上限(bps)。
     pub loan_pool_utilization_cap_bps: i32,
+    /// 对应 Java `loanLiquidationFeeBps`:强平专项费率(bps)。
     pub loan_liquidation_fee_bps: i32,
+    /// 对应 Java `ltvLiquidationBufferBps`:Symbol 派生缓冲;≤0 表示不改。
     pub ltv_liquidation_buffer_bps: i32,
+    /// 对应 Java `ltvMarginCallBufferBps`:Symbol 派生缓冲;≤0 表示不改。
     pub ltv_margin_call_buffer_bps: i32,
 }
 
 impl GlobalLoanConfig {
+    /// 对应 Java `thresholdsValidGivenCurrent`:字段为 0 时回退到当前生效值(`current*`)再校验阈值序。
     pub fn thresholds_valid_given_current(
         &self,
         current_cross_liquidation_ltv_bps: i32,
@@ -44,21 +59,33 @@ impl GlobalLoanConfig {
     }
 }
 
+/// 对应 Java `SymbolLoanConfig.UNSET`:override 字段未指定,需派生/取默认值。
 pub const UNSET: i32 = -1;
+/// 同 [`UNSET`] 语义,用于 `i64` 金额字段(`loanMaxAmount`)。
 pub const UNSET_AMOUNT: i64 = -1;
 
+/// 对应 Java 内嵌类 `BatchAddLoanCommand.SymbolLoanConfig`;per-symbol 借贷风控 override,
+/// 未显式指定的字段以 [`UNSET`]/[`UNSET_AMOUNT`] 占位,由 [`resolve`](SymbolLoanConfig::resolve) 派生实值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SymbolLoanConfig {
     pub symbol_id: i32,
+    /// 对应 Java `loanInitialLtvBps`:初始 LTV;0 表示该 symbol 关闭借贷。
     pub loan_initial_ltv_bps: i32,
     pub loan_liquidation_ltv_bps: i32,
+    /// 对应 Java `loanMarginCallLtvBps`:0 表示关闭预警(合法值,非"未设置")。
     pub loan_margin_call_ltv_bps: i32,
+    /// 对应 Java `loanMaxAmount`:0 表示无上限。
     pub loan_max_amount: i64,
+    /// 对应 Java `loanMaxTermDays`:0 表示无期限。
     pub loan_max_term_days: i32,
+    /// 对应 Java `collateralWeightBps`:0 表示该 currency 不作 Cross 抵押。
     pub collateral_weight_bps: i32,
 }
 
 impl SymbolLoanConfig {
+    /// 对应 Java `SymbolLoanConfig.resolve`:把 [`UNSET`]/[`UNSET_AMOUNT`] 占位字段派生成最终值——
+    /// liquidation 缺省 = initial + 缓冲,margin_call 缺省 = 派生后的 liquidation − 缓冲(不是从 initial 算),
+    /// collateral_weight 缺省 = initial_ltv。
     pub fn resolve(&self, liq_buffer_bps: i32, mc_buffer_bps: i32) -> Resolved {
         let liq = if self.loan_liquidation_ltv_bps == UNSET {
             self.loan_initial_ltv_bps + liq_buffer_bps
@@ -83,6 +110,8 @@ impl SymbolLoanConfig {
     }
 }
 
+/// 对应 Java `SymbolLoanConfig.Resolved`:派生后的最终配置(所有 [`UNSET`]/[`UNSET_AMOUNT`] 已填实),
+/// dispatch 实际生效的就是这个,而不是原始 `SymbolLoanConfig`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved {
     pub symbol_id: i32,
@@ -95,6 +124,8 @@ pub struct Resolved {
 }
 
 impl Resolved {
+    /// 对应 Java `Resolved.valid()`:initial_ltv_bps == 0 是"该 symbol 关闭借贷"的合法特例,
+    /// 跳过阈值序校验直接放行(即 [`thresholds_valid`] 不适用于该特例)。
     pub fn valid(&self) -> bool {
         self.initial_ltv_bps >= 0
             && self.initial_ltv_bps < BPS_FULL
@@ -107,22 +138,33 @@ impl Resolved {
     }
 }
 
+/// 对应 Java `SymbolLoanConfig.thresholdsValid`:initial < marginCall < liquidation < 100%;
+/// marginCall == 0 表示关闭预警(合法)。
 fn thresholds_valid(initial: i32, margin_call: i32, liquidation: i32) -> bool {
     liquidation > initial
         && liquidation < BPS_FULL
         && (margin_call == 0 || (margin_call > initial && margin_call < liquidation))
 }
 
+/// 对应 Java 内嵌类 `BatchAddLoanCommand.RateCurveConfig`:动态利率 kinked 曲线(全局单曲线)
+/// + Fixed 点差参数,存在即整体替换 FloatingRateModel/FixedRateModel 参数,见 loan.md §13.4。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateCurveConfig {
+    /// 对应 Java `baseBps`:零利用率时的基础利率。
     pub base_bps: i32,
+    /// 对应 Java `kinkUtilBps`:利用率拐点(须 0 < kink < 100%)。
     pub kink_util_bps: i32,
+    /// 对应 Java `slope1Bps`:拐点前斜率。
     pub slope1_bps: i32,
+    /// 对应 Java `slope2Bps`:拐点后斜率。
     pub slope2_bps: i32,
+    /// 对应 Java `lockedRateAdjustBps`:Fixed 相对曲线的加/减价(可负,apply 时下限 0)。
     pub locked_rate_adjust_bps: i32,
 }
 
 impl RateCurveConfig {
+    /// 对应 Java `RateCurveConfig.valid()`:base ∈ [0,100%)、0 < kink < 100%、slope1/slope2 ≥ 0;
+    /// `locked_rate_adjust_bps` 无约束。
     pub fn valid(&self) -> bool {
         self.base_bps >= 0
             && self.base_bps < BPS_FULL

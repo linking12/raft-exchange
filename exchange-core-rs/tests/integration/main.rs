@@ -1,3 +1,4 @@
+//! 集成测试入口：汇总 tests/integration 下所有 IT 测试模块（每个模块对应一份 Java IT 测试的移植）。
 mod it_custom_leverage_tests;
 mod it_exchange_core_integration_rejection_tests;
 mod it_exchange_core_integration_tests;

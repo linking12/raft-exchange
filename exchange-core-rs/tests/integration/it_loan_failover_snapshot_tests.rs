@@ -1,3 +1,7 @@
+//! 对应 Java 测试类 `ITLoanFailoverSnapshot.java` 的移植：验证 loan 状态（loan records + LoanService
+//! 池子/收入/LIF 桶 + 动态利率 currentRateBps/lastRepriceTs）完整进快照，恢复后与原实例逐字节一致
+//! （`to_snapshot_bytes()` round-trip）且全局守恒——failover 安全性的核心前提。
+
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -100,6 +104,10 @@ mod tests {
     const BORROWER: i64 = 9001;
     const LP: i64 = 9002;
 
+    // 对应 Java loanState_survivesSnapshotRestore_identicalHashAndConserved() 的场景：建一笔 isolated 贷款
+    // 后用无对手盘的强平使其全拒（触发 LIF 接管，loan1 移除）、再开一笔 cross 贷款，验证快照前后全局守恒，
+    // 且 to_snapshot_bytes()/from_snapshot_bytes() round-trip 后状态逐字节一致（loan records + 池子/LIF 桶都在快照里）。
+    // 注：Java 版走的是真实磁盘快照 + 独立容器恢复 + stateHash 比对，这里用内存态字节 round-trip 直接验证同一不变式。
     #[test]
     fn loan_state_survives_snapshot_restore_identical_bytes_and_conserved() {
         let mut core = ExchangeCore::new();
@@ -125,26 +133,26 @@ mod tests {
             submit(&mut core, cmd_loan_force_liquidate(2, BORROWER, SYMBOL, 1, MARK, 3, 1_000)),
             CommandResultCode::Success
         );
-        assert!(!core.ups.get(BORROWER).unwrap().isolated_loans.contains_key(&1), "全拒 → LIF 接管 → loan1 移除");
+        assert!(!core.ups.get(BORROWER).unwrap().isolated_loans.contains_key(&1), "full rejection -> LIF takeover -> loan1 removed");
 
         assert_eq!(submit(&mut core, cmd_loan_cross_add_collateral(1_000_003, BORROWER, WBTC, 300, 1_000)), CommandResultCode::Success);
         assert_eq!(submit(&mut core, cmd_loan_cross_borrow(1_000_004, BORROWER, SYMBOL, 2, 60_000, 1_000)), CommandResultCode::Success);
 
-        assert!(core.query_total_balance().is_global_zero(), "快照前应守恒");
+        assert!(core.query_total_balance().is_global_zero(), "must be conserved before snapshot");
         let (re, me) = core.to_snapshot_bytes();
 
         let recovered = ExchangeCore::from_snapshot_bytes(&re, &me);
         assert_eq!(
             recovered.to_snapshot_bytes(),
             (re.clone(), me.clone()),
-            "恢复后复制态必须与原 leader 逐字节一致（loan records + 池子/LIF 桶都在快照里）"
+            "recovered state must be byte-identical to the original leader (loan records + pool/LIF buckets are all in the snapshot)"
         );
-        assert!(recovered.query_total_balance().is_global_zero(), "恢复后应守恒");
+        assert!(recovered.query_total_balance().is_global_zero(), "must be conserved after recovery");
 
         let up = recovered.ups.get(BORROWER).unwrap();
-        assert_eq!(up.cross_loans.get(&2).map(|l| l.outstanding_principal), Some(60_000), "cross loan2 本金随快照存活");
+        assert_eq!(up.cross_loans.get(&2).map(|l| l.outstanding_principal), Some(60_000), "cross loan2 principal survives the snapshot");
         assert!(!up.isolated_loans.contains_key(&1));
-        assert_eq!(recovered.risk.loan_service.get_loan_insurance_fund(USDT), -80_000, "接管产生的负 LIF 随快照存活");
+        assert_eq!(recovered.risk.loan_service.get_loan_insurance_fund(USDT), -80_000, "negative LIF produced by the takeover survives the snapshot");
     }
 
     const RC_BTC: i32 = 730;
@@ -159,6 +167,10 @@ mod tests {
         core.ups.get(RC_BORROWER).unwrap().isolated_loans.get(&loan_id).expect("isolated loan not found").rate_bps
     }
 
+    // 对应 Java loanRateState_survivesSnapshotRestore_repricedCurveRatePreserved() 的场景：补齐上一测试
+    // 只 round-trip 默认利率状态的缺口——配非默认曲线、建仓制造非零利用率、reprice 把 currentRateBps
+    // 写成 curve(util)=240（≠ base 200），验证该动态利率状态随快照 round-trip 存活，恢复后新开的
+    // FLOATING 贷款仍按 240 开仓（而非回退到 base 200）。
     #[test]
     fn loan_rate_state_survives_snapshot_restore_repriced_curve_rate_preserved() {
         let mut core = ExchangeCore::new();
@@ -193,16 +205,16 @@ mod tests {
             submit(&mut core, cmd_loan_create(1_000_103, RC_BORROWER, RC_SYMBOL, 2, 100, 100_000, true, 1_000)),
             CommandResultCode::Success
         );
-        assert_eq!(floating_loan_rate_bps(&core, 2), RC_EXPECTED, "快照前：reprice 后新 FLOATING 率 = curve(util) = 240");
+        assert_eq!(floating_loan_rate_bps(&core, 2), RC_EXPECTED, "before snapshot: new FLOATING rate after reprice = curve(util) = 240");
 
-        assert!(core.query_total_balance().is_global_zero(), "快照前应守恒");
+        assert!(core.query_total_balance().is_global_zero(), "must be conserved before snapshot");
         let (re, me) = core.to_snapshot_bytes();
 
         let mut r = ExchangeCore::from_snapshot_bytes(&re, &me);
         assert_eq!(
             r.to_snapshot_bytes(),
             (re.clone(), me.clone()),
-            "恢复后复制态必须逐字节一致（currentRateBps / lastRepriceTs 都在快照里）"
+            "recovered state must be byte-identical (currentRateBps / lastRepriceTs are both in the snapshot)"
         );
 
         assert_eq!(
@@ -212,8 +224,8 @@ mod tests {
         assert_eq!(
             floating_loan_rate_bps(&r, 3),
             RC_EXPECTED,
-            "恢复后新 FLOATING 率 = curve(util) = 240（证明 currentRateBps 随快照存活，未重置为 base 200）"
+            "new FLOATING rate after recovery = curve(util) = 240 (proves currentRateBps survives the snapshot, not reset to base 200)"
         );
-        assert!(r.query_total_balance().is_global_zero(), "恢复后应守恒");
+        assert!(r.query_total_balance().is_global_zero(), "must be conserved after recovery");
     }
 }

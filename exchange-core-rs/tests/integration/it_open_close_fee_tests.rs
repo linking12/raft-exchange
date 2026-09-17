@@ -1,3 +1,6 @@
+//! 对应 Java 测试类 `ITOpenCloseFeeIntegration.java` 的移植：端到端验证期货开仓/关仓手续费的
+//! 6 个核心不变量（maker/taker 各自按率收费、开关仓费率一致、角色互换、反手单双段收费、
+//! fees bucket 跨多笔成交的累加），只关心 fee 行为本身，不校验仓位大小/保证金等无关字段。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -95,10 +98,12 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "期货全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "futures global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // 对应 Java pureOpen_chargesMakerAndTakerFee() 场景：纯开仓，maker 挂 ASK、taker 吃单，
+    // maker 付 makerFee × size，taker 付 takerFee × size，fees bucket 增加二者之和。
     #[test]
     fn pure_open_charges_maker_and_taker_fee() {
         let mut api = fresh_api();
@@ -112,12 +117,14 @@ mod tests {
         let expected_maker_fee = MAKER_FEE_PER_CONTRACT * size;
         let expected_taker_fee = TAKER_FEE_PER_CONTRACT * size;
 
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - expected_maker_fee, "maker 开仓后扣 makerFee");
-        assert_eq!(api.user_account(UID_2, QUOTE_ID), DEPOSIT - expected_taker_fee, "taker 开仓后扣 takerFee");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - expected_maker_fee, "maker fee deducted from opener after open");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), DEPOSIT - expected_taker_fee, "taker fee deducted from opener after open");
         assert_eq!(api.fees(QUOTE_ID), expected_maker_fee + expected_taker_fee, "fees bucket = makerFee + takerFee");
         assert_conserved(&api);
     }
 
+    // 对应 Java pureClose_chargesMakerAndTakerFee_atSameRateAsOpen() 场景：先开后平（同价位反向成交），
+    // 验证开仓和平仓按同一费率收取，maker/taker 角色不变时各自被收两次（开 + 关）。
     #[test]
     fn pure_close_charges_maker_and_taker_fee_at_same_rate_as_open() {
         let mut api = fresh_api();
@@ -133,14 +140,16 @@ mod tests {
         let expected_maker_fee_total = 2 * MAKER_FEE_PER_CONTRACT * size;
         let expected_taker_fee_total = 2 * TAKER_FEE_PER_CONTRACT * size;
 
-        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "UID_1 仓位平完");
-        assert!(api.user_position(UID_2, SYMBOL_ID).is_none(), "UID_2 仓位平完");
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - expected_maker_fee_total, "UID_1: 开 + 关 maker fee（价差 0）");
-        assert_eq!(api.user_account(UID_2, QUOTE_ID), DEPOSIT - expected_taker_fee_total, "UID_2: 开 + 关 taker fee（价差 0）");
-        assert_eq!(api.fees(QUOTE_ID), expected_maker_fee_total + expected_taker_fee_total, "fees bucket = 4 笔 fee 之和");
+        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "UID_1 position should be fully closed");
+        assert!(api.user_position(UID_2, SYMBOL_ID).is_none(), "UID_2 position should be fully closed");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - expected_maker_fee_total, "UID_1: open + close maker fee (zero spread)");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), DEPOSIT - expected_taker_fee_total, "UID_2: open + close taker fee (zero spread)");
+        assert_eq!(api.fees(QUOTE_ID), expected_maker_fee_total + expected_taker_fee_total, "fees bucket = sum of 4 fee charges");
         assert_conserved(&api);
     }
 
+    // 对应 Java closeFee_swapsSideOnRoleSwitch() 场景：开仓 UID_1 maker / UID_2 taker，
+    // 平仓时角色互换（UID_2 maker / UID_1 taker），验证关仓费按新角色收，而非开仓时的旧角色。
     #[test]
     fn close_fee_swaps_side_on_role_switch() {
         let mut api = fresh_api();
@@ -156,12 +165,14 @@ mod tests {
         let uid1_fee = MAKER_FEE_PER_CONTRACT * size + TAKER_FEE_PER_CONTRACT * size;
         let uid2_fee = TAKER_FEE_PER_CONTRACT * size + MAKER_FEE_PER_CONTRACT * size;
 
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - uid1_fee, "UID_1: 开 maker + 关 taker");
-        assert_eq!(api.user_account(UID_2, QUOTE_ID), DEPOSIT - uid2_fee, "UID_2: 开 taker + 关 maker");
-        assert_eq!(api.fees(QUOTE_ID), uid1_fee + uid2_fee, "fees bucket = 4 笔");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - uid1_fee, "UID_1: open maker + close taker");
+        assert_eq!(api.user_account(UID_2, QUOTE_ID), DEPOSIT - uid2_fee, "UID_2: open taker + close maker");
+        assert_eq!(api.fees(QUOTE_ID), uid1_fee + uid2_fee, "fees bucket = sum of 4 fee charges");
         assert_conserved(&api);
     }
 
+    // 对应 Java reverseFill_chargesBothCloseAndOpenFee() 场景：一笔成交同时关旧仓 + 开反向新仓
+    // （持仓 LONG 遇到量更大的反向 SHORT），验证关仓段和开仓段分别按各自费率独立收费、互不覆盖。
     #[test]
     fn reverse_fill_charges_both_close_and_open_fee() {
         let mut api = fresh_api();
@@ -177,17 +188,19 @@ mod tests {
         let uid1_fee = MAKER_FEE_PER_CONTRACT * 5 + TAKER_FEE_PER_CONTRACT * 5;
         let uid2_fee = TAKER_FEE_PER_CONTRACT * 5 + MAKER_FEE_PER_CONTRACT * 5;
 
-        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "UID_1 全平");
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - uid1_fee, "UID_1 fee: 开 maker + 关 taker");
+        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "UID_1 should be fully closed");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), DEPOSIT - uid1_fee, "UID_1 fee: open maker + close taker");
         assert_eq!(
-            api.user_position(UID_2, SYMBOL_ID).expect("UID_2 仍有仓位记录（pending 非零）").pending_buy_size,
+            api.user_position(UID_2, SYMBOL_ID).expect("UID_2 should still have a position record (pending is non-zero)").pending_buy_size,
             5,
-            "UID_2: 关 5 SHORT 后剩 5 张 BID 挂单未匹配"
+            "UID_2: after closing 5 SHORT, 5 contracts remain as an unmatched BID order"
         );
-        assert_eq!(api.fees(QUOTE_ID), uid1_fee + uid2_fee, "fees bucket = UID_1 + UID_2 累计");
+        assert_eq!(api.fees(QUOTE_ID), uid1_fee + uid2_fee, "fees bucket = UID_1 + UID_2 accumulated");
         assert_conserved(&api);
     }
 
+    // 对应 Java feesBucket_aggregatesAcrossMultipleFills() 场景：跑多笔开+平成交，
+    // 验证 fees bucket 恰好是所有 open/close fee 之和，无遗漏也无重复计算。
     #[test]
     fn fees_bucket_aggregates_across_multiple_fills() {
         let mut api = fresh_api();
@@ -205,7 +218,7 @@ mod tests {
         }
 
         let expected_fees = n * size_per_fill * (2 * MAKER_FEE_PER_CONTRACT + 2 * TAKER_FEE_PER_CONTRACT);
-        assert_eq!(api.fees(QUOTE_ID), expected_fees, "fees bucket = n × (开 + 关) × (maker + taker)");
+        assert_eq!(api.fees(QUOTE_ID), expected_fees, "fees bucket = n x (open + close) x (maker + taker)");
         assert_conserved(&api);
     }
 }

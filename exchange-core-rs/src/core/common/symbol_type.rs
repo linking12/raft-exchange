@@ -1,3 +1,7 @@
+//! 对应 Java `exchange.core2.core.common.SymbolType`。
+
+/// symbol 品种类型。`code()`/`of_code()` 对应 Java `getCode()`（lombok）/`SymbolType.of(int)`
+/// （Java 用 `Arrays.stream(values()).filter(...)` 查找，这里直接 match）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolType {
     CurrencyExchangePair,
@@ -16,16 +20,18 @@ impl SymbolType {
         }
     }
 
+    /// 对应 Java `SymbolType.of(int)`：未知 code 直接 panic（Java 抛 IllegalStateException）。
     pub fn of_code(code: i8) -> Self {
         match code {
             0 => SymbolType::CurrencyExchangePair,
             1 => SymbolType::FuturesContractPerpetual,
             2 => SymbolType::FuturesContractDelivery,
             3 => SymbolType::Option,
-            c => panic!("未知 SymbolType code {c}"),
+            c => panic!("unknown SymbolType code {c}"),
         }
     }
 
+    /// 对应 Java 静态方法 `SymbolType.isFuturesContract(SymbolType)`。
     pub fn is_futures_contract(self) -> bool {
         matches!(self, SymbolType::FuturesContractPerpetual | SymbolType::FuturesContractDelivery)
     }

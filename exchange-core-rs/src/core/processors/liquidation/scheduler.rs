@@ -1,6 +1,26 @@
+//! 对应 Java `LiquidationScheduledService`（抽象父类，`exchange.core2.core.processors
+//! .liquidation.LiquidationScheduledService`）与 `LiquidationCommandSubmitter`（函数式
+//! 提交出口接口）。
+//!
+//! Java 版把「定时线程骨架（`ScheduledExecutorService`/start-stop/leader gate 布尔量）」
+//! 与「每 tick 该发什么命令」耦合在同一个抽象类里；本文件只翻译了后者——即
+//! `runOneIteration()`/`coveredByScanSlice()` 中纯粹、确定性的部分（该发哪个
+//! slice 的 `LIQUIDATION_SCAN`、要不要顺带发 `REPRICE_LOAN_RATES`），产出待提交的
+//! 命令列表由外层去驱动实际的定时线程与 raft 提交，从而保持本模块内不含任何
+//! 墙钟/线程状态，便于单测直接断言 `pending_commands`。
+//!
+//! 关键点（与 Java 注释一致）：这里只负责“发命令”，不读用户态；真正的扫描/强平
+//! 检测发生在各节点 on-lane apply `LIQUIDATION_SCAN` 命令时（见
+//! `liquidation_engine`），命令经 raft 复制后各节点确定性 apply，从根上消除调度
+//! 线程与 apply 线程之间的竞态。
+
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 
+/// 对应 Java `LiquidationScheduledService.coveredByScanSlice`：判断某个 uid 是否落在
+/// 这条 `LIQUIDATION_SCAN` 命令负责扫描的分片里。非扫描命令、或 `size<=0`（未分片/
+/// 全量扫描）时视为总是覆盖；否则用 `floorMod`（对应 Rust 的 `rem_euclid`，对负数
+/// uid 也能得到非负余数）按分片数取模比较，实现扫描在多 tick 上的轮转分摊。
 pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
         return true;
@@ -8,6 +28,9 @@ pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     uid.rem_euclid(cmd.size) == cmd.uid
 }
 
+/// leader-local 的强平发令节奏状态；对应 Java `LiquidationScheduledService` 里除线程
+/// 骨架之外的字段（`scanTick`/`scanSliceCount`/`repriceEveryNTicks`/`shardId`/
+/// `running`）。`is_running` 复用作 leader gate：由外层根据 leader 身份切换。
 #[derive(Debug)]
 pub struct LiquidationScheduler {
     pub scan_tick: i64,
@@ -30,6 +53,10 @@ impl LiquidationScheduler {
         }
     }
 
+    /// 对应 Java `runOneIteration()`：每个调度 tick 调用一次。只有 leader 门控开启
+    /// （`is_running`）且是 0 号 shard 才发命令——强平扫描/重定价只需全局发一份，
+    /// 不按 shard 重复；分片（slice）本身是扫描负载在多个 tick 上的轮转分摊，与
+    /// shard 是两个正交概念。
     pub fn run_one_iteration(&mut self, timestamp: i64) {
         if !self.is_running || self.shard_id != 0 {
             return;
@@ -111,7 +138,7 @@ mod tests {
         let mut s = LiquidationScheduler::new(3, 30, 0);
         s.is_running = true;
         s.run_one_iteration(1_000);
-        assert_eq!(s.pending_commands.len(), 2, "tick0：LIQUIDATION_SCAN + REPRICE_LOAN_RATES");
+        assert_eq!(s.pending_commands.len(), 2, "tick0: LIQUIDATION_SCAN + REPRICE_LOAN_RATES");
         let scan = &s.pending_commands[0];
         assert_eq!(scan.command, OrderCommandType::LiquidationScan);
         assert_eq!(scan.symbol, -1);
@@ -122,7 +149,7 @@ mod tests {
 
         s.pending_commands.clear();
         s.run_one_iteration(2_000);
-        assert_eq!(s.pending_commands.len(), 1, "tick1：只 LIQUIDATION_SCAN");
+        assert_eq!(s.pending_commands.len(), 1, "tick1: LIQUIDATION_SCAN only");
         assert_eq!(s.pending_commands[0].uid, 1, "slice = tick1 mod 3 = 1");
         assert_eq!(s.scan_tick, 2);
 
@@ -132,7 +159,7 @@ mod tests {
 
         s.pending_commands.clear();
         s.run_one_iteration(4_000);
-        assert_eq!(s.pending_commands[0].uid, 0, "slice round-robin 回绕到 0");
+        assert_eq!(s.pending_commands[0].uid, 0, "slice round-robin wraps back to 0");
     }
 
     #[test]
@@ -147,6 +174,6 @@ mod tests {
             }
             s.pending_commands.clear();
         }
-        assert_eq!(reprice_ticks, vec![0, 2, 4], "tick 0/2/4 各发一次 reprice（scan_tick % 2 == 0）");
+        assert_eq!(reprice_ticks, vec![0, 2, 4], "reprice fires once at tick 0/2/4 (scan_tick % 2 == 0)");
     }
 }

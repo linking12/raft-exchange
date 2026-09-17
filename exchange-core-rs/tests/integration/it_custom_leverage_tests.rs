@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITExchangeCoreCustomLeverage`
+// 验证按持仓自定义杠杆(custom leverage)的下单/调整杠杆/强平场景：同持仓杠杆一致性校验、调整杠杆时的保证金重校验、强平判定使用最新杠杆等。
 mod tests {
     use std::collections::BTreeMap;
 
@@ -80,6 +82,7 @@ mod tests {
         assert_eq!(api.balance_adjustment(uid, currency, amount, txid), CommandResultCode::Success);
     }
 
+    // 对应 Java testInitLeverage：不显式指定杠杆下单时，仓位默认杠杆为1
     #[test]
     fn test_init_leverage() {
         let spec = CoreSymbolSpecification {
@@ -112,6 +115,7 @@ mod tests {
         assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().leverage, 1);
     }
 
+    // 对应 Java testLeverageMismatch：同一持仓上用不同杠杆下单应被拒绝(RiskLeverageMismatch)
     #[test]
     fn test_leverage_mismatch() {
         let spec = CoreSymbolSpecification {
@@ -148,6 +152,7 @@ mod tests {
         assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().pending_buy_size, 10);
     }
 
+    // 对应 Java testAdjustLeverage：调整杠杆时按新杠杆重新校验保证金是否充足
     #[test]
     fn test_adjust_leverage() {
         let deposit: i64 = 1_200;
@@ -183,6 +188,7 @@ mod tests {
         assert_eq!(api.user_position(UID_2, spec.symbol_id).unwrap().pending_buy_size, 0);
     }
 
+    // 对应 Java testOpenPositionThenAdjustLeverage：开仓后调整杠杆超过最大杠杆应被拒绝，合法范围内允许调整
     #[test]
     fn test_open_position_then_adjust_leverage() {
         let spec = init_symbol_spec();
@@ -210,6 +216,7 @@ mod tests {
         assert_eq!(api.leverage_adjustment(UID_1, spec.symbol_id, 15), CommandResultCode::Success);
     }
 
+    // 对应 Java testCustomLeverageOpenPosition：自定义杠杆开仓后保证金占用符合预期，用尽保证金后再下单应NSF
     #[test]
     fn test_custom_leverage_open_position() {
         let spec = CoreSymbolSpecification {
@@ -255,6 +262,7 @@ mod tests {
         );
     }
 
+    // 对应 Java testRejectInvalidLeverage：下单杠杆超过该价位档位允许的最大杠杆应被拒绝
     #[test]
     fn test_reject_invalid_leverage() {
         let spec = CoreSymbolSpecification {
@@ -283,6 +291,7 @@ mod tests {
         );
     }
 
+    // 对应 Java testCustomLeverageWithdraw：提现时需考虑杠杆持仓占用的保证金，超额提现应NSF
     #[test]
     fn test_custom_leverage_withdraw() {
         let spec = CoreSymbolSpecification {
@@ -327,6 +336,7 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT_ID), 10_000);
     }
 
+    // 对应 Java testTwoLeverageOrders：同一持仓下第二笔不同杠杆的挂单应被拒绝，且不影响已存在的挂单
     #[test]
     fn test_two_leverage_orders() {
         let spec = init_symbol_spec();
@@ -363,6 +373,7 @@ mod tests {
         }
     }
 
+    // 对应 Java testTwoLeverageOrders2：杠杆不匹配的挂单被拒绝后，用与首笔相同杠杆的后续挂单仍可成功
     #[test]
     fn test_two_leverage_orders2() {
         let spec = init_symbol_spec();
@@ -392,6 +403,7 @@ mod tests {
         );
     }
 
+    // 对应 Java testTwoLeverageOrdersWithSameOrderId：用相同orderId但不同杠杆重复下单应报杠杆不匹配，且不影响此前已成功的挂单
     #[test]
     fn test_two_leverage_orders_with_same_order_id() {
         let spec = init_symbol_spec();
@@ -423,6 +435,7 @@ mod tests {
         }
     }
 
+    // 对应 Java testPlaceExchangeWhileHasLeverage：持有杠杆期货仓位时下现货单需一并校验剩余保证金，不足则NSF
     #[test]
     fn test_place_exchange_while_has_leverage() {
         let fut = init_symbol_spec();
@@ -462,6 +475,7 @@ mod tests {
 
     const MAX_VALUE: i64 = 4_000_000;
 
+    // 对应 Java testLiquidationTriggeredByHighLeverage：高杠杆持仓在价格小幅下跌即触发强平全平
     #[test]
     fn test_liquidation_triggered_by_high_leverage() {
         let spec = CoreSymbolSpecification {
@@ -504,10 +518,11 @@ mod tests {
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(spec.symbol_id, 980), CommandResultCode::Success);
-        assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "50x 多头应被全平");
+        assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "50x long position should be fully closed");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testLiquidationOfMaintenanceMargin：触及维持保证金时强平只减仓到满足维持保证金要求的最小数量
     #[test]
     fn test_liquidation_of_maintenance_margin() {
         let spec = init_symbol_spec();
@@ -541,11 +556,12 @@ mod tests {
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(spec.symbol_id, 980), CommandResultCode::Success);
-        assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 49, "维持保证金强平只平 1 手");
-        assert_eq!(api.user_position(UID_2, spec.symbol_id).unwrap().open_volume, 49, "对手 SHORT 相应减 1");
+        assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 49, "maintenance-margin liquidation closes only 1 contract");
+        assert_eq!(api.user_position(UID_2, spec.symbol_id).unwrap().open_volume, 49, "counterparty SHORT reduced by 1 accordingly");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testLiquidationSendWarn：价格跌幅未达强平阈值时持仓保持不变(仅告警不强平)
     #[test]
     fn test_liquidation_send_warn() {
         let spec = init_symbol_spec();
@@ -569,10 +585,11 @@ mod tests {
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(spec.symbol_id, 981), CommandResultCode::Success);
-        assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 50, "981 未达强平阈值，仓位不变");
+        assert_eq!(api.user_position(UID_1, spec.symbol_id).unwrap().open_volume, 50, "price 981 does not reach the liquidation threshold, position unchanged");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testLiquidationLeverage：强平判定使用持仓当前生效的最新杠杆而非首次下单时的杠杆
     #[test]
     fn test_liquidation_leverage() {
         let spec = init_symbol_spec();
@@ -609,7 +626,7 @@ mod tests {
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(spec.symbol_id, 25), CommandResultCode::Success);
-        assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "按最新 50x 应在 25 触发全平");
+        assert!(api.user_position(UID_1, spec.symbol_id).is_none(), "using the latest 50x leverage, price 25 should trigger a full liquidation");
         assert!(api.total_balance().is_global_zero());
     }
 }

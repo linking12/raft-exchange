@@ -1,3 +1,8 @@
+//! 对应 Java 测试类 `ITLoanForceLiquidatePipeline.java` 的移植：验证 `LOAN_FORCE_LIQUIDATE` 从提交入口
+//! 穿透风控命令分发 → orderbook 路由 → 撮合成 spot TRADE → 分账结算的完整链路，而不是绕开路由直调
+//! handler 方法——之前 router 缺 LOAN_FORCE_LIQUIDATE 分支导致抵押永久卡在 exchange_locked 的 bug
+//! 正是被这类端到端缺口盖住的。
+
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -72,6 +77,8 @@ mod tests {
         }
     }
 
+    // 对应 Java forceLiquidate_flowsThroughOrderbookAndSettles()：借款人开一笔 isolated 贷款，LP 挂对手盘，
+    // 提交 LOAN_FORCE_LIQUIDATE 后验证命令穿透到 orderbook 并撮合出 TRADE、双方余额正确结算、全局守恒。
     #[test]
     fn force_liquidate_flows_through_orderbook_and_settles() {
         let mut api = ExchangeApi::new();
@@ -111,7 +118,7 @@ mod tests {
             CommandResultCode::Success
         );
 
-        let head = api.last_matcher_event().expect("matcherEvent 链为空 —— cmd 没走到 orderbook.newOrder");
+        let head = api.last_matcher_event().expect("matcherEvent chain is empty -- command never reached orderbook.newOrder");
         let mut trade_count = 0;
         let mut ev = Some(head);
         while let Some(e) = ev {
@@ -120,11 +127,11 @@ mod tests {
             }
             ev = e.next.as_deref();
         }
-        assert!(trade_count > 0, "预期至少 1 条 TRADE event，实际 {trade_count}");
+        assert!(trade_count > 0, "expected at least 1 TRADE event, got {trade_count}");
 
-        assert_eq!(api.user_locked(BORROWER, ETH), 0, "抵押应被 TRADE 消费，不滞留 exchange_locked");
-        assert_eq!(api.user_account(LP, ETH), ETH_COLLATERAL, "LP 应收满 100 ETH");
+        assert_eq!(api.user_locked(BORROWER, ETH), 0, "collateral should be consumed by the TRADE, not stuck in exchange_locked");
+        assert_eq!(api.user_account(LP, ETH), ETH_COLLATERAL, "LP should receive the full 100 ETH");
 
-        assert!(api.total_balance().is_global_zero(), "强平后全局守恒");
+        assert!(api.total_balance().is_global_zero(), "globally conserved after force liquidation");
     }
 }

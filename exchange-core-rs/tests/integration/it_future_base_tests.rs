@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITFutureBase`（抽象基类，具体断言在 `ITFutureCross.testMultiBuy`/`testMultiSell` 中实现），仅取其 Margin 品种子集
+// 验证多档 maker 挂单被单笔 taker 扫单吃掉后，GTC/IOC 在恰好吃满与超量一档时的接受/拒绝行为
 mod tests {
     use std::collections::BTreeMap;
 
@@ -102,10 +104,11 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "期货全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "futures global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // 对应 Java testMultiBuy：4 档 Ask maker 挂单，UID_4 用 Bid 扫单，sweep_size 决定是否超出可成交总量
     fn run_multi_buy(order_type: OrderType, sweep_size: i64) {
         let mut api = setup();
 
@@ -119,6 +122,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testMultiSell：4 档 Bid maker 挂单，UID_4 用 Ask 扫单，sweep_size 决定是否超出可成交总量
     fn run_multi_sell(order_type: OrderType, sweep_size: i64) {
         let mut api = setup();
 
@@ -132,41 +136,49 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testMultiBuyNoRejectionMarginGtc：GTC 扫单量刚好等于可成交总量（40），全部成交无拒绝
     #[test]
     fn multi_buy_no_rejection_margin_gtc() {
         run_multi_buy(OrderType::Gtc, 40);
     }
 
+    // 对应 Java testMultiBuyNoRejectionMarginIoc：IOC 扫单量刚好等于可成交总量（40），全部成交无拒绝
     #[test]
     fn multi_buy_no_rejection_margin_ioc() {
         run_multi_buy(OrderType::Ioc, 40);
     }
 
+    // 对应 Java testMultiBuyWithRejectionMarginGtc：GTC 扫单量超出可成交总量 1（41），触发 size 拒绝
     #[test]
     fn multi_buy_with_size_rejection_margin_gtc() {
         run_multi_buy(OrderType::Gtc, 41);
     }
 
+    // 对应 Java testMultiBuyWithRejectionMarginIoc：IOC 扫单量超出可成交总量 1（41），触发 size 拒绝
     #[test]
     fn multi_buy_with_size_rejection_margin_ioc() {
         run_multi_buy(OrderType::Ioc, 41);
     }
 
+    // 对应 Java testMultiSellNoRejectionMarginGtc：GTC 扫单量刚好等于可成交总量（22），全部成交无拒绝
     #[test]
     fn multi_sell_no_rejection_margin_gtc() {
         run_multi_sell(OrderType::Gtc, 22);
     }
 
+    // 对应 Java testMultiSellNoRejectionMarginIoc：IOC 扫单量刚好等于可成交总量（22），全部成交无拒绝
     #[test]
     fn multi_sell_no_rejection_margin_ioc() {
         run_multi_sell(OrderType::Ioc, 22);
     }
 
+    // 对应 Java testMultiSellWithRejectionMarginGtc：GTC 扫单量超出可成交总量 1（23），触发 size 拒绝
     #[test]
     fn multi_sell_with_size_rejection_margin_gtc() {
         run_multi_sell(OrderType::Gtc, 23);
     }
 
+    // 对应 Java testMultiSellWithRejectionMarginIoc：IOC 扫单量超出可成交总量 1（23），触发 size 拒绝
     #[test]
     fn multi_sell_with_size_rejection_margin_ioc() {
         run_multi_sell(OrderType::Ioc, 23);

@@ -1,3 +1,10 @@
+//! Rust 自建的订单簿双实现对拍(differential)测试。
+//! Java 侧有 `OrderBookNaiveImpl`/`OrderBookDirectImpl` 两套实现,分别有独立的测试类
+//! (OrderBookNaiveImplExchangeTest / OrderBookDirectImplExchangeTest 等),但没有把二者
+//! 放在同一条随机命令流下逐步对拍的框架。本文件补上这一环:对同一批随机生成的
+//! 下单/撤单/减量/改价命令,分别灌给 `OrderBookNaiveImpl` 与 `OrderBookDirectImpl`,
+//! 逐步比对返回码、matcher 事件链、L2 快照、state_hash 与内部一致性校验,
+//! 用于保证"快速路径"(Direct)与"参考实现"(Naive)行为完全一致。
 use std::panic;
 
 use proptest::prelude::*;
@@ -12,6 +19,7 @@ use exchange_core_rs::core::orderbook::i_order_book::IOrderBook;
 use exchange_core_rs::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
 use exchange_core_rs::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 
+// 随机命令生成器输出的四类订单簿操作:下单/撤单/减量/改价
 #[derive(Debug, Clone, Copy)]
 enum GenCmd {
     Place { uid_idx: usize, is_bid: bool, order_type: OrderType, price: i64, size: i64, reserve_extra: i64 },
@@ -20,6 +28,7 @@ enum GenCmd {
     Move { target_idx: usize, new_price: i64 },
 }
 
+// 生成按"单位价格"下单的策略(GTC/IOC/FOK 等使用绝对价格的订单类型)
 fn gen_place_unit_priced(n_users: usize, order_type: OrderType) -> impl Strategy<Value = GenCmd> {
     (0..n_users, any::<bool>(), 1i64..=100_000i64, 1i64..=1_000i64, 0i64..=1_000i64).prop_map(
         move |(uid_idx, is_bid, price, size, reserve_extra)| GenCmd::Place {
@@ -33,6 +42,7 @@ fn gen_place_unit_priced(n_users: usize, order_type: OrderType) -> impl Strategy
     )
 }
 
+// 生成按"预算"下单的策略(FokBudget/IocBudget 使用总预算而非单价)
 fn gen_place_budget(n_users: usize, order_type: OrderType) -> impl Strategy<Value = GenCmd> {
     (0..n_users, any::<bool>(), 1i64..=20_000_000i64, 1i64..=1_000i64).prop_map(
         move |(uid_idx, is_bid, budget, size)| GenCmd::Place {
@@ -46,6 +56,7 @@ fn gen_place_budget(n_users: usize, order_type: OrderType) -> impl Strategy<Valu
     )
 }
 
+// 按权重混合上述各类命令的整体生成策略
 fn gen_cmd(n_users: usize) -> impl Strategy<Value = GenCmd> {
     let cancel = (0usize..64).prop_map(|target_idx| GenCmd::Cancel { target_idx });
     let reduce = (0usize..64, 1i64..=1_000i64)
@@ -64,6 +75,7 @@ fn gen_cmd(n_users: usize) -> impl Strategy<Value = GenCmd> {
     ]
 }
 
+// 生成一个完整场景:随机用户数 + 一串随机命令
 fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenCmd>)> {
     (2usize..=5usize).prop_flat_map(|n_users| {
         let cmds = prop::collection::vec(gen_cmd(n_users), 10..80);
@@ -71,6 +83,7 @@ fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenCmd>)> {
     })
 }
 
+// 逐字段比对两条 matcher 事件链(naive vs direct),返回第一处差异的描述,完全一致则返回 None
 fn matcher_events_diff(
     a: &Option<Box<MatcherTradeEvent>>,
     b: &Option<Box<MatcherTradeEvent>>,
@@ -162,6 +175,8 @@ fn matcher_events_diff(
     }
 }
 
+// 双实现对拍工具:并行维护一个 naive 订单簿和一个 direct 订单簿,把同一条命令流
+// 依次灌给两者,并在每步之后校验结果一致
 struct DiffHarness {
     naive: OrderBookNaiveImpl,
     direct: OrderBookDirectImpl,
@@ -181,6 +196,7 @@ impl DiffHarness {
         }
     }
 
+    // 执行一步生成的命令(下单/撤单/减量/改价之一),然后校验两实现的不变量
     fn step(&mut self, step_idx: usize, gen: &GenCmd) -> Result<(), String> {
         match *gen {
             GenCmd::Place { uid_idx, is_bid, order_type, price, size, reserve_extra } => {
@@ -291,6 +307,7 @@ impl DiffHarness {
         Self::diff_cmd(step_idx, "MOVE", rc_n, rc_d, &cmd_n, &cmd_d)
     }
 
+    // 比对一次命令在两实现上的返回码、matcher 事件链、action 字段是否一致
     fn diff_cmd(
         step_idx: usize,
         label: &str,
@@ -317,6 +334,7 @@ impl DiffHarness {
         Ok(())
     }
 
+    // 校验每步之后 L2 快照、state_hash 一致,且 direct 实现内部状态自洽(不 panic)
     fn check_invariants(&self, step_idx: usize) -> Result<(), String> {
         let l2_n = self.naive.fill_l2(-1);
         let l2_d = self.direct.fill_l2(-1);
@@ -349,6 +367,7 @@ impl DiffHarness {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    // proptest 主入口:对随机场景运行双实现对拍,任何一步不一致即失败
     #[test]
     fn direct_matches_naive_for_random_command_stream((n_users, cmds) in scenario_strategy()) {
         let uids: Vec<i64> = (1..=n_users as i64).collect();
@@ -361,10 +380,12 @@ proptest! {
     }
 }
 
+// 固定回归场景:曾经在随机 fuzz 中发现问题的具体命令序列,收敛为确定性用例长期把关
 #[cfg(test)]
 mod scenario_tests {
     use super::*;
 
+    // 对一组固定命令序列运行双实现对拍,发现不一致直接 panic
     fn run_scenario(uids: Vec<i64>, cmds: &[GenCmd]) {
         let mut harness = DiffHarness::new(uids);
         for (step_idx, gen) in cmds.iter().enumerate() {
@@ -385,6 +406,7 @@ mod scenario_tests {
         GenCmd::Place { uid_idx, is_bid, order_type, price, size, reserve_extra }
     }
 
+    // 跨多个价格档位扫单场景下双实现应完全一致
     #[test]
     fn multi_bucket_sweep_matches_naive() {
         let uids = vec![1, 2, 3, 4];
@@ -400,6 +422,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // 撤单+改价混合场景下双实现应完全一致
     #[test]
     fn cancel_and_move_matches_naive() {
         let uids = vec![1, 2, 3];
@@ -415,6 +438,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // 改价导致穿价成交的场景下双实现应完全一致
     #[test]
     fn move_into_crossing_price_matches_naive() {
         let uids = vec![1, 2];
@@ -428,6 +452,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // IOC 单场景下双实现应完全一致
     #[test]
     fn ioc_matches_naive() {
         let uids = vec![1, 2];
@@ -439,6 +464,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // FOK-Budget 单场景(含此前 fuzz 挖出的边界案例)下双实现应完全一致
     #[test]
     fn fok_budget_matches_naive_including_ruling_p2_1_case() {
         let uids = vec![1, 2];
@@ -454,6 +480,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // FOK 单场景下双实现应完全一致
     #[test]
     fn fok_matches_naive() {
         let uids = vec![1, 2, 3];
@@ -474,6 +501,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // IOC-Budget 单跨价格档位边界场景下双实现应完全一致
     #[test]
     fn ioc_budget_matches_naive_across_bucket_boundary() {
         let uids = vec![1, 2];
@@ -487,6 +515,7 @@ mod scenario_tests {
         run_scenario(uids, &cmds);
     }
 
+    // 减量场景(含减到零、减量超过剩余量)下双实现应完全一致
     #[test]
     fn reduce_matches_naive() {
         let uids = vec![1, 2];

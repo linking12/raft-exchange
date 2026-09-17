@@ -16,6 +16,14 @@ use crate::core::processors::risk_engine::RiskEngine;
 
 use super::exchange_core::ExchangeCore;
 
+// 对应 Java `ExchangeApi`：Java 版是把 ApiCommand 编码后发布到 Disruptor RingBuffer 的异步门面
+// （submitCommand/submitCommandAsync/submitCommandAsyncFullResponse 等），本身不持有引擎状态。
+// Rust 版塌缩为同步门面：直接持有一个 `ExchangeCore` 并调用 `process_command`，每个 `submit*`
+// 方法对应 Java 一种 ApiCommand 的构造 + 提交，返回值也简化为 `CommandResultCode`（无 Future）。
+
+// 以下请求 DTO 是各 submit 方法的强类型入参，字段与目标 `OrderCommand` 字段一一对应；
+// 对应 Java 侧各 `ApiPlaceOrder`/`ApiCancelOrder`/... 的字段集合（Java 直接用这些 Api*Command
+// 对象经 `submitCommand` 编码进 RingBuffer，这里只是构造 `OrderCommand` 前的中间形态）。
 #[derive(Debug, Clone)]
 pub struct PlaceOrderRequest {
     pub order_id: i64,
@@ -86,6 +94,10 @@ pub struct MarginAdjustmentRequest {
     pub order_id: i64,
 }
 
+/// 对应 Java `ExchangeApi`：调用方门面。`core` 直接持有引擎（对比 Java 侧通过 RingBuffer 间接驱动
+/// 独立线程上的 RiskEngine/MatchingEngineRouter），`last_cmd` 保留最近一次提交后的完整 `OrderCommand`
+/// （含 matcher_event/fund_events/market_data），供 `last_*` 系列访问器读取——近似 Java
+/// `submitCommandAsyncFullResponse` 拿到的回填结果，但这里是同步、单条、无需 Future。
 #[derive(Default)]
 pub struct ExchangeApi {
     core: ExchangeCore,
@@ -97,6 +109,8 @@ impl ExchangeApi {
         ExchangeApi { core: ExchangeCore::new(), last_cmd: None }
     }
 
+    // 内部帮助函数：同步跑一条 cmd 并缓存结果，是下面各 submit 类方法的共同尾调用；
+    // 对应 Java 每个 ApiXxxCommand 经 `submitCommand`/`submitCommandAsync` 提交后拿 resultCode 的落点。
     fn run(&mut self, mut cmd: OrderCommand) -> CommandResultCode {
         self.core.process_command(&mut cmd);
         let rc = cmd.result_code.expect("process_command always sets result_code");
@@ -104,10 +118,14 @@ impl ExchangeApi {
         rc
     }
 
+    /// 对应 Java `BatchAddAccountsCommand`/初始化阶段直接调用 `currencySpecificationProvider.addCurrency`
+    /// 的单币种版本；非交易类配置，绕开 `run`/`OrderCommand` 直接改 SSP。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
     }
 
+    /// 对应 Java 添加 symbol 的批处理路径：base/quote 币种必须先注册，否则 `InvalidSymbol`；
+    /// 成功后现货/期货 symbol 都要同步进 matching router（对应 Java `MatchingEngineRouter` 建空 orderBook）。
     pub fn add_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if self.core.ssp.get_currency(spec.base_currency).is_none()
             || self.core.ssp.get_currency(spec.quote_currency).is_none()
@@ -121,6 +139,7 @@ impl ExchangeApi {
         rc
     }
 
+    /// `add_symbol` 的期货专用门：非期货类型直接拒绝（`UnsupportedSymbolType`），不进入通用校验。
     pub fn add_futures_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if !spec.symbol_type.is_futures_contract() {
             return CommandResultCode::UnsupportedSymbolType;
@@ -128,21 +147,27 @@ impl ExchangeApi {
         self.add_symbol(spec)
     }
 
+    /// 对应 Java `ApiAddUser` / `OrderCommandType.ADD_USER`。
     pub fn add_user(&mut self, uid: i64) -> CommandResultCode {
         let cmd = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
         self.run(cmd)
     }
 
+    /// 对应 Java 通过配置项 `MARGIN_TRADING_ENABLED` 挂接 `LiquidationEngine.commandSubmitter` 后
+    /// 打开清算调度；这里简化为直接置位 `liquidation_engine.is_running`（无独立扫描线程）。
     pub fn enable_liquidation(&mut self) {
         self.core.risk.liquidation_engine.is_running = true;
     }
 
+    /// 批量版 `add_currency`，对应 Java `BatchAddAccountsCommand` 之类批处理入口的币种部分。
     pub fn add_currencies(&mut self, currencies: impl IntoIterator<Item = CoreCurrencySpecification>) {
         for spec in currencies {
             self.core.ssp.add_currency(spec);
         }
     }
 
+    /// 批量版 `add_symbol`：非现货 symbol 在保证金交易未启用(`cfg_margin_trading_enabled == false`)时
+    /// 被静默跳过（对齐 Java 批处理里对 margin symbol 的门控，现货恒放行）。
     pub fn add_symbols(&mut self, symbols: impl IntoIterator<Item = CoreSymbolSpecification>) {
         for spec in symbols {
             if spec.symbol_type != SymbolType::CurrencyExchangePair && !self.core.risk.cfg_margin_trading_enabled {
@@ -153,6 +178,8 @@ impl ExchangeApi {
         }
     }
 
+    /// 批量建账户并充值初始余额：已存在的 uid 跳过（不覆盖），充值同时把等额记入
+    /// `risk.adjustments` 负值，保持全局守恒（对应 Java 批量种子账户流程 + BALANCE_ADJUSTMENT 的守恒约定）。
     pub fn add_accounts(&mut self, accounts: impl IntoIterator<Item = (i64, Vec<(i32, i64)>)>) {
         for (uid, balances) in accounts {
             if self.core.ups.add_empty_user_profile(uid) != CommandResultCode::Success {
@@ -167,16 +194,21 @@ impl ExchangeApi {
         }
     }
 
+    /// 批量版 `add_loan`（loan 池初始化/预设批处理入口）。
     pub fn add_loans(&mut self, cmds: impl IntoIterator<Item = BatchAddLoanCommand>) {
         for cmd in cmds {
             self.core.risk.apply_add_loan(&cmd, &mut self.core.ssp);
         }
     }
 
+    /// 对应 Java `ADD_LOAN` 批处理指令：绕开 `run`/`OrderCommand`，直接调用 RiskEngine 的 loan 配置
+    /// 应用逻辑（非交易类初始化路径，见 loan-config-simplification 分支收敛）。
     pub fn add_loan(&mut self, cmd: BatchAddLoanCommand) {
         self.core.risk.apply_add_loan(&cmd, &mut self.core.ssp);
     }
 
+    /// 对应 Java `ApiAdjustUserBalance` / `OrderCommandType.BALANCE_ADJUSTMENT`：`amount` 正为入金、
+    /// 负为出金，`txid` 作为幂等去重键写入 `order_id`。
     pub fn balance_adjustment(
         &mut self,
         uid: i64,
@@ -195,6 +227,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiPlaceOrder`（现货）/ `OrderCommandType.PLACE_ORDER`。
     pub fn place_order(&mut self, req: PlaceOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -211,6 +244,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiCancelOrder` / `OrderCommandType.CANCEL_ORDER`。
     pub fn cancel_order(&mut self, req: CancelOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::CancelOrder,
@@ -222,6 +256,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiMoveOrder` / `OrderCommandType.MOVE_ORDER`。
     pub fn move_order(&mut self, req: MoveOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::MoveOrder,
@@ -234,6 +269,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiReduceOrder` / `OrderCommandType.REDUCE_ORDER`。
     pub fn reduce_order(&mut self, req: ReduceOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::ReduceOrder,
@@ -246,6 +282,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiPlaceOrder`（期货，带杠杆/保证金模式/只减仓标志）/ `OrderCommandType.PLACE_ORDER`。
     pub fn place_futures_order(&mut self, req: PlaceFuturesOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -264,6 +301,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiClosePosition` / `OrderCommandType.CLOSE_POSITION`。
     pub fn close_position(&mut self, req: ClosePositionRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::ClosePosition,
@@ -293,6 +331,7 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiChangeLeverage` / `OrderCommandType.LEVERAGE_ADJUSTMENT`。
     pub fn leverage_adjustment(&mut self, uid: i64, symbol: i32, leverage: i32) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::LeverageAdjustment,
@@ -304,11 +343,15 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
+    /// 对应 Java `ApiPositionModeAdjustment` / `OrderCommandType.POSITION_MODE_ADJUSTMENT`：
+    /// `hedge=true` 即双向持仓模式（借用 `action=Bid` 编码，无独立布尔字段）。
     pub fn adjust_position_mode(&mut self, uid: i64, hedge: bool) -> CommandResultCode {
         let action = if hedge { OrderAction::Bid } else { OrderAction::Ask };
         self.run(OrderCommand { command: OrderCommandType::PositionModeAdjustment, uid, action: Some(action), ..Default::default() })
     }
 
+    /// 对应 Java `ApiMarkPriceAdjustment` / `OrderCommandType.MARKPRICE_ADJUSTMENT`：可能触发强平级联
+    /// （见 `ExchangeCore::run_liquidation_cascade`）。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::MarkpriceAdjustment,
@@ -318,14 +361,18 @@ impl ExchangeApi {
         })
     }
 
+    /// 对应 Java `ApiSuspendUser` / `OrderCommandType.SUSPEND_USER`。
     pub fn suspend_user(&mut self, uid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::SuspendUser, uid, ..Default::default() })
     }
 
+    /// 对应 Java `ApiResumeUser` / `OrderCommandType.RESUME_USER`。
     pub fn resume_user(&mut self, uid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
     }
 
+    /// 逃生口：直接提交任意已构造好的 `OrderCommand`，供上面没有专门包装方法的指令类型使用
+    /// （例如测试或 Raft 状态机重放场景）。
     pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
         self.run(cmd)
     }
@@ -350,6 +397,8 @@ impl ExchangeApi {
         *self.core.risk.adjustments.get(&currency).unwrap_or(&0)
     }
 
+    /// 对应 Java `ApiOrderBookRequest` / `OrderCommandType.ORDER_BOOK_REQUEST`：同步查询 L2 快照，
+    /// 走完整 `process_command`（本身不改状态，只是复用统一入口以获得撮合簿只读快照）。
     pub fn request_l2(&mut self, symbol: i32, depth: i32) -> L2MarketData {
         let mut cmd = OrderCommand {
             command: OrderCommandType::OrderBookRequest,
@@ -361,6 +410,8 @@ impl ExchangeApi {
         cmd.market_data.take().unwrap_or_default()
     }
 
+    /// 最近一次 `run`/`submit` 提交的完整命令回执；对应 Java `submitCommandAsyncFullResponse` 拿到的
+    /// `OrderCommand`，这里换成同步取值。
     pub fn last_cmd(&self) -> &OrderCommand {
         self.last_cmd.as_ref().expect("no command submitted yet")
     }
@@ -373,14 +424,19 @@ impl ExchangeApi {
         &self.last_cmd().fund_events
     }
 
+    /// 上一次提交触发的强平/ADL 级联（`run_liquidation_cascade`）中，各级联子命令累积的 fund events；
+    /// Java 侧对应级联命令异步经 raft 重提交、各自独立产出事件，这里因为级联同步内联完成而聚合暴露。
     pub fn cascade_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
         &self.core.last_cascade_events
     }
 
+    /// 同 `cascade_fund_events`，聚合级联子命令产出的撮合事件（已 flatten，`next` 链已摘除）。
     pub fn cascade_matcher_events(&self) -> &[crate::core::common::matcher_trade_event::MatcherTradeEvent] {
         &self.core.last_cascade_matcher_events
     }
 
+    // 底下三个直接暴露内部引擎子模块的只读访问器：Java 侧一般通过专门的 ReportQuery 间接读取，
+    // 这里为测试/调试保留直接逃生口。
     pub fn ups(&self) -> &UserProfileService {
         &self.core.ups
     }
@@ -393,30 +449,40 @@ impl ExchangeApi {
         &self.core.risk
     }
 
+    // 以下报表查询转发到 `reports.rs`，对应 Java `common/api/reports/*ReportQuery`
+    // + `ReportQueriesHandler`/`RiskEngine` 侧聚合逻辑，见该文件顶部注释。
+
+    /// 对应 Java `TotalCurrencyBalanceReportQuery`。
     pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
         self.core.query_total_balance()
     }
 
+    /// 对应 Java `SingleUserReportQuery`。
     pub fn single_user(&self, uid: i64, now_ms: i64) -> crate::core::reports::SingleUserReport {
         self.core.query_single_user(uid, now_ms)
     }
 
+    /// 对应 Java `InsuranceFundReportQuery`。
     pub fn insurance_fund(&self) -> crate::core::reports::InsuranceFundReport {
         self.core.query_insurance_fund()
     }
 
+    /// 对应 Java `SymbolCurrencyReportQuery`。
     pub fn symbol_currency(&self) -> crate::core::reports::SymbolCurrencyReport {
         self.core.query_symbol_currency()
     }
 
+    /// 对应 Java `FeeReportQuery`。
     pub fn fee_report(&self) -> crate::core::reports::FeeReport {
         self.core.query_fee_report()
     }
 
+    /// 对应 Java `LoanPlatformReportQuery`。
     pub fn loan_platform(&self) -> crate::core::reports::LoanPlatformReport {
         self.core.query_loan_platform()
     }
 
+    /// 对应 Java `StateHashReportQuery`：用于跨节点/跨语言一致性对拍（见 CONSISTENCY.md）。
     pub fn state_hash(&self) -> crate::core::reports::StateHashReport {
         self.core.query_state_hash()
     }
@@ -522,16 +588,16 @@ mod tests {
         let base_sum = api.user_account(SELLER, BASE) + api.user_account(BUYER, BASE)
             + api.adjustments(BASE)
             + api.fees(BASE);
-        assert_eq!(base_sum, 0, "base 守恒");
+        assert_eq!(base_sum, 0, "base conserved");
 
         let quote_sum = api.user_account(SELLER, QUOTE) + api.user_account(BUYER, QUOTE)
             + api.adjustments(QUOTE)
             + api.fees(QUOTE);
-        assert_eq!(quote_sum, 0, "quote 守恒");
+        assert_eq!(quote_sum, 0, "quote conserved");
 
         let l2 = api.request_l2(SYMBOL, 10);
-        assert!(l2.bid_prices.is_empty(), "买方完全成交，无残量挂单");
-        assert!(l2.ask_prices.is_empty(), "卖方 ASK 已被完全吃掉");
+        assert!(l2.bid_prices.is_empty(), "buyer fully filled, no residual resting order");
+        assert!(l2.ask_prices.is_empty(), "seller ASK fully consumed");
     }
 
     #[test]
@@ -615,7 +681,7 @@ mod tests {
         api.add_currency(QUOTE, 1);
         let rc = api.add_futures_symbol(spot_spec_fixed_fee(0, 0));
         assert_eq!(rc, CommandResultCode::UnsupportedSymbolType);
-        assert!(api.ssp().get_symbol(SYMBOL).is_none(), "拒绝的 symbol 不得注册");
+        assert!(api.ssp().get_symbol(SYMBOL).is_none(), "rejected symbol must not be registered");
     }
 
     #[test]
@@ -664,14 +730,14 @@ mod tests {
         });
         assert_eq!(bid_rc, CommandResultCode::Success);
 
-        let long_pos = api.user_position(LONG_USER, FUT_SYMBOL).expect("多头开仓后必有仓位记录");
+        let long_pos = api.user_position(LONG_USER, FUT_SYMBOL).expect("long position record must exist after opening");
         assert_eq!(long_pos.direction, PositionDirection::Long);
         assert_eq!(long_pos.open_volume, 10);
         assert_eq!(long_pos.open_init_margin_sum, 1_000);
         assert_eq!(long_pos.open_price_sum, 1_000);
         assert_eq!(long_pos.profit, 0);
 
-        let short_pos = api.user_position(SHORT_USER, FUT_SYMBOL).expect("空头开仓后必有仓位记录");
+        let short_pos = api.user_position(SHORT_USER, FUT_SYMBOL).expect("short position record must exist after opening");
         assert_eq!(short_pos.direction, PositionDirection::Short);
         assert_eq!(short_pos.open_volume, 10);
         assert_eq!(short_pos.open_init_margin_sum, 1_000);
@@ -680,7 +746,7 @@ mod tests {
 
         assert_eq!(api.user_account(LONG_USER, QUOTE), 10_000 - 100, "taker fee = size(10)*taker_fee(10)");
         assert_eq!(api.user_account(SHORT_USER, QUOTE), 10_000 - 50, "maker fee = size(10)*maker_fee(5)");
-        assert_eq!(api.user_locked(LONG_USER, QUOTE), 0, "期货保证金不占用 locked（纯虚拟仓位字段）");
+        assert_eq!(api.user_locked(LONG_USER, QUOTE), 0, "futures margin does not occupy locked (pure virtual position field)");
         assert_eq!(api.user_locked(SHORT_USER, QUOTE), 0);
         assert_eq!(api.fees(QUOTE), 150);
 
@@ -689,7 +755,7 @@ mod tests {
                 + api.adjustments(QUOTE)
                 + api.fees(QUOTE)
         };
-        assert_eq!(conserved(&api), 0, "开仓后 quote 守恒");
+        assert_eq!(conserved(&api), 0, "quote conserved after opening position");
 
         assert_eq!(api.set_mark_price(FUT_SYMBOL, 150), CommandResultCode::Success);
 
@@ -715,8 +781,8 @@ mod tests {
         });
         assert_eq!(close_long_rc, CommandResultCode::Success);
 
-        assert!(api.user_position(LONG_USER, FUT_SYMBOL).is_none(), "多头完全平仓后 position 记录应被拆除");
-        assert!(api.user_position(SHORT_USER, FUT_SYMBOL).is_none(), "空头完全平仓后 position 记录应被拆除");
+        assert!(api.user_position(LONG_USER, FUT_SYMBOL).is_none(), "long position record must be torn down after full close");
+        assert!(api.user_position(SHORT_USER, FUT_SYMBOL).is_none(), "short position record must be torn down after full close");
 
         assert_eq!(
             api.user_account(LONG_USER, QUOTE),
@@ -726,9 +792,9 @@ mod tests {
             api.user_account(SHORT_USER, QUOTE),
             10_000 - 50  - 50  - 500,
         );
-        assert_eq!(api.fees(QUOTE), 150 + 100 + 50, "累计四笔手续费：150(开仓)+100+50(平仓)");
+        assert_eq!(api.fees(QUOTE), 150 + 100 + 50, "four fees accumulated: 150(open)+100+50(close)");
 
-        assert_eq!(conserved(&api), 0, "平仓结算 PnL 后 quote 依旧守恒");
+        assert_eq!(conserved(&api), 0, "quote still conserved after close settles PnL");
 
         let l2 = api.request_l2(FUT_SYMBOL, 10);
         assert!(l2.bid_prices.is_empty());
@@ -767,8 +833,8 @@ mod tests {
         let spot = CoreSymbolSpecification { symbol_id: 201, symbol_type: SymbolType::CurrencyExchangePair,
             base_currency: BASE, quote_currency: QUOTE, base_scale_k: 1, quote_scale_k: 1, ..Default::default() };
         api.add_symbols([fut, spot]);
-        assert!(api.ssp().get_symbol(200).is_none(), "margin 关闭时期货 symbol 被门控跳过(对齐 Java)");
-        assert!(api.ssp().get_symbol(201).is_some(), "现货 symbol 恒放行");
+        assert!(api.ssp().get_symbol(200).is_none(), "futures symbol gated/skipped when margin trading disabled (aligned with Java)");
+        assert!(api.ssp().get_symbol(201).is_some(), "spot symbol always passes through");
     }
 
     #[test]
@@ -779,8 +845,8 @@ mod tests {
         api.add_accounts([(10i64, vec![(QUOTE, 1000i64)]), (11i64, vec![(QUOTE, 500i64)])]);
         assert_eq!(api.ups().get(10).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 1000);
         assert_eq!(api.ups().get(11).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 500);
-        assert!(api.total_balance().is_global_zero(), "seed 后全局守恒(账户 +1500 / 调整桶 -1500)");
+        assert!(api.total_balance().is_global_zero(), "globally conserved after seeding (accounts +1500 / adjustments bucket -1500)");
         api.add_accounts([(10i64, vec![(QUOTE, 9999i64)])]);
-        assert_eq!(api.ups().get(10).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 1000, "已存在 uid 跳过,不覆盖");
+        assert_eq!(api.ups().get(10).unwrap().accounts.get(&QUOTE).copied().unwrap_or(0), 1000, "existing uid skipped, not overwritten");
     }
 }

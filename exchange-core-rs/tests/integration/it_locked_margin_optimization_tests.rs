@@ -1,3 +1,7 @@
+//! Ported from the Java test class `ITRiskEngineLockedMarginOptimization.java`. Verifies the
+//! `calculateLockedMargin` optimization (commit 03ec8f04) computes correct locked-margin values
+//! across a range of scenarios: single/multi-position, opening/adding/closing, extra margin,
+//! multiple matcher events, pending orders, maker vs. taker, and cross vs. isolated margin mode.
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -95,6 +99,8 @@ mod tests {
         api.user_account(uid, USD)
     }
 
+    // Walks every currency's user balances, adjustments, fees, and open-position PnL/extra
+    // margin to confirm the futures accounting is globally conserved (sums to zero).
     fn assert_conserved(api: &ExchangeApi) {
         for &cur in api.ssp().currencies.keys() {
             let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -113,10 +119,12 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "期货全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "futures global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // Corresponds to Java testBasicLockedMarginCalculation(): a single position's locked
+    // (open_init_margin_sum) should be positive and correctly computed.
     #[test]
     fn basic_locked_margin_calculation() {
         let mut api = new_api();
@@ -127,14 +135,16 @@ mod tests {
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 1002, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
-        let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("Taker 应有仓位");
+        let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("Taker should have a position");
         assert_eq!(pos.open_volume, 1);
         assert_eq!(pos.direction, PositionDirection::Long);
-        assert!(pos.open_init_margin_sum > 0, "locked margin 应为正");
+        assert!(pos.open_init_margin_sum > 0, "locked margin should be positive");
         assert_eq!(pos.open_init_margin_sum, 1000);
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testMultiPositionLockedMargin(): the core optimization test point —
+    // locked margin across 3 different-symbol positions, and how it grows when a position adds.
     #[test]
     fn multi_position_locked_margin() {
         let mut api = new_api();
@@ -155,17 +165,19 @@ mod tests {
         assert!(api.user_position(USER_MULTI, SYMBOL_ETH).is_some());
         assert!(api.user_position(USER_MULTI, SYMBOL_BNB).is_some());
         let initial_locked = locked_margin(&api, USER_MULTI);
-        assert_eq!(initial_locked, 1600, "3 持仓 locked 合计应为 1600");
+        assert_eq!(initial_locked, 1600, "total locked margin across 3 positions should be 1600");
 
         assert_eq!(ask(&mut api, 1004, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2004, USER_MULTI, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
         let new_locked = locked_margin(&api, USER_MULTI);
-        assert!(new_locked > initial_locked, "加仓后 locked 应增加");
+        assert!(new_locked > initial_locked, "locked margin should increase after adding to the position");
         assert_eq!(api.user_position(USER_MULTI, SYMBOL_BTC).unwrap().open_volume, 2);
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testNewPositionCreation(): the taker-side-record==null boundary —
+    // locked margin starts at zero and increases as a fresh position is opened and added to.
     #[test]
     fn new_position_creation() {
         let mut api = new_api();
@@ -173,7 +185,7 @@ mod tests {
         add_user_money(&mut api, TAKER_UID, 10_000, 1);
         add_user_money(&mut api, MAKER_UID, MAX_VALUE, 2);
 
-        assert!(api.user_position(TAKER_UID, SYMBOL_BTC).is_none(), "初始无持仓");
+        assert!(api.user_position(TAKER_UID, SYMBOL_BTC).is_none(), "should have no position initially");
 
         assert_eq!(ask(&mut api, 1001, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2001, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
@@ -183,10 +195,12 @@ mod tests {
         assert_eq!(ask(&mut api, 1002, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(bid(&mut api, 2002, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         let locked_after_second = locked_margin(&api, TAKER_UID);
-        assert!(locked_after_second > locked_after_first, "加仓后 locked 应继续增加");
+        assert!(locked_after_second > locked_after_first, "locked margin should keep increasing after adding to the position");
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testPositionFullyClose(): locked margin computation when one of two
+    // positions is fully closed — the closed symbol's locked contribution should disappear.
     #[test]
     fn position_fully_close() {
         let mut api = new_api();
@@ -204,15 +218,17 @@ mod tests {
         assert_eq!(bid(&mut api, 1003, MAKER_UID, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 2003, USER_MULTI, 2, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
-        assert!(api.user_position(USER_MULTI, SYMBOL_BTC).is_none(), "BTC 已全平");
-        assert_eq!(api.user_position(USER_MULTI, SYMBOL_ETH).unwrap().open_volume, 10, "ETH 仍存在");
+        assert!(api.user_position(USER_MULTI, SYMBOL_BTC).is_none(), "BTC position should be fully closed");
+        assert_eq!(api.user_position(USER_MULTI, SYMBOL_ETH).unwrap().open_volume, 10, "ETH position should still exist");
 
         let locked_after = locked_margin(&api, USER_MULTI);
-        assert!(locked_after < locked_with_two, "平一仓后 locked 应减少");
-        assert!(locked_after > 0, "ETH 仍占 locked");
+        assert!(locked_after < locked_with_two, "locked margin should decrease after closing one position");
+        assert!(locked_after > 0, "ETH position should still occupy locked margin");
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testPositionCloseWithExtraMargin(): verifies refundExtraMargin — extra
+    // margin added to an isolated position is refunded (minus the close fee) when it's closed.
     #[test]
     fn position_close_with_extra_margin() {
         let extra_margin = 1000i64;
@@ -231,14 +247,14 @@ mod tests {
             }),
             CommandResultCode::Success
         );
-        assert!(api.user_position(TAKER_UID, SYMBOL_BTC).unwrap().extra_margin > 0, "extra margin 已加");
+        assert!(api.user_position(TAKER_UID, SYMBOL_BTC).unwrap().extra_margin > 0, "extra margin should be added");
         assert_eq!(api.user_position(TAKER_UID, SYMBOL_BTC).unwrap().extra_margin, extra_margin);
 
         let balance_before_close = balance(&api, TAKER_UID);
 
         assert_eq!(bid(&mut api, 1002, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 2002, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
-        assert!(api.user_position(TAKER_UID, SYMBOL_BTC).is_none(), "已全平");
+        assert!(api.user_position(TAKER_UID, SYMBOL_BTC).is_none(), "position should be fully closed");
 
         let balance_after_close = balance(&api, TAKER_UID);
         let expected_close_fee = 20i64;
@@ -246,6 +262,8 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testMultipleMatcherEvents(): verifies correct looped processing of
+    // multiple MatcherEvents when a single taker order sweeps several resting maker orders.
     #[test]
     fn multiple_matcher_events() {
         let mut api = new_api();
@@ -266,10 +284,12 @@ mod tests {
 
         assert_eq!(api.user_position(TAKER_UID, SYMBOL_BTC).unwrap().open_volume, 3);
         let locked_after = locked_margin(&api, TAKER_UID);
-        assert!(locked_after > locked_before, "开仓后 locked 应增加");
+        assert!(locked_after > locked_before, "locked margin should increase after opening a position");
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testPendingOrdersLockedMargin(): verifies that pending order size is
+    // tracked via the position record's pending_buy/sell_size fields, and cleared on cancel.
     #[test]
     fn pending_orders_locked_margin() {
         let mut api = new_api();
@@ -281,7 +301,7 @@ mod tests {
         assert_eq!(bid(&mut api, 2001, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
         {
-            let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("应有持仓");
+            let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("should have a position");
             assert_eq!(pos.open_volume, 1);
             assert_eq!(pos.pending_buy_size, 0);
             assert_eq!(pos.pending_sell_size, 0);
@@ -289,7 +309,7 @@ mod tests {
 
         assert_eq!(bid(&mut api, 2002, TAKER_UID, 1, 90_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         {
-            let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("应有持仓");
+            let pos = api.user_position(TAKER_UID, SYMBOL_BTC).expect("should have a position");
             assert_eq!(pos.pending_buy_size, 1);
             assert_eq!(pos.pending_buy_avg_price, 90_000);
         }
@@ -302,6 +322,9 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testMakerLockedMarginCalculation(): the counterparty maker's locked
+    // margin should decrease when the taker reduces the maker's position, leaving other symbols
+    // unaffected.
     #[test]
     fn maker_locked_margin_calculation() {
         let mut api = new_api();
@@ -320,11 +343,13 @@ mod tests {
         assert_eq!(bid(&mut api, 1003, TAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
 
         let maker_locked_after = locked_margin(&api, MAKER_UID);
-        assert!(maker_locked_after < maker_locked_before, "Maker 减仓后 locked 应减少");
-        assert_eq!(api.user_position(MAKER_UID, SYMBOL_ETH).unwrap().open_volume, 20, "Maker ETH 仓位未受影响");
+        assert!(maker_locked_after < maker_locked_before, "Maker's locked margin should decrease after reducing the position");
+        assert_eq!(api.user_position(MAKER_UID, SYMBOL_ETH).unwrap().open_volume, 20, "Maker's ETH position should be unaffected");
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testCrossMarginLockedCalculation(): locked margin computation under
+    // MarginMode::Cross — should be positive while positions are open and decrease on close.
     #[test]
     fn cross_margin_locked_calculation() {
         let mut api = new_api();
@@ -339,16 +364,18 @@ mod tests {
         assert_eq!(bid(&mut api, 2002, USER_MULTI, 10, 3_000, SYMBOL_ETH, MarginMode::Cross), CommandResultCode::Success);
 
         let locked = locked_margin(&api, USER_MULTI);
-        assert!(locked > 0, "CROSS 用户应有 locked margin");
+        assert!(locked > 0, "CROSS-margin user should have locked margin");
 
         assert_eq!(bid(&mut api, 1003, MAKER_UID, 1, 100_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(ask(&mut api, 2003, USER_MULTI, 1, 100_000, SYMBOL_BTC, MarginMode::Cross), CommandResultCode::Success);
 
         let locked_after = locked_margin(&api, USER_MULTI);
-        assert!(locked_after < locked, "平仓后 locked 应减少");
+        assert!(locked_after < locked, "locked margin should decrease after closing the position");
         assert_conserved(&api);
     }
 
+    // Corresponds to Java testPerformanceImprovement(): a functional check that a large order
+    // sweeping 10 resting maker price levels still ends up with the correct aggregated position.
     #[test]
     fn performance_improvement_functional() {
         let mut api = new_api();
@@ -371,7 +398,7 @@ mod tests {
         }
 
         assert_eq!(bid(&mut api, 2010, USER_MULTI, 10, 200_000, SYMBOL_BTC, MarginMode::Isolated), CommandResultCode::Success);
-        assert_eq!(api.user_position(USER_MULTI, SYMBOL_BTC).unwrap().open_volume, 20, "大单扫满 10 档后 BTC LONG=20");
+        assert_eq!(api.user_position(USER_MULTI, SYMBOL_BTC).unwrap().open_volume, 20, "after a large order sweeps 10 price levels, BTC LONG volume should be 20");
         assert_conserved(&api);
     }
 }

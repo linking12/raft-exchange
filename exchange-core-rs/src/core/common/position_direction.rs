@@ -1,5 +1,10 @@
+//! 对应 Java `exchange.core2.core.common.PositionDirection`。
+
 use crate::core::common::order_action::OrderAction;
 
+/// 仓位方向。Java 版只有 `multiplier` 字段（`@AllArgsConstructor`），没有独立的 `code`；
+/// 这里 `code()` 直接复用 `multiplier()`（Long=1/Short=-1/Empty=0），
+/// 与 Java `PositionDirection.of(byte)` 按同一套数值反查一致。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PositionDirection {
     Long,
@@ -9,6 +14,7 @@ pub enum PositionDirection {
 
 impl PositionDirection {
 
+    /// 对应 Java `PositionDirection.of(byte)`：未知 code 直接 panic（Java 抛 IllegalArgumentException）。
     pub fn of_code(code: i8) -> Self {
         match code {
             1 => PositionDirection::Long,
@@ -18,6 +24,7 @@ impl PositionDirection {
         }
     }
 
+    /// 对应 Java `PositionDirection.of(OrderAction)`：Bid→Long，Ask→Short。
     pub fn of_action(action: OrderAction) -> Self {
         if action == OrderAction::Bid {
             PositionDirection::Long
@@ -38,17 +45,20 @@ impl PositionDirection {
         self.multiplier() as i8
     }
 
+    /// 对应 Java `PositionDirection.isOppositeToAction(OrderAction)`。
     pub fn is_opposite_to_action(self, action: OrderAction) -> bool {
         (self == PositionDirection::Long && action == OrderAction::Ask)
             || (self == PositionDirection::Short && action == OrderAction::Bid)
     }
 
+    /// 对应 Java `PositionDirection.isSameAsAction(OrderAction)`。
     pub fn is_same_as_action(self, action: OrderAction) -> bool {
         (self == PositionDirection::Long && action == OrderAction::Bid)
             || (self == PositionDirection::Short && action == OrderAction::Ask)
     }
 }
 
+/// Rust 专用：Java 无默认值概念，这里选 `Empty`（无仓位）作为占位默认值。
 impl Default for PositionDirection {
     fn default() -> Self {
         PositionDirection::Empty

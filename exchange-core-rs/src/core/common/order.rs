@@ -2,6 +2,8 @@ use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
 
+/// 对应 Java `exchange.core2.core.common.Order`,订单簿内部的挂单记录。
+/// 不应在 OrderBook 外部持有引用——订单对象只在 OrderBook 内部生存周期内有效。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Order {
     pub order_id: i64,
@@ -9,16 +11,19 @@ pub struct Order {
     pub size: i64,
     pub filled: i64,
     pub filled_notional: i64,
+    /// 新单专用:GTC 买单在交易所模式下快速改价(移动订单)时的保留价格。
     pub reserve_bid_price: i64,
     pub action: OrderAction,
     pub order_type: OrderType,
     pub uid: i64,
     pub timestamp: i64,
     pub user_cookie: i32,
+    /// 仅 PLACE_ORDER 场景需要;对应 Java 侧 command byte 为 0 时代表 `None`(此处以 `OrderCommandType` 承载)。
     pub command: OrderCommandType,
 }
 
 impl Order {
+    /// 对应 Java `Order` 未持久化的派生量:剩余未成交数量。
     pub fn remaining(&self) -> i64 {
         self.size - self.filled
     }
@@ -28,6 +33,7 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
+/// 对应 Java `Order.writeMarshallable` / `Order(BytesIn)`。
 impl ChronicleMarshallable for Order {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i64(self.order_id);

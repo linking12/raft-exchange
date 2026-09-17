@@ -1,5 +1,8 @@
 #[cfg(test)]
 mod tests {
+    // 翻译自 Java `ITFeesDynamicExchange`
+    // 验证现货动态手续费品种（maker/taker fee 按 scale 计算）在挂单预扣、成交后 maker/taker 费率结算、部分成交、撤单退还等场景下手续费与账面的正确性。
+
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
     use exchange_core_rs::core::common::order_action::OrderAction;
@@ -65,6 +68,7 @@ mod tests {
         PlaceOrderRequest { order_id, uid, symbol: SYM, price, size, reserve_bid_price: 0, action: OrderAction::Ask, order_type: ot }
     }
 
+    // 按撮合数量计算 maker+taker 两侧手续费之和（换算到 currency scale），用于校验费池
     fn fee_pool(filled: i64) -> i64 {
         if filled == 0 {
             return 0;
@@ -92,10 +96,13 @@ mod tests {
         api.user_account(uid, cur) - api.user_locked(uid, cur)
     }
 
+    // 全局守恒校验：所有用户账户余额 + 调账 + 手续费池之和应恒为 0
     fn conserved(api: &ExchangeApi, cur: i32) -> i64 {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.adjustments(cur) + api.fees(cur)
     }
 
+    // 通用 maker/taker 手续费场景驱动：对应 Java 一系列 shouldProcessFees_*/shouldNotProcessFees_* 用例，
+    // 挂一笔 maker 单再用给定订单类型/size/price 吃单，校验成交后双方余额与手续费池是否符合预期
     #[allow(clippy::too_many_arguments)]
     fn run_spot(
         maker_action: OrderAction,
@@ -140,7 +147,7 @@ mod tests {
             order_type: OrderType::Gtc,
         };
         assert_eq!(api.place_order(maker_req), CommandResultCode::Success);
-        assert_eq!(api.fees(LTC), 0, "挂 maker 不入池");
+        assert_eq!(api.fees(LTC), 0, "placing the maker order should not add to the fee pool");
 
         let taker_action = match maker_action {
             OrderAction::Bid => OrderAction::Ask,
@@ -152,14 +159,15 @@ mod tests {
         };
         assert_eq!(api.place_order(taker_req), CommandResultCode::Success);
 
-        assert_eq!(api.fees(LTC), fee_pool(expected_filled), "LTC 费池");
+        assert_eq!(api.fees(LTC), fee_pool(expected_filled), "LTC fee pool");
         assert_eq!(api.fees(XBT), 0);
         assert_eq!(api.user_account(buyer, XBT), buyer_xbt_dep + base_amt(expected_filled), "buyer XBT");
         assert_eq!(api.user_account(seller, XBT), seller_xbt_dep - base_amt(expected_filled), "seller XBT");
-        assert_eq!(conserved(&api, XBT), 0, "XBT 守恒");
-        assert_eq!(conserved(&api, LTC), 0, "LTC 守恒");
+        assert_eq!(conserved(&api, XBT), 0, "XBT conservation");
+        assert_eq!(conserved(&api, LTC), 0, "LTC conservation");
     }
 
+    // 对应 Java shouldRequireTakerFees_GtcCancel1：GTC 挂单需按 taker fee 预扣资金（NSF 校验），撤单后全额退还
     #[test]
     fn should_require_taker_fees_gtc_cancel1() {
         let mut api = new_api();
@@ -183,10 +191,10 @@ mod tests {
             CommandResultCode::Success
         );
         assert_eq!(api.fees(LTC), 0);
-        assert_eq!(available(&api, UID_2, LTC), 0, "全额预留");
+        assert_eq!(available(&api, UID_2, LTC), 0, "fully reserved");
 
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 203, uid: UID_2, symbol: SYM }), CommandResultCode::Success);
-        assert_eq!(available(&api, UID_2, LTC), need, "撤后可用回到 need");
+        assert_eq!(available(&api, UID_2, LTC), need, "available balance returns to `need` after cancel");
         assert_eq!(api.fees(LTC), 0);
         assert_eq!(conserved(&api, LTC), 0);
 
@@ -194,57 +202,67 @@ mod tests {
         assert_eq!(api.balance_adjustment(UID_2, XBT, btc_amount, 3), CommandResultCode::Success);
         assert_eq!(api.place_order(ask(204, UID_2, price, 100, OrderType::Gtc)), CommandResultCode::Success);
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 204, uid: UID_2, symbol: SYM }), CommandResultCode::Success);
-        assert_eq!(available(&api, UID_2, XBT), btc_amount, "撤后 XBT 全回");
+        assert_eq!(available(&api, UID_2, XBT), btc_amount, "full XBT returned after cancel");
         assert_eq!(api.fees(LTC), 0);
         assert_eq!(api.fees(XBT), 0);
         assert_eq!(conserved(&api, LTC), 0);
         assert_eq!(conserved(&api, XBT), 0);
     }
 
+    // 对应 Java shouldProcessFees_BidGtcMaker_AskIocTakerPartial：BID maker 挂 500，ASK IOC taker 量 2000 > maker，部分成交 500
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_partial() {
         run_spot(OrderAction::Bid, 500, OrderType::Ioc, 2000, PRICE, 0, 500);
     }
 
+    // 对应 Java shouldProcessFees_BidGtcMakerPartial_AskIocTaker：BID maker 挂 500，ASK IOC taker 量 100 < maker，maker 被部分吃掉
     #[test]
     fn bid_gtc_maker_partial_ask_ioc_taker() {
         run_spot(OrderAction::Bid, 500, OrderType::Ioc, 100, PRICE, 0, 100);
     }
 
+    // 对应 Java shouldProcessFees_BidGtcMaker_AskIocTaker_FullyMatch：BID maker 与 ASK IOC taker 量相同，完全成交
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_fully_match() {
         run_spot(OrderAction::Bid, 500, OrderType::Ioc, 500, PRICE, 0, 500);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMaker_BidIocTakerPartial：ASK maker 挂 100，BID IOC taker 量 500，部分成交 100
     #[test]
     fn ask_gtc_maker_bid_ioc_taker_partial() {
         run_spot(OrderAction::Ask, 100, OrderType::Ioc, 500, PRICE, RESERVE, 100);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidIocTaker：ASK maker 挂 500，BID IOC taker 量 100，maker 被部分吃掉
     #[test]
     fn ask_gtc_maker_partial_bid_ioc_taker() {
         run_spot(OrderAction::Ask, 500, OrderType::Ioc, 100, PRICE, RESERVE, 100);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidGtcTaker：ASK maker 挂 500，BID GTC taker 量 100，maker 被部分吃掉后仍挂剩余
     #[test]
     fn ask_gtc_maker_partial_bid_gtc_taker() {
         run_spot(OrderAction::Ask, 500, OrderType::Gtc, 100, PRICE, RESERVE, 100);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMaker_BidGtcTakerPartial：ASK maker 挂 100，BID GTC taker 量 500，成交 100 后 taker 剩余转为挂单
     #[test]
     fn ask_gtc_maker_bid_gtc_taker_partial() {
         run_spot(OrderAction::Ask, 100, OrderType::Gtc, 500, PRICE, RESERVE, 100);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidFokTaker：ASK maker 挂 500，BID FOK_BUDGET taker 量 1 全额成交
     #[test]
     fn ask_gtc_maker_partial_bid_fok_budget_taker() {
         run_spot(OrderAction::Ask, 500, OrderType::FokBudget, 1, PRICE, PRICE, 1);
     }
 
+    // 对应 Java shouldNotProcessFees_AskGtcMakerPartial_BidFokTaker：FOK_BUDGET 预算不足以整单成交，整单被拒，双方均不收手续费
     #[test]
     fn should_not_process_fees_ask_gtc_maker_partial_bid_fok_taker() {
         run_spot(OrderAction::Ask, 500, OrderType::FokBudget, 10, PRICE, PRICE, 0);
     }
+    // Rust 侧独立校验：fee_pool 的结果应与 Java 手续费公式（price*size*step*fee/scale）分别对 maker/taker 计算后求和一致；Java 无直接对应用例
     #[test]
     fn fee_oracle_matches_java_independent_formula() {
         for filled in [1i64, 30, 100] {

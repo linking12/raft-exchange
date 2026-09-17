@@ -1,4 +1,7 @@
 #[cfg(test)]
+// 翻译自 Java `ITFeeAuditRegression`
+// 锁定 audit 报告 H1/H2 两处 fee 多扣 bug 的回归测试：H1 动态费率强平 fee 被 takerSize 倍放大；
+// H2 FOK_BUDGET 实际成交量低于预算时仍按预算估算 taker fee，导致差额蒸发
 mod tests {
     use std::collections::BTreeMap;
 
@@ -17,7 +20,7 @@ mod tests {
 
     fn assert_conserved(api: &ExchangeApi) {
         let tcb = api.total_balance();
-        assert!(tcb.is_global_zero(), "全局守恒被打破: {:?}", tcb.global_balances_sum());
+        assert!(tcb.is_global_zero(), "Global conservation broken: {:?}", tcb.global_balances_sum());
     }
 
     fn seed_user(api: &mut ExchangeApi, uid: i64, currency: i32, amount: i64, txid: i64) {
@@ -50,6 +53,7 @@ mod tests {
         })
     }
 
+    // 对应 Java h1_liquidationFeeDynamicRate_notAmplifiedByTakerSize：验证动态费率下强平手续费不会被 taker 成交量倍数放大
     #[test]
     fn h1_liquidation_fee_dynamic_rate_not_amplified_by_taker_size() {
         const BASE_ID: i32 = 999;
@@ -98,11 +102,12 @@ mod tests {
 
         let expected_final = 200_000i64 - 500 + 1030 - 1011 - 1011;
 
-        assert!(api.user_position(UID_1, SYM).is_none(), "loser 持仓应被全平");
-        assert_eq!(api.user_account(UID_1, USD), expected_final, "强平 fee 不应被 takerSize 倍放大");
+        assert!(api.user_position(UID_1, SYM).is_none(), "Loser position should be fully closed");
+        assert_eq!(api.user_account(UID_1, USD), expected_final, "Liquidation fee should not be amplified by takerSize");
         assert_conserved(&api);
     }
 
+    // 对应 Java h2_fokBudgetActualMatchedBelowBudget_refundsFeeDelta：验证 FOK_BUDGET 实际成交量低于预算时按实际成交均价算 fee，差额不蒸发
     #[test]
     fn h2_fok_budget_actual_matched_below_budget_refunds_fee_delta() {
         const BASE_ID: i32 = 998;
@@ -165,9 +170,9 @@ mod tests {
         let expected_paid = 1_200i64 + 12;
         let expected_accounts = user_quote_deposit - expected_paid;
 
-        assert_eq!(api.user_locked(UID_1, USD), 0, "FOK_BUDGET 全成后 exchangeLocked 必须归零");
-        assert_eq!(api.user_account(UID_1, USD), expected_accounts, "用户实付按成交均价算 fee，不按 budget 估算");
-        assert_eq!(api.user_account(UID_1, BASE_ID), taker_size, "base 收到 takerSize");
+        assert_eq!(api.user_locked(UID_1, USD), 0, "exchangeLocked must be zero after FOK_BUDGET fully fills");
+        assert_eq!(api.user_account(UID_1, USD), expected_accounts, "User's actual payment should be fee based on average fill price, not estimated from budget");
+        assert_eq!(api.user_account(UID_1, BASE_ID), taker_size, "Base account should receive takerSize");
         assert_conserved(&api);
     }
 }

@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITExtraMarginIntegration`
+// 验证逐仓/全仓追加保证金（extra margin）的记账、平仓退还、以及强平预警场景下的保证金/清算价/保证金率联动。
 mod tests {
     use std::collections::BTreeMap;
 
@@ -141,10 +143,11 @@ mod tests {
                     total += pos.extra_margin;
                 }
             }
-            assert_eq!(total, 0, "期货全局守恒被打破：currency={cur} total={total}");
+            assert_eq!(total, 0, "futures global conservation broken: currency={cur} total={total}");
         }
     }
 
+    // 对应 Java testExtraMarin4Cross：全仓下追加保证金应正确记入账户余额
     #[test]
     fn extra_margin_cross_credits_account() {
         let deposit1 = 2_000i64;
@@ -172,6 +175,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testExtraMarin4Isolated：逐仓追加保证金要求存在匹配仓位，仓位不存在/模式不匹配时报错
     #[test]
     fn extra_margin_isolated_requires_matching_position() {
         let deposit1 = 2_000i64;
@@ -213,10 +217,11 @@ mod tests {
 
         assert_eq!(api.margin_adjustment(adjust), CommandResultCode::Success);
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().extra_margin, deposit2);
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit1 - deposit2, "追加后 account 减 deposit2");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit1 - deposit2, "after topping up, account should be reduced by deposit2");
         assert_conserved(&api);
     }
 
+    // 对应 Java testIsolatedClosePosition：逐仓平仓后应退还 extra_margin
     #[test]
     fn isolated_close_position_refunds_extra_margin() {
         let deposit = 1_000i64;
@@ -257,13 +262,14 @@ mod tests {
         assert_eq!(place(&mut api, 1007, UID_1, SYMBOL_ID, price2, 1, OrderAction::Ask, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1008, UID_2, SYMBOL_ID, price2, 1, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
 
-        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "平仓后仓位拆除，extra_margin 退回");
+        assert!(api.user_position(UID_1, SYMBOL_ID).is_none(), "position should be closed out and extra_margin refunded");
         let expected = deposit + deposit2 + price2 - price1 - 2 * fee - deposit2;
         assert_eq!(api.user_account(UID_1, QUOTE_ID), expected);
         assert_eq!(expected, 1_480);
         assert_conserved(&api);
     }
 
+    // 对应 Java tesMultipleExtraMargin：同一用户多个逐仓仓位的 extra_margin 应相互独立
     #[test]
     fn multiple_extra_margin_are_independent_per_position() {
         let deposit = 10_000i64;
@@ -325,9 +331,10 @@ mod tests {
             .positions
             .into_iter()
             .find(|p| p.symbol == symbol)
-            .expect("仓位报表记录应存在")
+            .expect("position report entry should exist")
     }
 
+    // 对应 Java testInactiveUser：挂起（inactive）用户不允许追加保证金
     #[test]
     fn inactive_user_cannot_adjust_margin() {
         let deposit = 10_000i64;
@@ -341,7 +348,7 @@ mod tests {
 
         assert_eq!(api.add_user(UID_1), CommandResultCode::Success);
         assert_eq!(api.suspend_user(UID_1), CommandResultCode::Success);
-        assert!(api.ups().get(UID_1).is_none(), "挂起后从注册表移除");
+        assert!(api.ups().get(UID_1).is_none(), "user should be removed from the registry after suspension");
 
         let adjust = MarginAdjustmentRequest {
             uid: UID_1,
@@ -359,6 +366,7 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testIsolatedMarginLiquidationWarning：逐仓强平预警不应改动账户/仓位，追加保证金足够时应推高清算价距离
     #[test]
     fn isolated_margin_liquidation_warning() {
         let deposit = 10_000i64;
@@ -380,8 +388,8 @@ mod tests {
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, 9_950), CommandResultCode::Success);
-        assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee, "预警不改账户");
-        assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1, "预警不平仓");
+        assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee, "warning must not change the account");
+        assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1, "warning must not close the position");
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().extra_margin, 0);
         {
             let p = pos_view(&api, UID_1, BTC_SYM);
@@ -414,6 +422,7 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testIsolatedMarginLiquidationWarning2：逐仓预警后追加保证金不足时仍不应触发强平
     #[test]
     fn isolated_margin_liquidation_warning_insufficient_topup() {
         let deposit = 10_000i64;
@@ -453,12 +462,13 @@ mod tests {
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee - extra);
 
         assert_eq!(api.set_mark_price(BTC_SYM, 9_950), CommandResultCode::Success);
-        assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1, "补 7 仍不足，不强平");
+        assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1, "topping up by 7 is still insufficient, must not liquidate");
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().extra_margin, extra);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - fee - extra);
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testCrossMarginLiquidationWarning：全仓强平预警不触发强平，追加保证金后清算价/保证金率应相应改善
     #[test]
     fn cross_margin_liquidation_warning() {
         let deposit = 10_000i64;
@@ -490,11 +500,11 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, 9_000), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(ETH_SYM, 23_660), CommandResultCode::Success);
-        assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "预警不强平");
+        assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1), "warning must not liquidate");
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_840);
         assert_eq!(pos_view(&api, UID_1, ETH_SYM).unrealized_pnl, -8_660, "ETH SHORT@15000 mark23660");
-        assert_eq!(pos_view(&api, UID_1, ETH_SYM).liquidation_price, 23_677, "cross LP");
+        assert_eq!(pos_view(&api, UID_1, ETH_SYM).liquidation_price, 23_677, "cross liquidation price");
         assert_eq!(pos_view(&api, UID_1, ETH_SYM).margin_ratio_scale_k, 655, "cross margin ratio");
         assert!(api.total_balance().is_global_zero());
 
@@ -513,6 +523,7 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testCrossMarginLiquidationWarning2：全仓预警下连续两次追加保证金，验证每次清算价/保证金率的更新
     #[test]
     fn cross_margin_liquidation_warning_insufficient_topup() {
         let deposit = 10_000i64;
@@ -544,8 +555,8 @@ mod tests {
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(pos_view(&api, UID_1, ETH_SYM).unrealized_pnl, -8_660);
-        assert_eq!(pos_view(&api, UID_1, ETH_SYM).liquidation_price, 23_677, "cross LP 首警");
-        assert_eq!(pos_view(&api, UID_1, ETH_SYM).margin_ratio_scale_k, 655, "cross margin ratio 首警");
+        assert_eq!(pos_view(&api, UID_1, ETH_SYM).liquidation_price, 23_677, "cross liquidation price, first warning");
+        assert_eq!(pos_view(&api, UID_1, ETH_SYM).margin_ratio_scale_k, 655, "cross margin ratio, first warning");
         assert!(api.total_balance().is_global_zero());
 
         assert_eq!(
@@ -560,11 +571,12 @@ mod tests {
         assert_eq!(api.user_position(UID_1, BTC_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_position(UID_1, ETH_SYM).map(|p| p.open_volume), Some(1));
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_852);
-        assert_eq!(pos_view(&api, UID_1, ETH_SYM).liquidation_price, 23_689, "cross LP 二警");
-        assert_eq!(pos_view(&api, UID_1, ETH_SYM).margin_ratio_scale_k, 614, "cross margin ratio 二警");
+        assert_eq!(pos_view(&api, UID_1, ETH_SYM).liquidation_price, 23_689, "cross liquidation price, second warning");
+        assert_eq!(pos_view(&api, UID_1, ETH_SYM).margin_ratio_scale_k, 614, "cross margin ratio, second warning");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testIsolatedMarginLiquidation2：逐仓双腿同时被强平后应各自退还 extra_margin
     #[test]
     fn isolated_margin_liquidation_both_legs() {
         let deposit = 10_000i64;
@@ -611,8 +623,8 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(BTC_SYM, 9_000), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(ETH_SYM, 18_000), CommandResultCode::Success);
-        assert!(api.user_position(UID_1, BTC_SYM).is_none(), "BTC 逐仓腿应被全平");
-        assert!(api.user_position(UID_1, ETH_SYM).is_none(), "ETH 逐仓腿应被全平");
+        assert!(api.user_position(UID_1, BTC_SYM).is_none(), "BTC isolated leg should be fully liquidated");
+        assert!(api.user_position(UID_1, ETH_SYM).is_none(), "ETH isolated leg should be fully liquidated");
         assert!(api.total_balance().is_global_zero());
     }
 }

@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITExchangeCoreADL`
+// 验证强平多步级联(FORCE→IF→ADL)：亏损方被强平后先尝试保险基金(IF)接管，IF资金不足时再触发自动减仓(ADL)减仓盈利对手方，全程校验资金守恒与事件流顺序。
 mod tests {
     use std::collections::BTreeMap;
 
@@ -81,9 +83,10 @@ mod tests {
 
     fn assert_conserved(api: &ExchangeApi) {
         let tcb = api.total_balance();
-        assert!(tcb.is_global_zero(), "全局守恒被打破: {:?}", tcb.global_balances_sum());
+        assert!(tcb.is_global_zero(), "Global balance conservation broken: {:?}", tcb.global_balances_sum());
     }
 
+    // 对应 Java testADL：亏损方(LOSER)被强平且IF未接管时，触发ADL减仓盈利对手方(WINNER)，校验减仓量/资金结算/费用/事件流与全局守恒
     #[test]
     fn adl_deleverages_winning_counterparty() {
         let mut api = setup();
@@ -105,24 +108,25 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(SYM, 600), CommandResultCode::Success);
 
-        assert!(api.user_position(loser, SYM).is_none(), "LOSER 应被清仓");
-        assert_eq!(api.user_position(winner, SYM).unwrap().open_volume, 5, "WINNER 被 ADL 减仓 10→5");
-        assert_eq!(api.user_account(winner, QUOTE_ID), 50_000, "ADL 不动 winner 账户余额");
-        assert_eq!(api.user_position(winner, SYM).unwrap().profit, 0, "winner 剩余仓无浮盈残留");
-        assert_eq!(api.user_account(loser, QUOTE_ID), 4_960, "loser 亏逐仓保证金（破产价结算残留）");
-        assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_970, "maker 对手方净结算");
-        assert_eq!(api.fees(QUOTE_ID), 30, "开仓+减仓成交 taker 费入池");
-        assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 0, "无 liquidation_fee → IF 不增");
+        assert!(api.user_position(loser, SYM).is_none(), "LOSER should be fully closed");
+        assert_eq!(api.user_position(winner, SYM).unwrap().open_volume, 5, "WINNER reduced by ADL from 10 to 5");
+        assert_eq!(api.user_account(winner, QUOTE_ID), 50_000, "ADL does not touch winner's account balance");
+        assert_eq!(api.user_position(winner, SYM).unwrap().profit, 0, "no residual unrealized profit on winner's remaining position");
+        assert_eq!(api.user_account(loser, QUOTE_ID), 4_960, "loser loses isolated margin (residual after bankruptcy-price settlement)");
+        assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_970, "maker counterparty net settlement");
+        assert_eq!(api.fees(QUOTE_ID), 30, "taker fees from open + ADL-reduce fills go into the fee pool");
+        assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 0, "no liquidation_fee -> insurance fund balance unchanged");
         let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
             (FundEventType::UnlockPending, loser),
             (FundEventType::AdlPositionClose, winner),
             (FundEventType::AdlOriginClose, loser),
             (FundEventType::PnlSettlement, loser),
-        ], "ADL 级联事件流(类型+uid)");
+        ], "ADL cascade fund-event sequence (type + uid)");
         assert_conserved(&api);
     }
 
+    // 对应 Java testIFTakeover：保险基金(IF)有充足资金时接管亏损方持仓，不触发ADL，校验IF持仓/余额/费用与事件流
     #[test]
     fn if_takeover_absorbs_loser_position_no_adl() {
         let mut api = setup();
@@ -141,31 +145,32 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(SYM, 600), CommandResultCode::Success);
 
-        assert!(api.user_position(loser, SYM).is_none(), "LOSER 应清仓");
-        assert_eq!(api.user_position(maker, SYM).unwrap().open_volume, 5, "MAKER 无 ADL，保持 5");
+        assert!(api.user_position(loser, SYM).is_none(), "LOSER should be fully closed");
+        assert_eq!(api.user_position(maker, SYM).unwrap().open_volume, 5, "MAKER unaffected by ADL, stays at 5");
         assert_eq!(
             api.total_balance().if_open_interest_long.get(&SYM).copied().unwrap_or(0),
             5,
-            "IF 接管 LONG 5"
+            "IF takes over LONG position of 5"
         );
-        assert_eq!(api.user_account(loser, QUOTE_ID), 4_960, "loser 亏逐仓保证金");
-        assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_990, "maker 对手方净结算（无 ADL 减仓）");
-        assert_eq!(api.fees(QUOTE_ID), 10, "仅开仓成交费（无减仓）");
-        assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 40, "IF 承接持仓后 available 余额");
-        assert_eq!(api.insurance_fund().futures.values().map(|e| e.reserved).sum::<i64>(), 0, "IF reserved 无泄漏");
+        assert_eq!(api.user_account(loser, QUOTE_ID), 4_960, "loser loses isolated margin");
+        assert_eq!(api.user_account(maker, QUOTE_ID), 3_999_990, "maker counterparty net settlement (no ADL reduction)");
+        assert_eq!(api.fees(QUOTE_ID), 10, "only the opening trade fee (no reduce trade)");
+        assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 40, "insurance fund available balance after taking over the position");
+        assert_eq!(api.insurance_fund().futures.values().map(|e| e.reserved).sum::<i64>(), 0, "no leak in insurance fund reserved balance");
         let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
             (FundEventType::UnlockPending, loser),
             (FundEventType::IfPositionClose, loser),
             (FundEventType::PnlSettlement, loser),
-        ], "IF 接管级联事件流(类型+uid)");
+        ], "IF-takeover cascade fund-event sequence (type + uid)");
         assert!(
             !seq.iter().any(|(t, _)| *t == FundEventType::AdlPositionClose),
-            "IF 路径不应出现 ADL 事件"
+            "no ADL event should appear on the IF-takeover path"
         );
         assert_conserved(&api);
     }
 
+    // 对应 Java testLiquidationReopenAndReliquidate：同一用户经历两轮强平(IF接管)后重新开仓，校验第二轮强平仍能正常完成且IF reserved无残留泄漏
     #[test]
     fn liquidation_reopen_and_reliquidate_no_reserved_leak() {
         let mut api = setup();
@@ -181,17 +186,17 @@ mod tests {
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(SYM, 600), CommandResultCode::Success);
-        assert!(api.user_position(loser, SYM).is_none(), "第一次应清仓");
+        assert!(api.user_position(loser, SYM).is_none(), "first liquidation should fully close the position");
 
         assert_eq!(if_deposit(&mut api, 2 * 1_000, 100), CommandResultCode::Success);
         assert_eq!(place(&mut api, 3, loser, 700, 4, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 4, maker, 700, 4, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
         assert_eq!(api.set_mark_price(SYM, 400), CommandResultCode::Success);
-        assert!(api.user_position(loser, SYM).is_none(), "第二次也应清仓");
+        assert!(api.user_position(loser, SYM).is_none(), "second liquidation should also fully close the position");
 
         if let Some(entry) = api.insurance_fund().futures.get(&SYM) {
-            assert_eq!(entry.reserved, 0, "IF reserved 不得残留");
+            assert_eq!(entry.reserved, 0, "insurance fund reserved balance must not be left over");
         }
         assert_conserved(&api);
     }
