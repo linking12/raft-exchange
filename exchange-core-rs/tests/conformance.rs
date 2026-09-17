@@ -435,15 +435,18 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
         syms.dedup();
         for s in syms {
             // HEDGE 同 symbol 可有 LONG/SHORT 两腿:按方向名排序,两侧口径一致(单腿向量下为 no-op)。
-            let mut legs: Vec<(String, i64, i64)> = p
+            let mut legs: Vec<(String, i64, i64, i64, i64)> = p
                 .positions
                 .values()
                 .filter(|r| r.symbol == s && r.open_volume != 0)
-                .map(|r| (format!("{:?}", r.direction).to_uppercase(), r.open_volume, r.open_price_sum))
+                .map(|r| {
+                    (format!("{:?}", r.direction).to_uppercase(), r.open_volume, r.open_price_sum, r.open_init_margin_sum, r.extra_margin)
+                })
                 .collect();
             legs.sort();
-            for (dir, vol, sum) in legs {
-                out.push(format!("POS {uid} {s} {dir} {vol} {sum}"));
+            for (dir, vol, sum, im, em) in legs {
+                // 含初始保证金(受杠杆决定)与追加保证金,让 leverage/margin 在状态里可观测。
+                out.push(format!("POS {uid} {s} {dir} {vol} {sum} {im} {em}"));
             }
         }
     }

@@ -1,0 +1,28 @@
+#!events=off
+# CROSS 跨仓清算:uid1 用同一账户余额在 A/B 两个 symbol 各开 CROSS LONG10(共享保证金)。
+# 注:重级联(FORCE→ADL 跨双 symbol)下 Java exporter 的异步事件捕获不确定(偶发 ADL_ORIGIN_CLOSE 双计),
+#     故仅对拍确定性 STATE(cross 账户破产 -5000、A 被清算移除、B 保留、对手方 uid2 终态)—— 同 fuzz liq_* 口径。
+# A 暴跌(mark 1000→300)→ 账户级权益 = 余额 + A浮亏 + B浮盈 被击穿 → cross 清算(账户视角,非逐仓)。
+# 验证 CROSS 账户级维持保证金判定 + 清算级联在多仓下两侧一致(区别于 isolated 逐仓)。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10020 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+SYM_FUT id=10021 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+MARK sym=10020 price=1000
+MARK sym=10021 price=1000
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=500 txid=1
+BAL uid=2 cur=2 amount=10000000 txid=2
+# uid1 开两笔 CROSS 多头(A、B),uid2 做对手方
+PLACE_FUT oid=1 uid=2 sym=10020 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=10020 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=2 sym=10021 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=1 sym=10021 price=1000 size=10 action=BID margin=CROSS leverage=1
+# uid2 在两个 symbol 低位挂 BID 吸收清算卖单
+PLACE_FUT oid=5 uid=2 sym=10020 price=300 size=20 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=6 uid=2 sym=10021 price=300 size=20 action=BID margin=CROSS leverage=1
+ENABLE_LIQ
+# A 暴跌击穿 cross 账户权益
+MARK_AT sym=10020 price=300 ts=2000
+SCAN
