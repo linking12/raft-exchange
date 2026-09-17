@@ -1,0 +1,22 @@
+# HEDGE 腿隔离:uid1 双向持仓 LONG10 + SHORT10;再下一笔 ASK4(HEDGE 下 ASK → 归 SHORT 腿)。
+# 结果 SHORT 腿 10→14,LONG 腿原样 10 不受影响 —— 验证 create_positions_key 精确按方向落腿、加仓不误伤另一腿。
+# (注:DSL 无 reduce_only,HEDGE 下 ASK 是给 SHORT 腿加仓而非平 LONG;ONEWAY 的部分平仓见 futures_partial_close_reduce。)events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8003 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8003 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+USER uid=4
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+BAL uid=4 cur=2 amount=1000000 txid=4
+POS_MODE uid=1 hedge=1
+PLACE_FUT oid=1 uid=2 sym=8003 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=8003 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=3 uid=3 sym=8003 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=4 uid=1 sym=8003 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=5 uid=4 sym=8003 price=1000 size=4 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=6 uid=1 sym=8003 price=1000 size=4 action=ASK margin=ISOLATED leverage=1

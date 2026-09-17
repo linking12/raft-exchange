@@ -12,6 +12,7 @@ import exchange.core2.core.common.PositionMode;
 import exchange.core2.core.common.SymbolLoanSpecification;
 import exchange.core2.core.common.SymbolType;
 import exchange.core2.core.common.api.ApiAddUser;
+import exchange.core2.core.common.api.ApiAdjustMargin;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
@@ -260,6 +261,14 @@ public class ConformanceExporter {
                                 .transactionId(pl(kv, "txid", seq)).symbol(pi(kv, "sym"))
                                 .action("ASK".equals(kv.get("action")) ? OrderAction.ASK : OrderAction.BID)
                                 .fundingRate(pl(kv, "rate")).rateScaleK(pl(kv, "rateScaleK")).build()).join();
+                        break;
+                    case "MARGIN_ADJUST":
+                        rc = api.submitCommandAsync(ApiAdjustMargin.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid")).symbol(pi(kv, "sym"))
+                                .action("ASK".equals(kv.get("action")) ? OrderAction.ASK : OrderAction.BID)
+                                .currency(pi(kv, "sym"))
+                                .amount(pl(kv, "amount"))
+                                .marginMode("CROSS".equals(kv.get("margin")) ? MarginMode.CROSS : MarginMode.ISOLATED).build()).join();
                         break;
                     case "POS_MODE":
                         rc = api.submitCommandAsync(ApiAdjustPositionMode.builder()

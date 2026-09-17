@@ -1,0 +1,17 @@
+# 期货部分平仓(ONEWAY reduce):uid1 LONG10@1000,再下 ASK4@1100 平掉 4 手(不翻转)。
+# 部分平仓 PnL 递延进成本基准(不实现)——终态 LONG6,openPriceSum/profit 按引擎口径调整,账户不因部分平仓落袋。
+# 验证 close→(无 open)的 reduce 分支 + 递延 PnL 两侧一致(区别于 futures_position_flip 的 close+反手开)。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8004 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8004 price=1000
+USER uid=1
+USER uid=2
+USER uid=4
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=4 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=8004 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=8004 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=4 sym=8004 price=1100 size=4 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=1 sym=8004 price=1000 size=4 action=ASK margin=CROSS leverage=1

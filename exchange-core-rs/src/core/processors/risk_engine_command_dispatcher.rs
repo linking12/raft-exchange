@@ -346,12 +346,15 @@ impl RiskEngineCommandDispatcher {
         let price = cmd.price;
         for up in ups.users.values_mut() {
             // 该 symbol 上所有非空持仓 key（ONEWAY: symbol；HEDGE: ±symbol），先收集再改避免迭代中改容器。
-            let keys: Vec<i32> = up
+            let mut keys: Vec<i32> = up
                 .positions
                 .iter()
                 .filter(|(_, p)| p.symbol == symbol && p.open_volume != 0)
                 .map(|(&k, _)| k)
                 .collect();
+            // 对齐 Java processPositionRecord 的腿序：先 +symbol(LONG) 后 -symbol(SHORT)。
+            // BTreeMap 升序会把 -symbol 排前，降序即得 +symbol 优先（HEDGE 双腿结算事件快照才与 Java 一致）。
+            keys.sort_unstable_by(|a, b| b.cmp(a));
             for key in keys {
                 let (close_action, size) = {
                     let pos = &up.positions[&key];

@@ -1,0 +1,19 @@
+# 交割结算 × HEDGE 双腿:uid1 在交割 symbol 上同时持 LONG5 + SHORT5,SETTLE_PNL 整仓结算两腿。
+# 交割价 1200:LONG5(开@1000)PnL +1000、SHORT5(开@1000)PnL -1000 → uid1 净 0;uid2 SHORT5 -1000、uid3 LONG5 +1000。
+# 验证 delivery SETTLE_PNL 对 HEDGE 双腿都结算 + 移除,两侧 PNL_SETTLEMENT 事件/账户终态一致。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10010 kind=DELIVERY base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=10010 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+POS_MODE uid=1 hedge=1
+PLACE_FUT oid=1 uid=2 sym=10010 price=1000 size=5 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=10010 price=1000 size=5 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=3 uid=3 sym=10010 price=1000 size=5 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=4 uid=1 sym=10010 price=1000 size=5 action=ASK margin=ISOLATED leverage=1
+SETTLE_PNL sym=10010 price=1200 txid=1

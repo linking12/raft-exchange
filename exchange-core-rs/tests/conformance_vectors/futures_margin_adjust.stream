@@ -1,0 +1,18 @@
+# 期货追加保证金 + 平仓退还:ISOLATED LONG10 → MARGIN_ADJUST 追加 5000 保证金(account-5000, extra_margin+=) → 平仓退回。
+# 开:uid1 ISOLATED LONG10@1000。追加:MARGIN_ADJUST 5000(发 MARGIN_ADJUST 事件)。平:@1100 全平 → 退 extra_margin(MARGIN_REFUND)+ PnL+1000 结算 + 移除。
+# 终态 uid1 = 1000000(账户 -5000 追加后又 +5000 退回)+1000 PnL = 1001000。验证 MARGIN_ADJUST/MARGIN_REFUND/PNL_SETTLEMENT 事件链两侧一致。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8009 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8009 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=8009 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=8009 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+MARGIN_ADJUST uid=1 sym=8009 action=BID amount=5000 margin=ISOLATED txid=100
+PLACE_FUT oid=3 uid=3 sym=8009 price=1100 size=10 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=4 uid=1 sym=8009 price=1100 size=10 action=ASK margin=ISOLATED leverage=1

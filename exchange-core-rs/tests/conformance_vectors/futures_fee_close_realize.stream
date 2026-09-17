@@ -1,0 +1,19 @@
+# 期货固定费全周期:开仓收 taker/maker 费 → 平仓实现 PnL + 再收平仓 taker 费 + PnL 结算 + 移除。
+# taker=20 maker=10 fixed(feeScale=0,费=rate*size 与价无关)。
+# 开:uid1 taker BID10@1000 吃 uid2 maker ASK → uid1 LONG10(taker 费 200)、uid2 SHORT10(maker 费 100)。
+# 平:uid1 taker ASK10@1100 吃 uid3 maker BID → uid1 平 LONG10 实现 PnL+1000、收 taker 费 200;uid3 开 LONG10@1100 maker 费 100。
+# 验证 fee 桶累加(Σ600)+ 平仓 PnL 结算事件 + 账户口径,两侧一致。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8005 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=20 maker=10 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8005 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=8005 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=8005 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=3 sym=8005 price=1100 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=1 sym=8005 price=1100 size=10 action=ASK margin=CROSS leverage=1

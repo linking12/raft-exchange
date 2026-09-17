@@ -1,0 +1,19 @@
+# 期货单 taker 扫多 maker:uid1 BID30@1010 吃掉三档不同价的 ASK(uid2@1000/uid3@1005/uid4@1010)。
+# 一条 taker 命令产生 3 条 TRADE,逐 maker 各自结算保证金/开仓事件;验证多 maker 循环的事件与账户口径。
+# uid1 得 LONG30(三段不同价,open_price_sum=1000*10+1005*10+1010*10=30150)。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8002 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8002 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+USER uid=4
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+BAL uid=4 cur=2 amount=1000000 txid=4
+PLACE_FUT oid=1 uid=2 sym=8002 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=3 sym=8002 price=1005 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=4 sym=8002 price=1010 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=1 sym=8002 price=1010 size=30 action=BID margin=CROSS leverage=1

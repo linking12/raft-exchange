@@ -1,0 +1,17 @@
+# 期货持仓翻转:uid1 先开 LONG10@1000,再下 ASK20 → 平掉 LONG10(实现盈亏)+ 反手开 SHORT10。
+# 走 handleMatcherEventMargin 的 close→open 两步:UnlockPending / ClosePosition / PnlSettlement / OpenPosition 一条链。
+# uid3 挂 BID20@1100 提供对手方(maker 价 1100 → 平仓价 1100,LONG10 实现 PnL=(1100-1000)*10=+1000)。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8001 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8001 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=8001 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=8001 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=3 sym=8001 price=1100 size=20 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=1 sym=8001 price=1000 size=20 action=ASK margin=CROSS leverage=1
