@@ -800,6 +800,87 @@ mod tests {
         assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 150), 90);
     }
 
+    // ----------------------------------------------------------------
+    // 对拍 Java `LiquidationScannerTest`（破产价黄金值）。Java `createSpec` 不设 liquidation_fee
+    // → 这里恒 `liquidation_fee: 0`，其余入参与 Java 逐字对齐；CROSS 用例把 isolated 字段填垃圾值以证明被忽略。
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn java_bp_zero_margin() {
+        // LONG openVolume=1 openPriceSum=1000 initMargin=0 extraMargin=0；fixed takerFee=1。
+        // margin_base=0；max_loss=0-1*1=-1；numer=1000-(-1)=1001；ceil(1001/1)=1001。
+        let pos = long_position(1, 0, 1000, 0);
+        let spec = CoreSymbolSpecification { taker_fee: 1, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 1001);
+    }
+
+    #[test]
+    fn java_bp_negative_margin_fixed_fee() {
+        // LONG initMargin=-200 extraMargin=100 → margin_base=-100；takerFee=2；max_loss=-100-20=-120；
+        // numer=10000-(-120)=10120；ceil(10120/10)=1012。
+        let pos = long_position(10, -200, 10_000, 100);
+        let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 1012);
+    }
+
+    #[test]
+    fn java_bp_negative_open_price_sum() {
+        // SHORT openPriceSum=-4000 initMargin=250 extraMargin=50 → margin_base=300；takerFee=3；max_loss=300-15=285；
+        // sign=-1；numer=-4000-(-1)*285=-3715；ceil(-3715/5)=-743（可为负，实现不加正值检查）。
+        let pos = short_position(5, 250, -4_000, 50);
+        let spec = CoreSymbolSpecification { taker_fee: 3, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), -743);
+    }
+
+    #[test]
+    fn java_bp_zero_fee() {
+        // LONG initMargin=400 extraMargin=100 → margin_base=500；takerFee=0；max_loss=500；numer=9500；ceil(9500/10)=950。
+        let pos = long_position(10, 400, 10_000, 100);
+        let spec = CoreSymbolSpecification { taker_fee: 0, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 0), 950);
+    }
+
+    #[test]
+    fn java_bp_cross_fixed_fee_long_uses_allocated_margin_base() {
+        // CROSS LONG：忽略 isolated 垃圾字段，margin_base=alloc(480)；takerFee=2；max_loss=480-20=460；numer=9540；ceil/10=954。
+        let mut pos = long_position(10, 999_999, 10_000, 999_999);
+        pos.margin_mode = MarginMode::Cross;
+        let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 480), 954);
+    }
+
+    #[test]
+    fn java_bp_cross_fixed_fee_short_uses_allocated_margin_base() {
+        // CROSS SHORT：margin_base=alloc(300)；takerFee=3；max_loss=300-15=285；sign=-1；numer=4000+285=4285；ceil(4285/5)=857。
+        let mut pos = short_position(5, 999_999, 4_000, 999_999);
+        pos.margin_mode = MarginMode::Cross;
+        let spec = CoreSymbolSpecification { taker_fee: 3, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 300), 857);
+    }
+
+    #[test]
+    fn java_bp_cross_ratio_fee_long_uses_allocated_margin_base() {
+        // CROSS LONG 比例费：margin_base=alloc(600)；takerFee=1000 feeScaleK=1e6；numer=9600-600=9000；
+        // denom=8*(1e6-1000)=7_992_000；ceil(9000*1e6/7_992_000)=1127。
+        let mut pos = long_position(8, 999_999, 9_600, 999_999);
+        pos.margin_mode = MarginMode::Cross;
+        let spec = CoreSymbolSpecification { taker_fee: 1_000, liquidation_fee: 0, fee_scale_k: 1_000_000, ..Default::default() };
+        assert_eq!(pos.calculate_bankruptcy_price(&spec, |_| 600), 1127);
+    }
+
+    #[test]
+    fn java_bp_cross_varies_with_allocation_monotonic() {
+        // CROSS LONG：alloc 越大 → 多头破产价越低（alloc 真正驱动结果）。
+        let mut pos = long_position(10, 999_999, 10_000, 999_999);
+        pos.margin_mode = MarginMode::Cross;
+        let spec = CoreSymbolSpecification { taker_fee: 2, liquidation_fee: 0, fee_scale_k: 0, ..Default::default() };
+        let low_margin = pos.calculate_bankruptcy_price(&spec, |_| 300); // max_loss=280 numer=9720 → 972
+        let high_margin = pos.calculate_bankruptcy_price(&spec, |_| 800); // max_loss=780 numer=9220 → 922
+        assert_eq!(low_margin, 972);
+        assert_eq!(high_margin, 922);
+        assert!(high_margin < low_margin, "marginBase 越大，多头破产价越低");
+    }
+
     #[test]
     fn default_is_all_zero_empty() {
         let r = SymbolPositionRecord::default();
