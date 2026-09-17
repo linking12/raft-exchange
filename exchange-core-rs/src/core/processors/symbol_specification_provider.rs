@@ -86,8 +86,8 @@ impl ChronicleMarshallable for SymbolSpecificationProvider {
     /// 后接 `currencySpecificationProvider`(currencies, IntObject)。Rust 把 Java 两个 provider 合并进本类,
     /// 故一并读写;`spot_pair_index` 派生态读后重建(对齐 `rebuildSpotPairIndex`)。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
-        w.write_int_keyed_map(&self.symbols.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
-        w.write_int_keyed_map(&self.currencies.iter().map(|(&k, v)| (k, v)).collect::<Vec<_>>(), |vw, v| v.chronicle_write(vw));
+        w.write_int_keyed_map(&self.symbols, |vw, v| v.chronicle_write(vw));
+        w.write_int_keyed_map(&self.currencies, |vw, v| v.chronicle_write(vw));
     }
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let symbols = to_btree_i32(r.read_int_keyed_map(CoreSymbolSpecification::chronicle_read)?);

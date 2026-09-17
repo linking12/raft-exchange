@@ -355,20 +355,20 @@ impl ChronicleMarshallable for UserProfile {
         w.write_i64(self.uid);
         w.write_u8(self.user_status.code() as u8);
         self.processed_tx_ids.chronicle_write(w);
-        w.write_int_long_map(&self.accounts.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
-        w.write_int_long_map(&self.exchange_locked.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.accounts);
+        w.write_int_long_map(&self.exchange_locked);
         w.write_u8(self.position_mode.code() as u8);
         w.write_int_keyed_map(
-            &self.positions.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            &self.positions,
             |vw, v| v.chronicle_write(vw),
         );
         w.write_long_keyed_map(
-            &self.isolated_loans.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            &self.isolated_loans,
             |vw, v| v.chronicle_write(vw),
         );
-        w.write_int_long_map(&self.cross_loan_collateral.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        w.write_int_long_map(&self.cross_loan_collateral);
         w.write_long_keyed_map(
-            &self.cross_loans.iter().map(|(&k, v)| (k, v.clone())).collect::<Vec<_>>(),
+            &self.cross_loans,
             |vw, v| v.chronicle_write(vw),
         );
     }

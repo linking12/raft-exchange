@@ -8,6 +8,7 @@ pub mod internaltransfer_command_processor;
 pub mod liquidation;
 pub mod loan;
 pub mod loanratepricing_command_processor;
+pub mod binary_commands_processor;
 pub mod matching_engine_router;
 pub mod risk_engine;
 pub mod risk_engine_command_dispatcher;
