@@ -1,0 +1,14 @@
+# 交割亏损方向:多头在交割价低于开仓价时结算 → 实现负 PnL(账户减少)。
+# uid1 LONG10@1000,uid2 SHORT10@1000;SETTLE_PNL @800 → 多头 -2000、空头 +2000(零和)。
+# 补 delivery_settle(多头盈利)的对侧:验证交割负 PnL 结算 + 账户扣减两侧一致。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10051 kind=DELIVERY base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+MARK sym=10051 price=1000
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+PLACE_FUT oid=1 uid=1 sym=10051 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=2 sym=10051 price=1000 size=10 action=ASK margin=CROSS leverage=1
+SETTLE_PNL sym=10051 price=800 txid=1

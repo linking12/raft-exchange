@@ -1,0 +1,15 @@
+# 交割 × ISOLATED 追加保证金退还:uid1 ISOLATED LONG10@1000 → 追加 5000 保证金 → 交割 @1200。
+# SETTLE_PNL 平仓时:退还 extra_margin(MARGIN_REFUND)+ 实现 PnL(+2000)+ 移除仓位。
+# 验证交割的 refundExtraMargin 路径(delivery_settle 用 CROSS 无 extra_margin,此处补 ISOLATED+追加的退还链)。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10050 kind=DELIVERY base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+MARK sym=10050 price=1000
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+PLACE_FUT oid=1 uid=2 sym=10050 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=10050 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+MARGIN_ADJUST uid=1 sym=10050 action=BID amount=5000 margin=ISOLATED txid=100
+SETTLE_PNL sym=10050 price=1200 txid=1
