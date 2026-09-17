@@ -1,0 +1,21 @@
+# 现货 isolated 借贷强平:抵押币(base)暴跌使 LTV 越过 liqLtv → SCAN 尾部 checkLoans 检出 → 自提 LOAN_FORCE_LIQUIDATE
+# 卖抵押还债。需 LP 在盘口挂 BID 吸收强平卖单(否则无流动性成交)。事件级对拍 LOAN_LIQUIDATED 等结算类。
+# 借款人 uid=2 与借贷池 shard 0 同片(偶数 uid,见 loan_isolated_cycle 的分片本地性说明)。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=500 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 initialLtv=6000 liqLtv=8000 marginCallLtv=7500 maxAmount=0 maxTermDays=0
+MARK sym=500 price=1000
+USER uid=2
+USER uid=4
+BAL uid=2 cur=1 amount=100 txid=1
+BAL uid=4 cur=2 amount=1000000 txid=2
+# quote 借贷池注资(shard 0),供本金放出
+POOL_DEPOSIT cur=2 amount=1000000 txid=9
+# 开贷:抵押 100 base,借 50000 quote → LTV=50000/(100*1000)=5000bps < initialLtv 6000
+LOAN_CREATE uid=2 sym=500 loanId=9001 collateral=100 principal=50000 rateMode=0 ts=0 txid=10
+# LP 挂 BID 吸收后续强平卖单(买 100 base @1000)
+PLACE oid=8000 uid=4 sym=500 price=1000 size=100 action=BID type=GTC reserve=1000
+ENABLE_LIQ
+# 抵押暴跌:mark 1000→580 → LTV=50000/(100*580)=8620bps > liqLtv 8000 → 触发强平
+MARK_AT sym=500 price=580 ts=2000
+SCAN

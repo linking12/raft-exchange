@@ -3,7 +3,7 @@
 //!
 //! Rust `ExchangeApi` 无 `ApiSettleFundingFees`/`ApiSettlePNL` 专属封装，改用通用 `submit(OrderCommand)`：
 //!   - SETTLE_FUNDINGFEES：`{command, symbol, action=Bid/Ask, price=fundingRate, size=rateScaleK, order_id=txid}`
-//!     （payer = 方向与 action 相同的一侧；见 `funding_fee_command_processor.rs`）。**直接提交**，其零和
+//!     （payer = 方向与 action 相同的一侧；见 `fundingfee_command_processor.rs`）。**直接提交**，其零和
 //!     结算落进逐用户 `position.profit`（活仓）/`accounts`（ghost），可直接断言。
 //!   - SETTLE_PNL：`{command, symbol=delivery, price=settlePrice}`（交割整仓平掉该 symbol 所有持仓、结算
 //!     盈亏进 accounts、移除仓位）。

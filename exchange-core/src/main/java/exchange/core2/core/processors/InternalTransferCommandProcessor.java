@@ -20,15 +20,15 @@ import exchange.core2.core.orderbook.OrderBookEventsHelper;
  * <p>唯一会失败的 from-NSF 压在 R1、只依赖本地状态；扣款按 seq 定序，无双花、无需冻结。
  * 守恒中性（accounts 桶内 from−x/to+x，不碰 adjustments），幂等锚在 from。
  */
-public final class InternalTransferProcessor extends TwoStepCommandProcessor {
+public final class InternalTransferCommandProcessor extends TwoStepCommandProcessor {
 
     /** R1/R2 实例（RiskEngine 每 shard 一份）。 */
-    public InternalTransferProcessor(RiskEngine riskEngine) {
+    public InternalTransferCommandProcessor(RiskEngine riskEngine) {
         super(null, riskEngine);
     }
 
     /** ME-stage 实例（MatchingEngineRouter 持）。 */
-    public InternalTransferProcessor(OrderBookEventsHelper eventsHelper) {
+    public InternalTransferCommandProcessor(OrderBookEventsHelper eventsHelper) {
         super(eventsHelper, null);
     }
 

@@ -66,8 +66,8 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
     private final ADLCommandProcessor adlProcessor;
     private final FundingFeeCommandProcessor fundingFeeProcessor;
     private final ResetFeeCommandProcessor resetFeeProcessor;
-    private final InternalTransferProcessor internalTransferProcessor;
-    private final LoanRatePricingProcessor loanRatePricingProcessor;
+    private final InternalTransferCommandProcessor internalTransferCommandProcessor;
+    private final LoanRatePricingCommandProcessor loanRatePricingCommandProcessor;
 
     // sharding by symbolId
     private final int shardId;
@@ -121,8 +121,8 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
         this.adlProcessor = new ADLCommandProcessor(eventsHelper);
         this.fundingFeeProcessor = new FundingFeeCommandProcessor(eventsHelper);
         this.resetFeeProcessor = new ResetFeeCommandProcessor(eventsHelper);
-        this.internalTransferProcessor = new InternalTransferProcessor(eventsHelper);
-        this.loanRatePricingProcessor = new LoanRatePricingProcessor(eventsHelper);
+        this.internalTransferCommandProcessor = new InternalTransferCommandProcessor(eventsHelper);
+        this.loanRatePricingCommandProcessor = new LoanRatePricingCommandProcessor(eventsHelper);
         final OrdersProcessingConfiguration ordersProcCfg = exchangeCfg.getOrdersProcessingCfg();
         this.cfgMarginTradingEnabled = ordersProcCfg.getMarginTradingMode() == OrdersProcessingConfiguration.MarginTradingMode.MARGIN_TRADING_ENABLED;
         this.reportsQueriesConfiguration = exchangeCfg.getReportsQueriesCfg();
@@ -198,10 +198,10 @@ public final class MatchingEngineRouter implements WriteBytesMarshallable {
             cmd.resultCode = resetFeeProcessor.process(cmd);
 
         } else if (command == OrderCommandType.INTERNAL_TRANSFER) {
-            cmd.resultCode = internalTransferProcessor.process(cmd);
+            cmd.resultCode = internalTransferCommandProcessor.process(cmd);
 
         } else if (command == OrderCommandType.REPRICE_LOAN_RATES) {
-            cmd.resultCode = loanRatePricingProcessor.process(cmd);
+            cmd.resultCode = loanRatePricingCommandProcessor.process(cmd);
 
         } else if (command == OrderCommandType.MOVE_ORDER
                 || command == OrderCommandType.CANCEL_ORDER

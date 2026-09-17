@@ -20,7 +20,7 @@ import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
-import exchange.core2.core.processors.LoanRatePricingProcessor;
+import exchange.core2.core.processors.LoanRatePricingCommandProcessor;
 import exchange.core2.core.processors.RiskEngine;
 import exchange.core2.core.processors.loan.LoanService;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
  * REPRICE_LOAN_RATES 两步处理器（loan.md §13.2）：R1 key 编码收池子 → merge 跨 shard 求全局利用率 → R2 过曲线写利率。
  * 默认曲线 base=200/kink=8000/slope1=400/slope2=6000。
  */
-class LoanRatePricingProcessorTest {
+class LoanRatePricingCommandProcessorTest {
 
     private static final int USDT = 2;
     private static final int BTC = 5;
@@ -57,7 +57,7 @@ class LoanRatePricingProcessorTest {
         when(engine.getShardId()).thenReturn(0);
 
         OrderCommand cmd = new OrderCommand(2);
-        new LoanRatePricingProcessor(engine).collectInput(cmd);
+        new LoanRatePricingCommandProcessor(engine).collectInput(cmd);
 
         assertEquals(300L, cmd.commonByShard[0].amounts.get(USDT), "borrowed → key=currency");
         assertEquals(700L, cmd.commonByShard[0].amounts.get(~USDT), "available → key=~currency");
@@ -74,7 +74,7 @@ class LoanRatePricingProcessorTest {
         cmd.commonByShard[1].amounts.put(~USDT, 900L);
 
         cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        new LoanRatePricingProcessor(freshEventsHelper()).process(cmd);
+        new LoanRatePricingCommandProcessor(freshEventsHelper()).process(cmd);
 
         MatcherTradeEvent ev = cmd.matcherEvent;
         assertEquals(MatcherEventType.LOAN_REPRICE_EVENT, ev.eventType);
@@ -86,7 +86,7 @@ class LoanRatePricingProcessorTest {
         LoanService svc = new LoanService();
         RiskEngine engine = mock(RiskEngine.class);
         when(engine.getLoanService()).thenReturn(svc);
-        new LoanRatePricingProcessor(engine).applyEvent(cmd, ev, null, null);
+        new LoanRatePricingCommandProcessor(engine).applyEvent(cmd, ev, null, null);
         assertEquals(300L, svc.getFloatingRate().getCurrentRateBps().get(USDT));
     }
 
@@ -96,13 +96,13 @@ class LoanRatePricingProcessorTest {
         OrderCommand cmd = new OrderCommand(1);
         cmd.commonByShard[0].amounts.put(~USDT, 1000L);
         cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        new LoanRatePricingProcessor(freshEventsHelper()).process(cmd);
+        new LoanRatePricingCommandProcessor(freshEventsHelper()).process(cmd);
 
         assertEquals(0L, cmd.matcherEvent.size, "util=0");
         LoanService svc = new LoanService();
         RiskEngine engine = mock(RiskEngine.class);
         when(engine.getLoanService()).thenReturn(svc);
-        new LoanRatePricingProcessor(engine).applyEvent(cmd, cmd.matcherEvent, null, null);
+        new LoanRatePricingCommandProcessor(engine).applyEvent(cmd, cmd.matcherEvent, null, null);
         assertEquals(200L, svc.getFloatingRate().getCurrentRateBps().get(USDT), "空借出 → 基础利率");
     }
 
@@ -110,7 +110,7 @@ class LoanRatePricingProcessorTest {
     void merge_emptyPool_noEvents() {
         OrderCommand cmd = new OrderCommand(2);
         cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        new LoanRatePricingProcessor(freshEventsHelper()).process(cmd);
+        new LoanRatePricingCommandProcessor(freshEventsHelper()).process(cmd);
         assertNull(cmd.matcherEvent, "无池子 → 无 reprice 事件");
     }
 
@@ -124,7 +124,7 @@ class LoanRatePricingProcessorTest {
         cmd.commonByShard[0].amounts.put(BTC, 100L);   // borrowed
         cmd.commonByShard[0].amounts.put(~BTC, 100L);  // available → total 200, util 5000
         cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        new LoanRatePricingProcessor(freshEventsHelper()).process(cmd);
+        new LoanRatePricingCommandProcessor(freshEventsHelper()).process(cmd);
 
         MatcherTradeEvent first = cmd.matcherEvent;
         assertEquals(MatcherEventType.LOAN_REPRICE_EVENT, first.eventType);
@@ -141,7 +141,7 @@ class LoanRatePricingProcessorTest {
         LoanService svc = new LoanService();
         RiskEngine engine = mock(RiskEngine.class);
         when(engine.getLoanService()).thenReturn(svc);
-        LoanRatePricingProcessor r2 = new LoanRatePricingProcessor(engine);
+        LoanRatePricingCommandProcessor r2 = new LoanRatePricingCommandProcessor(engine);
         r2.applyEvent(cmd, first, null, null);
         r2.applyEvent(cmd, second, null, null);
         assertEquals(350L, svc.getFloatingRate().getCurrentRateBps().get(USDT));
@@ -154,7 +154,7 @@ class LoanRatePricingProcessorTest {
         OrderCommand cmd = new OrderCommand(1);
         cmd.commonByShard[0].amounts.put(USDT, 500L); // 仅 borrowed，available 缺席
         cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
-        new LoanRatePricingProcessor(freshEventsHelper()).process(cmd);
+        new LoanRatePricingCommandProcessor(freshEventsHelper()).process(cmd);
 
         MatcherTradeEvent ev = cmd.matcherEvent;
         assertEquals(10000L, ev.size, "满借 → util=100%");
@@ -164,7 +164,7 @@ class LoanRatePricingProcessorTest {
         LoanService svc = new LoanService();
         RiskEngine engine = mock(RiskEngine.class);
         when(engine.getLoanService()).thenReturn(svc);
-        new LoanRatePricingProcessor(engine).applyEvent(cmd, ev, null, null);
+        new LoanRatePricingCommandProcessor(engine).applyEvent(cmd, ev, null, null);
         assertEquals(6600L, svc.getFloatingRate().getCurrentRateBps().get(USDT), "满利用率封顶利率");
     }
 
@@ -180,7 +180,7 @@ class LoanRatePricingProcessorTest {
         when(engine.getShardId()).thenReturn(0);
 
         OrderCommand cmd = new OrderCommand(1);
-        new LoanRatePricingProcessor(engine).collectInput(cmd);
+        new LoanRatePricingCommandProcessor(engine).collectInput(cmd);
 
         IntLongHashMap amounts = cmd.commonByShard[0].amounts;
         assertFalse(amounts.containsKey(USDT), "borrowed 0 不写 key=currency");
@@ -195,7 +195,7 @@ class LoanRatePricingProcessorTest {
         when(engine.getLoanService()).thenReturn(svc);
         MatcherTradeEvent ev = new MatcherTradeEvent();
         ev.eventType = MatcherEventType.TRADE;
-        new LoanRatePricingProcessor(engine).applyEvent(new OrderCommand(1), ev, null, null);
+        new LoanRatePricingCommandProcessor(engine).applyEvent(new OrderCommand(1), ev, null, null);
         assertEquals(0L, svc.getFloatingRate().getCurrentRateBps().get(USDT), "非 reprice 事件不写利率");
     }
 }

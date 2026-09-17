@@ -1,15 +1,99 @@
 //! 对应 Java `ADLCommandProcessor`（两步处理器）：`AUTO_DELEVERAGING` R1 按 risk_score DESC 选盈利候选 + 预占 pending_adl_size，merge 消费出执行量，R2 关 counterparty 仓位 + 对称释放。
+use std::collections::BTreeMap;
+
 use crate::core::common::adl_user_position::AdlUserPosition;
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::cmd::order_command::OrderCommand;
+use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::common::core_currency_specification::CoreCurrencySpecification;
+use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::fund_event::{FundEvent, FundEventType};
+use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
+use crate::core::processors::risk_engine::RiskEngine;
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
+use crate::core::processors::user_profile_service::UserProfileService;
 
 /// 无状态处理器——参见模块文档。
 pub struct AdlCommandProcessor;
 
+impl TwoStepCommandProcessor for AdlCommandProcessor {
+    /// R1:候选取自 `compute_profitable_positions_by_symbol`,`collect_input` 排序+贪心分配,写回 `pending_adl_size`,
+    /// `build_matcher_events` 产出 `cmd.adl_events` 并把 `cmd.size` 改写为实际消费量;结果码恒 `Success`。
+    fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
+        cmd.adl_user_positions.clear();
+        cmd.adl_events.clear();
+
+        let symbol = cmd.symbol;
+        let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
+        let bankruptcy_price = cmd.price;
+        let remaining_size = cmd.size;
+        if remaining_size <= 0 {
+            return CommandResultCode::Success;
+        }
+
+        let mut candidates_map =
+            LiquidationService::compute_profitable_positions_by_symbol(ctx.ups, ctx.ssp, &ctx.risk.last_price_cache);
+        let candidates = candidates_map.remove(&symbol).unwrap_or_default();
+
+        let picks = Self::collect_input(candidates, action, bankruptcy_price, remaining_size);
+
+        // R1 写回：预占 pending_adl_size（与 finalize 对称释放）。
+        for pick in &picks {
+            if let Some(profile) = ctx.ups.users.get_mut(&pick.uid) {
+                let position_key = profile.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
+                if let Some(pos) = profile.positions.get_mut(&position_key) {
+                    pos.pending_adl_size += pick.volume;
+                }
+            }
+        }
+
+        let (events, consumed) = Self::build_matcher_events(&picks, remaining_size);
+        cmd.adl_user_positions = picks;
+        cmd.adl_events = events;
+        cmd.size = consumed; // 真实平仓数量，R2 finalize 用它关 taker 自己的仓
+
+        CommandResultCode::Success
+    }
+
+    /// R2:逐事件关 counterparty 仓（[`apply_event`](Self::apply_event)），再关 taker 仓 + 对称释放 pending
+    /// （[`finalize_for_command`](Self::finalize_for_command)）。
+    fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
+        let symbol = cmd.symbol;
+        let price = cmd.price;
+        let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
+
+        let spec = ctx.ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
+        let currency_spec = ctx
+            .ssp
+            .get_currency(spec.quote_currency)
+            .cloned()
+            .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
+
+        let order_id = cmd.order_id;
+        let events = std::mem::take(&mut cmd.adl_events);
+
+        for &(uid, exec_size) in &events {
+            Self::apply_event(
+                ctx.ups, symbol, action, price, order_id, uid, exec_size, &spec, &currency_spec,
+                &mut cmd.fund_events, &ctx.risk.last_price_cache, ctx.ssp,
+            );
+        }
+
+        let adl_positions: Vec<AdlUserPosition> = std::mem::take(&mut cmd.adl_user_positions);
+        Self::finalize_for_command(
+            ctx.ups, symbol, action, price, order_id, cmd.uid, cmd.size, !events.is_empty(), &adl_positions,
+            &spec, &currency_spec, &mut cmd.fund_events, &ctx.risk.last_price_cache, ctx.ssp,
+        );
+    }
+}
+
 impl AdlCommandProcessor {
     /// R1：对应 Java `collectInput`——按 risk_score DESC 贪心分配，筛选反向+浮盈候选，直至 remaining_size 耗尽；不写回 pending_adl_size（调用方职责）。
-    pub fn collect_input(
+    fn collect_input(
         candidates: Vec<SymbolPositionRecord>,
         action: OrderAction,
         bankruptcy_price: i64,
@@ -46,7 +130,7 @@ impl AdlCommandProcessor {
     }
 
     /// merge：对应 Java `buildMatcherEvents`（单 shard 塌缩版）——顺序遍历已排序候选取 exec=min(volume,remaining)；返回 (events, total_consumed)，空/耗尽时返回空 events。
-    pub fn build_matcher_events(candidates: &[AdlUserPosition], remaining_size: i64) -> (Vec<(i64, i64)>, i64) {
+    fn build_matcher_events(candidates: &[AdlUserPosition], remaining_size: i64) -> (Vec<(i64, i64)>, i64) {
         let mut remaining = remaining_size;
         let mut events = Vec::new();
         for node in candidates {
@@ -62,6 +146,77 @@ impl AdlCommandProcessor {
         }
         let consumed = remaining_size.max(0) - remaining.max(0);
         (events, consumed)
+    }
+
+    /// R2 per-event：对应 Java `applyEvent`——关一个 counterparty(反向浮盈对手)仓 + 结算。
+    /// counterparty 的 UserProfile / 仓位在 R1→R2 之间可能已消失,best-effort skip(非 error)。
+    #[allow(clippy::too_many_arguments)]
+    fn apply_event(
+        ups: &mut UserProfileService,
+        symbol: i32,
+        action: OrderAction,
+        price: i64,
+        order_id: i64,
+        uid: i64,
+        exec_size: i64,
+        spec: &CoreSymbolSpecification,
+        currency_spec: &CoreCurrencySpecification,
+        fund_events: &mut Vec<FundEvent>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        let Some(up) = ups.users.get_mut(&uid) else {
+            return; // counterparty UserProfile 已消失 -> skip
+        };
+        let position_key = up.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
+        if !up.positions.contains_key(&position_key) {
+            return; // counterparty 仓位已被关掉 -> skip
+        }
+        RiskEngine::close_and_settle_futures_position(
+            up, position_key, action, exec_size, price, spec, currency_spec, fund_events, last_price_cache, ssp,
+            FundEventType::AdlPositionClose, order_id,
+        );
+    }
+
+    /// R2 finalize：对应 Java `finalizeForCommand`——有实际成交时关 taker(loser)自身仓,再对称释放本命令
+    /// 全部候选(R1 原始表)的 `pending_adl_size`(与 R1 `+=` 对称,不管 apply 实际消费多少)。
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_for_command(
+        ups: &mut UserProfileService,
+        symbol: i32,
+        action: OrderAction,
+        price: i64,
+        order_id: i64,
+        taker_uid: i64,
+        taker_size: i64,
+        had_events: bool,
+        adl_user_positions: &[AdlUserPosition],
+        spec: &CoreSymbolSpecification,
+        currency_spec: &CoreCurrencySpecification,
+        fund_events: &mut Vec<FundEvent>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
+        ssp: &SymbolSpecificationProvider,
+    ) {
+        if had_events {
+            let up = ups.get_or_add_suspended(taker_uid);
+            let taker_key = up.create_positions_key(symbol, action, OrderCommandType::AutoDeleveraging);
+            if up.positions.contains_key(&taker_key) {
+                RiskEngine::close_and_settle_futures_position(
+                    up, taker_key, action.opposite(), taker_size, price, spec, currency_spec, fund_events,
+                    last_price_cache, ssp, FundEventType::AdlOriginClose, order_id,
+                );
+            }
+        }
+        for pick in adl_user_positions {
+            if let Some(up) = ups.users.get_mut(&pick.uid) {
+                let position_key = up.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
+                if let Some(pos) = up.positions.get_mut(&position_key) {
+                    if pos.pending_adl_size > 0 {
+                        pos.pending_adl_size -= pick.volume;
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -97,8 +97,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
     private final IFCommandProcessor ifProcessor;
     private final FundingFeeCommandProcessor fundingFeeProcessor;
     private final ResetFeeCommandProcessor resetFeeProcessor;
-    private final InternalTransferProcessor internalTransferProcessor;
-    private final LoanRatePricingProcessor loanRatePricingProcessor;
+    private final InternalTransferCommandProcessor internalTransferCommandProcessor;
+    private final LoanRatePricingCommandProcessor loanRatePricingCommandProcessor;
     private final LoanCommandDispatcher loanCommandDispatcher;
     private final RiskEngineCommandDispatcher commandDispatcher;
 
@@ -136,8 +136,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
         this.ifProcessor = new IFCommandProcessor(this);
         this.fundingFeeProcessor = new FundingFeeCommandProcessor(this);
         this.resetFeeProcessor = new ResetFeeCommandProcessor(this);
-        this.internalTransferProcessor = new InternalTransferProcessor(this);
-        this.loanRatePricingProcessor = new LoanRatePricingProcessor(this);
+        this.internalTransferCommandProcessor = new InternalTransferCommandProcessor(this);
+        this.loanRatePricingCommandProcessor = new LoanRatePricingCommandProcessor(this);
         this.loanCommandDispatcher = new LoanCommandDispatcher(this);
         this.commandDispatcher = new RiskEngineCommandDispatcher(this);
         this.initState();
@@ -898,14 +898,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
         }
         if (cmd.command == OrderCommandType.INTERNAL_TRANSFER) {
             do {
-                internalTransferProcessor.applyEvent(cmd, mte, null, null);
+                internalTransferCommandProcessor.applyEvent(cmd, mte, null, null);
                 mte = mte.nextEvent;
             } while (mte != null);
             return false;
         }
         if (cmd.command == OrderCommandType.REPRICE_LOAN_RATES) {
             do {
-                loanRatePricingProcessor.applyEvent(cmd, mte, null, null);
+                loanRatePricingCommandProcessor.applyEvent(cmd, mte, null, null);
                 mte = mte.nextEvent;
             } while (mte != null);
             loanService.getFloatingRate().setLastRepriceTs(cmd.timestamp);

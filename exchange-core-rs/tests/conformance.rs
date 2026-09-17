@@ -25,7 +25,7 @@ use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
 use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
 use exchange_core_rs::core::common::fund_event::{FundEvent, FundEventType};
-use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, GlobalLoanConfig};
+use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, GlobalLoanConfig, SymbolLoanConfig, UNSET, UNSET_AMOUNT};
 use exchange_core_rs::core::common::margin_mode::MarginMode;
 use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
@@ -326,6 +326,24 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 });
                 None
             }
+            // per-symbol loan 配置(含 collateralWeight → 落到 base 币),对应 Java BatchAddLoanCommand.ofSymbol。
+            // 直接 facade,不发 R;省略字段用 UNSET(-1)派生。cross loan 抵押估值必须先设 collateralWeight。
+            "LOAN_SYMBOL" => {
+                api.add_loan(BatchAddLoanCommand {
+                    global: None,
+                    symbol: Some(SymbolLoanConfig {
+                        symbol_id: i32_of(&kv, "sym"),
+                        loan_initial_ltv_bps: opt_i64(&kv, "initialLtv", 0) as i32,
+                        loan_liquidation_ltv_bps: opt_i64(&kv, "liqLtv", UNSET as i64) as i32,
+                        loan_margin_call_ltv_bps: opt_i64(&kv, "marginCallLtv", UNSET as i64) as i32,
+                        loan_max_amount: opt_i64(&kv, "maxAmount", UNSET_AMOUNT),
+                        loan_max_term_days: opt_i64(&kv, "maxTermDays", UNSET as i64) as i32,
+                        collateral_weight_bps: opt_i64(&kv, "collateralWeight", UNSET as i64) as i32,
+                    }),
+                    rate_curve: None,
+                });
+                None
+            }
             // cross loan 抵押注资:cmd.symbol=currency / size=amount,对应 Java ApiLoanCrossAddCollateral。
             "LOAN_CROSS_ADD_COLLATERAL" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LoanCrossAddCollateral,
@@ -450,8 +468,10 @@ fn rust_output(stream: &str) -> String {
 
 #[test]
 fn conformance_golden_vectors() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/conformance_vectors");
-    let entries = match fs::read_dir(dir) {
+    // 默认对拍入库向量;live-diff 编排(conformance_live_diff.sh)用 CONFORMANCE_VECTORS_DIR 指向临时目录跑新鲜随机流。
+    let dir = std::env::var("CONFORMANCE_VECTORS_DIR")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/conformance_vectors").to_string());
+    let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => {
             eprintln!("无 conformance_vectors 目录,跳过");

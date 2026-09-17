@@ -1,0 +1,23 @@
+# 现货 cross 借贷完整周期:设全局 numeraire + per-symbol 抵押权重 → 注资 cross 抵押 → cross 借款 → cross 还款。
+# 对拍 LOAN_BORROW / LOAN_REPAY 结算类事件 + 账户终态。镜像 Java ITLoanFundEvent 的 cross 流程:
+#   plain SYM_SPOT + ofSymbol(collateralWeight=10000,Cross 抵押需 >0) + ofGlobalNumeraire + POOL_DEPOSIT。
+# 借款人 uid=2 与借贷池 shard 0 同片(偶数 uid,分片本地性见 loan_isolated_cycle)。全程同步、确定。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=600 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 initialLtv=0 liqLtv=0 marginCallLtv=0 maxAmount=0 maxTermDays=0
+MARK sym=600 price=1000
+# per-symbol loan 配置:collateralWeight=10000 → base 币(1)满额计价(cross 抵押必须 >0)
+LOAN_SYMBOL sym=600 initialLtv=6000 liqLtv=8500 marginCallLtv=7500 maxAmount=0 maxTermDays=365 collateralWeight=10000
+# 全局:numeraire=quote(2) + cross LTV 阈值(显式给,避免默认致校验失败)
+LOAN_GLOBAL numeraire=2 crossLiqLtv=8500 crossMcLtv=7500
+# numeraire(quote)借贷池注资(shard 0)
+POOL_DEPOSIT cur=2 amount=1000000 txid=9
+USER uid=2
+# 给借款人 base 抵押
+BAL uid=2 cur=1 amount=300 txid=1
+# 注资 cross 抵押:锁 300 base
+LOAN_CROSS_ADD_COLLATERAL uid=2 cur=1 amount=300 txid=10
+# cross 借款:借 50000 numeraire。抵押值=300*1000*100%=300000,LTV=50000/300000=1667bps < 8500 ✓
+LOAN_CROSS_BORROW uid=2 sym=600 loanId=9 principal=50000 txid=11
+# 全额还款(ts=0 零利息)
+LOAN_CROSS_REPAY uid=2 loanId=9 repay=50000 txid=12

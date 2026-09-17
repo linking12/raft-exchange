@@ -89,7 +89,7 @@ public final class RiskEngineCommandDispatcher {
                 return;
             case INTERNAL_TRANSFER:
                 // collectInput 内部自 gate（from-shard 扣款、to-shard 由 R2 入账），此处不加 uidForThisHandler
-                engine.getInternalTransferProcessor().collectInput(cmd);
+                engine.getInternalTransferCommandProcessor().collectInput(cmd);
                 return;
             case MARGIN_ADJUSTMENT:
                 if (engine.uidForThisHandler(cmd.uid)) {
@@ -150,7 +150,7 @@ public final class RiskEngineCommandDispatcher {
                 }
                 return;
             case REPRICE_LOAN_RATES:
-                engine.getLoanRatePricingProcessor().collectInput(cmd);
+                engine.getLoanRatePricingCommandProcessor().collectInput(cmd);
                 if (engine.getShardId() == 0) {
                     cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
                 }

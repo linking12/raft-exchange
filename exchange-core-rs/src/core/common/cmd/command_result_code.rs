@@ -28,7 +28,7 @@ pub enum CommandResultCode {
     SymbolMgmtSymbolAlreadyExists, // -5001（SymbolSpecificationProvider.addSymbol dup 拒绝）
 
     // ================================================================
-    // 内部转账，逐字对应 Java `CommandResultCode.java:74`；供 InternalTransferProcessor.collectInput 的 R1 校验用。
+    // 内部转账，逐字对应 Java `CommandResultCode.java:74`；供 InternalTransferCommandProcessor.collectInput 的 R1 校验用。
     // ================================================================
     InternalTransferInvalidSelf, // -4301，from == to 自转
 

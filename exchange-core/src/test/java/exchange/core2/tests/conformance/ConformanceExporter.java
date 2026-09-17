@@ -84,8 +84,11 @@ public class ConformanceExporter {
 
     @Test
     public void exportGoldenVectors() throws Exception {
-        Path dir = Paths.get(System.getProperty("user.dir"), "..", "exchange-core-rs", "tests", "conformance_vectors")
-                .normalize();
+        // 默认入库向量目录;live-diff 编排(conformance_live_diff.sh)用 -Dconformance.vectors.dir=<临时目录> 覆盖跑新鲜随机流。
+        String overrideDir = System.getProperty("conformance.vectors.dir");
+        Path dir = overrideDir != null
+                ? Paths.get(overrideDir).normalize()
+                : Paths.get(System.getProperty("user.dir"), "..", "exchange-core-rs", "tests", "conformance_vectors").normalize();
         int exported = 0;
         try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, "*.stream")) {
             for (Path stream : files) {
@@ -286,6 +289,13 @@ public class ConformanceExporter {
                                 (int) pl(kv, "crossMcLtv", 0), (int) pl(kv, "poolCap", 0),
                                 (int) pl(kv, "liqFee", 0), (int) pl(kv, "liqBuf", 0),
                                 (int) pl(kv, "mcBuf", 0)), 5000);
+                        break;
+                    case "LOAN_SYMBOL":
+                        // per-symbol loan 配置(含 collateralWeight → 落到 base 币),对应 Rust LOAN_SYMBOL。setup,不发 R。
+                        c.sendBinaryDataCommandSync(BatchAddLoanCommand.ofSymbol(
+                                pi(kv, "sym"), (int) pl(kv, "initialLtv", 0), (int) pl(kv, "liqLtv", -1),
+                                (int) pl(kv, "marginCallLtv", -1), pl(kv, "maxAmount", -1),
+                                (int) pl(kv, "maxTermDays", -1), (int) pl(kv, "collateralWeight", -1)), 5000);
                         break;
                     case "LOAN_CROSS_ADD_COLLATERAL":
                         rc = api.submitCommandAsync(ApiLoanCrossAddCollateral.builder()

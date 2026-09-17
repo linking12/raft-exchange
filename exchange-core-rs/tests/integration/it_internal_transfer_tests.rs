@@ -5,7 +5,7 @@
 //! Rust 引擎单线程直调（无 raft/多 shard），shard 数对结果无影响——故 Java 的 `riskEnginesNum=1/2`
 //! 两个变体在 Rust 侧行为等价，但仍逐条保留以对齐 8 个 @Test 计数与断言黄金值。
 //!
-//! 字段映射（对应 Java `ApiInternalTransfer` + `InternalTransferProcessor`）：
+//! 字段映射（对应 Java `ApiInternalTransfer` + `InternalTransferCommandProcessor`）：
 //! `cmd.uid=fromUid`、`cmd.size=toUid`（overloaded：size 承载目标 uid 而非金额）、
 //! `cmd.symbol=currency`、`cmd.price=amount`、`cmd.order_id=transactionId`。
 //! 结果码：SUCCESS→Success、RISK_NSF→RiskNsf、RISK_INVALID_AMOUNT→RiskInvalidAmount、

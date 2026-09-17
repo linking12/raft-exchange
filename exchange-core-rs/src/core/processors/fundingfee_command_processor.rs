@@ -3,12 +3,19 @@
 
 use std::collections::BTreeMap;
 
+use crate::core::common::cmd::command_result_code::CommandResultCode;
+use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
+use crate::core::common::fund_event::FundEventType;
 use crate::core::common::order_action::OrderAction;
+use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::position_mode::PositionMode;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
+use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::user_status::UserStatus;
+use crate::core::processors::risk_engine::RiskEngine;
+use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::{distribute_remainder_by_one, mul_exact};
@@ -29,10 +36,86 @@ pub struct FundingPaymentAndRecvNotional {
 /// 无状态处理器——所有方法都是关联函数，不持有任何字段。
 pub struct FundingFeeCommandProcessor;
 
+impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
+    /// R1：仅 PERPETUAL + markPrice 可用 + size>0 才收集;`collect_input` 扫 ACTIVE 用户产 payer/receiver map,
+    /// `build_matcher_events` 做第一级 pro-rata,写 `cmd.funding_fee_event`。
+    fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
+        let spec = match ctx.ssp.get_symbol(cmd.symbol) {
+            Some(s) if s.symbol_type == SymbolType::FuturesContractPerpetual => s,
+            _ => return CommandResultCode::InvalidSymbol,
+        };
+        let mark_price = match ctx.risk.mark_price(cmd.symbol) {
+            Some(p) => p,
+            None => return CommandResultCode::RiskMarkpriceNotAvailable,
+        };
+        if cmd.size <= 0 {
+            return CommandResultCode::RiskInvalidAmount;
+        }
+        let action = cmd.action.expect("SETTLE_FUNDINGFEES requires action");
+        let symbol = spec.symbol_id;
+        let shard = Self::collect_input(ctx.ups, symbol, mark_price, action, cmd.price, cmd.size);
+        let events = Self::build_matcher_events(std::slice::from_ref(&shard));
+        if let Some(&(_shard_id, amount)) = events.first() {
+            cmd.funding_fee_event = Some((shard.payer_amounts, shard.receiver_notionals, amount));
+        }
+        CommandResultCode::Success
+    }
+
+    /// R2：消费 `cmd.funding_fee_event`（None 早退），`apply_event` 落账,再对每个 payer/receiver 发
+    /// FUNDINGFEE_SETTLEMENT（活仓走 futures 快照,ghost 仓走 spot 快照）。
+    fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
+        let Some((payer_amounts, receiver_notionals, shard_recv_amount)) = cmd.funding_fee_event.take() else {
+            return;
+        };
+        let symbol = cmd.symbol;
+        let action = cmd.action.expect("SETTLE_FUNDINGFEES requires action");
+        let spec = ctx.ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
+        let currency_spec = ctx
+            .ssp
+            .get_currency(spec.quote_currency)
+            .cloned()
+            .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
+        // apply_event 落账并返回 receiver 的实际分摊 map，供下方门控事件发射（避免重算 distribute_remainder_by_one）。
+        let receiver_fees = Self::apply_event(
+            ctx.ups,
+            symbol,
+            action,
+            &payer_amounts,
+            &receiver_notionals,
+            shard_recv_amount,
+            &spec,
+            &currency_spec,
+        );
+
+        let order_id = cmd.order_id;
+        let lpc = &ctx.risk.last_price_cache;
+        let payer_dir = PositionDirection::of_action(action);
+        let recv_dir = PositionDirection::of_action(action.opposite());
+        // 事件只对**实际结算的用户**发,对齐 Java `settleFundingFee` 的内联发射:payer 恒非零(collect_input 只收 fee>0)
+        // 故全发;receiver 只对**非零分摊**发(Java `if (fee==0) continue`,复用 apply_event 已算好的 receiver_fees)。
+        for (&uid, dir) in payer_amounts
+            .keys()
+            .map(|u| (u, payer_dir))
+            .chain(receiver_fees.iter().filter(|(_, &f)| f != 0).map(|(u, _)| (u, recv_dir)))
+        {
+            if let Some(up) = ctx.ups.get(uid) {
+                if let Some(pos) = up.positions.values().find(|p| p.symbol == symbol && p.open_volume != 0 && p.direction == dir) {
+                    RiskEngine::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::FundingfeeSettlement, order_id, pos, &spec, up, ctx.ssp);
+                } else {
+                    let ev = RiskEngine::spot_snapshot_event(
+                        FundEventType::FundingfeeSettlement, order_id, up, spec.quote_currency, ctx.ssp, &currency_spec, symbol,
+                    );
+                    cmd.fund_events.push(ev);
+                }
+            }
+        }
+    }
+}
+
 impl FundingFeeCommandProcessor {
-    /// R1：对应 Java `collectInput`。前置门禁（`cmd.size<=0`/mark price 缺失）挪到调用方 [`crate::core::processors::risk_engine::RiskEngine::settle_funding_fees_collect`]；本函数只扫 ACTIVE 用户产出 payer/receiver 两个 map。
+    /// R1：对应 Java `collectInput`。前置门禁（`cmd.size<=0`/mark price 缺失）在调用方 [`Self::collect`] 里判；本函数只扫 ACTIVE 用户产出 payer/receiver 两个 map。
     /// 仓位遍历对齐 [`UserProfile::process_position_record`]：ONEWAY 只处理 `symbol`，HEDGE 追加处理 `-symbol` 空头腿——否则空头腿不进池、破坏零和（settle 侧已按 `-symbol` 结算，collect 须对称）。HEDGE 多空两腿方向恒相反，按 uid 键不会互相覆盖。
-    pub fn collect_input(
+    fn collect_input(
         ups: &UserProfileService,
         symbol: i32,
         mark_price: i64,
@@ -74,7 +157,7 @@ impl FundingFeeCommandProcessor {
 
     /// merge：对应 Java `buildMatcherEvents`——两级 pro-rata 的第一级：`total_pay`（跨 shard payer 费用求和）按各 shard 的 receiver notional 占比截断分配 + [`distribute_remainder_by_one`] 余数分配（shard-id 升序，确定性）。
     /// `total_pay==0 || total_recv_notional==0` → 返回空 `Vec`（无可结算的东西）。参与分配的判定统一用 `receiver_notionals` 非空（notional 恒 >0）。`amount<=0 且 payer_amounts 为空` 的 shard 跳过。
-    pub fn build_matcher_events(shards_data: &[FundingPaymentAndRecvNotional]) -> Vec<(usize, i64)> {
+    fn build_matcher_events(shards_data: &[FundingPaymentAndRecvNotional]) -> Vec<(usize, i64)> {
         // 跨用户/跨 shard notional 聚合用 i128 求和 + 收窄守卫，防单币种总名义额超 i64（每笔已 i64-bounded，聚合可溢）。
         let total_pay = sum_i64_checked(shards_data.iter().flat_map(|s| s.payer_amounts.values()));
         let total_recv_notional = sum_i64_checked(shards_data.iter().flat_map(|s| s.receiver_notionals.values()));
@@ -103,9 +186,10 @@ impl FundingFeeCommandProcessor {
     }
 
     /// R2：对应 Java `applyEvent`——两级 pro-rata 的第二级：先无条件精确扣 `payer_amounts`（逐用户 [`Self::settle_funding_fee`]），再把 `shard_recv_amount` 按 `receiver_notionals` 占比二次截断分配（[`distribute_remainder_by_one`]，weights 换成 uid -> notional），`fee==0` 的用户跳过。
-    /// `shard_recv_amount<=0 || receiver_notionals.is_empty()` → 直接返回（跳过第二级，但 payer 侧已无条件处理）。
+    /// `shard_recv_amount<=0 || receiver_notionals.is_empty()` → 第二级整体跳过（返回空 map，但 payer 侧已无条件处理）。
+    /// 返回 `uid -> receiver_fee`（含 fee==0 项）供调用方门控事件发射，避免重算 [`distribute_remainder_by_one`]。
     #[allow(clippy::too_many_arguments)]
-    pub fn apply_event(
+    fn apply_event(
         ups: &mut UserProfileService,
         symbol: i32,
         action: OrderAction,
@@ -114,13 +198,13 @@ impl FundingFeeCommandProcessor {
         shard_recv_amount: i64,
         spec: &CoreSymbolSpecification,
         currency_spec: &CoreCurrencySpecification,
-    ) {
+    ) -> BTreeMap<i64, i64> {
         for (&uid, &fee) in payer_amounts {
             Self::settle_funding_fee(ups, symbol, action, uid, fee, true, spec, currency_spec);
         }
 
         if shard_recv_amount <= 0 || receiver_notionals.is_empty() {
-            return;
+            return BTreeMap::new();
         }
         let receiver_fees = distribute_remainder_by_one(shard_recv_amount, receiver_notionals);
         for (&uid, &fee) in &receiver_fees {
@@ -129,6 +213,7 @@ impl FundingFeeCommandProcessor {
             }
             Self::settle_funding_fee(ups, symbol, action, uid, fee, false, spec, currency_spec);
         }
+        receiver_fees
     }
 
     /// 对应 Java `settleFundingFee`：payer/receiver 共用的落账逻辑。

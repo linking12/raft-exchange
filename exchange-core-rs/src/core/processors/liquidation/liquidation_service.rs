@@ -136,7 +136,7 @@ impl LiquidationService {
 
     /// 对应 Java `computeProfitablePositionsBySymbol`：按需从复制态现算全部可被 ADL 摊派的仓位（symbol -> 候选），每次重算、不缓存——缓存会让 follower 在同一条 ADL 命令上看到不同候选、破坏确定性重放。ISOLATED 判浮盈>0 即入选（`adl_eligibility` 构造时已归一为 100）；CROSS 按 `quote_currency` 分组交 [`Self::add_cross_positions_if_user_safe`] 做账户级门 + factor + 入选。
     ///
-    /// 返回克隆快照而非 Java 的活引用列表（Rust 无法安全把多个 `&mut SymbolPositionRecord` 塞进跨 `ups` 借用的返回值）；调用方 `RiskEngine::adl_collect` 选中后重查活记录写 `pending_adl_size`。等价：候选各属不同 uid，无"看前次副作用"情形。
+    /// 返回克隆快照而非 Java 的活引用列表（Rust 无法安全把多个 `&mut SymbolPositionRecord` 塞进跨 `ups` 借用的返回值）；调用方 `AdlCommandProcessor::collect` 选中后重查活记录写 `pending_adl_size`。等价：候选各属不同 uid，无"看前次副作用"情形。
     pub fn compute_profitable_positions_by_symbol(
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,

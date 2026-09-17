@@ -53,7 +53,7 @@ pub enum OrderCommandType {
     LoanIfWithdraw,
 
     /// 对应 Java `REPRICE_LOAN_RATES`（码 63）：**不属于** `isLoan()` 的 14 码；走
-    /// `isNonTrading()` → `RiskEngineCommandDispatcher` → `LoanRatePricingProcessor`
+    /// `isNonTrading()` → `RiskEngineCommandDispatcher` → `LoanRatePricingCommandProcessor`
     /// （TwoStep reprice 管线，参考文档 §4.2）。
     RepriceLoanRates,
 
