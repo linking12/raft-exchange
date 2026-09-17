@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITFeesExchange`（及其非 Latency 变体 `ITFeesExchangeBasic`）
+// 验证现货交易对在挂单/吃单场景下手续费计算、余额扣划与资金守恒是否正确
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
@@ -92,6 +94,7 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.adjustments(cur) + api.fees(cur)
     }
 
+    // 校验一次撮合后的通用结果：手续费池、买卖双方 XBT 余额变化、以及 XBT/LTC 两侧的全局守恒
     fn assert_outcome(
         api: &ExchangeApi,
         filled: i64,
@@ -101,14 +104,15 @@ mod tests {
         seller: i64,
         seller_xbt_dep: i64,
     ) {
-        assert_eq!(api.fees(LTC), fee_pool(filled, price), "LTC 费池");
-        assert_eq!(api.fees(XBT), 0, "XBT 不收费");
+        assert_eq!(api.fees(LTC), fee_pool(filled, price), "LTC fee pool");
+        assert_eq!(api.fees(XBT), 0, "XBT is not charged fees");
         assert_eq!(api.user_account(buyer, XBT), buyer_xbt_dep + base_amt(filled), "buyer XBT");
         assert_eq!(api.user_account(seller, XBT), seller_xbt_dep - base_amt(filled), "seller XBT");
-        assert_eq!(conserved(api, XBT), 0, "XBT 守恒");
-        assert_eq!(conserved(api, LTC), 0, "LTC 守恒");
+        assert_eq!(conserved(api, XBT), 0, "XBT conservation");
+        assert_eq!(conserved(api, LTC), 0, "LTC conservation");
     }
 
+    // 对应 Java shouldRequireTakerFees_GtcCancel：BID 挂单需预留 taker 手续费，资金差 1 单位报 NSF，补齐后下单成功再撤单验证资金全额退回；同时验证 ASK 挂单无需额外手续费预留
     #[test]
     fn should_require_taker_fees_gtc_cancel() {
         let mut api = new_api();
@@ -125,18 +129,18 @@ mod tests {
         assert_eq!(
             api.place_order(bid(203, UID_2, price, price, size, OrderType::Gtc)),
             CommandResultCode::RiskNsf,
-            "差 1 litoshi 应 NSF"
+            "short by 1 litoshi should be NSF"
         );
         assert_eq!(api.balance_adjustment(UID_2, LTC, 1, 2), CommandResultCode::Success);
         assert_eq!(
             api.place_order(bid(203, UID_2, price, price, size, OrderType::Gtc)),
             CommandResultCode::Success
         );
-        assert_eq!(api.fees(LTC), 0, "挂单不收费");
-        assert_eq!(available(&api, UID_2, LTC), 0, "全额被预留");
+        assert_eq!(api.fees(LTC), 0, "placing order charges no fee");
+        assert_eq!(available(&api, UID_2, LTC), 0, "the full amount is reserved");
 
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 203, uid: UID_2, symbol: SYM }), CommandResultCode::Success);
-        assert_eq!(available(&api, UID_2, LTC), need, "撤后可用回到 need");
+        assert_eq!(available(&api, UID_2, LTC), need, "available balance returns to need after cancel");
         assert_eq!(api.fees(LTC), 0);
         assert_eq!(conserved(&api, LTC), 0);
 
@@ -144,7 +148,7 @@ mod tests {
         assert_eq!(api.balance_adjustment(UID_2, XBT, btc_amount, 3), CommandResultCode::Success);
         assert_eq!(api.place_order(ask(204, UID_2, price, 100, OrderType::Gtc)), CommandResultCode::Success);
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: 204, uid: UID_2, symbol: SYM }), CommandResultCode::Success);
-        assert_eq!(available(&api, UID_2, XBT), btc_amount, "撤后 XBT 全回");
+        assert_eq!(available(&api, UID_2, XBT), btc_amount, "XBT is fully returned after cancel");
         assert_eq!(api.fees(LTC), 0);
         assert_eq!(api.fees(XBT), 0);
         assert_eq!(conserved(&api, LTC), 0);
@@ -158,6 +162,7 @@ mod tests {
         2_000i64 * CURRENCY_SCALE_K
     }
 
+    // 对应 Java shouldProcessFees_BidGtcMaker_AskIocTakerPartial：BID maker 挂单量大于 taker IOC 吃单量，taker 部分成交
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_partial() {
         let mut api = new_api();
@@ -179,6 +184,7 @@ mod tests {
         assert_outcome(&api, maker_size, PRICE, UID_1, 0, UID_2, xbt_dep);
     }
 
+    // 对应 Java shouldProcessFees_BidGtcMakerPartial_AskIocTaker：BID maker 挂单量小于 taker IOC 吃单量，maker 部分成交，剩余挂单留在盘口
     #[test]
     fn bid_gtc_maker_partial_ask_ioc_taker() {
         let mut api = new_api();
@@ -203,6 +209,7 @@ mod tests {
         assert_eq!(l2.bid_volumes, vec![maker_size - taker_size]);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMaker_BidIocTakerPartial：ASK maker 挂单量大于 taker IOC 吃单量，taker 部分成交
     #[test]
     fn ask_gtc_maker_bid_ioc_taker_partial() {
         let mut api = new_api();
@@ -221,6 +228,7 @@ mod tests {
         assert_outcome(&api, maker_size, PRICE, UID_2, 0, UID_1, xbt_dep);
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidGtcTaker：ASK maker 挂单量小于 taker GTC 吃单量，maker 部分成交
     #[test]
     fn ask_gtc_maker_partial_bid_gtc_taker() {
         let mut api = new_api();
@@ -239,6 +247,7 @@ mod tests {
         assert_outcome(&api, taker_size, PRICE, UID_2, 0, UID_1, xbt_dep);
     }
 
+    // 对应 Java shouldNotProcessFees_AskGtcMakerPartial_BidFokTaker：taker FOK_BUDGET 预算不足以吃满 1000 手，订单全部落空，不产生成交也不收手续费
     #[test]
     fn should_not_process_fees_ask_gtc_maker_partial_bid_fok_taker() {
         let mut api = new_api();
@@ -255,9 +264,10 @@ mod tests {
         );
 
         assert_outcome(&api, 0, PRICE, UID_2, 0, UID_1, xbt_dep);
-        assert_eq!(api.user_account(UID_2, LTC), ltc_dep, "taker LTC 未动");
+        assert_eq!(api.user_account(UID_2, LTC), ltc_dep, "taker LTC is untouched");
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidFokTaker：taker FOK_BUDGET 预算足够按 1000 手成交，正常收取 maker/taker 手续费
     #[test]
     fn should_process_fees_ask_gtc_maker_partial_bid_fok_taker() {
         let mut api = new_api();

@@ -1,3 +1,11 @@
+//! Rust 自建的 loan(保证金借贷/抵押)端到端 + 属性测试套件。
+//! 场景函数与 Java `exchange.core2.tests.integration` 下的 ITLoanConservation /
+//! ITLoanDynamicRate / ITLoanForceLiquidatePipeline 等集成测试概念对应(隔离/交叉借贷
+//! 开仓-计息-部分还款-全额还款、强平/LIF 兜底接管、利率重定价、资金池与保险基金操作),
+//! 但没有逐个方法名的 1:1 映射,是直接驱动 `ExchangeCore` 而非走 ExchangeTestContainer
+//! 集成测试容器。每个场景后都调用 `assert_loan_invariants` 校验全局资金守恒、
+//! loanPoolBorrowed 追踪器与实际未偿本金一致、以及账户余额非负。文件末尾的 proptest
+//! 用随机借贷命令流(含强平/重定价/推进时间)持续压测这些不变量。
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
@@ -16,6 +24,8 @@ use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_core::ExchangeCore;
 use exchange_core_rs::core::processors::loan::loan_service::LoanService;
 
+// 逐币种校验全局资金守恒:用户余额(扣除冻结与抵押) + 冻结 + 抵押 + 持仓浮盈亏
+// + 借贷池可用/利息收入/保险基金 + 手续费池 + 调整池,总和应恒为 0
 fn assert_loan_conservation(core: &ExchangeCore) {
     for &cur in core.ssp.currencies.keys() {
         let mut account_balances: i64 = 0;
@@ -67,13 +77,14 @@ fn assert_loan_conservation(core: &ExchangeCore) {
 
         assert_eq!(
             total, 0,
-            "全局守恒被打破：currency={cur} accountBalances={account_balances} extraMargin={extra_margin_sum} \
+            "global conservation broken: currency={cur} accountBalances={account_balances} extraMargin={extra_margin_sum} \
              exchangeLocked={exchange_locked_sum} loanCollateral={loan_collateral_sum} \
              loanBalances={loan_balances} fees={fees} adjustments={adjustments}"
         );
     }
 }
 
+// 校验借贷池"已借出"追踪器(loanPoolBorrowed)与所有隔离/交叉借贷记录的未偿本金之和一致
 fn assert_loan_pool_borrowed_tracker_consistent(core: &ExchangeCore) {
     let mut outstanding: BTreeMap<i32, i64> = BTreeMap::new();
     for p in core.ups.users.values() {
@@ -89,31 +100,37 @@ fn assert_loan_pool_borrowed_tracker_consistent(core: &ExchangeCore) {
         let tracked = core.risk.loan_service.get_loan_pool_borrowed(cur);
         assert_eq!(
             tracked, expected,
-            "loanPoolBorrowed tracker 失配：currency={cur} tracked={tracked} expected(Σoutstanding)={expected}"
+            "loanPoolBorrowed tracker mismatch: currency={cur} tracked={tracked} expected(sum outstanding)={expected}"
         );
     }
 }
 
+// 校验所有用户账户余额均非负
 fn assert_accounts_non_negative(core: &ExchangeCore) {
     for p in core.ups.users.values() {
         for (&cur, &bal) in &p.accounts {
-            assert!(bal >= 0, "用户 {} 的 accounts[{cur}] 为负: {bal}", p.uid);
+            assert!(bal >= 0, "user {}'s accounts[{cur}] is negative: {bal}", p.uid);
         }
     }
 }
 
+// 汇总调用以上三条不变量,场景中的每一步命令后都应调用它把关
 fn assert_loan_invariants(core: &ExchangeCore) {
     assert_loan_conservation(core);
     assert_loan_pool_borrowed_tracker_consistent(core);
     assert_accounts_non_negative(core);
 }
 
+// 提交一条命令给 core 并取回结果码(所有命令都必须产生结果码)
 fn submit(core: &mut ExchangeCore, mut cmd: OrderCommand) -> (CommandResultCode, OrderCommand) {
     core.process_command(&mut cmd);
     let rc = cmd.result_code.expect("every command produces a result code");
     (rc, cmd)
 }
 
+// 以下一组 cmd_* 函数是各类 loan 命令(隔离借贷开仓/还款/加减抵押/强平、交叉借贷加减抵押/
+// 借款/还款/强平、资金池存取、保险基金存取、余额调整、重定价、下单)的构造辅助函数,
+// 仅做字段填充,不含业务逻辑
 #[allow(clippy::too_many_arguments)]
 fn cmd_loan_create(
     order_id: i64,
@@ -318,6 +335,7 @@ fn cmd_place_order(
     }
 }
 
+// 构造一个现货 symbol spec(默认零手续费,供 loan 场景使用)
 fn spot_spec(symbol_id: i32, base: i32, quote: i32) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id,
@@ -333,6 +351,8 @@ fn spot_spec(symbol_id: i32, base: i32, quote: i32) -> CoreSymbolSpecification {
     }
 }
 
+// 隔离借贷完整生命周期:开仓借款 -> 计息(加抵押时结算利息)-> 部分还款 -> 追加余额 ->
+// 全额还款(本金+利息清零)-> 释放全部抵押后空壳记录应被移除,全程守恒
 #[test]
 fn scenario_isolated_open_accrue_partial_full_repay() {
     const BASE: i32 = 1;
@@ -414,6 +434,8 @@ fn scenario_isolated_open_accrue_partial_full_repay() {
     assert_eq!(borrower.account(1), 2_000);
 }
 
+// 交叉借贷多笔借款 + 边界提现测试:同一抵押池下开出两笔借款,超额提现应被 LTV 风控拒绝
+// (且拒绝后状态原样回滚),合理额度内的提现应成功,最终全部还清后交叉借贷记录清空
 #[test]
 fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
     const SELL: i32 = 1;
@@ -473,6 +495,7 @@ fn scenario_cross_multi_borrow_withdraw_boundary_repay() {
     assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(QUOTE), 0);
 }
 
+// 构造隔离借贷强平场景的最小世界(BASE/QUOTE 现货 + 借款人 + 做市商)
 fn isolated_force_liquidate_world() -> (ExchangeCore, i32, i32, i32, i64, i64) {
     const BASE: i32 = 1;
     const QUOTE: i32 = 2;
@@ -491,6 +514,7 @@ fn isolated_force_liquidate_world() -> (ExchangeCore, i32, i32, i32, i64, i64) {
     (core, BASE, QUOTE, SYMBOL, BORROWER, MAKER)
 }
 
+// 绕过正常下单流程,直接向借款人插入一笔隔离借贷记录并发放本金(用于快速搭建强平前置状态)
 #[allow(clippy::too_many_arguments)]
 fn open_isolated_loan_direct(core: &mut ExchangeCore, borrower: i64, quote: i32, base: i32, symbol: i32, loan_id: i64, collateral: i64, principal: i64, rate_bps: i32, opened_at_ts: i64, fund_order_id: i64) {
     let (rc, _) = submit(core, cmd_pool_deposit(1, quote, 1_000_000));
@@ -508,6 +532,7 @@ fn open_isolated_loan_direct(core: &mut ExchangeCore, borrower: i64, quote: i32,
     core.risk.loan_service.disburse_loan(up, quote, principal);
 }
 
+// 给做市商充值后挂一条 bid 限价单,作为强平清算时的对手方流动性
 fn rest_maker_bid(core: &mut ExchangeCore, maker: i64, symbol: i32, order_id: i64, price: i64, size: i64, quote: i32, fund_order_id: i64) {
     let (rc, _) = submit(core, cmd_balance_adjustment(fund_order_id, maker, quote, 1_000_000_000));
     assert_eq!(rc, CommandResultCode::Success);
@@ -515,6 +540,7 @@ fn rest_maker_bid(core: &mut ExchangeCore, maker: i64, symbol: i32, order_id: i6
     assert_eq!(rc, CommandResultCode::Success);
 }
 
+// 隔离借贷强平:抵押物挂单被做市商完全吃掉,还清借款后剩余归入保险基金,借贷记录被移除
 #[test]
 fn scenario_isolated_force_liquidate_full_fill() {
     let (mut core, _base, quote, symbol, borrower, maker) = isolated_force_liquidate_world();
@@ -536,6 +562,7 @@ fn scenario_isolated_force_liquidate_full_fill() {
     assert_eq!(core.risk.loan_service.get_loan_pool_borrowed(quote), 0);
 }
 
+// 隔离借贷强平:抵押不足以覆盖借款本息(资不抵债),由保险基金(LIF)兜底接管抵押物并核销欠款
 #[test]
 fn scenario_isolated_force_liquidate_lif_takeover_undercollateralized() {
     let (mut core, _base, quote, symbol, borrower, _maker) = isolated_force_liquidate_world();
@@ -557,6 +584,7 @@ fn scenario_isolated_force_liquidate_lif_takeover_undercollateralized() {
     assert_eq!(core.risk.loan_service.get_interest_revenue(quote), 50);
 }
 
+// 借贷资金池(pool)与保险基金(IF)的存取操作:存入/取出金额校验、超额取出应被拒绝
 #[test]
 fn scenario_pool_and_if_ops() {
     const QUOTE: i32 = 2;
@@ -595,6 +623,8 @@ fn scenario_pool_and_if_ops() {
     assert_eq!(core.risk.loan_service.get_loan_insurance_fund(QUOTE), 0);
 }
 
+// 浮动利率重定价场景:高利用率下重定价应推高浮动利率,借贷在不同利率区间分段计息,
+// 最终还清后利息收入应等于两段累计利息之和
 #[test]
 fn scenario_reprice_then_accrue_then_repay() {
     const SELL: i32 = 1;
@@ -665,6 +695,8 @@ fn scenario_reprice_then_accrue_then_repay() {
     assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), interest_after_second_year);
 }
 
+// 交叉借贷强平:目标借贷 + 同用户名下另外两笔乱序插入的借贷记录,强平应按固定顺序
+// (而非插入顺序)依次扫清全部借贷,期间跨越两种抵押币种依次被消耗
 #[test]
 fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order() {
     const SELL1: i32 = 1;
@@ -749,6 +781,8 @@ fn scenario_cross_force_liquidate_multi_loan_takeover_sweeps_in_ascending_order(
     assert_eq!(core.risk.loan_service.get_interest_revenue(QUOTE), 0);
 }
 
+// proptest 随机命令流的全部命令变体:隔离/交叉借贷全套操作 + 资金池/IF 操作 +
+// 强平 + 重定价 + 改变标记价 + 推进时间
 #[derive(Debug, Clone)]
 enum GenLoanCmd {
     Create { uid_idx: usize, loan_id: i64, collateral: i64, principal: i64, floating: bool },
@@ -770,6 +804,7 @@ enum GenLoanCmd {
     AdvanceTime { delta_ms: i64 },
 }
 
+// 按权重混合生成上述各类 GenLoanCmd 的策略
 fn gen_loan_cmd(n_users: usize) -> impl Strategy<Value = GenLoanCmd> {
     let loan_id_space = 0i64..8;
     let amount_space = 1i64..=2_000;
@@ -840,6 +875,8 @@ const PT_SYMBOL: i32 = 100;
 const PT_SYMBOL_CROSS: i32 = 101;
 const PT_CURRENCIES: [i32; 3] = [PT_BASE, PT_QUOTE, PT_SELL];
 
+// 搭建 proptest 用的世界:隔离借贷 symbol + 交叉借贷 symbol,每个用户预充值三种币种,
+// 并挂一个巨量做市商买单为强平提供流动性
 fn proptest_world(n_users: usize) -> (ExchangeCore, Vec<i64>) {
     let mut core = ExchangeCore::new();
     core.ssp.add_currency(CoreCurrencySpecification { currency: PT_BASE, currency_scale_k: 1, ..Default::default() });
@@ -885,6 +922,7 @@ fn proptest_world(n_users: usize) -> (ExchangeCore, Vec<i64>) {
     (core, uids)
 }
 
+// 生成一个完整 proptest 场景:随机用户数 + 一串随机 loan 命令
 fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenLoanCmd>)> {
     (2usize..=4).prop_flat_map(|n_users| {
         let cmds = prop::collection::vec(gen_loan_cmd(n_users), 20..80);
@@ -895,6 +933,8 @@ fn scenario_strategy() -> impl Strategy<Value = (usize, Vec<GenLoanCmd>)> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
+    // proptest 主入口:对随机 loan 命令流(含强平/重定价/推进时间)持续压测,
+    // 每步命令后都断言守恒/借贷池追踪一致/账户非负三条不变量
     #[test]
     fn loan_conservation_holds_for_random_command_stream(
         (n_users, cmds) in scenario_strategy()

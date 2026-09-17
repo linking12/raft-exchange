@@ -1,33 +1,50 @@
+//! 对应 Java `exchange.core2.core.common.CoreSymbolSpecification`。现货/期货共用的 symbol 静态规格:
+//! 币对、缩放、手续费(通用)+ 保证金/杠杆分档(期货专属)+ [`SymbolLoanSpecification`] 借贷风控(现货专属)。
+
 use std::collections::BTreeMap;
 
 use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::utils::core_arithmetic_utils::{add_exact, ceil_mul_div, trunc_mul_div};
 
+/// 对应 Java `CoreSymbolSpecification`。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CoreSymbolSpecification {
     pub symbol_id: i32,
     pub symbol_type: SymbolType,
+    /// 对应 Java `baseCurrency`。
     pub base_currency: i32,
+    /// 对应 Java `quoteCurrency`(现货为计价币;期货语境下即合约结算币)。
     pub quote_currency: i32,
+    /// 对应 Java `baseScaleK`:base currency 数量乘子(lot size,单位为 base currency)。
     pub base_scale_k: i64,
+    /// 对应 Java `quoteScaleK`:quote currency 数量乘子(step size,单位为 quote currency)。
     pub quote_scale_k: i64,
+    /// 对应 Java `takerFee`:按每手计,单位为 quote currency(除非 `fee_scale_k` 非 0,见 [`is_fixed_fee`](Self::is_fixed_fee))。
     pub taker_fee: i64,
     pub maker_fee: i64,
+    /// 对应 Java `feeScaleK`:0 表示固定费用;>0 表示按比例收费,rate = fee / feeScaleK。
     pub fee_scale_k: i64,
     pub liquidation_fee: i64,
 
+    /// 对应 Java `initMargin`,仅 `symbol_type` 为期货时生效。
     pub init_margin: i64,
     pub init_margin_scale_k: i64,
+    /// 对应 Java `maintenanceMargin`:<notional, maintenanceMargin> 分档表。
     pub maintenance_margin: BTreeMap<i64, i64>,
     pub maintenance_margin_scale_k: i64,
+    /// 对应 Java `maxLeverage`:<notional, maxLeverage> 分档表。
     pub max_leverage: BTreeMap<i64, i64>,
 
+    /// 对应 Java `loanConfig`:现货 pair 的借贷风控配置(LTV 阈值/期限/单笔上限/抵押折价),
+    /// "业务不可变、物理可写"——仅 UPDATE_SYMBOL_LOAN_CONFIG 经 `updateLoanConfig` 改写;
+    /// 全 0 表示该 pair 借贷未启用。利率不在此处,是 per-loanCurrency 概念,归 LoanService 利率子系统。
     pub loan_config: SymbolLoanSpecification,
 }
 
 impl CoreSymbolSpecification {
 
+    /// 对应 Java `stateHash()`(`Objects.hash(...)`),字段集合一致但哈希算法不同,不要求跨语言数值相等。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.symbol_id as i64);
@@ -53,14 +70,18 @@ impl CoreSymbolSpecification {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
+    /// 对应 Java `isFixedFee()`。
     pub fn is_fixed_fee(&self) -> bool {
         self.fee_scale_k == 0
     }
 
+    /// 对应 Java `calculateInitMargin`:初始保证金 = 名义价值 × 初始保证金率 / 杠杆;
+    /// 未配置(`init_margin_scale_k == 0 || init_margin == 0`)时按 100% 初始保证金率处理(即 notional/leverage)。
     pub fn calculate_init_margin(&self, notional: i64, leverage: i64) -> i64 {
         if self.init_margin_scale_k == 0 || self.init_margin == 0 {
             return notional / leverage;
         }
+        // notional × init_margin / (init_margin_scale_k × leverage),对应 Java Math.multiplyExact 的溢出检测。
         let denom = self
             .init_margin_scale_k
             .checked_mul(leverage)
@@ -68,6 +89,9 @@ impl CoreSymbolSpecification {
         ceil_mul_div(notional, self.init_margin, denom)
     }
 
+    /// 对应 Java `calculateMaintenanceMargin`:维持保证金 = 各分档段 seg × MMR_seg / scaleK 之和;
+    /// `maintenance_margin` 以 (Floor, MMR) 分档存表,仓位跨档时逐段累加;notional 小于最小 Floor 时
+    /// 用最小档 rate 整段兜底;表空或 scaleK=0 时按 100% 返回 notional。
     pub fn calculate_maintenance_margin(&self, notional: i64) -> i64 {
         if self.maintenance_margin_scale_k == 0 || self.maintenance_margin.is_empty() {
             return notional;
@@ -92,6 +116,9 @@ impl CoreSymbolSpecification {
         add_exact(mm, trunc_mul_div(notional - prev_floor, prev_rate, self.maintenance_margin_scale_k))
     }
 
+    /// 对应 Java `isValidLeverage`。负杠杆一律非法:会产生负初始保证金、污染破产价
+    /// (`updateLeverage` 也不会把负数归一)。未配档(`max_leverage` 空)时不限上限
+    /// (leverage=0 表示默认,由调用方 `updateLeverage` 归一为 1x)。
     pub fn is_valid_leverage(&self, notional: i64, leverage: i32) -> bool {
         if leverage < 0 {
             return false;
@@ -105,6 +132,8 @@ impl CoreSymbolSpecification {
         }
     }
 
+    /// 对应 Java `getFloorValueInSortedMap`:取 `key` 的前驱分档(headMap 最大 key);
+    /// key 小于最小 Floor 时兜底取最小档的值,而不是 `None`。
     fn floor_value(map: &BTreeMap<i64, i64>, key: i64) -> Option<i64> {
         match map.range(..key).next_back() {
             Some((_, &v)) => Some(v),
@@ -117,6 +146,8 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
+/// 对应 Java `writeMarshallable`/`CoreSymbolSpecification(BytesIn bytes)` 构造器。
+/// `loan_config` 追加在字段序列末尾(冷启无需兼容 gate)。
 impl ChronicleMarshallable for CoreSymbolSpecification {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(self.symbol_id);

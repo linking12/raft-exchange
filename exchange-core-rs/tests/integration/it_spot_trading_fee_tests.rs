@@ -1,3 +1,5 @@
+//! 移植自 Java 测试类 ITSpotTradingFeeCalculationTest.java：验证现货 maker/taker 手续费在 GTC/IOC/FOK_BUDGET/
+//! IOC_BUDGET 各类订单类型、一对多撮合、部分成交等场景下的计算正确性，以及全局资金守恒。
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -69,6 +71,8 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.adjustments(cur) + api.fees(cur)
     }
 
+    // 对应 Java testGtcMakerTakerFeeCalculation()：单笔 GTC maker 对单笔 GTC taker，验证 maker/taker
+    // 手续费分别正确计入 fees 池以及双方账户扣费。
     #[test]
     fn gtc_maker_taker_fee_calculation() {
         let mut api = new_api();
@@ -80,17 +84,18 @@ mod tests {
         assert_eq!(api.place_order(bid(1001, UID_1, price, price, size, OrderType::Gtc)), CommandResultCode::Success);
         assert_eq!(api.place_order(ask(1002, UID_2, price, size, OrderType::Gtc)), CommandResultCode::Success);
 
-        assert_eq!(api.fees(QUOTE), fee_pool_for(size), "GTC maker+taker 入池费 = 100×300000");
+        assert_eq!(api.fees(QUOTE), fee_pool_for(size), "GTC maker+taker pooled fee = 100×300000");
         assert_eq!(api.fees(BASE), 0);
         let notional = size * price * FEE_SCALE_FACTOR;
         let maker_fee = size * MAKER_FEE * FEE_SCALE_FACTOR;
         let taker_fee = size * TAKER_FEE * FEE_SCALE_FACTOR;
-        assert_eq!(BIG_MONEY - api.user_account(UID_1, QUOTE), notional + maker_fee, "maker(BID) 花费=名义+maker费");
-        assert_eq!(api.user_account(UID_2, QUOTE), notional - taker_fee, "taker(ASK) 收入=名义-taker费");
+        assert_eq!(BIG_MONEY - api.user_account(UID_1, QUOTE), notional + maker_fee, "maker(BID) spend = notional + maker fee");
+        assert_eq!(api.user_account(UID_2, QUOTE), notional - taker_fee, "taker(ASK) receipt = notional - taker fee");
         assert_eq!(conserved(&api, BASE), 0);
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testIocTakerFeeCalculation()：GTC maker 对 IOC taker，验证 taker 手续费正确入池。
     #[test]
     fn ioc_taker_fee_calculation() {
         let mut api = new_api();
@@ -106,6 +111,7 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testFokBudgetTakerFeeCalculation()：FOK_BUDGET 全额成交场景，验证按成交量计费。
     #[test]
     fn fok_budget_taker_fee_calculation() {
         let mut api = new_api();
@@ -123,6 +129,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testIocBudgetFullFillTakerFeeCalculation()：IOC_BUDGET 预算恰好覆盖 size，全额成交，
+    // taker fee 按全量 size×price 计算。
     #[test]
     fn ioc_budget_full_fill_taker_fee_calculation() {
         let mut api = new_api();
@@ -136,11 +144,13 @@ mod tests {
         assert_eq!(api.place_order(bid(3102, UID_2, budget, budget, size, OrderType::IocBudget)), CommandResultCode::Success);
 
         let l2 = api.request_l2(SYMBOL, 10);
-        assert!(l2.ask_prices.is_empty() && l2.bid_prices.is_empty(), "全成后盘口清空");
+        assert!(l2.ask_prices.is_empty() && l2.bid_prices.is_empty(), "order book empty after full fill");
         assert_eq!(api.fees(QUOTE), fee_pool_for(size));
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testIocBudgetPartialFillTakerFeeCalculation()：IOC_BUDGET 预算不足以覆盖 requested_size，
+    // 部分成交后 fee 必须只按实际成交量计算，不能按请求量计算。
     #[test]
     fn ioc_budget_partial_fill_taker_fee_calculation() {
         let mut api = new_api();
@@ -154,8 +164,8 @@ mod tests {
         assert_eq!(api.place_order(ask(3201, UID_1, price, requested_size, OrderType::Gtc)), CommandResultCode::Success);
         assert_eq!(api.place_order(bid(3202, UID_2, budget, budget, requested_size, OrderType::IocBudget)), CommandResultCode::Success);
 
-        assert_eq!(api.fees(QUOTE), fee_pool_for(filled_size), "fee 只按已成交量 60");
-        assert_ne!(api.fees(QUOTE), fee_pool_for(requested_size), "不得按请求量 100 计费");
+        assert_eq!(api.fees(QUOTE), fee_pool_for(filled_size), "fee should only be based on the filled amount of 60");
+        assert_ne!(api.fees(QUOTE), fee_pool_for(requested_size), "must not be charged on the requested amount of 100");
         assert!(api.fees(QUOTE) > 0);
         let l2 = api.request_l2(SYMBOL, 10);
         assert_eq!(l2.ask_prices, vec![price]);
@@ -164,6 +174,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testIocBudgetFullRejectGlobalBalanceReconciliation()：IOC_BUDGET 预算完全不够（任何一手
+    // 都买不起），整单 reject，验证不收取任何 fee 且全局账面闭合。
     #[test]
     fn ioc_budget_full_reject_global_balance_reconciliation() {
         let mut api = new_api();
@@ -176,11 +188,13 @@ mod tests {
         assert_eq!(api.place_order(ask(3301, UID_1, price, requested_size, OrderType::Gtc)), CommandResultCode::Success);
         assert_eq!(api.place_order(bid(3302, UID_2, budget, budget, requested_size, OrderType::IocBudget)), CommandResultCode::Success);
 
-        assert_eq!(api.fees(QUOTE), 0, "全单 reject 应 0 fee");
+        assert_eq!(api.fees(QUOTE), 0, "full reject should have 0 fee");
         assert_eq!(conserved(&api, BASE), 0);
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testMakerOneToManyFeeCalculation()：一个 maker 挂单被多个 taker 分批吃单，验证 fees 按
+    // 已成交总量正确累加。
     #[test]
     fn maker_one_to_many_fee_calculation() {
         let mut api = new_api();
@@ -201,6 +215,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testTakerOneToManyFeeCalculation()：一个 taker 挂单吃掉多个 maker 挂单，验证 fees 按
+    // 已成交总量正确累加。
     #[test]
     fn taker_one_to_many_fee_calculation() {
         let mut api = new_api();
@@ -221,6 +237,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testMixedOrderTypesFeeCalculation()：GTC + IOC 混合订单类型同场景，验证 fees 计算不受
+    // 订单类型混用影响。
     #[test]
     fn mixed_order_types_fee_calculation() {
         let mut api = new_api();
@@ -241,6 +259,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testFeeCalculationParameters()：非整数 size/price 场景，验证 fee 计算使用的是实际成交的
+    // size/price 而非其他参数。
     #[test]
     fn fee_calculation_parameters() {
         let mut api = new_api();
@@ -258,6 +278,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testMakerOneToManyPartialFillFeeConsistency()：maker 挂单大于所有 taker 总量，只被部分
+    // 成交，验证 fees 只按实际成交量计算，maker 挂单余量保留在盘口。
     #[test]
     fn maker_one_to_many_partial_fill_fee_consistency() {
         let mut api = new_api();
@@ -283,6 +305,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testTakerOneToManyPartialFillFeeConsistency()：taker 挂单大于所有 maker 总量，只被部分
+    // 成交，验证 fees 只按实际成交量计算，taker 挂单余量保留在盘口。
     #[test]
     fn taker_one_to_many_partial_fill_fee_consistency() {
         let mut api = new_api();
@@ -308,6 +332,8 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
+    // 对应 Java testSpotFullLifecycleWithDepositWithdraw()：现货完整生命周期账目守恒——充值→撮合→提现
+    // →对账，对每种 taker OrderType（GTC/IOC/FOK_BUDGET/IOC_BUDGET）各跑一轮，验证全程全局账面闭合。
     #[test]
     fn spot_full_lifecycle_with_deposit_withdraw() {
         for taker_type in [OrderType::Gtc, OrderType::Ioc, OrderType::FokBudget, OrderType::IocBudget] {
@@ -315,6 +341,7 @@ mod tests {
         }
     }
 
+    // 辅助：跑一轮 maker GTC ASK + taker <taker_type> BID 的完整撮合与充提流程，断言各阶段全局守恒。
     fn run_spot_full_lifecycle(taker_type: OrderType) {
         let maker_uid = 7101;
         let taker_uid = 7102;
@@ -329,8 +356,8 @@ mod tests {
         assert_eq!(api.balance_adjustment(taker_uid, QUOTE, BIG_MONEY, 3), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(taker_uid, BASE, BIG_MONEY, 4), CommandResultCode::Success);
 
-        assert_eq!(conserved(&api, BASE), 0, "[{taker_type:?}] 充值后 base 账平");
-        assert_eq!(conserved(&api, QUOTE), 0, "[{taker_type:?}] 充值后 quote 账平");
+        assert_eq!(conserved(&api, BASE), 0, "[{taker_type:?}] base balanced after deposit");
+        assert_eq!(conserved(&api, QUOTE), 0, "[{taker_type:?}] quote balanced after deposit");
 
         assert_eq!(api.place_order(ask(7201, maker_uid, price, size, OrderType::Gtc)), CommandResultCode::Success);
         let is_budget = matches!(taker_type, OrderType::FokBudget | OrderType::IocBudget);
@@ -339,8 +366,8 @@ mod tests {
             api.place_order(bid(7202, taker_uid, taker_price_field, taker_price_field, size, taker_type)),
             CommandResultCode::Success
         );
-        assert_eq!(conserved(&api, BASE), 0, "[{taker_type:?}] 撮合后 base 账平");
-        assert_eq!(conserved(&api, QUOTE), 0, "[{taker_type:?}] 撮合后 quote 账平");
+        assert_eq!(conserved(&api, BASE), 0, "[{taker_type:?}] base balanced after matching");
+        assert_eq!(conserved(&api, QUOTE), 0, "[{taker_type:?}] quote balanced after matching");
 
         for (uid, txbase, txquote) in [(maker_uid, 10, 11), (taker_uid, 12, 13)] {
             let b = api.user_account(uid, BASE);
@@ -354,8 +381,8 @@ mod tests {
         }
 
         for uid in [maker_uid, taker_uid] {
-            assert_eq!(api.user_account(uid, BASE), 0, "[{taker_type:?}] 提现后 base 清零");
-            assert_eq!(api.user_account(uid, QUOTE), 0, "[{taker_type:?}] 提现后 quote 清零");
+            assert_eq!(api.user_account(uid, BASE), 0, "[{taker_type:?}] base zeroed after withdrawal");
+            assert_eq!(api.user_account(uid, QUOTE), 0, "[{taker_type:?}] quote zeroed after withdrawal");
         }
 
         assert_eq!(api.adjustments(QUOTE) + api.fees(QUOTE), 0, "[{taker_type:?}] quote adjustments+fees==0");
@@ -363,6 +390,6 @@ mod tests {
         assert_eq!(conserved(&api, BASE), 0);
         assert_eq!(conserved(&api, QUOTE), 0);
 
-        assert_eq!(api.fees(QUOTE), fee_pool_for(size), "[{taker_type:?}] quote 费池");
+        assert_eq!(api.fees(QUOTE), fee_pool_for(size), "[{taker_type:?}] quote fee pool");
     }
 }

@@ -1,3 +1,7 @@
+//! 对应 Java 测试类 `ITPerpetualContractIntegration.java` 的移植：验证 SettleFundingFees /
+//! SettlePnl 两类结算命令的 symbol 类型校验，以及交割合约（delivery）和永续合约（perpetual）
+//! 在资金费结算（funding fee）、PnL 结算（delivery settlement）、强平（liquidation）全生命周期下
+//! 仓位与账户余额的正确性。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -69,7 +73,7 @@ mod tests {
 
     fn assert_conserved(api: &ExchangeApi) {
         let tcb = api.total_balance();
-        assert!(tcb.is_global_zero(), "全局守恒被打破: {:?}", tcb.global_balances_sum());
+        assert!(tcb.is_global_zero(), "global conservation broken: {:?}", tcb.global_balances_sum());
     }
 
     fn seed_user(api: &mut ExchangeApi, uid: i64, amount: i64, txid: i64) {
@@ -124,6 +128,9 @@ mod tests {
         })
     }
 
+    // 对应 Java testInvalidSymbol() 场景：SettleFundingFees 命令发到非永续（delivery）symbol
+    // 应报 InvalidSymbol；发到永续 symbol 但尚无 mark price 时报 RiskMarkpriceNotAvailable；
+    // 设置 mark price 后同一命令才能成功。
     #[test]
     fn invalid_symbol_settle_funding_fees_guards() {
         let mut api = ExchangeApi::new();
@@ -146,6 +153,8 @@ mod tests {
         assert_eq!(settle_funding_fees(&mut api, 10000, OrderAction::Bid, 33, 100, 1003), CommandResultCode::Success);
     }
 
+    // 对应 Java testInvalidSymbol2() 场景：SettlePnl 命令发到永续 symbol 应报 InvalidSymbol
+    // （PnL 结算只适用于交割合约），发到 delivery symbol 才能成功。
     #[test]
     fn invalid_symbol_settle_pnl_guards() {
         let mut api = ExchangeApi::new();
@@ -166,6 +175,8 @@ mod tests {
         assert_eq!(settle_pnl(&mut api, 10001, 10_000, 2), CommandResultCode::Success);
     }
 
+    // 对应 Java testDeliveryScenario0() 场景（"没开出来单子交割后不需要结算 -- 交割"）：
+    // 挂单未成交（无实际仓位敞口）时，SettlePnl 是 no-op，不影响 pending 挂单和账户余额。
     #[test]
     fn delivery_scenario0_no_fill_settle_is_noop() {
         let deposit = 20_000i64;
@@ -182,18 +193,18 @@ mod tests {
 
         assert_eq!(place(&mut api, 1, UID_1, DELIVERY_SYM, 1_000, 10, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         {
-            let pos = api.user_position(UID_1, DELIVERY_SYM).expect("resting bid 建仓记录");
+            let pos = api.user_position(UID_1, DELIVERY_SYM).expect("resting bid should create a position record");
             assert_eq!(pos.direction, PositionDirection::Long);
             assert_eq!(pos.pending_sell_size, 0);
             assert_eq!(pos.pending_buy_size, 10);
             assert_eq!(pos.margin_mode, MarginMode::Cross);
             assert_eq!(pos.pending_buy_avg_price, 1_000);
         }
-        assert_eq!(api.user_account(UID_1, USD), deposit, "挂单不扣 accounts");
+        assert_eq!(api.user_account(UID_1, USD), deposit, "resting order must not deduct accounts");
 
         assert_eq!(settle_pnl(&mut api, DELIVERY_SYM, 200, 1), CommandResultCode::Success);
         {
-            let pos = api.user_position(UID_1, DELIVERY_SYM).expect("结算不动无敞口挂单");
+            let pos = api.user_position(UID_1, DELIVERY_SYM).expect("settlement should not touch a still-pending, unfilled order");
             assert_eq!(pos.pending_buy_size, 10);
             assert_eq!(pos.pending_buy_avg_price, 1_000);
         }
@@ -201,6 +212,9 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testDeliveryScenario1() 场景（"开出来单子后需要做交割结算 -- 交割"）：
+    // maker/taker 各持有一份多/空仓位，SettlePnl 结算后按 (settlePrice - openPrice) 分配盈亏，
+    // 两边仓位归零、fee 与 PnL 都正确记入账户余额。
     #[test]
     fn delivery_scenario1_full_settlement_pnl() {
         let deposit = 20_000i64;
@@ -232,6 +246,8 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testPerpetualScenario0() 场景（"下期货单但是没有成交, 所有没有开仓成功"）：
+    // 挂单未成交时，SettleFundingFees 是 no-op，不影响 pending 挂单和账户余额。
     #[test]
     fn perpetual_scenario0_no_fill_funding_is_noop() {
         let deposit = 20_000i64;
@@ -246,7 +262,7 @@ mod tests {
 
         assert_eq!(place(&mut api, 1, UID_1, PERP_SYM, 1_000, 10, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         {
-            let pos = api.user_position(UID_1, PERP_SYM).expect("resting bid 建仓记录");
+            let pos = api.user_position(UID_1, PERP_SYM).expect("resting bid should create a position record");
             assert_eq!(pos.direction, PositionDirection::Long);
             assert_eq!(pos.pending_buy_size, 10);
             assert_eq!(pos.pending_buy_avg_price, 1_000);
@@ -262,6 +278,9 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testPerpetualScenario1() 场景（"开出来单子后需要做结算 -- 永续, 正向"）：
+    // 资金费率 > 0 时多头向空头付费，验证开仓、结算后双方 profit 相应变化（附 golden 数值核对
+    // funding fee 事件的 free 余额），随后分两笔平仓（1 手 + 9 手）并核对 initMargin/账户余额。
     #[test]
     fn perpetual_scenario1_positive_funding_full_lifecycle() {
         let deposit = 20_000i64;
@@ -297,11 +316,11 @@ mod tests {
         assert_eq!(api.user_position(UID_1, PERP_SYM).unwrap().profit, -150);
         assert_eq!(api.user_position(UID_2, PERP_SYM).unwrap().profit, 150);
         let fe: Vec<_> = api.last_fund_events().iter().filter(|e| e.event_type == FundEventType::FundingfeeSettlement).collect();
-        assert_eq!(fe.len(), 2, "两条资金费结算事件");
-        let e1 = fe.iter().find(|e| e.uid == UID_1).expect("UID_1 funding 事件");
+        assert_eq!(fe.len(), 2, "expected two funding-fee settlement events");
+        let e1 = fe.iter().find(|e| e.uid == UID_1).expect("UID_1 funding event");
         assert_eq!(e1.free, 19_750, "Java golden UID_1 free");
         assert_eq!(e1.profit, -150);
-        let e2 = fe.iter().find(|e| e.uid == UID_2).expect("UID_2 funding 事件");
+        let e2 = fe.iter().find(|e| e.uid == UID_2).expect("UID_2 funding event");
         assert_eq!(e2.free, 19_650, "Java golden UID_2 free");
         assert_eq!(e2.profit, 150);
         assert_conserved(&api);
@@ -324,6 +343,9 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testPerpetualScenario2() 场景（"开出来单子后需要做结算 -- 永续, 反向"）：
+    // 资金费率 < 0 时空头向多头付费（与 scenario1 方向相反），同样验证结算后 profit 变化
+    // 及分批平仓（1 手 + 9 手）后的 initMargin/账户余额。
     #[test]
     fn perpetual_scenario2_negative_funding_full_lifecycle() {
         let deposit = 20_000i64;
@@ -367,6 +389,9 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java testPerpetualScenario3() 场景（"测试某订单多次发起SettleFundingFees是否正常"）：
+    // 开仓后结算资金费把多头 profit 拖到资不抵维持保证金水平，再开启强平引擎并重新推送 mark
+    // price 触发强平流程，验证仓位最终被清空。
     #[test]
     fn perpetual_scenario3_funding_then_liquidation() {
         let deposit = 5_000i64;
@@ -420,7 +445,7 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(sym, updated_price), CommandResultCode::Success);
 
-        assert!(api.user_position(UID_1, sym).is_none(), "UID_1 应被强平清仓");
+        assert!(api.user_position(UID_1, sym).is_none(), "UID_1 should have been liquidated and closed out");
         assert_conserved(&api);
     }
 }

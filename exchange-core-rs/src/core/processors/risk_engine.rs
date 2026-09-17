@@ -1,3 +1,36 @@
+//! 对应 Java `exchange.core2.core.processors.RiskEngine`：风控引擎（per-shard，按 symbol/user 分片）——
+//! 撮合前（R1）做账户/持仓/借贷相关的资金校验与预占用（lock/pendingHold），撮合后（R2）根据
+//! `MatcherTradeEvent` 链把成交/撤单/拒单结果实际落到账户余额、持仓、手续费池、PnL 结算等状态上。
+//!
+//! ## 与 Java 版本的结构性差异
+//! Java `RiskEngine` 自身持有 `SymbolSpecificationProvider` / `CurrencySpecificationProvider` /
+//! `UserProfileService` 等全部可变状态字段（构造时 new 出来，恢复快照时整体替换引用）。Rust 版本因为
+//! 借用检查的限制，把这些"大对象"拆到了 `ExchangeCore` 上，`RiskEngine` 只保留自己私有的状态
+//! （手续费池 fees/adjustments/suspends、markPrice 缓存、借贷/强平子引擎、以及透传用的 binary_cmd），
+//! 其余状态（`SymbolSpecificationProvider`/currency 合并后的 `ssp`、`UserProfileService` 即 `ups`）
+//! 均以 `&`/`&mut` 参数形式传入每个方法。因此 Java 里很多"字段方法"在这里变成了显式携带
+//! `ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider` 参数的自由函数/关联函数；
+//! 部分方法还进一步被拆成"先算好只读数据、再借 `&mut`"的两段式，以规避同时对同一 map 做只读遍历
+//! + 可变写入（例如 `handle_matcher_event_margin_one` 把 taker/maker 两次调用拆成互不重叠的
+//! `ups.get_or_add_suspended` 借用）。
+//!
+//! ## R1 / R2 两段处理
+//! - R1（`pre_process_command`）：命令进入撮合前的风控校验与预占用；只读 `ssp`、可变 `ups`，绝不接触
+//!   `matcher_event` / `market_data`（那是撮合产出的）。分派顺序：`is_loan()` → `LoanCommandDispatcher`；
+//!   `is_non_trading()` → `RiskEngineCommandDispatcher`；其余交易类命令走本文件内联分支（PLACE_ORDER /
+//!   CLOSE_POSITION / 强平三兄弟走 collect() 两步协议 / LIQUIDATION_SCAN）。
+//! - R2（`handler_risk_release`）：撮合把 `OrderCommand.matcher_event` 填好之后再回来，按事件链逐条把
+//!   资金变动落地（解冻 pending、扣/退手续费、平仓/开仓、PnL 结算、markPrice 缓存更新）。
+//!
+//! ## 分片（sharding）
+//! 上游 `ExchangeCore` 按 `uid` 做分片路由（此文件内部不再显式判断 `uidForThisHandler`——调用方在外层
+//! 已经保证只有归属本 shard 的 uid 才会走到这些方法），故这里的每个函数都假定传入的 `ups`/`cmd.uid`
+//! 就在本 shard 范围内。撮合结果（trade/reject/reduce 事件链）仍可能涉及非本 shard 的 maker，因此
+//! `UserProfileService::get_or_add_suspended` 承担了"跨 shard 首次见到该 uid 时惰性建档"的角色。
+//!
+//! ## 确定性红线
+//! 所有 map 遍历一律用 `BTreeMap`（不用 `HashMap`），保证跨节点/跨语言重放时迭代顺序一致；不读系统时钟，
+//! 时间戳（如 `cmd.timestamp`）一律来自命令本身。
 use std::collections::BTreeMap;
 
 use crate::core::common::user_profile::UserProfile;
@@ -35,6 +68,24 @@ use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::{mul_exact, sub_exact};
 
+/// 对应 Java `RiskEngine` 的可变状态子集（见文件头说明：`SymbolSpecificationProvider`/`ssp` 与
+/// `UserProfileService`/`ups` 已上移到 `ExchangeCore`，不在本 struct 中）。
+///
+/// 字段对应关系：
+/// - `fees` / `adjustments` / `suspends` —— 对应 Java 同名 `IntLongHashMap` 三个桶（手续费池 /
+///   人工调整记账 / 挂起清算调整），语义未变，容器换成 `BTreeMap` 以保证遍历顺序确定。
+/// - `last_price_cache` —— 对应 Java `lastPriceCache`（markPrice / 现货最新价缓存，R2 每次撮合事件后刷新）。
+/// - `cfg_margin_trading_enabled` —— 对应 Java `cfgMarginTradingEnabled`（构造期配置开关，是否允许期货保证金交易）。
+///   注意：Java 还有一个 `cfgIgnoreRiskProcessing`（跳过风控测试开关），本 struct 未见对应字段，调用方若需要
+///   该语义需在外层处理，不要凭空假设这里已实现。
+/// - `loan_service` / `liquidation_service` / `liquidation_engine` —— 对应 Java 同名字段，借贷 / 强平子系统状态，
+///   随快照一起序列化。
+/// - `binary_cmd` —— 对应 Java `binaryCommandsProcessor`。经审计：全代码库没有任何生产路径向其
+///   `incoming` map 写入数据（批量命令如 ADD_LOAN 走 `apply_add_loan` 直接同步处理，不经过它做多帧二进制
+///   重组），因此它在 Rust 侧实质上是一个恒为空的占位字段，存在的唯一目的是让 chronicle 快照的字节布局
+///   （字段出现的相对位置）与 Java `writeMarshallable` 保持逐字段对齐，方便快照互操作/对拍。不要误以为
+///   它承担了 Java 里报表查询路由（`handleReportQuery`）或跨帧二进制命令重组的实际逻辑——那部分在 Rust
+///   侧未复刻到这个字段上。
 #[derive(Debug, Default)]
 pub struct RiskEngine {
     pub adjustments: BTreeMap<i32, i64>,
@@ -50,6 +101,9 @@ pub struct RiskEngine {
 
 impl RiskEngine {
 
+    /// 对应 Java 构造函数 + `initState()`：全新初始化本 shard 的风控状态。Java 版在此处还会把新建的
+    /// provider/service 转发给 `liquidationService`/`liquidationEngine`（避免它们持有 stale 引用）；
+    /// Rust 版因为这些子引擎自身不缓存 `ssp`/`ups` 引用（每次调用都由外部按需传入），不存在这个转发步骤。
     pub fn new() -> Self {
         RiskEngine {
             adjustments: BTreeMap::new(),
@@ -64,6 +118,13 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java `RiskEngine.reset()`（ApiReset 命令触发）：清空本 shard 的业务状态，引擎回到空白。
+    /// 注意 Java 还会 `reset()` 掉 `symbolSpecificationProvider`/`currencySpecificationProvider`/
+    /// `userProfileService`/`binaryCommandsProcessor`，这些在 Rust 侧不属于本 struct（见文件头说明），
+    /// 需要调用方（`ExchangeCore`）自行对 `ssp`/`ups`/`binary_cmd` 做相应清理；`last_price_cache` /
+    /// `fees` / `adjustments` / `suspends` / `loan_service` / `liquidation_service` 属于本 struct，
+    /// 在这里直接清。`liquidation_engine` 未被清空——与 Java（Java 侧同样没有对 `liquidationEngine`
+    /// 做 reset）保持一致。
     pub fn reset(&mut self) {
         self.adjustments.clear();
         self.fees.clear();
@@ -73,6 +134,24 @@ impl RiskEngine {
         self.liquidation_service = LiquidationService::new();
     }
 
+    /// 对应 Java `RiskEngine.preProcessCommand`：R1（撮合前）分派器。三级路由与 Java 一致：
+    /// 1. `is_loan()` → `LoanCommandDispatcher::dispatch`（借贷子域）；
+    /// 2. `is_non_trading()` → `RiskEngineCommandDispatcher::dispatch`（账户/行情/运营类命令）；
+    /// 3. 其余交易类命令走本方法内联分支。
+    ///
+    /// 与 Java 的差异：
+    /// - Java 主 switch 里 `MOVE_ORDER`/`CANCEL_ORDER`/`REDUCE_ORDER`/`ORDER_BOOK_REQUEST` 显式落到
+    ///   `return false`（不做资金校验，直接进撮合）；Rust 版这里对应"未命中任何 if 分支"的隐式落空，
+    ///   没有对应 arm——`cmd.result_code` 保持撮合层自己写入的值。
+    /// - `FORCE_LIQUIDATION`/`IF_TAKEOVER`/`AUTO_DELEVERAGING` 在 Java 里各自调用
+    ///   `xxxProcessor.collectInput` + `normalizeCmdPositionSize`；Rust 版统一收敛成
+    ///   `TwoStepCommandProcessor::collect`（对应 Java 的 collectInput）语义，`IF_TAKEOVER`/
+    ///   `AUTO_DELEVERAGING` 额外先做一次 `normalize_cmd_position_size` 再 collect，顺序与 Java
+    ///   （先 collectInput 后 normalize）相反——因为 Rust 的 collect 阶段需要读到已收敛过的 size。
+    /// - `PERSIST_STATE_*`/`RECOVER_STATE_*`/`RESET`/`SETTLE_PNL`/`SYSTEM_LIQUIDATION_NOTIFY` 等引擎
+    ///   生命周期命令在 Java 主 switch 内联处理；Rust 版未在本方法内出现对应分支，这部分逻辑已迁移到
+    ///   `ExchangeCore`/上层调用方或 `write_risk_engine_payload`/`read_risk_engine_payload`
+    ///   （见本文件后部），不要在此处找它们。
     pub fn pre_process_command(
         &mut self,
         cmd: &mut OrderCommand,
@@ -131,6 +210,10 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java `RiskEngine.placeOrderRiskCheck`：下单总入口。校验 user/symbol 存在性后转
+    /// [`Self::place_order`] 做实质风控检查。与 Java 的差异：Java 版这里还有 `cfgIgnoreRiskProcessing`
+    /// 短路开关（跳过 risk 直接放行）和失败时的 warn 日志（携带 cmd + accounts 上下文），
+    /// Rust 版未见对应逻辑，调用方若需要这两项行为需在外层自行处理。
     pub fn place_order_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -148,6 +231,12 @@ impl RiskEngine {
         self.place_order(cmd, user_profile, spec, ssp)
     }
 
+    /// 对应 Java `RiskEngine.closePositionRiskCheck`：CLOSE_POSITION 的 R1 校验。取已有同方向仓位，按
+    /// [`Self::max_closable_size`] 把 `cmd.size` 收敛到可平量，沿用该仓位的 `leverage`/`margin_mode`，
+    /// 再 `pending_hold` 占用。无仓位或可平量 ≤ 0 时直接 `Success`（不下单也不报错，语义同 Java）。
+    /// 与 Java 的差异：Java 版这里还发 `sendLockPendingEvent`（携带 free/locked 快照）；本方法未见
+    /// 对应事件推送，调用方需自行确认事件是否在别处（如 `pre_process_command` 的 PLACE_ORDER 分支同款
+    /// 逻辑）补齐。
     pub fn close_position_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -187,6 +276,24 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
+    /// 对应 Java `RiskEngine.handlerRiskRelease`：R2（撮合后）分派器，按 `cmd.command` 分流到各个
+    /// `TwoStepCommandProcessor::apply`（RepriceLoanRates / InternalTransfer / SettleFundingfees /
+    /// IfTakeover / AutoDeleveraging），其余交易类命令落到本方法尾部的通用现货/期货事件处理逻辑
+    /// （对应 Java 主体的 spot vs futures 分支 + markPrice 缓存刷新）。
+    ///
+    /// 与 Java 结构差异：
+    /// - Java 用 `do { ... mte = mte.nextEvent; } while (mte != null)` 顺序遍历事件链并原地处理；
+    ///   Rust 版为了同时满足"只读遍历事件链"和"可变借用 `ups`/`fees`/`cmd.fund_events`"的借用检查，
+    ///   把 `cmd.matcher_event` 先 `take()` 出来（`mte_owned`），处理完再放回 `cmd.matcher_event = mte_owned`，
+    ///   期间用 `&MatcherTradeEvent` 只读引用穿针（`Option<&MatcherTradeEvent>` 链式 `.next.as_deref()`），
+    ///   避免同时持有 `cmd` 的可变借用和事件链的只读借用。
+    /// - `FORCE_LIQUIDATION` 的强平费收取在 Java 里是撮合期货分支末尾的 `collectLiquidationFee` 独立调用；
+    ///   Rust 版把"遍历本次事件链算 taker 累计 size/notional"的部分提前到本方法开头（`force_taker_size`/
+    ///   `force_taker_size_price`，与 `handle_matcher_event_margin` 共用同一条事件链只读遍历），
+    ///   实际扣费/入池/发事件仍在本方法内联完成，逻辑对应但代码位置不同。
+    /// - Loan 强平（`LoanForceLiquidate`/`LoanCrossForceLiquidate`）的 quote proceeds 路由钩子
+    ///   （对应 Java `loanCommandDispatcher.postProcessLoanForceLiquidate`/
+    ///   `postProcessLoanCrossForceLiquidate`）在现货分支结算完之后调用，语义一致。
     pub fn handler_risk_release(
         &mut self,
         cmd: &mut OrderCommand,
@@ -205,6 +312,9 @@ impl RiskEngine {
             return;
         }
         if cmd.command == OrderCommandType::SettleFundingfees {
+            // 对应 Java：apply 结算完资金费后调用 liquidationEngine.checkPositions(cmd) 推进强平扫描。
+            // had_funding_event 先于 apply() 记录，是因为 apply() 会消费/清空 cmd.funding_fee_event，
+            // 之后已经读不出"这批资金费事件是否非空"，故必须在调用前拍快照。
             let had_funding_event = cmd.funding_fee_event.is_some();
             {
                 let mut ctx = TwoStepContext::new(self, ups, ssp);
@@ -239,6 +349,9 @@ impl RiskEngine {
         let mark_price_for_futures = self.mark_price(cmd.symbol).unwrap_or(0);
         let fees = &mut self.fees;
         let last_price_cache = &self.last_price_cache;
+        // take() 是为了让下面既能以 &MatcherTradeEvent 只读遍历整条事件链，又能同时可变借用
+        // ups/fees/cmd.fund_events；处理完毕后无论走哪条 return 路径都要记得 put 回 cmd.matcher_event，
+        // 否则调用方会发现事件链凭空消失。BINARY_EVENT 对应 Java 早退（无需风控处理，直接原样放行）。
         let mte_owned = cmd.matcher_event.take();
         let mte = match mte_owned.as_deref() {
             Some(m) => m,
@@ -483,10 +596,17 @@ impl RiskEngine {
         Self::refresh_price_record(&mut self.last_price_cache, cmd, true);
     }
 
+    /// MARKPRICE_ADJUSTMENT 等直接写入 markPrice 的入口（测试 hook / 外部行情注入），不做 symbol 是否存在
+    /// 的校验，调用方须自行确保已校验过 symbol。Java 侧无同名独立方法，是 Rust 侧为满足写路径需要拆出的
+    /// 小工具方法。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) {
         self.last_price_cache.entry(symbol).or_default().mark_price = price;
     }
 
+    /// 对应 Java `handlerRiskRelease` 末尾更新 `lastPriceCache` 的那段逻辑（未独立成方法，这里拆出来
+    /// 是 Rust 侧的结构调整）：优先取盘口首档（`marketData` 非空且双边有量）写 ask/bid；否则退化为事件链
+    /// 里第一笔 TRADE 的价格。仅现货（`is_spot`）额外调用 `apply_trade_price` 推进现货 markPrice 的
+    /// EMA/滑动逻辑——期货侧 markPrice 由资金费/外部行情驱动，不吃撮合成交价。
     fn refresh_price_record(cache: &mut BTreeMap<i32, LastPriceCacheRecord>, cmd: &OrderCommand, is_spot: bool) {
         let has_book = cmd
             .market_data
@@ -518,6 +638,15 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java `RiskEngineCommandDispatcher.handleBinaryMessage` 里 `BatchAddLoanCommand` 分支
+    /// （不在 `RiskEngine.java` 本体，是 Java 侧二进制批量命令 dispatcher 的一部分；Rust 版把这段业务
+    /// 逻辑收敛成 `RiskEngine` 的一个方法）。三段独立生效，互不阻塞（一段校验失败不影响另外两段）：
+    /// 1. `global`：全局借贷参数（清算/预警 LTV 阈值等），先做"新值相对当前值是否自洽"的联合校验
+    ///    （`thresholds_valid_given_current`），只更新传入的正值字段（0/负值视为"不改该字段"）；
+    /// 2. `symbol`：单 symbol 借贷配置，只有已注册的现货 symbol 才允许配置；`initial_ltv_bps == 0` 是
+    ///    "关闭该 symbol 的借贷"（kill switch，只清 initial 字段），非 0 则连同 `collateral_weight_bps`
+    ///    一并写回该 symbol 的 base currency spec；
+    /// 3. `rate_curve`：借贷利率曲线（floating + fixed spread）整体替换。
     pub fn apply_add_loan(&mut self, cmd: &BatchAddLoanCommand, ssp: &mut SymbolSpecificationProvider) {
         if let Some(g) = &cmd.global {
             let current_liq = self.loan_service.global_config.cross_liquidation_ltv_bps;
@@ -594,10 +723,18 @@ impl RiskEngine {
         }
     }
 
+    /// 读缓存里的 markPrice，`0` 视为"未设置"归一化成 `None`（对应 Java 多处 `priceRecord == null ||
+    /// priceRecord.markPrice == 0` 的判空写法，这里收敛成一个 `Option`）。
     pub fn mark_price(&self, symbol: i32) -> Option<i64> {
         self.last_price_cache.get(&symbol).map(|r| r.mark_price).filter(|&p| p != 0)
     }
 
+    /// 对应 Java `RiskEngine.calculateLocked`：用户在某 currency 上的全量锁定额（currency 精度），
+    /// 不变量 `free = accounts − locked`。四部分累加：① 该 currency 下所有期货持仓占用保证金
+    /// （[`Self::calculate_locked_margin`]，含 pending + 潜在 fee）；② 现货挂单冻结（`user_profile.locked`，
+    /// 对应 Java `exchangeLocked`）；③④ 借贷抵押（[`Self::loan_collateral_locked`]，Isolated + Cross 合并）。
+    /// 注意 Java 文档里特别强调：提现/加保证金/现货下单/期货下单四处 NSF **不**直接调用本方法（它们各自
+    /// 算期货净盈余，单独扣 loan 抵押），这个约束在 Rust 侧同样成立——不要图省事在那四处改用本函数。
     pub fn calculate_locked(
         user_profile: &UserProfile,
         currency: i32,
@@ -618,6 +755,9 @@ impl RiskEngine {
         locked
     }
 
+    /// 对应 Java `RiskEngine.calculateFreeFuturesMargin(userProfile, currency)`（单参重载）：某 currency
+    /// 上期货净盈余（currency 精度），不指定当前 symbol，逐仓浮盈一律不计入（保守估计）。见
+    /// [`Self::calculate_free_futures_margin_for_symbol`] 的详细算法说明。
     pub fn calculate_free_futures_margin(
         &self,
         user_profile: &UserProfile,
@@ -627,6 +767,13 @@ impl RiskEngine {
         self.calculate_free_futures_margin_for_symbol(user_profile, currency, -1, ssp)
     }
 
+    /// Java 无直接对应方法名；是 Rust 侧为发 fund event 时顺带算出仓位快照展示字段（未实现盈亏/预估强平价/
+    /// 保证金率/维持保证金 scale）而拆出的小工具，对应 Java `MatcherTradeEvent`/持仓快照里这几项字段各自的
+    /// 计算散落调用点（`SymbolPositionRecord.estimateLiquidationPrice`/`estimateMarginRatioScaleK` 等）
+    /// 在 Rust 里被收敛到一处统一算。ISOLATED 与 CROSS 两条分支对应 Java 里这两种 marginMode 各自的
+    /// 强平价/保证金率公式差异：ISOLATED 只用自身仓位的保证金余量；CROSS 要汇总同 currency 下所有
+    /// CROSS 仓位的 PnL/维持保证金，再折算账户级可用余额（`calculate_cross_available`）参与计算。
+    /// `open_volume == 0`（无仓）时全部估算量直接归零，不做除零风险的公式代入。
     pub(crate) fn futures_estimates(last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>, up: &UserProfile, pos: &SymbolPositionRecord, spec: &CoreSymbolSpecification, ssp: &SymbolSpecificationProvider) -> (i64, i64, i64, i64) {
         if pos.open_volume == 0 {
             return (0, 0, 0, 0);
@@ -660,6 +807,9 @@ impl RiskEngine {
         (upnl, liq, mr, mmsk)
     }
 
+    /// 对应 Java `RiskEngine.withdrawableBalance`：可提现/可转出余额（提现与内部转账共用的 NSF 口径）—
+    /// `accounts − 现货冻结 − 借贷抵押 (+ 期货净盈余，仅 margin trading 开启时)`。现货冻结与借贷抵押必扣
+    /// （两者都不能被提走/转走）。
     pub(crate) fn withdrawable_balance(
         &self,
         user_profile: &UserProfile,
@@ -676,6 +826,15 @@ impl RiskEngine {
             + free_futures_margin
     }
 
+    /// 对应 Java `RiskEngine.placeOrder`：下单前置分派。现货 → [`Self::place_exchange_order`]；
+    /// 期货 → 逐项前置校验（margin trading 开关 / markPrice 可用 / 同 symbol 下 marginMode 与 leverage
+    /// 一致）后转 [`Self::can_place_margin_order`] 做 NSF 校验，通过则 `pending_hold`/`pending_hold_budget`
+    /// 占用挂单额度、新仓 commit 进 `positions` map。
+    ///
+    /// 与 Java 结构差异：Java 版在 NSF 校验失败或提前返回时，会把刚 `objectsPool.get` 出来的空
+    /// `SymbolPositionRecord` 放回对象池（避免污染对象池）；Rust 版用 `position.clone()` 起手（已有仓位）
+    /// 或栈上局部变量（新仓位），失败路径直接丢弃局部变量即可，没有对象池需要回收，因此这里没有
+    /// 对应 Java `objectsPool.put` 的清理代码，是刻意的（Rust 没有对象池这层）。
     fn place_order(
         &mut self,
         cmd: &mut OrderCommand,
@@ -757,6 +916,20 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
+    /// 对应 Java `RiskEngine.canPlaceMarginOrder`：期货下单 NSF 校验——
+    /// `仓位总保证金 + 手续费预扣 + 开仓浮亏 − 同 currency 可抵扣浮盈 ≤ 账户可支配`。五个计算块与 Java 原文
+    /// 的 ①～⑤ 编号一一对应：
+    /// ① `position_margin`：本仓含新挂单后的总保证金（`calculate_required_margin_for_order` 返回 -1
+    ///    表示新单不扩敞口，回退到 `calculate_required_margin_for_futures`）；
+    /// ② `cross_free_margin`：同 currency 下账户级可抵扣——只有 CROSS 仓位的浮盈才计入，本仓
+    ///    （用 `position_key` 相等判定，对应 Java 用对象引用 `==` 判本仓）只加浮盈，其它仓
+    ///    CROSS 加浮盈减保证金、ISOLATED 只减保证金；每仓贡献都按各自 symbol 的 scale 折算到 currency
+    ///    再累加（不同 symbol 的 sizePrice 单位可不同，裸加会串味）；
+    /// ③ `pending_fee`：本单成交时按 taker rate 预扣的手续费（此处只判定容量，真正扣款在 R2）；
+    /// ④ `open_loss`：开仓瞬间浮亏预留（BUDGET 单跳过——成交价由撮合决定，`cmd.price` 不是单价）；
+    /// ⑤ NSF 比较：`可支配（accounts − 现货冻结 − 借贷抵押） ≥ required`。
+    ///
+    /// 跨 currency 不互通；BUDGET 单成交价由撮合决定，跳过 ④ 的 open_loss 检查（与 Java 一致）。
     #[allow(clippy::too_many_arguments)]
     fn can_place_margin_order(
         &self,
@@ -771,6 +944,8 @@ impl RiskEngine {
         let action = cmd.action.expect("PLACE_ORDER requires action");
         let is_budget_order = matches!(cmd.order_type, Some(OrderType::FokBudget) | Some(OrderType::IocBudget));
 
+        // ① positionMargin：new_order_margin == -1 表示新单纯反向/抵消现有 pending、不扩敞口，
+        // 此时总保证金维持当前值（回退到含现有 pending 的 calculate_required_margin_for_futures）。
         let order_notional = if is_budget_order { cmd.price } else { mul_exact(cmd.size, cmd.price) };
         let new_order_margin = position.calculate_required_margin_for_order(spec, action, order_notional);
         let position_margin = if new_order_margin == -1 {
@@ -779,6 +954,8 @@ impl RiskEngine {
             new_order_margin
         };
 
+        // ② cross_free_margin：key == position_key 分支是本仓（用 position_key 相等代替 Java 的对象引用
+        // `==`，Rust 侧没有指针身份，靠 key 唯一性等价判定）；其余分支只汇总同 quote_currency 下的其它仓位。
         let mut cross_free_margin: i64 = 0;
         for (&key, pos_record) in user_profile.positions.iter() {
             if key == position_key {
@@ -817,12 +994,15 @@ impl RiskEngine {
             }
         }
 
+        // ③ pending_fee：本单成交时按 taker rate 应扣的手续费，这里只做容量判定，R2 才实际扣。
         let pending_fee = if is_budget_order {
             position.calculate_pending_fee_for_order_budget(spec, action, cmd.size, cmd.price)
         } else {
             position.calculate_pending_fee_for_order(spec, action, cmd.size, cmd.price)
         };
 
+        // ④ open_loss：开仓瞬间浮亏预留，防"开仓即爆仓"。opening_size 只算真正开新敞口的手数——
+        // ONEWAY 反向单先抵掉 open_volume，剩余部分才是新开对侧敞口；其余场景（HEDGE 或同向）全额计入。
         let mut open_loss: i64 = 0;
         if !is_budget_order {
             let opposite_to_pos = user_profile.position_mode == PositionMode::OneWay
@@ -844,6 +1024,7 @@ impl RiskEngine {
             }
         }
 
+        // ⑤ NSF 比较：可支配 = accounts − 现货冻结 − 借贷抵押（借贷抵押不能顶期货保证金，否则贷款变裸债）。
         let currency = position.currency;
         let spendable = user_profile.account(currency) - user_profile.locked(currency)
             - Self::loan_collateral_locked(user_profile, currency);
@@ -856,6 +1037,10 @@ impl RiskEngine {
         required <= spendable
     }
 
+    /// 对应 Java `RiskEngine.loanCollateralLocked`：借贷抵押占用（currency 精度）—— Isolated 中
+    /// `collateral_currency == currency` 的各笔贷款抵押 + Cross 账户级抵押池。抵押虚拟锁定在 accounts，
+    /// 故期货下单/逐仓加保证金/提现/现货下单各处 NSF 必须扣减本项，否则抵押会被当自由资金顶保证金或
+    /// 提走，贷款变裸债、损失由借贷池承担。
     fn loan_collateral_locked(user_profile: &UserProfile, currency: i32) -> i64 {
         let mut locked: i64 = 0;
         for loan in user_profile.isolated_loans.values() {
@@ -867,6 +1052,9 @@ impl RiskEngine {
         locked
     }
 
+    /// 对应 Java `RiskEngine.calculateLockedMargin`：单个 position 的期货保证金占用，折算到 currency
+    /// 记账单位（不同 symbol 的撮合内部单位 `baseScaleK×quoteScaleK` 不同，不折算无法跨 symbol 相加）。
+    /// 占用额取 `calculate_required_margin_for_futures`（已成交仓位 + pending 挂单 + 潜在 fee）。
     fn calculate_locked_margin(
         position: &SymbolPositionRecord,
         spec: &CoreSymbolSpecification,
@@ -881,6 +1069,11 @@ impl RiskEngine {
         )
     }
 
+    /// 对应 Java `RiskEngine.calculateFreeFuturesMargin(userProfile, currency, curPosSymbol)`
+    /// （三参私有重载）：某 currency 上期货净盈余（currency 精度），用作提现/加保证金/现货下单 NSF 的可用
+    /// 额度补充；`cur_pos_symbol` 对应逐仓仓位的未实现盈亏是否计入分摊——现货下单场景下，用户在该 symbol
+    /// 上逐仓仓位的浮盈可为同 symbol 的新单提供额度。最终结果取"计浮盈按初始保证金扣" 与
+    /// "不计浮盈按维持保证金扣" 两者的较小值（更保守，与 Java 语义一致）。
     fn calculate_free_futures_margin_for_symbol(
         &self,
         user_profile: &UserProfile,
@@ -958,6 +1151,8 @@ impl RiskEngine {
             .min(realized_pnl - cross_maintenance_margin - isolated_required_margin)
     }
 
+    /// 对应 Java `RiskEngine.maxClosableSize`：可平量——只有 position 方向与 action 反向时才有意义。
+    /// 空仓/同向 action 直接返 0，让上游 no-op，防止 reduce-only/CLOSE 被误用成开新敞口。
     fn max_closable_size(pos: &SymbolPositionRecord, action: OrderAction, requested_size: i64) -> i64 {
         if !pos.direction.is_opposite_to_action(action) {
             return 0;
@@ -965,6 +1160,18 @@ impl RiskEngine {
         requested_size.min(pos.open_volume)
     }
 
+    /// 对应 Java `RiskEngine.placeExchangeOrder`：现货下单前置。按 action 锁定 quote(BID) 或 base(ASK)
+    /// 到 `user_profile` 的 locked 桶，`accounts` 本身不动。三阶段：① 算 `order_lock_amount`
+    /// （BID = notional + taker fee，按 limit/BUDGET 两种订单类型走不同公式；ASK = size），并做
+    /// currency-scale 换算；② NSF 校验（`accounts − 现货冻结 − 借贷抵押 + 期货净盈余 ≥ order_lock_amount`）；
+    /// ③ `locked` 累加。
+    ///
+    /// 与 Java 的一处已核实差异：Java 这里调用的是 `calculateFreeFuturesMargin(userProfile, currency,
+    /// spec.symbolId)`（三参私有重载，把 `spec.symbolId` 当作 `curPosSymbol`，允许同 symbol 下逐仓仓位的
+    /// 未实现盈亏计入这笔现货单的可用额度）；本方法调用的是 [`Self::calculate_free_futures_margin`]
+    /// 二参公开版本，内部固定传 `cur_pos_symbol = -1`（逐仓浮盈一律不计入，更保守）。是否与 Java 等价
+    /// 取决于该 symbol 上是否存在同名的期货/现货逐仓仓位这一前提，具体行为差异待确认，这里如实记录
+    /// 观察到的调用参数不同，不代表其中一侧是错的。
     fn place_exchange_order(
         &mut self,
         cmd: &OrderCommand,
@@ -1030,6 +1237,18 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
+    /// 对应 Java `RiskEngine.handleMatcherRejectReduceEventExchange`：撤单/拒单事件处理，只涉及单方
+    /// （active 单的 owner），仅释放 locked，accounts 不动。守恒：accounts 不变 + locked 减少 →
+    /// 可用余额（= accounts − locked）自然增加同等额度，全局 delta = 0。
+    ///
+    /// ASK：下单时按 base 数量直冻（`calculate_amount_ask(size) == size`），残量直接退。
+    /// BID：下单时按 quote(notional + taker fee) 冻结，按订单类型决定释放公式——`FOK_BUDGET`/
+    /// `IOC_BUDGET` 全拒（`mte.next.is_none()`）按预算全额算；`IOC_BUDGET` 部分成交残量释放 0
+    /// （对应 BUY handler 已经释放了整笔预算，这里不能重复释放）；其余走常规
+    /// `calculate_amount_bid_taker_fee`。
+    ///
+    /// 与 Java 的一处差异：Java 只在 `release > 0` 时才发 `sendUnLockEvent`；本方法只要能查到
+    /// `currency` 的 spec 就无条件 push 一条 `Unlocked` 快照事件（哪怕 `release == 0`）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_reject_reduce_event_exchange(
         cmd: &OrderCommand,
@@ -1089,6 +1308,10 @@ impl RiskEngine {
         }
     }
 
+    /// Java 无同名独立方法（对应逻辑分散在 `FundEventsHelper.sendXxxEvent` 各方法内联构造事件对象里）：
+    /// Rust 侧把"取当前 free/locked 快照 + 组装成一条现货 `FundEvent`"这段公共逻辑收敛成一个工具函数，
+    /// 供 R2 现货各处（reject/reduce 释放、sell/buy 结算的 taker/maker 各腿）复用，避免重复计算
+    /// `calculate_locked`。
     pub(crate) fn spot_snapshot_event(
         event_type: FundEventType,
         order_id: i64,
@@ -1105,6 +1328,16 @@ impl RiskEngine {
         ev
     }
 
+    /// 对应 Java `RiskEngine.handleMatcherEventsExchangeSell`：卖单成交事件处理——taker 付 base 收 quote；
+    /// maker 是买方，付 quote 收 base。两阶段：① 循环内逐事件结算 maker（释放冻结 + 入 base + 扣 quote
+    /// 实付）；② 循环结束后用聚合量结算 taker（释放 base 冻结 + 入 quote = notional − takerFee）+
+    /// 平台 `fees` 池入账。taker/maker fee 均用整批的均价重算（`avg_taker_price`/`avg_maker_price`），
+    /// 而不是逐笔累加各自的 fee，用意与 Java 注释一致：避免逐笔 ceil 舍入的 dust 在 fees 池里累积漂移。
+    ///
+    /// 与 Java 的一处差异：Java 只在对应金额 > 0 时才 `sendUnLockEvent`；本方法（以及下面的
+    /// `handle_matcher_events_exchange_buy`）对 maker/taker 的每次余额变动都无条件 push 一条
+    /// `Transfer` 类型快照事件到 `fund_events`，不做金额是否为零的判空——即事件总是发出，只是事件内的
+    /// free/locked 数值可能与变动前一致。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_sell(
         cmd: &OrderCommand,
@@ -1248,6 +1481,13 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java `RiskEngine.handleMatcherEventsExchangeBuy`：买单成交事件处理——taker 付 quote 收 base；
+    /// maker 是卖方，付 base 收 quote。两阶段同 [`Self::handle_matcher_events_exchange_sell`]（maker 循环内
+    /// 结算，taker 聚合后统一结算 + fees 入账）。`bidder_hold_price`（taker 下单时的参考冻结价：limit 单
+    /// = 限价，FOK/IOC_BUDGET = `reserve_bid_price`）通常 ≥ 实际成交价，差额在结算时退给用户；
+    /// `FOK_BUDGET`/`IOC_BUDGET` 走独立分支——冻结的是预算上限 `held_total` 而非按 hold price 算的名义值，
+    /// 未匹配部分 `leftover` 原样退。事件推送的差异说明见
+    /// [`Self::handle_matcher_events_exchange_sell`] 文档。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_events_exchange_buy(
         cmd: &OrderCommand,
@@ -1419,6 +1659,11 @@ impl RiskEngine {
         }
     }
 
+    /// Java 无直接对应方法——Java `handleMatcherEventMargin` 本身处理单个事件，外层的
+    /// `do { ...; mte = mte.nextEvent; } while (mte != null)` 事件链遍历是内联写在
+    /// `handlerRiskRelease` 里的。Rust 版把"遍历事件链 + 逐事件调用"拆成这个独立的循环包装函数，
+    /// 单事件处理逻辑下沉到 [`Self::handle_matcher_event_margin_one`]（对应 Java 的
+    /// `handleMatcherEventMargin` 本体）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin(
         cmd_uid: i64,
@@ -1458,6 +1703,20 @@ impl RiskEngine {
         }
     }
 
+    /// 对应 Java `RiskEngine.handleMatcherEventMargin`（单个撮合事件）：期货成交/撤拒事件处理，保证金从
+    /// 用户账户扣/退，fee 入平台 `fees` 池，profit 在持仓清零时结算回账户。分 taker（本次调用方向的
+    /// active 单）与 maker（`mte.matched_order_uid`，仅当 `event_type == Trade` 时才有对手方）两块，
+    /// 各自转调 [`Self::settle_margin_position_event`] 完成实际结算。
+    ///
+    /// 与 Java 的结构差异：Java 里 taker 块与 maker 块的 TRADE 三步（释放 pending → 平反向仓收 fee →
+    /// 反手开同向仓收 fee）+ 清零善后（退 extraMargin/结算 profit/移除 record）是各自内联重复写的两段
+    /// （taker 用 taker fee 费率、maker 用 maker fee 费率，`isLiquidation` 只有 taker 侧可能为 true）；
+    /// Rust 版把这段公共骨架收敛成 [`Self::settle_margin_position_event`] 一个函数，用 `is_taker` 参数
+    /// 切换费率来源、`is_liquidation` 只在 taker 调用点传入真实值（maker 调用点硬编码 `false`，对应
+    /// Java 注释"Maker side fill 不进入 liquidation 流程 — 强平判别在 taker.cmd.orderId 上"）。
+    /// `required` 参数区分 taker（`false`，position 缺失时静默跳过，对应 Java taker 侧只 `log.warn`
+    /// 不 panic）与 maker（`true`，position 缺失时 panic，对应 Java `makerUp.getPositionRecordOrThrowEx`
+    /// 的强断言语义）。
     #[allow(clippy::too_many_arguments)]
     fn handle_matcher_event_margin_one(
         cmd_uid: i64,
@@ -1522,6 +1781,21 @@ impl RiskEngine {
         }
     }
 
+    /// Java 无同名独立方法——对应 Java `handleMatcherEventMargin` 内 taker 块与 maker 块共有的处理骨架
+    /// （两处各自内联，逻辑相同只是费率/`isLiquidation`/缺失时是否 panic 不同，见调用方
+    /// [`Self::handle_matcher_event_margin_one`] 的说明）。TRADE 三步：
+    /// 释放本笔挂单 pending（`pending_release`）→ 平反向仓 `closed_size`（收 fee，taker 用
+    /// taker fee、maker 用 maker fee）→ 反手开同向 `size_to_open`（收 fee）；REJECT/REDUCE 只退
+    /// pending，不动账户。分支结束后若持仓 `is_empty()`（`open_volume` + pendingBuy + pendingSell
+    /// 全 0）触发清零善后：① 退还 `extra_margin`（定额追加保证金本就属于用户）；② 结算残留 `profit`
+    /// 入账户；③ 从 `positions` map 移除该记录。
+    ///
+    /// 待确认对应 Java 逻辑的一处差异：Java `removePositionRecord`（对应这里"仓位清零后移除"的动作）
+    /// 内部会调用 `liquidationEngine.onPositionClosed(userProfile, record)` 更新强平引擎的持仓索引；
+    /// 经全仓库检索，`LiquidationEngine::on_position_closed` 在生产代码路径中未被任何地方调用
+    /// （仅测试用例直接调用验证其自身行为）。此处 `up.positions.remove(&position_key)` 之后没有
+    /// 对应的 `on_position_closed` 调用，是否遗漏或由其它路径（如强平扫描自身按 `positions` 是否存在
+    /// 惰性判断）覆盖了该职责，未在本次注释审计范围内确认，不要凭空断定为 bug。
     #[allow(clippy::too_many_arguments)]
     fn settle_margin_position_event(
         fund_events: &mut Vec<FundEvent>,
@@ -1650,10 +1924,14 @@ impl RiskEngine {
                 Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, event_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
             }
 
+            // 见本函数文档注释："待确认对应 Java 逻辑" 一节：此处未调用 liquidation_engine.on_position_closed。
             up.positions.remove(&position_key);
         }
     }
 
+    /// Java 无直接对应方法：把 `map`（如 `fees`）里各 currency 的累计值"收割"清零，同时累加进
+    /// `adjustments` 记账桶与调用方提供的 `harvested` 输出（用于报表/对拍场景一次性取走并清零手续费池，
+    /// 同时保留审计轨迹）。零值 currency 不搬运，避免 `adjustments`/`harvested` 里堆积无意义的 0 项。
     pub(crate) fn harvest_into(map: &mut BTreeMap<i32, i64>, adjustments: &mut BTreeMap<i32, i64>, harvested: &mut BTreeMap<i32, i64>) {
         for (&c, v) in map.iter_mut() {
             let amount = std::mem::replace(v, 0);
@@ -1664,10 +1942,16 @@ impl RiskEngine {
         }
     }
 
+    /// 同 [`Self::mark_price`] 但以 `&BTreeMap` 直接取值、不做 `!=0` 归一化，缺省返回 0——用在已经
+    /// 拿到 `last_price_cache` 借用（而非 `&self`）的静态方法里，纯粹是借用形状不同的重复小工具。
     fn mark_of(last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>, symbol: i32) -> i64 {
         last_price_cache.get(&symbol).map(|r| r.mark_price).unwrap_or(0)
     }
 
+    /// Java 无同名独立方法（对应 Java `FundEventsHelper.sendXxxEvent` 系列方法内联构造期货持仓事件的
+    /// 公共部分）：组装一条携带完整持仓快照（方向/量/保证金/已实现盈亏/未实现盈亏/预估强平价/保证金率/
+    /// pending 挂单等）的 `FundEvent`，供 R2 期货各处结算点（开仓/平仓/解冻 pending/保证金退款/
+    /// PnL 结算）复用，避免每处重复拼装同样多的字段。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_futures_event(
         fund_events: &mut Vec<FundEvent>,
@@ -1719,6 +2003,13 @@ impl RiskEngine {
         });
     }
 
+    /// Java 无同名独立方法——对应 IF_TAKEOVER / AUTO_DELEVERAGING 在 Java `RiskEngine` 里各自内联的
+    /// "平仓 + 若清零则退 extraMargin/结算 profit/移除 record" 那段收尾逻辑（Rust 侧收敛成公共方法，
+    /// 供 `IfCommandProcessor`/`AdlCommandProcessor` 复用，见 `if_command_processor.rs`/
+    /// `adl_command_processor.rs` 里的调用点）。与 [`Self::settle_margin_position_event`] 的清零善后
+    /// 部分几乎同构（同样是退 extraMargin → 结算 profit → 移除 record），区别是本方法只做"平仓"这一种
+    /// 动作（无 TRADE 的开仓分支），调用点未见到对 `liquidation_engine.on_position_closed` 的调用——
+    /// 与 [`Self::settle_margin_position_event`] 文档中记录的同一处待确认差异。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn close_and_settle_futures_position(
         up: &mut UserProfile,
@@ -1774,6 +2065,9 @@ impl RiskEngine {
         up.positions.remove(&position_key);
     }
 
+    /// Java 无同名独立方法（对应 R1 PLACE_ORDER 通过后 `sendLockEvent` 那类"取当前快照发一条现货事件"
+    /// 的内联写法）：uid/currency/symbol 任一查不到时静默不发事件（`let...else return`），不报错——
+    /// 调用点（[`Self::pre_process_command`] 的 PLACE_ORDER 分支）已经在外层保证了这些应当存在。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_spot_balance_event(
         cmd: &mut OrderCommand,
@@ -1790,6 +2084,12 @@ impl RiskEngine {
         cmd.fund_events.push(Self::spot_snapshot_event(event_type, order_id, up, currency, ssp, cspec, symbol_id));
     }
 
+    /// 对应 Java `RiskEngine.normalizeCmdPositionSize`：强平/ADL/IF takeover 等系统命令从"决定要平多少"
+    /// 到 R1 实际处理之间，仓位可能已经变化（并发/多阶段决策），这里以 R1 时刻的 `open_volume` 重新收敛
+    /// `cmd.size`，保证撮合引擎见到的 size 准确。FORCE_LIQUIDATION 用被强平者平仓视角（action 与仓位
+    /// 方向相反）；IF_TAKEOVER/AUTO_DELEVERAGING 用 counterparty 接管视角（action 与仓位方向相同）——
+    /// 两种视角不一致，因此不能套用 [`Self::max_closable_size`] 那种带方向 guard 的写法，纯按
+    /// `open_volume` 取 min 收敛。
     fn normalize_cmd_position_size(cmd: &mut OrderCommand, ups: &UserProfileService) -> CommandResultCode {
         let action = match cmd.action {
             Some(a) => a,
@@ -1807,6 +2107,10 @@ impl RiskEngine {
         CommandResultCode::ValidForMatchingEngine
     }
 
+    /// Java 无同名独立方法（对应 Java `handlerRiskRelease` 尾部 "强平类命令推进 liquidation 状态机"
+    /// 那几行：`if (takerSpr != null && (FORCE_LIQUIDATION || IF_TAKEOVER || AUTO_DELEVERAGING))
+    /// liquidationEngine.advanceLiquidation(cmd, takerSpr)`）：查到 taker 持仓后转调
+    /// `LiquidationEngine::advance_liquidation` 推进该仓位的强平状态机；查不到 uid/持仓则静默跳过。
     fn advance_liquidation_for(engine: &mut LiquidationEngine, cmd: &OrderCommand, ups: &mut UserProfileService) {
         let action = match cmd.action {
             Some(a) => a,
@@ -1830,6 +2134,33 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError as SnapChronicleErr
 use crate::core::snapshot::chronicle_writer::ChronicleWriter as SnapChronicleWriter;
 use crate::core::snapshot::marshalling::{to_btree_i32 as snap_to_btree_i32, ChronicleMarshallable};
 
+/// 对应 Java `RiskEngine.writeMarshallable`：序列化本 shard 全部风控状态进 raft snapshot。
+/// **字段顺序必须与 [`read_risk_engine_payload`] 严格一致**（Chronicle Wire 是位置编码，不是自描述的
+/// key-value，顺序错位会读出错误字段而不是显式报错）。
+///
+/// 写入顺序与 Java `writeMarshallable` 逐项对照：
+/// 1. `shardId`（Java 用真实 shardId；Rust 版恒写 `0` 占位——分片归属判定已上移到调用方，这里不再需要
+///    真实 shard 编号，但保留字段位置以对齐字节布局）；
+/// 2. `shardMask`（同上，恒写 `0`）；
+/// 3. `symbolSpecificationProvider.writeMarshallable` + `currencySpecificationProvider.writeMarshallable`
+///    → Rust 版对应 `core.ssp.chronicle_write`（Java 的两个 provider 在 Rust 里合并成一个
+///    `SymbolSpecificationProvider`，其 `chronicle_write` 内部按 symbols 再 currencies 的顺序写，
+///    与 Java 两次调用的顺序等价，见 `symbol_specification_provider.rs`）；
+/// 4. `userProfileService.writeMarshallable` → `core.ups.chronicle_write`；
+/// 5. `liquidationService.writeMarshallable` → `risk.liquidation_service.chronicle_write`；
+/// 6. `loanService.writeMarshallable` → `risk.loan_service.chronicle_write`；
+/// 7. `binaryCommandsProcessor.writeMarshallable` → `risk.binary_cmd.chronicle_write`（见
+///    [`RiskEngine`] struct 文档：Rust 侧此字段恒为空占位，写出的是空 map 的固定字节序列，纯粹为了
+///    对齐 Java 快照里这个位置有一个 `BinaryCommandsProcessor` 帧）；
+/// 8. `lastPriceCache` → `risk.last_price_cache`；
+/// 9. `fees` → `risk.fees`；
+/// 10. `adjustments` → `risk.adjustments`；
+/// 11. `suspends` → `risk.suspends`。
+///
+/// 与 Java 的结构差异：Java `writeMarshallable` 是 `RiskEngine` 的实例方法（对每个 shard 各自的
+/// `RiskEngine` 调用一次，因为 Java 每个 shard 有自己独立的 provider/service 实例）；Rust 版因为
+/// `ssp`/`ups` 已上移到 `ExchangeCore`（单一实例，不按 shard 分开持有），这里改成接收 `&ExchangeCore`
+/// 的自由函数，一次性把"全局的 ssp/ups" + "RiskEngine 自己的状态"打包进一份 payload。
 pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
     let mut w = SnapChronicleWriter::new();
     w.write_i32(0);
@@ -1847,6 +2178,12 @@ pub fn write_risk_engine_payload(core: &ExchangeCore) -> Vec<u8> {
     w.into_bytes()
 }
 
+/// 对应 Java `RiskEngine.recoverStateBySnapshot` 里 `serializationProcessor.loadData` 的 lambda
+/// （反序列化并构造 `State` 那部分）：读取顺序与 [`write_risk_engine_payload`] 严格对称，字段含义见其文档。
+/// `shard_id`/`shard_mask` 读出后丢弃（`_shard_id`/`_shard_mask`，仅为消费掉对应字节，不做 Java 那样的
+/// "读到的值必须等于本 shard 的 shardId/shardMask，否则 throw IllegalStateException" 校验——因为写入时
+/// 这两个字段本就恒为占位 0，此处也没有意义可校）。末尾 `debug_assert!(r.is_empty(), ...)` 校验 payload
+/// 被完整消费，字段顺序一旦与写入侧漂移会在 debug build 下第一时间炸出来，而不是静默读错数据。
 pub fn read_risk_engine_payload(payload: &[u8], core: &mut ExchangeCore) -> Result<(), SnapChronicleError> {
     let mut r = SnapChronicleReader::new(payload);
     let _shard_id = r.read_i32()?;
@@ -1860,7 +2197,7 @@ pub fn read_risk_engine_payload(payload: &[u8], core: &mut ExchangeCore) -> Resu
     core.risk.fees = snap_to_btree_i32(r.read_int_long_map()?);
     core.risk.adjustments = snap_to_btree_i32(r.read_int_long_map()?);
     core.risk.suspends = snap_to_btree_i32(r.read_int_long_map()?);
-    debug_assert!(r.is_empty(), "RE payload 未被完全消费,字段布局可能漂移");
+    debug_assert!(r.is_empty(), "RE payload not fully consumed; field layout may have drifted");
     Ok(())
 }
 

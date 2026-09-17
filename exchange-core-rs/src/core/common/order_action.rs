@@ -1,3 +1,6 @@
+//! 对应 Java `exchange.core2.core.common.OrderAction`。买/卖方向。
+
+/// 订单方向。code 值 Ask=0/Bid=1，对应 Java `OrderAction.getCode()`（byte 编码，落盘/上链一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderAction {
     Ask,
@@ -11,6 +14,7 @@ impl OrderAction {
             OrderAction::Bid => 1,
         }
     }
+    /// 对应 Java `OrderAction.of(byte)`：非法 code 返回 None（Java 侧抛 IllegalArgumentException）。
     pub fn from_code(c: i8) -> Option<Self> {
         match c {
             0 => Some(OrderAction::Ask),

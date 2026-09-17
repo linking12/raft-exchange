@@ -1,3 +1,11 @@
+//! Java↔Rust 黄金向量对拍框架(以 Java 为 oracle)。
+//!
+//! 本文件没有对应的单个 Java 测试类,而是与
+//! `exchange-core/src/test/java/exchange/core2/tests/conformance/ConformanceExporter.java`
+//! 配套的 Rust 侧回放器:读取 `tests/conformance_vectors/*.stream` 文本 DSL 脚本,
+//! 在 Rust 引擎上重放同一套命令序列,并将结果(命令返回码 + 账户/仓位/手续费状态
+//! + 资金事件)与 Java `ConformanceExporter` 预先生成的 `*.golden` 文件逐行对拍,
+//! 验证两侧引擎行为完全一致。
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -14,6 +22,7 @@ use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecifi
 use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_api::{ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest, PlaceOrderRequest};
 
+// 解析向量文件的一行 DSL:首个 token 是命令 verb,其余 `key=value` token 收集为键值表;空行/`#` 注释行跳过。
 fn parse_line(line: &str) -> Option<(String, BTreeMap<String, String>)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -31,10 +40,10 @@ fn parse_line(line: &str) -> Option<(String, BTreeMap<String, String>)> {
 }
 
 fn i64_of(kv: &BTreeMap<String, String>, k: &str) -> i64 {
-    kv.get(k).unwrap_or_else(|| panic!("缺字段 {k}")).parse().unwrap()
+    kv.get(k).unwrap_or_else(|| panic!("missing field {k}")).parse().unwrap()
 }
 fn i32_of(kv: &BTreeMap<String, String>, k: &str) -> i32 {
-    kv.get(k).unwrap_or_else(|| panic!("缺字段 {k}")).parse().unwrap()
+    kv.get(k).unwrap_or_else(|| panic!("missing field {k}")).parse().unwrap()
 }
 fn opt_i64(kv: &BTreeMap<String, String>, k: &str, d: i64) -> i64 {
     kv.get(k).map(|v| v.parse().unwrap()).unwrap_or(d)
@@ -74,6 +83,7 @@ fn margin_of(s: Option<&str>) -> MarginMode {
     if s == Some("CROSS") { MarginMode::Cross } else { MarginMode::Isolated }
 }
 
+// golden 输出只收录这些资金事件类型(与 Java ConformanceExporter 收录的类型集合对齐)。
 fn fe_allowed(t: FundEventType) -> bool {
     use FundEventType::*;
     matches!(
@@ -94,6 +104,7 @@ fn fe_allowed(t: FundEventType) -> bool {
     )
 }
 
+// 将一条资金事件格式化为 golden 文件里的一行文本。
 fn fe_line(e: &FundEvent) -> Option<String> {
     if !fe_allowed(e.event_type) {
         return None;
@@ -108,6 +119,8 @@ fn fe_line(e: &FundEvent) -> Option<String> {
     ))
 }
 
+// 核心回放器:逐行解析 DSL 命令,依次提交给 Rust 引擎,记录每条命令的返回码
+// 和沿途产生的资金事件,返回最终引擎状态 + 结果行 + 排序后的事件行。
 fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
     let mut api = ExchangeApi::new();
     let mut results = Vec::new();
@@ -357,7 +370,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
-            other => panic!("未支持的命令 verb: {other}"),
+            other => panic!("unsupported command verb: {other}"),
         };
         if let Some(rc) = rc {
             if !no_r(verb.as_str()) {
@@ -371,6 +384,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
     (api, results, fund_lines)
 }
 
+// 把回放结束后的引擎状态(非零余额、非零仓位、非零手续费)序列化成确定顺序的文本行,供 golden 对拍。
 fn state_digest(api: &ExchangeApi) -> Vec<String> {
     let mut out = Vec::new();
     let mut uids: Vec<i64> = api.ups().users.keys().copied().collect();
@@ -414,10 +428,12 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
     out
 }
 
+// 向量文件里的 `#!events=off` 指令可关闭事件行对拍(部分向量不关心事件顺序)。
 fn events_enabled(stream: &str) -> bool {
     !stream.lines().any(|l| l.trim_start_matches('#').trim() == "!events=off")
 }
 
+// 拼出与 Java golden 文件同格式的完整输出:命令结果行 + STATE 状态段 + (可选)EVENTS 事件段。
 fn rust_output(stream: &str) -> String {
     let (api, results, fund_lines) = replay(stream);
     let mut lines = results;
@@ -430,6 +446,7 @@ fn rust_output(stream: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+// 遍历 tests/conformance_vectors/*.stream,对每个向量回放并与同名 .golden 逐行比对。
 #[test]
 fn conformance_golden_vectors() {
     let dir = std::env::var("CONFORMANCE_VECTORS_DIR")
@@ -437,7 +454,7 @@ fn conformance_golden_vectors() {
     let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => {
-            eprintln!("无 conformance_vectors 目录,跳过");
+            eprintln!("no conformance_vectors directory, skipping");
             return;
         }
     };
@@ -452,15 +469,15 @@ fn conformance_golden_vectors() {
         let golden_path = path.with_extension("golden");
         let stream = fs::read_to_string(&path).unwrap();
         let expected = fs::read_to_string(&golden_path)
-            .unwrap_or_else(|_| panic!("缺 golden: {}(先用 Java ConformanceExporter 生成)", golden_path.display()));
+            .unwrap_or_else(|_| panic!("missing golden: {} (generate it first with Java ConformanceExporter)", golden_path.display()));
         let actual = rust_output(&stream);
         assert_eq!(
             actual.trim_end(),
             expected.trim_end(),
-            "\n向量 {} 的 Rust 输出与 Java golden 不一致",
+            "\nRust output for vector {} does not match Java golden",
             path.file_name().unwrap().to_string_lossy()
         );
         checked += 1;
     }
-    assert!(checked > 0, "conformance_vectors 里没有 .stream 向量");
+    assert!(checked > 0, "no .stream vectors found in conformance_vectors");
 }

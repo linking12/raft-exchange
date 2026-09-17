@@ -1,3 +1,6 @@
+//! 移植自 Java 测试类 ITExchangeCorePriceScale.java：验证不同 base/quote scale 下期货/现货下单的价格精度换算，
+//! 以及保证金占用（cross/isolated）、提现与现货挂单冻结（exchangeLocked）互斥、杠杆调整边界、精度 floor/dust
+//! 处理、SUSPEND dust sweep、CROSS 强平价计算等场景。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -120,6 +123,8 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.adjustments(cur) + api.fees(cur)
     }
 
+    // 对应 Java testMarginTradePriceScale()：期货下单价格精度(scale)场景，验证开仓后仓位方向/占用保证金/
+    // 未实现盈亏在 base_scale_k=1000、quote_scale_k=100000 下的换算正确性。
     #[test]
     fn margin_trade_price_scale() {
         let mut api = ExchangeApi::new();
@@ -145,7 +150,7 @@ mod tests {
         let initial_margin = (0.1 * 750.0 / 10.0 * 100_000_000.0) as i64;
         let open_price_sum = (0.1 * 753.4 * 100_000_000.0) as i64;
 
-        let pos = api.user_position(UID_1, SYM_FUT).expect("多头开仓后必有仓位");
+        let pos = api.user_position(UID_1, SYM_FUT).expect("position must exist after opening a long");
         assert_eq!(pos.direction, PositionDirection::Long);
         assert_eq!(pos.open_volume, size);
         assert_eq!(pos.open_init_margin_sum, initial_margin);
@@ -155,6 +160,8 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT), charge);
     }
 
+    // 对应 Java testSpotTradePriceScale()：现货成交价格精度(scale)场景，验证撮合后双方 base/quote 账户
+    // 按 scale 精确记账。
     #[test]
     fn spot_trade_price_scale() {
         let mut api = ExchangeApi::new();
@@ -187,6 +194,7 @@ mod tests {
         assert_eq!(api.user_account(UID_2, USDT), trade_amount_currency);
     }
 
+    // 对应 Java testWithdrawWhenMarginExist()：期货持仓存在时提现校验，可提现额度受期货保证金占用限制。
     #[test]
     fn withdraw_when_margin_exist() {
         let mut api = ExchangeApi::new();
@@ -215,6 +223,8 @@ mod tests {
         assert_eq!(api.balance_adjustment(UID_1, USDT, -usdt_deposit, 100), CommandResultCode::Success);
     }
 
+    // 对应 Java testPlaceExchangeWhenMarginExist()：期货持仓存在时下现货单校验，现货下单额度同样受期货
+    // 保证金占用限制。
     #[test]
     fn place_exchange_when_margin_exist() {
         let mut api = ExchangeApi::new();
@@ -238,6 +248,7 @@ mod tests {
         assert_eq!(available(&api, UID_1, USDT), usdt_deposit / 2);
     }
 
+    // 对应 Java testExtraMargin4Cross()：全仓(CROSS)追加保证金场景，差 1 无法下单，补足后下单成功。
     #[test]
     fn extra_margin_4_cross() {
         let mut api = ExchangeApi::new();
@@ -267,6 +278,7 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT), usdt_deposit + extra + 1);
     }
 
+    // 对应 Java testExtraMargin4Isolated()：逐仓(ISOLATED)追加保证金场景，差 1 无法下单，补足后下单成功。
     #[test]
     fn extra_margin_4_isolated() {
         let mut api = ExchangeApi::new();
@@ -296,6 +308,7 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT), usdt_deposit + extra + 1);
     }
 
+    // 对应 Java testAdjustLeverage()：调整杠杆边界场景，提高杠杆释放保证金可成功，降低杠杆保证金不足则失败。
     #[test]
     fn adjust_leverage() {
         let mut api = ExchangeApi::new();
@@ -315,6 +328,8 @@ mod tests {
         assert_eq!(api.leverage_adjustment(UID_1, SYM_FUT, 9), CommandResultCode::RiskNsf);
     }
 
+    // 对应 Java testWithdrawBlockedBySpotLock()：现货挂单冻结阻止超额提现，可提现额度必须按
+    // (accounts - exchangeLocked) 计算，不能挪用现货挂单冻结的部分。
     #[test]
     fn withdraw_blocked_by_spot_lock() {
         let mut api = ExchangeApi::new();
@@ -343,6 +358,8 @@ mod tests {
         assert_eq!(available(&api, UID_1, USDT), 0);
     }
 
+    // 对应 Java testPlaceMarginOrderBlockedBySpotLock()：现货挂单冻结后再下期货单，期货保证金校验同样
+    // 必须按 (accounts - exchangeLocked) 计算。
     #[test]
     fn place_margin_order_blocked_by_spot_lock() {
         let mut api = ExchangeApi::new();
@@ -364,6 +381,8 @@ mod tests {
         assert_eq!(api.place_futures_order(fut(20002, UID_1, SYM_FUT, fut_price, 1_000, OrderAction::Bid, OrderType::Gtc, 1, MarginMode::Cross)), CommandResultCode::Success);
     }
 
+    // 对应 Java testIsolatedMarginAdjustBlockedBySpotLock()：现货挂单冻结后做逐仓(ISOLATED)追加保证金，
+    // 追加额度必须扣减现货冻结部分，否则相当于把现货冻结的资金挪走。
     #[test]
     fn isolated_margin_adjust_blocked_by_spot_lock() {
         let mut api = ExchangeApi::new();
@@ -395,6 +414,8 @@ mod tests {
         );
     }
 
+    // 对应 Java testSpotLockPartialReleaseOnPartialFill()：现货挂单部分成交时，exchangeLocked 按成交比例
+    // 释放，accounts 按实际成交净额扣减。
     #[test]
     fn spot_lock_partial_release_on_partial_fill() {
         let mut api = ExchangeApi::new();
@@ -426,6 +447,8 @@ mod tests {
         assert_eq!(conserved(&api, BNB), 0);
     }
 
+    // 对应 Java testSpotLockFullReleaseOnCancel()：现货挂单取消后 exchangeLocked 必须归零，accounts 不变
+    // （下单时本就没有扣减 accounts）。
     #[test]
     fn spot_lock_full_release_on_cancel() {
         let mut api = ExchangeApi::new();
@@ -449,6 +472,8 @@ mod tests {
         assert_eq!(conserved(&api, USDT), 0);
     }
 
+    // 对应 Java testSpotLockAccumulatesAcrossMultipleOrders()：同一 currency 多笔未成交挂单时 exchangeLocked
+    // 累加，取消其中一笔只释放对应额度。
     #[test]
     fn spot_lock_accumulates_across_multiple_orders() {
         let mut api = ExchangeApi::new();
@@ -475,6 +500,8 @@ mod tests {
         assert_eq!(conserved(&api, USDT), 0);
     }
 
+    // 对应 Java testFokBudgetFullFillReleasesExchangeLocked()：FOK_BUDGET 全部成交后 exchangeLocked
+    // 必须完全释放，不残留。
     #[test]
     fn fok_budget_full_fill_releases_exchange_locked() {
         let mut api = ExchangeApi::new();
@@ -499,11 +526,13 @@ mod tests {
         assert_eq!(api.user_locked(UID_1, USDT), 0);
         assert_eq!(api.user_account(UID_1, BNB), actual_base);
         let l2 = api.request_l2(SYM_SPOT, 10);
-        assert!(l2.bid_prices.is_empty(), "taker 无挂单残留");
+        assert!(l2.bid_prices.is_empty(), "no resting order should remain for the taker");
         assert_eq!(conserved(&api, USDT), 0);
         assert_eq!(conserved(&api, BNB), 0);
     }
 
+    // 对应 Java testFokBudgetFullRejectReleasesExchangeLocked()：FOK_BUDGET 整单被拒后 exchangeLocked
+    // 必须完全释放。
     #[test]
     fn fok_budget_full_reject_releases_exchange_locked() {
         let mut api = ExchangeApi::new();
@@ -526,6 +555,8 @@ mod tests {
         assert_eq!(conserved(&api, USDT), 0);
     }
 
+    // 对应 Java testIocBudgetPartialFillReleasesExchangeLocked()：IOC_BUDGET 部分成交 + 剩余拒绝后，
+    // exchangeLocked 必须完全释放（已成交 + 剩余拒绝共归零）。
     #[test]
     fn ioc_budget_partial_fill_releases_exchange_locked() {
         let mut api = ExchangeApi::new();
@@ -546,12 +577,14 @@ mod tests {
         let actual_paid = 80 * USDT_SCALE;
         let actual_base = (0.4 * BNB_SCALE as f64) as i64;
         assert_eq!(api.user_account(UID_1, USDT), usdt_deposit - actual_paid);
-        assert_eq!(api.user_locked(UID_1, USDT), 0, "部分成交后 exchangeLocked 完全释放");
+        assert_eq!(api.user_locked(UID_1, USDT), 0, "exchangeLocked fully released after partial fill");
         assert_eq!(api.user_account(UID_1, BNB), actual_base);
         assert_eq!(conserved(&api, USDT), 0);
         assert_eq!(conserved(&api, BNB), 0);
     }
 
+    // 对应 Java testIocBudgetFullRejectReleasesExchangeLocked()：IOC_BUDGET 因空盘口完全无法成交时，
+    // exchangeLocked 必须完全释放。
     #[test]
     fn ioc_budget_full_reject_releases_exchange_locked() {
         let mut api = ExchangeApi::new();
@@ -571,6 +604,8 @@ mod tests {
         assert_eq!(conserved(&api, USDT), 0);
     }
 
+    // 对应 Java testMakerBidExchangeLockedPrecisionDriftOnPartialFills()：精度 floor 漂移场景，一次性
+    // lock 与逐笔 release 各自独立 floor，累计误差导致残留。
     #[test]
     fn maker_bid_exchange_locked_precision_drift_on_partial_fills() {
         let mut api = ExchangeApi::new();
@@ -583,19 +618,21 @@ mod tests {
 
         let price = 1_933;
         assert_eq!(api.place_order(spot_bid(40001, UID_1, SYM_FEE, price, 4, OrderType::Gtc)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, LTC), 153, "单次 lock = floor(15332/100) = 153");
+        assert_eq!(api.user_locked(UID_1, LTC), 153, "single-shot lock = floor(15332/100) = 153");
 
         for i in 0..4 {
             assert_eq!(api.place_order(spot_ask(40100 + i, UID_2, SYM_FEE, price, 1, OrderType::Ioc)), CommandResultCode::Success);
         }
 
         let l2 = api.request_l2(SYM_FEE, 10);
-        assert!(l2.bid_prices.is_empty(), "BID 全部成交，无残量");
-        assert_eq!(api.user_locked(UID_1, LTC), 1, "精度漂移：4×floor(3833/100)=152，残 1");
+        assert!(l2.bid_prices.is_empty(), "BID fully filled, no remainder");
+        assert_eq!(api.user_locked(UID_1, LTC), 1, "precision drift: 4×floor(3833/100)=152, 1 remains");
         assert_eq!(conserved(&api, LTC), 0);
         assert_eq!(conserved(&api, XBT), 0);
     }
 
+    // 对应 Java testMakerBidExchangeLockedDustStaysAfterCancelOfRemainder()：部分成交后 cancel 剩余部分，
+    // 精度 dust 仍滞留在 exchangeLocked，不会退回 accounts。
     #[test]
     fn maker_bid_exchange_locked_dust_stays_after_cancel_of_remainder() {
         let mut api = ExchangeApi::new();
@@ -614,7 +651,7 @@ mod tests {
             assert_eq!(api.place_order(spot_ask(50100 + i, UID_2, SYM_FEE, price, 1, OrderType::Ioc)), CommandResultCode::Success);
         }
 
-        assert_eq!(api.user_locked(UID_1, LTC), 77, "partial 后 lock = 153 - 38×2 = 77");
+        assert_eq!(api.user_locked(UID_1, LTC), 77, "after partial fill lock = 153 - 38×2 = 77");
         let accounts_before_cancel = 100_000 - 26 * 2;
         assert_eq!(api.user_account(UID_1, LTC), accounts_before_cancel);
 
@@ -624,11 +661,13 @@ mod tests {
         assert_eq!(api.user_account(UID_1, LTC), accounts_before_cancel);
         assert_eq!(available(&api, UID_1, LTC), accounts_before_cancel - 1);
         let l2 = api.request_l2(SYM_FEE, 10);
-        assert!(l2.bid_prices.is_empty(), "BID 已 cancel 清除");
+        assert!(l2.bid_prices.is_empty(), "BID cleared by cancel");
         assert_eq!(conserved(&api, LTC), 0);
         assert_eq!(conserved(&api, XBT), 0);
     }
 
+    // 对应 Java testMakerBidCancelWithoutAnyFillFullyReleasesExchangeLocked()：完全未成交直接 cancel，
+    // exchangeLocked 应精确归零，不产生 dust 残留。
     #[test]
     fn maker_bid_cancel_without_any_fill_fully_releases_exchange_locked() {
         let mut api = ExchangeApi::new();
@@ -644,12 +683,14 @@ mod tests {
         assert_eq!(api.user_locked(UID_1, LTC), 153);
 
         assert_eq!(api.cancel_order(CancelOrderRequest { order_id: bid_order_id, uid: UID_1, symbol: SYM_FEE }), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, LTC), 0, "无成交 cancel 精确归零");
+        assert_eq!(api.user_locked(UID_1, LTC), 0, "cancel with no fills zeroes out exactly");
         assert_eq!(api.user_account(UID_1, LTC), 100_000);
         assert_eq!(available(&api, UID_1, LTC), 100_000);
         assert_eq!(conserved(&api, LTC), 0);
     }
 
+    // 对应 Java testFuturesFillDoesNotAffectSpotLock()：期货下单/撮合流程不应影响用户的现货 exchangeLocked
+    // 或现货挂单本身。
     #[test]
     fn futures_fill_does_not_affect_spot_lock() {
         let mut api = ExchangeApi::new();
@@ -672,14 +713,16 @@ mod tests {
         assert_eq!(api.place_futures_order(fut(40002, UID_2, SYM_FUT, fut_price, 1_000, OrderAction::Ask, OrderType::Gtc, 1, MarginMode::Cross)), CommandResultCode::Success);
         assert_eq!(api.place_futures_order(fut(40003, UID_1, SYM_FUT, fut_price, 1_000, OrderAction::Bid, OrderType::Ioc, 1, MarginMode::Cross)), CommandResultCode::Success);
 
-        assert!(api.user_position(UID_1, SYM_FUT).is_some(), "期货持仓应开成");
-        assert_eq!(api.user_locked(UID_1, USDT), spot_lock, "现货 lock 不受期货流程影响");
+        assert!(api.user_position(UID_1, SYM_FUT).is_some(), "futures position should be opened");
+        assert_eq!(api.user_locked(UID_1, USDT), spot_lock, "spot lock unaffected by futures flow");
         let l2 = api.request_l2(SYM_SPOT, 10);
-        assert_eq!(l2.bid_prices, vec![spot_price], "现货挂单仍在");
+        assert_eq!(l2.bid_prices, vec![spot_price], "spot order should still be resting");
         assert_eq!(conserved(&api, USDT), 0);
         assert_eq!(conserved(&api, BNB), 0);
     }
 
+    // 对应 Java testSuspendSweepsDustToFees()：SUSPEND 触发时把残留 dust 从用户账户 sweep 进 fees bucket，
+    // 同时保持全局守恒。
     #[test]
     fn suspend_sweeps_dust_to_fees() {
         let mut api = ExchangeApi::new();
@@ -701,17 +744,19 @@ mod tests {
 
         assert_eq!(api.balance_adjustment(UID_1, LTC, -99_895, 10), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(UID_1, XBT, -400, 11), CommandResultCode::Success);
-        assert_eq!(api.user_account(UID_1, LTC), 1, "LTC 剩 dust 1");
-        assert_eq!(api.user_locked(UID_1, LTC), 1, "dust 仍在 lock");
-        assert_eq!(api.user_account(UID_1, XBT), 0, "XBT 已全提");
+        assert_eq!(api.user_account(UID_1, LTC), 1, "LTC dust of 1 remains");
+        assert_eq!(api.user_locked(UID_1, LTC), 1, "dust still sits in lock");
+        assert_eq!(api.user_account(UID_1, XBT), 0, "XBT fully withdrawn");
 
         let fees_before = api.fees(LTC);
         assert_eq!(api.suspend_user(UID_1), CommandResultCode::Success);
-        assert!(api.ups().get(UID_1).is_none(), "SUSPEND 成功后 user 被移除");
-        assert_eq!(api.fees(LTC), fees_before + 1, "dust 1 已 sweep 到 fees bucket");
-        assert!(api.total_balance().is_global_zero(), "SUSPEND(含 dust sweep) 后全局守恒仍成立");
+        assert!(api.ups().get(UID_1).is_none(), "user should be removed after successful SUSPEND");
+        assert_eq!(api.fees(LTC), fees_before + 1, "dust of 1 swept into the fees bucket");
+        assert!(api.total_balance().is_global_zero(), "global conservation still holds after SUSPEND (including dust sweep)");
     }
 
+    // 对应 Java testSuspendDoesNotSweepWhenUserHasRealAccounts()：用户仍有真实余额（非 dust-only）时
+    // SUSPEND 被拒绝，不触发 sweep。
     #[test]
     fn suspend_no_sweep_with_real_accounts() {
         let mut api = ExchangeApi::new();
@@ -731,6 +776,8 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testSuspendCleanAccountDoesNotTriggerSweep()：完全干净账户（accounts/exchangeLocked 全 0）
+    // 时 SUSPEND 直接通过，sweep 是 no-op。
     #[test]
     fn suspend_clean_account_no_sweep() {
         let mut api = ExchangeApi::new();
@@ -739,11 +786,13 @@ mod tests {
 
         let fees_before = api.fees(USDT);
         assert_eq!(api.suspend_user(UID_1), CommandResultCode::Success);
-        assert_eq!(api.fees(USDT), fees_before, "无 dust sweep 进入 fees bucket");
-        assert!(api.ups().get(UID_1).is_none(), "干净账户 SUSPEND 后 user 被移除");
+        assert_eq!(api.fees(USDT), fees_before, "no dust swept into the fees bucket");
+        assert!(api.ups().get(UID_1).is_none(), "user should be removed after SUSPEND on a clean account");
         assert!(api.total_balance().is_global_zero());
     }
 
+    // 对应 Java testCrossLiquidationPriceAccountsForSpotLock()：CROSS 强平价计算必须扣减现货挂单冻结
+    // (exchangeLocked)，否则有现货挂单的用户会拿到偏乐观（偏低）的强平价。
     #[test]
     fn cross_liquidation_price_accounts_for_spot_lock() {
         let mut api = ExchangeApi::new();
@@ -766,24 +815,24 @@ mod tests {
 
         let liq_no_spot = {
             let report = api.single_user(UID_1, 0);
-            assert_eq!(report.exchange_locked.get(&USDT).copied().unwrap_or(0), 0, "无现货挂单冻结");
-            let pos = report.positions.iter().find(|p| p.symbol == SYM_FUT).expect("CROSS 仓位已开");
-            assert!(pos.liquidation_price > 0, "强平价格必须为正值");
+            assert_eq!(report.exchange_locked.get(&USDT).copied().unwrap_or(0), 0, "no spot order lock");
+            let pos = report.positions.iter().find(|p| p.symbol == SYM_FUT).expect("CROSS position should be open");
+            assert!(pos.liquidation_price > 0, "liquidation price must be positive");
             pos.liquidation_price
         };
 
         let spot_lock = 100 * USDT_SCALE;
         assert_eq!(api.place_order(spot_bid(50003, UID_1, SYM_SPOT, 50 * 100_000, 2_000, OrderType::Gtc)), CommandResultCode::Success);
-        assert_eq!(api.user_locked(UID_1, USDT), spot_lock, "现货 lock 已冻结 100 USDT");
+        assert_eq!(api.user_locked(UID_1, USDT), spot_lock, "spot lock has frozen 100 USDT");
 
         let liq_with_spot = {
             let report = api.single_user(UID_1, 0);
             assert_eq!(report.exchange_locked.get(&USDT).copied().unwrap_or(0), spot_lock);
-            report.positions.iter().find(|p| p.symbol == SYM_FUT).expect("仓位仍在").liquidation_price
+            report.positions.iter().find(|p| p.symbol == SYM_FUT).expect("position should still exist").liquidation_price
         };
         assert!(
             liq_with_spot > liq_no_spot,
-            "现货挂单冻结应抬高强平价：with_spot={liq_with_spot} no_spot={liq_no_spot}（若相等则 liquidation_price 未扣 exchangeLocked）"
+            "spot order lock should raise the liquidation price: with_spot={liq_with_spot} no_spot={liq_no_spot} (if equal, liquidation_price did not deduct exchangeLocked)"
         );
 
         assert!(api.total_balance().is_global_zero());

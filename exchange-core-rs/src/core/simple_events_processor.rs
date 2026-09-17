@@ -11,6 +11,11 @@ use crate::core::trade_events_handler::{
 };
 use crate::core::exchange_core::ExchangeCore;
 
+/// 对应 Java `SimpleEventsProcessor`（原实现 `ObjLongConsumer<OrderCommand>`，挂在 Disruptor 结果处理器上）。
+/// Rust 侧无 Disruptor，`process` 由调用方在 `ExchangeCore::process_command` 之后显式调用；
+/// Java 用 `seq < 0` 区分「来自 R2 风控阶段，只发 fund events」，Rust 因为单线程管线里 R1/ME/R2
+/// 已经在一次 `process_command` 内跑完，`process` 固定按 execution report → fund events → market data
+/// 全量顺序发送，不再需要这个符号位分支。
 pub struct SimpleEventsProcessor<T: TradeEventsHandler, F: FundEventsHandler> {
     trade: T,
     fund: F,
@@ -21,6 +26,7 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         SimpleEventsProcessor { trade, fund }
     }
 
+    /// 对应 Java `SimpleEventsProcessor.accept` 的主流程分支（`seq >= 0`）。
     pub fn process(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
         self.send_execution_report(core, cmd, seq);
         self.send_fund_events(cmd, seq);
@@ -39,6 +45,7 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         (self.trade, self.fund)
     }
 
+    // 对应 Java `SimpleEventsProcessor.sendExecutionReport`：按 symbol 类型分派到现货/期货报告构造。
     fn send_execution_report(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
         if !is_reportable_command(cmd.command) {
             return;
@@ -53,6 +60,8 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
+    // 对应 Java `SimpleEventsProcessor.sendSpotExecutionReport`：NEW → REJECT → CANCEL/REDUCE(提前返回) →
+    // 按 matcher_event 链表遍历逐笔 TRADE（taker/maker 各发一条）。顺序与 Java 严格一致，供下游按序重放。
     fn send_spot_execution_report(&mut self, cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) {
         let first = cmd.matcher_event.as_deref();
         if cmd.command == OrderCommandType::PlaceOrder && cmd.result_code == Some(CommandResultCode::Success) {
@@ -85,6 +94,8 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
+    // 对应 Java `SimpleEventsProcessor.sendFuturesExecutionReport`：结构同现货版，额外查 taker/maker 各自
+    // 的持仓模式（position_side）附加到回报里；Java 按 uid 分片查 UserProfileService，Rust 单 shard 直查 core.ups。
     fn send_futures_execution_report(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) {
         let first = cmd.matcher_event.as_deref();
         let taker_side = position_mode_of(core, cmd.uid);
@@ -119,6 +130,10 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
+    // 对应 Java `SimpleEventsProcessor.sendFundEvents`：Java 要在 taker 链表(cmd.takerFundEvents)与
+    // per-shard maker 链表数组(cmd.makerFundEventsByShard)上各走一遍，靠 `processed` 标记去重
+    // （同一事件可能在多 shard 场景下被路由到不止一次遍历）。Rust 撮合塌缩为单 shard，事件已在
+    // `cmd.fund_events` 收敛成一个扁平 Vec，直接顺序遍历即可，不需要 processed 去重。
     fn send_fund_events(&mut self, cmd: &OrderCommand, seq: i64) {
         for (index, fe) in cmd.fund_events.iter().enumerate() {
             let uni_id = ExecutionIdGenerator::build_trade_exec_id(seq, index as i32, false);
@@ -126,6 +141,8 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
+    // 对应 Java `SimpleEventsProcessor.sendMarketData`：把 cmd 上挂的 L2 快照转成对外 OrderBook，
+    // 缺失 spec 时 Java 记错误日志但仍以 scale=0 发出（按设计不可达）；Rust 简化为直接兜底 0。
     fn send_market_data(&mut self, core: &ExchangeCore, cmd: &OrderCommand) {
         let Some(md) = &cmd.market_data else { return };
         let asks = md
@@ -150,6 +167,8 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
     }
 }
 
+// 对应 Java `SimpleEventsProcessor.isReportableCommand`：纯订单生命周期指令（含 CLOSE_POSITION/
+// FORCE_LIQUIDATION——两者内部也走 orderBook.newOrder）才生成 execution report。
 fn is_reportable_command(command: OrderCommandType) -> bool {
     matches!(
         command,
@@ -162,6 +181,8 @@ fn is_reportable_command(command: OrderCommandType) -> bool {
     )
 }
 
+// 对应 Java 内联的 `userProfileServices.get(shardIdOfUid(uid)).getUserProfile(uid).positionMode`
+// 查询（单 shard 塌缩后无需按 uid 分片路由）。
 fn position_mode_of(core: &ExchangeCore, uid: i64) -> PositionMode {
     core.ups.get(uid).map(|u| u.position_mode).unwrap_or_default()
 }
@@ -278,8 +299,8 @@ mod tests {
         assert_eq!(tr.spot[0].execution_type, ExecType::New);
         let trades: Vec<&SpotExecutionReport> = tr.spot.iter().filter(|r| r.execution_type == ExecType::Trade).collect();
         assert_eq!(trades.len(), 2);
-        assert!(trades.iter().any(|r| !r.is_maker), "缺 taker TRADE");
-        assert!(trades.iter().any(|r| r.is_maker), "缺 maker TRADE");
+        assert!(trades.iter().any(|r| !r.is_maker), "missing taker TRADE");
+        assert!(trades.iter().any(|r| r.is_maker), "missing maker TRADE");
         let taker_trade = trades.iter().find(|r| !r.is_maker).unwrap();
         assert_eq!(taker_trade.account_id, BUYER);
         assert_eq!(taker_trade.last_qty, 10);
@@ -289,7 +310,7 @@ mod tests {
         assert_eq!(maker_trade.account_id, SELLER);
         assert_eq!(maker_trade.order_id, 100);
 
-        assert!(!proc.fund_handler().fund.is_empty(), "现货成交应产生资金事件回报");
+        assert!(!proc.fund_handler().fund.is_empty(), "spot trade should produce fund event reports");
     }
 
     use crate::core::common::fund_event::{FundEvent, FundEventType};

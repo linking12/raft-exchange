@@ -1,5 +1,9 @@
 #[cfg(test)]
 mod tests {
+    // 翻译自 Java `ITFuturesTradingFeeCalculationTest`
+    // 验证期货动态手续费（maker/taker）在各类下单方式、部分成交、反手开仓、hedge 双向持仓、
+    // 追加保证金等场景下的计算是否正确，并校验 USD 全局守恒（账户余额 + adjustments + fees + 持仓浮盈 == 0）。
+
     use std::collections::BTreeMap;
 
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -117,6 +121,7 @@ fn btc_taker(size: i64, price: i64) -> i64 {
     calculate_taker_fee(size, price, BTC_TAKER_FEE, BTC_FEE_SCALE_K)
 }
 
+// 校验 USD 全局守恒：所有用户余额 + adjustments + fees + 持仓浮盈(按标记价)/extra_margin 之和应为 0
 fn assert_conserved_usd(api: &ExchangeApi) {
     let mut total: i64 = api.ups().users.values().map(|p| p.account(USD)).sum();
     total += api.adjustments(USD);
@@ -134,9 +139,10 @@ fn assert_conserved_usd(api: &ExchangeApi) {
             total += pos.extra_margin;
         }
     }
-    assert_eq!(total, 0, "期货全局守恒被打破：USD total={total}");
+    assert_eq!(total, 0, "futures global conservation broken: USD total={total}");
 }
 
+// hedge 模式下按方向（LONG/SHORT）取出对应的独立仓位腿
 fn hedge_leg(api: &ExchangeApi, uid: i64, symbol: i32, dir: PositionDirection) -> Option<&SymbolPositionRecord> {
     api.ups()
         .get(uid)?
@@ -145,6 +151,7 @@ fn hedge_leg(api: &ExchangeApi, uid: i64, symbol: i32, dir: PositionDirection) -
         .find(|p| p.symbol == symbol && p.direction == dir)
 }
 
+// hedge 模式下把该用户在该 symbol 上所有腿的 open_volume 相加（用于校验平仓后归零）
 fn hedge_open_volume_sum(api: &ExchangeApi, uid: i64, symbol: i32) -> i64 {
     api.ups()
         .get(uid)
@@ -152,6 +159,7 @@ fn hedge_open_volume_sum(api: &ExchangeApi, uid: i64, symbol: i32) -> i64 {
         .unwrap_or(0)
 }
 
+// 对应 Java testFuturesGtcMakerTakerFeeCalculation：GTC maker 挂单 + GTC taker 吃单，验证 maker/taker 手续费金额及账户扣费
 #[test]
 fn futures_gtc_maker_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -167,10 +175,10 @@ fn futures_gtc_maker_taker_fee_calculation() {
     assert_eq!(place(&mut api, 1001, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
     assert_eq!(place(&mut api, 1002, TAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
 
-    let maker_pos = api.user_position(MAKER, BTC_SYM).expect("maker 应有仓位");
+    let maker_pos = api.user_position(MAKER, BTC_SYM).expect("maker should have a position");
     assert_eq!(maker_pos.direction, PositionDirection::Long);
     assert_eq!(maker_pos.open_volume, size);
-    let taker_pos = api.user_position(TAKER, BTC_SYM).expect("taker 应有仓位");
+    let taker_pos = api.user_position(TAKER, BTC_SYM).expect("taker should have a position");
     assert_eq!(taker_pos.direction, PositionDirection::Short);
     assert_eq!(taker_pos.open_volume, size);
 
@@ -185,6 +193,7 @@ fn futures_gtc_maker_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesIocTakerFeeCalculation：IOC taker 吃单场景下的 taker 手续费计算
 #[test]
 fn futures_ioc_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -211,6 +220,7 @@ fn futures_ioc_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 开仓后再反向平仓一轮，校验不同 taker 单类型下 maker/taker 各自的账户余额与全局 fees 是否一致
 fn run_per_user_balance(taker_type: OrderType) {
     const MAKER: i64 = 9001;
     const TAKER: i64 = 9002;
@@ -232,8 +242,8 @@ fn run_per_user_balance(taker_type: OrderType) {
     assert_eq!(place(&mut api, 9103, TAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
     assert_eq!(place(&mut api, 9104, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
 
-    assert!(api.user_position(MAKER, BTC_SYM).is_none(), "[{taker_type:?}] maker 仓位应全平");
-    assert!(api.user_position(TAKER, BTC_SYM).is_none(), "[{taker_type:?}] taker 仓位应全平");
+    assert!(api.user_position(MAKER, BTC_SYM).is_none(), "[{taker_type:?}] maker position should be fully closed");
+    assert!(api.user_position(TAKER, BTC_SYM).is_none(), "[{taker_type:?}] taker position should be fully closed");
 
     let maker_fee = btc_maker(size, price);
     let taker_fee = btc_taker(size, price);
@@ -243,6 +253,7 @@ fn run_per_user_balance(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesPerUserBalanceAcrossOrderTypes：对 GTC/IOC/FOK_BUDGET/IOC_BUDGET 四种 taker 单类型分别跑一遍
 #[test]
 fn futures_per_user_balance_across_order_types() {
     run_per_user_balance(OrderType::Gtc);
@@ -251,6 +262,7 @@ fn futures_per_user_balance_across_order_types() {
     run_per_user_balance(OrderType::IocBudget);
 }
 
+// 充值 -> 开平仓收费 -> 提现清零的完整生命周期，校验 adjustments/fees 净额与全局守恒
 fn run_full_lifecycle(taker_type: OrderType) {
     const MAKER: i64 = 9201;
     const TAKER: i64 = 9202;
@@ -263,7 +275,7 @@ fn run_full_lifecycle(taker_type: OrderType) {
     seed_user(&mut api, TAKER, deposit, 2);
     assert_eq!(api.user_account(MAKER, USD), deposit);
     assert_eq!(api.user_account(TAKER, USD), deposit);
-    assert_eq!(api.adjustments(USD), -2 * deposit, "[{taker_type:?}] 充值后 adjustments = -2*deposit");
+    assert_eq!(api.adjustments(USD), -2 * deposit, "[{taker_type:?}] adjustments = -2*deposit after deposit");
     assert_conserved_usd(&api);
 
     assert_eq!(place(&mut api, 9301, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
@@ -290,11 +302,12 @@ fn run_full_lifecycle(taker_type: OrderType) {
     assert_eq!(api.user_account(MAKER, USD), 0);
     assert_eq!(api.user_account(TAKER, USD), 0);
     let expected_adjustments = -2 * (maker_fee + taker_fee);
-    assert_eq!(api.adjustments(USD), expected_adjustments, "[{taker_type:?}] adjustments 净额");
-    assert_eq!(api.fees(USD), 2 * (maker_fee + taker_fee), "[{taker_type:?}] fees 总额");
+    assert_eq!(api.adjustments(USD), expected_adjustments, "[{taker_type:?}] net adjustments");
+    assert_eq!(api.fees(USD), 2 * (maker_fee + taker_fee), "[{taker_type:?}] total fees");
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesFullLifecycleWithDepositWithdraw：对四种 taker 单类型分别跑一遍完整生命周期
 #[test]
 fn futures_full_lifecycle_with_deposit_withdraw() {
     run_full_lifecycle(OrderType::Gtc);
@@ -303,6 +316,7 @@ fn futures_full_lifecycle_with_deposit_withdraw() {
     run_full_lifecycle(OrderType::IocBudget);
 }
 
+// 对应 Java testFuturesExtraMarginFullLifecycleConservation：逐仓追加保证金 -> 平仓退回 -> 提现清零，全程校验全局守恒
 #[test]
 fn futures_extra_margin_full_lifecycle_conservation() {
     const TAKER: i64 = 9701;
@@ -334,13 +348,13 @@ fn futures_extra_margin_full_lifecycle_conservation() {
         }),
         CommandResultCode::Success
     );
-    assert_eq!(api.user_account(TAKER, USD), account_before - extra_margin_amount, "追加后 account 减 extraMarginAmount");
+    assert_eq!(api.user_account(TAKER, USD), account_before - extra_margin_amount, "account minus extraMarginAmount after topping up");
     assert_eq!(api.user_position(TAKER, BTC_SYM).unwrap().extra_margin, extra_margin_amount, "position.extra_margin == extraMarginAmount");
     assert_conserved_usd(&api);
 
     assert_eq!(place(&mut api, 9803, TAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
     assert_eq!(place(&mut api, 9804, MAKER, BTC_SYM, price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
-    assert!(api.user_position(TAKER, BTC_SYM).is_none(), "平仓后仓位拆除，extra_margin 退回");
+    assert!(api.user_position(TAKER, BTC_SYM).is_none(), "position is torn down after closing, extra_margin refunded");
     assert_conserved_usd(&api);
 
     let taker_bal = api.user_account(TAKER, USD);
@@ -357,6 +371,7 @@ fn futures_extra_margin_full_lifecycle_conservation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesPositionClosingFeeCalculation：先开仓再部分平仓，校验平仓段单独产生的 maker/taker 手续费
 #[test]
 fn futures_position_closing_fee_calculation() {
     const MAKER: i64 = 1;
@@ -394,6 +409,7 @@ fn futures_position_closing_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testDynamicFeeCalculationAccuracy：纯公式校验，多档 size 下动态费率的 maker/taker 计算结果
 #[test]
 fn dynamic_fee_calculation_accuracy() {
     let price = 50_000i64;
@@ -405,6 +421,7 @@ fn dynamic_fee_calculation_accuracy() {
     }
 }
 
+// 对应 Java testDynamicFeeTradingWithEthSymbol：用 ETH 合约（不同费率参数）实盘下单验证动态费率生效
 #[test]
 fn dynamic_fee_trading_with_eth_symbol() {
     const MAKER: i64 = 1;
@@ -436,6 +453,7 @@ fn dynamic_fee_trading_with_eth_symbol() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesMakerOneToManyFeeCalculation：一个 maker 大单被三个 taker 分别吃掉，校验 maker 手续费按各笔累加
 #[test]
 fn futures_maker_one_to_many_fee_calculation() {
     const MAKER: i64 = 1;
@@ -469,6 +487,7 @@ fn futures_maker_one_to_many_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesTakerOneToManyFeeCalculation：一个 taker 大单依次吃掉三个不同价位的 maker，校验按各笔成交价分别计费
 #[test]
 fn futures_taker_one_to_many_fee_calculation() {
     const M1: i64 = 1;
@@ -500,6 +519,7 @@ fn futures_taker_one_to_many_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesMixedOrderTypesFeeCalculation：两个 GTC maker + 一个 GTC taker + 一个 IOC taker 混合撮合下的费用计算
 #[test]
 fn futures_mixed_order_types_fee_calculation() {
     const M1: i64 = 1;
@@ -533,6 +553,7 @@ fn futures_mixed_order_types_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesFokBudgetTakerFeeCalculation：FOK_BUDGET taker 按预算全额成交时的手续费计算
 #[test]
 fn futures_fok_budget_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -556,6 +577,7 @@ fn futures_fok_budget_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesIocBudgetFullFillTakerFeeCalculation：IOC_BUDGET taker 按预算全额成交时的手续费计算
 #[test]
 fn futures_ioc_budget_full_fill_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -573,12 +595,13 @@ fn futures_ioc_budget_full_fill_taker_fee_calculation() {
     assert_eq!(place(&mut api, 7102, TAKER, BTC_SYM, budget, size, OrderAction::Bid, OrderType::IocBudget, MarginMode::Cross, 1), CommandResultCode::Success);
 
     let expected_taker_fee = btc_taker(size, price);
-    assert_eq!(api.user_position(TAKER, BTC_SYM).unwrap().open_volume, size, "IOC_BUDGET 全成 lastQty == size");
+    assert_eq!(api.user_position(TAKER, BTC_SYM).unwrap().open_volume, size, "IOC_BUDGET fully filled, lastQty == size");
     assert_eq!(api.user_account(TAKER, USD), deposit - expected_taker_fee);
     assert_eq!(api.fees(USD), btc_maker(size, price) + expected_taker_fee);
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesIocBudgetPartialFillTakerFeeCalculation：IOC_BUDGET taker 因预算不足只部分成交，费用只按实际成交量计算
 #[test]
 fn futures_ioc_budget_partial_fill_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -598,16 +621,17 @@ fn futures_ioc_budget_partial_fill_taker_fee_calculation() {
 
     let expected_taker_fee = btc_taker(filled, price);
     let wrong_taker_fee = btc_taker(requested, price);
-    assert_ne!(expected_taker_fee, wrong_taker_fee, "sanity：filled 与 requested 费不同");
+    assert_ne!(expected_taker_fee, wrong_taker_fee, "sanity: fee for filled differs from fee for requested");
 
-    assert_eq!(api.user_position(TAKER, BTC_SYM).unwrap().open_volume, filled, "taker 只开出已成交 6");
+    assert_eq!(api.user_position(TAKER, BTC_SYM).unwrap().open_volume, filled, "taker only opens the filled 6, not the requested amount");
     assert_eq!(api.user_account(TAKER, USD), deposit - expected_taker_fee);
     assert_eq!(api.user_position(MAKER, BTC_SYM).unwrap().open_volume, filled);
     assert_eq!(api.fees(USD), btc_maker(filled, price) + expected_taker_fee);
-    assert!(api.fees(USD) > 0, "应收到 USD fee");
+    assert!(api.fees(USD) > 0, "should have collected a USD fee");
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesFeeCalculationParameters：用非整数价格校验手续费计算参数的正确性
 #[test]
 fn futures_fee_calculation_parameters() {
     const MAKER: i64 = 1;
@@ -631,6 +655,7 @@ fn futures_fee_calculation_parameters() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesMakerOneToManyPartialFillFeeConsistency：maker 大单被多笔部分成交吃掉时，全局 fees 应等于逐笔 maker+taker 之和
 #[test]
 fn futures_maker_one_to_many_partial_fill_fee_consistency() {
     const MAKER: i64 = 1;
@@ -659,12 +684,13 @@ fn futures_maker_one_to_many_partial_fill_fee_consistency() {
     let expected_maker_fees = btc_maker(s1, price) + btc_maker(s2, price) + btc_maker(s3, price);
     let expected_taker_fees = btc_taker(s1, price) + btc_taker(s2, price) + btc_taker(s3, price);
     let global_fees_collected = api.fees(USD) - fees_before;
-    assert_eq!(global_fees_collected, expected_maker_fees + expected_taker_fees, "全局 fee == 逐笔 maker+taker 之和");
+    assert_eq!(global_fees_collected, expected_maker_fees + expected_taker_fees, "global fee == sum of per-trade maker+taker fees");
     assert!(global_fees_collected > 0);
     assert!(global_fees_collected < filled * price / 10);
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesTakerOneToManyPartialFillFeeConsistency：taker 大单依次吃掉多个不同价位 maker，全局 fees 应等于逐笔 maker+taker 之和
 #[test]
 fn futures_taker_one_to_many_partial_fill_fee_consistency() {
     const M1: i64 = 1;
@@ -700,6 +726,7 @@ fn futures_taker_one_to_many_partial_fill_fee_consistency() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesReverseOpeningFeeCalculation：反手开仓（平掉原 LONG 同时反向开出更大的 SHORT），校验平仓段已实现盈亏与新开仓段手续费
 #[test]
 fn futures_reverse_opening_fee_calculation() {
     const U1: i64 = 1;
@@ -725,10 +752,10 @@ fn futures_reverse_opening_fee_calculation() {
     assert_eq!(place(&mut api, 11003, U1, BTC_SYM, reverse_price, reverse_size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
     assert_eq!(place(&mut api, 11004, U3, BTC_SYM, reverse_price, reverse_size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 1), CommandResultCode::Success);
 
-    let u1_pos = api.user_position(U1, BTC_SYM).expect("翻仓后 U1 仍持仓");
+    let u1_pos = api.user_position(U1, BTC_SYM).expect("U1 should still hold a position after reversal");
     assert_eq!(u1_pos.direction, PositionDirection::Short);
     assert_eq!(u1_pos.open_volume, reverse_size - initial_size);
-    assert_eq!(u1_pos.profit, 20_000, "平腿已实现盈亏累进但未支付（新仓非空）");
+    assert_eq!(u1_pos.profit, 20_000, "closing leg's realized PnL accrues but is not paid out (new position is non-empty)");
 
     assert_eq!(api.user_position(U3, BTC_SYM).unwrap().direction, PositionDirection::Long);
     assert_eq!(api.user_position(U3, BTC_SYM).unwrap().open_volume, reverse_size);
@@ -743,6 +770,7 @@ fn futures_reverse_opening_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testHedgeModePositionOpeningFeeEvents：hedge 模式下同一用户同时开 LONG 与 SHORT 两条独立腿，各自按 maker 手续费计费
 #[test]
 fn hedge_mode_position_opening_fee_events() {
     const USER: i64 = 1;
@@ -777,6 +805,7 @@ fn hedge_mode_position_opening_fee_events() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testHedgeModePartialClosingFeeEvents：hedge 模式下部分平掉 LONG 腿，SHORT 腿不受影响，校验平仓段手续费
 #[test]
 fn hedge_mode_partial_closing_fee_events() {
     const USER: i64 = 1;
@@ -832,6 +861,7 @@ fn hedge_mode_partial_closing_fee_events() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testHedgeModePositionReversalFeeEvents：hedge 模式下 LONG 腿全平后拆除，同时开出新的 SHORT 腿，校验相关手续费
 #[test]
 fn hedge_mode_position_reversal_fee_events() {
     const USER: i64 = 1;
@@ -870,7 +900,7 @@ fn hedge_mode_position_reversal_fee_events() {
     assert_eq!(place(&mut api, 14004, USER, BTC_SYM, price, new_short, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
     assert_eq!(place(&mut api, 14005, CP2, BTC_SYM, price, reversal, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
 
-    assert!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).is_none(), "LONG 全平后应拆除");
+    assert!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Long).is_none(), "LONG leg should be torn down once fully closed");
     assert_eq!(hedge_leg(&api, USER, BTC_SYM, PositionDirection::Short).unwrap().open_volume, new_short);
 
     let expected_close_maker = btc_maker(initial_long, price);
@@ -883,6 +913,7 @@ fn hedge_mode_position_reversal_fee_events() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testHedgeModeMixedOrderTypesFeeEvents：hedge 模式下 GTC 开仓后，IOC 单因无对手盘未成交，不应产生新手续费
 #[test]
 fn hedge_mode_mixed_order_types_fee_events() {
     const USER: i64 = 1;
@@ -921,6 +952,7 @@ fn hedge_mode_mixed_order_types_fee_events() {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testHedgeModeFeeConsistencyWithGlobalBalance：hedge 模式双向开仓后，全局 fees 与全局余额守恒均应成立
 #[test]
 fn hedge_mode_fee_consistency_with_global_balance() {
     const USER: i64 = 1;
@@ -947,12 +979,13 @@ fn hedge_mode_fee_consistency_with_global_balance() {
     let global_fees_collected = api.fees(USD) - initial_fees;
     let expected = btc_maker(long_size, price) + btc_taker(long_size, price)
         + btc_maker(short_size, price) + btc_taker(short_size, price);
-    assert_eq!(global_fees_collected, expected, "全局 fees == 四笔 maker+taker 之和");
+    assert_eq!(global_fees_collected, expected, "global fees == sum of the four maker+taker fees");
     assert!(global_fees_collected > 0);
-    assert!(api.total_balance().is_global_zero(), "HEDGE 双向开仓后全局守恒");
+    assert!(api.total_balance().is_global_zero(), "global conservation holds after HEDGE two-sided opening");
     assert_conserved_usd(&api);
 }
 
+// hedge 模式下开 LONG+SHORT 两条腿再依次平掉、提现清零的完整生命周期，校验各阶段全局守恒
 fn run_hedge_full_lifecycle(taker_type: OrderType) {
     const MAKER: i64 = 9401;
     const TAKER: i64 = 9402;
@@ -991,7 +1024,7 @@ fn run_hedge_full_lifecycle(taker_type: OrderType) {
     assert_eq!(api.close_position(ClosePositionRequest { order_id: 9507, uid: TAKER, symbol: BTC_SYM, action: OrderAction::Bid, price, size, order_type: OrderType::Gtc }), CommandResultCode::Success);
     assert_eq!(place(&mut api, 9508, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
 
-    assert_eq!(hedge_open_volume_sum(&api, TAKER, BTC_SYM), 0, "[{taker_type:?}] 平仓后 openVolume 总和为 0");
+    assert_eq!(hedge_open_volume_sum(&api, TAKER, BTC_SYM), 0, "[{taker_type:?}] openVolume sums to 0 after closing");
     assert_conserved_usd(&api);
 
     let maker_bal = api.user_account(MAKER, USD);
@@ -1005,6 +1038,7 @@ fn run_hedge_full_lifecycle(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesHedgeFullLifecycleWithDepositWithdraw：对四种 taker 单类型分别跑一遍 hedge 完整生命周期
 #[test]
 fn futures_hedge_full_lifecycle_with_deposit_withdraw() {
     run_hedge_full_lifecycle(OrderType::Gtc);
@@ -1013,6 +1047,7 @@ fn futures_hedge_full_lifecycle_with_deposit_withdraw() {
     run_hedge_full_lifecycle(OrderType::IocBudget);
 }
 
+// 逐仓 + hedge 模式下开 LONG+SHORT 两条独立腿（各自独立保证金）再平仓、提现清零的完整生命周期
 fn run_isolated_hedge_full_lifecycle(taker_type: OrderType) {
     const MAKER: i64 = 9601;
     const TAKER: i64 = 9602;
@@ -1058,7 +1093,7 @@ fn run_isolated_hedge_full_lifecycle(taker_type: OrderType) {
     assert_eq!(api.close_position(ClosePositionRequest { order_id: 9707, uid: TAKER, symbol: BTC_SYM, action: OrderAction::Bid, price, size, order_type: OrderType::Gtc }), CommandResultCode::Success);
     assert_eq!(place(&mut api, 9708, MAKER, BTC_SYM, price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
 
-    assert_eq!(hedge_open_volume_sum(&api, TAKER, BTC_SYM), 0, "[{taker_type:?}] 平仓后 openVolume 总和为 0");
+    assert_eq!(hedge_open_volume_sum(&api, TAKER, BTC_SYM), 0, "[{taker_type:?}] openVolume sums to 0 after closing");
     assert_conserved_usd(&api);
 
     let maker_bal = api.user_account(MAKER, USD);
@@ -1072,6 +1107,7 @@ fn run_isolated_hedge_full_lifecycle(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
+// 对应 Java testFuturesIsolatedHedgeFullLifecycleWithDepositWithdraw：对四种 taker 单类型分别跑一遍逐仓 hedge 完整生命周期
 #[test]
 fn futures_isolated_hedge_full_lifecycle_with_deposit_withdraw() {
     run_isolated_hedge_full_lifecycle(OrderType::Gtc);

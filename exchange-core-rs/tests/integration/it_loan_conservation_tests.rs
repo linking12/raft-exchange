@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod tests {
+    // 翻译自 Java `ITLoanConservation`
+    // 验证非恒等 scale（WBTC currency_scale_k=100）下 loan 强平/还款各路径的全局资金守恒（含跨币种 loan 平台桶）
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
@@ -138,9 +140,10 @@ mod tests {
     }
 
     fn assert_conserved(core: &ExchangeCore, whence: &str) {
-        assert!(core.query_total_balance().is_global_zero(), "全局资金守恒破裂 @ {whence} —— loan 平台桶已纳入对账");
+        assert!(core.query_total_balance().is_global_zero(), "global conservation broken @ {whence} -- loan platform bucket is included in reconciliation");
     }
 
+    // 搭建整套测试夹具：WBTC(scale_k=100，非恒等)/USDT 现货对 + loan_config + 资金池预存 + BORROWER/LP 初始余额
     fn boot() -> ExchangeCore {
         let mut core = ExchangeCore::new();
         core.ssp.add_currency(CoreCurrencySpecification { currency: WBTC, currency_scale_k: 100, collateral_weight_bps: 10_000, ..Default::default() });
@@ -177,6 +180,7 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
     }
 
+    // 对应 Java fullLiquidation_nonIdentityScale_conserves：抵押品全部被强平卖出后校验守恒
     #[test]
     fn full_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -189,16 +193,17 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         let borrower = core.ups.get(BORROWER).unwrap();
-        assert_eq!(borrower.locked(WBTC), 0, "exchangeLocked[WBTC] 未归零");
-        assert_eq!(borrower.account(WBTC), 0, "3 WBTC 抵押应全部卖出");
-        assert_eq!(core.ups.get(LP).unwrap().account(WBTC), COLLATERAL_WBTC, "LP 应收 3 WBTC");
+        assert_eq!(borrower.locked(WBTC), 0, "exchangeLocked[WBTC] should be zero");
+        assert_eq!(borrower.account(WBTC), 0, "all 3 WBTC collateral should be sold");
+        assert_eq!(core.ups.get(LP).unwrap().account(WBTC), COLLATERAL_WBTC, "LP should receive 3 WBTC");
 
         let proceeds = COLLATERAL_LOTS * MARK_PRICE;
         let liq_fee = proceeds * 200 / 10_000;
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), proceeds - liq_fee, "借款人 USDT 结算额错（应为 proceeds−liqFee）");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), proceeds - liq_fee, "borrower's USDT settlement amount is wrong (should be proceeds - liqFee)");
         assert_conserved(&core, "after full liquidation");
     }
 
+    // 对应 Java partialFillLiquidation_nonIdentityScale_conserves：流动性只够部分成交，仅卖出部分抵押品后校验守恒
     #[test]
     fn partial_fill_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -209,26 +214,28 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         let borrower = core.ups.get(BORROWER).unwrap();
-        assert_eq!(borrower.locked(WBTC), 0, "partial-fill 后 exchangeLocked[WBTC] 未归零");
-        assert_eq!(borrower.account(WBTC), 100, "只卖 2 lot，账户应剩 100（1 WBTC）");
+        assert_eq!(borrower.locked(WBTC), 0, "exchangeLocked[WBTC] should be zero after partial-fill");
+        assert_eq!(borrower.account(WBTC), 100, "only 2 lots sold, account should have 100 (1 WBTC) remaining");
         let proceeds = 2 * MARK_PRICE;
-        assert_eq!(borrower.account(USDT), proceeds - proceeds * 200 / 10_000, "partial-fill 借款人 USDT 结算额错");
+        assert_eq!(borrower.account(USDT), proceeds - proceeds * 200 / 10_000, "borrower's USDT settlement amount is wrong for partial-fill");
         assert_conserved(&core, "after partial-fill liquidation");
     }
 
+    // 对应 Java repay_nonIdentityScale_conserves：全额还款后校验守恒
     #[test]
     fn repay_non_identity_scale_conserves() {
         let mut core = boot();
         create_loan(&mut core, 3);
         assert_conserved(&core, "after create");
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), PRINCIPAL, "借入后 USDT 应 = 本金");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), PRINCIPAL, "USDT should equal the principal after borrowing");
 
         let (rc, _) = submit(&mut core, cmd_loan_repay(20, BORROWER, 3, 0, 1_000));
         assert_eq!(rc, CommandResultCode::Success);
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), 0, "全额还款后 USDT 应归零");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), 0, "USDT should be zero after full repayment");
         assert_conserved(&core, "after full repay");
     }
 
+    // 对应 Java resetFee_doesNotSweepInsuranceFund_conserves：RESET_FEE 不得清空 loan 保险基金（准备金非收入），且不影响守恒
     #[test]
     fn reset_fee_does_not_sweep_insurance_fund_conserves() {
         let mut core = boot();
@@ -237,15 +244,15 @@ mod tests {
         let (rc, _) = submit(&mut core, cmd_loan_force_liquidate(2000, BORROWER, SYMBOL, 4, MARK_PRICE, COLLATERAL_LOTS, 2_000));
         assert_eq!(rc, CommandResultCode::Success);
 
-        assert_eq!(*core.risk.fees.get(&USDT).unwrap_or(&0), 0, "撮合 fees 应为 0（takerFee/makerFee=0）");
+        assert_eq!(*core.risk.fees.get(&USDT).unwrap_or(&0), 0, "matching fees should be 0 (takerFee/makerFee=0)");
         let adj_before = *core.risk.adjustments.get(&USDT).unwrap_or(&0);
         assert_conserved(&core, "after liquidation, before reset-fee");
 
         let (rc, _) = submit(&mut core, cmd_reset_fee(999));
         assert_eq!(rc, CommandResultCode::Success);
 
-        assert_eq!(*core.risk.adjustments.get(&USDT).unwrap_or(&0), adj_before, "RESET_FEE 不得提取 LIF —— 它是准备金不是收入");
-        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(USDT), COLLATERAL_LOTS * MARK_PRICE * 200 / 10_000, "强平费应仍在 LIF");
+        assert_eq!(*core.risk.adjustments.get(&USDT).unwrap_or(&0), adj_before, "RESET_FEE must not sweep the LIF -- it is a reserve, not revenue");
+        assert_eq!(core.risk.loan_service.get_loan_insurance_fund(USDT), COLLATERAL_LOTS * MARK_PRICE * 200 / 10_000, "liquidation fee should still be in the LIF");
         assert_conserved(&core, "after reset-fee");
     }
 
@@ -256,25 +263,27 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
     }
 
+    // 对应 Java crossFullLiquidation_nonIdentityScale_conserves：cross 借贷抵押品全部被强平卖出后校验守恒
     #[test]
     fn cross_full_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
         cross_borrow(&mut core, 10);
         assert_conserved(&core, "after cross borrow");
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), CROSS_PRINCIPAL, "借入后 USDT = 本金");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), CROSS_PRINCIPAL, "USDT should equal the principal after borrowing");
 
         place_lp_bid(&mut core, 2000, COLLATERAL_LOTS);
         let (rc, _) = submit(&mut core, cmd_loan_cross_force_liquidate(3000, BORROWER, SYMBOL, 10, MARK_PRICE, COLLATERAL_LOTS, 2_000));
         assert_eq!(rc, CommandResultCode::Success);
 
         let borrower = core.ups.get(BORROWER).unwrap();
-        assert_eq!(borrower.locked(WBTC), 0, "cross 强平后 exchangeLocked[WBTC] 未归零");
-        assert_eq!(borrower.account(WBTC), 0, "3 WBTC 抵押应全部卖出");
+        assert_eq!(borrower.locked(WBTC), 0, "exchangeLocked[WBTC] should be zero after cross liquidation");
+        assert_eq!(borrower.account(WBTC), 0, "all 3 WBTC collateral should be sold");
         let proceeds = COLLATERAL_LOTS * MARK_PRICE;
-        assert_eq!(borrower.account(USDT), proceeds - proceeds * 200 / 10_000, "cross 借款人 USDT 结算额错");
+        assert_eq!(borrower.account(USDT), proceeds - proceeds * 200 / 10_000, "borrower's USDT settlement amount is wrong for cross liquidation");
         assert_conserved(&core, "after cross full liquidation");
     }
 
+    // 对应 Java crossUnderwaterLiquidation_nonIdentityScale_conserves：抵押品跌破本金（underwater）时强平，借款人本金不返还，仍需守恒
     #[test]
     fn cross_underwater_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -286,11 +295,12 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
 
         let borrower = core.ups.get(BORROWER).unwrap();
-        assert_eq!(borrower.locked(WBTC), 0, "underwater cross 强平后 exchangeLocked 未归零");
-        assert_eq!(borrower.account(USDT), CROSS_PRINCIPAL, "underwater：借款人应保留全额本金");
+        assert_eq!(borrower.locked(WBTC), 0, "exchangeLocked should be zero after underwater cross liquidation");
+        assert_eq!(borrower.account(USDT), CROSS_PRINCIPAL, "underwater: borrower should keep the full principal");
         assert_conserved(&core, "after cross underwater liquidation");
     }
 
+    // 对应 Java crossWithdrawAndRepay_nonIdentityScale_conserves：cross 借贷下先提取部分抵押品再全额还款，验证两步都守恒
     #[test]
     fn cross_withdraw_and_repay_non_identity_scale_conserves() {
         let mut core = boot();
@@ -300,10 +310,11 @@ mod tests {
         assert_conserved(&core, "after cross withdraw collateral");
         let (rc, _) = submit(&mut core, cmd_loan_cross_repay(23, BORROWER, 12, 0, 1_000));
         assert_eq!(rc, CommandResultCode::Success);
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), 0, "cross 全额还款后 USDT 归零");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(USDT), 0, "USDT should be zero after full cross repayment");
         assert_conserved(&core, "after cross full repay");
     }
 
+    // 对应 Java duplicateForceLiquidate_secondRejectedByGuard_conserves：同一笔 loan 重复发起强平，第二次应被 guard 拒绝且状态不变
     #[test]
     fn duplicate_force_liquidate_second_rejected_by_guard_conserves() {
         let mut core = boot();
@@ -312,12 +323,12 @@ mod tests {
 
         let (rc, _) = submit(&mut core, cmd_loan_force_liquidate(4000, BORROWER, SYMBOL, 20, MARK_PRICE, COLLATERAL_LOTS, 2_000));
         assert_eq!(rc, CommandResultCode::Success);
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(WBTC), 100, "X 后账户剩 1 WBTC");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(WBTC), 100, "account has 1 WBTC left after the first force-liquidate (X)");
 
         let (rc, _) = submit(&mut core, cmd_loan_force_liquidate(4001, BORROWER, SYMBOL, 20, MARK_PRICE, COLLATERAL_LOTS, 2_000));
         assert_eq!(rc, CommandResultCode::LoanInvalidAmount);
-        assert_eq!(core.ups.get(BORROWER).unwrap().account(WBTC), 100, "Y 被拒，账户 WBTC 不变");
-        assert_eq!(core.ups.get(BORROWER).unwrap().locked(WBTC), 0, "Y 被拒，exchangeLocked 不变");
+        assert_eq!(core.ups.get(BORROWER).unwrap().account(WBTC), 100, "second force-liquidate (Y) rejected, WBTC account unchanged");
+        assert_eq!(core.ups.get(BORROWER).unwrap().locked(WBTC), 0, "second force-liquidate (Y) rejected, exchangeLocked unchanged");
         assert_conserved(&core, "after duplicate force-liquidate rejected");
     }
 }

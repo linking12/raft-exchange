@@ -12,11 +12,20 @@ use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::loan::loan_service::{LoanService, BPS_SCALE as LOAN_BPS_SCALE};
 use crate::core::utils::core_arithmetic_utils::size_price_to_currency_scale;
 
+// 对应 Java `exchange.core2.core.common.api.reports.*`(各 ReportQuery/ReportResult DTO) +
+// `RiskEngine`/`ReportQueriesHandler` 里的聚合查询逻辑。Java 因为 RiskEngine 按 uid 分片，报表要
+// 把各 shard 的部分结果 merge 后再输出；Rust 单 shard 塌缩后一次遍历即得全量，不需要跨 shard 合并步骤。
+// 各报表金额均是"原始整数 + scale_k"的定点表示，换算成人类可读值需要调用方按对应 currency/symbol 的
+// scale_k 自行还原（约定与 Java CoreArithmeticUtils 的定点算术一致）。
+
 #[inline]
 fn add(map: &mut BTreeMap<i32, i64>, k: i32, v: i64) {
     *map.entry(k).or_insert(0) += v;
 }
 
+/// 对应 Java `TotalCurrencyBalanceReportResult`：全平台按币种汇总的资产负债表，用于跨节点/跨语言
+/// 守恒对拍。各桶均以币种为键；`global_balances_sum`/`is_global_zero` 把"账户+额外保证金+手续费+
+/// 调整+挂起+交易所锁定+loan 余额+loan 抵押+IF 余额"这些互斥桶相加，理论上恒为 0（资金零和不变式）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TotalCurrencyBalanceReport {
     pub currency_balances: BTreeMap<i32, i64>,
@@ -35,6 +44,8 @@ pub struct TotalCurrencyBalanceReport {
 }
 
 impl TotalCurrencyBalanceReport {
+    /// 按币种把互斥资金桶（不含 `symbol_open_interest_*`/`if_open_interest_*`——那两组是数量而非资金）
+    /// 逐一相加，守恒态下每个币种理应为 0。用于测试/运维对拍，对应 Java 侧报表守恒校验惯例。
     pub fn global_balances_sum(&self) -> BTreeMap<i32, i64> {
         let mut sum = BTreeMap::new();
         for bucket in [
@@ -60,6 +71,8 @@ impl TotalCurrencyBalanceReport {
     }
 }
 
+/// 对应 Java `SingleUserReportResult` 内嵌的期货仓位视图：估值字段（`mark_price`/`unrealized_pnl`/
+/// `liquidation_price`/`margin_ratio_scale_k`）由 `RiskEngine::futures_estimates` 现算现取，非存量字段。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionView {
     pub symbol: i32,
@@ -82,6 +95,9 @@ pub struct PositionView {
     pub maintenance_margin_scale_k: i64,
 }
 
+/// 对应 Java `SingleUserReportResult`：单用户视图（账户/仓位/loan/挂单）。`found=false` 时其余字段
+/// 全为默认值，对应 Java 查不到 UserProfile 时的空结果分支。`isolated_loans`/`cross_loans` 用位置元组
+/// 而非具名结构体承载各字段，字段顺序见 `query_single_user` 里对应 tuple 的构造注释。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SingleUserReport {
     pub uid: i64,
@@ -91,17 +107,24 @@ pub struct SingleUserReport {
     pub exchange_locked: BTreeMap<i32, i64>,
     pub positions: Vec<PositionView>,
     pub cross_account_ltv_bps: i64,
+    // (loan_id, symbol_id, loan_currency, collateral_currency, collateral_amount,
+    //  outstanding_principal, accumulated_interest, rate_bps, opened_at_ts,
+    //  display_interest, ltv_bps, mark_price)
     pub isolated_loans: Vec<(i64, i32, i32, i32, i64, i64, i64, i32, i64, i64, i64, i64)>,
+    // (loan_id, symbol_id, loan_currency, outstanding_principal, accumulated_interest,
+    //  rate_bps, opened_at_ts, display_interest)
     pub cross_loans: Vec<(i64, i32, i32, i64, i64, i32, i64, i64)>,
     pub cross_loan_collateral: BTreeMap<i32, i64>,
     pub orders: Vec<(i32, Order)>,
 }
 
+/// 对应 Java `FeeReportResult`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeeReport {
     pub fees: BTreeMap<i32, i64>,
 }
 
+/// 对应 Java `InsuranceFundReportResult` 内嵌的单 symbol 保险基金条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuturesIfEntry {
     pub available: i64,
@@ -109,6 +132,7 @@ pub struct FuturesIfEntry {
     pub position_value: i64,
 }
 
+/// 对应 Java `InsuranceFundReportResult`：期货 IF（按 symbol）+ loan IF（按币种）+ 各 symbol 最新标记价。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InsuranceFundReport {
     pub futures: BTreeMap<i32, FuturesIfEntry>,
@@ -116,6 +140,7 @@ pub struct InsuranceFundReport {
     pub mark_price: BTreeMap<i32, i64>,
 }
 
+/// 对应 Java `LoanPlatformReportResult` 内嵌的单币种 loan 平台条目。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoanPlatformEntry {
     pub interest_revenue: i64,
@@ -124,17 +149,23 @@ pub struct LoanPlatformEntry {
     pub pool_borrowed: i64,
 }
 
+/// 对应 Java `LoanPlatformReportResult`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoanPlatformReport {
     pub per_currency: BTreeMap<i32, LoanPlatformEntry>,
 }
 
+/// 对应 Java `SymbolCurrencyReportResult`：全量 symbol/currency 配置快照。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SymbolCurrencyReport {
     pub symbols: Vec<CoreSymbolSpecification>,
     pub currencies: Vec<CoreCurrencySpecification>,
 }
 
+/// 对应 Java `StateHashReportResult`：分组件（loan_service/liquidation_service/风控三桶/symbol specs/
+/// currency specs/user profiles/mark price/order books 等）的哈希，供跨节点/跨语言逐组件比对定位分歧；
+/// `merged()` 再把各组件按名称排序（`BTreeMap` 天然有序）滚成一个总哈希，对应 Java 侧 state hash 的
+/// 合并算法（31 进制滚动哈希，seed=17）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StateHashReport {
     pub components: BTreeMap<String, i64>,
@@ -154,6 +185,10 @@ impl StateHashReport {
 }
 
 impl ExchangeCore {
+    /// 对应 Java `RiskEngine` 处理 `TotalCurrencyBalanceReportQuery` 的聚合逻辑：遍历全量用户+风控侧
+    /// 各桶，把仓位 PnL/额外保证金/IF 头寸等以 symbol 计价的量通过 `size_price_to_currency` 折算成对应
+    /// quote 币种再汇总。`currency_balances` 已扣除被锁定/被质押的部分（对应字段各自独立记账，
+    /// 相减确保总额不重复计入），因此 `global_balances_sum` 各桶相加应恒为 0。
     pub fn query_total_balance(&self) -> TotalCurrencyBalanceReport {
         let mut r = TotalCurrencyBalanceReport::default();
         let mut pnl_by_symbol: BTreeMap<i32, i64> = BTreeMap::new();
@@ -237,6 +272,8 @@ impl ExchangeCore {
         r
     }
 
+    /// 对应 Java `RiskEngine` 处理 `SingleUserReportQuery` 的逻辑。`now_ms` 用于 loan 展示利息
+    /// （`calculate_display_interest`）按当前时刻计提，不改任何持久状态，是纯只读投影。
     pub fn query_single_user(&self, uid: i64, now_ms: i64) -> SingleUserReport {
         let Some(up) = self.ups.get(uid) else {
             return SingleUserReport {
@@ -338,10 +375,13 @@ impl ExchangeCore {
         }
     }
 
+    /// 对应 Java `FeeReportQuery` 处理逻辑。
     pub fn query_fee_report(&self) -> FeeReport {
         FeeReport { fees: self.risk.fees.clone() }
     }
 
+    /// 对应 Java `InsuranceFundReportQuery` 处理逻辑：`symbols` 取"有 IF 名义金额记录"∪"有 IF 自营仓位"
+    /// 的并集，保证只出现在自营仓位里、还没记过 notional 的 symbol 也能出现在报表中。
     pub fn query_insurance_fund(&self) -> InsuranceFundReport {
         let mut r = InsuranceFundReport::default();
         let mut symbols: std::collections::BTreeSet<i32> = self.risk.liquidation_service.notionals.keys().copied().collect();
@@ -367,6 +407,8 @@ impl ExchangeCore {
         r
     }
 
+    /// 对应 Java `LoanPlatformReportQuery` 处理逻辑：币种集合取"资金池可用/已借出/利息收入/保险基金"
+    /// 四个 map 键的并集，任一桶有记录的币种都要出现在报表里。
     pub fn query_loan_platform(&self) -> LoanPlatformReport {
         let ls = &self.risk.loan_service;
         let mut per_currency: BTreeMap<i32, LoanPlatformEntry> = BTreeMap::new();
@@ -389,6 +431,7 @@ impl ExchangeCore {
         LoanPlatformReport { per_currency }
     }
 
+    /// 对应 Java `SymbolCurrencyReportQuery` 处理逻辑：全量配置快照，无过滤。
     pub fn query_symbol_currency(&self) -> SymbolCurrencyReport {
         SymbolCurrencyReport {
             symbols: self.ssp.symbols.values().cloned().collect(),
@@ -396,6 +439,9 @@ impl ExchangeCore {
         }
     }
 
+    /// 对应 Java `StateHashReportQuery` 处理逻辑：按子系统分组件计算哈希，供跨节点/跨语言黄金向量
+    /// 对拍时精确定位是哪个子系统状态分歧（而不是只有一个笼统的总哈希）。哈希算法为经典
+    /// `h = h*31 + x` 滚动哈希，`BTreeMap` 保证组件按名称的确定性迭代顺序。
     pub fn query_state_hash(&self) -> StateHashReport {
         fn hash_bucket(map: &BTreeMap<i32, i64>) -> i64 {
             let mut h: i64 = 17;
@@ -438,6 +484,8 @@ impl ExchangeCore {
         StateHashReport { components }
     }
 
+    // 把以 (base_scale_k, quote_scale_k) 定点表示的 symbol 相关金额（PnL/持仓名义价值等）折算成该
+    // symbol 计价币种(quote_currency)自己的 scale，供跨 symbol 汇总到同一币种桶时口径一致。
     fn size_price_to_currency(&self, amount: i64, symbol: i32) -> Option<(i32, i64)> {
         let spec = self.ssp.get_symbol(symbol)?;
         let cspec = self.ssp.get_currency(spec.quote_currency)?;
@@ -445,6 +493,8 @@ impl ExchangeCore {
         Some((spec.quote_currency, v))
     }
 
+    // 复用 RiskEngine 强平判定同一套估值口径（`futures_estimates`），只取报表需要的
+    // (强平价, 保证金率scale_k, 维持保证金scale_k)，丢弃其中的未实现盈亏(已由 pos.estimate_unrealized_profit 单独取)。
     fn position_estimates(&self, up: &UserProfile, pos: &SymbolPositionRecord) -> (i64, i64, i64) {
         let Some(spec) = self.ssp.get_symbol(pos.symbol) else { return (0, 0, 0) };
         let (_upnl, liq, mr, mmsk) = RiskEngine::futures_estimates(&self.risk.last_price_cache, up, pos, spec, &self.ssp);
@@ -517,7 +567,7 @@ mod tests {
         });
 
         let tcb = core.query_total_balance();
-        assert!(tcb.is_global_zero(), "守恒被打破: sum={:?}", tcb.global_balances_sum());
+        assert!(tcb.is_global_zero(), "conservation broken: sum={:?}", tcb.global_balances_sum());
         assert_eq!(tcb.currency_balances.get(&QUOTE).copied().unwrap_or(0), 1_000_000 - 50_000);
         assert_eq!(tcb.exchange_locked.get(&QUOTE).copied().unwrap_or(0), 50_000);
         assert_eq!(tcb.adjustments.get(&QUOTE).copied().unwrap_or(0), -1_000_000);
@@ -555,7 +605,7 @@ mod tests {
         let mut susp = admin_cmd(OrderCommandType::SuspendUser, 1);
         core.process_command(&mut susp);
         assert_eq!(susp.result_code, Some(CommandResultCode::Success));
-        assert!(core.ups.get(1).is_none(), "挂起后从注册表移除");
+        assert!(core.ups.get(1).is_none(), "removed from registry after suspend");
 
         core.process_command(&mut admin_cmd(OrderCommandType::AddUser, 2));
         core.process_command(&mut OrderCommand {
@@ -700,9 +750,9 @@ mod tests {
         };
         core.process_command(&mut buy);
         let transfers: Vec<_> = buy.fund_events.iter().filter(|e| e.event_type == FundEventType::Transfer).collect();
-        assert!(!transfers.is_empty(), "现货成交应发 TRANSFER 事件: {:?}", buy.fund_events);
-        assert!(transfers.iter().any(|e| e.currency == QUOTE), "应有 quote 腿");
-        assert!(transfers.iter().any(|e| e.currency == BASE), "应有 base 腿");
+        assert!(!transfers.is_empty(), "spot trade should emit TRANSFER events: {:?}", buy.fund_events);
+        assert!(transfers.iter().any(|e| e.currency == QUOTE), "should have quote leg");
+        assert!(transfers.iter().any(|e| e.currency == BASE), "should have base leg");
     }
 
     #[test]
@@ -733,7 +783,7 @@ mod tests {
             timestamp: 10_000,
             ..Default::default()
         });
-        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.mark_price), None, "挂单未成交不应回写");
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.mark_price), None, "resting unmatched order should not write back");
         core.process_command(&mut OrderCommand {
             command: OrderCommandType::PlaceOrder,
             order_id: 11,
@@ -747,7 +797,7 @@ mod tests {
             timestamp: 10_000,
             ..Default::default()
         });
-        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.mark_price), Some(50), "现货成交价应回写 markPrice");
+        assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.mark_price), Some(50), "spot trade price should write back markPrice");
         assert_eq!(core.risk.last_price_cache.get(&SYMBOL).map(|r| r.mark_price_ts), Some(10_000));
     }
 
@@ -778,7 +828,7 @@ mod tests {
             });
         }
         let r = core.query_single_user(SELLER, 0);
-        assert_eq!(r.orders.len(), 2, "报表应含 2 个挂单: {:?}", r.orders);
+        assert_eq!(r.orders.len(), 2, "report should contain 2 resting orders: {:?}", r.orders);
         assert_eq!(r.orders[0].1.order_id, 101);
         assert_eq!(r.orders[0].0, SYMBOL);
         assert_eq!(r.orders[1].1.order_id, 102);

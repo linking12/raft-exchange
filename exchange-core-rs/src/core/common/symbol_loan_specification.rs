@@ -1,17 +1,30 @@
+//! 对应 Java `exchange.core2.core.common.SymbolLoanSpecification`。per-symbol 现货借贷
+//! 配置,挂在 `CoreSymbolSpecification::loan_config` 上;全 0 = 该 pair 未启用借贷。
+//! 仅 `UPDATE_SYMBOL_LOAN_CONFIG` 经 `update` 改写。利率不在此(是 per-loanCurrency
+//! 池级概念,归 LoanService)。
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SymbolLoanSpecification {
+    /// 对应 Java `initialLtvBps`:开仓 LTV 上限;0 = 借贷未启用。
     pub initial_ltv_bps: i32,
+    /// 对应 Java `liquidationLtvBps`:Isolated 单笔强平触发线(Cross 借贷用 LoanService
+    /// 的全局阈值,不看这个字段)。
     pub liquidation_ltv_bps: i32,
+    /// 对应 Java `marginCallLtvBps`:Isolated 预警线;0 = 关闭。
     pub margin_call_ltv_bps: i32,
+    /// 对应 Java `maxAmount`:单笔本金上限;0 = 无上限。
     pub max_amount: i64,
+    /// 对应 Java `maxTermDays`:最大贷款期限(天);0 = 无期限(仅 Isolated LOCKED 生效)。
     pub max_term_days: i32,
 }
 
 impl SymbolLoanSpecification {
+    /// 对应 Java `isEnabled()`。
     pub fn is_enabled(&self) -> bool {
         self.initial_ltv_bps > 0
     }
 
+    /// 对应 Java `update(...)`:唯一 mutation 入口;调用方已完成字段层校验。
     pub fn update(
         &mut self,
         initial_ltv_bps: i32,
@@ -27,6 +40,7 @@ impl SymbolLoanSpecification {
         self.max_term_days = max_term_days;
     }
 
+    /// 对应 Java `stateHash()`(`Objects.hash` 五字段)。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.initial_ltv_bps as i64);
@@ -42,6 +56,8 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
+/// 对应 Java `writeMarshallable`/构造函数 `SymbolLoanSpecification(BytesIn)`:
+/// 字段顺序与 Java 保持一致。
 impl ChronicleMarshallable for SymbolLoanSpecification {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(self.initial_ltv_bps);

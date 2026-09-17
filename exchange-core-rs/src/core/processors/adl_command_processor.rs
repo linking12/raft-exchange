@@ -1,3 +1,12 @@
+//! 对应 Java `exchange.core2.core.processors.ADLCommandProcessor`。
+//!
+//! ADL（自动减仓）命令的两步处理器：从本 symbol 下盈利、且方向与触发方相反的仓位里，按风险分数
+//! （risk score）从高到低贪心挑选候选并预占 `pending_adl_size`（`collect`，对应 Java R1
+//! `collectInput` + matcher stage `buildMatcherEvents` 合并），随后依次平掉这些候选（counterparty）的仓位、
+//! 并对称释放预占、平掉发起方（taker）的仓位（`apply`，对应 Java R2 `applyEvent`（逐 event）+
+//! `finalizeForCommand`）。Rust 单实例无 shard，故不需要 Java 里跨 shard 按 score 做 k-way merge，
+//! `collect_input` 选出的候选顺序即最终消费顺序。
+
 use std::collections::BTreeMap;
 
 use crate::core::common::adl_user_position::AdlUserPosition;
@@ -16,9 +25,13 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 use crate::core::processors::user_profile_service::UserProfileService;
 
+/// 无状态标记类型，方法均为纯函数式的 `&self` 调用。
 pub struct AdlCommandProcessor;
 
 impl TwoStepCommandProcessor for AdlCommandProcessor {
+    /// 对应 Java `collectInput` + matcher stage `buildMatcherEvents` 的合并：算出本 symbol 下该由谁
+    /// 承接减仓、承接多少，并把结果（`adl_user_positions`/`adl_events`/改写后的 `cmd.size`）写回 cmd。
+    /// `cmd.size` 在此步会被改写为实际能凑够的成交量（候选不够时小于原始请求量）。
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         cmd.adl_user_positions.clear();
         cmd.adl_events.clear();
@@ -54,6 +67,9 @@ impl TwoStepCommandProcessor for AdlCommandProcessor {
         CommandResultCode::Success
     }
 
+    /// 对应 Java R2 `applyEvent`（逐 event 循环调用）+ `finalizeForCommand` 的合并：依次平掉每个被
+    /// 选中候选（counterparty）的仓位，再平掉发起方（taker）的仓位，并释放 `collect` 阶段对候选仓位
+    /// 预占的 `pending_adl_size`（与 R1 的 `+=` 对称，防止同一 cmd 内重复触发同一仓位）。
     fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
         let symbol = cmd.symbol;
         let price = cmd.price;
@@ -85,6 +101,11 @@ impl TwoStepCommandProcessor for AdlCommandProcessor {
 }
 
 impl AdlCommandProcessor {
+    /// 对应 Java `collectInput` 内的候选筛选 + 排序 + 贪心预占循环。
+    /// 过滤条件（都要满足）：`open_volume > 0`、`open_volume > pending_adl_size`（还有未被预占的可减仓量）、
+    /// 方向与触发方 `action` 相反、且按 `bankruptcy_price` 算未实现盈亏为正（亏损方不该被 ADL）。
+    /// 按 risk score 降序排序后贪心取满 `remaining_size`；`sort_by` 后 `reverse()` 复刻 Java
+    /// `sortThisByLong(...).reverseThis()` 的同分排序结果（同分时后出现的候选排前面）。
     fn collect_input(
         candidates: Vec<SymbolPositionRecord>,
         action: OrderAction,
@@ -120,6 +141,11 @@ impl AdlCommandProcessor {
         out
     }
 
+    /// 对应 Java matcher stage `buildMatcherEvents`：按候选顺序（已按 score 降序）依次消费直到
+    /// `remaining_size` 耗尽，产出 `(uid, exec_size)` 事件序列；返回值第二项是实际消费掉的总量，
+    /// 候选不足以覆盖 `remaining_size` 时小于原始请求量（调用方据此改写 `cmd.size`）。
+    /// Java 版这里要在多个 shard 的候选链表间做按 score 的 k-way merge；Rust 单实例下候选已是单一
+    /// 有序列表，直接顺序消费即等价。
     fn build_matcher_events(candidates: &[AdlUserPosition], remaining_size: i64) -> (Vec<(i64, i64)>, i64) {
         let mut remaining = remaining_size;
         let mut events = Vec::new();
@@ -138,6 +164,9 @@ impl AdlCommandProcessor {
         (events, consumed)
     }
 
+    /// 对应 Java R2 `applyEvent`：平掉某个 ADL 候选（counterparty）在 `symbol` 上、方向为
+    /// `action.opposite()` 的仓位 `exec_size` 数量，并结算盈亏。uid 的档案或该仓位在 R1→R2 之间被撤销
+    /// 时静默跳过（cmd 提交与应用之间状态可能已变化，R1 校验时也不会为它预占）。
     #[allow(clippy::too_many_arguments)]
     fn apply_event(
         ups: &mut UserProfileService,
@@ -166,6 +195,9 @@ impl AdlCommandProcessor {
         );
     }
 
+    /// 对应 Java R2 `finalizeForCommand`：`had_events` 为真时平掉发起方（taker）在 `symbol` 上、方向为
+    /// `action` 的仓位 `taker_size` 数量（若没有任何候选被接管则不平仓）；随后对每个被选中的候选，
+    /// 释放它在 `collect` 阶段预占的 `pending_adl_size`（与 R1 的 `+=` 对称的 `-=`）。
     #[allow(clippy::too_many_arguments)]
     fn finalize_for_command(
         ups: &mut UserProfileService,
@@ -251,7 +283,7 @@ mod tests {
         let low_score = candidate(1, PositionDirection::Short, 5, 750, 100, 10, 0);
         let high_score = candidate(2, PositionDirection::Short, 5, 750, 100, 90, 0);
         let picks = AdlCommandProcessor::collect_input(vec![low_score, high_score], OrderAction::Bid, 100, 3);
-        assert_eq!(picks[0].uid, 2, "高分候选必须排第一个被选中");
+        assert_eq!(picks[0].uid, 2, "the higher-score candidate must be picked first");
     }
 
     #[test]
@@ -260,7 +292,7 @@ mod tests {
         let b = candidate(2, PositionDirection::Short, 5, 750, 100, 50, 0);
         let picks = AdlCommandProcessor::collect_input(vec![a, b], OrderAction::Bid, 100, 10);
         assert_eq!(picks.len(), 2);
-        assert_eq!(picks[0].uid, 2, "reverseThis 把同分序反转：后扫到的 uid2 排第一");
+        assert_eq!(picks[0].uid, 2, "reverseThis reverses same-score order: uid2, scanned later, ranks first");
         assert_eq!(picks[1].uid, 1);
     }
 
@@ -282,7 +314,7 @@ mod tests {
         assert_eq!(picks[0].uid, 1);
         assert_eq!(picks[0].volume, 5);
         assert_eq!(picks[1].uid, 2);
-        assert_eq!(picks[1].volume, 2, "部分消费：min(5, remaining=2)=2");
+        assert_eq!(picks[1].volume, 2, "partial consumption: min(5, remaining=2)=2");
     }
 
     #[test]
@@ -308,7 +340,7 @@ mod tests {
         let picks = vec![AdlUserPosition { uid: 1, volume: 5 }];
         let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, 20);
         assert_eq!(events, vec![(1, 5)]);
-        assert_eq!(consumed, 5, "候选不够，实际消费 < 原始请求量，cmd.size 应改写为这个真实值");
+        assert_eq!(consumed, 5, "not enough candidates: actual consumption < original requested size; cmd.size should be rewritten to this real value");
     }
 
     #[test]
@@ -326,9 +358,9 @@ mod tests {
         assert_eq!(picks.iter().map(|p| p.volume).sum::<i64>(), 8);
 
         let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, 8);
-        assert_eq!(consumed, 8, "R1 已经选到刚好 8，merge 应当把全部候选完整消费掉，不裁剪任何一个");
+        assert_eq!(consumed, 8, "R1 already picked exactly 8; merge should fully consume all candidates without trimming any");
         for (ev, pick) in events.iter().zip(picks.iter()) {
-            assert_eq!(ev.1, pick.volume, "每个候选的 exec_volume 必须等于 R1 预占量，不是被 merge 部分裁剪后的值");
+            assert_eq!(ev.1, pick.volume, "each candidate's exec_volume must equal the R1 reserved amount, not a value partially trimmed by merge");
         }
     }
 }

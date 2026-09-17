@@ -1,30 +1,46 @@
+//! 定期利率模型（对应 Java `exchange.core2.core.processors.loan.rate.FixedRateModel`）。
+//!
+//! 仅用于 Isolated LOCKED：开仓时把 [`FloatingRateModel`] 当前利率 + 点差固化进 `loan.rate_bps`，
+//! 此后利率不再随 floating 曲线变化，按固定利率线性计息。唯一自有状态是
+//! `locked_rate_adjust_bps`（点差），利率基准仍需读 floating 引擎的曲线值。
+
 use crate::core::common::loan_record::LoanRecord;
 use crate::core::processors::loan::loan_service::{BPS_SCALE, YEAR_MS};
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::utils::core_arithmetic_utils::{add_exact, trunc_mul_div};
 
+/// 对应 Java `FixedRateModel`；`locked_rate_adjust_bps` 对应 Java 字段 `lockedRateAdjustBps`：
+/// 相对 floating 曲线的加/减价（bps），默认 0 表示与 floating 同价。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedRateModel {
     pub locked_rate_adjust_bps: i32,
 }
 
 impl FixedRateModel {
+    /// 对应 Java `reset()`：清空点差回到默认状态。
     pub fn reset(&mut self) {
         self.locked_rate_adjust_bps = 0;
     }
 
+    /// 对应 Java `openRateBps(int)`：开仓利率 = floating 当前利率（未 reprice 过则回退 base）
+    /// + `locked_rate_adjust_bps`，下限钳到 0；结果会固化进 `loan.rate_bps`，此后不再随 floating 变化。
     pub fn open_rate_bps(&self, floating: &FloatingRateModel, loan_currency: i32) -> i32 {
         let adjusted =
             floating.current_rate_bps_or_base(loan_currency) as i64 + self.locked_rate_adjust_bps as i64;
         adjusted.max(0) as i32
     }
 
+    /// 对应 Java `accrue(LoanRecord, long)`：写路径，按 `loan.rate_bps` 补计利息到 `now`，
+    /// 推进 `last_accrue_ts`，返回本次新增利息（恒 ≥ 0）。
     pub fn accrue<L: LoanRecord>(&self, loan: &mut L, now: i64) -> i64 {
         let delta =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
         if delta > 0 {
             loan.set_accumulated_interest(add_exact(loan.accumulated_interest(), delta));
         }
+        // 只在“已计息(delta>0)”或“本就不可能计息(无本金/免息)”时推进游标；有本金有利率却因截断得 0 时
+        // 保留游标，让被截断的 elapsed 继续累积到跨过精度阈值再计——否则高频 accrue（如反复 REPAY）
+        // 会把每段亚阈值利息永久吞掉（对应 Java 注释所述 F1 场景）。
         if now > loan.last_accrue_ts()
             && (delta > 0 || loan.outstanding_principal() <= 0 || loan.rate_bps() <= 0)
         {
@@ -33,18 +49,24 @@ impl FixedRateModel {
         delta
     }
 
+    /// 状态哈希；无直接对应 Java 方法体（Java 用 `Objects.hash(lockedRateAdjustBps)`），
+    /// 这里等价地对唯一字段做自定义 31 进制滚动哈希，用于集群一致性校验。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.locked_rate_adjust_bps as i64);
         ((h >> 32) as i32) ^ (h as i32)
     }
 
+    /// 对应 Java `displayInterest(LoanRecord, long)`：读路径，返回 accumulated_interest + 到
+    /// `now` 的 pending 利息，不修改 `loan` 状态。
     pub fn display_interest<L: LoanRecord>(&self, loan: &L, now: i64) -> i64 {
         let pending =
             Self::accrue_delta(loan.outstanding_principal(), loan.rate_bps(), loan.last_accrue_ts(), now);
         add_exact(loan.accumulated_interest(), pending)
     }
 
+    /// 对应 Java 私有方法 `accrueDelta`：分两步 trunc_mul_div（先 elapsed×principal/YEAR_MS
+    /// 再 ×rate_bps/BPS_SCALE），避免中间值溢出。
     fn accrue_delta(outstanding_principal: i64, rate_bps: i32, last_accrue_ts: i64, now: i64) -> i64 {
         if outstanding_principal <= 0 || rate_bps <= 0 {
             return 0;
@@ -179,9 +201,12 @@ use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for FixedRateModel {
+    /// 对应 Java `writeMarshallable(BytesOut)`：单字段 `locked_rate_adjust_bps` 写为 i32，
+    /// 与 Java `bytes.writeInt(lockedRateAdjustBps)` 顺序/类型一致。
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(self.locked_rate_adjust_bps);
     }
+    /// 对应 Java 反序列化构造器 `FixedRateModel(FloatingRateModel, BytesIn)`：按同一顺序读回单个 i32。
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         Ok(FixedRateModel { locked_rate_adjust_bps: r.read_i32()? })
     }
@@ -197,12 +222,12 @@ mod java_parity {
         floating.current_rate_bps.insert(2, 500);
 
         let zero = FixedRateModel { locked_rate_adjust_bps: 0 };
-        assert_eq!(zero.open_rate_bps(&floating, 2), 500, "adjust=0 → 同 Floating");
+        assert_eq!(zero.open_rate_bps(&floating, 2), 500, "adjust=0 -> same as Floating");
 
         let plus = FixedRateModel { locked_rate_adjust_bps: 50 };
         assert_eq!(plus.open_rate_bps(&floating, 2), 550, "Fixed = Floating + adjust");
 
         let minus = FixedRateModel { locked_rate_adjust_bps: -600 };
-        assert_eq!(minus.open_rate_bps(&floating, 2), 0, "减穿则封底 0");
+        assert_eq!(minus.open_rate_bps(&floating, 2), 0, "negative adjust that crosses zero is floored at 0");
     }
 }

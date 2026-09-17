@@ -1,3 +1,9 @@
+//! 对应 Java `exchange.core2.core.common.UserProfile`。单用户账户状态快照,聚合该 uid 在各业务线上的
+//! 资金与持仓:通用余额(accounts)、现货挂单冻结(exchange_locked)、期货持仓(positions,HEDGE 模式下
+//! 用 ±symbol 区分多空)、借贷(isolated_loans 逐仓单笔 / cross_loans+cross_loan_collateral 全仓债务
+//! 凭证+账户级抵押池)。
+//! **该结构体整体进 raft snapshot 并参与 `state_hash`**:跨节点必须逐字段收敛。
+
 use std::collections::BTreeMap;
 
 use crate::core::common::time_window_dedup_set::TimeWindowDedupSet;
@@ -17,20 +23,34 @@ use crate::core::utils::core_arithmetic_utils as arithmetic;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserProfile {
     pub uid: i64,
+    /// 对应 Java `userStatus`:ACTIVE/SUSPENDED;SUSPEND 命令 apply 前守卫要求 accounts/locks/loans 全空。
     pub user_status: UserStatus,
+    /// 对应 Java `accounts`:currency -> 物理余额总额(未拆锁定),scale = currency_scale_k。
     pub accounts: BTreeMap<i32, i64>,
+    /// 对应 Java `exchangeLocked`:currency -> 现货挂单冻结额,scale 与 accounts 一致。
+    /// accounts 是"真实持有总额",exchange_locked 是其中"已被现货挂单冻结、不可立即支配"的部分;
+    /// RiskEngine 计算 locked 时会用到,使 free + locked = accounts。
     pub exchange_locked: BTreeMap<i32, i64>,
+    /// 对应 Java `processedTransactionIds`:外部触发命令(BALANCE_ADJUSTMENT/MARGIN_ADJUSTMENT/
+    /// LOAN_* / INTERNAL_TRANSFER 等)共用的幂等表,按命令时间做时间窗去重。
     pub processed_tx_ids: TimeWindowDedupSet,
+    /// 对应 Java `positionMode`:单向/双向持仓;双向时 positions key 用 ±symbol 区分多空。
     pub position_mode: PositionMode,
+    /// 对应 Java `positions`:symbol -> margin position record;HEDGE 模式下正 symbol=多头、负 symbol=空头。
     pub positions: BTreeMap<i32, SymbolPositionRecord>,
 
+    /// 对应 Java `isolatedLoans`:loan_id -> record(loan_id 客户端提供、per-user 唯一,与 Cross 命名空间独立);
+    /// 抵押与单笔 loan 绑定,收集在 record.collateral_amount。
     pub isolated_loans: BTreeMap<i64, IsolatedLoanRecord>,
+    /// 对应 Java `crossLoanCollateral`:Cross 借贷账户级多币种抵押池,currency -> amount,与单笔 debt 解耦。
     pub cross_loan_collateral: BTreeMap<i32, i64>,
+    /// 对应 Java `crossLoans`:Cross 借贷单笔债务凭证,loan_id -> record;无抵押字段,抵押走 cross_loan_collateral。
     pub cross_loans: BTreeMap<i64, CrossLoanRecord>,
 }
 
 impl UserProfile {
 
+    /// 对应 Java 构造器 `UserProfile(long uid, UserStatus userStatus)`。
     pub fn new(uid: i64, user_status: UserStatus) -> Self {
         UserProfile {
             uid,
@@ -46,6 +66,8 @@ impl UserProfile {
         }
     }
 
+    /// 对应 Java `processPositionRecord`:用 consumer 处理指定 symbol 下的所有仓位记录
+    /// (ONEWAY 模式只有 symbol 一条;HEDGE 模式再处理 -symbol 对侧仓位)。
     pub fn process_position_record<F>(&mut self, symbol: i32, mut consumer: F)
     where
         F: FnMut(&mut SymbolPositionRecord),
@@ -60,6 +82,7 @@ impl UserProfile {
         }
     }
 
+    /// 对应 Java `processedTransactionIds.tryClaim` 的调用点。
     pub fn try_claim_tx(&mut self, tx_id: i64, now_ms: i64) -> bool {
         self.processed_tx_ids.try_claim(tx_id, now_ms)
     }
@@ -76,10 +99,13 @@ impl UserProfile {
         *self.cross_loan_collateral.entry(currency).or_insert(0) += delta;
     }
 
+    /// 对应 Java `createPositionsKey(int symbol, OrderAction orderAction, OrderCommandType command)`。
+    /// ONEWAY 模式恒返回 symbol 本身;HEDGE 模式按下单方向取 ±symbol,平仓/强平命令要翻转到对侧仓位的 key。
     pub fn create_positions_key(&self, symbol: i32, action: OrderAction, command: OrderCommandType) -> i32 {
         if self.position_mode == PositionMode::Hedge {
             let key = if action == OrderAction::Bid { symbol } else { -symbol };
             if command == OrderCommandType::ClosePosition || command == OrderCommandType::ForceLiquidation {
+                // 平仓/强平时翻转到对侧仓位。
                 return -key;
             }
             key
@@ -88,6 +114,8 @@ impl UserProfile {
         }
     }
 
+    /// 对应 Java `createPositionsKey(SymbolPositionRecord position)`:已知仓位记录时,HEDGE 模式
+    /// 直接用 `direction` 的符号乘子还原其 positions key。
     pub fn create_positions_key_of(&self, position: &SymbolPositionRecord) -> i32 {
         if self.position_mode == PositionMode::Hedge {
             position.direction.multiplier() * position.symbol
@@ -96,6 +124,8 @@ impl UserProfile {
         }
     }
 
+    /// 对应 Java `countPositionRecord`:统计指定 symbol 下满足 predicate 的仓位记录数量
+    /// (ONEWAY 最多 1、HEDGE 最多 2,即 symbol 与 -symbol 两条)。
     pub fn count_position_record<F>(&self, symbol: i32, predicate: F) -> i32
     where
         F: Fn(&SymbolPositionRecord) -> bool,
@@ -116,6 +146,15 @@ impl UserProfile {
         count
     }
 
+    /// 对应 Java `calculateCrossAvailable`。cross 可支配余额(currency scale)=
+    /// `accounts − exchange_locked − Σ 同 currency 逐仓(ISOLATED)虚拟锁定 margin`。
+    ///
+    /// open_init_margin_sum 开仓时未从 accounts 物理扣除(只在仓位记录里虚拟锁定),要显式剥离;
+    /// extra_margin 已在 MARGIN_ADJUSTMENT 时从 accounts 扣走,不重复减。逐仓 pending 单占用(含 pending fee)
+    /// 由 `SymbolPositionRecord::calculate_required_margin_for_futures` 一并扣除。
+    ///
+    /// 三条路径共享同一口径:强平触发、账户报表、事件下发——避免客户端展示的 LP/marginRatio 跟真实强平点脱节。
+    /// spec 缺失时该仓不计入扣项(宁可 equity 略高估,不 panic)。
     pub fn calculate_cross_available<'a, F>(
         &self,
         currency: i32,
@@ -144,6 +183,18 @@ impl UserProfile {
         cross_available
     }
 
+    /// 对应 Java `crossMarginBaseAllocation`。一次算好整账户所有 CROSS 仓的破产价基础 `margin_base`
+    /// (pos -> margin_base,size_price scale,与 `open_init_margin_sum` 同 scale),直接喂
+    /// `SymbolPositionRecord::calculate_bankruptcy_price` 的 CROSS 回调;承接原 Java
+    /// `LiquidationEngine.calculateCrossBpMarginBaseAllocation` 的账户级分摊逻辑。
+    ///
+    /// 按 currency 分组,组内账户级 marginBalance 按 MM 占比分给每个 CROSS 仓:
+    /// `marginBalance = cross_available + Σ UPnL`;
+    /// `allocated_i = marginBalance × mm_i / Σ MM`(按 MM 占比分账户余额);
+    /// `margin_base_i = allocated_i − UPnL_i`(EP 基础换算,currency scale),再转回 size_price scale。
+    ///
+    /// **守恒不变式**:`Σ margin_base_i(currency scale) = cross_available`;单仓时 margin_base = cross_available。
+    /// 边界:某 currency 组 `Σ MM = 0` 时该组不入 map(caller 取默认 0);spec/price 缺失的仓跳过、其余照分。
     pub fn cross_margin_base_allocation<'a, FS, FC, FM>(
         &self,
         symbol_spec_lookup: FS,
@@ -157,6 +208,7 @@ impl UserProfile {
     {
         let mut margin_base_by_pos: BTreeMap<i32, i64> = BTreeMap::new();
 
+        // 账户级 marginBalance 分摊在单一 currency 内闭合,先按 currency 分组。
         let mut cross_by_currency: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
         for (&key, p) in self.positions.iter() {
             if p.margin_mode == MarginMode::Cross {
@@ -204,6 +256,7 @@ impl UserProfile {
             }
 
             if total_mm == 0 {
+                // 该 currency 组无仓位承担维持保证金,不入 map(对应 Java 的 `return` 跳过 forEachKeyValue)。
                 continue;
             }
 
@@ -215,10 +268,12 @@ impl UserProfile {
             for (&key, &mm) in mm_by_pos.iter() {
                 let allocated = arithmetic::trunc_mul_div(margin_balance, mm, total_mm);
                 let margin_base_currency = allocated - upnl_by_pos[&key];
+                // 累加阶段已用同一 key 校验过 spec 存在,分配阶段不会消失;expect 兜底纯防御性。
                 let pos_spec = symbol_spec_lookup(self.positions[&key].symbol)
                     .expect("symbol spec disappeared between accumulation and allocation loops");
                 margin_base_by_pos.insert(
                     key,
+                    // currency scale -> size_price scale,供 SymbolPositionRecord::calculate_bankruptcy_price 使用。
                     arithmetic::currency_to_size_price_scale(
                         margin_base_currency,
                         pos_spec.base_scale_k,
@@ -244,6 +299,9 @@ impl UserProfile {
         *self.cross_loan_collateral.get(&currency).unwrap_or(&0)
     }
 
+    /// 对应 Java `stateHash`:逐字段累积哈希;`processed_tx_ids`/`positions` 各条目/`isolated_loans`/
+    /// `cross_loans` 均调各自的 state_hash 而非 derive(Hash),因为其内部容器布局(如 VecDeque 物理偏移)
+    /// 不参与状态等价性判定,只看逻辑内容——保证快照恢复后布局不同但逻辑等价的状态在各节点产生相同 hash。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
@@ -282,6 +340,9 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
+/// 对应 Java `writeMarshallable`/`UserProfile(BytesIn)` 构造器的字段读写顺序:通用(uid/status/
+/// processed_tx_ids/accounts)→现货(exchange_locked)→期货(position_mode/positions)→借贷
+/// (isolated_loans/cross_loan_collateral/cross_loans)。
 impl ChronicleMarshallable for UserProfile {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i64(self.uid);
@@ -311,6 +372,7 @@ impl ChronicleMarshallable for UserProfile {
         let accounts = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?);
         let exchange_locked = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_long_map()?);
         let position_mode = PositionMode::of_code(r.read_u8()? as i8);
+        // 对应 Java `new SymbolPositionRecord(uid, bytesIn)`:子记录自身不落盘 uid,读回后从父 UserProfile 回填。
         let positions: BTreeMap<i32, SymbolPositionRecord> = r
             .read_int_keyed_map(SymbolPositionRecord::chronicle_read)?
             .into_iter()

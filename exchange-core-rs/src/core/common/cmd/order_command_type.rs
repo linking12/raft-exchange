@@ -1,3 +1,10 @@
+//! 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`。
+//! Rust 未搬运 Java 侧网关/持久化专用类型：`BINARY_DATA_QUERY`、
+//! `PERSIST_STATE_MATCHING`/`PERSIST_STATE_RISK`/`RECOVER_STATE_MATCHING`/`RECOVER_STATE_RISK`、
+//! `GROUPING_CONTROL`、`SHUTDOWN_SIGNAL`、`RESERVED_COMPRESSED`。
+
+/// 命令类型；`code()`/`from_code()` 对应 Java `OrderCommandType.getCode()`（lombok）与
+/// `OrderCommandType.fromCode(byte)`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
     PlaceOrder,
@@ -38,6 +45,11 @@ pub enum OrderCommandType {
     AutoDeleveraging,
     IfDeposit,
     IfWithdraw,
+    /// code=44。Java `LIQUIDATION_SCAN` 声明为 64，但同一 Java 枚举里 `LOAN_IF_DEPOSIT` 也是 64——
+    /// Java 的 `fromCode` 查找表按声明顺序 `put`，后声明的 `LOAN_IF_DEPOSIT` 覆盖了先声明的
+    /// `LIQUIDATION_SCAN`，即 Java `fromCode((byte) 64)` 实际拿到的是 `LOAN_IF_DEPOSIT`。
+    /// Rust 侧改分配到 44 以保证全部 code 两两不同（Ruling P6-D，见下方
+    /// `p6_new_codes_are_internally_distinct_and_match_java_where_unconflicted` 测试）。
     LiquidationScan,
     SettlePnl,
 
@@ -90,6 +102,7 @@ impl OrderCommandType {
             OrderCommandType::AutoDeleveraging => 41,
             OrderCommandType::IfDeposit => 42,
             OrderCommandType::IfWithdraw => 43,
+            // 44 而非 Java 的 64：见上方枚举定义处关于 Java 64 撞码 LoanIfDeposit 的说明。
             OrderCommandType::LiquidationScan => 44,
             OrderCommandType::SettlePnl => 26,
             OrderCommandType::SuspendUser => 12,
@@ -99,6 +112,8 @@ impl OrderCommandType {
         }
     }
 
+    /// 对应 Java `OrderCommandType.fromCode(byte)`（Java 用静态 `HashMap<Byte, OrderCommandType>`
+    /// 查表，未知 code 抛 `IllegalArgumentException`；这里未知 code 直接 panic）。
     pub fn from_code(c: i8) -> Self {
         match c {
             1 => OrderCommandType::PlaceOrder,
@@ -144,10 +159,17 @@ impl OrderCommandType {
             91 => OrderCommandType::BinaryDataCommand,
             120 => OrderCommandType::Nop,
             124 => OrderCommandType::Reset,
-            other => panic!("未知 OrderCommandType code {other}"),
+            other => panic!("unknown OrderCommandType code {other}"),
         }
     }
 
+    /// 非交易命令分类，对应 Java `OrderCommandType.isNonTrading()`：命中者在
+    /// `RiskEngine::pre_process_command` 走 `RiskEngineCommandDispatcher::dispatch` 二级路由，
+    /// 主 switch 只留交易（下单）/结算/引擎自身生命周期。
+    /// 与 Java 覆盖范围不完全一致：`SettlePnl`/`SystemLiquidationNotify` 在 Java 侧仍留在
+    /// `RiskEngine` 主 switch（`RiskEngine.java` 的 `case SETTLE_PNL` / `case SYSTEM_LIQUIDATION_NOTIFY`），
+    /// Rust 把这两者也并入了 dispatcher（见 `risk_engine_command_dispatcher.rs`），
+    /// 是二级 dispatch 覆盖范围的调整，非行为分歧。
     pub fn is_non_trading(self) -> bool {
         matches!(
             self,
@@ -170,6 +192,8 @@ impl OrderCommandType {
         )
     }
 
+    /// loan 子域命令判断，对应 Java `OrderCommandType.isLoan()`：命中则整块委托给
+    /// `LoanCommandDispatcher::dispatch`，主 switch 里永远看不到 loan 命令。
     pub fn is_loan(self) -> bool {
         matches!(
             self,
@@ -191,6 +215,8 @@ impl OrderCommandType {
     }
 }
 
+/// Rust 专用：Java 枚举无默认值概念，这里给 `derive(Default)` 的宿主结构体（如 `OrderCommand`）
+/// 一个占位类型，选 `Nop` 作为无操作占位。
 impl Default for OrderCommandType {
     fn default() -> Self {
         OrderCommandType::Nop

@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITFeesMargin`（`ITFeesMarginBasic` 为其 Margin 配置实现；`ITFeesMarginLatency` 为 JMH 延迟测试不涉及）
+// 验证期货 maker/taker 手续费计算、GTC 部分成交后挂单量、以及撤单不收手续费
 mod tests {
     use std::collections::BTreeMap;
 
@@ -119,9 +121,10 @@ mod tests {
                 total += pos.extra_margin;
             }
         }
-        assert_eq!(total, 0, "期货全局守恒被打破：JPY total={total}");
+        assert_eq!(total, 0, "futures global conservation broken: JPY total={total}");
     }
 
+    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidIocTaker：GTC Ask maker 被 IOC Bid taker 部分吃掉，校验双方手续费与持仓
     #[test]
     fn ask_gtc_maker_partial_bid_ioc_taker() {
         let mut api = seed();
@@ -134,13 +137,13 @@ mod tests {
         assert_eq!(place(&mut api, 102, UID_2, PRICE, 30, OrderAction::Bid, OrderType::Ioc), CommandResultCode::Success);
 
         let filled = 30i64;
-        let mp = api.user_position(UID_1, SYM).expect("maker 持仓");
+        let mp = api.user_position(UID_1, SYM).expect("maker position");
         assert_eq!(mp.direction, PositionDirection::Short);
         assert_eq!(mp.open_volume, filled);
         assert_eq!(mp.pending_sell_size, 10);
         assert_eq!(mp.pending_buy_size, 0);
         assert_eq!(mp.open_price_sum, PRICE * filled);
-        let tp = api.user_position(UID_2, SYM).expect("taker 持仓");
+        let tp = api.user_position(UID_2, SYM).expect("taker position");
         assert_eq!(tp.direction, PositionDirection::Long);
         assert_eq!(tp.open_volume, filled);
         assert_eq!(tp.pending_sell_size, 0);
@@ -156,6 +159,7 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java shouldProcessFees_BidGtcMakerPartial_AskIocTaker：GTC Bid maker 被 IOC Ask taker 部分吃掉，校验双方手续费与持仓
     #[test]
     fn bid_gtc_maker_partial_ask_ioc_taker() {
         let mut api = seed();
@@ -168,13 +172,13 @@ mod tests {
         assert_eq!(place(&mut api, 102, UID_2, PRICE, 30, OrderAction::Ask, OrderType::Ioc), CommandResultCode::Success);
 
         let filled = 30i64;
-        let mp = api.user_position(UID_1, SYM).expect("maker 持仓");
+        let mp = api.user_position(UID_1, SYM).expect("maker position");
         assert_eq!(mp.direction, PositionDirection::Long);
         assert_eq!(mp.open_volume, filled);
         assert_eq!(mp.pending_buy_size, 20);
         assert_eq!(mp.pending_sell_size, 0);
         assert_eq!(mp.open_price_sum, PRICE * filled);
-        let tp = api.user_position(UID_2, SYM).expect("taker 持仓");
+        let tp = api.user_position(UID_2, SYM).expect("taker position");
         assert_eq!(tp.direction, PositionDirection::Short);
         assert_eq!(tp.open_volume, filled);
         assert_eq!(tp.pending_buy_size, 0);
@@ -188,17 +192,18 @@ mod tests {
         assert_conserved(&api);
     }
 
+    // 对应 Java shouldNotTakeFeesForCancelAsk：未成交挂单被撤销不产生手续费，账户与持仓完全还原
     #[test]
     fn should_not_take_fees_for_cancel_ask() {
         let mut api = seed();
         seed_user(&mut api, UID_1, DEPOSIT, 1);
 
         assert_eq!(place(&mut api, 101, UID_1, PRICE, 40, OrderAction::Ask, OrderType::Gtc), CommandResultCode::Success);
-        let p = api.user_position(UID_1, SYM).expect("resting 仓位");
+        let p = api.user_position(UID_1, SYM).expect("resting position");
         assert_eq!(p.direction, PositionDirection::Short);
         assert_eq!(p.open_volume, 0);
         assert_eq!(p.pending_sell_size, 40);
-        assert_eq!(api.user_account(UID_1, JPY), DEPOSIT, "挂单未成交，账户不动");
+        assert_eq!(api.user_account(UID_1, JPY), DEPOSIT, "unfilled order does not touch the account");
         assert_eq!(api.fees(JPY), 0);
         assert_conserved(&api);
 
@@ -209,13 +214,14 @@ mod tests {
 
         assert!(
             api.user_position(UID_1, SYM).map_or(true, |p| p.open_volume == 0 && p.pending_sell_size == 0 && p.pending_buy_size == 0),
-            "撤单后不应残留挂量"
+            "no resting size should remain after cancel"
         );
         assert_eq!(api.user_account(UID_1, JPY), DEPOSIT);
         assert_eq!(api.fees(JPY), 0);
         assert_eq!(api.fees(USD), 0);
         assert_conserved(&api);
     }
+    // 无直接对应的 Java @Test：用独立公式（fee_rate × filled）交叉校验 maker/taker 手续费计算，锚定 Java 侧同款 oracle
     #[test]
     fn fee_oracle_matches_java_independent_formula() {
         assert_eq!(maker_fee(30), MAKER_FEE * 30, "Java makerFee×30 = 60");

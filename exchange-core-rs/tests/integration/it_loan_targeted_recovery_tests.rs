@@ -1,3 +1,8 @@
+//! Ported from the Java test class `ITLoanTargetedRecovery.java`. Verifies that the loan
+//! targeted liquidation index still works after snapshot recovery: build state, snapshot it,
+//! restore into a fresh `ExchangeCore` instance (rebuilding the isolated/cross loan indices
+//! from the recovered user state), then confirm a mark-price crash alone (no
+//! `LIQUIDATION_SCAN`) still force-liquidates the loan through the targeted path.
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -86,6 +91,9 @@ mod tests {
         OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, timestamp: ts, ..Default::default() }
     }
 
+    // Corresponds to Java loanIndex_rebuildsAfterSnapshotRecovery_targetedStillTriggersForceSell():
+    // build a loan on the original instance, snapshot it, restore into a fresh instance, then
+    // check the targeted loan-liquidation index was rebuilt and still fires on a mark-price crash.
     #[test]
     fn loan_index_rebuilds_after_snapshot_recovery_targeted_still_triggers_force_sell() {
         let (re, me) = {
@@ -107,7 +115,7 @@ mod tests {
                 submit(&mut core, cmd_loan_create(2_000_002, BORROWER, SYMBOL, LOAN_ID, ETH_COLLATERAL, XBT_PRINCIPAL, 1_000)),
                 CommandResultCode::Success
             );
-            assert!(core.query_total_balance().is_global_zero(), "快照前应守恒");
+            assert!(core.query_total_balance().is_global_zero(), "should be conserved before snapshot");
             core.to_snapshot_bytes()
         };
 
@@ -120,9 +128,9 @@ mod tests {
                 .isolated_loan_symbol_to_users
                 .get(&SYMBOL)
                 .is_some_and(|users| users.contains(&BORROWER)),
-            "恢复后 isolated targeted 索引未重建/未命中 loan-only 用户"
+            "after recovery, isolated targeted index was not rebuilt or did not match the loan-only user"
         );
-        assert!(r.query_total_balance().is_global_zero(), "恢复后应守恒");
+        assert!(r.query_total_balance().is_global_zero(), "should be conserved after recovery");
 
         assert_eq!(
             submit(&mut r, cmd_place_order(2000, LP, SYMBOL, CRASH_MARK, ETH_COLLATERAL, OrderAction::Bid, 1_500)),
@@ -141,9 +149,9 @@ mod tests {
             .unwrap_or(0);
         assert!(
             collateral_now < ETH_COLLATERAL,
-            "snapshot 恢复后抵押价暴跌应仍经 targeted 路径即时强平；抵押未减少说明恢复后 loan 索引未重建/未命中 (now={collateral_now})"
+            "after snapshot recovery, a collateral price crash should still trigger immediate liquidation via the targeted path; unchanged collateral means the loan index was not rebuilt/missed after recovery (now={collateral_now})"
         );
 
-        assert!(r.query_total_balance().is_global_zero(), "恢复后 targeted 强平仍守恒");
+        assert!(r.query_total_balance().is_global_zero(), "global balance should still be conserved after targeted liquidation post-recovery");
     }
 }

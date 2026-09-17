@@ -7,12 +7,23 @@ use crate::core::common::margin_mode::MarginMode;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
 
+/// 对应 Java `ExchangeCore`：Java 版是把 RiskEngine(R1 预处理/R2 风控释放)、MatchingEngineRouter(ME)
+/// 通过 LMAX Disruptor 组装成多阶段流水线（G 分组 → [J 落盘] ‖ R1 → ME → R2 → E 结果处理，
+/// 各阶段可多 shard 并行），并负责 disruptor 生命周期(startup/shutdown)与线程池装配。
+/// Rust 版把整条流水线塌缩为单线程、单 shard 的确定性管线：一次 `process_command` 内同步依次跑
+/// R1(`risk.pre_process_command`) → ME(`matching.process_order`) → R2(`risk.handler_risk_release`)，
+/// 不经过队列/线程边界，天然满足 Raft 状态机对确定性重放的要求；`RiskEngine`/`MatchingEngineRouter`
+/// 是本 crate 内被塌缩的等价物，字段语义仍与 Java 逐一对应。
 #[derive(Default)]
 pub struct ExchangeCore {
     pub risk: RiskEngine,
     pub matching: MatchingEngineRouter,
     pub ups: UserProfileService,
     pub ssp: SymbolSpecificationProvider,
+    // 上一次 `process_command` 期间由 `run_liquidation_cascade` 同步驱动的二级命令（强平/IF/ADL 等）
+    // 累积产出的 fund events / matcher events；每次 `process_command` 开头清空重记，供调用方
+    // （如 SimpleEventsProcessor）在处理完主命令后单独取出上报，对应 Java 侧这些事件分散在各自
+    // 独立、异步经 raft 重提交的二级命令各自的结果里（Rust 因为同步内联级联而在此处聚合暴露）。
     pub last_cascade_events: Vec<crate::core::common::fund_event::FundEvent>,
     pub last_cascade_matcher_events: Vec<crate::core::common::matcher_trade_event::MatcherTradeEvent>,
 }
@@ -30,6 +41,13 @@ impl ExchangeCore {
         }
     }
 
+    /// 对应 Java `ExchangeCore` 流水线核心：R1(`RiskEngine.preProcessCommand`) → ME
+    /// (`MatchingEngineRouter.processOrder`) → R2(`RiskEngine.handlerRiskRelease`)。Java 里三段分别
+    /// 跑在 Disruptor 不同 handler 阶段（可能不同线程/shard），此处塌缩为一次函数调用内的三步同步执行，
+    /// 保证同一条命令的处理结果在任意节点、任意时刻重放都完全确定（Raft 状态机要求）。
+    /// `RESET` 单独短路：不经过 R1/ME/R2，直接清空全部业务状态后返回（对应 Java RiskEngine/
+    /// MatchingEngineRouter 各自 `case RESET` 分支）。处理完成后调用 `run_liquidation_cascade`
+    /// 同步排空强平/ADL 级联产生的二级命令（Java 侧是异步经由 raft 重新提交，见该方法注释）。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
         self.last_cascade_events.clear();
         self.last_cascade_matcher_events.clear();
@@ -58,6 +76,11 @@ impl ExchangeCore {
         self.run_liquidation_cascade();
     }
 
+    // 对应 Java `RiskEngine.reset()`(清 userProfileService/liquidationService/loanService/
+    // symbolSpecificationProvider/currencySpecificationProvider/lastPriceCache/fees/adjustments/
+    // suspends) + `MatchingEngineRouter` 的 `case RESET`(清 orderBooks)。Rust 侧 SSP/UPS/RiskEngine/
+    // MatchingEngineRouter 各自持有独立状态，这里逐一清空后重建现货对索引（Java 无此索引，Rust 的
+    // spot_pair_index 是塌缩单 shard 后新增的辅助结构，清空后必须显式 rebuild 而非留脏）。
     fn reset(&mut self) {
         self.risk.reset();
         self.ups.users.clear();
@@ -67,6 +90,13 @@ impl ExchangeCore {
         self.matching.reset();
     }
 
+    // 对应 Java `LiquidationEngine`/`LiquidationScheduledService` 生成 FORCE_LIQUIDATION/IF/ADL 等
+    // 二级命令后，通过 `LiquidationCommandSubmitter` 异步把命令重新提交进 raft 共识、再经共识回放
+    // 走一遍完整流水线的机制。Rust 单节点确定性管线里没有"重新走共识"这一跳：`pending_commands`
+    // 队列在本次 `process_command` 尾部被同步、原地排空——每弹出一条二级命令就原样跑一遍
+    // R1→ME→R2（递归级联：这一步产生的新命令会追加到队列继续被排空），产生的 fund_events/
+    // matcher_event 被收集进 `last_cascade_events`/`last_cascade_matcher_events` 供调用方读取。
+    // 这是 Java 版"async 经 raft 再入队"到 Rust 版"sync 原地递归排空"的关键行为收敛点。
     fn run_liquidation_cascade(&mut self) {
         if !self.risk.liquidation_engine.pending_commands.is_empty() {
             log::debug!(
@@ -99,6 +129,12 @@ impl ExchangeCore {
         }
     }
 
+    /// 对应 Java `RiskEngine`/`MatchingEngineRouter` 各自实现 `WriteBytesMarshallable`（Chronicle Wire
+    /// 二进制编码）产生 RE/ME 两个独立快照模块。RE(risk-engine) 模块覆盖 symbol/currency specs、
+    /// UserProfileService(账户/仓位/挂单)、RiskEngine 自身(fees/adjustments/suspends/last_price_cache/
+    /// loan_service/liquidation_service) 等*复制态*；ME(matching-engine) 模块覆盖撮合簿(order_books)。
+    /// 两段独立编码、独立传输，与 Java 侧 `PERSIST_STATE_RISK`/`PERSIST_STATE_MATCHING` 两条独立持久化
+    /// 指令的模块划分一致，供上层 Raft 快照分别落盘/传输。
     pub fn to_snapshot_bytes(&self) -> (Vec<u8>, Vec<u8>) {
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
         use crate::core::snapshot::module_frame::encode_module_payload;
@@ -109,19 +145,36 @@ impl ExchangeCore {
         (re, me)
     }
 
+    /// `to_snapshot_bytes` 的逆过程：解出 RE/ME 两个模块帧并重建 `ExchangeCore`。对应 Java
+    /// `RiskEngine.recoverStateBySnapshot`/`MatchingEngineRouter.recoverStateBySnapshot`
+    /// （各自反序列化进临时 State/DeserializedData 持有者、再原子赋值给自身字段）。解出复制态后
+    /// 必须调用 `restore_non_replicated_state` 重建快照里*没有*编码的派生索引/临时字段——
+    /// 这一步是 Java/Rust 都需要的（Java 见 `LiquidationEngine.updateProvider`），因为这些字段要么是
+    /// 纯内存缓存（重放开销小于序列化成本），要么在快照写入时被有意排除（如 ADL 资格/待 ADL 量/
+    /// 清算流水这类瞬时状态，见下）。
     pub fn from_snapshot_bytes(re_ecs: &[u8], me_ecs: &[u8]) -> Self {
         use crate::core::snapshot::chronicle_reader::ChronicleReader;
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
         use crate::core::snapshot::module_frame::decode_module_payload;
         let mut core = ExchangeCore::default();
-        let re = decode_module_payload(re_ecs).expect("RE 模块帧解码失败");
-        crate::core::processors::risk_engine::read_risk_engine_payload(&re, &mut core).expect("RE payload 解析失败");
-        let me = decode_module_payload(me_ecs).expect("ME 模块帧解码失败");
-        core.matching = MatchingEngineRouter::chronicle_read(&mut ChronicleReader::new(&me)).expect("ME payload 解析失败");
+        let re = decode_module_payload(re_ecs).expect("RE module frame decode failed");
+        crate::core::processors::risk_engine::read_risk_engine_payload(&re, &mut core).expect("RE payload parse failed");
+        let me = decode_module_payload(me_ecs).expect("ME module frame decode failed");
+        core.matching = MatchingEngineRouter::chronicle_read(&mut ChronicleReader::new(&me)).expect("ME payload parse failed");
         core.restore_non_replicated_state();
         core
     }
 
+    // 对应 Java 快照恢复后的派生状态重建：
+    // 1) SSP 的现货对唯一性索引本就是 Rust 侧新增的辅助结构（Java 无此索引），恒需 rebuild。
+    // 2) 逐仓/全仓 ADL 资格(adl_eligibility)、待 ADL 量(pending_adl_size)、清算流水(liquidation_flow)
+    //    复位为"刚重启"的初值——对应 Java `SymbolPositionRecord` 构造函数/`reset()` 里的默认值
+    //    （ISOLATED=100 全仓=0），这三个字段要么是运行期缓存要么是本地进行中状态，快照里不落盘。
+    // 3) 期货持仓量>0 的用户重新灌入 `LiquidationEngine.symbol_to_users` 索引（symbol→持仓人集合），
+    //    对应 Java `LiquidationEngine.updateProvider` 遍历全体 UserProfile 重建同一索引的逻辑；
+    //    该索引用于清算扫描定位候选人，快照里同样不落盘（纯粹可从复制态推导，重建比序列化更省）。
+    // 4) loan 侧同理委托 `loan_liquidation_engine.rebuild_indices` 重建 isolated/cross loan 的
+    //    symbol→borrower 索引。
     fn restore_non_replicated_state(&mut self) {
         self.ssp.rebuild_spot_pair_index();
         for up in self.ups.users.values_mut() {
@@ -228,11 +281,11 @@ mod tests {
         core.process_command(&mut reset);
 
         assert_eq!(reset.result_code, Some(CommandResultCode::Success));
-        assert!(core.ups.users.is_empty(), "用户清空");
-        assert!(core.ssp.symbols.is_empty() && core.ssp.currencies.is_empty(), "specs 清空");
-        assert!(core.risk.fees.is_empty() && core.risk.adjustments.is_empty() && core.risk.suspends.is_empty(), "费用/对冲桶清空");
-        assert!(core.risk.last_price_cache.is_empty(), "价格缓存清空");
-        assert_eq!(core.matching.order_books_state_hash(), 17, "撮合簿清空（空 hash 种子 17）");
+        assert!(core.ups.users.is_empty(), "users cleared");
+        assert!(core.ssp.symbols.is_empty() && core.ssp.currencies.is_empty(), "specs cleared");
+        assert!(core.risk.fees.is_empty() && core.risk.adjustments.is_empty() && core.risk.suspends.is_empty(), "fee/adjustment/suspend buckets cleared");
+        assert!(core.risk.last_price_cache.is_empty(), "price cache cleared");
+        assert_eq!(core.matching.order_books_state_hash(), 17, "order books cleared (empty hash seed 17)");
     }
 
     #[test]
@@ -353,7 +406,7 @@ mod tests {
         core.process_command(&mut cancel);
 
         assert_eq!(cancel.result_code, Some(CommandResultCode::Success));
-        assert_eq!(core.ups.get(1).unwrap().locked(QUOTE), 0, "R2 应释放全部冻结");
+        assert_eq!(core.ups.get(1).unwrap().locked(QUOTE), 0, "R2 must release all locked funds");
     }
 }
 
@@ -819,7 +872,7 @@ mod liquidation_engine_e2e_tests {
         let mut core = seeded();
         core.process_command(&mut markprice(100, 1_000));
         open_borrower_long(&mut core);
-        let holders = core.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("索引应有该 symbol");
+        let holders = core.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("index should have this symbol");
         assert!(holders.contains(&BORROWER));
         assert!(holders.contains(&M1));
     }
@@ -845,8 +898,8 @@ mod liquidation_engine_e2e_tests {
             "借款人 LONG 被 FORCE 全平，仓位移除"
         );
         let if_available: i64 = core.risk.liquidation_service.notionals.values().map(|n| n.available).sum();
-        assert!(if_available > 0, "清算费必须计入 IFNotional.available");
-        assert_eq!(conserved(&core), before, "强平（含清算费转入 IF）全局守恒");
+        assert!(if_available > 0, "liquidation fee must be credited to IFNotional.available");
+        assert_eq!(conserved(&core), before, "globally conserved after force liquidation (incl. liquidation fee transferred to IF)");
     }
 
     #[test]
@@ -871,9 +924,9 @@ mod liquidation_engine_e2e_tests {
             ..Default::default()
         };
         core.process_command(&mut force);
-        assert_eq!(force.size, 10, "normalize 必须把 cmd.size 夹到 open_volume=10，不得超平");
-        assert!(!core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT), "10 手全平后仓位移除");
-        assert_eq!(conserved(&core), before, "夹取后正常成交，守恒");
+        assert_eq!(force.size, 10, "normalize must clamp cmd.size to open_volume=10, must not over-close");
+        assert!(!core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT), "position removed after full close of 10 lots");
+        assert_eq!(conserved(&core), before, "conserved after normal fill following clamp");
     }
 
     #[test]
@@ -885,8 +938,8 @@ mod liquidation_engine_e2e_tests {
         let before = conserved(&core);
         core.process_command(&mut markprice(94, 2_000));
 
-        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "FORCE→IF→ADL 级联后队列排空");
-        assert_eq!(conserved(&core), before, "无成交的级联不改变任何余额，守恒");
+        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "queue drained after FORCE→IF→ADL cascade");
+        assert_eq!(conserved(&core), before, "cascade with no fills does not change any balance, conserved");
     }
 }
 
@@ -993,13 +1046,13 @@ mod loan_scanner_e2e_tests {
         };
         core.process_command(&mut scan);
 
-        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "扫描生成的 force-liquidate 已排空处理");
+        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "force-liquidate generated by scan has been drained and processed");
         assert!(
             !core.ups.get(BORROWER).unwrap().isolated_loans.contains_key(&LOAN_ID),
             "越线 loan 被强平（1000 抵押全卖、900 本金还清、loan 移除）"
         );
-        assert_eq!(conserved(&core, COLL), before_coll, "COLL 守恒");
-        assert_eq!(conserved(&core, LOANC), before_loanc, "LOANC 守恒");
+        assert_eq!(conserved(&core, COLL), before_coll, "COLL conserved");
+        assert_eq!(conserved(&core, LOANC), before_loanc, "LOANC conserved");
     }
 }
 
@@ -1128,8 +1181,8 @@ mod snapshot_tests {
         let restored = ExchangeCore::from_snapshot_bytes(&re, &me);
 
         let (re2, me2) = restored.to_snapshot_bytes();
-        assert_eq!(re2, re, "RE 模块快照 round-trip 必须字节等价");
-        assert_eq!(me2, me, "ME 模块快照 round-trip 必须字节等价");
+        assert_eq!(re2, re, "RE module snapshot round-trip must be byte-equal");
+        assert_eq!(me2, me, "ME module snapshot round-trip must be byte-equal");
 
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].open_volume, 10);
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].direction, PositionDirection::Long);
@@ -1140,15 +1193,15 @@ mod snapshot_tests {
         let mut restored2 = ExchangeCore::from_snapshot_bytes(&re, &me);
         restored2.process_command(&mut ob);
         let md = ob.market_data.unwrap();
-        assert!(md.bid_prices.contains(&80), "resting 挂单簿状态必须随快照复原");
+        assert!(md.bid_prices.contains(&80), "resting order book state must be restored with the snapshot");
 
-        assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].adl_eligibility, 100, "ISOLATED 仓 adl_eligibility 复原为 100");
+        assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].adl_eligibility, 100, "ISOLATED position adl_eligibility restored to 100");
         assert!(restored.ups.get(U_LONG).unwrap().positions[&FUT].liquidation_flow.is_none());
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].pending_adl_size, 0);
 
-        let holders = restored.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("futures 索引重建");
+        let holders = restored.risk.liquidation_engine.symbol_to_users.get(&FUT).expect("futures index rebuilt");
         assert!(holders.contains(&U_LONG) && holders.contains(&U_SHORT));
-        assert!(!holders.contains(&U_MAKER), "只挂单未开仓的用户按 open_volume>0 过滤，不入重建索引（对齐 Java）");
+        assert!(!holders.contains(&U_MAKER), "users who only rest orders without opening a position are filtered by open_volume>0 and excluded from the rebuilt index (aligned with Java)");
         assert!(
             restored.risk.liquidation_engine.loan_liquidation_engine.isolated_loan_symbol_to_users.get(&SPOT).unwrap().contains(&BORROWER),
             "loan 索引重建"
@@ -1169,7 +1222,7 @@ mod snapshot_tests {
         let mut mp = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price: 94, timestamp: 5_000, ..Default::default() };
         restored.process_command(&mut mp);
 
-        assert!(restored.risk.liquidation_engine.pending_commands.is_empty(), "恢复后强平级联正常排空");
+        assert!(restored.risk.liquidation_engine.pending_commands.is_empty(), "force-liquidation cascade drains normally after recovery");
         assert!(
             !restored.ups.get(U_LONG).unwrap().positions.contains_key(&FUT),
             "恢复后 targeted 索引生效，U_LONG 被强平平仓"
@@ -1276,11 +1329,11 @@ mod settle_pnl_tests {
         core.process_command(&mut settle);
         assert_eq!(settle.result_code, Some(CommandResultCode::Success));
 
-        assert!(!core.ups.get(U_LONG).unwrap().positions.contains_key(&DELIV), "LONG 交割平仓移除");
-        assert!(!core.ups.get(U_SHORT).unwrap().positions.contains_key(&DELIV), "SHORT 交割平仓移除");
-        assert_eq!(core.ups.get(U_LONG).unwrap().account(QUOTE) - long_acct0, 50, "LONG 交割盈利 (105-100)*10=+50");
-        assert_eq!(core.ups.get(U_SHORT).unwrap().account(QUOTE) - short_acct0, -50, "SHORT 交割亏损 (100-105)*10=-50");
-        assert_eq!(conserved(&core), before, "交割结算全局守恒");
+        assert!(!core.ups.get(U_LONG).unwrap().positions.contains_key(&DELIV), "LONG delivery close removes position");
+        assert!(!core.ups.get(U_SHORT).unwrap().positions.contains_key(&DELIV), "SHORT delivery close removes position");
+        assert_eq!(core.ups.get(U_LONG).unwrap().account(QUOTE) - long_acct0, 50, "LONG delivery profit (105-100)*10=+50");
+        assert_eq!(core.ups.get(U_SHORT).unwrap().account(QUOTE) - short_acct0, -50, "SHORT delivery loss (100-105)*10=-50");
+        assert_eq!(conserved(&core), before, "globally conserved after delivery settlement");
     }
 
     #[test]
@@ -1292,6 +1345,6 @@ mod settle_pnl_tests {
 
         let mut settle = OrderCommand { command: OrderCommandType::SettlePnl, symbol: PERP, price: 105, timestamp: 2_000, ..Default::default() };
         core.process_command(&mut settle);
-        assert_eq!(settle.result_code, Some(CommandResultCode::InvalidSymbol), "SETTLE_PNL 只对交割合约有效");
+        assert_eq!(settle.result_code, Some(CommandResultCode::InvalidSymbol), "SETTLE_PNL is only valid for delivery contracts");
     }
 }

@@ -1,4 +1,6 @@
 #[cfg(test)]
+// 翻译自 Java `ITLoanDisableSymbol`
+// 验证停借（ADD_LOAN 把 initialLtvBps 置 0）只关闭新开仓入口，不得连带影响/强平存量贷款。
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, SymbolLoanConfig, UNSET, UNSET_AMOUNT};
@@ -82,6 +84,8 @@ mod tests {
         }
     }
 
+    // 对应 Java disableSymbol_blocksNewLoans_butKeepsExistingUnliquidated：停借后拒绝新贷款，但存量贷款的
+    // liquidation/margin-call LTV 及抵押物保持不变，不会被行情波动误强平
     #[test]
     fn disable_symbol_blocks_new_loans_but_keeps_existing_unliquidated() {
         let mut core = ExchangeCore::new();
@@ -105,9 +109,9 @@ mod tests {
         core.risk.apply_add_loan(&disable_symbol_cmd(SYMBOL), &mut core.ssp);
         {
             let cfg = core.ssp.get_symbol(SYMBOL).unwrap().loan_config;
-            assert_eq!(cfg.initial_ltv_bps, 0, "停借 → initial 归零");
-            assert_eq!(cfg.liquidation_ltv_bps, 8_000, "liquidation 必须保留，否则存量被连带强平");
-            assert_eq!(cfg.margin_call_ltv_bps, 7_000, "marginCall 必须保留");
+            assert_eq!(cfg.initial_ltv_bps, 0, "disabling loans -> initial LTV zeroed");
+            assert_eq!(cfg.liquidation_ltv_bps, 8_000, "liquidation LTV must be preserved, otherwise existing loans get liquidated as collateral damage");
+            assert_eq!(cfg.margin_call_ltv_bps, 7_000, "margin-call LTV must be preserved");
         }
 
         assert_eq!(
@@ -126,9 +130,9 @@ mod tests {
             .unwrap_or(-1);
         assert_eq!(
             collateral, ETH_COLLATERAL,
-            "停借不得动存量：liquidationLtv 若跟着 initialLtv 归零，此处抵押会被强平消费掉"
+            "disabling loans must not touch existing balances: if liquidationLtv zeroed along with initialLtv, this collateral would be consumed by liquidation"
         );
 
-        assert!(core.query_total_balance().is_global_zero(), "停借全程守恒");
+        assert!(core.query_total_balance().is_global_zero(), "conservation must hold throughout the disable-loans flow");
     }
 }
