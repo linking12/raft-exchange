@@ -23,17 +23,17 @@ use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-use crate::core::common::adl_user_position::AdlUserPosition;
 use crate::core::processors::adl_command_processor::AdlCommandProcessor;
-use crate::core::processors::funding_fee_command_processor::FundingFeeCommandProcessor;
+use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
+use crate::core::processors::fundingfee_command_processor::FundingFeeCommandProcessor;
 use crate::core::processors::if_command_processor::IfCommandProcessor;
-use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
+use crate::core::processors::internaltransfer_command_processor::InternalTransferCommandProcessor;
 use crate::core::processors::liquidation::liquidation_engine::LiquidationEngine;
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_command_dispatcher::LoanCommandDispatcher;
 use crate::core::processors::risk_engine_command_dispatcher::RiskEngineCommandDispatcher;
 use crate::core::processors::loan::loan_service::LoanService;
-use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
+use crate::core::processors::loanratepricing_command_processor::LoanRatePricingCommandProcessor;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::{mul_exact, sub_exact};
 
@@ -142,23 +142,20 @@ impl RiskEngine {
         } else if cmd.command == OrderCommandType::ClosePosition {
             cmd.result_code = Some(self.close_position_risk_check(cmd, ups, ssp));
         } else if cmd.command == OrderCommandType::SettleFundingfees {
-            // SETTLE_FUNDINGFEES 不是 is_non_trading()，停留在主交易 switch。
-            cmd.result_code = Some(self.settle_funding_fees_collect(cmd, ups, ssp));
+            let mut ctx = TwoStepContext::new(self, ups, ssp);
+            cmd.result_code = Some(FundingFeeCommandProcessor.collect(&mut ctx, cmd));
         } else if cmd.command == OrderCommandType::ForceLiquidation {
-            // FORCE_LIQUIDATION R1：normalize_cmd_position_size 夹取 size 后走 IOC 平仓单撮合。
             cmd.result_code = Some(Self::normalize_cmd_position_size(cmd, ups));
         } else if cmd.command == OrderCommandType::IfTakeover {
-            // IF_TAKEOVER 不是 is_non_trading()。刻意先 normalize 再 collect（Java 反序）：正常 scanner 路径 size ≤ taker 仓位，
-            // normalize 是 no-op 两序等价；仅在人为放大 size 的病态输入下先夹更稳（IF 只按 taker 能接管的量预留）。结果码以 collect 为准。
+            // 先 normalize 再 collect（Java 反序）：夹取被放大的 size，防病态输入下预留超过 taker 仓位。
             Self::normalize_cmd_position_size(cmd, ups);
-            cmd.result_code = Some(self.if_takeover_collect(cmd));
+            let mut ctx = TwoStepContext::new(self, ups, ssp);
+            cmd.result_code = Some(IfCommandProcessor.collect(&mut ctx, cmd));
         } else if cmd.command == OrderCommandType::AutoDeleveraging {
-            // AUTO_DELEVERAGING 不是 is_non_trading()。同 IF_TAKEOVER：刻意先 normalize 再 collect（Java 反序），
-            // 正常路径等价；病态放大输入下先夹避免对手方平仓多于 taker 平仓。
-            Self::normalize_cmd_position_size(cmd, ups);
-            cmd.result_code = Some(self.adl_collect(cmd, ups, ssp));
+            Self::normalize_cmd_position_size(cmd, ups); // 同 IF_TAKEOVER：先夹 size 再 collect
+            let mut ctx = TwoStepContext::new(self, ups, ssp);
+            cmd.result_code = Some(AdlCommandProcessor.collect(&mut ctx, cmd));
         } else if cmd.command == OrderCommandType::LiquidationScan {
-            // ④ 扫描 lane：LIQUIDATION_SCAN 纯扫描（check_positions），单 shard 恒 Success；命中的强平命令入队待级联。
             let mut _alerts = Vec::new();
             self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut _alerts);
             cmd.fund_events.append(&mut _alerts);
@@ -229,11 +226,11 @@ impl RiskEngine {
     /// `is_non_trading()` 早退之前,因为它们虽属非交易、却各有专属载体需在 R2 真正 apply:
     ///
     /// ```text
-    ///   ① RepriceLoanRates   → reprice_loan_rates_apply           (载体 cmd.loan_reprice_events)
-    ///   ② InternalTransfer   → internal_transfer_apply            (载体 cmd.internal_transfer_event)
-    ///   ③ SettleFundingfees  → settle_funding_fees_apply + 结算后 check_positions (载体 cmd.funding_fee_event)
-    ///   ④ IfTakeover         → if_takeover_apply + advance_liquidation (载体 cmd.if_takeover_size)
-    ///   ⑤ AutoDeleveraging   → adl_apply + advance_liquidation      (载体 cmd.adl_events)
+    ///   ① RepriceLoanRates   → LoanRatePricingCommandProcessor.apply       (载体 cmd.loan_reprice_events)
+    ///   ② InternalTransfer   → InternalTransferCommandProcessor.apply      (载体 cmd.internal_transfer_event)
+    ///   ③ SettleFundingfees  → FundingFeeCommandProcessor.apply + 结算后 check_positions (载体 cmd.funding_fee_event)
+    ///   ④ IfTakeover         → IfCommandProcessor.apply + advance_liquidation (载体 cmd.if_takeover_size)
+    ///   ⑤ AutoDeleveraging   → AdlCommandProcessor.apply + advance_liquidation (载体 cmd.adl_events)
     ///   —— 到此其余 is_non_trading()：R1 已定结果码，直接 return ——
     ///   ⑥ 撮合结算           → 取 cmd.matcher_event 链：现货两段扣费 / 期货 handle_matcher_event_margin
     /// ```
@@ -250,19 +247,24 @@ impl RiskEngine {
         // ①~⑤ 专属载体命令（顺序/载体见上方 doc 表），都须在通用 is_non_trading 早退前特判。
         // ① RepriceLoanRates
         if cmd.command == OrderCommandType::RepriceLoanRates {
-            self.reprice_loan_rates_apply(cmd);
+            let mut ctx = TwoStepContext::new(self, ups, ssp);
+            LoanRatePricingCommandProcessor.apply(&mut ctx, cmd);
             return;
         }
         // ② InternalTransfer
         if cmd.command == OrderCommandType::InternalTransfer {
-            self.internal_transfer_apply(cmd, ups, ssp);
+            let mut ctx = TwoStepContext::new(self, ups, ssp);
+            InternalTransferCommandProcessor.apply(&mut ctx, cmd);
             return;
         }
         // ③ SettleFundingfees
         if cmd.command == OrderCommandType::SettleFundingfees {
             // 门控：无 funding 事件则不触发 checkPositions；有则结算后查同 symbol 强平（结算可能致仓破产）。
             let had_funding_event = cmd.funding_fee_event.is_some();
-            self.settle_funding_fees_apply(cmd, ups, ssp);
+            {
+                let mut ctx = TwoStepContext::new(self, ups, ssp);
+                FundingFeeCommandProcessor.apply(&mut ctx, cmd);
+            }
             if had_funding_event {
                 let mut _alerts = Vec::new();
                 self.liquidation_engine.check_positions(cmd, ups, ssp, &self.last_price_cache, &self.loan_service, &mut _alerts);
@@ -272,13 +274,19 @@ impl RiskEngine {
         }
         // ④ IfTakeover
         if cmd.command == OrderCommandType::IfTakeover {
-            self.if_takeover_apply(cmd, ups, ssp);
+            {
+                let mut ctx = TwoStepContext::new(self, ups, ssp);
+                IfCommandProcessor.apply(&mut ctx, cmd);
+            }
             Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups); // 结算后推进状态机（REJECT→ADL）
             return;
         }
         // ⑤ AutoDeleveraging
         if cmd.command == OrderCommandType::AutoDeleveraging {
-            self.adl_apply(cmd, ups, ssp);
+            {
+                let mut ctx = TwoStepContext::new(self, ups, ssp);
+                AdlCommandProcessor.apply(&mut ctx, cmd);
+            }
             Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups); // 结算后推进状态机（恒终态）
             return;
         }
@@ -588,278 +596,6 @@ impl RiskEngine {
             record.apply_trade_price(cmd.timestamp, trade_price);
         }
     }
-
-
-    /// RepriceLoanRates R2：逐事件 apply_event（advance_accumulator 先于 reprice_currency，顺序不可颠倒），循环后统一 set_last_reprice_ts 一次；空事件完全 no-op（含不推进 ts）。
-    fn reprice_loan_rates_apply(&mut self, cmd: &mut OrderCommand) {
-        let events = std::mem::take(&mut cmd.loan_reprice_events);
-        if events.is_empty() {
-            return;
-        }
-        for (currency, util_bps) in events {
-            LoanRatePricingProcessor::apply_event(&mut self.loan_service, currency, util_bps, cmd.timestamp);
-        }
-        self.loan_service.floating_rate.set_last_reprice_ts(cmd.timestamp);
-    }
-
-
-    /// InternalTransfer R2：消费 cmd.internal_transfer_event 给 to-shard 入账（未知 to 自动建 SUSPENDED）。
-    fn internal_transfer_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
-        let Some((to_uid, currency, amount)) = cmd.internal_transfer_event.take() else {
-            return;
-        };
-        InternalTransferProcessor::apply_event(ups, to_uid, currency, amount);
-        let order_id = cmd.order_id;
-        Self::push_spot_balance_event(cmd, ups, ssp, FundEventType::InternalTransfer, order_id, to_uid, currency, 0);
-    }
-
-    /// SettleFundingfees R1+merge：门禁顺序 InvalidSymbol → RiskMarkpriceNotAvailable → RiskInvalidAmount（不可换序）；结果写入 cmd.funding_fee_event 供 R2 消费。
-    fn settle_funding_fees_collect(
-        &mut self,
-        cmd: &mut OrderCommand,
-        ups: &UserProfileService,
-        ssp: &SymbolSpecificationProvider,
-    ) -> CommandResultCode {
-        let spec = match ssp.get_symbol(cmd.symbol) {
-            Some(s) if s.symbol_type == SymbolType::FuturesContractPerpetual => s,
-            _ => return CommandResultCode::InvalidSymbol,
-        };
-        let mark_price = match self.mark_price(cmd.symbol) {
-            Some(p) => p,
-            None => return CommandResultCode::RiskMarkpriceNotAvailable,
-        };
-        if cmd.size <= 0 {
-            return CommandResultCode::RiskInvalidAmount;
-        }
-        let action = cmd.action.expect("SETTLE_FUNDINGFEES requires action");
-        let symbol = spec.symbol_id;
-        let shard = FundingFeeCommandProcessor::collect_input(ups, symbol, mark_price, action, cmd.price, cmd.size);
-        let events = FundingFeeCommandProcessor::build_matcher_events(std::slice::from_ref(&shard));
-        if let Some(&(_shard_id, amount)) = events.first() {
-            cmd.funding_fee_event = Some((shard.payer_amounts, shard.receiver_notionals, amount));
-        }
-        CommandResultCode::Success
-    }
-
-    /// SettleFundingfees R2：消费 cmd.funding_fee_event（None 时早退）。
-    fn settle_funding_fees_apply(
-        &mut self,
-        cmd: &mut OrderCommand,
-        ups: &mut UserProfileService,
-        ssp: &SymbolSpecificationProvider,
-    ) {
-        let Some((payer_amounts, receiver_notionals, shard_recv_amount)) = cmd.funding_fee_event.take() else {
-            return;
-        };
-        let symbol = cmd.symbol;
-        let action = cmd.action.expect("SETTLE_FUNDINGFEES requires action");
-        let spec = ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
-        let currency_spec = ssp
-            .get_currency(spec.quote_currency)
-            .cloned()
-            .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
-        FundingFeeCommandProcessor::apply_event(
-            ups,
-            symbol,
-            action,
-            &payer_amounts,
-            &receiver_notionals,
-            shard_recv_amount,
-            &spec,
-            &currency_spec,
-        );
-
-        let order_id = cmd.order_id;
-        let lpc = &self.last_price_cache;
-        let payer_dir = PositionDirection::of_action(action);
-        let recv_dir = PositionDirection::of_action(action.opposite());
-        for (&uid, dir) in payer_amounts.keys().map(|u| (u, payer_dir)).chain(receiver_notionals.keys().map(|u| (u, recv_dir))) {
-            if let Some(up) = ups.get(uid) {
-                if let Some(pos) = up.positions.values().find(|p| p.symbol == symbol && p.open_volume != 0 && p.direction == dir) {
-                    Self::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::FundingfeeSettlement, order_id, pos, &spec, up, ssp);
-                } else {
-                    let ev = Self::spot_snapshot_event(
-                        FundEventType::FundingfeeSettlement, order_id, up, spec.quote_currency, ssp, &currency_spec, symbol,
-                    );
-                    cmd.fund_events.push(ev);
-                }
-            }
-        }
-    }
-
-    // ==== IF_TAKEOVER（保险基金接管） ====
-
-    /// IfTakeover R1+merge：preview=min(available-reserved,size*price) 写 cmd.if_preview_cover，覆盖不满→None（全拒）否则 Some(cmd.size) 写 cmd.if_takeover_size；结果码恒 Success（REJECT 是事件级信号）。
-    fn if_takeover_collect(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
-        let preview = IfCommandProcessor::collect_input(&mut self.liquidation_service, cmd.symbol, cmd.size, cmd.price);
-        cmd.if_preview_cover = preview;
-        cmd.if_takeover_size = IfCommandProcessor::build_matcher_event(preview, cmd.size, cmd.price);
-        CommandResultCode::Success
-    }
-
-    /// IfTakeover R2（apply+finalize 合并）：成功则按 create_positions_key 关 taker 仓（不收手续费）+ 结算退款，释放 reserved 无论成败都执行。
-    fn if_takeover_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
-        let symbol = cmd.symbol;
-        let price = cmd.price;
-        let action = cmd.action.expect("IF_TAKEOVER requires action");
-        let accepted_size = cmd.if_takeover_size.take();
-
-        if let Some(size) = accepted_size {
-            let direction = PositionDirection::of_action(action);
-            IfCommandProcessor::apply_event(&mut self.liquidation_service, symbol, direction, size, price);
-
-            let spec = ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
-            let currency_spec = ssp
-                .get_currency(spec.quote_currency)
-                .cloned()
-                .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
-
-            let up = ups.get_or_add_suspended(cmd.uid);
-            // 按 create_positions_key 查 taker 仓（非裸 symbol），ONEWAY 下等价 no-op，为 HEDGE 铺好正确接线。
-            let position_key = up.create_positions_key(symbol, action, cmd.command);
-            if up.positions.contains_key(&position_key) {
-                up.positions.get_mut(&position_key).unwrap().close_current_position_futures(action.opposite(), cmd.size, price);
-
-                let order_id = cmd.order_id;
-                Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::IfPositionClose, order_id, up.positions.get(&position_key).unwrap(), &spec, up, ssp);
-
-                let is_empty = up.positions.get(&position_key).unwrap().is_empty();
-                if is_empty {
-                    let currency = up.positions.get(&position_key).unwrap().currency;
-
-                    let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
-                    if extra_margin > 0 {
-                        let refund = arithmetic::size_price_to_currency_scale(
-                            extra_margin,
-                            spec.base_scale_k,
-                            spec.quote_scale_k,
-                            currency_spec.currency_scale_k,
-                        );
-                        up.add_to_account(currency, refund);
-                        Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::MarginRefund, order_id, up.positions.get(&position_key).unwrap(), &spec, up, ssp);
-                        up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
-                    }
-
-                    let profit = up.positions.get(&position_key).unwrap().profit;
-                    if profit != 0 {
-                        let profit_scaled = arithmetic::size_price_to_currency_scale(
-                            profit,
-                            spec.base_scale_k,
-                            spec.quote_scale_k,
-                            currency_spec.currency_scale_k,
-                        );
-                        up.add_to_account(currency, profit_scaled);
-                        Self::push_futures_event(&mut cmd.fund_events, &self.last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&position_key).unwrap(), &spec, up, ssp);
-                    }
-                    up.positions.remove(&position_key);
-                }
-            }
-        } else {
-            // IF 全拒：合成 REJECT 供 advance_liquidation 升级 ADL（接受走 if_takeover_size 载体、拒绝仍经 matcher_event）。
-            cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
-                event_type: MatcherEventType::Reject,
-                ..Default::default()
-            }));
-        }
-
-        // finalize 后半：无论接管成功/全拒都释放本命令预冻结的 reserved（跟 R1 对称）。
-        self.liquidation_service.release_reserved_if_notional(symbol, cmd.if_preview_cover);
-    }
-
-    // ==== AUTO_DELEVERAGING（自动减仓 ADL） ====
-
-    /// AutoDeleveraging R1+merge：候选取自 compute_profitable_positions_by_symbol，排序+贪心分配为预占量写回 pending_adl_size，merge 产出 cmd.adl_events 并把 cmd.size 改写为实际消费量；结果码恒 Success。
-    fn adl_collect(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
-        cmd.adl_user_positions.clear();
-        cmd.adl_events.clear();
-
-        let symbol = cmd.symbol;
-        let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
-        let bankruptcy_price = cmd.price;
-        let remaining_size = cmd.size;
-        if remaining_size <= 0 {
-            return CommandResultCode::Success;
-        }
-
-        let mut candidates_map = LiquidationService::compute_profitable_positions_by_symbol(ups, ssp, &self.last_price_cache);
-        let candidates = candidates_map.remove(&symbol).unwrap_or_default();
-
-        let picks = AdlCommandProcessor::collect_input(candidates, action, bankruptcy_price, remaining_size);
-
-        // R1 写回：预占 pending_adl_size（与 finalize 对称释放，见 `adl_apply` 文档）。
-        for pick in &picks {
-            if let Some(profile) = ups.users.get_mut(&pick.uid) {
-                let position_key = profile.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
-                if let Some(pos) = profile.positions.get_mut(&position_key) {
-                    pos.pending_adl_size += pick.volume;
-                }
-            }
-        }
-
-        let (events, consumed) = AdlCommandProcessor::build_matcher_events(&picks, remaining_size);
-        cmd.adl_user_positions = picks;
-        cmd.adl_events = events;
-        cmd.size = consumed; // 真实平仓数量，R2 finalize 用它关 taker 自己的仓
-
-        CommandResultCode::Success
-    }
-
-    /// AutoDeleveraging R2（apply+finalize 合并）：apply 逐条关 counterparty 仓（缺失 best-effort skip），finalize 前半按 cmd.size（真实消费量）关 taker 仓，后半按 cmd.adl_user_positions 原始表释放 pending_adl_size（与 R1 += 对称，不管 apply 实际消费多少）。
-    fn adl_apply(&mut self, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) {
-        let symbol = cmd.symbol;
-        let price = cmd.price;
-        let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
-
-        let spec = ssp.get_symbol(symbol).cloned().unwrap_or_else(|| panic!("symbol spec missing for symbol {symbol}"));
-        let currency_spec = ssp
-            .get_currency(spec.quote_currency)
-            .cloned()
-            .unwrap_or_else(|| panic!("currency spec missing for currency {}", spec.quote_currency));
-
-        let events = std::mem::take(&mut cmd.adl_events);
-
-        // R2 apply：per-event 关 counterparty 仓（best-effort skip）。
-        for &(uid, exec_size) in &events {
-            let Some(up) = ups.users.get_mut(&uid) else {
-                // counterparty UserProfile 在 R1/R2 之间已消失 -> skip，不是 error。
-                continue;
-            };
-            let position_key = up.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
-            if !up.positions.contains_key(&position_key) {
-                // counterparty 仓位在 R1/R2 之间已被关掉 -> skip，不是 error。
-                continue;
-            }
-            let order_id = cmd.order_id;
-            Self::adl_close_and_settle(up, position_key, action, exec_size, price, &spec, &currency_spec, &mut cmd.fund_events, &self.last_price_cache, ssp, FundEventType::AdlPositionClose, order_id);
-        }
-
-        // finalize 前半：关 taker 自己的仓（只在有实际成交时）。
-        if !events.is_empty() {
-            let taker_uid = cmd.uid;
-            let taker_size = cmd.size;
-            let order_id = cmd.order_id;
-            let up = ups.get_or_add_suspended(taker_uid);
-            let taker_key = up.create_positions_key(symbol, action, OrderCommandType::AutoDeleveraging);
-            if up.positions.contains_key(&taker_key) {
-                Self::adl_close_and_settle(up, taker_key, action.opposite(), taker_size, price, &spec, &currency_spec, &mut cmd.fund_events, &self.last_price_cache, ssp, FundEventType::AdlOriginClose, order_id);
-            }
-        }
-
-        // finalize 后半：释放本命令全部候选（R1 原始表）的 pending_adl_size，跟 R1 `+=` 对称。
-        let adl_positions: Vec<AdlUserPosition> = std::mem::take(&mut cmd.adl_user_positions);
-        for pick in &adl_positions {
-            if let Some(up) = ups.users.get_mut(&pick.uid) {
-                let position_key = up.create_positions_key(symbol, action.opposite(), OrderCommandType::AutoDeleveraging);
-                if let Some(pos) = up.positions.get_mut(&position_key) {
-                    if pos.pending_adl_size > 0 {
-                        pos.pending_adl_size -= pick.volume;
-                    }
-                }
-            }
-        }
-    }
-
-
 
     /// ADD_LOAN 批量运行时配置：global/symbol/rate_curve 三段各自独立可选独立校验（一段非法只跳过）；无 binary-command 组帧基建，直接开放为配置入口（不经 preamble/幂等/结果码）。symbol 段强制 collateral_weight_bps∈[0,10000]，kill-switch 只清 initial_ltv_bps 保留存量。
     pub fn apply_add_loan(&mut self, cmd: &BatchAddLoanCommand, ssp: &mut SymbolSpecificationProvider) {
@@ -1468,7 +1204,7 @@ impl RiskEngine {
         }
     }
 
-    fn spot_snapshot_event(
+    pub(crate) fn spot_snapshot_event(
         event_type: FundEventType,
         order_id: i64,
         up: &UserProfile,
@@ -2051,7 +1787,7 @@ impl RiskEngine {
             }
 
             // 残余已实现盈亏一次性打入 accounts，再从 map 摘除。
-            // PNL_SETTLEMENT 事件与账户入账同门控在 profit != 0（零利润不发多余事件，与 adl_close_and_settle 一致）。
+            // PNL_SETTLEMENT 事件与账户入账同门控在 profit != 0（零利润不发多余事件，与 close_and_settle_futures_position 一致）。
             let profit = up.positions.get(&position_key).unwrap().profit;
             if profit != 0 {
                 let profit_scaled = arithmetic::size_price_to_currency_scale(
@@ -2133,6 +1869,64 @@ impl RiskEngine {
         });
     }
 
+    /// 期货仓位「关仓 + 结算」共享 helper：关仓发 `close_event_type` 事件;仓位清空则退 extraMargin(MARGIN_REFUND)、
+    /// 结算 profit(PNL_SETTLEMENT)、移除。ADL(counterparty/taker)与 IF_TAKEOVER 共用——两者都不收手续费,
+    /// 除 `close_event_type`(AdlPositionClose/AdlOriginClose/IfPositionClose)外逻辑逐字一致。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn close_and_settle_futures_position(
+        up: &mut UserProfile,
+        position_key: i32,
+        close_action: OrderAction,
+        size: i64,
+        price: i64,
+        spec: &CoreSymbolSpecification,
+        currency_spec: &CoreCurrencySpecification,
+        fund_events: &mut Vec<FundEvent>,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
+        ssp: &SymbolSpecificationProvider,
+        close_event_type: FundEventType,
+        order_id: i64,
+    ) {
+        if !up.positions.contains_key(&position_key) {
+            return;
+        }
+        up.positions.get_mut(&position_key).unwrap().close_current_position_futures(close_action, size, price);
+
+        Self::push_futures_event(fund_events, last_price_cache, close_event_type, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
+
+        let is_empty = up.positions.get(&position_key).map(|p| p.is_empty()).unwrap_or(false);
+        if !is_empty {
+            return;
+        }
+        let currency = up.positions.get(&position_key).unwrap().currency;
+
+        let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
+        if extra_margin > 0 {
+            let refund = arithmetic::size_price_to_currency_scale(
+                extra_margin,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                currency_spec.currency_scale_k,
+            );
+            up.add_to_account(currency, refund);
+            Self::push_futures_event(fund_events, last_price_cache, FundEventType::MarginRefund, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
+            up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
+        }
+
+        let profit = up.positions.get(&position_key).unwrap().profit;
+        if profit != 0 {
+            let profit_scaled = arithmetic::size_price_to_currency_scale(
+                profit,
+                spec.base_scale_k,
+                spec.quote_scale_k,
+                currency_spec.currency_scale_k,
+            );
+            up.add_to_account(currency, profit_scaled);
+            Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
+        }
+        up.positions.remove(&position_key);
+    }
+
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_spot_balance_event(
@@ -2185,61 +1979,6 @@ impl RiskEngine {
         }
     }
 
-    /// ADL 关仓+清算 helper：apply（关 counterparty 仓）与 finalize（关 taker 仓）共用；ADL 不收手续费（同 IF_TAKEOVER）故可安全共享。
-    #[allow(clippy::too_many_arguments)]
-    fn adl_close_and_settle(
-        up: &mut UserProfile,
-        position_key: i32,
-        close_action: OrderAction,
-        size: i64,
-        price: i64,
-        spec: &CoreSymbolSpecification,
-        currency_spec: &CoreCurrencySpecification,
-        fund_events: &mut Vec<FundEvent>,
-        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
-        ssp: &SymbolSpecificationProvider,
-        close_event_type: FundEventType,
-        order_id: i64,
-    ) {
-        let Some(pos) = up.positions.get_mut(&position_key) else {
-            return;
-        };
-        pos.close_current_position_futures(close_action, size, price);
-
-        Self::push_futures_event(fund_events, last_price_cache, close_event_type, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
-
-        let is_empty = up.positions.get(&position_key).map(|p| p.is_empty()).unwrap_or(false);
-        if !is_empty {
-            return;
-        }
-        let currency = up.positions.get(&position_key).unwrap().currency;
-
-        let extra_margin = up.positions.get(&position_key).unwrap().extra_margin;
-        if extra_margin > 0 {
-            let refund = arithmetic::size_price_to_currency_scale(
-                extra_margin,
-                spec.base_scale_k,
-                spec.quote_scale_k,
-                currency_spec.currency_scale_k,
-            );
-            up.add_to_account(currency, refund);
-            Self::push_futures_event(fund_events, last_price_cache, FundEventType::MarginRefund, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
-            up.positions.get_mut(&position_key).unwrap().extra_margin = 0;
-        }
-
-        let profit = up.positions.get(&position_key).unwrap().profit;
-        if profit != 0 {
-            let profit_scaled = arithmetic::size_price_to_currency_scale(
-                profit,
-                spec.base_scale_k,
-                spec.quote_scale_k,
-                currency_spec.currency_scale_k,
-            );
-            up.add_to_account(currency, profit_scaled);
-            Self::push_futures_event(fund_events, last_price_cache, FundEventType::PnlSettlement, order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
-        }
-        up.positions.remove(&position_key);
-    }
 }
 
 #[cfg(test)]

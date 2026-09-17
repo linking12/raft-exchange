@@ -8,7 +8,7 @@ import lombok.RequiredArgsConstructor;
  * INTERNAL_TRANSFER —— 用户间同币种原子转账。
  *
  * <p>Wire 映射：fromUid → uid / toUid → size / currency → symbol / amount → price / transactionId → orderId（幂等 key）。
- * from 与 to 可跨 shard；R1（from-shard）扣款，R2（to-shard）入账（详见 {@link exchange.core2.core.processors.InternalTransferProcessor}）。
+ * from 与 to 可跨 shard；R1（from-shard）扣款，R2（to-shard）入账（详见 {@link exchange.core2.core.processors.InternalTransferCommandProcessor}）。
  */
 @Builder
 @EqualsAndHashCode(callSuper = false)

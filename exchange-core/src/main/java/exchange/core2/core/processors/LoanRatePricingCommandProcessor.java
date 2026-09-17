@@ -21,13 +21,13 @@ import lombok.extern.slf4j.Slf4j;
  * R1 复用同一张 {@code amounts} map 存两侧，靠 key 符号区分：borrowed 存 key = currency（≥0）、available 存 key = ~currency（&lt;0），一一对应无冲突。
  */
 @Slf4j
-public final class LoanRatePricingProcessor extends TwoStepCommandProcessor {
+public final class LoanRatePricingCommandProcessor extends TwoStepCommandProcessor {
 
-    public LoanRatePricingProcessor(RiskEngine riskEngine) {
+    public LoanRatePricingCommandProcessor(RiskEngine riskEngine) {
         super(null, riskEngine);
     }
 
-    public LoanRatePricingProcessor(OrderBookEventsHelper eventsHelper) {
+    public LoanRatePricingCommandProcessor(OrderBookEventsHelper eventsHelper) {
         super(eventsHelper, null);
     }
 

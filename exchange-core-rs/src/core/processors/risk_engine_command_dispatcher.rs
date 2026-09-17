@@ -12,8 +12,9 @@ use crate::core::common::order_action::OrderAction;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::position_mode::PositionMode;
 use crate::core::common::symbol_type::SymbolType;
-use crate::core::processors::internal_transfer_processor::InternalTransferProcessor;
-use crate::core::processors::loan_rate_pricing_processor::LoanRatePricingProcessor;
+use crate::core::processors::internaltransfer_command_processor::InternalTransferCommandProcessor;
+use crate::core::processors::loanratepricing_command_processor::LoanRatePricingCommandProcessor;
+use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
@@ -37,8 +38,14 @@ impl RiskEngineCommandDispatcher {
             OrderCommandType::MarginAdjustment => Self::margin_adjustment(engine, cmd, ups, ssp),
             OrderCommandType::LeverageAdjustment => Self::leverage_adjustment(engine, cmd, ups, ssp),
             OrderCommandType::MarkpriceAdjustment => Self::markprice_adjustment(engine, cmd, ups, ssp),
-            OrderCommandType::RepriceLoanRates => Self::reprice_loan_rates_collect(engine, cmd),
-            OrderCommandType::InternalTransfer => Self::internal_transfer_collect(engine, cmd, ups, ssp),
+            OrderCommandType::RepriceLoanRates => {
+                let mut ctx = TwoStepContext::new(engine, ups, ssp);
+                LoanRatePricingCommandProcessor.collect(&mut ctx, cmd)
+            }
+            OrderCommandType::InternalTransfer => {
+                let mut ctx = TwoStepContext::new(engine, ups, ssp);
+                InternalTransferCommandProcessor.collect(&mut ctx, cmd)
+            }
             OrderCommandType::IfDeposit => Self::if_deposit(engine, cmd, ssp),
             OrderCommandType::IfWithdraw => Self::if_withdraw(engine, cmd, ssp),
             OrderCommandType::SettlePnl => Self::settle_pnl(engine, cmd, ups, ssp),
@@ -385,37 +392,6 @@ impl RiskEngineCommandDispatcher {
             }
         }
         CommandResultCode::Success
-    }
-
-    /// RepriceLoanRates R1：单 shard 归并恒等，collect_input 与 merge 一次性做完，写入 cmd.loan_reprice_events 供 R2 消费。
-    fn reprice_loan_rates_collect(engine: &mut RiskEngine, cmd: &mut OrderCommand) -> CommandResultCode {
-        let shard_data = LoanRatePricingProcessor::collect_input(&engine.loan_service);
-        cmd.loan_reprice_events = LoanRatePricingProcessor::build_matcher_events(&[shard_data]);
-        CommandResultCode::Success
-    }
-
-    /// InternalTransfer R1+merge：字段映射 cmd.uid=from_uid/cmd.size=to_uid/cmd.symbol=currency/cmd.price=amount；R1 失败直接返回拒绝码，成功写入 cmd.internal_transfer_event 供 R2 消费。
-    fn internal_transfer_collect(
-        engine: &mut RiskEngine,
-        cmd: &mut OrderCommand,
-        ups: &mut UserProfileService,
-        ssp: &SymbolSpecificationProvider,
-    ) -> CommandResultCode {
-        let from_uid = cmd.uid;
-        let to_uid = cmd.size;
-        let currency = cmd.symbol;
-        let amount = cmd.price;
-        let order_id = cmd.order_id;
-        let timestamp = cmd.timestamp;
-
-        let rc =
-            InternalTransferProcessor::collect_input(engine, ups, ssp, from_uid, to_uid, currency, amount, order_id, timestamp);
-        if rc == CommandResultCode::Success {
-            cmd.internal_transfer_event =
-                Some(InternalTransferProcessor::build_matcher_events(to_uid, currency, amount));
-            RiskEngine::push_spot_balance_event(cmd, ups, ssp, FundEventType::InternalTransfer, order_id, from_uid, currency, 0);
-        }
-        rc
     }
 
     /// futures IF_DEPOSIT 运营充值，与 loan LOAN_IF_DEPOSIT 独立池子；校验序 symbol→amount>0→currency spec→精度可逆，全过才 deposit_to_insurance_fund + adjustments[quote_currency] -= amount（对冲恒定）。

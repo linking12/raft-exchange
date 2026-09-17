@@ -1,0 +1,17 @@
+# 期货 IF 接管:loser 巨亏被强平、书面无流动性 → FORCE 拒 → IF 已注资则由 IF 接管(IF_POSITION_CLOSE),不走 ADL。
+# 与 adl.stream 的区别仅在开局 IF_DEPOSIT 注资:adl 无 IF 故级联到 ADL,此处 IF 有钱故停在 IF 阶段。
+# 事件级对拍(IF_POSITION_CLOSE 等结算类)。SCAN 循环触发 FORCE→IF 级联至 settle。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10002 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=2 maker=0 feeScale=1000 initMargin=1 initMarginScaleK=100
+MARK sym=10002 price=1000
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=5000 txid=1
+BAL uid=2 cur=2 amount=50000 txid=2
+PLACE_FUT oid=1 uid=1 sym=10002 price=1000 size=5 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=2 sym=10002 price=1000 size=5 action=ASK margin=ISOLATED leverage=1
+IF_DEPOSIT sym=10002 amount=1000000 txid=100
+ENABLE_LIQ
+MARK_AT sym=10002 price=600 ts=2000
+SCAN
