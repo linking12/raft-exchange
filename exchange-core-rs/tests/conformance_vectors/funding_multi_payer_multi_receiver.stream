@@ -1,0 +1,20 @@
+# 资金费多 payer × 多 receiver 零和：uid1 LONG10 + uid2 LONG20(payers)，uid3 SHORT10 + uid4 SHORT20(receivers)。
+# payer fee: uid1=trunc(10000/300)=33，uid2=trunc(20000/300)=66，Σ=99；receiver pro-rata: uid3=trunc(99*10000/30000)=33，uid4=trunc(99*20000/30000)=66，Σ=99，无余数。
+# 验证多方各自结算 + 每方发 FUNDINGFEE_SETTLEMENT + 零和守恒。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10000 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+MARK sym=10000 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+USER uid=4
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+BAL uid=4 cur=2 amount=1000000 txid=4
+PLACE_FUT oid=1 uid=3 sym=10000 price=1000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=4 sym=10000 price=1000 size=20 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=3 uid=1 sym=10000 price=1000 size=10 action=BID margin=CROSS leverage=1
+PLACE_FUT oid=4 uid=2 sym=10000 price=1000 size=20 action=BID margin=CROSS leverage=1
+SETTLE_FUNDING sym=10000 action=BID rate=1 rateScaleK=300 txid=1345
