@@ -11,9 +11,9 @@ Java [`exchange-core`](https://github.com/exchange-core/exchange-core)(`exchange
 
 ## 快速开始
 
-### 构造:`ExchangeApi` 持有 `ExchangeCore`
+### 构造
 
-`ExchangeApi` 拥有底层引擎 `ExchangeCore`(撮合状态机):门面负责**命令构造/查询**;引擎级操作——两个回调(`with_results_consumer` 结果消费、`with_command_submitter` 级联去向)、调度器(`tick_liquidation_scheduler`)、快照(`persist`/`recover`)——都经 `api.core_mut()` 拿到 core 再自己调,同一个所有者、不割裂。固定顺序:**`ExchangeApi::new()` → `api.core_mut()` 装配 → 配置 → 下单/查询/报表。**
+`ExchangeApi` 持有 `ExchangeCore`;`new()` 后经 `api.core_mut()` 装配回调,再配置、下单、查询。
 
 ```rust
 use exchange_core_rs::core::exchange_api::{
@@ -29,35 +29,30 @@ use exchange_core_rs::core::common::isolated_loan_record::LoanRateMode;
 use exchange_core_rs::core::simple_events_processor::SimpleEventsProcessor;
 use exchange_core_rs::core::trade_events_handler::{TradeEventsHandler, OrderBook, SpotExecutionReport, FuturesExecutionReport};
 use exchange_core_rs::core::fund_events_handler::{FundEventsHandler, FundEventReport};
-use std::{cell::RefCell, rc::Rc};
 
-// 自定义两个回调(实现 handler trait):撮合执行报告 + 资金事件报告
-struct MyTradeHandler;  // → 行情/成交推送
+// 事件回调:实现两个 handler trait(撮合执行报告 + 资金事件)
+struct MyTradeHandler;
 impl TradeEventsHandler for MyTradeHandler {
-    fn order_book(&mut self, _ob: OrderBook) {}                           // L2 盘口(OrderBookRequest 时)
-    fn spot_execution_report(&mut self, _r: SpotExecutionReport) {}       // 现货成交/挂单/撤单回报
-    fn futures_execution_report(&mut self, _r: FuturesExecutionReport) {} // 期货成交回报
+    fn order_book(&mut self, _ob: OrderBook) {}
+    fn spot_execution_report(&mut self, _r: SpotExecutionReport) {}
+    fn futures_execution_report(&mut self, _r: FuturesExecutionReport) {}
 }
-struct MyFundHandler;   // → 账务/审计
+struct MyFundHandler;
 impl FundEventsHandler for MyFundHandler {
-    fn fund_event_report(&mut self, _r: FundEventReport) {}               // 余额变动(deposit/lock/pnl/fee/loan…)
+    fn fund_event_report(&mut self, _r: FundEventReport) {}
 }
 
-let mut api = ExchangeApi::new();  // 自带一个默认 ExchangeCore
+let mut api = ExchangeApi::new();
 
-// ① 回调:用 SimpleEventsProcessor 把每条命令解码成 执行报告 + 资金事件,分发给上面两个 handler
-//    (接 Raft 还要设 with_command_submitter,见文末「接入 Raft 状态机」)
-let events = Rc::new(RefCell::new(SimpleEventsProcessor::new(MyTradeHandler, MyFundHandler)));
-{
-    let events = events.clone();
-    api.core_mut().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
-        events.borrow_mut().process(cmd, seq, ssp, ups);  // seq=全局单调序号(下游去重/断点续传)
-    }));
-}
+// 装配结果消费者:SimpleEventsProcessor 把命令解码成报告,分发给两个 handler
+let mut events = SimpleEventsProcessor::new(MyTradeHandler, MyFundHandler);
+api.core_mut().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
+    events.process(cmd, seq, ssp, ups);
+}));
 
-// ② 配置:货币(+精度 scale_k)/ symbol / 开户 / 充值
-api.add_currency(1, 1);  // base
-api.add_currency(2, 1);  // quote
+// 配置:货币(+精度)/ symbol / 开户 / 充值
+api.add_currency(1, 1);
+api.add_currency(2, 1);
 api.add_symbol(CoreSymbolSpecification {
     symbol_id: 100, symbol_type: SymbolType::CurrencyExchangePair,
     base_currency: 1, quote_currency: 2, base_scale_k: 1, quote_scale_k: 1,
@@ -65,33 +60,31 @@ api.add_symbol(CoreSymbolSpecification {
 });
 api.add_user(1);
 api.add_user(2);
-api.balance_adjustment(1, 1, 1_000_000, 1);   // seller 充 base
-api.balance_adjustment(2, 2, 10_000_000, 2);  // buyer 充 quote
+api.balance_adjustment(1, 1, 1_000_000, 1);
+api.balance_adjustment(2, 2, 10_000_000, 2);
 ```
 
-装配好后,方法按 **配置 → 交易 → 查询 → 报表** 分层(见 `src/core/exchange_api.rs`)。下面按业务域列常用对接,全部作用在同一个 `api`:
+方法按 **配置 → 交易 → 查询 → 报表** 分层,按域列常用调用:
 
 #### 现货
 
 ```rust
-// 挂卖单;GTC 买单须给 reserve_bid_price(预留吃单上限价)
 api.place_order(PlaceOrderRequest { order_id: 5001, uid: 1, symbol: 100, price: 20_000, size: 1,
     reserve_bid_price: 0, action: OrderAction::Ask, order_type: OrderType::Gtc });
 api.place_order(PlaceOrderRequest { order_id: 5002, uid: 2, symbol: 100, price: 20_000, size: 1,
-    reserve_bid_price: 20_000, action: OrderAction::Bid, order_type: OrderType::Gtc });
+    reserve_bid_price: 20_000, action: OrderAction::Bid, order_type: OrderType::Gtc });  // 买单须给 reserve_bid_price
 api.move_order(MoveOrderRequest { order_id: 5001, uid: 1, symbol: 100, new_price: 20_010 });
 api.cancel_order(CancelOrderRequest { order_id: 5001, uid: 1, symbol: 100 });
-let _ev = api.last_matcher_event();  // 上条命令的撮合事件链
+let _ev = api.last_matcher_event();
 ```
 
 #### 期货
 
 ```rust
-// 前置:add_futures_symbol(需开启 margin trading)+ 喂 mark price + 调杠杆/仓位模式
+// 前置:add_futures_symbol(需开启 margin trading)
 api.set_mark_price(200, 30_000);
 api.leverage_adjustment(1, 200, 10);
-api.adjust_position_mode(1, /*hedge*/ false);
-// 开多(逐仓 10x)/ 加保证金 / 平仓
+api.adjust_position_mode(1, false);
 api.place_futures_order(PlaceFuturesOrderRequest { order_id: 6001, uid: 1, symbol: 200, price: 30_000, size: 2,
     action: OrderAction::Bid, order_type: OrderType::Gtc, leverage: 10, margin_mode: MarginMode::Isolated, reduce_only: false });
 api.margin_adjustment(MarginAdjustmentRequest { uid: 1, symbol: 200, action: OrderAction::Bid, amount: 1_000,
@@ -103,13 +96,13 @@ api.close_position(ClosePositionRequest { order_id: 6003, uid: 1, symbol: 200, a
 #### Loan
 
 ```rust
-api.pool_deposit(2, 1_000_000, 7000);                                              // LP 向借贷池注资
-api.loan_create(7001, 1, 100, /*loan_id*/ 1, /*collateral*/ 500, /*principal*/ 40_000, LoanRateMode::Floating, 1_000);
-api.loan_add_collateral(7002, 1, /*loan_id*/ 1, 100, 1_000);
-api.loan_repay(7003, 1, /*loan_id*/ 1, 10_000, 1_000);
-api.loan_cross_borrow(7004, 1, 100, /*loan_id*/ 2, 60_000, 1_000);                 // 全仓借贷
-api.insurance_fund_deposit(200, 50_000, 7100);                                     // 期货保险基金注资
-// loan/pool/保险基金/结算各有便捷方法;冷门命令走通用入口 api.submit(order_command)
+api.pool_deposit(2, 1_000_000, 7000);        // LP 注资借贷池
+api.loan_create(7001, 1, 100, 1, 500, 40_000, LoanRateMode::Floating, 1_000);  // (order_id, uid, symbol, loan_id, collateral, principal, ..)
+api.loan_add_collateral(7002, 1, 1, 100, 1_000);
+api.loan_repay(7003, 1, 1, 10_000, 1_000);
+api.loan_cross_borrow(7004, 1, 100, 2, 60_000, 1_000);
+api.insurance_fund_deposit(200, 50_000, 7100);
+// 冷门命令走通用入口 api.submit(order_command)
 ```
 
 #### 报表(只读快照,对账/风控/展示外部拉)
@@ -126,39 +119,32 @@ let _h   = api.state_hash();                    // 多节点/快照往返比对
 
 ### 接入 Raft 状态机
 
-Raft 状态机层拿 `api` 当状态机驱动;引擎级装配与操作都经 `api.core_mut()`:
-
-- **apply 循环**:对每条**已提交到共识日志**的命令调 `api.submit(cmd)`(= `core.process_command`),再把 `results_consumer` 回调的结果发给客户端。
-- **级联去向** `with_command_submitter`:强平/loan 次生命令交 Raft 复制而非就地 apply(下节详解)。
-- **周期扫描** `api.core_mut().tick_liquidation_scheduler(now)`:leader 按自己的时钟周期调用,内置 `LiquidationScheduler` 投一条 `LIQUIDATION_SCAN` 进队列交复制(`start_liquidation_scheduler` / `stop_liquidation_scheduler` 开关);扫描在 apply 时才确定性执行。
-- **快照** `api.core_mut().persist(snapshot_id, instance_id)` / `.recover(snapshot_id, instance_id)`:per (RE/ME 模块 × 分片 instance),供 install-snapshot。
-
-#### `with_command_submitter`:级联命令去向
-
-强平/loan 会在 apply 过程中**动态产出**次生命令(FORCE→IF→ADL、loan 强平…);`with_command_submitter` 决定它们交到哪。它收一个**工厂闭包** `Fn() -> Box<dyn FnMut(OrderCommand)>`——引擎内部有多个产出点(调度器、强平引擎、loan fan-out)各需一个独立 sink,而 `Box<dyn FnMut>` 不能 clone,故传工厂、每处 `make()` 出一个。
-
-- **单节点(默认,无需设)**:`ExchangeApi::new()` 已装好——sink 把命令推进本地 `pending_commands`,同一次 `process_command` 内由 `drive_pending` 就地排空。
-- **集群(Raft)**:sink 里不就地 apply,而是把命令**交给 Raft 复制**;每条复制回来的命令再走一遍 `api.submit`,各节点确定性收敛到同一终态(全局守恒)。
+引擎级操作(级联去向、周期扫描、快照)都经 `api.core_mut()`;`with_command_submitter` 收工厂,内层闭包等价 Java 的 `LiquidationCommandSubmitter.submit(cmd)`(单节点默认已装好,集群下改成交 Raft):
 
 ```rust
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 
-// sink 捕获引擎产出的级联命令——实际接线里是 propose_to_raft(cmd)
+// 级联去向:强平/loan 次生命令交 raft 而非就地 apply(外层工厂只因 Box<dyn FnMut> 不能 clone)
 let queue: Rc<RefCell<VecDeque<OrderCommand>>> = Rc::new(RefCell::new(VecDeque::new()));
 let q = queue.clone();
 api.core_mut().with_command_submitter(move || {
-    let sink = q.clone();
-    Box::new(move |cmd| sink.borrow_mut().push_back(cmd))
+    let q = q.clone();
+    Box::new(move |cmd: OrderCommand| { q.borrow_mut().push_back(cmd); })  // 实际:raft.propose(cmd)
 });
 
-// apply 一条自身命令后,把 Raft 回流的级联命令逐条喂回引擎(重放走同一管线)
+// apply 循环:自身命令 + raft 回流的级联命令,都喂回引擎
 api.submit(user_cmd);
 loop {
-    let next = queue.borrow_mut().pop_front();  // 先取出再 submit,避免持 borrow 时引擎再 push 触发 panic
+    let next = queue.borrow_mut().pop_front();  // 先取出再 submit
     let Some(cmd) = next else { break };
     api.submit(cmd);
 }
+
+// 周期扫描(leader 时钟)+ 快照(install-snapshot,per RE/ME 模块 × 分片)
+api.core_mut().tick_liquidation_scheduler(now);
+api.core_mut().persist(snapshot_id, instance_id);
+api.core_mut().recover(snapshot_id, instance_id);
 ```
 
 ## 架构
