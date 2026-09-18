@@ -45,11 +45,9 @@ pub enum OrderCommandType {
     AutoDeleveraging,
     IfDeposit,
     IfWithdraw,
-    /// code=44。Java `LIQUIDATION_SCAN` 声明为 64，但同一 Java 枚举里 `LOAN_IF_DEPOSIT` 也是 64——
-    /// Java 的 `fromCode` 查找表按声明顺序 `put`，后声明的 `LOAN_IF_DEPOSIT` 覆盖了先声明的
-    /// `LIQUIDATION_SCAN`，即 Java `fromCode((byte) 64)` 实际拿到的是 `LOAN_IF_DEPOSIT`。
-    /// Rust 侧改分配到 44 以保证全部 code 两两不同（Ruling P6-D，见下方
-    /// `p6_new_codes_are_internally_distinct_and_match_java_where_unconflicted` 测试）。
+    /// code=44。Java 原来 `LIQUIDATION_SCAN=64` 与 `LOAN_IF_DEPOSIT=64` 撞码（`fromCode((byte)64)` 按声明
+    /// 顺序被后者覆盖，scan 反解不出），Rust P6-D 先分配到 44 避开;2026-09-18 已把 Java 侧也改到 44
+    /// 对齐（上 raft 后命令按 byte 码过共识/序列化，两侧必须一致）。
     LiquidationScan,
     SettlePnl,
 
@@ -102,7 +100,6 @@ impl OrderCommandType {
             OrderCommandType::AutoDeleveraging => 41,
             OrderCommandType::IfDeposit => 42,
             OrderCommandType::IfWithdraw => 43,
-            // 44 而非 Java 的 64：见上方枚举定义处关于 Java 64 撞码 LoanIfDeposit 的说明。
             OrderCommandType::LiquidationScan => 44,
             OrderCommandType::SettlePnl => 26,
             OrderCommandType::SuspendUser => 12,

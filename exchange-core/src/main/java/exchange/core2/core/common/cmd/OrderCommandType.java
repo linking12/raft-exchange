@@ -46,7 +46,7 @@ public enum OrderCommandType {
     SETTLE_PNL((byte) 26, true),
     RESET_FEE((byte) 27, true),
 
-    LIQUIDATION_SCAN((byte) 64, true),
+    LIQUIDATION_SCAN((byte) 44, true),
     SYSTEM_LIQUIDATION_NOTIFY((byte) 31, true),
 
     IF_TAKEOVER((byte) 40, true),
