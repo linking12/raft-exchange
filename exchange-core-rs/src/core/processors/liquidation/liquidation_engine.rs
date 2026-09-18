@@ -45,6 +45,7 @@ use crate::core::common::order_type::OrderType;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_profile::UserProfile;
+use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
 use crate::core::processors::liquidation::liquidation_flow::{LiquidationFlow, LiquidationState};
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_liquidation_engine::LoanLiquidationEngine;
@@ -79,21 +80,32 @@ enum IsolatedCheck {
 /// - `symbol_to_users`：对应 Java `symbolToUsers`，symbol -> 持有者 uid 集合，
 ///   由所有节点在开仓/平仓 apply 时确定性维护，不进 snapshot。
 /// - `is_running`：对应 Java 父类 `isRunning()` 的 leader gate。
-/// - `pending_commands`：待提交命令的输出队列（Java 版直接调用父类 `submit`
-///   把命令送进 raft；Rust 版改为把命令攒进这个队列，由调用方统一提交）。
+/// - `command_submitter`：命令提交出口回调，对应 Java `commandSubmitter`。生成
+///   FORCE/IF/ADL 时调 `submit(cmd)` → 回调。`ExchangeCore::new` 注册成塞进
+///   `pending_commands` sink（单节点）/ raft 提交（集群）/ collector（单测）。
 /// - `loan_liquidation_engine`：对应 Java `loanLiquidationEngine`，现货借贷强平
-///   子域委托对象。
+///   子域委托对象（自持一份同 sink 的回调）。
 #[derive(Debug, Default)]
 pub struct LiquidationEngine {
     pub symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
     pub is_running: bool,
-    pub pending_commands: Vec<OrderCommand>,
     pub loan_liquidation_engine: LoanLiquidationEngine,
+    command_submitter: CommandSubmitter,
 }
 
 impl LiquidationEngine {
     pub fn new() -> Self {
         LiquidationEngine::default()
+    }
+
+    /// 注册命令提交出口。因 `Box<dyn FnMut>` 不可 clone，本引擎与 loan 子引擎各需一份捕获同一 sink 的
+    /// 回调，故收工厂 `make`，各调一次 `make()` 铸自己那份（loan 子引擎在此一并注册，共用同一 sink）。
+    pub fn set_command_submitter<F>(&mut self, make: F)
+    where
+        F: Fn() -> Box<dyn FnMut(OrderCommand)>,
+    {
+        self.command_submitter.set(make());
+        self.loan_liquidation_engine.set_command_submitter(make());
     }
 
     /// 对应 Java `onPositionOpened`：开仓 apply 时把 uid 登记进 symbol -> 持有者索引
@@ -122,8 +134,8 @@ impl LiquidationEngine {
     /// `is_running` 门控）。`cmd.symbol >= 0` 只查该 symbol 的持有者（targeted，价格/
     /// 资金费触发）；`cmd.symbol < 0`（`LIQUIDATION_SCAN`）全量整扫兜底，按
     /// `covered_by_scan_slice` 把扫描负载分摊到多个 tick。末尾委托
-    /// `loan_liquidation_engine.check_loans`，检测现货借贷侧强平，并把其
-    /// `pending_commands` 并入自身队列。
+    /// `loan_liquidation_engine.check_loans`，检测现货借贷侧强平（loan 子引擎经自己的
+    /// `command_submitter` 回调提交，与本引擎同一 sink，无需再回收）。
     ///
     /// targeted 分支末尾对 `symbol_to_users` 做一次惰性清理（保留仍持有该 symbol
     /// 仓位的 uid），这是 Rust 版对索引一致性的主动校验，弥补没有严格依赖
@@ -165,7 +177,6 @@ impl LiquidationEngine {
             }
         }
         self.loan_liquidation_engine.check_loans(cmd, ups, ssp, last_price_cache, loan_service, fund_events);
-        self.pending_commands.append(&mut self.loan_liquidation_engine.pending_commands);
     }
 
     /// 对应 Java `checkUser`（逐仓分类）+ 部分 `checkIsolated`（越预警线事件生成）+
@@ -410,7 +421,7 @@ impl LiquidationEngine {
             LiquidationService::generate_liquidation_order_id(uid, position.symbol, position.direction, ts);
         position.liquidation_flow = Some(LiquidationFlow::new(d.bankruptcy_price, d.size, order_id));
         let force_cmd = Self::build_force_cmd(uid, position.symbol, position.direction, order_id, d.bankruptcy_price, d.size, ts);
-        self.pending_commands.push(force_cmd);
+        self.command_submitter.submit(force_cmd);
     }
 
     /// 对应 Java `advanceLiquidation`：强平命令 apply 后推进 FORCE→IF→ADL 状态机
@@ -468,7 +479,7 @@ impl LiquidationEngine {
         }
         if let Some(flow) = pos.liquidation_flow {
             let if_cmd = Self::build_if_cmd(pos.uid, pos.symbol, pos.direction, &flow, cmd.timestamp);
-            self.pending_commands.push(if_cmd);
+            self.command_submitter.submit(if_cmd);
         }
     }
 
@@ -485,7 +496,7 @@ impl LiquidationEngine {
         }
         if let Some(flow) = pos.liquidation_flow {
             let adl_cmd = Self::build_adl_cmd(pos.uid, pos.symbol, pos.direction, &flow, cmd.timestamp);
-            self.pending_commands.push(adl_cmd);
+            self.command_submitter.submit(adl_cmd);
         }
     }
 
@@ -627,11 +638,24 @@ mod tests {
     use crate::core::common::core_currency_specification::CoreCurrencySpecification;
     use crate::core::common::matcher_trade_event::MatcherTradeEvent;
     use crate::core::common::symbol_type::SymbolType;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     const FUT_SYMBOL: i32 = 200;
     const FUT_QUOTE: i32 = 2;
     const FUT_BASE: i32 = 1;
     const UID: i64 = 1;
+
+    /// collector 出口：把 FORCE/IF/ADL 命令收进共享 Vec 供断言；必须在触发 `check_positions`/`advance_liquidation` 之前挂上。
+    fn attach_collector(engine: &mut LiquidationEngine) -> Rc<RefCell<Vec<OrderCommand>>> {
+        let collected = Rc::new(RefCell::new(Vec::new()));
+        let sink = collected.clone();
+        engine.set_command_submitter(move || {
+            let s = sink.clone();
+            Box::new(move |cmd| s.borrow_mut().push(cmd))
+        });
+        collected
+    }
 
     fn futures_spec() -> CoreSymbolSpecification {
         let mut mm = BTreeMap::new();
@@ -755,18 +779,20 @@ mod tests {
     fn check_positions_leader_gate_off_is_noop() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
         engine.is_running = false;
+        let out = attach_collector(&mut engine);
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
         lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
         let cmd = markprice_cmd(FUT_SYMBOL, 1_000);
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
-        assert!(engine.pending_commands.is_empty(), "a follower neither detects nor submits");
+        assert!(out.borrow().is_empty(), "a follower neither detects nor submits");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
     }
 
     #[test]
     fn check_positions_targeted_isolated_underwater_queues_force_and_sets_flow() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
+        let out = attach_collector(&mut engine);
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
         lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
@@ -774,8 +800,8 @@ mod tests {
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
-        assert_eq!(engine.pending_commands.len(), 1, "one FORCE is triggered");
-        let force = &engine.pending_commands[0];
+        assert_eq!(out.borrow().len(), 1, "one FORCE is triggered");
+        let force = out.borrow()[0].clone();
         assert_eq!(force.command, OrderCommandType::ForceLiquidation);
         assert_eq!(force.uid, UID);
         assert_eq!(force.symbol, FUT_SYMBOL);
@@ -792,6 +818,7 @@ mod tests {
     #[test]
     fn check_positions_healthy_position_no_force() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
+        let out = attach_collector(&mut engine);
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
         lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(100));
@@ -799,13 +826,14 @@ mod tests {
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
-        assert!(engine.pending_commands.is_empty(), "a healthy position does not trigger anything");
+        assert!(out.borrow().is_empty(), "a healthy position does not trigger anything");
         assert!(ups.get(UID).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none());
     }
 
     #[test]
     fn check_positions_idempotent_second_scan_no_double_submit() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
+        let out = attach_collector(&mut engine);
         engine.on_position_opened(UID, FUT_SYMBOL);
         insert_long(&mut ups, UID);
         lpc.insert(FUT_SYMBOL, LastPriceCacheRecord::with_mark(50));
@@ -814,12 +842,13 @@ mod tests {
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
-        assert_eq!(engine.pending_commands.len(), 1, "flow already in progress -> the second scan does not resubmit (idempotency gate)");
+        assert_eq!(out.borrow().len(), 1, "flow already in progress -> the second scan does not resubmit (idempotency gate)");
     }
 
     #[test]
     fn check_positions_scan_slice_filters_users() {
         let (mut engine, mut ups, ssp, mut lpc) = seeded();
+        let out = attach_collector(&mut engine);
         ups.add_empty_user_profile(2);
         insert_long(&mut ups, 1);
         insert_long(&mut ups, 2);
@@ -828,8 +857,8 @@ mod tests {
 
         engine.check_positions(&scan, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
 
-        assert_eq!(engine.pending_commands.len(), 1, "only uid=1 is within the slice");
-        assert_eq!(engine.pending_commands[0].uid, 1);
+        assert_eq!(out.borrow().len(), 1, "only uid=1 is within the slice");
+        assert_eq!(out.borrow()[0].uid, 1);
         assert!(ups.get(2).unwrap().positions[&FUT_SYMBOL].liquidation_flow.is_none(), "uid=2 is outside the slice and was not touched");
     }
 
@@ -858,6 +887,7 @@ mod tests {
 
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut ssp = SymbolSpecificationProvider::new();
         ssp.add_currency(CoreCurrencySpecification { currency: BASE_CCY, currency_scale_k: 1, ..Default::default() });
         ssp.add_currency(CoreCurrencySpecification { currency: QUOTE_CCY, currency_scale_k: 1, ..Default::default() });
@@ -880,7 +910,7 @@ mod tests {
         let cmd = markprice_cmd(SYMBOL, 1_000);
 
         engine.check_positions(&cmd, &mut ups, &ssp, &lpc, &LoanService::new(), &mut Vec::new());
-        assert!(engine.pending_commands.is_empty(), "a healthy CROSS account whose scaled maintenance truncates to zero must not be mistakenly liquidated (and must not divide by zero)");
+        assert!(out.borrow().is_empty(), "a healthy CROSS account whose scaled maintenance truncates to zero must not be mistakenly liquidated (and must not divide by zero)");
         assert!(ups.get(U).unwrap().positions[&SYMBOL].liquidation_flow.is_none());
     }
 
@@ -906,25 +936,27 @@ mod tests {
     fn advance_force_non_reject_closes_flow() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = pos_with_flow(LiquidationState::Liquidating);
         let cmd = force_apply_cmd(Some(mte(MatcherEventType::Trade, 10)));
         engine.advance_liquidation(&cmd, &mut pos);
         assert!(pos.liquidation_flow.is_none(), "FORCE fully filled -> flow closed");
-        assert!(engine.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
     }
 
     #[test]
     fn advance_force_reject_transitions_to_wait_if_and_queues_if() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = pos_with_flow(LiquidationState::Liquidating);
         let cmd = force_apply_cmd(Some(mte(MatcherEventType::Reject, 7)));
         engine.advance_liquidation(&cmd, &mut pos);
         let flow = pos.liquidation_flow.expect("flow is retained");
         assert_eq!(flow.state, LiquidationState::WaitIfExecution);
         assert_eq!(flow.size, 7, "flow.size is updated to the REJECT remaining size");
-        assert_eq!(engine.pending_commands.len(), 1);
-        let ifc = &engine.pending_commands[0];
+        assert_eq!(out.borrow().len(), 1);
+        let ifc = out.borrow()[0].clone();
         assert_eq!(ifc.command, OrderCommandType::IfTakeover);
         assert_eq!(ifc.size, 7);
         assert_eq!(ifc.action, Some(OrderAction::Bid), "IF takeover of a LONG -> BID (perspective flip)");
@@ -935,13 +967,14 @@ mod tests {
     fn advance_if_reject_transitions_to_wait_adl_and_queues_adl() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = pos_with_flow(LiquidationState::WaitIfExecution);
         let cmd = OrderCommand { command: OrderCommandType::IfTakeover, uid: UID, symbol: FUT_SYMBOL, matcher_event: Some(mte(MatcherEventType::Reject, 7)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         let flow = pos.liquidation_flow.expect("flow is retained");
         assert_eq!(flow.state, LiquidationState::WaitAdlExecution);
-        assert_eq!(engine.pending_commands.len(), 1);
-        let adl = &engine.pending_commands[0];
+        assert_eq!(out.borrow().len(), 1);
+        let adl = out.borrow()[0].clone();
         assert_eq!(adl.command, OrderCommandType::AutoDeleveraging);
         assert_eq!(adl.action, Some(OrderAction::Bid));
         assert_eq!(adl.order_id, LiquidationService::generate_adl_order_id(777));
@@ -951,39 +984,43 @@ mod tests {
     fn advance_if_non_reject_closes_flow() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = pos_with_flow(LiquidationState::WaitIfExecution);
         let cmd = OrderCommand { command: OrderCommandType::IfTakeover, uid: UID, symbol: FUT_SYMBOL, matcher_event: Some(mte(MatcherEventType::Trade, 7)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         assert!(pos.liquidation_flow.is_none(), "IF takeover succeeded -> flow closed");
-        assert!(engine.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
     }
 
     #[test]
     fn advance_adl_is_terminal() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = pos_with_flow(LiquidationState::WaitAdlExecution);
         let cmd = OrderCommand { command: OrderCommandType::AutoDeleveraging, uid: UID, symbol: FUT_SYMBOL, matcher_event: Some(mte(MatcherEventType::Trade, 7)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         assert!(pos.liquidation_flow.is_none(), "ADL is always a terminal state");
-        assert!(engine.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
     }
 
     #[test]
     fn advance_null_flow_non_force_skips() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = SymbolPositionRecord::new(UID, FUT_SYMBOL, FUT_QUOTE, MarginMode::Isolated, 1);
         let cmd = OrderCommand { command: OrderCommandType::IfTakeover, uid: UID, symbol: FUT_SYMBOL, matcher_event: Some(mte(MatcherEventType::Reject, 7)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         assert!(pos.liquidation_flow.is_none());
-        assert!(engine.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
     }
 
     #[test]
     fn advance_null_flow_force_recovers_new_flow() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = SymbolPositionRecord {
             direction: PositionDirection::Long,
             open_volume: 10,
@@ -994,20 +1031,21 @@ mod tests {
         let flow = pos.liquidation_flow.expect("recovery created a flow");
         assert_eq!(flow.state, LiquidationState::WaitIfExecution);
         assert_eq!(flow.original_order_id, 555, "the recovery flow uses cmd.order_id as the root orderId");
-        assert_eq!(engine.pending_commands.len(), 1);
-        assert_eq!(engine.pending_commands[0].command, OrderCommandType::IfTakeover);
+        assert_eq!(out.borrow().len(), 1);
+        assert_eq!(out.borrow()[0].command, OrderCommandType::IfTakeover);
     }
 
     #[test]
     fn advance_out_of_order_command_skips() {
         let mut engine = LiquidationEngine::new();
         engine.is_running = true;
+        let out = attach_collector(&mut engine);
         let mut pos = pos_with_flow(LiquidationState::Liquidating);
         let cmd = OrderCommand { command: OrderCommandType::IfTakeover, uid: UID, symbol: FUT_SYMBOL, matcher_event: Some(mte(MatcherEventType::Reject, 7)), timestamp: 6_000, ..Default::default() };
         engine.advance_liquidation(&cmd, &mut pos);
         let flow = pos.liquidation_flow.expect("flow is unchanged");
         assert_eq!(flow.state, LiquidationState::Liquidating, "an out-of-order command is skipped, state is unchanged");
-        assert!(engine.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
     }
 
     #[test]

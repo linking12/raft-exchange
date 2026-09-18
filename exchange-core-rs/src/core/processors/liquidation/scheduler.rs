@@ -1,13 +1,13 @@
 //! 对应 Java `LiquidationScheduledService`（抽象父类，`exchange.core2.core.processors
-//! .liquidation.LiquidationScheduledService`）与 `LiquidationCommandSubmitter`（函数式
-//! 提交出口接口）。
+//! .liquidation.LiquidationScheduledService`）中「每 tick 发什么命令」的确定性部分。
 //!
 //! Java 版把「定时线程骨架（`ScheduledExecutorService`/start-stop/leader gate 布尔量）」
 //! 与「每 tick 该发什么命令」耦合在同一个抽象类里；本文件只翻译了后者——即
 //! `runOneIteration()`/`coveredByScanSlice()` 中纯粹、确定性的部分（该发哪个
-//! slice 的 `LIQUIDATION_SCAN`、要不要顺带发 `REPRICE_LOAN_RATES`），产出待提交的
-//! 命令列表由外层去驱动实际的定时线程与 raft 提交，从而保持本模块内不含任何
-//! 墙钟/线程状态，便于单测直接断言 `pending_commands`。
+//! slice 的 `LIQUIDATION_SCAN`、要不要顺带发 `REPRICE_LOAN_RATES`）。发令出口与
+//! `LiquidationEngine` 同构 = Java `commandSubmitter` 回调（`run_one_iteration` 调 `submit(cmd)` →
+//! 回调）：单节点注册成塞 `ExchangeCore.pending_commands`、集群注册成 raft 提交、单测注册成 collector。
+//! 墙钟/定时线程由外层驱动，本模块不含。
 //!
 //! 关键点（与 Java 注释一致）：这里只负责“发命令”，不读用户态；真正的扫描/强平
 //! 检测发生在各节点 on-lane apply `LIQUIDATION_SCAN` 命令时（见
@@ -16,6 +16,7 @@
 
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
+use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
 
 /// 对应 Java `LiquidationScheduledService.coveredByScanSlice`：判断某个 uid 是否落在
 /// 这条 `LIQUIDATION_SCAN` 命令负责扫描的分片里。非扫描命令、或 `size<=0`（未分片/
@@ -31,14 +32,16 @@ pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
 /// leader-local 的强平发令节奏状态；对应 Java `LiquidationScheduledService` 里除线程
 /// 骨架之外的字段（`scanTick`/`scanSliceCount`/`repriceEveryNTicks`/`shardId`/
 /// `running`）。`is_running` 复用作 leader gate：由外层根据 leader 身份切换。
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LiquidationScheduler {
     pub scan_tick: i64,
     pub scan_slice_count: i64,
     pub reprice_every_n_ticks: i64,
     pub shard_id: i32,
     pub is_running: bool,
-    pub pending_commands: Vec<OrderCommand>,
+    /// 发令出口回调（= Java `commandSubmitter`）。与 `LiquidationEngine` 同构：单节点塞
+    /// `ExchangeCore.pending_commands`、集群提交 raft、单测 collector。
+    command_submitter: CommandSubmitter,
 }
 
 impl LiquidationScheduler {
@@ -49,20 +52,24 @@ impl LiquidationScheduler {
             reprice_every_n_ticks: reprice_every_n_ticks.max(1),
             shard_id,
             is_running: false,
-            pending_commands: Vec::new(),
+            command_submitter: CommandSubmitter::default(),
         }
     }
 
-    /// 对应 Java `runOneIteration()`：每个调度 tick 调用一次。只有 leader 门控开启
-    /// （`is_running`）且是 0 号 shard 才发命令——强平扫描/重定价只需全局发一份，
-    /// 不按 shard 重复；分片（slice）本身是扫描负载在多个 tick 上的轮转分摊，与
-    /// shard 是两个正交概念。
+    /// 注册发令出口回调（= Java `LiquidationScheduledService.setCommandSubmitter`）。
+    pub fn set_command_submitter(&mut self, cb: Box<dyn FnMut(OrderCommand)>) {
+        self.command_submitter.set(cb);
+    }
+
+    /// 对应 Java `runOneIteration()`：每个调度 tick 调用一次，经 `command_submitter` 回调发令。
+    /// 只有 leader 门控开启（`is_running`）且是 0 号 shard 才发命令——强平扫描/重定价只需全局发一份，不按
+    /// shard 重复；分片（slice）本身是扫描负载在多个 tick 上的轮转分摊，与 shard 是两个正交概念。
     pub fn run_one_iteration(&mut self, timestamp: i64) {
         if !self.is_running || self.shard_id != 0 {
             return;
         }
         let slice = self.scan_tick.rem_euclid(self.scan_slice_count.max(1));
-        self.pending_commands.push(OrderCommand {
+        self.command_submitter.submit(OrderCommand {
             command: OrderCommandType::LiquidationScan,
             symbol: -1,
             uid: slice,
@@ -71,7 +78,7 @@ impl LiquidationScheduler {
             ..Default::default()
         });
         if self.reprice_every_n_ticks > 0 && self.scan_tick % self.reprice_every_n_ticks == 0 {
-            self.pending_commands.push(OrderCommand {
+            self.command_submitter.submit(OrderCommand {
                 command: OrderCommandType::RepriceLoanRates,
                 timestamp,
                 ..Default::default()
@@ -84,9 +91,20 @@ impl LiquidationScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     fn scan_cmd(uid: i64, size: i64) -> OrderCommand {
         OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid, size, ..Default::default() }
+    }
+
+    /// collector 出口：把 `run_one_iteration` 发出的命令收进共享 Vec 供断言。等价于集群模式的回调，
+    /// 只是回调收集而非提交 raft。
+    fn attach_collector(s: &mut LiquidationScheduler) -> Rc<RefCell<Vec<OrderCommand>>> {
+        let collected = Rc::new(RefCell::new(Vec::new()));
+        let sink = collected.clone();
+        s.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push(cmd)));
+        collected
     }
 
     #[test]
@@ -119,8 +137,9 @@ mod tests {
     #[test]
     fn run_one_iteration_leader_gate_off_is_noop() {
         let mut s = LiquidationScheduler::new(10, 30, 0);
+        let out = attach_collector(&mut s);
         s.run_one_iteration(1_000);
-        assert!(s.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
         assert_eq!(s.scan_tick, 0);
     }
 
@@ -128,8 +147,9 @@ mod tests {
     fn run_one_iteration_non_shard_zero_is_noop() {
         let mut s = LiquidationScheduler::new(10, 30, 1);
         s.is_running = true;
+        let out = attach_collector(&mut s);
         s.run_one_iteration(1_000);
-        assert!(s.pending_commands.is_empty());
+        assert!(out.borrow().is_empty());
         assert_eq!(s.scan_tick, 0);
     }
 
@@ -137,42 +157,44 @@ mod tests {
     fn run_one_iteration_emits_scan_with_slice_and_advances_tick() {
         let mut s = LiquidationScheduler::new(3, 30, 0);
         s.is_running = true;
+        let out = attach_collector(&mut s);
         s.run_one_iteration(1_000);
-        assert_eq!(s.pending_commands.len(), 2, "tick0: LIQUIDATION_SCAN + REPRICE_LOAN_RATES");
-        let scan = &s.pending_commands[0];
+        assert_eq!(out.borrow().len(), 2, "tick0: LIQUIDATION_SCAN + REPRICE_LOAN_RATES");
+        let scan = out.borrow()[0].clone();
         assert_eq!(scan.command, OrderCommandType::LiquidationScan);
         assert_eq!(scan.symbol, -1);
         assert_eq!(scan.uid, 0, "slice = tick0 mod 3 = 0");
         assert_eq!(scan.size, 3, "sliceCount");
-        assert_eq!(s.pending_commands[1].command, OrderCommandType::RepriceLoanRates);
+        assert_eq!(out.borrow()[1].command, OrderCommandType::RepriceLoanRates);
         assert_eq!(s.scan_tick, 1);
 
-        s.pending_commands.clear();
+        out.borrow_mut().clear();
         s.run_one_iteration(2_000);
-        assert_eq!(s.pending_commands.len(), 1, "tick1: LIQUIDATION_SCAN only");
-        assert_eq!(s.pending_commands[0].uid, 1, "slice = tick1 mod 3 = 1");
+        assert_eq!(out.borrow().len(), 1, "tick1: LIQUIDATION_SCAN only");
+        assert_eq!(out.borrow()[0].uid, 1, "slice = tick1 mod 3 = 1");
         assert_eq!(s.scan_tick, 2);
 
-        s.pending_commands.clear();
+        out.borrow_mut().clear();
         s.run_one_iteration(3_000);
-        assert_eq!(s.pending_commands[0].uid, 2);
+        assert_eq!(out.borrow()[0].uid, 2);
 
-        s.pending_commands.clear();
+        out.borrow_mut().clear();
         s.run_one_iteration(4_000);
-        assert_eq!(s.pending_commands[0].uid, 0, "slice round-robin wraps back to 0");
+        assert_eq!(out.borrow()[0].uid, 0, "slice round-robin wraps back to 0");
     }
 
     #[test]
     fn run_one_iteration_reprice_every_n_ticks() {
         let mut s = LiquidationScheduler::new(100, 2, 0);
         s.is_running = true;
+        let out = attach_collector(&mut s);
         let mut reprice_ticks = Vec::new();
         for t in 0..6 {
             s.run_one_iteration(t);
-            if s.pending_commands.iter().any(|c| c.command == OrderCommandType::RepriceLoanRates) {
+            if out.borrow().iter().any(|c| c.command == OrderCommandType::RepriceLoanRates) {
                 reprice_ticks.push(t);
             }
-            s.pending_commands.clear();
+            out.borrow_mut().clear();
         }
         assert_eq!(reprice_ticks, vec![0, 2, 4], "reprice fires once at tick 0/2/4 (scan_tick % 2 == 0)");
     }

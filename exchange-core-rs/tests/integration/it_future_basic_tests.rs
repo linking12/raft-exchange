@@ -565,12 +565,8 @@ mod tests {
         assert_eq!(api.set_mark_price(FC_FUT, 94), CommandResultCode::Success);
 
         assert!(
-            api.risk().liquidation_engine.pending_commands.is_empty(),
-            "liquidation queue must be drained (FORCE already processed)"
-        );
-        assert!(
             api.user_position(BORROWER, FC_FUT).is_none(),
-            "borrower's underwater LONG fully closed by FORCE, position removed"
+            "borrower's underwater LONG fully closed by FORCE (cascade fully driven single-node)",
         );
         let if_available: i64 = api.insurance_fund().futures.values().map(|e| e.available).sum();
         assert!(if_available > 0, "liquidation fee must be credited to insurance fund available");

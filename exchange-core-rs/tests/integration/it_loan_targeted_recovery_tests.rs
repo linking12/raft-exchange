@@ -100,7 +100,7 @@ mod tests {
         // 共享内存后端:build+persist(leader)→ recover(follower/fresh core),模拟 failover。
         let shared = InMemorySerializationProcessor::new();
         {
-            let mut core = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+            let mut core = ExchangeCore::new(); core.with_serialization_processor(Box::new(shared.clone()));
             core.ssp.add_currency(CoreCurrencySpecification { currency: ETH, currency_scale_k: 1, ..Default::default() });
             core.ssp.add_currency(CoreCurrencySpecification { currency: XBT, currency_scale_k: 1, ..Default::default() });
             let spec = eth_xbt_loan_spec();
@@ -122,7 +122,7 @@ mod tests {
             assert!(core.persist(1, 0));
         }
 
-        let mut r = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut r = ExchangeCore::new(); r.with_serialization_processor(Box::new(shared.clone()));
         r.recover(1, 0);
 
         assert!(

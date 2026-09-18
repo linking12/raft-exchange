@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 #[cfg(test)]
@@ -11,6 +14,11 @@ use crate::core::snapshot::serialization_processor::{
     InMemorySerializationProcessor, SerializationProcessor, SerializedModuleType,
 };
 
+/// 逐命令结果回调签名（= Java `ObjLongConsumer<OrderCommand> resultsConsumer`）：主命令与每条级联
+/// 子命令处理完各触发一次。`SimpleEventsProcessor` 只读 `ssp`(取 spec/scale)+ `ups`(查持仓模式),
+/// 故只透传这两块引擎片段(不相交借用),不吃整个 `&ExchangeCore`。
+type ResultsConsumer = Box<dyn FnMut(&OrderCommand, i64, &SymbolSpecificationProvider, &UserProfileService)>;
+
 /// 对应 Java `ExchangeCore`：Java 版是把 RiskEngine(R1 预处理/R2 风控释放)、MatchingEngineRouter(ME)
 /// 通过 LMAX Disruptor 组装成多阶段流水线（G 分组 → [J 落盘] ‖ R1 → ME → R2 → E 结果处理，
 /// 各阶段可多 shard 并行），并负责 disruptor 生命周期(startup/shutdown)与线程池装配。
@@ -23,24 +31,15 @@ pub struct ExchangeCore {
     pub matching: MatchingEngineRouter,
     pub ups: UserProfileService,
     pub ssp: SymbolSpecificationProvider,
-    // 上一次 `process_command` 期间由 `run_liquidation_cascade` 同步驱动的二级命令（强平/IF/ADL 等）
-    // 累积产出的 fund events / matcher events；每次 `process_command` 开头清空重记，供调用方
-    // （如 SimpleEventsProcessor）在处理完主命令后单独取出上报，对应 Java 侧这些事件分散在各自
-    // 独立、异步经 raft 重提交的二级命令各自的结果里（Rust 因为同步内联级联而在此处聚合暴露）。
-    pub last_cascade_events: Vec<crate::core::common::fund_event::FundEvent>,
-    pub last_cascade_matcher_events: Vec<crate::core::common::matcher_trade_event::MatcherTradeEvent>,
-    // 快照存储后端（对应 Java `ExchangeCore.serializationProcessor`，由 config 注入）：**基础设施、非复制态**。
-    // 既不进快照（`persist` 只写 risk/matching/ups/ssp 四个业务模块），也不参与状态比较；默认内存后端。
+    pending_commands: Rc<RefCell<Vec<OrderCommand>>>,
     ser_proc: Box<dyn SerializationProcessor>,
-    // 对应 Java `ExchangeCore` 构造里 `liquidationEngine.setCommandSubmitter(...)` 注入的提交出口：
-    // 系统自生成命令（`LIQUIDATION_SCAN` / `FORCE_LIQUIDATION` / `IF_TAKEOVER` / `AUTO_DELEVERAGING` 等）
-    // 的统一去向。None = 单节点，就地处理（cascade 同步 FIFO 排空、scan 直接回灌 `process_command`）；
-    // Some = raft 模式，交给它（外层提交进 raft 共识、提交后作为普通命令回流引擎），本进程内不处理。
-    // 非复制态基础设施，不进快照/状态比较。
-    command_submitter: Option<Box<dyn FnMut(OrderCommand)>>,
-    // 周期强平扫描调度器（对应 Java `LiquidationEngine extends LiquidationScheduledService` 里"每 tick
-    // 发什么命令"的确定性部分）：`tick_liquidation_scheduler` 由外层定时器驱动，产出 `LIQUIDATION_SCAN` /
-    // `REPRICE_LOAN_RATES`，与 cascade 共用同一 `command_submitter`。leader gate（`is_running`）由外层设置。
+    results_consumer: Option<ResultsConsumer>,
+    results_seq: i64,
+    /// 周期强平发令器（对应 Java `LiquidationEngine extends LiquidationScheduledService` 里"每 tick 发什么
+    /// 命令"的确定性部分）。由引擎驱动：`start/stop_liquidation_scheduler` 是 leader 门控（= Java
+    /// `start()/stop()`），`tick_liquidation_scheduler(now)` 是每个调度 tick 的驱动（= Java `runOneIteration`）。
+    /// 墙钟脉冲由外层 server 每 interval 调一次 tick 提供（`!Send` 引擎内不放时钟线程）；scheduler 的
+    /// `command_submitter` 与引擎共用同一 sink（单节点 pending / 集群 raft）。
     liquidation_scheduler: LiquidationScheduler,
 }
 
@@ -51,39 +50,72 @@ impl Default for ExchangeCore {
 }
 
 impl ExchangeCore {
+    // ──────────────── 构造 & 注册（new 装默认，with_* 覆盖）────────────────
 
+    /// 构造函数：装好默认——内存序列化后端（`InMemorySerializationProcessor`）、本地单节点命令出口
+    /// （塞 `pending_commands`）。结果回调默认不装（`None`，不产事件、零开销）。外部通过下面的 `with_*`
+    /// 覆盖：`with_serialization_processor`（换 Disk 后端）/ `with_command_submitter`（换 raft 出口）/
+    /// `with_results_consumer`（挂 `SimpleEventsProcessor` 产事件）。
     pub fn new() -> Self {
-        ExchangeCore::with_serialization_processor(Box::new(InMemorySerializationProcessor::new()))
-    }
-
-    /// 对应 Java `ExchangeCore` 构造时由 `SerializationConfiguration.serializationProcessorFactory`
-    /// 注入 `ISerializationProcessor`（Disk/Memory/Dummy）。Rust 侧同样把存储后端作为依赖注入，
-    /// `persist`/`recover` 经它按 per-(module, instanceId) 落盘/加载。
-    pub fn with_serialization_processor(ser_proc: Box<dyn SerializationProcessor>) -> Self {
-        ExchangeCore {
+        let mut core = ExchangeCore {
             risk: RiskEngine::new(),
             matching: MatchingEngineRouter::new(),
             ups: UserProfileService::new(),
             ssp: SymbolSpecificationProvider::new(),
-            last_cascade_events: Vec::new(),
-            last_cascade_matcher_events: Vec::new(),
-            ser_proc,
-            command_submitter: None,
+            pending_commands: Rc::new(RefCell::new(Vec::new())),
+            ser_proc: Box::new(InMemorySerializationProcessor::new()),
+            results_consumer: None,
+            results_seq: 0,
             liquidation_scheduler: LiquidationScheduler::new(10, 30, 0),
-        }
+        };
+        // 默认命令出口 = 本地单节点：强平引擎 + loan 子引擎 + scheduler 的 command_submitter 都塞进 pending_commands
+        // （= Java 单节点 setCommandSubmitter(api::submitCommand)，api = 入 ring buffer）。集群走
+        // with_command_submitter override 成 raft。
+        let pending = core.pending_commands.clone();
+        core.with_command_submitter(move || {
+            let sink = pending.clone();
+            Box::new(move |cmd| sink.borrow_mut().push(cmd))
+        });
+        core
     }
+
+    /// 覆盖序列化后端（默认 `InMemorySerializationProcessor`）。对应 Java 由
+    /// `SerializationConfiguration.serializationProcessorFactory` 注入 `ISerializationProcessor`
+    /// （Disk/Memory/Dummy）；`persist`/`recover` 经它按 per-(module, instanceId) 落盘/加载。
+    pub fn with_serialization_processor(&mut self, ser_proc: Box<dyn SerializationProcessor>) {
+        self.ser_proc = ser_proc;
+    }
+
+    /// 覆盖系统自生成命令（scan / FORCE / IF / ADL / reprice）的提交出口（= Java
+    /// `liquidationEngine.setCommandSubmitter(...)`）。`new` 装的是本地默认出口（塞 `pending_commands`）;
+    /// **集群下外层调本方法 override 成 raft 提交**——与 Java 单节点/集群切换 `setCommandSubmitter` 目标
+    /// (ring buffer / raft)一致,每条命令各自提交。强平引擎、loan 子引擎、scheduler 各需一份捕获同一 sink
+    /// 的回调,而 `Box<dyn FnMut>` 不可 clone,故收工厂 `make`,给每个发令方各铸一份。
+    pub fn with_command_submitter<F>(&mut self, make: F)
+    where
+        F: Fn() -> Box<dyn FnMut(OrderCommand)>,
+    {
+        self.liquidation_scheduler.set_command_submitter(make());
+        self.risk.liquidation_engine.set_command_submitter(make);
+    }
+
+    /// 覆盖逐命令结果回调（= Java `resultsConsumer`，通常是 `SimpleEventsProcessor`）。
+    pub fn with_results_consumer(&mut self, consumer: ResultsConsumer) {
+        self.results_consumer = Some(consumer);
+    }
+
+    // ─────────────────────────── 命令处理流水线 ───────────────────────────
 
     /// 对应 Java `ExchangeCore` 流水线核心：R1(`RiskEngine.preProcessCommand`) → ME
     /// (`MatchingEngineRouter.processOrder`) → R2(`RiskEngine.handlerRiskRelease`)。Java 里三段分别
     /// 跑在 Disruptor 不同 handler 阶段（可能不同线程/shard），此处塌缩为一次函数调用内的三步同步执行，
     /// 保证同一条命令的处理结果在任意节点、任意时刻重放都完全确定（Raft 状态机要求）。
     /// `RESET` 单独短路：不经过 R1/ME/R2，直接清空全部业务状态后返回（对应 Java RiskEngine/
-    /// MatchingEngineRouter 各自 `case RESET` 分支）。处理完成后调用 `run_liquidation_cascade`
-    /// 同步排空强平/ADL 级联产生的二级命令（Java 侧是异步经由 raft 重新提交，见该方法注释）。
+    /// MatchingEngineRouter 各自 `case RESET` 分支）。主命令处理完后 inline 自驱 `pending_commands`：
+    /// 单节点回调塞了 FORCE/IF/ADL → 逐条再走 R1→ME→R2 直到清空；集群回调走 raft → pending 恒空、
+    /// 循环 no-op（级联由 raft 回流每条各自一次 `process_command` 驱动）。每条命令在 `apply_one` 末尾触发
+    /// `results_consumer`（= Java disruptor 对每条 ring buffer 命令触发 `resultsConsumer`）。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
-        self.last_cascade_events.clear();
-        self.last_cascade_matcher_events.clear();
-
         log::trace!(
             "process_command enter: cmd={:?} uid={} symbol={} order_id={}",
             cmd.command, cmd.uid, cmd.symbol, cmd.order_id
@@ -96,85 +128,63 @@ impl ExchangeCore {
             return;
         }
 
-        self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
-        self.matching.process_order(cmd);
-        self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
+        self.apply_one(cmd);
 
         log::trace!(
             "process_command: R1->ME->R2 done cmd={:?} result={:?}",
             cmd.command, cmd.result_code
         );
 
-        self.dispatch_liquidation_cascade();
+        self.drive_pending();
     }
 
-    /// 对应 Java `ExchangeCore` 构造里 `liquidationEngine.setCommandSubmitter(...)`：注入系统自生成命令
-    /// （scan / FORCE / IF / ADL）的统一提交出口，切到 raft 模式（见 `command_submitter` 字段说明）。
-    pub fn set_command_submitter(&mut self, submitter: Box<dyn FnMut(OrderCommand)>) {
-        self.command_submitter = Some(submitter);
-    }
-
-    /// 周期强平扫描 tick，由外层定时器驱动（对应 Java `LiquidationScheduledService` 的定时线程每 delay
-    /// 调一次 `runOneIteration`）。leader-gated（`liquidation_scheduler.is_running` 由外层按 leader 身份
-    /// 设置）：产出 `LIQUIDATION_SCAN`/`REPRICE_LOAN_RATES` 与 cascade 走同一去向——设了 `command_submitter`
-    /// （raft）则交给它过共识，否则单节点直接回灌 `process_command`。
-    pub fn tick_liquidation_scheduler(&mut self, timestamp: i64) {
-        self.liquidation_scheduler.run_one_iteration(timestamp);
-        let cmds: Vec<OrderCommand> = self.liquidation_scheduler.pending_commands.drain(..).collect();
-        if self.command_submitter.is_some() {
-            let submit = self.command_submitter.as_mut().unwrap();
-            for cmd in cmds {
-                submit(cmd);
+    /// 驱动 `pending_commands`（单节点自驱 / 集群 no-op）：每弹一批逐条走 R1→ME→R2，新生成的又进队列，
+    /// 直到清空。单节点回调塞了 FORCE/IF/ADL/scan → 排空即级联；集群回调走 raft → pending 恒空、循环 no-op。
+    fn drive_pending(&mut self) {
+        loop {
+            let batch: Vec<OrderCommand> = std::mem::take(&mut *self.pending_commands.borrow_mut());
+            if batch.is_empty() {
+                break;
             }
-        } else {
-            for mut cmd in cmds {
-                self.process_command(&mut cmd);
+            for mut c in batch {
+                self.apply_one(&mut c);
             }
         }
     }
 
-    /// leader gate：外层按 leader 身份开关周期扫描调度器（对应 Java `LiquidationScheduledService.start/stop`
-    /// 对 `isRunning()` 的置位）。与 `risk.liquidation_engine.is_running`（on-lane 检测门控）配套设置。
-    pub fn set_scheduler_running(&mut self, running: bool) {
-        self.liquidation_scheduler.is_running = running;
+    /// 一条命令走完 R1→ME→R2 并触发结果回调（主命令与每条级联子命令共用同一步序）。末尾逐命令触发
+    /// `results_consumer`（= Java `resultsHandler.onEvent(cmd, seq)`）：`results_consumer`(可变借用)与
+    /// `ssp`/`ups`(只读借用)是不相交字段,借用检查器允许同时借。
+    fn apply_one(&mut self, cmd: &mut OrderCommand) {
+        self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
+        self.matching.process_order(cmd);
+        self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
+        let seq = self.results_seq;
+        self.results_seq += 1;
+        if let Some(h) = self.results_consumer.as_mut() {
+            h(cmd, seq, &self.ssp, &self.ups);
+        }
     }
 
-    // 二级清算命令（FORCE/IF/ADL）的去向,对应 Java `LiquidationEngine.setCommandSubmitter` 两分支：
-    // - 设了 `command_submitter`（raft 模式）：把本次 `process_command` 生成的二级命令交给它（外层提交进
-    //   raft 共识、提交后作为普通命令回流引擎再 apply），本进程内不排空；链式 FORCE→IF→ADL 跨 raft 轮次
-    //   推进（每条已提交命令回流 apply 时再生成下一条并提交），顺序由 raft 提交序决定、不走本地 FIFO。
-    // - 未设（单节点）：`pending_commands` 在本次调用尾部同步、原地 FIFO 排空——每弹出一条就原样跑一遍
-    //   R1→ME→R2（递归级联：产生的新命令追加队列继续排空），fund/matcher 事件聚合进 `last_cascade_*`
-    //   供调用方取。这是 Java“async 经 raft 再入队”到 Rust 单节点“sync 原地递归排空”的行为收敛点。
-    fn dispatch_liquidation_cascade(&mut self) {
-        if self.command_submitter.is_some() {
-            let cmds: Vec<OrderCommand> =
-                self.risk.liquidation_engine.pending_commands.drain(..).collect();
-            let submit = self.command_submitter.as_mut().unwrap();
-            for cmd in cmds {
-                submit(cmd);
-            }
-            return;
-        }
-        let mut cascade_steps = 0usize;
-        while !self.risk.liquidation_engine.pending_commands.is_empty() {
-            let mut generated = self.risk.liquidation_engine.pending_commands.remove(0);
-            cascade_steps += 1;
-            self.risk.pre_process_command(&mut generated, &mut self.ups, &self.ssp);
-            self.matching.process_order(&mut generated);
-            self.risk.handler_risk_release(&mut generated, &mut self.ups, &self.ssp);
-            self.last_cascade_events.extend(generated.fund_events.iter().cloned());
-            let mut node = generated.matcher_event.as_deref();
-            while let Some(ev) = node {
-                let mut flat = ev.clone();
-                flat.next = None;
-                self.last_cascade_matcher_events.push(flat);
-                node = ev.next.as_deref();
-            }
-        }
-        if cascade_steps > 0 {
-            log::debug!("liquidation cascade drained {} secondary commands (single-node)", cascade_steps);
-        }
+    // ─────────── 周期强平发令器（引擎驱动，leader 门控，= Java LiquidationScheduledService）───────────
+
+    /// leader 上线：启动周期发令（= Java `LiquidationScheduledService.start()` 置 `running=true`）。外层
+    /// server 在成为 leader 时调；之后每个墙钟 tick 调 `tick_liquidation_scheduler`。
+    pub fn start_liquidation_scheduler(&mut self) {
+        self.liquidation_scheduler.is_running = true;
+    }
+
+    /// leader 下台：停止周期发令（= Java `stop()`）。
+    pub fn stop_liquidation_scheduler(&mut self) {
+        self.liquidation_scheduler.is_running = false;
+    }
+
+    /// 每个调度 tick 驱动一次（= Java `runOneIteration`，由外层 server 的墙钟每 interval 调）。leader-gated：
+    /// 非 leader（`is_running=false`）no-op。leader 上产 `LIQUIDATION_SCAN`/`REPRICE_LOAN_RATES` → scheduler
+    /// 的 `command_submitter` 回调 → 单节点塞 `pending`（随即自驱排空 = 就地跑扫描/级联）/ 集群提交 raft。
+    pub fn tick_liquidation_scheduler(&mut self, now: i64) {
+        self.liquidation_scheduler.run_one_iteration(now);
+        self.drive_pending();
     }
 
     // 对应 Java `RiskEngine.reset()`(清 userProfileService/liquidationService/loanService/
@@ -190,6 +200,8 @@ impl ExchangeCore {
         self.ssp.rebuild_spot_pair_index();
         self.matching.reset();
     }
+
+    // ─────────────────────────── 快照 persist / recover ───────────────────────────
 
     /// 对应 Java `RiskEngine`/`MatchingEngineRouter` 各自实现 `WriteBytesMarshallable`（Chronicle Wire
     /// 二进制编码）产生 RE/ME 两个独立快照模块。RE(risk-engine) 模块覆盖 symbol/currency specs、
@@ -958,7 +970,7 @@ mod liquidation_engine_e2e_tests {
         core.process_command(&mut markprice(94, 2_000));
 
         assert!(
-            core.risk.liquidation_engine.pending_commands.is_empty(),
+            core.pending_commands.borrow().is_empty(),
             "队列必须被排空（生成的 FORCE 已处理）"
         );
         assert!(
@@ -970,10 +982,11 @@ mod liquidation_engine_e2e_tests {
         assert_eq!(conserved(&core), before, "globally conserved after force liquidation (incl. liquidation fee transferred to IF)");
     }
 
-    // raft 模式（设了 command_submitter）：markprice 触发生成的 FORCE 被交给 submitter（外层去走 raft 共识），
-    // 引擎本进程内不 apply——对照上面的单节点用例（同一场景下 FORCE 会就地排空、借款人仓位被平掉）。
+    // 集群模式（command_submitter 注册成 collector = raft 提交出口）：markprice 触发生成的 FORCE 被交给
+    // submitter（外层去走 raft 共识），引擎本进程内不 apply——对照上面的单节点用例（同一场景下 FORCE 会
+    // 就地排空、借款人仓位被平掉）。
     #[test]
-    fn raft_mode_hands_cascade_to_submitter_without_inline_apply() {
+    fn cluster_mode_hands_cascade_to_submitter_without_inline_apply() {
         use std::cell::RefCell;
         use std::rc::Rc;
         let mut core = seeded();
@@ -983,30 +996,32 @@ mod liquidation_engine_e2e_tests {
         core.process_command(&mut m2);
 
         let captured: Rc<RefCell<Vec<OrderCommand>>> = Rc::new(RefCell::new(Vec::new()));
-        let sink = captured.clone();
-        core.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push(cmd)));
+        let cap = captured.clone();
+        core.with_command_submitter(move || {
+            let sink = cap.clone();
+            Box::new(move |cmd| sink.borrow_mut().push(cmd))
+        });
 
         core.process_command(&mut markprice(94, 2_000));
 
-        let cmds = captured.borrow();
         assert!(
-            cmds.iter().any(|c| c.command == OrderCommandType::ForceLiquidation && c.uid == BORROWER),
+            captured.borrow().iter().any(|c| c.command == OrderCommandType::ForceLiquidation && c.uid == BORROWER),
             "borrower 的 FORCE_LIQUIDATION 应被交给 submitter（去走 raft 共识）"
         );
         assert!(
-            core.risk.liquidation_engine.pending_commands.is_empty(),
+            core.pending_commands.borrow().is_empty(),
             "pending 已全部交出，引擎内不残留"
         );
         assert!(
             core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT),
-            "raft 模式下 FORCE 尚未回流 apply，借款人仓位仍在（未就地平仓）"
+            "集群模式下 FORCE 尚未回流 apply，借款人仓位仍在（未就地平仓）"
         );
     }
 
     // 模拟 raft 全程：submitter 把二级命令收进队列（= 提交进共识），逐条"共识后回流"再 apply；每条 apply
     // 又可能生成下一条（IF/ADL）进队列。验证 raft 回流路径最终与单节点同一结果（借款人被强平、全局守恒）。
     #[test]
-    fn raft_mode_cascade_completes_across_rounds_conserves() {
+    fn cluster_mode_cascade_completes_across_rounds_conserves() {
         use std::cell::RefCell;
         use std::collections::VecDeque;
         use std::rc::Rc;
@@ -1018,8 +1033,11 @@ mod liquidation_engine_e2e_tests {
         let before = conserved(&core);
 
         let queue: Rc<RefCell<VecDeque<OrderCommand>>> = Rc::new(RefCell::new(VecDeque::new()));
-        let sink = queue.clone();
-        core.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push_back(cmd)));
+        let q = queue.clone();
+        core.with_command_submitter(move || {
+            let sink = q.clone();
+            Box::new(move |cmd| sink.borrow_mut().push_back(cmd))
+        });
 
         core.process_command(&mut markprice(94, 2_000));
 
@@ -1031,32 +1049,12 @@ mod liquidation_engine_e2e_tests {
 
         assert!(rounds > 0, "至少回流处理了 FORCE");
         assert!(queue.borrow().is_empty());
-        assert!(core.risk.liquidation_engine.pending_commands.is_empty());
+        assert!(core.pending_commands.borrow().is_empty());
         assert!(
             !core.ups.get(BORROWER).unwrap().positions.contains_key(&FUT),
             "raft 回流 apply 后借款人被强平（与单节点同一终态）"
         );
         assert_eq!(conserved(&core), before, "raft 回流路径全局守恒");
-    }
-
-    // scheduler tick 产出的 LIQUIDATION_SCAN 也走同一个 command_submitter（与 cascade 的 FORCE/IF/ADL 统一）。
-    #[test]
-    fn raft_mode_scheduler_tick_submits_scan_via_command_submitter() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let mut core = seeded();
-        let captured: Rc<RefCell<Vec<OrderCommand>>> = Rc::new(RefCell::new(Vec::new()));
-        let sink = captured.clone();
-        core.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push(cmd)));
-        core.set_scheduler_running(true);
-
-        core.tick_liquidation_scheduler(9_000);
-
-        let cmds = captured.borrow();
-        assert!(
-            cmds.iter().any(|c| c.command == OrderCommandType::LiquidationScan),
-            "scheduler tick 应把 LIQUIDATION_SCAN 交给 command_submitter（与 cascade 同一出口）"
-        );
     }
 
     #[test]
@@ -1095,7 +1093,7 @@ mod liquidation_engine_e2e_tests {
         let before = conserved(&core);
         core.process_command(&mut markprice(94, 2_000));
 
-        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "queue drained after FORCE→IF→ADL cascade");
+        assert!(core.pending_commands.borrow().is_empty(), "queue drained after FORCE→IF→ADL cascade");
         assert_eq!(conserved(&core), before, "cascade with no fills does not change any balance, conserved");
     }
 }
@@ -1203,7 +1201,7 @@ mod loan_scanner_e2e_tests {
         };
         core.process_command(&mut scan);
 
-        assert!(core.risk.liquidation_engine.pending_commands.is_empty(), "force-liquidate generated by scan has been drained and processed");
+        assert!(core.pending_commands.borrow().is_empty(), "force-liquidate generated by scan has been drained and processed");
         assert!(
             !core.ups.get(BORROWER).unwrap().isolated_loans.contains_key(&LOAN_ID),
             "越线 loan 被强平（1000 抵押全卖、900 本金还清、loan 移除）"
@@ -1274,7 +1272,7 @@ mod snapshot_tests {
     }
 
     fn build_rich_core(ser_proc: Box<dyn SerializationProcessor>) -> ExchangeCore {
-        let mut core = ExchangeCore::with_serialization_processor(ser_proc);
+        let mut core = ExchangeCore::new(); core.with_serialization_processor(ser_proc);
         core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, collateral_weight_bps: 8000, ..Default::default() });
         core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
         assert_eq!(core.ssp.add_symbol(fut_spec()), CommandResultCode::Success);
@@ -1337,7 +1335,7 @@ mod snapshot_tests {
         let shared = InMemorySerializationProcessor::new();
         let mut core = build_rich_core(Box::new(shared.clone()));
         assert!(core.persist(1, 0));
-        let mut restored = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut restored = ExchangeCore::new(); restored.with_serialization_processor(Box::new(shared.clone()));
         restored.recover(1, 0);
 
         // 字节相等:restored 重新 persist 到快照 2,与快照 1 的两模块 payload 逐字节比对。
@@ -1353,7 +1351,7 @@ mod snapshot_tests {
         assert_eq!(restored.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000 - 300);
         assert_eq!(restored.risk.liquidation_service.notionals[&FUT].available, 500);
         let mut ob = OrderCommand { command: OrderCommandType::OrderBookRequest, symbol: FUT, size: 10, ..Default::default() };
-        let mut restored2 = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut restored2 = ExchangeCore::new(); restored2.with_serialization_processor(Box::new(shared.clone()));
         restored2.recover(1, 0);
         restored2.process_command(&mut ob);
         let md = ob.market_data.unwrap();
@@ -1378,7 +1376,7 @@ mod snapshot_tests {
         let shared = InMemorySerializationProcessor::new();
         let mut core = build_rich_core(Box::new(shared.clone()));
         assert!(core.persist(1, 0));
-        let mut restored = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut restored = ExchangeCore::new(); restored.with_serialization_processor(Box::new(shared.clone()));
         restored.recover(1, 0);
         restored.risk.liquidation_engine.is_running = true;
 
@@ -1388,7 +1386,7 @@ mod snapshot_tests {
         let mut mp = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price: 94, timestamp: 5_000, ..Default::default() };
         restored.process_command(&mut mp);
 
-        assert!(restored.risk.liquidation_engine.pending_commands.is_empty(), "force-liquidation cascade drains normally after recovery");
+        assert!(restored.pending_commands.borrow().is_empty(), "force-liquidation cascade drains normally after recovery");
         assert!(
             !restored.ups.get(U_LONG).unwrap().positions.contains_key(&FUT),
             "恢复后 targeted 索引生效，U_LONG 被强平平仓"

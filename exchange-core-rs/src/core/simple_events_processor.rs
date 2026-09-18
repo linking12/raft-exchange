@@ -6,19 +6,46 @@ use crate::core::common::matcher_event_type::MatcherEventType;
 use crate::core::common::position_mode::PositionMode;
 use crate::core::common::symbol_type::SymbolType;
 use crate::core::fund_events_handler::{FundEventReport, FundEventsHandler};
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::trade_events_handler::{
     ExecutionIdGenerator, FuturesExecutionReport, OrderBook, OrderBookRecord, SpotExecutionReport, TradeEventsHandler,
 };
-use crate::core::exchange_core::ExchangeCore;
 
 /// 对应 Java `SimpleEventsProcessor`（原实现 `ObjLongConsumer<OrderCommand>`，挂在 Disruptor 结果处理器上）。
-/// Rust 侧无 Disruptor，`process` 由调用方在 `ExchangeCore::process_command` 之后显式调用；
-/// Java 用 `seq < 0` 区分「来自 R2 风控阶段，只发 fund events」，Rust 因为单线程管线里 R1/ME/R2
-/// 已经在一次 `process_command` 内跑完，`process` 固定按 execution report → fund events → market data
-/// 全量顺序发送，不再需要这个符号位分支。
+/// Rust 侧接为 `ExchangeCore.results_consumer`：`process_command` 对主命令 + 每条级联子命令各触发一次
+/// `process`，只读透传 `ssp`(取 spec/scale) + `ups`(查持仓模式)，不吃整个 `&ExchangeCore`。
+/// Java 用 `seq < 0` 区分「来自 R2 风控阶段，只发 fund events」；Rust 单线程管线里 R1/ME/R2 在一次
+/// `process_command` 内跑完，`process` 固定按 execution report → fund events → market data 全量顺序发送，
+/// 无需 Java 那个符号位分支。
 pub struct SimpleEventsProcessor<T: TradeEventsHandler, F: FundEventsHandler> {
     trade: T,
     fund: F,
+}
+
+/// 调试/测试用事件 handler：把 `SimpleEventsProcessor` 产出的每条执行回报 / 资金事件 / 盘口快照直接
+/// `println!` 打到标准输出（`cargo test -- --nocapture` 即可见），用来观测真实事件流。挂法：
+/// `ExchangeCore::with_results_consumer(Box::new(move |cmd, seq, ssp, ups| proc.process(cmd, seq, ssp, ups)))`，
+/// 其中 `proc = SimpleEventsProcessor::new(LoggingEventsHandler, LoggingEventsHandler)`。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LoggingEventsHandler;
+
+impl TradeEventsHandler for LoggingEventsHandler {
+    fn order_book(&mut self, order_book: OrderBook) {
+        println!("order book: {:?}", order_book);
+    }
+    fn spot_execution_report(&mut self, report: SpotExecutionReport) {
+        println!("spot execution report: {:?}", report);
+    }
+    fn futures_execution_report(&mut self, report: FuturesExecutionReport) {
+        println!("futures execution report: {:?}", report);
+    }
+}
+
+impl FundEventsHandler for LoggingEventsHandler {
+    fn fund_event_report(&mut self, report: FundEventReport) {
+        println!("fund event report: {:?}", report);
+    }
 }
 
 impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
@@ -27,10 +54,16 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
     }
 
     /// 对应 Java `SimpleEventsProcessor.accept` 的主流程分支（`seq >= 0`）。
-    pub fn process(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
-        self.send_execution_report(core, cmd, seq);
+    pub fn process(
+        &mut self,
+        cmd: &OrderCommand,
+        seq: i64,
+        ssp: &SymbolSpecificationProvider,
+        ups: &UserProfileService,
+    ) {
+        self.send_execution_report(cmd, seq, ssp, ups);
         self.send_fund_events(cmd, seq);
-        self.send_market_data(core, cmd);
+        self.send_market_data(cmd, ssp);
     }
 
     pub fn trade_handler(&self) -> &T {
@@ -46,15 +79,21 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
     }
 
     // 对应 Java `SimpleEventsProcessor.sendExecutionReport`：按 symbol 类型分派到现货/期货报告构造。
-    fn send_execution_report(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64) {
+    fn send_execution_report(
+        &mut self,
+        cmd: &OrderCommand,
+        seq: i64,
+        ssp: &SymbolSpecificationProvider,
+        ups: &UserProfileService,
+    ) {
         if !is_reportable_command(cmd.command) {
             return;
         }
-        let Some(spec) = core.ssp.get_symbol(cmd.symbol) else { return };
+        let Some(spec) = ssp.get_symbol(cmd.symbol) else { return };
         match spec.symbol_type {
             SymbolType::CurrencyExchangePair => self.send_spot_execution_report(cmd, seq, spec),
             SymbolType::FuturesContractPerpetual | SymbolType::FuturesContractDelivery => {
-                self.send_futures_execution_report(core, cmd, seq, spec)
+                self.send_futures_execution_report(cmd, seq, spec, ups)
             }
             SymbolType::Option => {}
         }
@@ -95,10 +134,10 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
     }
 
     // 对应 Java `SimpleEventsProcessor.sendFuturesExecutionReport`：结构同现货版，额外查 taker/maker 各自
-    // 的持仓模式（position_side）附加到回报里；Java 按 uid 分片查 UserProfileService，Rust 单 shard 直查 core.ups。
-    fn send_futures_execution_report(&mut self, core: &ExchangeCore, cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) {
+    // 的持仓模式（position_side）附加到回报里；Java 按 uid 分片查 UserProfileService，Rust 单 shard 直查 ups。
+    fn send_futures_execution_report(&mut self, cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, ups: &UserProfileService) {
         let first = cmd.matcher_event.as_deref();
-        let taker_side = position_mode_of(core, cmd.uid);
+        let taker_side = position_mode_of(ups, cmd.uid);
         if cmd.command == OrderCommandType::PlaceOrder && cmd.result_code == Some(CommandResultCode::Success) {
             self.trade.futures_execution_report(FuturesExecutionReport::place_order(cmd, seq, spec, taker_side));
         }
@@ -122,7 +161,7 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         while let Some(ev) = cur {
             if ev.event_type == MatcherEventType::Trade {
                 self.trade.futures_execution_report(FuturesExecutionReport::trade_taker(cmd, seq, spec, taker_side, ev, trade_index));
-                let maker_side = position_mode_of(core, ev.matched_order_uid);
+                let maker_side = position_mode_of(ups, ev.matched_order_uid);
                 self.trade.futures_execution_report(FuturesExecutionReport::trade_maker(cmd, seq, spec, maker_side, ev, trade_index));
                 trade_index += 1;
             }
@@ -143,7 +182,7 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
 
     // 对应 Java `SimpleEventsProcessor.sendMarketData`：把 cmd 上挂的 L2 快照转成对外 OrderBook，
     // 缺失 spec 时 Java 记错误日志但仍以 scale=0 发出（按设计不可达）；Rust 简化为直接兜底 0。
-    fn send_market_data(&mut self, core: &ExchangeCore, cmd: &OrderCommand) {
+    fn send_market_data(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) {
         let Some(md) = &cmd.market_data else { return };
         let asks = md
             .ask_prices
@@ -159,7 +198,7 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
             .zip(&md.bid_orders)
             .map(|((&price, &volume), &orders)| OrderBookRecord { price, volume, orders: orders as i32 })
             .collect();
-        let (base_scale_k, quote_scale_k) = match core.ssp.get_symbol(cmd.symbol) {
+        let (base_scale_k, quote_scale_k) = match ssp.get_symbol(cmd.symbol) {
             Some(spec) => (spec.base_scale_k, spec.quote_scale_k),
             None => (0, 0),
         };
@@ -183,8 +222,8 @@ fn is_reportable_command(command: OrderCommandType) -> bool {
 
 // 对应 Java 内联的 `userProfileServices.get(shardIdOfUid(uid)).getUserProfile(uid).positionMode`
 // 查询（单 shard 塌缩后无需按 uid 分片路由）。
-fn position_mode_of(core: &ExchangeCore, uid: i64) -> PositionMode {
-    core.ups.get(uid).map(|u| u.position_mode).unwrap_or_default()
+fn position_mode_of(ups: &UserProfileService, uid: i64) -> PositionMode {
+    ups.get(uid).map(|u| u.position_mode).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -194,6 +233,7 @@ mod tests {
     use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
     use crate::core::common::order_action::OrderAction;
     use crate::core::common::order_type::OrderType;
+    use crate::core::exchange_core::ExchangeCore;
     use crate::core::fund_events_handler::FundEventReport;
     use crate::core::trade_events_handler::{ExecType, FuturesExecutionReport, OrderBook, SpotExecutionReport};
 
@@ -292,7 +332,7 @@ mod tests {
         assert_eq!(taker.result_code, Some(CommandResultCode::Success));
 
         let mut proc = SimpleEventsProcessor::new(TradeRec::default(), FundRec::default());
-        proc.process(&core, &taker, 5);
+        proc.process(&taker, 5, &core.ssp, &core.ups);
 
         let tr = proc.trade_handler();
         assert_eq!(tr.spot.len(), 3, "spot reports: {:?}", tr.spot);
@@ -311,6 +351,99 @@ mod tests {
         assert_eq!(maker_trade.order_id, 100);
 
         assert!(!proc.fund_handler().fund.is_empty(), "spot trade should produce fund event reports");
+    }
+
+    // 验证 SimpleEventsProcessor 作为 ExchangeCore.results_consumer 接线生效：挂成回调，由 process_command
+    // 逐命令触发（= Java resultsConsumer 每条命令 accept 一次），而非调用方手动调 process。
+    #[test]
+    fn wired_as_results_consumer_fires_per_command_via_process_command() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
+        let spec = CoreSymbolSpecification {
+            symbol_id: SYMBOL,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: BASE,
+            quote_currency: QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            ..Default::default()
+        };
+        assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
+        core.matching.add_symbol(&spec);
+        for uid in [SELLER, BUYER] {
+            let mut c = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
+            run(&mut core, &mut c);
+        }
+        let mut c = OrderCommand { command: OrderCommandType::BalanceAdjustment, uid: SELLER, symbol: BASE, price: 1_000, order_id: 1, ..Default::default() };
+        run(&mut core, &mut c);
+        let mut c = OrderCommand { command: OrderCommandType::BalanceAdjustment, uid: BUYER, symbol: QUOTE, price: 1_000_000, order_id: 2, ..Default::default() };
+        run(&mut core, &mut c);
+        let mut maker = OrderCommand {
+            command: OrderCommandType::PlaceOrder, order_id: 100, uid: SELLER, symbol: SYMBOL,
+            price: 100, size: 10, action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), ..Default::default()
+        };
+        run(&mut core, &mut maker);
+
+        // 接线：SimpleEventsProcessor 挂成 results_consumer（共享持有以便事后读回执）。
+        let proc = Rc::new(RefCell::new(SimpleEventsProcessor::new(TradeRec::default(), FundRec::default())));
+        let sink = proc.clone();
+        core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| sink.borrow_mut().process(cmd, seq, ssp, ups)));
+
+        let mut taker = OrderCommand {
+            command: OrderCommandType::PlaceOrder, order_id: 101, uid: BUYER, symbol: SYMBOL,
+            price: 100, size: 10, reserve_bid_price: 100, action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc), user_cookie: 77, ..Default::default()
+        };
+        core.process_command(&mut taker);
+
+        let pr = proc.borrow();
+        assert_eq!(pr.trade_handler().spot.len(), 3, "consumer fired for the taker command: NEW + taker/maker TRADE");
+        assert!(!pr.fund_handler().fund.is_empty(), "consumer forwarded fund events too");
+    }
+
+    // 挂真事件 handler `LoggingEventsHandler` 跑一笔现货成交：执行回报 + 资金事件经 process_command →
+    // results_consumer 直接 println 打到标准输出（`cargo test -- --nocapture` 可见），验证事件流端到端产出。
+    #[test]
+    fn logging_events_handler_emits_events_through_process_command() {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
+        let spec = CoreSymbolSpecification {
+            symbol_id: SYMBOL,
+            symbol_type: SymbolType::CurrencyExchangePair,
+            base_currency: BASE,
+            quote_currency: QUOTE,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            ..Default::default()
+        };
+        assert_eq!(core.ssp.add_symbol(spec.clone()), CommandResultCode::Success);
+        core.matching.add_symbol(&spec);
+        for uid in [SELLER, BUYER] {
+            let mut c = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
+            run(&mut core, &mut c);
+        }
+        run(&mut core, &mut OrderCommand { command: OrderCommandType::BalanceAdjustment, uid: SELLER, symbol: BASE, price: 1_000, order_id: 1, ..Default::default() });
+        run(&mut core, &mut OrderCommand { command: OrderCommandType::BalanceAdjustment, uid: BUYER, symbol: QUOTE, price: 1_000_000, order_id: 2, ..Default::default() });
+        run(&mut core, &mut OrderCommand {
+            command: OrderCommandType::PlaceOrder, order_id: 100, uid: SELLER, symbol: SYMBOL,
+            price: 100, size: 10, action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), ..Default::default()
+        });
+
+        let mut proc = SimpleEventsProcessor::new(LoggingEventsHandler, LoggingEventsHandler);
+        core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| proc.process(cmd, seq, ssp, ups)));
+
+        let mut taker = OrderCommand {
+            command: OrderCommandType::PlaceOrder, order_id: 101, uid: BUYER, symbol: SYMBOL,
+            price: 100, size: 10, reserve_bid_price: 100, action: Some(OrderAction::Bid),
+            order_type: Some(OrderType::Gtc), ..Default::default()
+        };
+        core.process_command(&mut taker);
+        assert_eq!(taker.result_code, Some(CommandResultCode::Success), "trade ran through LoggingEventsHandler-backed results_consumer");
     }
 
     use crate::core::common::fund_event::{FundEvent, FundEventType};
@@ -443,7 +576,7 @@ mod tests {
 
     fn run_proc(core: &ExchangeCore, cmd: &OrderCommand, seq: i64) -> (TradeRec, FundRec) {
         let mut proc = SimpleEventsProcessor::new(TradeRec::default(), FundRec::default());
-        proc.process(core, cmd, seq);
+        proc.process(cmd, seq, &core.ssp, &core.ups);
         proc.into_handlers()
     }
 

@@ -125,19 +125,26 @@ fn fe_line(e: &FundEvent) -> Option<String> {
 // 核心回放器:逐行解析 DSL 命令,依次提交给 Rust 引擎,记录每条命令的返回码
 // 和沿途产生的资金事件,返回最终引擎状态 + 结果行 + 排序后的事件行。
 fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
-    let mut api = ExchangeApi::new();
+    // results_consumer 收集器（= Java resultsConsumer）：主命令 + 每条级联子命令处理完各触发一次，
+    // 逐命令累积其 fund events。装在 ExchangeCore 上（resultsConsumer 是 core 的事），再用 from_core 包成门面。
+    let collected: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = collected.clone();
+    let mut core = exchange_core_rs::core::exchange_core::ExchangeCore::new();
+    core.with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
+        sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
+    }));
+    let mut api = ExchangeApi::from_core(core);
     let mut results = Vec::new();
     let mut fund_lines: Vec<String> = Vec::new();
     let mut seq = 0i64;
 
     macro_rules! collect_events {
         () => {{
-            for e in api.last_fund_events() {
+            for e in collected.borrow().iter() {
                 if let Some(l) = fe_line(e) { fund_lines.push(l); }
             }
-            for e in api.cascade_fund_events() {
-                if let Some(l) = fe_line(e) { fund_lines.push(l); }
-            }
+            collected.borrow_mut().clear();
         }};
     }
 
