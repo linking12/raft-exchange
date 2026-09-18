@@ -75,6 +75,50 @@ fn fut_spec() -> CoreSymbolSpecification {
 }
 
 // 初始化一个带 n_users 个用户(各自预充值 QUOTE)、已开启强平引擎的 ExchangeCore
+#[test]
+fn dbg_conservation_minimal() {
+    let cur = QUOTE;
+    let (mut core, uids) = seeded(4);
+    markprice(&mut core, 100, 1_000);
+    let cmds: Vec<(usize, i64, i64, bool)> = vec![
+        (2, 84, 5, false), (3, 95, 6, false), (0, 60, 0, true), // Mark 60 encoded as bid=true size=0 sentinel
+    ];
+    let _ = (cmds, uids);
+    // 直接手写 11 条
+    let mut oid = 1000i64;
+    let mut ts = 2_000i64;
+    let dump = |core: &ExchangeCore, tag: &str| {
+        let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.mark_price).unwrap_or(0);
+        let accts: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
+        let fees = *core.risk.fees.get(&cur).unwrap_or(&0);
+        let adj = *core.risk.adjustments.get(&cur).unwrap_or(&0);
+        let mut pos_pnl = 0i64;
+        for u in core.ups.users.values() { for p in u.positions.values() { if p.currency == cur { pos_pnl += p.estimate_pnl(mark) + p.extra_margin; } } }
+        let if_av: i64 = core.risk.liquidation_service.notionals.values().map(|n| n.available).sum();
+        let if_pos: i64 = core.risk.liquidation_service.positions.values().map(|p| p.position_value(mark)).sum();
+        let total = accts + fees + adj + pos_pnl + if_av + if_pos;
+        eprintln!("[{tag}] total={total} | accts={accts} fees={fees} adj={adj} pos_pnl={pos_pnl} if_av={if_av} if_pos={if_pos}");
+    };
+    let uids: Vec<i64> = (1..=4).collect();
+    let mut pl = |core: &mut ExchangeCore, ui: usize, price: i64, size: i64| {
+        let bid = ui % 2 == 0;
+        place(core, oid, uids[ui], price, size, bid, 10);
+        oid += 1;
+    };
+    dump(&core, "init");
+    pl(&mut core, 2, 84, 5); dump(&core, "p1");
+    pl(&mut core, 3, 95, 6); dump(&core, "p2");
+    markprice(&mut core, 60, ts); ts += 1000; dump(&core, "m60");
+    pl(&mut core, 3, 86, 5); dump(&core, "p3");
+    pl(&mut core, 2, 86, 6); dump(&core, "p4");
+    pl(&mut core, 1, 98, 3); dump(&core, "p5");
+    pl(&mut core, 0, 98, 9); dump(&core, "p6");
+    markprice(&mut core, 100, ts); ts += 1000; dump(&core, "m100");
+    markprice(&mut core, 60, ts); ts += 1000; dump(&core, "m60b");
+    pl(&mut core, 1, 80, 14); dump(&core, "p7");
+    markprice(&mut core, 92, ts); dump(&core, "m92");
+}
+
 fn seeded(n_users: i64) -> (ExchangeCore, Vec<i64>) {
     let mut core = ExchangeCore::new();
     core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });

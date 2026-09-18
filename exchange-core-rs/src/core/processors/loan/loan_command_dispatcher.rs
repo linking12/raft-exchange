@@ -811,20 +811,22 @@ impl LoanCommandDispatcher {
             let taken_over =
                 engine.loan_service.take_over_cross_loan(taker_up, target_loan_id, cmd.timestamp, ssp, &engine.last_price_cache);
             if taken_over {
-                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
-                if let Some((lid, lcur, luid, cip)) = liq {
-                    Self::push_cross_loan_liquidated_zeroed(cmd, ssp, taker_up, lid, lcur, luid, cip);
+                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.outstanding_principal, l.accumulated_interest, l.cum_interest_paid));
+                if let Some((lid, lcur, luid, prin, intr, cip)) = liq {
+                    Self::push_cross_loan_liquidated(cmd, engine, ssp, taker_up, lid, lcur, luid, prin, intr, cip, selling_currency, ts);
                 }
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
             } else if traded_size > 0 {
-                if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
-                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts, false);
+                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.outstanding_principal, l.accumulated_interest, l.cum_interest_paid));
+                if let Some((lid, lcur, luid, prin, intr, cip)) = liq {
+                    Self::push_cross_loan_liquidated(cmd, engine, ssp, taker_up, lid, lcur, luid, prin, intr, cip, selling_currency, ts);
                 }
             }
         } else {
             if traded_size > 0 {
-                if let Some(l) = taker_up.cross_loans.get(&target_loan_id) {
-                    Self::push_cross_loan_event(cmd, engine, ssp, taker_up, l, FundEventType::LoanLiquidated, ts, false);
+                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.outstanding_principal, l.accumulated_interest, l.cum_interest_paid));
+                if let Some((lid, lcur, luid, prin, intr, cip)) = liq {
+                    Self::push_cross_loan_liquidated(cmd, engine, ssp, taker_up, lid, lcur, luid, prin, intr, cip, selling_currency, ts);
                 }
             }
             let is_empty = {
@@ -837,7 +839,7 @@ impl LoanCommandDispatcher {
         }
 
         if all_collateral_exhausted {
-            Self::take_over_remaining_cross_loans(engine, cmd, taker_up, cmd.timestamp, target_loan_id, ssp);
+            Self::take_over_remaining_cross_loans(engine, cmd, taker_up, cmd.timestamp, target_loan_id, selling_currency, ssp);
         }
         engine.liquidation_engine.loan_liquidation_engine.sync_cross_exposure(taker_up);
     }
@@ -999,7 +1001,7 @@ impl LoanCommandDispatcher {
             loan_mode: 0,
             loan_debt_principal: loan.outstanding_principal,
             loan_debt_interest: loan.accumulated_interest,
-            loan_interest_paid_total: loan.cum_interest_paid,
+            loan_interest_paid_total: if event_type == FundEventType::LoanCollateralChange { 0 } else { loan.cum_interest_paid },
             loan_ltv_bps: ltv_bps,
             loan_collateral_currency: loan.collateral_currency,
             loan_collateral_currency_scale_k: coll_scale,
@@ -1081,16 +1083,25 @@ impl LoanCommandDispatcher {
     /// `EventsHelper.sendLoanLiquidatedEvent`（LIF 接管后场景）；Java 未抽出独立方法，是 Rust 侧为消除
     /// 两处重复参数组装而新增的共享函数。调用时机固定在 LIF 已接管、principal/interest 已清零之后，
     /// 因此不像 `push_cross_loan_event` 那样需要重算 debt/collateral 快照。
-    fn push_cross_loan_liquidated_zeroed(
+    #[allow(clippy::too_many_arguments)]
+    fn push_cross_loan_liquidated(
         cmd: &mut OrderCommand,
+        engine: &RiskEngine,
         ssp: &SymbolSpecificationProvider,
         up: &UserProfile,
         loan_id: i64,
         loan_currency: i32,
         uid: i64,
+        principal: i64,
+        interest: i64,
         cum_interest_paid: i64,
+        selling_currency: i32,
+        timestamp: i64,
     ) {
         let (free, locked, cur_scale) = Self::currency_free_locked(ssp, up, loan_currency);
+        let (coll_free, coll_locked, coll_scale) = Self::currency_free_locked(ssp, up, selling_currency);
+        let ltv_bps =
+            engine.loan_service.calculate_cross_account_ltv_bps(up, timestamp, ssp, &engine.last_price_cache, false);
         cmd.fund_events.push(FundEvent {
             event_type: FundEventType::LoanLiquidated,
             order_id: loan_id,
@@ -1100,7 +1111,15 @@ impl LoanCommandDispatcher {
             free,
             locked,
             loan_mode: 1,
+            loan_debt_principal: principal,
+            loan_debt_interest: interest,
             loan_interest_paid_total: cum_interest_paid,
+            loan_ltv_bps: ltv_bps,
+            loan_collateral_currency: selling_currency,
+            loan_collateral_currency_scale_k: coll_scale,
+            loan_collateral_pledged: up.cross_loan_collateral(selling_currency),
+            loan_collateral_free: coll_free,
+            loan_collateral_locked: coll_locked,
             ..Default::default()
         });
     }
@@ -1223,6 +1242,7 @@ impl LoanCommandDispatcher {
         up: &mut UserProfile,
         now: i64,
         target_loan_id: i64,
+        selling_currency: i32,
         ssp: &SymbolSpecificationProvider,
     ) {
         let loan_ids: Vec<i64> = up.cross_loans.keys().copied().collect();
@@ -1243,7 +1263,7 @@ impl LoanCommandDispatcher {
             }
             let liq = up.cross_loans.get(&loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
             if let Some((lid, lcur, luid, cip)) = liq {
-                Self::push_cross_loan_liquidated_zeroed(cmd, ssp, up, lid, lcur, luid, cip);
+                Self::push_cross_loan_liquidated(cmd, engine, ssp, up, lid, lcur, luid, 0, 0, cip, selling_currency, now);
             }
             Self::close_and_recycle_cross_loan(up, loan_id);
         }

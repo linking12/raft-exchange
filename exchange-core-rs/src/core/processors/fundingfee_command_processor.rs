@@ -17,7 +17,7 @@ use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::core_currency_specification::CoreCurrencySpecification;
 use crate::core::common::core_symbol_specification::CoreSymbolSpecification;
-use crate::core::common::fund_event::FundEventType;
+use crate::core::common::fund_event::{FundEventType, SYSTEM_TRIGGERED_ORDER_ID};
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::position_mode::PositionMode;
@@ -103,7 +103,8 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
             &currency_spec,
         );
 
-        let order_id = cmd.order_id;
+        let order_id = SYSTEM_TRIGGERED_ORDER_ID;
+        let mark_price = ctx.risk.mark_price(symbol).unwrap_or(0);
         let lpc = &ctx.risk.last_price_cache;
         let payer_dir = PositionDirection::of_action(action);
         let recv_dir = PositionDirection::of_action(action.opposite());
@@ -116,9 +117,12 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
                 if let Some(pos) = up.positions.values().find(|p| p.symbol == symbol && p.open_volume != 0 && p.direction == dir) {
                     RiskEngine::push_futures_event(&mut cmd.fund_events, lpc, FundEventType::FundingfeeSettlement, order_id, pos, &spec, up, ctx.ssp);
                 } else {
-                    let ev = RiskEngine::spot_snapshot_event(
+                    let mut ev = RiskEngine::spot_snapshot_event(
                         FundEventType::FundingfeeSettlement, order_id, up, spec.quote_currency, ctx.ssp, &currency_spec, symbol,
                     );
+                    ev.base_scale_k = spec.base_scale_k;
+                    ev.quote_scale_k = spec.quote_scale_k;
+                    ev.mark_price = mark_price;
                     cmd.fund_events.push(ev);
                 }
             }

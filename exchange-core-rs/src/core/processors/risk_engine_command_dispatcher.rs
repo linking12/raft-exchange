@@ -388,7 +388,7 @@ impl RiskEngineCommandDispatcher {
     /// 逐个处理，是为了拿到确定的遍历顺序（跨节点回放一致），同时避开边遍历 BTreeMap 边删除的借用冲突。
     fn settle_pnl(engine: &mut RiskEngine, cmd: &mut OrderCommand, ups: &mut UserProfileService, ssp: &SymbolSpecificationProvider) -> CommandResultCode {
         let symbol = cmd.symbol;
-        let order_id = cmd.order_id;
+        let order_id = SYSTEM_TRIGGERED_ORDER_ID;
         let spec = match ssp.get_symbol(symbol) {
             Some(s) if s.symbol_type == SymbolType::FuturesContractDelivery => s.clone(),
             _ => return CommandResultCode::InvalidSymbol,
@@ -523,9 +523,10 @@ impl RiskEngineCommandDispatcher {
     }
 
     /// 对应 Java `adjustBalance` 里内联的 `sendDepositEvent`/`sendWithdrawEvent` 调用（Rust 版拆到
-    /// dispatch 成功后统一收尾，见 dispatch 的文档注释）：price >= 0 视为充值，否则视为提现。
+    /// dispatch 成功后统一收尾，见 dispatch 的文档注释）：`amountDiff > 0` 视为充值，否则(含 0)视为提现
+    /// （对齐 Java `adjustBalance` 的 `amountDiff > 0 ? DEPOSIT : WITHDRAW`）。
     fn emit_balance_adjustment_event(_engine: &mut RiskEngine, cmd: &mut OrderCommand, ups: &UserProfileService, ssp: &SymbolSpecificationProvider) {
-        let ev_type = if cmd.price >= 0 { FundEventType::Deposit } else { FundEventType::Withdraw };
+        let ev_type = if cmd.price > 0 { FundEventType::Deposit } else { FundEventType::Withdraw };
         RiskEngine::push_spot_balance_event(cmd, ups, ssp, ev_type, cmd.order_id, cmd.uid, cmd.symbol, 0);
     }
 
