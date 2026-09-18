@@ -75,7 +75,7 @@ mod tests {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let sink = collector.clone();
         let mut api = ExchangeApi::new();
-        api.with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
+        api.core_mut().with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
             sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
         }));
         api.add_currency(XBT, 1);

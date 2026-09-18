@@ -15,8 +15,7 @@ use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::processors::risk_engine::RiskEngine;
 
-use crate::core::snapshot::serialization_processor::SerializationProcessor;
-use super::exchange_core::{ExchangeCore, ResultsConsumer};
+use super::exchange_core::ExchangeCore;
 
 #[derive(Debug, Clone)]
 pub struct PlaceOrderRequest {
@@ -151,28 +150,6 @@ impl ExchangeApi {
 
     pub fn core_mut(&mut self) -> &mut ExchangeCore {
         &mut self.core
-    }
-
-    /// Wire the snapshot backend (`InMemory` / `File`) used by
-    /// `core().persist(..)` / `core_mut().recover(..)`.
-    pub fn with_serialization_processor(&mut self, ser_proc: Box<dyn SerializationProcessor>) {
-        self.core.with_serialization_processor(ser_proc);
-    }
-
-    /// Wire where cascade / loan liquidation fan-out commands go:
-    /// the default factory pushes them into the engine's local pending
-    /// queue; a cluster factory hands them to Raft replication instead.
-    pub fn with_command_submitter<F>(&mut self, make: F)
-    where
-        F: Fn() -> Box<dyn FnMut(OrderCommand)>,
-    {
-        self.core.with_command_submitter(make);
-    }
-
-    /// Wire a downstream consumer invoked after each command applies,
-    /// streaming its results / events out (market data, audit, Raft results).
-    pub fn with_results_consumer(&mut self, consumer: ResultsConsumer) {
-        self.core.with_results_consumer(consumer);
     }
 
     fn run(&mut self, mut cmd: OrderCommand) -> CommandResultCode {
