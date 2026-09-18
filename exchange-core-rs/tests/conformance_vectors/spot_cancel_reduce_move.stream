@@ -1,7 +1,6 @@
-# 撮合执行报告(match event)进③:现货 REDUCE / CANCEL / MOVE(下移穿越挂单产生成交) 三类执行报告。
-# 覆盖 NEW / REDUCE / CANCEL / TRADE(经 MOVE 触发,taker=移动方),逐字段对拍 Java oracle。
-# 注:刻意不做"MOVE 成交后再 CANCEL 同一单"——Java mover 的 filledNotional 不累计(quirk),Rust 累计,
-# 会在 cancel 报告 cumQ 分歧(见 CONSISTENCY §6);此处规避,单独发现单报告。
+# 撮合执行报告(match event)进③:现货 REDUCE / MOVE(下移穿越挂单产生成交) / CANCEL(移动成交后撤余量)。
+# 覆盖 NEW / REDUCE / TRADE(经 MOVE 触发,taker=移动方) / CANCEL,逐字段对拍 Java oracle。
+# CANCEL 报告 cumQ=450 是 §7.6 修复(Java MOVE 补 filledNotional 累计)的回归护栏——修前 Java=0、Rust=450。
 #!match=on
 CUR id=1 digit=0
 CUR id=2 digit=0
@@ -16,8 +15,7 @@ PLACE oid=2 uid=2 sym=100 price=90 size=5 action=BID type=GTC reserve=90
 PLACE oid=1 uid=1 sym=100 price=100 size=10 action=ASK type=GTC
 # 减仓 ASK 3(10->7,无成交) -> REDUCE 报告(status NEW)
 REDUCE oid=1 uid=1 sym=100 size=3
-# uid=1 另挂 ASK 110x4(NEW),随即撤掉(无成交) -> CANCEL 报告(status CANCELED)
-PLACE oid=3 uid=1 sym=100 price=110 size=4 action=ASK type=GTC
-CANCEL oid=3 uid=1 sym=100
-# ASK oid=1 下移到 90 穿越 BID@90 -> MOVE 触发 TRADE(taker=移动方 ASK, maker=BID)
+# ASK oid=1 下移到 90 穿越 BID@90 -> MOVE 触发 TRADE(taker=移动方 ASK 成交 5, maker=BID)
 MOVE oid=1 uid=1 sym=100 price=90
+# 撤掉剩余 ASK(2,已成交 5@90) -> CANCEL 报告 cumQty=5 cumQ=450(修复后两侧一致)
+CANCEL oid=1 uid=1 sym=100

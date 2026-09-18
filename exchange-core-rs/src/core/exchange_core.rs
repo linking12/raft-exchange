@@ -14,7 +14,7 @@ use crate::core::snapshot::serialization_processor::{
     InMemorySerializationProcessor, SerializationProcessor, SerializedModuleType,
 };
 
-type ResultsConsumer = Box<dyn FnMut(&OrderCommand, i64, &SymbolSpecificationProvider, &UserProfileService)>;
+pub type ResultsConsumer = Box<dyn FnMut(&OrderCommand, i64, &SymbolSpecificationProvider, &UserProfileService)>;
 
 pub struct ExchangeCore {
     pub risk: RiskEngine,

@@ -162,11 +162,10 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) 
         FeRecorder { sink: fund_sink.clone() },
     )));
     let proc_c = proc.clone();
-    let mut core = exchange_core_rs::core::exchange_core::ExchangeCore::new();
-    core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
+    let mut api = ExchangeApi::new();
+    api.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
         proc_c.borrow_mut().process(cmd, seq, ssp, ups);
     }));
-    let mut api = ExchangeApi::from_core(core);
     let mut results = Vec::new();
     let mut seq = 0i64;
 

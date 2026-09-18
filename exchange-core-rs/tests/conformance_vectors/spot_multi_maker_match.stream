@@ -1,0 +1,17 @@
+# 撮合执行报告(match event)进③:现货 taker 一次扫掉两个 maker -> 多笔 TRADE 的发出顺序与累计推进。
+# NEW + 2x(TRADE taker + TRADE maker),cumQty/cumQ 逐笔递增,验证 trade 顺序不错发/漏发。
+#!match=on
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=100 base=1 quote=2 baseScale=1 quoteScale=1 taker=3 maker=1
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=1 amount=1000000 txid=1
+BAL uid=2 cur=1 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+# 两个 maker ASK:oid=1 @100x4(uid=1)、oid=2 @101x6(uid=2)
+PLACE oid=1 uid=1 sym=100 price=100 size=4 action=ASK type=GTC
+PLACE oid=2 uid=2 sym=100 price=101 size=6 action=ASK type=GTC
+# taker BID 101x8 -> 先吃 oid=1 全 4(FILLED),再吃 oid=2 的 4(PARTIALLY_FILLED)
+PLACE oid=3 uid=3 sym=100 price=101 size=8 action=BID type=GTC reserve=101
