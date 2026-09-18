@@ -6,6 +6,9 @@ use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
+use crate::core::snapshot::serialization_processor::{
+    InMemorySerializationProcessor, SerializationProcessor, SerializedModuleType,
+};
 
 /// 对应 Java `ExchangeCore`：Java 版是把 RiskEngine(R1 预处理/R2 风控释放)、MatchingEngineRouter(ME)
 /// 通过 LMAX Disruptor 组装成多阶段流水线（G 分组 → [J 落盘] ‖ R1 → ME → R2 → E 结果处理，
@@ -14,7 +17,6 @@ use crate::core::processors::risk_engine::RiskEngine;
 /// R1(`risk.pre_process_command`) → ME(`matching.process_order`) → R2(`risk.handler_risk_release`)，
 /// 不经过队列/线程边界，天然满足 Raft 状态机对确定性重放的要求；`RiskEngine`/`MatchingEngineRouter`
 /// 是本 crate 内被塌缩的等价物，字段语义仍与 Java 逐一对应。
-#[derive(Default)]
 pub struct ExchangeCore {
     pub risk: RiskEngine,
     pub matching: MatchingEngineRouter,
@@ -26,11 +28,27 @@ pub struct ExchangeCore {
     // 独立、异步经 raft 重提交的二级命令各自的结果里（Rust 因为同步内联级联而在此处聚合暴露）。
     pub last_cascade_events: Vec<crate::core::common::fund_event::FundEvent>,
     pub last_cascade_matcher_events: Vec<crate::core::common::matcher_trade_event::MatcherTradeEvent>,
+    // 快照存储后端（对应 Java `ExchangeCore.serializationProcessor`，由 config 注入）：**基础设施、非复制态**。
+    // 既不进快照（`persist` 只写 risk/matching/ups/ssp 四个业务模块），也不参与状态比较；默认内存后端。
+    ser_proc: Box<dyn SerializationProcessor>,
+}
+
+impl Default for ExchangeCore {
+    fn default() -> Self {
+        ExchangeCore::new()
+    }
 }
 
 impl ExchangeCore {
 
     pub fn new() -> Self {
+        ExchangeCore::with_serialization_processor(Box::new(InMemorySerializationProcessor::new()))
+    }
+
+    /// 对应 Java `ExchangeCore` 构造时由 `SerializationConfiguration.serializationProcessorFactory`
+    /// 注入 `ISerializationProcessor`（Disk/Memory/Dummy）。Rust 侧同样把存储后端作为依赖注入，
+    /// `persist`/`recover` 经它按 per-(module, instanceId) 落盘/加载。
+    pub fn with_serialization_processor(ser_proc: Box<dyn SerializationProcessor>) -> Self {
         ExchangeCore {
             risk: RiskEngine::new(),
             matching: MatchingEngineRouter::new(),
@@ -38,6 +56,7 @@ impl ExchangeCore {
             ssp: SymbolSpecificationProvider::new(),
             last_cascade_events: Vec::new(),
             last_cascade_matcher_events: Vec::new(),
+            ser_proc,
         }
     }
 
@@ -135,34 +154,40 @@ impl ExchangeCore {
     /// loan_service/liquidation_service) 等*复制态*；ME(matching-engine) 模块覆盖撮合簿(order_books)。
     /// 两段独立编码、独立传输，与 Java 侧 `PERSIST_STATE_RISK`/`PERSIST_STATE_MATCHING` 两条独立持久化
     /// 指令的模块划分一致，供上层 Raft 快照分别落盘/传输。
-    pub fn to_snapshot_bytes(&self) -> (Vec<u8>, Vec<u8>) {
+    pub fn persist(&mut self, snapshot_id: i64, instance_id: i32) -> bool {
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
-        use crate::core::snapshot::module_frame::encode_module_payload;
-        let re = encode_module_payload(&crate::core::processors::risk_engine::write_risk_engine_payload(self));
+        // 模块层只产 raw payload；framing 由 processor 负责（对齐 Java storeData 内部 WireToOutputStream）。
+        let re = crate::core::processors::risk_engine::write_risk_engine_payload(self);
         let mut w = crate::core::snapshot::chronicle_writer::ChronicleWriter::new();
         self.matching.chronicle_write(&mut w);
-        let me = encode_module_payload(&w.into_bytes());
-        (re, me)
+        let me = w.into_bytes();
+        let ok_re = self.ser_proc.store_data(snapshot_id, 0, 0, SerializedModuleType::RiskEngine, instance_id, &re);
+        let ok_me =
+            self.ser_proc.store_data(snapshot_id, 0, 0, SerializedModuleType::MatchingEngineRouter, instance_id, &me);
+        ok_re && ok_me
     }
 
-    /// `to_snapshot_bytes` 的逆过程：解出 RE/ME 两个模块帧并重建 `ExchangeCore`。对应 Java
-    /// `RiskEngine.recoverStateBySnapshot`/`MatchingEngineRouter.recoverStateBySnapshot`
-    /// （各自反序列化进临时 State/DeserializedData 持有者、再原子赋值给自身字段）。解出复制态后
-    /// 必须调用 `restore_non_replicated_state` 重建快照里*没有*编码的派生索引/临时字段——
-    /// 这一步是 Java/Rust 都需要的（Java 见 `LiquidationEngine.updateProvider`），因为这些字段要么是
-    /// 纯内存缓存（重放开销小于序列化成本），要么在快照写入时被有意排除（如 ADL 资格/待 ADL 量/
-    /// 清算流水这类瞬时状态，见下）。
-    pub fn from_snapshot_bytes(re_ecs: &[u8], me_ecs: &[u8]) -> Self {
+    /// 对应 Java `RiskEngine.recoverStateBySnapshot`/`MatchingEngineRouter.recoverStateBySnapshot`：
+    /// 经持有的 `ISerializationProcessor.loadData` 按 per-(module, instanceId) 取回两模块 payload、
+    /// 反序列化进 risk/matching/ups/ssp 复制态，再原子生效。解出复制态后必须调用
+    /// `restore_non_replicated_state` 重建快照里*没有*编码的派生索引/临时字段——这一步 Java/Rust
+    /// 都需要（Java 见 `LiquidationEngine.updateProvider`），因为这些字段要么是纯内存缓存（重放开销
+    /// 小于序列化成本），要么在快照写入时被有意排除（如 ADL 资格/待 ADL 量/清算流水这类瞬时状态）。
+    pub fn recover(&mut self, snapshot_id: i64, instance_id: i32) {
         use crate::core::snapshot::chronicle_reader::ChronicleReader;
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
-        use crate::core::snapshot::module_frame::decode_module_payload;
-        let mut core = ExchangeCore::default();
-        let re = decode_module_payload(re_ecs).expect("RE module frame decode failed");
-        crate::core::processors::risk_engine::read_risk_engine_payload(&re, &mut core).expect("RE payload parse failed");
-        let me = decode_module_payload(me_ecs).expect("ME module frame decode failed");
-        core.matching = MatchingEngineRouter::chronicle_read(&mut ChronicleReader::new(&me)).expect("ME payload parse failed");
-        core.restore_non_replicated_state();
-        core
+        let re = self
+            .ser_proc
+            .load_data(snapshot_id, SerializedModuleType::RiskEngine, instance_id)
+            .expect("RE snapshot module not found");
+        crate::core::processors::risk_engine::read_risk_engine_payload(&re, self).expect("RE payload parse failed");
+        let me = self
+            .ser_proc
+            .load_data(snapshot_id, SerializedModuleType::MatchingEngineRouter, instance_id)
+            .expect("ME snapshot module not found");
+        self.matching =
+            MatchingEngineRouter::chronicle_read(&mut ChronicleReader::new(&me)).expect("ME payload parse failed");
+        self.restore_non_replicated_state();
     }
 
     // 对应 Java 快照恢复后的派生状态重建：
@@ -1116,8 +1141,8 @@ mod snapshot_tests {
         }
     }
 
-    fn build_rich_core() -> ExchangeCore {
-        let mut core = ExchangeCore::new();
+    fn build_rich_core(ser_proc: Box<dyn SerializationProcessor>) -> ExchangeCore {
+        let mut core = ExchangeCore::with_serialization_processor(ser_proc);
         core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, collateral_weight_bps: 8000, ..Default::default() });
         core.ssp.add_currency(CoreCurrencySpecification { currency: QUOTE, currency_scale_k: 1, ..Default::default() });
         assert_eq!(core.ssp.add_symbol(fut_spec()), CommandResultCode::Success);
@@ -1176,13 +1201,19 @@ mod snapshot_tests {
 
     #[test]
     fn snapshot_roundtrip_preserves_replicated_state_and_rebuilds_non_replicated() {
-        let core = build_rich_core();
-        let (re, me) = core.to_snapshot_bytes();
-        let restored = ExchangeCore::from_snapshot_bytes(&re, &me);
+        // 共享内存后端:core persist → fresh restored recover(模拟 failover 跨实例)。
+        let shared = InMemorySerializationProcessor::new();
+        let mut core = build_rich_core(Box::new(shared.clone()));
+        assert!(core.persist(1, 0));
+        let mut restored = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        restored.recover(1, 0);
 
-        let (re2, me2) = restored.to_snapshot_bytes();
-        assert_eq!(re2, re, "RE module snapshot round-trip must be byte-equal");
-        assert_eq!(me2, me, "ME module snapshot round-trip must be byte-equal");
+        // 字节相等:restored 重新 persist 到快照 2,与快照 1 的两模块 payload 逐字节比对。
+        assert!(restored.persist(2, 0));
+        let m_re = SerializedModuleType::RiskEngine;
+        let m_me = SerializedModuleType::MatchingEngineRouter;
+        assert_eq!(shared.load_data(2, m_re, 0), shared.load_data(1, m_re, 0), "RE module snapshot round-trip must be byte-equal");
+        assert_eq!(shared.load_data(2, m_me, 0), shared.load_data(1, m_me, 0), "ME module snapshot round-trip must be byte-equal");
 
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].open_volume, 10);
         assert_eq!(restored.ups.get(U_LONG).unwrap().positions[&FUT].direction, PositionDirection::Long);
@@ -1190,7 +1221,8 @@ mod snapshot_tests {
         assert_eq!(restored.risk.loan_service.get_loan_pool_available(QUOTE), 1_000_000 - 300);
         assert_eq!(restored.risk.liquidation_service.notionals[&FUT].available, 500);
         let mut ob = OrderCommand { command: OrderCommandType::OrderBookRequest, symbol: FUT, size: 10, ..Default::default() };
-        let mut restored2 = ExchangeCore::from_snapshot_bytes(&re, &me);
+        let mut restored2 = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        restored2.recover(1, 0);
         restored2.process_command(&mut ob);
         let md = ob.market_data.unwrap();
         assert!(md.bid_prices.contains(&80), "resting order book state must be restored with the snapshot");
@@ -1211,9 +1243,11 @@ mod snapshot_tests {
 
     #[test]
     fn restored_core_liquidation_works_via_rebuilt_index() {
-        let core = build_rich_core();
-        let (re, me) = core.to_snapshot_bytes();
-        let mut restored = ExchangeCore::from_snapshot_bytes(&re, &me);
+        let shared = InMemorySerializationProcessor::new();
+        let mut core = build_rich_core(Box::new(shared.clone()));
+        assert!(core.persist(1, 0));
+        let mut restored = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        restored.recover(1, 0);
         restored.risk.liquidation_engine.is_running = true;
 
         let mut mk = fut_order(50, U_MAKER, 92, 10, true, 10);
