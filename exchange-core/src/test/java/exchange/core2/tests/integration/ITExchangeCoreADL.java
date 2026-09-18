@@ -2,12 +2,17 @@ package exchange.core2.tests.integration;
 
 import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.MarginMode;
+import exchange.core2.core.common.OrderAction;
+import exchange.core2.core.common.OrderType;
 import exchange.core2.core.common.PositionDirection;
 import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiInsuranceFundDeposit;
 import exchange.core2.core.common.api.ApiPersistState;
+import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiRecoverState;
 import exchange.core2.core.common.api.reports.SingleUserReportResult;
+import exchange.core2.core.common.api.reports.TotalCurrencyBalanceReportResult;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.config.InitialStateConfiguration;
@@ -113,6 +118,129 @@ public final class ITExchangeCoreADL {
             });
 
         }
+    }
+
+    /**
+     * ADL 级联守恒对照/护栏：精确复刻 Rust exchange-core-rs liquidation_e2e proptest shrink 出的 11 命令最小反例
+     * （单分片 + 纯 ApiAdjustMarkPrice，不注入盘口流动性，强制 FORCE→IF→ADL）。mark 92 前四仓与 Rust 逐字段一致
+     * （uid1 L9@864 / uid2 S6@506 / uid3 L6@506 profit68 / uid4 S9@808），级联命令也一致（含 ADL uid4@94 size7）。
+     *
+     * 该反例在 Rust 的【同步内联级联排空】下会造钱：uid1 的 ADL@92 先把 uid4 当对手方消耗掉，随后 uid4 自己的
+     * ADL@94 用 stale size 多平 uid3、而 origin 已空 → 全局守恒 +12（Rust 已在 collect 阶段把 ADL 执行量夹到 taker
+     * origin 实时 openVolume 修掉）。Java 的【异步 disruptor 级联排序】下不会驱动 uid4 走进该路径（uid3 不被误减），
+     * 本测试断言 Java 全程守恒——既作 Java 侧守恒护栏，也对照确认这条 leak 是 Rust 同步塌缩特有、非 Java 侧缺陷。
+     */
+    @Test
+    public void adlOriginConsumedMidCascadeConservation() throws Exception {
+        final int base = 11, quote = 12, fut = 5001;
+        final CoreSymbolSpecification futSpec = CoreSymbolSpecification.builder()
+                .symbolId(fut).type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                .baseCurrency(base).baseScaleK(1)
+                .quoteCurrency(quote).quoteScaleK(1)
+                .takerFee(0).makerFee(0).feeScaleK(10_000)
+                .maintenanceMargin(TreeSortedMap.newMapWith(Long.MAX_VALUE, 500L))
+                .maintenanceMarginScaleK(10_000)
+                .liquidationFee(200)
+                .maxLeverage(TreeSortedMap.newMapWith(Long.MAX_VALUE, 1000L))
+                .build();
+
+        final PerformanceConfiguration perfCfg = PerformanceConfiguration.baseBuilder()
+                .ringBufferSize(16 * 1024)
+                .matchingEnginesNum(1)
+                .riskEnginesNum(1)
+                .build();
+
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(perfCfg)) {
+            container.enableLiquidationEngines();
+            container.addCurrency(base, 0);
+            container.addCurrency(quote, 0);
+            container.addSymbol(futSpec);
+
+            final long u1 = 1, u2 = 2, u3 = 3, u4 = 4;
+            for (long uid : new long[]{u1, u2, u3, u4}) {
+                container.createUserWithMoney(uid, quote, 1_000_000L);
+            }
+            setMark(container, fut, 100);
+            drainCascade(container);
+
+            long oid = 1000;
+            placeIsolated(container, oid++, u3, 84, 5, true, fut); drainCascade(container);
+            placeIsolated(container, oid++, u4, 95, 6, false, fut); drainCascade(container);
+            setMark(container, fut, 60); drainCascade(container);
+            placeIsolated(container, oid++, u4, 86, 5, false, fut); drainCascade(container);
+            placeIsolated(container, oid++, u3, 86, 6, true, fut); drainCascade(container);
+            placeIsolated(container, oid++, u2, 98, 3, false, fut); drainCascade(container);
+            placeIsolated(container, oid++, u1, 98, 9, true, fut); drainCascade(container);
+            setMark(container, fut, 100); drainCascade(container);
+            setMark(container, fut, 60); drainCascade(container);
+            placeIsolated(container, oid++, u2, 80, 14, false, fut); drainCascade(container);
+
+            // mark 92 前四仓应与 Rust 逐字段一致（回归时若此处漂了，说明撮合/保证金分岔，先查这里）
+            assertPos(container, u1, fut, PositionDirection.LONG, 9, 864);
+            assertPos(container, u2, fut, PositionDirection.SHORT, 6, 506);
+            assertPos(container, u3, fut, PositionDirection.LONG, 6, 506);
+            assertPos(container, u4, fut, PositionDirection.SHORT, 9, 808);
+
+            // 最后一次 mark 触发级联，drain 排空
+            setMark(container, fut, 92);
+            drainCascade(container);
+
+            boolean conserved;
+            String diag;
+            try {
+                final TotalCurrencyBalanceReportResult bal = container.totalBalanceReport();
+                conserved = bal.isGlobalBalancesAllZero();
+                diag = "globalBalancesSum=" + bal.getGlobalBalancesSum();
+            } catch (IllegalStateException openInterestImbalance) {
+                conserved = false;
+                diag = "totalBalanceReport threw (open-interest imbalance): " + openInterestImbalance.getMessage();
+            }
+            assertThat("ADL origin 被前一轮清算消耗后 stale cmd.size 多平 counterparty，全局守恒破裂: " + diag,
+                    conserved, is(true));
+        }
+    }
+
+    private static void placeIsolated(ExchangeTestContainer container, long orderId, long uid, long price, long size,
+                                      boolean bid, int symbolId) {
+        final ApiPlaceOrder.ApiPlaceOrderBuilder b = ApiPlaceOrder.builder()
+                .uid(uid).orderId(orderId)
+                .price(price).size(size)
+                .action(bid ? OrderAction.BID : OrderAction.ASK)
+                .orderType(OrderType.GTC)
+                .symbol(symbolId).marginMode(MarginMode.ISOLATED).leverage(10);
+        if (bid) {
+            b.reservePrice(price);
+        }
+        container.getApi().submitCommandAsync(b.build()).join();
+    }
+
+    private static void setMark(ExchangeTestContainer container, int symbolId, long markPrice) {
+        container.submitCommandSync(ApiAdjustMarkPrice.builder()
+                .transactionId(container.getRandomTransactionId())
+                .symbol(symbolId).markPrice(markPrice).build(), CommandResultCode.SUCCESS);
+    }
+
+    /** 排空 on-lane 触发的 FORCE→IF→ADL 自驱级联：反复 flush 直到守恒报告不再抛 OI-imbalance（对齐 ITConservationFuzz）。 */
+    private static void drainCascade(ExchangeTestContainer container) throws Exception {
+        final long deadline = System.currentTimeMillis() + 5_000L;
+        while (System.currentTimeMillis() < deadline) {
+            container.getApi().groupingControl(0, 1);
+            try {
+                container.totalBalanceReport();
+                return;
+            } catch (IllegalStateException cascadeInFlight) {
+                Thread.sleep(20L);
+            }
+        }
+        container.getApi().groupingControl(0, 1);
+    }
+
+    private static void assertPos(ExchangeTestContainer container, long uid, int symbolId,
+                                  PositionDirection dir, long openVolume, long openPriceSum) throws Exception {
+        final SingleUserReportResult.Position pos = container.getUserProfile(uid).getPositions().get(symbolId).get(0);
+        assertThat("uid" + uid + " direction", pos.direction, is(dir));
+        assertThat("uid" + uid + " openVolume", pos.openVolume, is(openVolume));
+        assertThat("uid" + uid + " openPriceSum", pos.openPriceSum, is(openPriceSum));
     }
 
     @Test
