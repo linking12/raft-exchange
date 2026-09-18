@@ -125,10 +125,12 @@ public final class ITExchangeCoreADL {
      * （单分片 + 纯 ApiAdjustMarkPrice，不注入盘口流动性，强制 FORCE→IF→ADL）。mark 92 前四仓与 Rust 逐字段一致
      * （uid1 L9@864 / uid2 S6@506 / uid3 L6@506 profit68 / uid4 S9@808），级联命令也一致（含 ADL uid4@94 size7）。
      *
-     * 该反例在 Rust 的【同步内联级联排空】下会造钱：uid1 的 ADL@92 先把 uid4 当对手方消耗掉，随后 uid4 自己的
-     * ADL@94 用 stale size 多平 uid3、而 origin 已空 → 全局守恒 +12（Rust 已在 collect 阶段把 ADL 执行量夹到 taker
-     * origin 实时 openVolume 修掉）。Java 的【异步 disruptor 级联排序】下不会驱动 uid4 走进该路径（uid3 不被误减），
-     * 本测试断言 Java 全程守恒——既作 Java 侧守恒护栏，也对照确认这条 leak 是 Rust 同步塌缩特有、非 Java 侧缺陷。
+     * 该反例在 Rust 的【同步内联级联排空】下会造钱：uid1 的 ADL@92 先把 uid4 当对手方【完全消耗】，随后 uid4 自己的
+     * ADL@94 执行时 origin 已不存在 —— `normalizeCmdPositionSize`（两侧都有的 R1 夹位）对 position==null 的分支恰好
+     * 【不夹】，stale size=7 直接去多平 uid3 → 全局守恒 +12。Java 的【异步 disruptor 级联排序】下 uid4 的 ADL 执行时
+     * origin 尚未被消耗光，走不到那个 null 分支，故不 leak（本测试断言之，纯 on-lane 亦然）。Rust 侧的修复对齐 Java 放置：
+     * 在 `RiskEngine::normalize_cmd_position_size` 的 position==null 分支补 `cmd.size=0`（三类清算命令统一覆盖），
+     * 而非在 ADL processor 里加特例。本测试是 Java 侧守恒护栏 + 与 Rust 修复后终态逐字段对照。
      */
     @Test
     public void adlOriginConsumedMidCascadeConservation() throws Exception {

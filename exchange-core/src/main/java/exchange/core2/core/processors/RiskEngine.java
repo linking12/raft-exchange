@@ -729,6 +729,7 @@ public final class RiskEngine implements WriteBytesMarshallable {
         int positionRecordKey = userProfile.createPositionsKey(cmd.symbol, cmd.action, cmd.command);
         SymbolPositionRecord position = userProfile.positions.get(positionRecordKey);
         if (position == null) {
+            cmd.size = 0;
             return CommandResultCode.SUCCESS;
         }
         // FORCE_LIQUIDATION 用被强平者平仓视角（action 与 position direction 反向）；

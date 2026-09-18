@@ -39,9 +39,8 @@ impl TwoStepCommandProcessor for AdlCommandProcessor {
         let symbol = cmd.symbol;
         let action = cmd.action.expect("AUTO_DELEVERAGING requires action");
         let bankruptcy_price = cmd.price;
-        let remaining_size = Self::normalize_adl_size(ctx.ups, cmd.uid, symbol, action, cmd.size);
+        let remaining_size = cmd.size;
         if remaining_size <= 0 {
-            cmd.size = 0;
             return CommandResultCode::Success;
         }
 
@@ -102,26 +101,6 @@ impl TwoStepCommandProcessor for AdlCommandProcessor {
 }
 
 impl AdlCommandProcessor {
-    /// 执行时重算本次 ADL 的可减仓量:夹到 taker(发起方)在 `symbol`/`action` 上的实时 open_volume,
-    /// 返回 `min(requested, 实时仓位)`;仓位不存在时返回 0。见 CONSISTENCY.md §6。
-    fn normalize_adl_size(
-        ups: &UserProfileService,
-        taker_uid: i64,
-        symbol: i32,
-        action: OrderAction,
-        requested: i64,
-    ) -> i64 {
-        let origin_open_volume = ups
-            .users
-            .get(&taker_uid)
-            .and_then(|up| {
-                let key = up.create_positions_key(symbol, action, OrderCommandType::AutoDeleveraging);
-                up.positions.get(&key).map(|pos| pos.open_volume)
-            })
-            .unwrap_or(0);
-        requested.min(origin_open_volume)
-    }
-
     /// 对应 Java `collectInput` 内的候选筛选 + 排序 + 贪心预占循环。
     /// 过滤条件（都要满足）：`open_volume > 0`、`open_volume > pending_adl_size`（还有未被预占的可减仓量）、
     /// 方向与触发方 `action` 相反、且按 `bankruptcy_price` 算未实现盈亏为正（亏损方不该被 ADL）。

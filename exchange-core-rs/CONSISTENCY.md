@@ -172,8 +172,8 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | 差异 | Java | Rust | 处理 |
 |------|------|------|------|
 | **并发/分片** | Disruptor 多处理器 + RiskEngine 按 `uid & shardMask` 多实例分片 | 单线程确定性单管线、单分片(`shardMask=0`) | 状态经报表聚合后分片无关,可比;事件用全流多重集 |
-| **强平触发时机** | `LIQUIDATION_SCAN` / 周期扫描 | markprice 更新即 targeted 定向扫 | 事件用全流多重集比,不比逐命令归属 |
-| **ADL 减仓量重算时机** | 周期 re-scan,每次按当前破产仓位**新鲜生成** ADL 命令(`collectInput` 直接信任 cmd.size,无夹位) | 同步排空跑 size 生成即钉死的命令,故 `AdlCommandProcessor::normalize_adl_size` 在**执行时**按 taker 实时 `open_volume` 重算(`min(cmd.size, 实时仓位)`) | 同一不变量(ADL 量 = 破产额 ∩ 实时仓位),仅重算时机不同(Java scan 时 / Rust exec 时);净行为与输出一致(golden 两侧同),见 §7.5 |
+| **强平触发 / 周期兜底扫** | on-lane(markprice/funding apply 即 targeted 检测)**+** 定时线程周期发 `LIQUIDATION_SCAN` 全量兜底(`LiquidationScheduledService`,默认 2s) | on-lane 同 Java;周期兜底的**发令逻辑**已翻译(`scheduler.rs::run_one_iteration`/`covered_by_scan_slice`),但**墙钟定时线程未接**,库内以 on-lane 为主(e2e 用 markprice 驱动;库内不含墙钟/线程,便于单测断言 `pending_commands`) | 主触发两侧相同=on-lane;Java 多一条定时器周期兜底扫,Rust 的定时驱动交外层。事件用全流多重集比,不比逐命令归属 |
+| **清算命令提交 / 级联执行模型** | LiquidationEngine 生成的 FORCE/IF/ADL/scan 经 `ExchangeCore.setCommandSubmitter` → `api.submitCommand` **重新入命令管线**(异步 disruptor;有 raft 则经共识),各节点确定 apply | `ExchangeCore` **无 `setCommandSubmitter` 扩展**;命令入 `pending_commands`,由 `run_liquidation_cascade` 在触发命令尾部**同步原地 FIFO 排空**(单节点、不再走共识) | 提交/执行模型不同 → **级联顺序不同**(Rust 同步 FIFO 会把 ADL origin 完全消耗后再跑它自己的 stale ADL,Java 异步顺序不会)。但 R1 夹位 `normalizeCmdPositionSize`↔`normalize_cmd_position_size` **两侧逐字节一致**(FORCE/IF/ADL 都 `min(cmd.size, openVolume)`,`position==null`/`None` 分支都 `cmd.size=0`),故顺序差异不影响资金结果,终态逐字段一致。此 null 分支两侧都补 `size=0` 是 2026-09-18 同步修的(否则拿 stale size 空平对手方凭空造钱),见 §7.5 |
 | **`MARGIN_ALERT`/`LIQUIDATION_ALERT`** | 引擎内发事件 | 刻意外置(不发,水位告警走外部拉报表) | 两侧都排除 |
 | **仓位生命周期事件** `OPEN_POSITION`/`CLOSE_POSITION` | 期货开仓只对 maker 发 | maker+taker 都发(钱一致、事件数不同) | 排除(与 `POS` 状态冗余) |
 | **记账/锁事件** `Deposit`/`Locked`/… | `balance_adjustment` 等会发 | 部分不发 | 排除(只对拍结算类) |
@@ -236,13 +236,14 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 
 > 全量测试:lib 986 / conformance 1 / e2e 36 / integration 323 / base_parity 78 / diff 9,0 警告。
 
-### 7.5 守恒 proptest 抓到 ADL 摊派凭空造钱(2026-09-18,Rust 已修;实测确认是 Rust 同步塌缩特有、非 Java 侧缺陷)
+### 7.5 守恒 proptest 抓到 ADL 摊派凭空造钱(2026-09-18,Rust+Java 同步修在 `normalizeCmdPositionSize` null 分支)
 
 `conservation_holds_under_random_stream_with_liquidation`(防线②)偶发失败,shrink 出 11 条最小反例:同 tick 多重清算级联下,`uid4` 先作为 `uid1` 的 ADL@92 盈利 counterparty 被消耗,随后轮到 `uid4` 自己的 ADL@94——`cmd.size`(=`flow.size`,级联生成时固定、已 stale)仍按原量去杠杆 counterparty(`uid3`@94),但 `uid4` 的 origin 仓位已没了。`close_current_position_futures` 对 origin 只平 `min(size, open_volume)`(没了则一点不平)、超出量丢弃,而 counterparty 已按 full `cmd.size` 平仓 → 差额 ×(94−mark) **凭空造 12 QUOTE**。
 
-- **Rust 修复**:`adl_command_processor.rs::collect` 把 ADL 执行量夹到 taker origin 的**实时 `open_volume`**(`cmd.size.min(origin_available)`;origin 没了=0 则整条 ADL no-op)。**只用复制态 `open_volume`,绝不用 leader-local 的 `liquidation_flow`** 做候选/夹取(follower 侧为空会致跨节点发散)。验证:minimal repro delta 0 + 2000 例 proptest + 全量绿。
-- **Java 实测:不复现**(纠正先前"同源同 bug"的代码级推断)。写了 Java 回归测试 `ITExchangeCoreADL#adlOriginConsumedMidCascadeConservation`(单分片,逐字节复刻同一 11 命令;mark92 前四仓与 Rust 完全一致 `uid1` L9@864/`uid2` S6@506/`uid3` L6@506 profit68/`uid4` S9@808;级联命令也一致含 `ADL uid4@94 size7`)——**Java 全程守恒,PASS**。`finalizeForCommand` 跳 origin(`takerSpr==null`)那条 latent flaw 两侧代码确实都在,但**触发它的是 Rust 的同步内联级联排空**(`run_liquidation_cascade` 把 `uid1` 的 ADL@92 完全 apply、消耗掉 `uid4`,**再**跑 `uid4` 的 ADL@94);Java 的**异步 disruptor** 级联排序不驱动 `uid4` 走进该路径(`uid3` 不被误减)。故这条 leak 是 **Rust 同步塌缩特有的触发**,非 Java 侧缺陷,Java 不需要修。
-- **教训**:跨引擎"同源 bug"的结论必须用**实测**证,别只凭代码路径推断——本次先下的代码级"Java 同源同 bug"判断被这条回归测试直接推翻。该 Java 测试留作 Java 侧守恒护栏 + 与 Rust 修复后行为对照。当前无任何黄金向量命中此场景,故 Rust 修复不破坏 ③。
+- **根因(定位到位)**:两侧 R1 都有 `normalizeCmdPositionSize`/`normalize_cmd_position_size`=`cmd.size = min(cmd.size, position.openVolume)`,对 FORCE/IF/ADL 都调——**但 `position==null`(origin 被前序清算完全消耗)分支两侧本都 `return SUCCESS 不夹`**,stale `cmd.size` 直接进 ADL:collect 按它选满对手方、apply 平掉对手方,而 origin 已空平不掉 → 凭空造钱。Rust 同步 FIFO 排空(`run_liquidation_cascade`)会把 `uid1` 的 ADL@92 完全 apply、**消耗光 `uid4`**,再跑 `uid4` 自己的 stale ADL@94 → 撞上 null 分支;Java 异步 disruptor 顺序下 `uid4` 的 ADL 执行时 origin 尚未空,**走不到 null 分支**。
+- **Rust 修复(对齐 Java 放置)**:在 `RiskEngine::normalize_cmd_position_size` 的 `position==None` 分支补 `cmd.size = 0`——**修在 Java `normalizeCmdPositionSize` 的直接对应体里、三类清算命令统一覆盖**,而非在 ADL processor 加特例(ADL processor 保持与 Java `collectInput` 一样无夹位)。唯一 delta 就是这条 null 分支(§6)。验证:minimal repro delta 0 + 3000 例 proptest + 全量绿。
+- **Java 实测:不复现,但机制不是"缺陷差异"**。回归测试 `ITExchangeCoreADL#adlOriginConsumedMidCascadeConservation`(单分片,逐字节复刻 11 命令;mark92 前四仓与 Rust 完全一致;**关掉周期兜底扫、纯 on-lane 亦 PASS**,证明与周期扫无关)。两侧 R1 夹位逐字节相同,只是同步 FIFO(Rust) vs 异步 disruptor(Java) 的顺序决定了会不会把 origin 消耗光后再跑其 ADL、从而触达那条 null 分支。终态两侧逐字段一致。
+- **教训**:①跨引擎"同源 bug"结论必须**实测**证,别凭代码路径推断(本次"Java 无夹位/同源同 bug"两个先期判断都被推翻——Java 其实有 R1 夹位,只是 null 分支不触达);②改动放在与 Java 对应的同一函数/同一层,别加特例。该 Java 测试留作守恒护栏 + Rust 修复后终态对照;当前无黄金向量命中此场景,Rust 修复不破坏 ③。
 
 ---
 
