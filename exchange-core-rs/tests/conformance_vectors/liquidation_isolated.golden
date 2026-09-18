@@ -10,6 +10,7 @@ A 1 2 1900
 A 2 2 999700
 FEE 2 600
 EVENTS
+FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
 FE LIQUIDATION_CLOSE uid=1 cur=2 free=2700 locked=0
 FE LIQUIDATION_FEE uid=1 cur=2 free=1900 locked=0
 FE PNL_SETTLEMENT uid=1 cur=2 free=1900 locked=0

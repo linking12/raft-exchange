@@ -101,6 +101,9 @@ fn fe_allowed(t: FundEventType) -> bool {
             | LoanRepay
             | LoanLiquidated
             | InternalTransfer
+            | MarginAlert
+            | LiquidationAlert
+            | LoanMarginCall
     )
 }
 
@@ -224,7 +227,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
                 order_type: order_type_of(kv.get("type").map(String::as_str)),
                 leverage: opt_i64(&kv, "leverage", 1) as i32,
                 margin_mode: margin_of(kv.get("margin").map(String::as_str)),
-                reduce_only: false,
+                reduce_only: opt_i64(&kv, "reduceOnly", 0) != 0,
             })),
             "SCAN" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LiquidationScan,

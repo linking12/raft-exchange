@@ -1,0 +1,27 @@
+# 现货 + 期货混合,跨币种独立记账(镜像 Java 多产品并存 IT:同引擎同时跑现货撮合与期货保证金交易):
+# 三币种 USD(1)/USDT(2)/BTC(3)。SYM 200 = 现货 BTC/USDT(quote=2 计价),
+# SYM 201 = 永续 BTC-PERP,quote=1(USD)计保证金/PnL。两套市场用不同币种结算,账目必须互不串扰。
+# 现货腿:uid1 用 USDT 向 uid2 买 2 BTC。期货腿:uid5 ISOLATED LONG 3@1000(USD 保证金)、uid6 ASK 对手。
+# 验证同一引擎多产品并存时:现货 USDT/BTC 记账 与 期货 USD 保证金记账彼此独立,Rust 与 Java 逐账户逐币种一致。
+CUR id=1 digit=0
+CUR id=2 digit=0
+CUR id=3 digit=0
+SYM_SPOT id=200 base=3 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+SYM_FUT id=201 kind=PERP base=3 quote=1 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=201 price=1000
+USER uid=1
+USER uid=2
+USER uid=5
+USER uid=6
+# 现货腿资金:uid1 USDT 买、uid2 BTC 卖
+BAL uid=1 cur=2 amount=100000 txid=1
+BAL uid=2 cur=3 amount=2 txid=2
+# 期货腿资金:uid5/uid6 各自 USD 保证金(IM=3*1000*1/10=300,给足)
+BAL uid=5 cur=1 amount=10000 txid=3
+BAL uid=6 cur=1 amount=10000 txid=4
+# 现货 BTC/USDT 成交(uid1 -100000 USDT/+2 BTC;uid2 +100000 USDT/-2 BTC)
+PLACE oid=1 uid=2 sym=200 price=50000 size=2 action=ASK type=GTC
+PLACE oid=2 uid=1 sym=200 price=50000 size=2 action=BID type=GTC reserve=50000
+# 期货 BTC-PERP:uid6 挂卖 → uid5 吃单开 LONG 3@1000(双方各锁 USD 保证金,现货 USDT 账目不受影响)
+PLACE_FUT oid=3 uid=6 sym=201 price=1000 size=3 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=4 uid=5 sym=201 price=1000 size=3 action=BID margin=ISOLATED leverage=1

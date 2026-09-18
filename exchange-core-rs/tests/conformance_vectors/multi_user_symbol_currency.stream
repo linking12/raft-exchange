@@ -1,0 +1,35 @@
+# 多用户 / 多 symbol / 多 currency 现货综合(镜像 Java ITExchangeCoreIntegrationMulti* 的多市场并存):
+# 四币种 USD(1)/USDT(2)/BTC(3)/ETH(4),三个交叉计价现货对:
+#   SYM 100 = BTC/USDT (base=3,quote=2)、SYM 101 = ETH/USDT (base=4,quote=2)、SYM 102 = BTC/USD (base=3,quote=1)。
+# 四用户跨市场成交:uid1 在 100/102 双市场买 BTC(分别用 USDT/USD 结算)、uid2 双市场卖 BTC、
+# uid3 用 USDT 买 ETH、uid4 卖 ETH。验证同一引擎内多 symbol 并存、多币种独立记账(BTC 库存跨两对共享、
+# USDT 同时服务 100/101 两对、USD 只服务 102)Rust 与 Java 逐账户逐币种终态一致。Java 当 oracle。
+CUR id=1 digit=0
+CUR id=2 digit=0
+CUR id=3 digit=0
+CUR id=4 digit=0
+SYM_SPOT id=100 base=3 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+SYM_SPOT id=101 base=4 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+SYM_SPOT id=102 base=3 quote=1 baseScale=1 quoteScale=1 taker=0 maker=0
+USER uid=1
+USER uid=2
+USER uid=3
+USER uid=4
+# uid1:USDT 买 BTC(SYM100)+ USD 买 BTC(SYM102)
+BAL uid=1 cur=2 amount=100000 txid=1
+BAL uid=1 cur=1 amount=49000 txid=2
+# uid2:BTC 库存,跨 SYM100(卖2) + SYM102(卖1) 共 3
+BAL uid=2 cur=3 amount=3 txid=3
+# uid3:USDT 买 ETH(SYM101)
+BAL uid=3 cur=2 amount=15000 txid=4
+# uid4:ETH 库存卖出(SYM101)
+BAL uid=4 cur=4 amount=5 txid=5
+# SYM100 BTC/USDT:uid2 挂卖 → uid1 吃单成交(uid1 -100000 USDT / +2 BTC;uid2 +100000 USDT / -2 BTC)
+PLACE oid=1 uid=2 sym=100 price=50000 size=2 action=ASK type=GTC
+PLACE oid=2 uid=1 sym=100 price=50000 size=2 action=BID type=GTC reserve=50000
+# SYM101 ETH/USDT:uid4 挂卖 → uid3 吃单(uid3 -15000 USDT / +5 ETH;uid4 +15000 USDT / -5 ETH)
+PLACE oid=3 uid=4 sym=101 price=3000 size=5 action=ASK type=GTC
+PLACE oid=4 uid=3 sym=101 price=3000 size=5 action=BID type=GTC reserve=3000
+# SYM102 BTC/USD:uid2 挂卖 → uid1 吃单(uid1 -49000 USD / +1 BTC;uid2 +49000 USD / -1 BTC)
+PLACE oid=5 uid=2 sym=102 price=49000 size=1 action=ASK type=GTC
+PLACE oid=6 uid=1 sym=102 price=49000 size=1 action=BID type=GTC reserve=49000

@@ -28,6 +28,7 @@ FE ADL_ORIGIN_CLOSE uid=1 cur=2 free=4970 locked=0
 FE ADL_POSITION_CLOSE uid=2 cur=2 free=50000 locked=0
 FE ADL_POSITION_CLOSE uid=4 cur=2 free=50000 locked=0
 FE ADL_POSITION_CLOSE uid=6 cur=2 free=50000 locked=0
+FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
 FE PNL_SETTLEMENT uid=1 cur=2 free=4850 locked=0
 FE PNL_SETTLEMENT uid=2 cur=2 free=50040 locked=0
 FE PNL_SETTLEMENT uid=4 cur=2 free=50040 locked=0

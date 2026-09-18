@@ -11,4 +11,5 @@ POS 2 10002 SHORT 5 5000 50 0
 FEE 2 10
 EVENTS
 FE IF_POSITION_CLOSE uid=1 cur=2 free=5000 locked=0
+FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
 FE PNL_SETTLEMENT uid=1 cur=2 free=4960 locked=0
