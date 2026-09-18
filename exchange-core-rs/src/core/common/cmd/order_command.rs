@@ -39,7 +39,6 @@ pub struct OrderCommand {
     pub if_takeover_size: Option<i64>,
     pub adl_user_positions: Vec<AdlUserPosition>,
     pub adl_events: Vec<(i64, i64)>,
-
     pub fund_events: Vec<FundEvent>,
 }
 

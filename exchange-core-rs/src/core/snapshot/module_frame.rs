@@ -4,11 +4,8 @@ const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4d, 0x18];
 
 #[derive(Debug)]
 pub enum ModuleFrameError {
-
     Lz4(String),
-
     Truncated,
-
     NotDataDocument(u32),
 }
 

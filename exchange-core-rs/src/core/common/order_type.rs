@@ -1,14 +1,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderType {
-
     Gtc,
-
     Ioc,
-
     IocBudget,
-
     Fok,
-
     FokBudget,
 }
 

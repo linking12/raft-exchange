@@ -1,0 +1,23 @@
+R 3 SUCCESS
+R 4 SUCCESS
+R 5 SUCCESS
+R 6 SUCCESS
+R 7 SUCCESS
+R 8 SUCCESS
+R 9 SUCCESS
+STATE
+A 1 1 999990
+A 1 2 980
+A 2 1 10
+A 2 2 998950
+FEE 2 70
+EVENTS
+MATCH
+ER NEW NEW uid=1 oid=1 side=ASK maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 tid=0
+ER NEW NEW uid=2 oid=2 side=BID maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 tid=0
+ER TRADE FILLED uid=2 oid=2 side=BID maker=0 px=100 lastQty=6 lastPx=100 cumQty=6 cumQ=600 comm=30 tid=104448
+ER TRADE PARTIALLY_FILLED uid=1 oid=1 side=ASK maker=1 px=100 lastQty=6 lastPx=100 cumQty=6 cumQ=600 comm=12 tid=104448
+ER NEW NEW uid=2 oid=3 side=BID maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 tid=0
+ER REJECT REJECTED uid=2 oid=3 side=BID maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 tid=0
+ER TRADE PARTIALLY_FILLED uid=2 oid=3 side=BID maker=0 px=100 lastQty=4 lastPx=100 cumQty=4 cumQ=400 comm=20 tid=116736
+ER TRADE FILLED uid=1 oid=1 side=ASK maker=1 px=100 lastQty=4 lastPx=100 cumQty=10 cumQ=1000 comm=8 tid=116736

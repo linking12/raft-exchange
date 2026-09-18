@@ -109,8 +109,12 @@ public class ConformanceExporter {
 
     private String runVector(List<String> lines) throws Exception {
         boolean eventsOn = lines.stream().noneMatch(l -> l.replaceFirst("^#+", "").trim().equals("!events=off"));
+        boolean matchOn = lines.stream().anyMatch(l -> l.replaceFirst("^#+", "").trim().equals("!match=on"));
         StringBuilder out = new StringBuilder();
         List<Long> uids = new ArrayList<>();
+        // 撮合明细事件(执行报告)多重集:仅同步(现货/期货撮合、无异步清算扫描)向量 opt-in `#!match=on`,
+        // 按发出顺序累加(单线程确定),用于对拍 SpotExecutionReport/FuturesExecutionReport 不多发/漏发/错发。
+        final List<String> matchAccum = new ArrayList<>();
         // 线程安全:同步/join 路径由主线程 append,但异步清算(FORCE→IF→ADL)的 fund event 由 disruptor
         // 结果线程(E 阶段)append、由主线程 SCAN 循环读——裸 ArrayList 跨线程会漏读/串读(曾致 LIQUIDATION_FEE
         // 被读成两条)。用 synchronizedList 保证可见性与原子性。
@@ -118,8 +122,23 @@ public class ConformanceExporter {
 
         IEventsHandler4Test handler = new IEventsHandler4Test() {
             @Override public void process(FundEventReport r) { fundEventReport(r); }
-            @Override public void process(SpotExecutionReport r) {}
-            @Override public void process(FuturesExecutionReport r) {}
+            @Override public void process(SpotExecutionReport r) {
+                if (!matchOn) return;
+                matchAccum.add("ER " + r.executionType.name() + ' ' + r.orderStatus.name()
+                        + " uid=" + r.accountId + " oid=" + r.orderId + " side=" + r.side.name()
+                        + " maker=" + (r.isMaker ? 1 : 0) + " px=" + r.price + " lastQty=" + r.lastQty
+                        + " lastPx=" + r.lastPrice + " cumQty=" + r.cumulativeQty + " cumQ=" + r.cumulativeQuoteQty
+                        + " comm=" + r.commission + " tid=" + r.tradeId);
+            }
+            @Override public void process(FuturesExecutionReport r) {
+                if (!matchOn) return;
+                matchAccum.add("ERF " + r.executionType.name() + ' ' + r.orderStatus.name()
+                        + " uid=" + r.userId + " oid=" + r.orderId + " side=" + r.side.name()
+                        + " maker=" + (r.isMaker ? 1 : 0) + " pos=" + r.positionSide.name() + " cp=" + r.counterpartyId
+                        + " px=" + r.price + " lastQty=" + r.lastQty + " lastPx=" + r.lastPx
+                        + " cumQty=" + r.cumQty + " cumQ=" + r.cumQuoteQty + " avgPx=" + r.avgPx
+                        + " fee=" + r.fee + " eid=" + r.execId);
+            }
             @Override public void orderBook(ITradeEventsHandler.OrderBook o) {}
             @Override public void spotExecutionReport(ITradeEventsHandler.SpotExecutionReport r) {}
             @Override public void futuresExecutionReport(ITradeEventsHandler.FuturesExecutionReport r) {}
@@ -394,6 +413,12 @@ public class ConformanceExporter {
                 Collections.sort(feAccum);
                 for (String fe : feAccum) {
                     out.append(fe).append('\n');
+                }
+            }
+            if (matchOn) {
+                out.append("MATCH\n");
+                for (String m : matchAccum) {
+                    out.append(m).append('\n');
                 }
             }
         }

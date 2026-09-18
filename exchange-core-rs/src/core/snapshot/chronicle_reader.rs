@@ -2,13 +2,9 @@ use std::fmt;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ChronicleError {
-
     UnexpectedEof { needed: usize, remaining: usize },
-
     StopBitOverflow,
-
     InvalidUtf8,
-
     NotDataDocument { header: u32 },
 }
 
