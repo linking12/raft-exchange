@@ -13,7 +13,6 @@ pub enum OrderCommandType {
     LeverageAdjustment,
     MarginAdjustment,
     MarkpriceAdjustment,
-
     LoanCreate,
     LoanRepay,
     LoanAddCollateral,
@@ -28,9 +27,7 @@ pub enum OrderCommandType {
     PoolWithdraw,
     LoanIfDeposit,
     LoanIfWithdraw,
-
     RepriceLoanRates,
-
     InternalTransfer,
     SettleFundingfees,
     SystemLiquidationNotify,
@@ -38,15 +35,12 @@ pub enum OrderCommandType {
     AutoDeleveraging,
     IfDeposit,
     IfWithdraw,
-
     LiquidationScan,
     SettlePnl,
-
     SuspendUser,
     ResumeUser,
     PositionModeAdjustment,
     ResetFee,
-
     Reset,
     Nop,
 }

@@ -5,7 +5,7 @@ use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
 use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
 use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
-use exchange_core_rs::core::common::fund_event::{FundEvent, FundEventType};
+use exchange_core_rs::core::common::fund_event::FundEventType;
 use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, GlobalLoanConfig, SymbolLoanConfig, UNSET, UNSET_AMOUNT};
 use exchange_core_rs::core::common::margin_mode::MarginMode;
 use exchange_core_rs::core::common::order_action::OrderAction;
@@ -13,6 +13,57 @@ use exchange_core_rs::core::common::order_type::OrderType;
 use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_api::{ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest, PlaceOrderRequest};
+use exchange_core_rs::core::common::position_mode::PositionMode;
+use exchange_core_rs::core::fund_events_handler::{FundEventReport, FundEventsHandler};
+use exchange_core_rs::core::simple_events_processor::SimpleEventsProcessor;
+use exchange_core_rs::core::trade_events_handler::{FuturesExecutionReport, OrderBook, SpotExecutionReport, TradeEventsHandler};
+
+struct ErRecorder {
+    sink: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+}
+impl TradeEventsHandler for ErRecorder {
+    fn order_book(&mut self, _ob: OrderBook) {}
+    fn spot_execution_report(&mut self, r: SpotExecutionReport) {
+        self.sink.borrow_mut().push(format!(
+            "ER {} {} uid={} oid={} side={} maker={} px={} lastQty={} lastPx={} cumQty={} cumQ={} comm={} tid={}",
+            snake(&format!("{:?}", r.execution_type)),
+            snake(&format!("{:?}", r.order_status)),
+            r.account_id, r.order_id, snake(&format!("{:?}", r.side)), if r.is_maker { 1 } else { 0 },
+            r.price, r.last_qty, r.mark_price, r.cumulative_qty, r.cumulative_quote_qty, r.commission, r.trade_id
+        ));
+    }
+    fn futures_execution_report(&mut self, r: FuturesExecutionReport) {
+        let pos = match r.position_side {
+            PositionMode::OneWay => "ONEWAY",
+            PositionMode::Hedge => "HEDGE",
+        };
+        self.sink.borrow_mut().push(format!(
+            "ERF {} {} uid={} oid={} side={} maker={} pos={} cp={} px={} lastQty={} lastPx={} cumQty={} cumQ={} avgPx={} fee={} eid={}",
+            snake(&format!("{:?}", r.execution_type)),
+            snake(&format!("{:?}", r.order_status)),
+            r.user_id, r.order_id, snake(&format!("{:?}", r.side)), if r.is_maker { 1 } else { 0 },
+            pos, r.counterparty_id, r.price, r.last_qty, r.last_px, r.cum_qty, r.cum_quote_qty, r.avg_px, r.fee, r.exec_id
+        ));
+    }
+}
+struct FeRecorder {
+    sink: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+}
+impl FundEventsHandler for FeRecorder {
+    fn fund_event_report(&mut self, r: FundEventReport) {
+        if !fe_allowed(r.event_type) {
+            return;
+        }
+        self.sink.borrow_mut().push(format!(
+            "FE {} uid={} cur={} free={} locked={}",
+            snake(&format!("{:?}", r.event_type)),
+            r.account_id,
+            r.balances.currency,
+            r.balances.free,
+            r.balances.locked
+        ));
+    }
+}
 
 fn parse_line(line: &str) -> Option<(String, BTreeMap<String, String>)> {
     let line = line.trim();
@@ -97,42 +148,24 @@ fn fe_allowed(t: FundEventType) -> bool {
     )
 }
 
-fn fe_line(e: &FundEvent) -> Option<String> {
-    if !fe_allowed(e.event_type) {
-        return None;
-    }
-    Some(format!(
-        "FE {} uid={} cur={} free={} locked={}",
-        snake(&format!("{:?}", e.event_type)),
-        e.uid,
-        e.currency,
-        e.free,
-        e.locked
-    ))
-}
+fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) {
 
-fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
-
-    let collected: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> =
+    let fund_sink: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let sink = collected.clone();
+    let match_sink: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let proc = std::rc::Rc::new(std::cell::RefCell::new(SimpleEventsProcessor::new(
+        ErRecorder { sink: match_sink.clone() },
+        FeRecorder { sink: fund_sink.clone() },
+    )));
+    let proc_c = proc.clone();
     let mut core = exchange_core_rs::core::exchange_core::ExchangeCore::new();
-    core.with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
-        sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
+    core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
+        proc_c.borrow_mut().process(cmd, seq, ssp, ups);
     }));
     let mut api = ExchangeApi::from_core(core);
     let mut results = Vec::new();
-    let mut fund_lines: Vec<String> = Vec::new();
     let mut seq = 0i64;
-
-    macro_rules! collect_events {
-        () => {{
-            for e in collected.borrow().iter() {
-                if let Some(l) = fe_line(e) { fund_lines.push(l); }
-            }
-            collected.borrow_mut().clear();
-        }};
-    }
 
     let no_r = |v: &str| matches!(v, "MARK_AT" | "SCAN" | "IF_DEPOSIT" | "LIF_DEPOSIT");
     for line in stream.lines() {
@@ -372,12 +405,13 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
             if !no_r(verb.as_str()) {
                 results.push(format!("R {seq} {}", snake(&format!("{rc:?}"))));
             }
-            collect_events!();
         }
         seq += 1;
     }
+    let mut fund_lines = fund_sink.borrow().clone();
     fund_lines.sort();
-    (api, results, fund_lines)
+    let match_lines = match_sink.borrow().clone();
+    (api, results, fund_lines, match_lines)
 }
 
 fn state_digest(api: &ExchangeApi) -> Vec<String> {
@@ -427,14 +461,22 @@ fn events_enabled(stream: &str) -> bool {
     !stream.lines().any(|l| l.trim_start_matches('#').trim() == "!events=off")
 }
 
+fn match_enabled(stream: &str) -> bool {
+    stream.lines().any(|l| l.trim_start_matches('#').trim() == "!match=on")
+}
+
 fn rust_output(stream: &str) -> String {
-    let (api, results, fund_lines) = replay(stream);
+    let (api, results, fund_lines, match_lines) = replay(stream);
     let mut lines = results;
     lines.push("STATE".to_string());
     lines.extend(state_digest(&api));
     if events_enabled(stream) {
         lines.push("EVENTS".to_string());
         lines.extend(fund_lines);
+    }
+    if match_enabled(stream) {
+        lines.push("MATCH".to_string());
+        lines.extend(match_lines);
     }
     lines.join("\n") + "\n"
 }

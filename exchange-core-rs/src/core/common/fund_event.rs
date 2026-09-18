@@ -5,14 +5,12 @@ pub const SYSTEM_TRIGGERED_ORDER_ID: i64 = -1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FundEventType {
-
     #[default]
     Deposit,
     Locked,
     Transfer,
     Unlocked,
     Withdraw,
-
     LockPending,
     UnlockPending,
     OpenPosition,
@@ -26,18 +24,14 @@ pub enum FundEventType {
     IfPositionClose,
     AdlOriginClose,
     AdlPositionClose,
-
     MarginAlert,
     LiquidationAlert,
-
     ResetFee,
-
     LoanMarginCall,
     LoanBorrow,
     LoanRepay,
     LoanCollateralChange,
     LoanLiquidated,
-
     InternalTransfer,
 }
 
