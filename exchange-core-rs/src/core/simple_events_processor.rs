@@ -1040,4 +1040,192 @@ mod tests {
         assert_eq!(report.event_type, FundEventType::Deposit);
         assert_eq!(report.balances.currency, 20000);
     }
+
+    const FUT_SYM: i32 = 4;
+    const FUT_TAKER: i64 = 29851;
+    const FUT_MAKER: i64 = 10332;
+
+    fn fut_core() -> ExchangeCore {
+        let mut core = ExchangeCore::new();
+        core.ssp.add_currency(CoreCurrencySpecification { currency: 1, currency_scale_k: 1000, ..Default::default() });
+        core.ssp.add_currency(CoreCurrencySpecification { currency: 2, currency_scale_k: 1000, ..Default::default() });
+        let spec = CoreSymbolSpecification {
+            symbol_id: FUT_SYM,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: 1,
+            quote_currency: 2,
+            base_scale_k: 1000,
+            quote_scale_k: 1000,
+            ..Default::default()
+        };
+        assert_eq!(core.ssp.add_symbol(spec), CommandResultCode::Success);
+        core.ups.add_empty_user_profile(FUT_TAKER);
+        core.ups.add_empty_user_profile(FUT_MAKER);
+        core.ups.get_mut(FUT_TAKER).unwrap().position_mode = PositionMode::Hedge;
+        core.ups.get_mut(FUT_MAKER).unwrap().position_mode = PositionMode::OneWay;
+        core
+    }
+
+    fn fut_place_command() -> OrderCommand {
+        OrderCommand {
+            command: OrderCommandType::PlaceOrder,
+            order_id: 123,
+            symbol: FUT_SYM,
+            price: 52200,
+            size: 3200,
+            reserve_bid_price: 12800,
+            action: Some(OA::Bid),
+            order_type: Some(OrderType::Ioc),
+            uid: FUT_TAKER,
+            timestamp: 1578930983745201,
+            user_cookie: 44188,
+            result_code: Some(CommandResultCode::Success),
+            margin_mode: MarginMode::Isolated,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn should_handle_futures_single_trade() {
+        let core = fut_core();
+        let mut cmd = fut_place_command();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Trade,
+            active_order_completed: false,
+            maker_order_id: 276810,
+            matched_order_uid: FUT_MAKER,
+            maker_order_completed: true,
+            matched_order_command_type: OrderCommandType::PlaceOrder,
+            matched_order_filled: 123,
+            matched_order_filled_notional: 1000,
+            matched_order_type: OrderType::Gtc,
+            matched_order_price: 12233,
+            matched_order_size: 23,
+            matched_user_cookie: 778899,
+            matched_order_timestamp: 177777777777,
+            price: 20100,
+            size: 8272,
+            filled: 246,
+            filled_notional: 2000,
+            bidder_hold_price: 13233,
+            ..Default::default()
+        }));
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 0, "futures symbol must not emit spot reports");
+        assert_eq!(tr.futures.len(), 3);
+        assert_eq!(fr.fund.len(), 0);
+
+        let new_order = &tr.futures[0];
+        assert_eq!(new_order.execution_type, ExecType::New);
+        assert_eq!(new_order.order_status, OrderStatus::New);
+        assert_eq!(new_order.symbol_id, FUT_SYM);
+        assert_eq!(new_order.contract_type, SymbolType::FuturesContractPerpetual);
+        assert_eq!(new_order.order_qty_scale, 1000);
+        assert_eq!(new_order.price_scale, 1000);
+        assert_eq!(new_order.user_id, FUT_TAKER);
+        assert_eq!(new_order.cl_order_id, 44188);
+        assert_eq!(new_order.order_id, 123);
+        assert_eq!(new_order.order_type, OrderType::Ioc);
+        assert_eq!(new_order.side, OA::Bid);
+        assert_eq!(new_order.counterparty_id, -1);
+        assert_eq!(new_order.price, 52200);
+        assert_eq!(new_order.order_qty, 3200);
+        assert_eq!(new_order.create_time, 1578930983745201);
+        assert_eq!(new_order.position_side, PositionMode::Hedge, "taker position_side looked up from taker uid");
+        assert_eq!(new_order.last_qty, 0);
+        assert_eq!(new_order.avg_px, 0);
+        assert_eq!(new_order.fee_asset_id, 2);
+        assert!(!new_order.is_maker);
+
+        let taker_view = &tr.futures[1];
+        assert_eq!(taker_view.execution_type, ExecType::Trade);
+        assert_eq!(taker_view.order_status, OrderStatus::PartiallyFilled);
+        assert_eq!(taker_view.user_id, FUT_TAKER);
+        assert_eq!(taker_view.counterparty_id, FUT_MAKER);
+        assert_eq!(taker_view.position_side, PositionMode::Hedge);
+        assert_eq!(taker_view.last_qty, 8272);
+        assert_eq!(taker_view.last_px, 20100);
+        assert_eq!(taker_view.cum_qty, 246);
+        assert_eq!(taker_view.cum_quote_qty, 2000);
+        assert_eq!(taker_view.avg_px, 2000 / 246, "taker avg_px = filled_notional / filled");
+        assert!(!taker_view.is_maker);
+
+        let maker_view = &tr.futures[2];
+        assert_eq!(maker_view.execution_type, ExecType::Trade);
+        assert_eq!(maker_view.order_status, OrderStatus::Filled);
+        assert_eq!(maker_view.user_id, FUT_MAKER);
+        assert_eq!(maker_view.counterparty_id, FUT_TAKER, "maker counterparty is the taker command uid");
+        assert_eq!(maker_view.order_id, 276810);
+        assert_eq!(maker_view.side, OA::Ask, "maker side is opposite of taker");
+        assert_eq!(maker_view.position_side, PositionMode::OneWay, "maker position_side looked up independently from maker uid");
+        assert_eq!(maker_view.last_qty, 8272);
+        assert_eq!(maker_view.last_px, 20100);
+        assert_eq!(maker_view.cum_qty, 123);
+        assert_eq!(maker_view.cum_quote_qty, 1000);
+        assert_eq!(maker_view.avg_px, 1000 / 123, "maker avg_px = matched_order_filled_notional / matched_order_filled");
+        assert!(maker_view.is_maker);
+
+        assert_eq!(taker_view.exec_id, maker_view.exec_id, "taker and maker share the same trade exec id");
+    }
+
+    #[test]
+    fn should_handle_futures_reduce() {
+        let core = fut_core();
+        let mut cmd = OrderCommand { command: OrderCommandType::ReduceOrder, ..fut_place_command() };
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reduce,
+            active_order_completed: true,
+            filled: 100,
+            filled_notional: 10000,
+            ..Default::default()
+        }));
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 0);
+        assert_eq!(tr.futures.len(), 1);
+        assert_eq!(fr.fund.len(), 0);
+
+        let r = &tr.futures[0];
+        assert_eq!(r.execution_type, ExecType::Reduce);
+        assert_eq!(r.order_status, OrderStatus::Canceled);
+        assert_eq!(r.symbol_id, FUT_SYM);
+        assert_eq!(r.contract_type, SymbolType::FuturesContractPerpetual);
+        assert_eq!(r.user_id, FUT_TAKER);
+        assert_eq!(r.position_side, PositionMode::Hedge);
+        assert_eq!(r.order_id, 123);
+        assert!(!r.is_maker);
+    }
+
+    #[test]
+    fn should_handle_futures_single_reject() {
+        let core = fut_core();
+        let mut cmd = fut_place_command();
+        cmd.matcher_event = Some(Box::new(MatcherTradeEvent {
+            event_type: MatcherEventType::Reject,
+            active_order_completed: true,
+            size: 8272,
+            price: 52201,
+            ..Default::default()
+        }));
+
+        let (tr, fr) = run_proc(&core, &cmd, 192837);
+
+        assert_eq!(tr.spot.len(), 0);
+        assert_eq!(tr.futures.len(), 2);
+        assert_eq!(fr.fund.len(), 0);
+
+        assert_eq!(tr.futures[0].execution_type, ExecType::New);
+        let reject = &tr.futures[1];
+        assert_eq!(reject.execution_type, ExecType::Reject);
+        assert_eq!(reject.order_status, OrderStatus::Rejected);
+        assert_eq!(reject.symbol_id, FUT_SYM);
+        assert_eq!(reject.contract_type, SymbolType::FuturesContractPerpetual);
+        assert_eq!(reject.user_id, FUT_TAKER);
+        assert_eq!(reject.position_side, PositionMode::Hedge);
+        assert_eq!(reject.order_id, 123);
+        assert!(!reject.is_maker);
+    }
 }

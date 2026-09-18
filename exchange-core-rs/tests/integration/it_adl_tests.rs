@@ -128,6 +128,7 @@ mod tests {
         assert_eq!(api.insurance_fund().futures.values().map(|e| e.available).sum::<i64>(), 0, "no liquidation_fee -> insurance fund balance unchanged");
         let seq: Vec<(FundEventType, i64)> = cascade.iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
+            (FundEventType::LiquidationAlert, loser),
             (FundEventType::UnlockPending, loser),
             (FundEventType::AdlPositionClose, winner),
             (FundEventType::AdlOriginClose, loser),
@@ -168,6 +169,7 @@ mod tests {
         assert_eq!(api.insurance_fund().futures.values().map(|e| e.reserved).sum::<i64>(), 0, "no leak in insurance fund reserved balance");
         let seq: Vec<(FundEventType, i64)> = cascade.iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
+            (FundEventType::LiquidationAlert, loser),
             (FundEventType::UnlockPending, loser),
             (FundEventType::IfPositionClose, loser),
             (FundEventType::PnlSettlement, loser),
