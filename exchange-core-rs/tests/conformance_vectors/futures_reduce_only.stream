@@ -1,0 +1,19 @@
+# reduce-only(FLAG_REDUCE_ONLY)语义:uid=1 先持 LONG 10。
+# (a) 再下一个**同向**(BID)reduce-only 单 → reduce-only 不许加仓,应被拒/置空。
+# (b) 再下一个**反向**(ASK)reduce-only 单 size=15 > 可平量 10 → 应被夹到 10 平仓,不反向开新仓。
+# 验证 reduce-only 的「拒绝加仓 + 超量夹平」两条语义 Rust 与 Java 一致(现有向量未压 reduceOnly 标记)。Java 当 oracle。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=7401 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=7401 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=7401 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=7401 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=3 uid=1 sym=7401 price=1000 size=5 action=BID margin=ISOLATED leverage=1 reduceOnly=1
+PLACE_FUT oid=4 uid=3 sym=7401 price=1000 size=15 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=5 uid=1 sym=7401 price=1000 size=15 action=ASK margin=ISOLATED leverage=1 reduceOnly=1

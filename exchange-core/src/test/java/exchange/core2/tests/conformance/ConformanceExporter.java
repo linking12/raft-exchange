@@ -64,7 +64,8 @@ public class ConformanceExporter {
             "LIQUIDATION_CLOSE", "LIQUIDATION_FEE",
             "FUNDINGFEE_SETTLEMENT", "PNL_SETTLEMENT", "MARGIN_ADJUST", "MARGIN_REFUND",
             "IF_POSITION_CLOSE", "ADL_ORIGIN_CLOSE", "ADL_POSITION_CLOSE",
-            "LOAN_BORROW", "LOAN_REPAY", "LOAN_LIQUIDATED", "INTERNAL_TRANSFER");
+            "LOAN_BORROW", "LOAN_REPAY", "LOAN_LIQUIDATED", "INTERNAL_TRANSFER",
+            "MARGIN_ALERT", "LIQUIDATION_ALERT", "LOAN_MARGIN_CALL");
 
     private static final TreeSortedMap<Long, Long> MM = TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L);
     private static final TreeSortedMap<Long, Long> LEV = TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L);
@@ -216,6 +217,7 @@ public class ConformanceExporter {
                                 .action("ASK".equals(kv.get("action")) ? OrderAction.ASK : OrderAction.BID)
                                 .orderType(orderType(kv.getOrDefault("type", "GTC")))
                                 .leverage((int) pl(kv, "leverage", 1))
+                                .reduceOnly(pl(kv, "reduceOnly", 0) != 0)
                                 .marginMode("CROSS".equals(kv.get("margin")) ? MarginMode.CROSS : MarginMode.ISOLATED).build()).join();
                         break;
                     case "SCAN":

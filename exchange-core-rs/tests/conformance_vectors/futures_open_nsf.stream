@@ -1,0 +1,13 @@
+# 期货开仓 NSF:uid=1 余额(100)远不够付初始保证金(size10@1000, IM=10000*1/10=1000),开仓必须被拒、不锁定、无仓位。
+# 现有 iocask_nsf 压的是现货 NSF;本向量补期货侧「初始保证金不足→拒绝」路径。taker 挂单方 uid=2 资金充足,其挂单继续留在簿上(不成交)。
+# 验证被拒命令的结果码 + uid=1 账户 100 原样不动、无 POS,两侧一致。events-on。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=7201 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=7201 price=1000
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=100 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+PLACE_FUT oid=1 uid=2 sym=7201 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=7201 price=1000 size=10 action=BID margin=ISOLATED leverage=1
