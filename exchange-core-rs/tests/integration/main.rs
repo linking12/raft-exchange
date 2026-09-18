@@ -34,3 +34,5 @@ mod it_loan_targeted_recovery_tests;
 mod it_loan_targeted_liquidation_tests;
 mod it_loan_disable_symbol_tests;
 mod it_loan_failover_snapshot_tests;
+mod it_ioc_ask_lock_release_tests;
+mod it_r2_sync_funding_tests;

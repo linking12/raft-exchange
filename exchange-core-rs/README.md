@@ -13,31 +13,47 @@ Java [`exchange-core`](https://github.com/exchange-core/exchange-core)(`exchange
 
 ### 构造:`ExchangeApi` 持有 `ExchangeCore`
 
-`ExchangeApi` 拥有底层引擎 `ExchangeCore`(撮合状态机):门面负责**命令构造/查询**,并直通转发三个装配 setter(`with_results_consumer` / `with_serialization_processor` / `with_command_submitter`);更底层的引擎操作(快照 `persist`/`recover`、调度器 `tick_liquidation_scheduler`)经 `api.core_mut()` 触达——同一个所有者,不割裂。固定顺序:**`ExchangeApi::new()` → `api.with_*` 装配 → 配置 → 下单/查询/报表。**
+`ExchangeApi` 拥有底层引擎 `ExchangeCore`(撮合状态机):门面负责**命令构造/查询**;引擎级操作——两个回调(`with_results_consumer` 结果消费、`with_command_submitter` 级联去向)、调度器(`tick_liquidation_scheduler`)、快照(`persist`/`recover`)——都经 `api.core_mut()` 拿到 core 再自己调,同一个所有者、不割裂。固定顺序:**`ExchangeApi::new()` → `api.core_mut()` 装配 → 配置 → 下单/查询/报表。**
 
 ```rust
 use exchange_core_rs::core::exchange_api::{
     ExchangeApi, PlaceOrderRequest, CancelOrderRequest, MoveOrderRequest,
     PlaceFuturesOrderRequest, ClosePositionRequest, MarginAdjustmentRequest,
 };
-use exchange_core_rs::core::snapshot::serialization_processor::FileSerializationProcessor;
 use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
 use exchange_core_rs::core::common::margin_mode::MarginMode;
 use exchange_core_rs::core::common::isolated_loan_record::LoanRateMode;
+use exchange_core_rs::core::simple_events_processor::SimpleEventsProcessor;
+use exchange_core_rs::core::trade_events_handler::{TradeEventsHandler, OrderBook, SpotExecutionReport, FuturesExecutionReport};
+use exchange_core_rs::core::fund_events_handler::{FundEventsHandler, FundEventReport};
+use std::{cell::RefCell, rc::Rc};
+
+// 自定义两个回调(实现 handler trait):撮合执行报告 + 资金事件报告
+struct MyTradeHandler;  // → 行情/成交推送
+impl TradeEventsHandler for MyTradeHandler {
+    fn order_book(&mut self, _ob: OrderBook) {}                           // L2 盘口(OrderBookRequest 时)
+    fn spot_execution_report(&mut self, _r: SpotExecutionReport) {}       // 现货成交/挂单/撤单回报
+    fn futures_execution_report(&mut self, _r: FuturesExecutionReport) {} // 期货成交回报
+}
+struct MyFundHandler;   // → 账务/审计
+impl FundEventsHandler for MyFundHandler {
+    fn fund_event_report(&mut self, _r: FundEventReport) {}               // 余额变动(deposit/lock/pnl/fee/loan…)
+}
 
 let mut api = ExchangeApi::new();  // 自带一个默认 ExchangeCore
 
-// ① 装配底层引擎(直通 setter):结果消费者 + 快照后端(接 Raft 再加 command_submitter,见文末)
-api.with_results_consumer(Box::new(|cmd, seq, _ssp, _ups| {
-    // cmd.matcher_event → 撮合事件链(TRADE/REDUCE/REJECT)
-    // cmd.fund_events   → 资金事件(deposit/lock/pnl/fee/loan…)
-    // seq               → 全局单调序号(下游去重/断点续传)
-    on_result(seq, cmd);
-}));
-api.with_serialization_processor(Box::new(FileSerializationProcessor::new("./snap")));
+// ① 回调:用 SimpleEventsProcessor 把每条命令解码成 执行报告 + 资金事件,分发给上面两个 handler
+//    (接 Raft 还要设 with_command_submitter,见文末「接入 Raft 状态机」)
+let events = Rc::new(RefCell::new(SimpleEventsProcessor::new(MyTradeHandler, MyFundHandler)));
+{
+    let events = events.clone();
+    api.core_mut().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
+        events.borrow_mut().process(cmd, seq, ssp, ups);  // seq=全局单调序号(下游去重/断点续传)
+    }));
+}
 
 // ② 配置:货币(+精度 scale_k)/ symbol / 开户 / 充值
 api.add_currency(1, 1);  // base
@@ -110,12 +126,40 @@ let _h   = api.state_hash();                    // 多节点/快照往返比对
 
 ### 接入 Raft 状态机
 
-Raft 状态机层拿 `api` 当状态机驱动;装配走直通 setter,快照/tick 走 `api.core_mut()`:
+Raft 状态机层拿 `api` 当状态机驱动;引擎级装配与操作都经 `api.core_mut()`:
 
 - **apply 循环**:对每条**已提交到共识日志**的命令调 `api.submit(cmd)`(= `core.process_command`),再把 `results_consumer` 回调的结果发给客户端。
-- **级联去向** `api.with_command_submitter(factory)`:把强平/loan 级联命令从"本地 `pending_commands` 队列"换成"交 Raft 复制"的工厂——级联命令不再 inline apply,而是过共识日志再回灌 `process_command`。
+- **级联去向** `with_command_submitter`:强平/loan 次生命令交 Raft 复制而非就地 apply(下节详解)。
 - **周期扫描** `api.core_mut().tick_liquidation_scheduler(now)`:leader 按自己的时钟周期调用,内置 `LiquidationScheduler` 投一条 `LIQUIDATION_SCAN` 进队列交复制(`start_liquidation_scheduler` / `stop_liquidation_scheduler` 开关);扫描在 apply 时才确定性执行。
 - **快照** `api.core_mut().persist(snapshot_id, instance_id)` / `.recover(snapshot_id, instance_id)`:per (RE/ME 模块 × 分片 instance),供 install-snapshot。
+
+#### `with_command_submitter`:级联命令去向
+
+强平/loan 会在 apply 过程中**动态产出**次生命令(FORCE→IF→ADL、loan 强平…);`with_command_submitter` 决定它们交到哪。它收一个**工厂闭包** `Fn() -> Box<dyn FnMut(OrderCommand)>`——引擎内部有多个产出点(调度器、强平引擎、loan fan-out)各需一个独立 sink,而 `Box<dyn FnMut>` 不能 clone,故传工厂、每处 `make()` 出一个。
+
+- **单节点(默认,无需设)**:`ExchangeApi::new()` 已装好——sink 把命令推进本地 `pending_commands`,同一次 `process_command` 内由 `drive_pending` 就地排空。
+- **集群(Raft)**:sink 里不就地 apply,而是把命令**交给 Raft 复制**;每条复制回来的命令再走一遍 `api.submit`,各节点确定性收敛到同一终态(全局守恒)。
+
+```rust
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+
+// sink 捕获引擎产出的级联命令——实际接线里是 propose_to_raft(cmd)
+let queue: Rc<RefCell<VecDeque<OrderCommand>>> = Rc::new(RefCell::new(VecDeque::new()));
+let q = queue.clone();
+api.core_mut().with_command_submitter(move || {
+    let sink = q.clone();
+    Box::new(move |cmd| sink.borrow_mut().push_back(cmd))
+});
+
+// apply 一条自身命令后,把 Raft 回流的级联命令逐条喂回引擎(重放走同一管线)
+api.submit(user_cmd);
+loop {
+    let next = queue.borrow_mut().pop_front();  // 先取出再 submit,避免持 borrow 时引擎再 push 触发 panic
+    let Some(cmd) = next else { break };
+    api.submit(cmd);
+}
+```
 
 ## 架构
 
@@ -164,7 +208,7 @@ Java `ExchangeApi` 是 Disruptor 之上的**异步提交层**(`RingBuffer` + `Co
 - **命令覆盖完整**:Rust `OrderCommandType` 覆盖全部 **43 个业务命令码**;Java `OrderCommandType` 有 51 个,多出的 8 个全是**基础设施/传输类、非业务**——`GROUPING_CONTROL`/`SHUTDOWN_SIGNAL`/`RESERVED_COMPRESSED`(Disruptor/journal 生命周期,单管线 N/A)、`BINARY_DATA_QUERY`(Rust 直接调报表访问器)、`PERSIST_STATE_{MATCHING,RISK}` + `RECOVER_STATE_{MATCHING,RISK}`(这 4 个 Rust 合并进 `persist()` / `recover()` 两个方法,一次处理 RE+ME 两模块)。**44 个 `Api*` 业务命令全部有对应**。
 - **便捷方法**(有专用封装的高频操作):`add_user`/`balance_adjustment`/`place_order`/`place_futures_order`/`cancel_order`/`move_order`/`reduce_order`/`close_position`/`margin_adjustment`/`leverage_adjustment`/`adjust_position_mode`/`set_mark_price`/`suspend_user`/`resume_user`;初始化批量入口 `add_currencies`/`add_symbols`/`add_accounts`/`add_loans`(对齐 Java `BatchAdd*Command`)。
 - **通用入口** `submit(OrderCommand)`:loan(`LoanCreate`/`LoanRepay`/`LoanCross*`/…)、`PoolDeposit`/`PoolWithdraw`、`IfDeposit`/`IfWithdraw`、`SettlePnl`/`SettleFundingfees`、`RepriceLoanRates`、`InternalTransfer`、`ResetFee`、`Reset` 等经此提交(与 Java 逐命令对拍一致,只是不各配一个便捷 wrapper)。
-- **装配**:`ExchangeApi::new()` 自带默认 core,再由门面直通转发 `with_command_submitter` / `with_results_consumer` / `with_serialization_processor` = Java 侧 Disruptor handler 链的接线(级联去向、results 处理器、journal/快照后端),在单管线里收敛成三个显式 setter;更底层的 `persist`/`recover`/`tick_liquidation_scheduler` 经 `api.core_mut()`。
+- **装配**:`ExchangeApi::new()` 自带默认 core,经 `api.core_mut()` 挂两个回调 `with_results_consumer`(results 处理器,配 `SimpleEventsProcessor` + 自定义 `TradeEventsHandler`/`FundEventsHandler`)、`with_command_submitter`(级联去向)= Java 侧 Disruptor handler 链接线,在单管线里收敛成显式回调;快照 `persist`/`recover`、`tick_liquidation_scheduler` 同样经 `api.core_mut()`。
 - **快照** `persist(snapshot_id, instance_id)` / `recover(...)` 经持有的 `SerializationProcessor` = Java `submitPersistCommandAsync`/`submitRecoverCommandAsync`(见模块表 `ExchangeCore`)。
 - **报表**:直接访问器 `total_balance`/`single_user`/`fee_report`/`insurance_fund`/`loan_platform`/`symbol_currency`/`state_hash` = Java `processReport`/`submitQueryAsync`。
 - **不移植**:Java 异步层(`submitCommandAsync`/`FullResponse`/`submitBatchAsync`/回调/`RingBuffer`)、`groupingControl`(Disruptor 批处理控制)——单线程顺序管线下 N/A。
