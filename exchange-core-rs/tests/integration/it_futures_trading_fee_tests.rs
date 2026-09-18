@@ -12,7 +12,7 @@ mod tests {
     use exchange_core_rs::core::common::symbol_position_record::SymbolPositionRecord;
     use exchange_core_rs::core::common::symbol_type::SymbolType;
     use exchange_core_rs::core::exchange_api::{
-        ClosePositionRequest, ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest,
+        ClosePositionRequest, ExchangeApi, LiquidationScanRequest, MarginAdjustmentRequest, PlaceFuturesOrderRequest,
     };
     use exchange_core_rs::core::utils::core_arithmetic_utils::{calculate_maker_fee, calculate_taker_fee};
 
@@ -1079,5 +1079,116 @@ fn futures_isolated_hedge_full_lifecycle_with_deposit_withdraw() {
     run_isolated_hedge_full_lifecycle(OrderType::Ioc);
     run_isolated_hedge_full_lifecycle(OrderType::FokBudget);
     run_isolated_hedge_full_lifecycle(OrderType::IocBudget);
+}
+
+// Liquidation full-lifecycle conservation: deposit -> open -> crash -> liquidate -> withdraw -> reconcile.
+// The forced-liquidation path shares RiskEngine settlement with normal placement; if it drops a fee,
+// misroutes residual value, or leaves the IF cash flow open, global conservation breaks immediately.
+#[test]
+fn futures_liquidation_full_lifecycle_conservation() {
+    const VICTIM: i64 = 9801;
+    const LP: i64 = 9802;
+    const ACCEPTOR: i64 = 9803;
+    let victim_deposit = 10_000i64;
+    let lp_deposit = 100_000_000i64;
+    let acceptor_deposit = 100_000_000i64;
+    let open_price = 50_000i64;
+    let crash_price = 25_000i64;
+    let size = 4i64;
+    let leverage = 10i32;
+
+    let mut api = seed_btc(open_price);
+    seed_user(&mut api, VICTIM, victim_deposit, 1);
+    seed_user(&mut api, LP, lp_deposit, 2);
+    seed_user(&mut api, ACCEPTOR, acceptor_deposit, 3);
+    assert_conserved_usd(&api);
+
+    // open: LP ASK opens SHORT (CROSS), victim BID opens LONG (ISOLATED)
+    assert_eq!(place(&mut api, 9901, LP, BTC_SYM, open_price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, leverage), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 9902, VICTIM, BTC_SYM, open_price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+    assert_eq!(api.user_position(VICTIM, BTC_SYM).expect("victim LONG must exist").open_volume, size);
+    assert_conserved_usd(&api);
+
+    // acceptor pre-places a low BID to absorb the forced sell
+    assert_eq!(place(&mut api, 9903, ACCEPTOR, BTC_SYM, crash_price, size * 2, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, leverage), CommandResultCode::Success);
+
+    // crash (liquidation still disabled), then trigger a full scan
+    assert_eq!(api.set_mark_price(BTC_SYM, crash_price), CommandResultCode::Success);
+    api.enable_liquidation();
+    assert_eq!(api.submit_liquidation_scan(LiquidationScanRequest { scan_slice: 0, slice_count: 1, timestamp: 1 }), CommandResultCode::Success);
+
+    // victim position must be fully closed
+    let victim_vol = api.user_position(VICTIM, BTC_SYM).map(|p| p.open_volume).unwrap_or(0);
+    assert_eq!(victim_vol, 0, "victim LONG must be fully liquidated");
+    assert_conserved_usd(&api);
+
+    // withdraw the whole victim account
+    let victim_bal = api.user_account(VICTIM, USD);
+    if victim_bal != 0 {
+        assert_eq!(api.balance_adjustment(VICTIM, USD, -victim_bal, 4), CommandResultCode::Success);
+    }
+    assert_eq!(api.user_account(VICTIM, USD), 0, "victim account should be zero after withdraw");
+    assert_conserved_usd(&api);
+}
+
+// HEDGE liquidation full-lifecycle conservation: only the losing leg (LONG) is liquidated after a crash,
+// while the profitable SHORT leg is preserved; global conservation must hold across the whole flow.
+#[test]
+#[ignore = "INCOMPLETE (subagent interrupted by rate limit): place() returns RiskInvalidLeverage — leverage=10 vs symbol max_leverage tier for this size/price needs Java cross-check + rework"]
+fn futures_hedge_liquidation_full_lifecycle_conservation() {
+    const VICTIM: i64 = 9901;
+    const LP: i64 = 9902;
+    let victim_deposit = 100_000i64;
+    let lp_deposit = 100_000_000i64;
+    let open_price = 50_000i64;
+    let crash_price = 25_000i64;
+    let bp_fill_price = 49_970i64;
+    let size = 4i64;
+    let leverage = 10i32;
+
+    let mut api = seed_btc(open_price);
+    seed_user(&mut api, VICTIM, victim_deposit, 1);
+    seed_user(&mut api, LP, lp_deposit, 2);
+    assert_conserved_usd(&api);
+
+    assert_eq!(api.adjust_position_mode(VICTIM, true), CommandResultCode::Success);
+
+    // open LONG: LP ASK (CROSS) + victim BID (ISOLATED)
+    assert_eq!(place(&mut api, 10001, LP, BTC_SYM, open_price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, leverage), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 10002, VICTIM, BTC_SYM, open_price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+    // open SHORT: LP BID (CROSS) + victim ASK (ISOLATED)
+    assert_eq!(place(&mut api, 10003, LP, BTC_SYM, open_price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, leverage), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 10004, VICTIM, BTC_SYM, open_price, size, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, leverage), CommandResultCode::Success);
+
+    assert_eq!(hedge_leg(&api, VICTIM, BTC_SYM, PositionDirection::Long).expect("LONG leg").open_volume, size);
+    assert_eq!(hedge_leg(&api, VICTIM, BTC_SYM, PositionDirection::Short).expect("SHORT leg").open_volume, size);
+    assert_conserved_usd(&api);
+
+    // crash (liquidation disabled), place LP BID at bankruptcy price to absorb the forced sell, then scan
+    assert_eq!(api.set_mark_price(BTC_SYM, crash_price), CommandResultCode::Success);
+    assert_eq!(place(&mut api, 10005, LP, BTC_SYM, bp_fill_price, size, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, leverage), CommandResultCode::Success);
+    api.enable_liquidation();
+    assert_eq!(api.submit_liquidation_scan(LiquidationScanRequest { scan_slice: 0, slice_count: 1, timestamp: 1 }), CommandResultCode::Success);
+
+    // LONG liquidated, SHORT (profitable when price drops) preserved
+    let long_vol = hedge_leg(&api, VICTIM, BTC_SYM, PositionDirection::Long).map(|p| p.open_volume).unwrap_or(0);
+    assert_eq!(long_vol, 0, "LONG leg must be liquidated");
+    assert_eq!(
+        hedge_leg(&api, VICTIM, BTC_SYM, PositionDirection::Short).expect("SHORT leg preserved").open_volume,
+        size,
+        "SHORT leg is profitable during the crash and must survive"
+    );
+    assert_conserved_usd(&api);
+
+    // withdraw free balances, reconcile
+    let victim_bal = api.user_account(VICTIM, USD);
+    let lp_bal = api.user_account(LP, USD);
+    if victim_bal != 0 {
+        assert_eq!(api.balance_adjustment(VICTIM, USD, -victim_bal, 3), CommandResultCode::Success);
+    }
+    if lp_bal != 0 {
+        assert_eq!(api.balance_adjustment(LP, USD, -lp_bal, 4), CommandResultCode::Success);
+    }
+    assert_conserved_usd(&api);
 }
 }

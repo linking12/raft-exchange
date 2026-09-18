@@ -187,6 +187,27 @@ mod tests {
     }
 
     #[test]
+    fn should_init_symbols() {
+        // smoke test: registering the basic symbols succeeds (mirrors shouldInitSymbols).
+        // setup()/setup_exchange() assert add_symbol == Success internally.
+        let _spot = setup();
+        let mut ex = setup_exchange();
+        let l2 = ex.request_l2(SYMBOL_EX, 10);
+        assert!(l2.ask_prices.is_empty(), "freshly initialized book must be empty");
+        assert!(l2.bid_prices.is_empty(), "freshly initialized book must be empty");
+    }
+
+    #[test]
+    fn should_init_users() {
+        // smoke test: users are registered with their initial balances (mirrors shouldInitUsers).
+        let api = setup();
+        assert_eq!(api.ups().get(UID_1).unwrap().account(BASE), 1_000_000);
+        assert_eq!(api.ups().get(UID_1).unwrap().account(QUOTE), 100_000_000);
+        assert_eq!(api.ups().get(UID_2).unwrap().account(BASE), 1_000_000);
+        assert_eq!(api.ups().get(UID_2).unwrap().account(QUOTE), 100_000_000);
+    }
+
+    #[test]
     fn exchange_risk_move() {
         let mut api = setup_exchange();
         assert_eq!(api.add_user(UID_1), CommandResultCode::Success);

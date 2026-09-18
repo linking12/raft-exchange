@@ -11,6 +11,7 @@ mod tests {
     use exchange_core_rs::core::common::margin_mode::MarginMode;
     use exchange_core_rs::core::common::order_action::OrderAction;
     use exchange_core_rs::core::common::order_type::OrderType;
+    use exchange_core_rs::core::common::position_direction::PositionDirection;
     use exchange_core_rs::core::common::symbol_type::SymbolType;
     use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
 
@@ -46,7 +47,7 @@ mod tests {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let sink = collector.clone();
         let mut api = ExchangeApi::new();
-        api.core_mut().with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
+        api.core().with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
             sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
         }));
         api.add_currency(BASE_ID, 1);
@@ -208,5 +209,101 @@ mod tests {
             assert_eq!(entry.reserved, 0, "insurance fund reserved balance must not be left over");
         }
         assert_conserved(&api);
+    }
+
+    // Translation of ITExchangeCoreADL.adlOriginConsumedMidCascadeConservation:
+    // a specific FORCE->IF->ADL cascade where the origin position is consumed mid-cascade; regression
+    // guard that a stale liquidation cmd.size does not over-close the counterparty and break global
+    // conservation. Terminal positions are pinned field-by-field against the Java oracle.
+    #[test]
+    fn adl_origin_consumed_mid_cascade_conservation() {
+        const FUT: i32 = 5001;
+
+        let spec = CoreSymbolSpecification {
+            symbol_id: FUT,
+            symbol_type: SymbolType::FuturesContractPerpetual,
+            base_currency: BASE_ID,
+            quote_currency: QUOTE_ID,
+            base_scale_k: 1,
+            quote_scale_k: 1,
+            taker_fee: 0,
+            maker_fee: 0,
+            fee_scale_k: 10_000,
+            liquidation_fee: 200,
+            maintenance_margin: BTreeMap::from([(i64::MAX, 500)]),
+            maintenance_margin_scale_k: 10_000,
+            max_leverage: BTreeMap::from([(i64::MAX, 1_000)]),
+            ..Default::default()
+        };
+
+        let mut api = ExchangeApi::new();
+        api.add_currency(BASE_ID, 1);
+        api.add_currency(QUOTE_ID, 1);
+        assert_eq!(api.add_futures_symbol(spec), CommandResultCode::Success);
+
+        let (u1, u2, u3, u4) = (1i64, 2i64, 3i64, 4i64);
+        for (i, &uid) in [u1, u2, u3, u4].iter().enumerate() {
+            seed_user(&mut api, uid, 1_000_000, (i + 1) as i64);
+        }
+
+        // liquidation is enabled from the start; each mark change drives the cascade synchronously
+        api.enable_liquidation();
+
+        let place_iso = |api: &mut ExchangeApi, order_id: i64, uid: i64, price: i64, size: i64, bid: bool| {
+            api.place_futures_order(PlaceFuturesOrderRequest {
+                order_id,
+                uid,
+                symbol: FUT,
+                price,
+                size,
+                action: if bid { OrderAction::Bid } else { OrderAction::Ask },
+                order_type: OrderType::Gtc,
+                leverage: 10,
+                margin_mode: MarginMode::Isolated,
+                reduce_only: false,
+            })
+        };
+
+        assert_eq!(api.set_mark_price(FUT, 100), CommandResultCode::Success);
+
+        let mut oid = 1000i64;
+        assert_eq!(place_iso(&mut api, oid, u3, 84, 5, true), CommandResultCode::Success);
+        oid += 1;
+        assert_eq!(place_iso(&mut api, oid, u4, 95, 6, false), CommandResultCode::Success);
+        oid += 1;
+        assert_eq!(api.set_mark_price(FUT, 60), CommandResultCode::Success);
+        assert_eq!(place_iso(&mut api, oid, u4, 86, 5, false), CommandResultCode::Success);
+        oid += 1;
+        assert_eq!(place_iso(&mut api, oid, u3, 86, 6, true), CommandResultCode::Success);
+        oid += 1;
+        assert_eq!(place_iso(&mut api, oid, u2, 98, 3, false), CommandResultCode::Success);
+        oid += 1;
+        assert_eq!(place_iso(&mut api, oid, u1, 98, 9, true), CommandResultCode::Success);
+        oid += 1;
+        assert_eq!(api.set_mark_price(FUT, 100), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(FUT, 60), CommandResultCode::Success);
+        assert_eq!(place_iso(&mut api, oid, u2, 80, 14, false), CommandResultCode::Success);
+
+        // pre-cascade positions must match the Java oracle field-by-field
+        let check = |api: &ExchangeApi, uid: i64, dir: PositionDirection, vol: i64, price_sum: i64| {
+            let p = api.user_position(uid, FUT).unwrap();
+            assert_eq!(p.direction, dir, "uid{uid} direction");
+            assert_eq!(p.open_volume, vol, "uid{uid} open_volume");
+            assert_eq!(p.open_price_sum, price_sum, "uid{uid} open_price_sum");
+        };
+        check(&api, u1, PositionDirection::Long, 9, 864);
+        check(&api, u2, PositionDirection::Short, 6, 506);
+        check(&api, u3, PositionDirection::Long, 6, 506);
+        check(&api, u4, PositionDirection::Short, 9, 808);
+
+        // final mark triggers the FORCE->IF->ADL cascade
+        assert_eq!(api.set_mark_price(FUT, 92), CommandResultCode::Success);
+
+        let tcb = api.total_balance();
+        assert!(
+            tcb.is_global_zero(),
+            "ADL origin consumed mid-cascade must not break global conservation: {:?}",
+            tcb.global_balances_sum()
+        );
     }
 }

@@ -163,7 +163,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) 
     )));
     let proc_c = proc.clone();
     let mut api = ExchangeApi::new();
-    api.core_mut().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
+    api.core().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
         proc_c.borrow_mut().process(cmd, seq, ssp, ups);
     }));
     let mut results = Vec::new();

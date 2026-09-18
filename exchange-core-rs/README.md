@@ -13,7 +13,7 @@ Java [`exchange-core`](https://github.com/exchange-core/exchange-core)(`exchange
 
 ### 构造
 
-`ExchangeApi` 持有 `ExchangeCore`;`new()` 后经 `api.core_mut()` 装配回调,再配置、下单、查询。
+`ExchangeApi` 持有 `ExchangeCore`;`new()` 后经 `api.core()` 装配回调,再配置、下单、查询。
 
 ```rust
 use exchange_core_rs::core::exchange_api::{
@@ -46,7 +46,7 @@ let mut api = ExchangeApi::new();
 
 // 装配结果消费者:SimpleEventsProcessor 把命令解码成报告,分发给两个 handler
 let mut events = SimpleEventsProcessor::new(MyTradeHandler, MyFundHandler);
-api.core_mut().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
+api.core().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
     events.process(cmd, seq, ssp, ups);
 }));
 
@@ -119,7 +119,7 @@ let _h   = api.state_hash();                    // 多节点/快照往返比对
 
 ### 接入 Raft 状态机
 
-引擎级操作(级联去向、周期扫描、快照)都经 `api.core_mut()`;`with_command_submitter` 收工厂,内层闭包等价 Java 的 `LiquidationCommandSubmitter.submit(cmd)`(单节点默认已装好,集群下改成交 Raft):
+引擎级操作(级联去向、周期扫描、快照)都经 `api.core()`;`with_command_submitter` 收工厂,内层闭包等价 Java 的 `LiquidationCommandSubmitter.submit(cmd)`(单节点默认已装好,集群下改成交 Raft):
 
 ```rust
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
@@ -128,7 +128,7 @@ use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 // 级联去向:强平/loan 次生命令交 raft 而非就地 apply(外层工厂只因 Box<dyn FnMut> 不能 clone)
 let queue: Rc<RefCell<VecDeque<OrderCommand>>> = Rc::new(RefCell::new(VecDeque::new()));
 let q = queue.clone();
-api.core_mut().with_command_submitter(move || {
+api.core().with_command_submitter(move || {
     let q = q.clone();
     Box::new(move |cmd: OrderCommand| { q.borrow_mut().push_back(cmd); })  // 实际:raft.propose(cmd)
 });
@@ -142,9 +142,9 @@ loop {
 }
 
 // 周期扫描(leader 时钟)+ 快照(install-snapshot,per RE/ME 模块 × 分片)
-api.core_mut().tick_liquidation_scheduler(now);
-api.core_mut().persist(snapshot_id, instance_id);
-api.core_mut().recover(snapshot_id, instance_id);
+api.core().tick_liquidation_scheduler(now);
+api.core().persist(snapshot_id, instance_id);
+api.core().recover(snapshot_id, instance_id);
 ```
 
 ## 架构
@@ -194,7 +194,7 @@ Java `ExchangeApi` 是 Disruptor 之上的**异步提交层**(`RingBuffer` + `Co
 - **命令覆盖完整**:Rust `OrderCommandType` 覆盖全部 **43 个业务命令码**;Java `OrderCommandType` 有 51 个,多出的 8 个全是**基础设施/传输类、非业务**——`GROUPING_CONTROL`/`SHUTDOWN_SIGNAL`/`RESERVED_COMPRESSED`(Disruptor/journal 生命周期,单管线 N/A)、`BINARY_DATA_QUERY`(Rust 直接调报表访问器)、`PERSIST_STATE_{MATCHING,RISK}` + `RECOVER_STATE_{MATCHING,RISK}`(这 4 个 Rust 合并进 `persist()` / `recover()` 两个方法,一次处理 RE+ME 两模块)。**44 个 `Api*` 业务命令全部有对应**。
 - **便捷方法**(有专用封装的高频操作):`add_user`/`balance_adjustment`/`place_order`/`place_futures_order`/`cancel_order`/`move_order`/`reduce_order`/`close_position`/`margin_adjustment`/`leverage_adjustment`/`adjust_position_mode`/`set_mark_price`/`suspend_user`/`resume_user`;初始化批量入口 `add_currencies`/`add_symbols`/`add_accounts`/`add_loans`(对齐 Java `BatchAdd*Command`)。
 - **通用入口** `submit(OrderCommand)`:loan(`LoanCreate`/`LoanRepay`/`LoanCross*`/…)、`PoolDeposit`/`PoolWithdraw`、`IfDeposit`/`IfWithdraw`、`SettlePnl`/`SettleFundingfees`、`RepriceLoanRates`、`InternalTransfer`、`ResetFee`、`Reset` 等经此提交(与 Java 逐命令对拍一致,只是不各配一个便捷 wrapper)。
-- **装配**:`ExchangeApi::new()` 自带默认 core,经 `api.core_mut()` 挂两个回调 `with_results_consumer`(results 处理器,配 `SimpleEventsProcessor` + 自定义 `TradeEventsHandler`/`FundEventsHandler`)、`with_command_submitter`(级联去向)= Java 侧 Disruptor handler 链接线,在单管线里收敛成显式回调;快照 `persist`/`recover`、`tick_liquidation_scheduler` 同样经 `api.core_mut()`。
+- **装配**:`ExchangeApi::new()` 自带默认 core,经 `api.core()` 挂两个回调 `with_results_consumer`(results 处理器,配 `SimpleEventsProcessor` + 自定义 `TradeEventsHandler`/`FundEventsHandler`)、`with_command_submitter`(级联去向)= Java 侧 Disruptor handler 链接线,在单管线里收敛成显式回调;快照 `persist`/`recover`、`tick_liquidation_scheduler` 同样经 `api.core()`。
 - **快照** `persist(snapshot_id, instance_id)` / `recover(...)` 经持有的 `SerializationProcessor` = Java `submitPersistCommandAsync`/`submitRecoverCommandAsync`(见模块表 `ExchangeCore`)。
 - **报表**:直接访问器 `total_balance`/`single_user`/`fee_report`/`insurance_fund`/`loan_platform`/`symbol_currency`/`state_hash` = Java `processReport`/`submitQueryAsync`。
 - **不移植**:Java 异步层(`submitCommandAsync`/`FullResponse`/`submitBatchAsync`/回调/`RingBuffer`)、`groupingControl`(Disruptor 批处理控制)——单线程顺序管线下 N/A。
