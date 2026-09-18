@@ -217,6 +217,24 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 - **解决**:向量令借款人落在注资同片(`uid & (riskEngines-1) == 0`,即偶数 uid=2 → shard 0),使场景在 Java 分片模型与 Rust 塌缩模型下**都自洽**,真正跑通 LOAN_BORROW/LOAN_REPAY 的钱账。
 - **教训**:凡涉及**按币种/全局键**(非按 uid)的分片本地状态(借贷池、后续 LIF 池等),向量必须让相关 uid 与注资 shard 同片,否则撞上塌缩差异。
 
+### 7.4 全量逐子系统 review(2026-09-18):资金结算 CLEAN,修 5 处事件/报告层平价缺口
+
+对整个 `exchange-core-rs` 做 6 组并行逐字段对拍(风控/撮合/清算IF ADL/借贷/持仓PnL资金费/API算术)。**资金结算 6 子系统全部 CLEAN**——逐路径对照 Java 验证,零守恒漏洞、无丢失/凭空/重复/错路由(现货 R1锁定+R2买卖、保证金 R2、FORCE→IF→ADL 级联、loan disburse/repay/利息/抵押/LIF、funding/transfer 零和、PnL 实现、i128 算术、reports 9 桶齐全)。发现并修复的均为**非资金的事件/报告层**缺口:
+
+| # | 位置 | 缺口 | 修复 |
+|---|------|------|------|
+| 1 | `order_book_{direct,naive}_impl` `try_match_instantly`/`match_against` | MOVE 一个**已部分成交**的挂单进入撮合时,TRADE 事件 `filled`/`filled_notional` 从 0 起算(Java `takerOrder.getFilled()` 起),客户端执行报告 `cumulative_qty/quote` 少算历史成交 | 加 `taker_prior_filled(_notional)` 入参,事件字段累加历史成交;**返回值仍是本次量**,订单状态/资金原本就正确 |
+| 2 | `risk_engine::close_position_risk_check` | CLOSE_POSITION 的 R1 未发 `LockPending` 事件(Java `sendLockPendingEvent`) | `pending_hold` 后补 `push_futures_event(LockPending)`;账户/pending_hold 原本一致 |
+| 3 | `order_book_direct_impl::match_against_budget_ioc` | IOC_BUDGET `active_order_completed` 用逐档 `batch_remaining==0`;**Java DirectImpl 用全局 `remainingSize==0`** | Direct 改全局;**Naive 也统一为全局**(`taker_filled==taker_size`)——见下 |
+| 4 | `user_profile::cross_margin_base_allocation` | `allocated - upnl` 用普通减法,违反本文件"整数运算走 `*_exact`"红线(仅喂 CROSS 破产价估算,溢出需近 i64 上限) | 改 `sub_exact` |
+| 5 | `loan_command_dispatcher` R2 后处理 | loan 强平/接管后未刷新扫描器索引(Java `onIsolatedLoanClosed`/`syncCrossExposure`);R1 的 `reconcile_loan_indices` 不覆盖 R2 路径 | 后处理末尾补 `on_isolated_loan_closed`/`sync_cross_exposure`;原本 over-trigger-safe、快照自愈 |
+
+**#3 顺带发现 Java 自身 Direct≠Naive**:Java `OrderBookDirectImpl` budget 用**全局** `remainingSize==0`,`OrdersBucketNaive.match` 用**逐桶** `volumeToCollect==0`——同一字段两 impl 本就不同。全局是**语义正确值**(taker 未成交部分会被 REJECT、不算 completed),逐桶是 Java Naive 的 quirk。Rust 把 **Direct 与 Naive 都统一为全局**:既对齐 production 的 Java Direct,又保住 `orderbook_diff`/`*_matches_naive` 的 Direct≡Naive 参考不变式(Rust Naive 是测试参考,不单独对 Java Naive 对拍,故不镜像该 quirk)。
+
+**事件类型完整性审计**:`FundEventType` **27/27 全移植**(DEPOSIT…INTERNAL_TRANSFER,1-50 逐一对齐);`MatcherEventType` Rust 4 个(Trade/Reject/Reduce/BinaryEvent),Java 另 6 个(IF/ADL/FUNDING/RESET_FEE/LOAN_REPRICE/INTERNAL_TRANSFER `_EVENT`)在 Java 里也**不经 R2 按事件类型分发**,而由各两步处理器**按命令类型**处理——Rust 用 `TwoStepCommandProcessor` trait 按命令类型路由,等价,那 6 类从不产出/分发,**非遗漏**。
+
+> 全量测试:lib 986 / conformance 1 / e2e 36 / integration 323 / base_parity 78 / diff 9,0 警告。
+
 ---
 
 ## 8. 命令流 DSL 参考

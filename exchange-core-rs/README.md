@@ -120,6 +120,8 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 
 两套独立实现同一撮合引擎,如何**证明行为等价**且**防止漂移**——三层递进防线(IT 翻译对拍 / 守恒 proptest / 黄金向量对拍 Java-oracle)+ 差分模糊 + 归一化规格,以及框架发现的真实问题,详见 **[`CONSISTENCY.md`](CONSISTENCY.md)**。
 
+2026-09-18 对整个 crate 做了 6 组并行逐字段 review:**资金结算 6 子系统全部 CLEAN**(零守恒漏洞),仅修了 5 处非资金的事件/报告层平价缺口;`FundEventType` 27/27 全移植,`MatcherEventType` 无遗漏(缺的 6 类由两步处理器按命令类型路由,等价)。详见 CONSISTENCY.md §7.4。
+
 ## 构建 / 测试 / 基准
 
 ```bash

@@ -267,7 +267,7 @@ impl UserProfile {
 
             for (&key, &mm) in mm_by_pos.iter() {
                 let allocated = arithmetic::trunc_mul_div(margin_balance, mm, total_mm);
-                let margin_base_currency = allocated - upnl_by_pos[&key];
+                let margin_base_currency = arithmetic::sub_exact(allocated, upnl_by_pos[&key]);
                 // 累加阶段已用同一 key 校验过 spec 存在,分配阶段不会消失;expect 兜底纯防御性。
                 let pos_spec = symbol_spec_lookup(self.positions[&key].symbol)
                     .expect("symbol spec disappeared between accumulation and allocation loops");

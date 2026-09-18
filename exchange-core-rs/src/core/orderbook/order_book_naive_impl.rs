@@ -74,7 +74,7 @@ impl OrderBookNaiveImpl {
         let price = cmd.price;
         let size = cmd.size;
 
-        let (filled, filled_notional) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
+        let (filled, filled_notional) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, 0, 0, cmd);
         if filled == size {
             return;
         }
@@ -120,6 +120,8 @@ impl OrderBookNaiveImpl {
         taker_price: i64,
         taker_size: i64,
         taker_reserve_bid_price: i64,
+        taker_prior_filled: i64,
+        taker_prior_filled_notional: i64,
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
         match taker_action {
@@ -131,6 +133,8 @@ impl OrderBookNaiveImpl {
                 taker_action,
                 taker_reserve_bid_price,
                 true,
+                taker_prior_filled,
+                taker_prior_filled_notional,
                 cmd,
             ),
             OrderAction::Ask => Self::match_against(
@@ -141,6 +145,8 @@ impl OrderBookNaiveImpl {
                 taker_action,
                 taker_reserve_bid_price,
                 false,
+                taker_prior_filled,
+                taker_prior_filled_notional,
                 cmd,
             ),
         }
@@ -158,6 +164,8 @@ impl OrderBookNaiveImpl {
         taker_action: OrderAction,
         taker_size: i64,
         taker_reserve_bid_price: i64,
+        taker_prior_filled: i64,
+        taker_prior_filled_notional: i64,
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
         match taker_action {
@@ -169,6 +177,8 @@ impl OrderBookNaiveImpl {
                 taker_action,
                 taker_reserve_bid_price,
                 true,
+                taker_prior_filled,
+                taker_prior_filled_notional,
                 cmd,
             ),
             OrderAction::Ask => Self::match_against(
@@ -179,6 +189,8 @@ impl OrderBookNaiveImpl {
                 taker_action,
                 taker_reserve_bid_price,
                 false,
+                taker_prior_filled,
+                taker_prior_filled_notional,
                 cmd,
             ),
         }
@@ -206,6 +218,8 @@ impl OrderBookNaiveImpl {
         taker_action: OrderAction,
         taker_reserve_bid_price: i64,
         ascending: bool,
+        taker_prior_filled: i64,
+        taker_prior_filled_notional: i64,
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
         // 先收集一遍价位快照再逐个处理（而不是直接对 BTreeMap 做迭代中修改），
@@ -261,8 +275,8 @@ impl OrderBookNaiveImpl {
                     bidder_hold_price,
                     matched_order_uid: f.uid,
                     matched_order_command_type: f.command,
-                    filled: taker_filled,
-                    filled_notional: taker_filled_notional,
+                    filled: add_exact(taker_prior_filled, taker_filled),
+                    filled_notional: add_exact(taker_prior_filled_notional, taker_filled_notional),
                     matched_order_size: f.size,
                     matched_order_price: f.price,
                     matched_order_type: f.order_type,
@@ -345,8 +359,8 @@ impl OrderBookNaiveImpl {
             let mut remaining_in_call = size_cap;
             bucket.match_forward(size_cap, &mut |f: MakerFill| {
                 remaining_in_call -= f.trade;
-                let active_order_completed = remaining_in_call == 0;
                 taker_filled += f.trade;
+                let active_order_completed = taker_filled == taker_size;
                 taker_filled_notional = add_exact(taker_filled_notional, mul_exact(f.trade, p));
                 let bidder_hold_price = if taker_action == OrderAction::Bid {
                     taker_reserve_bid_price
@@ -409,7 +423,7 @@ impl OrderBookNaiveImpl {
         let price = cmd.price;
         let size = cmd.size;
 
-        let (filled, _) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
+        let (filled, _) = self.try_match_instantly(action, price, size, cmd.reserve_bid_price, 0, 0, cmd);
         let rejected_size = size - filled;
         if rejected_size != 0 {
             Self::attach_reject_event(cmd, rejected_size);
@@ -455,7 +469,7 @@ impl OrderBookNaiveImpl {
 
         let available = self.available_volume_for_match(action, price);
         if available >= size {
-            self.try_match_instantly(action, price, size, cmd.reserve_bid_price, cmd);
+            self.try_match_instantly(action, price, size, cmd.reserve_bid_price, 0, 0, cmd);
         } else {
             Self::attach_reject_event(cmd, size);
         }
@@ -482,7 +496,7 @@ impl OrderBookNaiveImpl {
 
         match budget {
             Some(calculated) if Self::is_budget_limit_satisfied(action, calculated, limit) => {
-                self.try_match_full(action, size, cmd.reserve_bid_price, cmd);
+                self.try_match_full(action, size, cmd.reserve_bid_price, 0, 0, cmd);
             }
             _ => Self::attach_reject_event(cmd, size),
         }
@@ -760,7 +774,7 @@ impl IOrderBook for OrderBookNaiveImpl {
 
         let remaining = order.size - order.filled;
         let (matched_now, matched_notional_now) =
-            self.try_match_instantly(action, new_price, remaining, order.reserve_bid_price, cmd);
+            self.try_match_instantly(action, new_price, remaining, order.reserve_bid_price, order.filled, order.filled_notional, cmd);
         let total_filled = order.filled + matched_now;
 
         if total_filled == order.size {
