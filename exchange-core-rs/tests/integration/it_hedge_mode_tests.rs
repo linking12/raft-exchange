@@ -14,7 +14,8 @@ mod tests {
     use exchange_core_rs::core::common::symbol_position_record::SymbolPositionRecord;
     use exchange_core_rs::core::common::symbol_type::SymbolType;
     use exchange_core_rs::core::exchange_api::{
-        ClosePositionRequest, ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest,
+        ClosePositionRequest, ExchangeApi, LiquidationScanRequest, MarginAdjustmentRequest,
+        PlaceFuturesOrderRequest,
     };
     use exchange_core_rs::core::utils::core_arithmetic_utils::currency_to_size_price_scale;
 
@@ -584,5 +585,87 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_2, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 100, "UID_2 counterparty SHORT should survive");
         assert_eq!(leg_dir(&api, UID_3, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 50, "UID_3 counterparty LONG should survive");
         assert!(api.total_balance().is_global_zero(), "global conservation");
+    }
+
+    // testLiquidationLoop2: HEDGE liquidation where the counterparties are also HEDGE.
+    // UID_1 = LONG100 + SHORT50, UID_2 = LONG50 + SHORT100. Price rises to 95M -> both ISOLATED
+    // SHORT legs (50 + 100 = 150) are underwater and get liquidated; UID_4's resting ASK 180@80M
+    // absorbs the forced buys, ending SHORT 150. Each victim keeps only its LONG leg.
+    #[test]
+    fn test_liquidation_loop2() {
+        let mut api = setup();
+        assert_eq!(api.adjust_position_mode(UID_1, true), CommandResultCode::Success);
+        assert_eq!(api.adjust_position_mode(UID_2, true), CommandResultCode::Success);
+
+        // open LONG 100 @ 75M
+        assert_eq!(place_on(&mut api, 10001, UID_1, SYMBOL_ID, 75_000_000, 100, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 10002, UID_2, SYMBOL_ID, 75_000_000, 100, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+        // open SHORT 50 @ 80M
+        assert_eq!(place_on(&mut api, 10003, UID_1, SYMBOL_ID, 80_000_000, 50, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 10004, UID_2, SYMBOL_ID, 80_000_000, 50, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 100);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 50);
+        assert_eq!(leg_dir(&api, UID_2, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 50);
+        assert_eq!(leg_dir(&api, UID_2, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 100);
+
+        // price up (liquidation still disabled -> no scan yet)
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 95_000_000), CommandResultCode::Success);
+
+        // UID_4 resting ASK to absorb the forced buys
+        assert_eq!(place_on(&mut api, 20001, UID_4, SYMBOL_ID, 80_000_000, 180, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+        assert_eq!(sym_position_count(&api, UID_4, SYMBOL_ID), 1);
+        assert_eq!(leg_dir(&api, UID_4, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 0);
+
+        // trigger liquidation
+        api.enable_liquidation();
+        assert_eq!(api.submit_liquidation_scan(LiquidationScanRequest { scan_slice: 0, slice_count: 1, timestamp: 1 }), CommandResultCode::Success);
+
+        // UID_4 absorbed both liquidated SHORT legs: 50 + 100 = 150
+        assert_eq!(sym_position_count(&api, UID_4, SYMBOL_ID), 1);
+        assert_eq!(leg_dir(&api, UID_4, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 150);
+        // UID_1 SHORT liquidated, only LONG remains
+        assert_eq!(sym_position_count(&api, UID_1, SYMBOL_ID), 1);
+        assert!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).is_some());
+        // UID_2 SHORT liquidated, only LONG remains
+        assert_eq!(sym_position_count(&api, UID_2, SYMBOL_ID), 1);
+        assert!(leg_dir(&api, UID_2, SYMBOL_ID, PositionDirection::Long).is_some());
+    }
+
+    // testLiquidationLoop3: CROSS HEDGE with equal offsetting legs is never liquidated.
+    // UID_1 = LONG100 + SHORT100 (CROSS) with net-zero PnL; price swinging up (95M) then down (55M)
+    // must leave both legs untouched.
+    #[test]
+    fn test_liquidation_loop3() {
+        let mut api = setup();
+        assert_eq!(api.adjust_position_mode(UID_1, true), CommandResultCode::Success);
+
+        // UID_1 CROSS hedge: open LONG 100 then SHORT 100, both @75M (offsetting)
+        assert_eq!(place_on(&mut api, 10001, UID_1, SYMBOL_ID, 75_000_000, 100, OrderAction::Bid, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 10002, UID_2, SYMBOL_ID, 75_000_000, 100, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 0), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 10003, UID_1, SYMBOL_ID, 75_000_000, 100, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, 0), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 10004, UID_3, SYMBOL_ID, 75_000_000, 100, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 0), CommandResultCode::Success);
+
+        assert_eq!(sym_position_count(&api, UID_1, SYMBOL_ID), 2);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 100);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 100);
+
+        // resting liquidity that would absorb any forced order (should never be used)
+        assert_eq!(place_on(&mut api, 20001, UID_4, SYMBOL_ID, 70_000_000, 200, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+        assert_eq!(place_on(&mut api, 20002, UID_5, SYMBOL_ID, 80_000_000, 200, OrderAction::Ask, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
+
+        api.enable_liquidation();
+
+        // price up -> no liquidation (net-zero CROSS hedge)
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 95_000_000), CommandResultCode::Success);
+        assert_eq!(api.submit_liquidation_scan(LiquidationScanRequest { scan_slice: 0, slice_count: 1, timestamp: 1 }), CommandResultCode::Success);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 100);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 100);
+
+        // price down -> still no liquidation
+        assert_eq!(api.set_mark_price(SYMBOL_ID, 55_000_000), CommandResultCode::Success);
+        assert_eq!(api.submit_liquidation_scan(LiquidationScanRequest { scan_slice: 0, slice_count: 1, timestamp: 2 }), CommandResultCode::Success);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Long).unwrap().open_volume, 100);
+        assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 100);
     }
 }

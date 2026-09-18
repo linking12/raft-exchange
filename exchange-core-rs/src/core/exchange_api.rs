@@ -144,11 +144,7 @@ impl ExchangeApi {
         ExchangeApi { core: ExchangeCore::new(), last_cmd: None }
     }
 
-    pub fn core(&self) -> &ExchangeCore {
-        &self.core
-    }
-
-    pub fn core_mut(&mut self) -> &mut ExchangeCore {
+    pub fn core(&mut self) -> &mut ExchangeCore {
         &mut self.core
     }
 

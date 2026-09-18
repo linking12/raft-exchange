@@ -17,6 +17,7 @@ use crate::core::processors::liquidation::liquidation_flow::{LiquidationFlow, Li
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_liquidation_engine::LoanLiquidationEngine;
 use crate::core::processors::loan::loan_service::LoanService;
+use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::{
@@ -148,7 +149,7 @@ impl LiquidationEngine {
                 if position.margin_mode == MarginMode::Isolated {
                     match Self::check_isolated_decision(key, position, spec, mark_price) {
                         IsolatedCheck::Liquidate(d) => decisions.push(d),
-                        IsolatedCheck::Alert => fund_events.push(Self::notification_event(FundEventType::MarginAlert, uid, position)),
+                        IsolatedCheck::Alert => fund_events.push(Self::notification_event(FundEventType::MarginAlert, uid, position, spec, profile, ssp, last_price_cache)),
                         IsolatedCheck::Healthy => {}
                     }
                 } else {
@@ -165,7 +166,9 @@ impl LiquidationEngine {
                 None => return,
             };
             if let Some(pos) = profile.positions.get(&d.position_key) {
-                fund_events.push(Self::notification_event(FundEventType::LiquidationAlert, uid, pos));
+                if let Some(spec) = ssp.get_symbol(pos.symbol) {
+                    fund_events.push(Self::notification_event(FundEventType::LiquidationAlert, uid, pos, spec, profile, ssp, last_price_cache));
+                }
             }
             self.start_liquidation_flow(profile, d, ts);
         }
@@ -394,16 +397,36 @@ impl LiquidationEngine {
         crate::core::processors::liquidation::scheduler::covered_by_scan_slice(cmd, uid)
     }
 
-    fn notification_event(event_type: FundEventType, uid: i64, position: &SymbolPositionRecord) -> FundEvent {
+    fn notification_event(
+        event_type: FundEventType,
+        uid: i64,
+        position: &SymbolPositionRecord,
+        spec: &CoreSymbolSpecification,
+        up: &UserProfile,
+        ssp: &SymbolSpecificationProvider,
+        last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
+    ) -> FundEvent {
+        let (upnl, liq, mr, mmsk) = RiskEngine::futures_estimates(last_price_cache, up, position, spec, ssp);
+        let mark = last_price_cache.get(&position.symbol).map(|r| r.mark_price).unwrap_or(0);
         FundEvent {
             event_type,
             uid,
             symbol: position.symbol,
             currency: position.currency,
+            base_scale_k: spec.base_scale_k,
+            quote_scale_k: spec.quote_scale_k,
             direction: position.direction,
             open_volume: position.open_volume,
+            open_init_margin_sum: position.open_init_margin_sum,
             open_price_sum: position.open_price_sum,
+            leverage: position.leverage,
             margin_mode: position.margin_mode,
+            extra_margin: position.extra_margin,
+            unrealized_profit: upnl,
+            liquidation_price: liq,
+            margin_ratio_scale_k: mr,
+            maintenance_margin_scale_k: mmsk,
+            mark_price: mark,
             ..Default::default()
         }
     }

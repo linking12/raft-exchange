@@ -240,6 +240,27 @@ mod tests {
         assert_outcome(&api, taker_size, PRICE, UID_2, 0, UID_1, xbt_dep);
     }
 
+    // Translation of ITFeesExchange.shouldProcessFees_AskGtcMakerPartial_BidIocTaker:
+    // ASK GTC maker (2000) partially filled by a BID IOC taker (1997) -> 1997 filled, maker/taker
+    // fees charged on the filled amount.
+    #[test]
+    fn ask_gtc_maker_partial_bid_ioc_taker() {
+        let mut api = new_api();
+        let maker_size = 2000 * BASE_SCALE_K;
+        let taker_size = 1997 * BASE_SCALE_K;
+        let xbt_dep = xbt_deposit();
+        user_money(&mut api, UID_1, XBT, xbt_dep, 1);
+        assert_eq!(api.place_order(ask(101, UID_1, PRICE, maker_size, OrderType::Gtc)), CommandResultCode::Success);
+
+        user_money(&mut api, UID_2, LTC, ltc_deposit(), 2);
+        assert_eq!(
+            api.place_order(bid(102, UID_2, 11_521 * QUOTE_SCALE_K, 11_659 * QUOTE_SCALE_K, taker_size, OrderType::Ioc)),
+            CommandResultCode::Success
+        );
+
+        assert_outcome(&api, taker_size, PRICE, UID_2, 0, UID_1, xbt_dep);
+    }
+
     #[test]
     fn should_not_process_fees_ask_gtc_maker_partial_bid_fok_taker() {
         let mut api = new_api();
