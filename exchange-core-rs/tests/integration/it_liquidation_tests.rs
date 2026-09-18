@@ -13,7 +13,7 @@ mod tests {
     use exchange_core_rs::core::exchange_api::{ExchangeApi, PlaceFuturesOrderRequest};
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
     use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
-    use exchange_core_rs::core::common::fund_event::FundEventType;
+    use exchange_core_rs::core::common::fund_event::{FundEvent, FundEventType};
 
     const XBT: i32 = 3762;
     const USD: i32 = 840;
@@ -69,12 +69,24 @@ mod tests {
     }
 
     fn setup_btc(entry: i64) -> ExchangeApi {
-        let mut api = ExchangeApi::new();
+        setup_btc_with_collector(entry).0
+    }
+
+    /// 同 `setup_btc`，但在 `ExchangeCore` 上装一个 results_consumer 收集器（= Java `resultsConsumer`）并
+    /// 返回 `(api, collector)`，供需要观测级联 fund events 的用例。事件观测走生产机制,不在 `ExchangeApi` 上设。
+    fn setup_btc_with_collector(entry: i64) -> (ExchangeApi, std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>) {
+        let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = collector.clone();
+        let mut core = exchange_core_rs::core::exchange_core::ExchangeCore::new();
+        core.with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
+            sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
+        }));
+        let mut api = ExchangeApi::from_core(core);
         api.add_currency(XBT, 1);
         api.add_currency(USD, 1);
         assert_eq!(api.add_futures_symbol(btc_spec()), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(BTC_SYM, entry), CommandResultCode::Success);
-        api
+        (api, collector)
     }
 
     fn setup_two(entry: i64) -> ExchangeApi {
@@ -128,6 +140,14 @@ mod tests {
         api.user_position(uid, sym).map(|p| p.open_volume).unwrap_or(0)
     }
 
+    /// 触发 `set_mark_price`（inline 自驱级联）并收集本次触发 + 各级联子命令的 fund events；触发前先 clear
+    /// 掉 setup 阶段积累的事件。collector 由 `setup_btc_with_collector` 在 `ExchangeCore` 上装好。
+    fn collect_cascade_on_mark(api: &mut ExchangeApi, collector: &std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>, symbol: i32, price: i64) -> Vec<FundEvent> {
+        collector.borrow_mut().clear();
+        assert_eq!(api.set_mark_price(symbol, price), CommandResultCode::Success);
+        collector.borrow().clone()
+    }
+
     // 对应 Java testBasicLiquidationIsolatedMode：逐仓多头暴跌95%触发全量强平，校验强平级联事件流与资金守恒
     #[test]
     fn basic_liquidation_isolated_long() {
@@ -137,7 +157,7 @@ mod tests {
         let bp_fill = 9_920i64;
         let liq_price = 500i64;
 
-        let mut api = setup_btc(entry);
+        let (mut api, cascade_collector) = setup_btc_with_collector(entry);
         seed_user(&mut api, trader, 3_000, 1);
         seed_user(&mut api, lp, 100_000, 2);
 
@@ -149,7 +169,7 @@ mod tests {
         assert_eq!(place(&mut api, 10003, lp, BTC_SYM, bp_fill, liquidity, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(BTC_SYM, liq_price), CommandResultCode::Success);
+        let cascade = collect_cascade_on_mark(&mut api, &cascade_collector, BTC_SYM, liq_price);
 
         assert!(api.user_position(trader, BTC_SYM).is_none(), "trader position should be fully closed");
         assert_eq!(api.user_account(trader, USD), 1_900, "liquidated party loses isolated margin + fees paid, 1900 remains");
@@ -158,7 +178,7 @@ mod tests {
         assert_eq!(if_available, 0, "no liquidation_fee configured -> IF available should not increase");
         assert_eq!(api.user_account(lp, USD), 99_700, "LP counterparty net settlement");
         assert_eq!(api.user_position(lp, BTC_SYM).unwrap().pending_buy_size, liquidity - position_size, "lp liquidity consumed by 10");
-        let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
+        let seq: Vec<(FundEventType, i64)> = cascade.iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
             (FundEventType::LiquidationClose, trader),
             (FundEventType::PnlSettlement, trader),
@@ -166,7 +186,7 @@ mod tests {
             (FundEventType::ClosePosition, lp),
             (FundEventType::LiquidationFee, trader),
         ], "liquidation cascade event stream (type + uid)");
-        let pnl = api.cascade_fund_events().iter().find(|e| e.event_type == FundEventType::PnlSettlement && e.uid == trader).unwrap();
+        let pnl = cascade.iter().find(|e| e.event_type == FundEventType::PnlSettlement && e.uid == trader).unwrap();
         assert_eq!(pnl.free, 1_900, "PnlSettlement event free should equal the final account balance");
         assert_conserved(&api);
     }

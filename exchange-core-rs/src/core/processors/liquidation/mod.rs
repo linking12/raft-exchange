@@ -9,6 +9,7 @@
 //! （liquidation_flow：leader-local，不复制）驱动单个持仓在 FORCE → IF → ADL
 //! 之间推进。
 
+pub mod command_submitter;
 pub mod liquidation_engine;
 pub mod liquidation_flow;
 pub mod liquidation_service;

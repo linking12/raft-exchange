@@ -6121,6 +6121,13 @@ mod tests {
                 ups.get_mut(TAKER_UID).unwrap().positions.get_mut(&FUT_SYMBOL).unwrap().liquidation_flow = Some(flow);
             }
 
+            let generated: std::rc::Rc<std::cell::RefCell<Vec<OrderCommand>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let sink = generated.clone();
+            engine.liquidation_engine.set_command_submitter(move || {
+                let s = sink.clone();
+                Box::new(move |c| s.borrow_mut().push(c))
+            });
+
             let mut cmd = if_takeover_cmd(OrderAction::Bid, 100, 100);
             run_full_pipeline(&mut engine, &mut cmd, &mut ups, &ssp);
 
@@ -6131,7 +6138,7 @@ mod tests {
             let flow = ups.get(TAKER_UID).unwrap().positions.get(&FUT_SYMBOL).unwrap().liquidation_flow.expect("flow 应仍存在");
             assert_eq!(flow.state, LiquidationState::WaitAdlExecution, "IF 不足必须升级到 WAIT_ADL");
             assert!(
-                engine.liquidation_engine.pending_commands.iter().any(|c| c.command == OrderCommandType::AutoDeleveraging),
+                generated.borrow().iter().any(|c| c.command == OrderCommandType::AutoDeleveraging),
                 "IF 不足必须入队 ADL 命令（ADL 后备不能静默失效）"
             );
         }

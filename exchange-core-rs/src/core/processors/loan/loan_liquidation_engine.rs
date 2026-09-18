@@ -6,9 +6,9 @@
 //! `FundEvent`（`LoanMarginCall`）。价格事件走 `symbolId`/`(base,quote)` targeted 索引只查受影响的
 //! 持有者，`LIQUIDATION_SCAN` 全量兜底（按 [`covered_by_scan_slice`] 分片）。
 //!
-//! 与 Java 版的结构性差异：Java 通过 `commandSubmitter`/`eventsHelper` 把命令与事件直接提交/发送；
-//! Rust 版把二者收集进 `pending_commands` / 调用方传入的 `fund_events: &mut Vec<FundEvent>`，
-//! 由上层统一处理，本身不持有提交通道。
+//! 命令出口 `command_submitter` 回调对齐 Java `commandSubmitter`（由上层 `LiquidationEngine`
+//! 在 `ExchangeCore::new` 时注册成同一个 `pending_commands` sink，单节点/集群/单测各注册不同回调）；
+//! 预警 `FundEvent` 仍走调用方传入的 `fund_events: &mut Vec<FundEvent>`（对齐 Java `eventsHelper`）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,6 +21,7 @@ use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
 use crate::core::common::user_profile::UserProfile;
+use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
 use crate::core::processors::liquidation::scheduler::covered_by_scan_slice;
 use crate::core::processors::loan::loan_service::{
     LoanService, BPS_SCALE, ORDERID_SUBTYPE_CROSS, ORDERID_SUBTYPE_ISOLATED,
@@ -41,12 +42,16 @@ const MS_PER_DAY: i64 = 86_400 * 1_000;
 pub struct LoanLiquidationEngine {
     pub isolated_loan_symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
     pub cross_loan_currency_to_users: BTreeMap<i32, BTreeSet<i64>>,
-    pub pending_commands: Vec<OrderCommand>,
+    command_submitter: CommandSubmitter,
 }
 
 impl LoanLiquidationEngine {
     pub fn new() -> Self {
         LoanLiquidationEngine::default()
+    }
+
+    pub fn set_command_submitter(&mut self, cb: Box<dyn FnMut(OrderCommand)>) {
+        self.command_submitter.set(cb);
     }
 
     /// 对应 Java `updateProvider(...)` 中索引重建部分：清空两个索引后，
@@ -181,7 +186,7 @@ impl LoanLiquidationEngine {
             // 破产价 = markPrice × 债务 / 抵押估值，即卖出所得刚好覆盖债务的地板价（ceil 取整确保
             // 地板不低于真实盈亏平衡点）；对应 Java 私有方法 bankruptcyPrice
             let limit_price = ceil_mul_div(mark_price, real_debt, collateral_value);
-            self.pending_commands.push(OrderCommand {
+            self.command_submitter.submit(OrderCommand {
                 command: OrderCommandType::LoanForceLiquidate,
                 order_id,
                 uid: loan.uid,
@@ -285,7 +290,7 @@ impl LoanLiquidationEngine {
             return;
         }
         let order_id = LoanService::force_sell_order_id(ORDERID_SUBTYPE_CROSS, up.uid, target_loan.loan_id, ts);
-        self.pending_commands.push(OrderCommand {
+        self.command_submitter.submit(OrderCommand {
             command: OrderCommandType::LoanCrossForceLiquidate,
             order_id,
             uid: up.uid,
@@ -469,11 +474,21 @@ mod tests {
     use crate::core::common::symbol_loan_specification::SymbolLoanSpecification;
     use crate::core::common::symbol_type::SymbolType;
     use crate::core::common::user_status::UserStatus;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     const COLL: i32 = 1;
     const LOANC: i32 = 2;
     const SYMBOL: i32 = 100;
     const UID: i64 = 7;
+
+    /// collector 出口：把强平命令收进共享 Vec 供断言。
+    fn attach_collector(e: &mut LoanLiquidationEngine) -> Rc<RefCell<Vec<OrderCommand>>> {
+        let collected = Rc::new(RefCell::new(Vec::new()));
+        let sink = collected.clone();
+        e.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push(cmd)));
+        collected
+    }
 
     fn spot_spec(liquidation_ltv_bps: i32, margin_call_ltv_bps: i32, max_term_days: i32) -> CoreSymbolSpecification {
         CoreSymbolSpecification {
@@ -557,12 +572,15 @@ mod tests {
         assert!(e.cross_loan_currency_to_users.is_empty(), "full exit -> every currency bucket precisely removed");
     }
 
-    fn run_check_loans(e: &mut LoanLiquidationEngine, up: UserProfile, ssp: &SymbolSpecificationProvider) {
+    fn run_check_loans(e: &mut LoanLiquidationEngine, up: UserProfile, ssp: &SymbolSpecificationProvider) -> Vec<OrderCommand> {
+        let out = attach_collector(e);
         let mut ups = UserProfileService::new();
         ups.users.insert(UID, up);
         let ls = LoanService::new();
         let cmd = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: SYMBOL, timestamp: 5_000, ..Default::default() };
         e.check_loans(&cmd, &ups, ssp, &price_cache(), &ls, &mut Vec::new());
+        let collected = out.borrow().clone();
+        collected
     }
 
     #[test]
@@ -572,10 +590,10 @@ mod tests {
         e.on_isolated_loan_opened(UID, SYMBOL);
         let mut up = profile(UID);
         up.isolated_loans.insert(1, iso_loan(1, 1000, 900));
-        run_check_loans(&mut e, up, &ssp);
+        let cmds = run_check_loans(&mut e, up, &ssp);
 
-        assert_eq!(e.pending_commands.len(), 1, "LTV breach -> FORCE command submitted");
-        let c = &e.pending_commands[0];
+        assert_eq!(cmds.len(), 1, "LTV breach -> FORCE command submitted");
+        let c = &cmds[0];
         assert_eq!(c.command, OrderCommandType::LoanForceLiquidate);
         assert_eq!(c.uid, UID);
         assert_eq!(c.symbol, SYMBOL);
@@ -593,8 +611,8 @@ mod tests {
         e.on_isolated_loan_opened(UID, SYMBOL);
         let mut up = profile(UID);
         up.isolated_loans.insert(1, iso_loan(1, 1000, 500));
-        run_check_loans(&mut e, up, &ssp);
-        assert!(e.pending_commands.is_empty(), "a healthy loan does not trigger");
+        let cmds = run_check_loans(&mut e, up, &ssp);
+        assert!(cmds.is_empty(), "a healthy loan does not trigger");
     }
 
     #[test]
@@ -604,8 +622,8 @@ mod tests {
         e.on_isolated_loan_opened(UID, SYMBOL);
         let mut up = profile(UID);
         up.isolated_loans.insert(1, iso_loan(1, 0, 900));
-        run_check_loans(&mut e, up, &ssp);
-        assert!(e.pending_commands.is_empty(), "collateral value<=0 -> skip, no division by zero, no command submitted");
+        let cmds = run_check_loans(&mut e, up, &ssp);
+        assert!(cmds.is_empty(), "collateral value<=0 -> skip, no division by zero, no command submitted");
     }
 
     #[test]
@@ -616,6 +634,7 @@ mod tests {
         ssp.add_symbol(spot_spec(8000, 7000, 1));
 
         let mut e = LoanLiquidationEngine::new();
+        let out = attach_collector(&mut e);
         e.on_isolated_loan_opened(UID, SYMBOL);
         let mut up = profile(UID);
         let mut loan = iso_loan(1, 1000, 500);
@@ -629,7 +648,7 @@ mod tests {
         let cmd = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: SYMBOL, timestamp: 2 * MS_PER_DAY, ..Default::default() };
         e.check_loans(&cmd, &ups, &ssp, &price_cache(), &ls, &mut Vec::new());
 
-        assert_eq!(e.pending_commands.len(), 1, "LOCKED loan past term -> liquidated regardless of LTV");
+        assert_eq!(out.borrow().len(), 1, "LOCKED loan past term -> liquidated regardless of LTV");
     }
 
     #[test]
@@ -721,6 +740,7 @@ mod tests {
     fn check_loans_targeted_unions_isolated_and_cross_currency_indices() {
         let ssp = seeded_ssp();
         let mut e = LoanLiquidationEngine::new();
+        let out = attach_collector(&mut e);
         const UID_B: i64 = 8;
         e.on_isolated_loan_opened(UID, SYMBOL);
         let mut up_a = profile(UID);
@@ -737,7 +757,7 @@ mod tests {
         let cmd = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: SYMBOL, timestamp: 5_000, ..Default::default() };
         e.check_loans(&cmd, &ups, &ssp, &price_cache(), &ls, &mut Vec::new());
 
-        assert_eq!(e.pending_commands.len(), 1);
-        assert_eq!(e.pending_commands[0].uid, UID, "user A, present in the union, is detected and liquidated");
+        assert_eq!(out.borrow().len(), 1);
+        assert_eq!(out.borrow()[0].uid, UID, "user A, present in the union, is detected and liquidated");
     }
 }

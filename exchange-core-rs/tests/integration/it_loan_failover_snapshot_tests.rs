@@ -115,7 +115,7 @@ mod tests {
     fn loan_state_survives_snapshot_restore_identical_bytes_and_conserved() {
         // 共享内存后端:leader persist → follower(fresh core)recover,模拟 failover。
         let shared = InMemorySerializationProcessor::new();
-        let mut core = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut core = ExchangeCore::new(); core.with_serialization_processor(Box::new(shared.clone()));
         core.ssp.add_currency(CoreCurrencySpecification { currency: WBTC, currency_scale_k: 100, collateral_weight_bps: 10_000, ..Default::default() });
         core.ssp.add_currency(CoreCurrencySpecification { currency: USDT, currency_scale_k: 1, ..Default::default() });
         let spec = spot_loan_spec(SYMBOL, WBTC, USDT, 6_000, 8_500, 7_500);
@@ -146,7 +146,7 @@ mod tests {
         assert!(core.query_total_balance().is_global_zero(), "must be conserved before snapshot");
         assert!(core.persist(1, 0));
 
-        let mut recovered = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut recovered = ExchangeCore::new(); recovered.with_serialization_processor(Box::new(shared.clone()));
         recovered.recover(1, 0);
         // recovered 重新 persist 到快照 2,两模块 payload 与快照 1 逐字节相等。
         assert!(recovered.persist(2, 0));
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn loan_rate_state_survives_snapshot_restore_repriced_curve_rate_preserved() {
         let shared = InMemorySerializationProcessor::new();
-        let mut core = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut core = ExchangeCore::new(); core.with_serialization_processor(Box::new(shared.clone()));
         core.ssp.add_currency(CoreCurrencySpecification { currency: RC_BTC, currency_scale_k: 1, collateral_weight_bps: 10_000, ..Default::default() });
         core.ssp.add_currency(CoreCurrencySpecification { currency: RC_USDT, currency_scale_k: 1, ..Default::default() });
         let spec = spot_loan_spec(RC_SYMBOL, RC_BTC, RC_USDT, 6_000, 8_500, 7_500);
@@ -224,7 +224,7 @@ mod tests {
         assert!(core.query_total_balance().is_global_zero(), "must be conserved before snapshot");
         assert!(core.persist(1, 0));
 
-        let mut r = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        let mut r = ExchangeCore::new(); r.with_serialization_processor(Box::new(shared.clone()));
         r.recover(1, 0);
         assert!(r.persist(2, 0));
         assert_eq!(

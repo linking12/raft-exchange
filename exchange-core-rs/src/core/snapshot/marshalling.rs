@@ -255,7 +255,7 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
-        let mut core = ExchangeCore::with_serialization_processor(Box::new(FileSerializationProcessor::new(&dir)));
+        let mut core = ExchangeCore::new(); core.with_serialization_processor(Box::new(FileSerializationProcessor::new(&dir)));
         core.risk.cfg_margin_trading_enabled = true; // 期货需要
 
         // ===== 4 币种(带 name + collateral weight) =====
@@ -366,7 +366,7 @@ mod tests {
         // 文件名与 Java SnapshotHelper.genSnapshotFileName 一致。
         assert!(dir.join("snapshot_1_RE_0.dat").exists());
         assert!(dir.join("snapshot_1_ME_0.dat").exists());
-        let mut recovered = ExchangeCore::with_serialization_processor(Box::new(FileSerializationProcessor::new(&dir)));
+        let mut recovered = ExchangeCore::new(); recovered.with_serialization_processor(Box::new(FileSerializationProcessor::new(&dir)));
         recovered.recover(1, 0);
         // 对称:recovered 重新 persist 到快照 2,比对两次落盘的 .dat 文件逐字节相等。
         assert!(recovered.persist(2, 0));

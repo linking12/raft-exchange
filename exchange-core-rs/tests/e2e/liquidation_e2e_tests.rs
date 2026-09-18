@@ -134,7 +134,6 @@ fn force_full_fill_moves_fee_to_if_and_conserves() {
 
     markprice(&mut core, 94, 2_000);
 
-    assert!(core.risk.liquidation_engine.pending_commands.is_empty());
     assert!(!core.ups.get(borrower).unwrap().positions.contains_key(&FUT), "borrower position should be fully closed");
     let if_avail: i64 = core.risk.liquidation_service.notionals.values().map(|n| n.available).sum();
     assert!(if_avail > 0, "liquidation fee should flow into IF");
@@ -152,7 +151,6 @@ fn healthy_market_no_liquidation_conserves() {
     place(&mut core, 101, uids[1], 100, 10, true, 5);
     let before = conserved(&core, QUOTE);
     markprice(&mut core, 101, 2_000);
-    assert!(core.risk.liquidation_engine.pending_commands.is_empty());
     assert!(core.ups.get(uids[1]).unwrap().positions.contains_key(&FUT), "healthy position should not be liquidated");
     assert_eq!(conserved(&core, QUOTE), before);
 }
@@ -204,7 +202,6 @@ proptest! {
             for n in core.risk.liquidation_service.notionals.values() {
                 prop_assert!(n.available >= 0, "IFNotional.available is negative");
             }
-            prop_assert!(core.risk.liquidation_engine.pending_commands.is_empty());
         }
     }
 }
