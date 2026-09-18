@@ -14,6 +14,9 @@ mod tests {
     use exchange_core_rs::core::common::isolated_loan_record::LoanRateMode;
     use exchange_core_rs::core::common::symbol_type::SymbolType;
     use exchange_core_rs::core::exchange_core::ExchangeCore;
+    use exchange_core_rs::core::snapshot::serialization_processor::{
+        InMemorySerializationProcessor, SerializationProcessor, SerializedModuleType,
+    };
 
     fn submit(core: &mut ExchangeCore, mut cmd: OrderCommand) -> CommandResultCode {
         core.process_command(&mut cmd);
@@ -110,7 +113,9 @@ mod tests {
     // 注：Java 版走的是真实磁盘快照 + 独立容器恢复 + stateHash 比对，这里用内存态字节 round-trip 直接验证同一不变式。
     #[test]
     fn loan_state_survives_snapshot_restore_identical_bytes_and_conserved() {
-        let mut core = ExchangeCore::new();
+        // 共享内存后端:leader persist → follower(fresh core)recover,模拟 failover。
+        let shared = InMemorySerializationProcessor::new();
+        let mut core = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
         core.ssp.add_currency(CoreCurrencySpecification { currency: WBTC, currency_scale_k: 100, collateral_weight_bps: 10_000, ..Default::default() });
         core.ssp.add_currency(CoreCurrencySpecification { currency: USDT, currency_scale_k: 1, ..Default::default() });
         let spec = spot_loan_spec(SYMBOL, WBTC, USDT, 6_000, 8_500, 7_500);
@@ -139,13 +144,21 @@ mod tests {
         assert_eq!(submit(&mut core, cmd_loan_cross_borrow(1_000_004, BORROWER, SYMBOL, 2, 60_000, 1_000)), CommandResultCode::Success);
 
         assert!(core.query_total_balance().is_global_zero(), "must be conserved before snapshot");
-        let (re, me) = core.to_snapshot_bytes();
+        assert!(core.persist(1, 0));
 
-        let recovered = ExchangeCore::from_snapshot_bytes(&re, &me);
+        let mut recovered = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        recovered.recover(1, 0);
+        // recovered 重新 persist 到快照 2,两模块 payload 与快照 1 逐字节相等。
+        assert!(recovered.persist(2, 0));
         assert_eq!(
-            recovered.to_snapshot_bytes(),
-            (re.clone(), me.clone()),
-            "recovered state must be byte-identical to the original leader (loan records + pool/LIF buckets are all in the snapshot)"
+            shared.load_data(2, SerializedModuleType::RiskEngine, 0),
+            shared.load_data(1, SerializedModuleType::RiskEngine, 0),
+            "recovered RE module must be byte-identical to the original leader (loan records + pool/LIF buckets are all in the snapshot)"
+        );
+        assert_eq!(
+            shared.load_data(2, SerializedModuleType::MatchingEngineRouter, 0),
+            shared.load_data(1, SerializedModuleType::MatchingEngineRouter, 0),
+            "recovered ME module must be byte-identical to the original leader"
         );
         assert!(recovered.query_total_balance().is_global_zero(), "must be conserved after recovery");
 
@@ -173,7 +186,8 @@ mod tests {
     // FLOATING 贷款仍按 240 开仓（而非回退到 base 200）。
     #[test]
     fn loan_rate_state_survives_snapshot_restore_repriced_curve_rate_preserved() {
-        let mut core = ExchangeCore::new();
+        let shared = InMemorySerializationProcessor::new();
+        let mut core = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
         core.ssp.add_currency(CoreCurrencySpecification { currency: RC_BTC, currency_scale_k: 1, collateral_weight_bps: 10_000, ..Default::default() });
         core.ssp.add_currency(CoreCurrencySpecification { currency: RC_USDT, currency_scale_k: 1, ..Default::default() });
         let spec = spot_loan_spec(RC_SYMBOL, RC_BTC, RC_USDT, 6_000, 8_500, 7_500);
@@ -208,13 +222,20 @@ mod tests {
         assert_eq!(floating_loan_rate_bps(&core, 2), RC_EXPECTED, "before snapshot: new FLOATING rate after reprice = curve(util) = 240");
 
         assert!(core.query_total_balance().is_global_zero(), "must be conserved before snapshot");
-        let (re, me) = core.to_snapshot_bytes();
+        assert!(core.persist(1, 0));
 
-        let mut r = ExchangeCore::from_snapshot_bytes(&re, &me);
+        let mut r = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        r.recover(1, 0);
+        assert!(r.persist(2, 0));
         assert_eq!(
-            r.to_snapshot_bytes(),
-            (re.clone(), me.clone()),
-            "recovered state must be byte-identical (currentRateBps / lastRepriceTs are both in the snapshot)"
+            shared.load_data(2, SerializedModuleType::RiskEngine, 0),
+            shared.load_data(1, SerializedModuleType::RiskEngine, 0),
+            "recovered RE module must be byte-identical (currentRateBps / lastRepriceTs are both in the snapshot)"
+        );
+        assert_eq!(
+            shared.load_data(2, SerializedModuleType::MatchingEngineRouter, 0),
+            shared.load_data(1, SerializedModuleType::MatchingEngineRouter, 0),
+            "recovered ME module must be byte-identical"
         );
 
         assert_eq!(

@@ -15,6 +15,7 @@ mod tests {
     use exchange_core_rs::core::common::order_type::OrderType;
     use exchange_core_rs::core::common::symbol_type::SymbolType;
     use exchange_core_rs::core::exchange_core::ExchangeCore;
+    use exchange_core_rs::core::snapshot::serialization_processor::InMemorySerializationProcessor;
 
     const ETH: i32 = 3928;
     const XBT: i32 = 3762;
@@ -96,8 +97,10 @@ mod tests {
     // check the targeted loan-liquidation index was rebuilt and still fires on a mark-price crash.
     #[test]
     fn loan_index_rebuilds_after_snapshot_recovery_targeted_still_triggers_force_sell() {
-        let (re, me) = {
-            let mut core = ExchangeCore::new();
+        // 共享内存后端:build+persist(leader)→ recover(follower/fresh core),模拟 failover。
+        let shared = InMemorySerializationProcessor::new();
+        {
+            let mut core = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
             core.ssp.add_currency(CoreCurrencySpecification { currency: ETH, currency_scale_k: 1, ..Default::default() });
             core.ssp.add_currency(CoreCurrencySpecification { currency: XBT, currency_scale_k: 1, ..Default::default() });
             let spec = eth_xbt_loan_spec();
@@ -116,10 +119,11 @@ mod tests {
                 CommandResultCode::Success
             );
             assert!(core.query_total_balance().is_global_zero(), "should be conserved before snapshot");
-            core.to_snapshot_bytes()
-        };
+            assert!(core.persist(1, 0));
+        }
 
-        let mut r = ExchangeCore::from_snapshot_bytes(&re, &me);
+        let mut r = ExchangeCore::with_serialization_processor(Box::new(shared.clone()));
+        r.recover(1, 0);
 
         assert!(
             r.risk
