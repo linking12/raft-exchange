@@ -1,0 +1,12 @@
+R 4 SUCCESS
+R 5 SUCCESS
+R 6 SUCCESS
+R 7 SUCCESS
+R 8 SUCCESS
+STATE
+A 1 2 100000000
+EVENTS
+MATCH
+ERF NEW NEW uid=1 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=1100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
+ERF REDUCE NEW uid=1 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=0 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
+ERF CANCEL CANCELED uid=1 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=0 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0

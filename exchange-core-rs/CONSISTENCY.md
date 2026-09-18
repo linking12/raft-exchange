@@ -130,10 +130,11 @@ golden 由 Java 在**生成之后、断言之前**产出。若把生成器并进
 
 ### 4.3 对拍内容
 
-每个向量的 `.golden` 含三段(见 §9 格式):
+每个向量的 `.golden` 含最多四段(见 §9 格式):
 1. **每命令结果码** `R <seq> <CODE>`(`CODE` 用 Rust CamelCase 自动转 Java SCREAMING_SNAKE,命名分歧会被对拍直接抓到)。
 2. **最终状态摘要** `STATE`:排序的账户 `A`、仓位 `POS`、费用池 `FEE`(跳 0 值,分片/线程无关)。
 3. **结算类 fund event 多重集** `EVENTS`:见下。
+4. **撮合执行报告** `MATCH`(仅同步向量 opt-in `#!match=on`):经 `SimpleEventsProcessor` 产出的 `SpotExecutionReport`/`FuturesExecutionReport`,`ER`/`ERF` 行**按发出顺序**逐字段对拍——验证 match event 不多发/漏发/错发。两侧 fund event(`FE`)与 match event(`ER`/`ERF`)都从**同一个 `SimpleEventsProcessor` 出口**流出(Rust `tests/conformance.rs` 挂 `results_consumer`、Java exporter 挂 `SimpleEventsProcessor4Test`),口径统一。异步清算/ADL 向量刻意不开 `#!match=on`(exporter 异步捕获非确定,见 §6)。
 
 ### 4.4 关键收益:清算/ADL 的状态现在能逐值对拍
 
@@ -177,7 +178,9 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **`MARGIN_ALERT`/`LIQUIDATION_ALERT`** | 引擎内发事件 | 刻意外置(不发,水位告警走外部拉报表) | 两侧都排除 |
 | **仓位生命周期事件** `OPEN_POSITION`/`CLOSE_POSITION` | 期货开仓只对 maker 发 | maker+taker 都发(钱一致、事件数不同) | 排除(与 `POS` 状态冗余) |
 | **记账/锁事件** `Deposit`/`Locked`/… | `balance_adjustment` 等会发 | 部分不发 | 排除(只对拍结算类) |
-| **撮合明细事件** | `SpotExecutionReport`/`FuturesExecutionReport`(高层报告) | raw `MatcherTradeEvent`(单链) | 不进 ③;撮合正确性由 ① 逐值对拍 |
+| **撮合明细事件(高层报告)** | `SpotExecutionReport`/`FuturesExecutionReport` | 经 `SimpleEventsProcessor` 产出同型报告 | **同步向量已进 ③**(`#!match=on` 的 `MATCH` 段,`ER`/`ERF` 逐字段);异步清算向量仍只靠 ① |
+| **执行报告 exec-id / trade-id** | `seq` 由 disruptor 定(R2 `-seq` + 主 `+seq` 双发) | `results_seq` 单发递增 | `ER`/`ERF` **剔除** `tid`/`eid`(seq 口径刻意不同);taker==maker 共享 id 的不变式由 ① + `simple_events_processor` 单测覆盖 |
+| **MOVE 成交后 mover 的 `filledNotional`** | ~~不累计~~ **已修**:`moveOrder` 补 `filledNotional` 累计(§7.6) | 两者都累计(自洽) | 两侧一致;`spot_cancel_reduce_move`(MOVE 成交后 cancel 看 cumQ)对拍作回归护栏,`spot_cancel_after_fill` 对拍正常成交路径 |
 | **`state_hash`** | Java 自己的 hash | 逐字段折叠、是超集 | 不互比;跨实现用 ③ 的语义状态摘要 |
 | **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
 | **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |
@@ -245,11 +248,19 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 - **Java 实测:不复现,但机制不是"缺陷差异"**。回归测试 `ITExchangeCoreADL#adlOriginConsumedMidCascadeConservation`(单分片,逐字节复刻 11 命令;mark92 前四仓与 Rust 完全一致;**关掉周期兜底扫、纯 on-lane 亦 PASS**,证明与周期扫无关)。两侧 R1 夹位逐字节相同,只是同步 FIFO(Rust) vs 异步 disruptor(Java) 的顺序决定了会不会把 origin 消耗光后再跑其 ADL、从而触达那条 null 分支。终态两侧逐字段一致。
 - **教训**:①跨引擎"同源 bug"结论必须**实测**证,别凭代码路径推断(本次"Java 无夹位/同源同 bug"两个先期判断都被推翻——Java 其实有 R1 夹位,只是 null 分支不触达);②改动放在与 Java 对应的同一函数/同一层,别加特例。该 Java 测试留作守恒护栏 + Rust 修复后终态对照;当前无黄金向量命中此场景,Rust 修复不破坏 ③。
 
+### 7.6 match event 进 ③(2026-09-18)抓到 Java MOVE 路径不累计 `filledNotional`(Rust 更正确)
+
+把 `SimpleEventsProcessor` 的执行报告接进 ③(`#!match=on`)后,新向量 `spot_cancel_reduce_move` 立刻抓到分歧:一个 ASK 挂单被 `MOVE` 下移**穿越对手挂单成交** 5 手后再被 `CANCEL`,CANCEL 报告的 `cumulative_quote_qty`——**Java=0、Rust=450**(两侧 `cumulative_qty` 都=5)。
+
+- **根因(实测定位)**:Java `OrderBookEventsHelper.sendReduceEvent` 取 `order.getFilledNotional()`,而 Java 的 MOVE 撮合路径**只累计 mover order 的 `filled`、不累计 `filledNotional`**(留 0);Rust 两者都累计,自洽。对照向量 `spot_cancel_after_fill`(正常 maker 部分成交后 CANCEL)两侧**一致**(`cumQty=4 cumQ=400`),证明只有 MOVE 路径有此 quirk,普通成交路径 `makerOrder.filledNotional += ...` 正常。
+- **定性**:Java 报告层 quirk,Rust 更正确;`cumulative_qty`/账户/仓位/资金全部正确,仅 `cumulative_quote_qty` 在"MOVE 成交→reduce/cancel 报告"这一狭窄链路上不一致。
+- **修复(已落地)**:Java `OrderBookDirectImpl.moveOrder` + `OrderBookNaiveImpl.moveOrder` 在 `order.filled = filled` 后补 `order.filledNotional = matchResult[1]`(与 `placeOrder` 一致)。验证:①全 85 向量重生成**仅 `spot_cancel_reduce_move` 一个 golden 变**(cumQ 0→450),其余零漂移;②`OrderBook*Test`/`*EventsProcessor*Test` + **全量 Java 套件绿**;③`filledNotional` 读者仅报告/快照/equals(不进风控结算),影响面吻合。`spot_cancel_reduce_move`(MOVE 成交后 CANCEL)现两侧一致,留作回归护栏。
+
 ---
 
 ## 8. 命令流 DSL 参考
 
-`.stream` 每行一条:`VERB key=value key=value …`;`#` 开头为注释;首部 `#!events=off` 表示该向量只对拍 result+state(异步清算向量用)。两侧解释器(`tests/conformance.rs` / `ConformanceExporter.java`)必须同步支持每个 verb。
+`.stream` 每行一条:`VERB key=value key=value …`;`#` 开头为注释;首部 `#!events=off` 表示该向量只对拍 result+state(异步清算向量用);`#!match=on` 额外对拍撮合执行报告 `MATCH` 段(仅确定性同步向量,见 §4.3/§6)。两侧解释器(`tests/conformance.rs` / `ConformanceExporter.java`)必须同步支持每个 verb。
 
 | VERB | 字段 | 语义 | 发 R 行? |
 |------|------|------|:--:|
@@ -263,6 +274,9 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | `BAL` | `uid cur amount txid` | 充值/提现 | 是 |
 | `PLACE` | `oid uid sym price size action(BID/ASK) type(GTC/IOC/FOK/FOK_BUDGET/IOC_BUDGET) reserve` | 现货下单(BUDGET:`price`=预算) | 是 |
 | `PLACE_FUT` | `oid uid sym price size action type leverage margin(ISOLATED/CROSS)` | 期货下单 | 是 |
+| `CANCEL` | `oid uid sym` | 撤单 | 是 |
+| `REDUCE` | `oid uid sym size` | 减单(size=减少量) | 是 |
+| `MOVE` | `oid uid sym price` | 移动挂单到新价(可触发成交) | 是 |
 | `SCAN` | `slice sliceCount ts` | 清算扫描(Java=triggerLiquidation 循环至 settle) | 否(trigger) |
 | `IF_DEPOSIT` | `sym amount txid` | 保险基金充值 | 否(setup) |
 | `SETTLE_PNL` | `sym price txid` | 交割结算 | 是 |
@@ -287,10 +301,14 @@ POS <uid> <sym> <DIR> <open_volume> <open_price_sum>   # open_volume≠0,DIR∈{
 FEE <cur> <amount>         # 非零费用池,cur 升序
 EVENTS                     # 若非 #!events=off
 FE <TYPE> uid=<uid> cur=<cur> free=<free> locked=<locked>   # 结算类白名单,整体排序后逐行
+MATCH                      # 若 #!match=on
+ER <execType> <orderStatus> uid= oid= side= maker= px= lastQty= lastPx= cumQty= cumQ= comm=   # 现货执行报告,按发出顺序
+ERF <execType> <orderStatus> uid= oid= side= maker= pos= cp= px= lastQty= lastPx= cumQty= cumQ= avgPx= fee=   # 期货执行报告,按发出顺序
 ```
 
 - `CODE`:Rust `CommandResultCode` 的 CamelCase Debug 名自动转 SCREAMING_SNAKE,与 Java `enum.name()` 对齐。
 - `EVENTS` 段是**排序后的多重集**(顺序无关),只含 §6 白名单事件。
+- `MATCH` 段**按发出顺序**(不排序:同步向量两侧发序确定,顺序本身是被验证的语义)。`execType`/`orderStatus`/`side`/`pos` 用与 Java `enum.name()` 对齐的 SCREAMING_SNAKE(`pos`=`ONEWAY`/`HEDGE`);剔除 seq 派生的 `tid`/`eid`(见 §6)。
 
 ---
 
@@ -321,6 +339,7 @@ cargo test --test conformance
 - ✅ **清算/ADL 事件级对拍**:确定性(SCAN 驱动)向量已 events-on——修了 Java `ConformanceExporter` 的异步捕获(`feAccum` synchronizedList + 稳定判据),`adl`/`liquidation_isolated`/`loan_liquidation_isolated` 均事件级对拍。
 - ✅ **差分模糊扩面**:`gen_conformance_fuzz` 已含现货(`gen_vector`)/期货(`gen_futures_vector`)/清算(`gen_liquidation_vector`)三条随机流 + 离线 live-diff 编排(`conformance_live_diff.sh`)。
 - ✅ **③ 向量扩面**:现货/期货/交割/清算/ADL/funding/loan/cross/hedge/if_takeover/loan_liquidation/cross_loan 均入库对拍。
+- ✅ **match event 进 ③**(2026-09-18):`SimpleEventsProcessor` 接进对拍框架,fund event + match event 从同一出口流出;同步向量 opt-in `#!match=on` 逐字段对拍 `SpotExecutionReport`/`FuturesExecutionReport`。6 个向量:`spot_match_events`(NEW/TRADE/REJECT)、`fut_match_events`(NEW/TRADE/posSide/cp/avgPx)、`spot_cancel_reduce_move`(REDUCE/MOVE→TRADE/CANCEL)、`spot_cancel_after_fill`、`spot_multi_maker_match`(多笔 TRADE 顺序)、`fut_cancel_reduce_match`(期货 REDUCE/CANCEL)。新增 `CANCEL`/`REDUCE`/`MOVE`(现货)DSL verb。**抓到并修复** Java MOVE `filledNotional` quirk(§7.6,全量 Java 套件绿)。异步清算向量刻意不开(见 §6/[[conformance-exporter-async-flaky]])。
 
 **刻意不做 / 需独立决策:**
 

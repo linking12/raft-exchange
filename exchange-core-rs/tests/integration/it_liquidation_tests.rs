@@ -74,11 +74,10 @@ mod tests {
     fn setup_btc_with_collector(entry: i64) -> (ExchangeApi, std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>) {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let sink = collector.clone();
-        let mut core = exchange_core_rs::core::exchange_core::ExchangeCore::new();
-        core.with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
+        let mut api = ExchangeApi::new();
+        api.with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
             sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
         }));
-        let mut api = ExchangeApi::from_core(core);
         api.add_currency(XBT, 1);
         api.add_currency(USD, 1);
         assert_eq!(api.add_futures_symbol(btc_spec()), CommandResultCode::Success);

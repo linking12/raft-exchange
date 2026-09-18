@@ -1,0 +1,15 @@
+# 撮合执行报告(match event)进③:期货挂单 REDUCE / CANCEL(无成交)-> ERF REDUCE/CANCEL 报告。
+# 补足 fut_match_events 只覆盖 NEW/TRADE 的缺口。
+#!match=on
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=200 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=2 maker=1 feeScale=1000 initMargin=1 initMarginScaleK=100
+MARK sym=200 price=1000
+USER uid=1
+BAL uid=1 cur=2 amount=100000000 txid=1
+# 远离盘口的挂单 ASK 1100x10(无对手,NEW/working)
+PLACE_FUT oid=1 uid=1 sym=200 price=1100 size=10 action=ASK type=GTC leverage=2 margin=CROSS
+# 减仓 4(10->6,无成交) -> ERF REDUCE(status NEW)
+REDUCE oid=1 uid=1 sym=200 size=4
+# 撤单 -> ERF CANCEL(status CANCELED)
+CANCEL oid=1 uid=1 sym=200

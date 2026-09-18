@@ -515,6 +515,9 @@ public final class OrderBookNaiveImpl implements IOrderBook {
             return CommandResultCode.SUCCESS;
         }
         order.filled = filled;
+        // 与 placeOrder 一致:MOVE 撮合成交后必须同步累计 filledNotional(否则后续 reduce/cancel 事件的
+        // filledNotional 停留在移动前的值,执行报告 cumulativeQuoteQty 少算 MOVE 触发的成交)。
+        order.filledNotional = matchResult.length == 0 ? order.getFilledNotional() : matchResult[1];
 
         // if not filled completely - put it into corresponding bucket
         final OrdersBucketNaive anotherBucket = buckets.computeIfAbsent(newPrice, p -> {

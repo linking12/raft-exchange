@@ -1,0 +1,16 @@
+# 撮合执行报告(match event)进③:部分成交的 maker 单被 CANCEL -> CANCEL 报告 cumQty/cumQ 应带历史成交。
+# 与 spot_cancel_reduce_move 的 MOVE quirk 对照:正常成交路径 maker.filledNotional 会累计,两侧一致。
+#!match=on
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=100 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0
+USER uid=1
+USER uid=2
+BAL uid=1 cur=1 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+# maker ASK 100x10(NEW)
+PLACE oid=1 uid=1 sym=100 price=100 size=10 action=ASK type=GTC
+# taker BID 100x4 -> NEW + TRADE(maker oid=1 部分成交 4)
+PLACE oid=2 uid=2 sym=100 price=100 size=4 action=BID type=GTC reserve=100
+# 撤掉剩余 maker(6) -> CANCEL 报告:cumQty=4 cumQ=400(正常成交累计)
+CANCEL oid=1 uid=1 sym=100

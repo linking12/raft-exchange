@@ -588,6 +588,9 @@ public final class OrderBookDirectImpl implements IOrderBook {
 
         // not filled completely, inserting into new position
         orderToMove.filled = filled;
+        // 与 placeOrder 一致:MOVE 撮合成交后必须同步累计 filledNotional(否则后续 reduce/cancel 事件的
+        // filledNotional 停留在移动前的值,执行报告 cumulativeQuoteQty 少算 MOVE 触发的成交)。
+        orderToMove.filledNotional = matchResult.length == 0 ? orderToMove.getFilledNotional() : matchResult[1];
 
         // insert into a new place
         insertOrder(orderToMove, freeBucket);
